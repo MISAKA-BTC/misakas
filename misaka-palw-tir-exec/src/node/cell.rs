@@ -52,6 +52,37 @@ pub struct TirCellV1 {
     pub positions: Range<u32>,
 }
 
+/// Conservative committed-input closure for one public history court. Its local
+/// evaluation reads the named occurrence, preceding carry outputs, and its own
+/// checkpoint/history instances. A post node reading a global state also needs the
+/// pre occurrence's committed state/history units (NF-15/NF-19). Start at zero so this does not invent an
+/// unaligned state restore or replace committed inputs with a replayed prefix.
+/// The ordinary bounded cell-run planner still admits/refuses the resulting size.
+pub fn tir_public_court_cells_v1(
+    space: &PalwTirStepSpaceV1,
+    ctx: &PalwJobContextV2,
+    named_leaf: u64,
+    shard: u16,
+) -> Result<Vec<TirCellV1>, String> {
+    let leaf = space.leaf_at(ctx, named_leaf).ok_or("the public court leaf is outside the job")?;
+    let PalwTirLeafKindV1::Commit { occurrence, .. } = leaf.kind else {
+        return Err("a public history court must name a committed node".into());
+    };
+    let first = usize::try_from(occurrence).map_err(|_| "the court occurrence does not fit usize")?;
+    let end = first.checked_add(1).ok_or("the court occurrence overflows")?;
+    let positions = leaf.position.checked_add(1).ok_or("the court position overflows")?;
+    let mut cells = Vec::new();
+    if end == space.occurrences().len() {
+        let post = &space.program.blocks[space.program.schedule.post as usize];
+        if post.nodes.iter().any(|node| node.inputs.iter().any(|input|
+            matches!(input, misaka_palw_tir::Ref::State(state) if !space.program.states[*state as usize].per_layer))) {
+            cells.push(TirCellV1 { shard, occ: 0..1, positions: 0..positions });
+        }
+    }
+    cells.push(TirCellV1 { shard, occ: first..end, positions: 0..positions });
+    Ok(cells)
+}
+
 /// **Where a cell's committed inputs come from.** Every answer is authenticated against the claim's step root by the
 /// implementation: the verifier never opens a path itself.
 pub trait TirCellInputsV1 {
@@ -559,6 +590,8 @@ impl TirCellInputsV1 for TirCaptureInputsV1<'_> {
 pub struct TirRunInputsV1 {
     hashes: BTreeMap<u64, Hash64>,
     preimages: BTreeMap<u64, PalwStepTileLeafV1>,
+    identity: Option<(u64, Hash64, Hash64, Hash64)>,
+    ranges: BTreeMap<(u64, usize), PalwStepRangeOpeningV1>,
 }
 
 impl TirRunInputsV1 {
@@ -582,16 +615,42 @@ impl TirRunInputsV1 {
             return Err("more preimages than leaves in the run".to_string());
         }
         let ctx_hash = ctx.context_hash();
+        let identity = (leaf_count, *step_root, ctx_hash, *class_id);
+        if self.identity.is_some_and(|old| old != identity) {
+            return Err("the requested runs bind different jobs, classes or roots".into());
+        }
         for (i, pre) in preimages.iter().enumerate() {
             if step_tile_leaf_hash_v1(&ctx_hash, class_id, pre) != opening.leaf_hashes[i] {
                 return Err(format!("preimage {i} of the run is not its opened leaf"));
             }
+        }
+        // Authenticate every preimage before the first mutation. A corrupt suffix may
+        // not leave the preceding leaves behind in a supposedly refused whole reply.
+        for (i, pre) in preimages.iter().enumerate() {
             self.preimages.insert(opening.first_leaf_index + i as u64, pre.clone());
         }
         for (i, h) in opening.leaf_hashes.iter().enumerate() {
             self.hashes.insert(opening.first_leaf_index + i as u64, *h);
         }
+        self.identity = Some(identity);
+        self.ranges.insert((opening.first_leaf_index, opening.leaf_hashes.len()), opening.clone());
         Ok(())
+    }
+
+    pub(crate) fn preimages_v1(&self) -> &BTreeMap<u64, PalwStepTileLeafV1> { &self.preimages }
+    pub(crate) fn validate_capture_v1(&self, capture: &super::backend::TirCaptureV1, class_id: Hash64) -> Result<(), String> {
+        let b = &capture.binding;
+        if self.identity != Some((b.step_leaf_count, b.step_merkle_root, b.job_context.context_hash(), class_id)) {
+            return Err("the sparse evidence is not this capture's binding".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn proof_tree_v1(&self, binding: &super::backend::TirCaptureV1, class_id: Hash64, cap: u64) -> Result<super::sparse_tree::TirSparseStepTreeV1, String> {
+        self.validate_capture_v1(binding, class_id)?;
+        let b = &binding.binding;
+        let mut tree = super::sparse_tree::TirSparseStepTreeV1::new(b.step_leaf_count, b.step_merkle_root)?;
+        for opening in self.ranges.values() { tree.add_range(opening, cap)?; }
+        Ok(tree)
     }
 
     pub fn leaves(&self) -> usize {
@@ -613,12 +672,36 @@ impl TirCellInputsV1 for TirRunInputsV1 {
 /// leaves]` where they are adjacent, plus the checkpoint and history runs of the instances the cell writes. A seat builds its
 /// `TirStepRun` demands from these; a producer builds the answers.
 pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1) -> Result<Vec<(u64, u32, usize)>, String> {
+    cell_runs_capped_v1(space, ctx, cell, usize::MAX)
+}
+
+/// Node-policy planning bound, checked before allocating a position's leaf list or
+/// an unbounded descriptor vector. It does not alter consensus class eligibility.
+pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1, cap: usize) -> Result<Vec<(u64, u32, usize)>, String> {
     let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
-    let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
+    let listed_at = |a: u32| -> Result<Vec<kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafV1>, String> {
+        let leaves = space.running_total(&job, a.saturating_add(1)).saturating_sub(space.running_total(&job, a));
+        if leaves > cap as u128 { return Err("the node's position leaf planning budget is full".into()); }
+        Ok(space.leaves_of_position(ctx, a))
+    };
     let n_occ = space.occurrences().len();
+    if cell.occ.start >= cell.occ.end || cell.occ.end > n_occ {
+        return Err(format!("a cell of occurrences {:?} of {n_occ}", cell.occ));
+    }
+    if cell.positions.start > cell.positions.end || cell.positions.start > job.positions {
+        return Err(format!("a cell of positions {:?} of {}", cell.positions, job.positions));
+    }
+    if cell.positions.start == cell.positions.end.min(job.positions) {
+        return Ok(Vec::new());
+    }
+    let p = cell.positions.start;
+    if p > 0 && (!p.is_multiple_of(space.layout.checkpoint_interval) || !p.is_multiple_of(space.layout.h_tile)) {
+        return Err(format!("a cell's start {p} is not aligned to checkpoint/history tiles"));
+    }
+    let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
     let mut runs: Vec<(u64, u32, usize)> = Vec::new();
     for a in cell.positions.start..cell.positions.end.min(job.positions) {
-        let listed = space.leaves_of_position(ctx, a);
+        let listed = listed_at(a)?;
         let mut wanted: Vec<(u64, bool)> = Vec::new(); // (index, preimage needed)
         let carry_nodes: Vec<u16> = if cell.occ.start > 0 {
             let (block, _) = space.occurrences()[cell.occ.start - 1];
@@ -654,7 +737,8 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
             }
             // A run's preimages are a PREFIX of it: the carry-in tiles lead it (they sit just before the cell's own leaves).
             let pre = wanted[i..j].iter().take_while(|(_, needs)| *needs).count();
-            runs.push((wanted[i].0, (j - i) as u32, pre));
+            if runs.len() >= cap { return Err("the node's cell run descriptor budget is full".into()); }
+            runs.push((wanted[i].0, u32::try_from(j - i).map_err(|_| "the requested run leaf count exceeds u32")?, pre));
             i = j;
         }
     }
@@ -664,10 +748,11 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
     if p > 0 {
         let layout = &space.layout;
         let mut handed: Vec<u64> = Vec::new();
-        for leaf in space.leaves_of_position(ctx, p - 1) {
+        for leaf in listed_at(p - 1)? {
             if let PalwTirLeafKindV1::State { instance, .. } = leaf.kind
                 && owned_fixed.contains(&(instance as usize))
             {
+                if handed.len() >= cap { return Err("the node's restore leaf planning budget is full".into()); }
                 handed.push(leaf.index);
             }
         }
@@ -678,11 +763,12 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
             let tiles = need.div_ceil(layout.h_tile as usize).min((p / layout.h_tile) as usize);
             for t in 0..tiles {
                 let last = p - 1 - t as u32 * layout.h_tile;
-                for leaf in space.leaves_of_position(ctx, last) {
+                for leaf in listed_at(last)? {
                     if let PalwTirLeafKindV1::HistTile { instance, .. } = leaf.kind
                         && instance as usize == *k
                     {
-                        handed.push(leaf.index);
+                        if handed.len() >= cap { return Err("the node's restore leaf planning budget is full".into()); }
+                handed.push(leaf.index);
                     }
                 }
             }
@@ -695,7 +781,8 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
             while j < handed.len() && handed[j] == handed[j - 1] + 1 {
                 j += 1;
             }
-            runs.push((handed[i], (j - i) as u32, j - i));
+            if runs.len() >= cap { return Err("the node's restore run descriptor budget is full".into()); }
+            runs.push((handed[i], u32::try_from(j - i).map_err(|_| "the restore run count exceeds u32")?, j - i));
             i = j;
         }
     }

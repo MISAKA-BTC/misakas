@@ -295,6 +295,9 @@ impl PalwTirTensorSourceV1 for TirParamsSourceV1<'_, '_> {
 /// **Whatever serves inventory openings for a class** — a mapped artifact, or a tree over params
 /// in memory.
 pub trait TirParamOpenerV1 {
+    /// Additional transient provider buffers, excluding returned pieces/proofs. Unknown
+    /// providers are refused by bounded evidence stores rather than assumed zero-copy.
+    fn param_scratch_storage_v1(&self, _leaves: &[u32]) -> Option<u64> { None }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1>;
     /// One multiproof over `leaves` ([`TirInventoryTreeV1::multiproof`]).
     fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>;
@@ -320,6 +323,18 @@ impl<'s> TirHeldInventoryV1<'s> {
 }
 
 impl TirParamOpenerV1 for TirHeldInventoryV1<'_> {
+    fn param_scratch_storage_v1(&self, leaves: &[u32]) -> Option<u64> {
+        // tensor_bytes may return an owned full instance (TirParamsSource). During
+        // replacement of the multiproof's current Cow two instances can coexist.
+        let mut largest = 0u64;
+        for leaf in leaves {
+            let (j, _, _, _) = self.tree.index.piece_of(*leaf)?;
+            let d = self.program.params.get(j as usize)?;
+            let bytes = d.shape.iter().try_fold(d.dtype.width() as u64, |n, dim| n.checked_mul(u64::from(*dim)))?;
+            largest = largest.max(bytes);
+        }
+        largest.checked_mul(2)
+    }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.tree.open(self.program, self.src, leaf)
     }

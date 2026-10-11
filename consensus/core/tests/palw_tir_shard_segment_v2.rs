@@ -36,7 +36,7 @@ use kaspa_consensus_core::palw_state_v2::{
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirAdmissionCarriageV1;
 use kaspa_consensus_core::palw_tir_shard_segment_v2::{
     palw_tir_shard_cell_resident_bytes_v2, palw_tir_shard_cell_resident_permille_v2, palw_tir_shard_drawn_price_permille_v2,
-    palw_tir_shard_price_share_v2, palw_tir_shard_seat_need_bytes_v2,
+    palw_tir_shard_price_share_v2, palw_tir_shard_room_permille_v2, palw_tir_shard_seat_need_bytes_v2,
 };
 use kaspa_consensus_core::palw_tir_shard_v1::{
     PalwSeatReceiptV4, PalwTirShardPartV1, palw_tir_cells_share_permille_v1, palw_tir_shard_assignment_v1,
@@ -331,6 +331,12 @@ fn past_the_fence_a_seat_is_priced_by_the_larger_of_work_and_residency_and_below
     let below = licensed(None);
     let past = licensed(Some(0));
     let unarmed_far = licensed(Some(1_000_000));
+    let crossed_after_acceptance = licensed(Some(4));
+    assert_eq!(
+        below.s.state_root(),
+        crossed_after_acceptance.s.state_root(),
+        "acceptance at 3 pins work-only bind/pay/locks even when the dormant test fence is crossed before binding at 6"
+    );
     assert_eq!(below.s.state_root(), unarmed_far.s.state_root(), "a fence the chain never reaches changes no byte");
     let plan = below.s.tir_shard_plan(&below.s.claim(&below.claim).unwrap().class_id).expect("the plan").clone();
     let record = below.s.tir_class_v1(&below.s.claim(&below.claim).unwrap().class_id).expect("the IR class").clone();
@@ -340,6 +346,11 @@ fn past_the_fence_a_seat_is_priced_by_the_larger_of_work_and_residency_and_below
     assert_eq!(below.drawn, palw_tir_shard_drawn_permille_v1(&plan, &below.anchor, &below.claim, true));
     // Past it: `max(work, resident)` over each seat's cells.
     assert_eq!(past.drawn, palw_tir_shard_drawn_price_permille_v2(&plan, &resident, &past.anchor, &past.claim, true));
+    let room_shares = palw_tir_shard_room_permille_v2(&plan.cell_permille, &resident, plan.s_l, plan.s_p).unwrap();
+    for shard in 0..usize::from(plan.s_l) {
+        let class_seat_prices: u32 = past.drawn[shard * 4 + 1..shard * 4 + 4].iter().sum();
+        assert!(class_seat_prices <= 2 * room_shares[shard], "room must cover actual native bound-seat masks");
+    }
     assert_ne!(past.drawn, below.drawn, "a late segment holds more than it computes: some seat's price moves");
     // Every counted signer locks at least what it locks below the fence, and more where its cells hold more than they compute.
     let mut moved = 0;

@@ -128,6 +128,36 @@ pub struct TirPlan {
     pub rows: crate::tiers::TirRowSitesV1,
 }
 
+impl TirPlan {
+    /// State instances touched by these occurrences, including read-only global state.
+    /// Other instances keep their indices but need no value storage in a cell executor.
+    pub fn cell_state_instances(&self, occ: &std::ops::Range<usize>) -> TirResult<BTreeSet<usize>> {
+        if occ.start >= occ.end || occ.end > self.occurrences.len() {
+            return Err(TirError::new(TirErrorKind::Position, "the cell's occurrence range is out of bounds"));
+        }
+        let mut touched = BTreeSet::new();
+        for &(block, layer) in &self.occurrences[occ.clone()] {
+            for node in &self.program.blocks[block as usize].nodes {
+                let mut state = |j: u16| {
+                    let l = if self.program.states[j as usize].per_layer { layer } else { None };
+                    if let Some(k) = self.instance(j, l) {
+                        touched.insert(k as usize);
+                    }
+                };
+                for r in &node.inputs {
+                    if let Ref::State(j) = r {
+                        state(*j);
+                    }
+                }
+                if let Prim::StateWrite { state: j } | Prim::HistAppend { state: j } = node.prim {
+                    state(j);
+                }
+            }
+        }
+        Ok(touched)
+    }
+}
+
 fn work_of(ivs: &[Interval]) -> Work {
     if ivs.iter().all(|i| in_i64(*i)) { Work::I64 } else { Work::I128 }
 }

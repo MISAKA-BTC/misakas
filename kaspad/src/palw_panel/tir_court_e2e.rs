@@ -69,6 +69,38 @@ const DEMAND_LADDER: u64 = kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MA
 const TURN: u64 = 20;
 const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
 
+#[test]
+fn annex_pursuit_owns_retained_and_tree_leases_through_eviction_clone_and_refusal() {
+    use super::tir_court::PalwTirAnnexPursuitV1;
+    use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+    let ir = ir_class("pursuit-tree-lease", true);
+    let tir = ir.tir();
+    let claim = produce(&ir, 33_123, None);
+    let prompt: Vec<u32> = claim.prompt.iter().map(|id| u32::try_from(*id).unwrap()).collect();
+    let own = tir.retain_memo(&claim.job, &prompt).unwrap();
+    let need = misaka_palw_sdk::lineages::tir::tir_full_tree_storage_need_v1(own.binding.step_leaf_count).unwrap();
+    let refused = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(need - 1), || None);
+    assert!(PalwTirAnnexPursuitV1::try_new_with_ledger(own.clone(), 100, &refused).is_err());
+    assert_eq!(refused.reserved_bytes(), 0, "tree refusal publishes no reservation/pursuit");
+    let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(need), || None);
+    let pursuit = PalwTirAnnexPursuitV1::try_new_with_ledger(own.clone(), 100, &ledger).unwrap();
+    let copied_pursuit = pursuit.clone();
+    let tree_reader = pursuit.own_tree.clone();
+    let weak_own = std::sync::Arc::downgrade(&own);
+    assert_eq!(ledger.reserved_bytes(), need);
+    tir.evict_retained_memo_v1();
+    drop(own);
+    drop(pursuit);
+    assert!(weak_own.upgrade().is_some(), "the cloned pursuit holds retained data and its admission");
+    assert_eq!(ledger.reserved_bytes(), need);
+    drop(copied_pursuit);
+    assert!(weak_own.upgrade().is_none(), "last pursuit releases the evicted retained job");
+    assert_eq!(ledger.reserved_bytes(), need, "an independent tree reader still holds tree admission");
+    assert!(tree_reader.opening(0).is_some());
+    drop(tree_reader);
+    assert_eq!(ledger.reserved_bytes(), 0, "last tree owner releases its admission");
+}
+
 fn h64(v: u64) -> Hash64 {
     Hash64::from_u64_word(v)
 }
@@ -1154,9 +1186,9 @@ fn a_seat_pursues_a_large_claim_through_served_annexes() {
     ));
     let tick = &court_src[court_src.find("    async fn tir_annex_pursuit_tick_v1(").expect("the tick")..];
     // The first ask: leaf 0 — or, on a trace descent, decode row 0's door leaf (`with_trace`).
-    let first_ask = &tick[tick.find("let mut pursuit = PalwTirAnnexPursuitV1::new(own, current_daa);").expect("the pursuit")..];
+    let first_ask = &tick[tick.find("let Some(pursuit) = pursuit else { return };").expect("the admitted pursuit")..];
     let first_ask = &first_ask[..first_ask.find("            return;").expect("the first ask's end")];
-    assert!(first_ask.contains("pursuit = pursuit.with_trace(rows, row0);"));
+    assert!(tick.contains("pursuit = pursuit.with_reserved_trace(rows, row0);"));
     assert!(first_ask.contains(
         "self.request_leaf_evidence_v1(network_domain, claim, palw_tir_annex_request_index_v1(leaf), leaf, current_daa).await;"
     ));
@@ -2011,7 +2043,7 @@ fn as_filed_c(built: Result<PalwCourtVerdictProofV2, String>) -> Result<PalwCour
 }
 
 /// The seat's own run of `claim`'s job.
-fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1> {
+fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1> {
     let prompt: Vec<u32> = claim.prompt.iter().map(|t| *t as u32).collect();
     tir.retain_memo(&claim.job, &prompt).expect("the seat's own run")
 }
@@ -2020,7 +2052,7 @@ fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk:
 /// seat's own rows tree, the served annexes' door token cleared (on chain the rows root comes first).
 fn trace_pursuit_c(
     tir: &TirBackendV1,
-    own: &std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1>,
+    own: &std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1>,
 ) -> super::tir_court::PalwTirAnnexPursuitV1 {
     let ctx = &own.binding.job_context;
     let rows = misaka_palw_sdk::lineages::tir::tir_rows_tree_v1(ctx, &own.logits_rows).expect("the seat's rows tree");

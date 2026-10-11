@@ -389,9 +389,18 @@ pub(crate) struct RunBufs {
 
 impl RunBufs {
     pub fn initial(plan: &TirPlan) -> Self {
+        Self::initial_with(plan, |_| true)
+    }
+
+    fn initial_with(plan: &TirPlan, keep: impl Fn(usize) -> bool) -> Self {
         let mut fixed = Vec::with_capacity(plan.instances.len());
         let mut hist = Vec::with_capacity(plan.instances.len());
-        for inst in &plan.instances {
+        for (k, inst) in plan.instances.iter().enumerate() {
+            if !keep(k) {
+                fixed.push(Buf::empty(inst.dtype));
+                hist.push(HistBuf::default());
+                continue;
+            }
             match inst.kind {
                 StateKind::Fixed { .. } => {
                     fixed.push(Buf::zeros(inst.dtype, numel(&inst.shape)));
@@ -444,6 +453,8 @@ pub struct TirExecutor<'a> {
     /// The kernel whose deliberately broken variant runs ([`Self::set_fused_fault`]); test only.
     fused_fault: Option<usize>,
     run: RunBufs,
+    /// A cell allocates and executes only this immutable occurrence scope.
+    cell_occ: Option<std::ops::Range<usize>>,
     work: WorkBufs,
 }
 
@@ -461,6 +472,7 @@ impl<'a> TirExecutor<'a> {
             fused: None,
             fused_fault: None,
             run: RunBufs::initial(plan),
+            cell_occ: None,
             work: WorkBufs {
                 slots: (0..nb).map(|b| vec![Buf::default(); plan.blocks[b].nodes.len()]).collect(),
                 vals: (0..nb).map(|b| vec![Val::default(); plan.blocks[b].nodes.len()]).collect(),
@@ -477,6 +489,16 @@ impl<'a> TirExecutor<'a> {
         })
     }
 
+    fn initial_run_bufs(&self) -> TirResult<RunBufs> {
+        match &self.cell_occ {
+            Some(occ) => {
+                let touched = self.plan.cell_state_instances(occ)?;
+                Ok(RunBufs::initial_with(self.plan, |k| touched.contains(&k)))
+            }
+            None => Ok(RunBufs::initial(self.plan)),
+        }
+    }
+
     pub fn plan(&self) -> &TirPlan {
         self.plan
     }
@@ -490,6 +512,7 @@ impl<'a> TirExecutor<'a> {
     /// [`Self::new`] computes (the ranges of the instances that are bound; the dtype's range for the others, which no step of
     /// this executor reads).
     pub fn new_cell(plan: &'a TirPlan, params: &'a TirParams<'a>, occ: std::ops::Range<usize>) -> TirResult<Self> {
+        let touched = plan.cell_state_instances(&occ)?;
         for (o, &(block, layer)) in plan.occurrences.iter().enumerate() {
             if !occ.contains(&o) {
                 continue;
@@ -501,7 +524,10 @@ impl<'a> TirExecutor<'a> {
                         if !params.has(*j, l) {
                             return Err(TirError::new(
                                 TirErrorKind::Missing,
-                                format!("param {} (layer {l:?}): the cell's occurrence {o} reads it", plan.program.params[*j as usize].name),
+                                format!(
+                                    "param {} (layer {l:?}): the cell's occurrence {o} reads it",
+                                    plan.program.params[*j as usize].name
+                                ),
                             ));
                         }
                     }
@@ -516,7 +542,8 @@ impl<'a> TirExecutor<'a> {
             occ_plans,
             fused: None,
             fused_fault: None,
-            run: RunBufs::initial(plan),
+            run: RunBufs::initial_with(plan, |k| touched.contains(&k)),
+            cell_occ: Some(occ),
             work: WorkBufs {
                 slots: (0..nb).map(|b| vec![Buf::default(); plan.blocks[b].nodes.len()]).collect(),
                 vals: (0..nb).map(|b| vec![Val::default(); plan.blocks[b].nodes.len()]).collect(),
@@ -546,7 +573,10 @@ impl<'a> TirExecutor<'a> {
         sink: &mut dyn StepSink,
     ) -> TirResult<Vec<Vec<i128>>> {
         let n_occ = self.plan.occurrences.len();
-        if occ.start >= occ.end || occ.end > n_occ {
+        if occ.start >= occ.end
+            || occ.end > n_occ
+            || self.cell_occ.as_ref().is_some_and(|scope| occ.start < scope.start || occ.end > scope.end)
+        {
             return Err(TirError::new(TirErrorKind::Operand, format!("a cell of occurrences {occ:?} of {n_occ}")));
         }
         let runs_post = occ.end == n_occ;
@@ -592,13 +622,17 @@ impl<'a> TirExecutor<'a> {
         if st.pos >= p.history_bound {
             return Err(TirError::new(TirErrorKind::Position, "position ≥ history_bound"));
         }
-        let mut run = RunBufs::initial(self.plan);
+        let mut run = self.initial_run_bufs()?;
         run.pos = st.pos;
         run.tail_rows = self.run.tail_rows;
         let bad = |what: &str| TirError::new(TirErrorKind::Operand, what.to_string());
+        let scoped = self.cell_occ.as_ref().map(|occ| self.plan.cell_state_instances(occ)).transpose()?;
         for (k, inst) in self.plan.instances.iter().enumerate() {
             if !keep(inst.state, inst.layer) {
                 continue;
+            }
+            if scoped.as_ref().is_some_and(|set| !set.contains(&k)) {
+                return Err(bad("a cell checkpoint names state outside the executor's occurrence scope"));
             }
             let key = (inst.state, inst.layer);
             match inst.kind {
@@ -764,6 +798,9 @@ impl<'a> TirExecutor<'a> {
     /// state (NF-19), so the run state after the position is the same either way; the logits are
     /// then not produced ([`Self::logits`] is empty).
     pub fn step_opt(&mut self, token: u32, sink: &mut dyn StepSink, run_post: bool) -> TirResult<()> {
+        if self.cell_occ.is_some() {
+            return Err(TirError::new(TirErrorKind::Operand, "a cell executor must use step_cell within its scope"));
+        }
         let to = self.begin_step(token, run_post)?;
         let r = self.run_occurrences(0, to, sink);
         self.end_step(r)
@@ -783,6 +820,9 @@ impl<'a> TirExecutor<'a> {
         boundary: usize,
         lie: &dyn Fn(&mut [i128]),
     ) -> TirResult<()> {
+        if self.cell_occ.is_some() {
+            return Err(TirError::new(TirErrorKind::Operand, "a cell executor must use step_cell within its scope"));
+        }
         let to = self.begin_step(token, run_post)?;
         if boundary == 0 || boundary >= to {
             return Err(TirError::new(TirErrorKind::Operand, format!("a boundary at occurrence {boundary} of a step of {to}")));
@@ -1131,10 +1171,15 @@ impl<'a> TirExecutor<'a> {
         Ok(())
     }
 
-    /// The run state in the reference evaluator's form (every instance present).
+    /// The run state in the reference evaluator's form (all instances for a full executor;
+    /// only the immutable scope's instances for a cell).
     pub fn export_state(&self) -> RunState {
+        let scoped = self.cell_occ.as_ref().map(|occ| self.plan.cell_state_instances(occ).expect("the cell's scope was validated"));
         let mut st = RunState { pos: self.run.pos, ..Default::default() };
         for (k, inst) in self.plan.instances.iter().enumerate() {
+            if scoped.as_ref().is_some_and(|set| !set.contains(&k)) {
+                continue;
+            }
             let key = (inst.state, inst.layer);
             match inst.kind {
                 StateKind::Fixed { .. } => {
@@ -1161,11 +1206,21 @@ impl<'a> TirExecutor<'a> {
     /// and a history of exactly `min(pos, window − 1)` rows. An absent instance is the initial
     /// one (zeros, no rows).
     pub fn import_state(&mut self, st: &RunState) -> TirResult<()> {
+        if let Some(occ) = &self.cell_occ {
+            let touched = self.plan.cell_state_instances(occ)?;
+            let plan = self.plan;
+            return self.import_cell_state(st, &|j, l| {
+                touched.iter().any(|k| {
+                    let instance = &plan.instances[*k];
+                    instance.state == j && instance.layer == l
+                })
+            });
+        }
         let p: &TirProgramV1 = &self.plan.program;
         if st.pos >= p.history_bound {
             return Err(TirError::new(TirErrorKind::Position, "position ≥ history_bound"));
         }
-        let mut run = RunBufs::initial(self.plan);
+        let mut run = self.initial_run_bufs()?;
         run.pos = st.pos;
         run.tail_rows = self.run.tail_rows;
         let bad = |what: &str| TirError::new(TirErrorKind::Operand, what.to_string());
@@ -1203,5 +1258,87 @@ impl<'a> TirExecutor<'a> {
         }
         self.run = run;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cell_resource_tests {
+    use super::*;
+    use misaka_palw_tir::builder::ProgramBuilder;
+
+    fn state_plan() -> TirPlan {
+        let mut b = ProgramBuilder::new(4, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
+        let fixed = b.fixed_state("per-layer", DType::I8, &[4], -128, 127, true);
+        let global = b.fixed_state("read-only-global", DType::I8, &[4], 0, 0, false);
+        let readonly = b.fixed_state("read-only-layer", DType::I8, &[4], 0, 0, true);
+        let hist = b.hist_state("per-layer-history", DType::I8, &[4], 8, true);
+        let carry = misaka_palw_tir::TensorType::fixed(DType::I8, &[4]);
+        let pre = {
+            let mut block = b.block("pre", vec![]);
+            let x = block.cast(Ref::State(global), DType::I8);
+            block.finish(&[x])
+        };
+        let layer = {
+            let mut block = b.block("layer", vec![carry.clone()]);
+            let x = block.add(Ref::CarryIn(0), Ref::State(readonly), DType::I32);
+            let x = block.clamp(x, -128, 127, DType::I8);
+            let x = block.state_write(fixed, x);
+            block.hist_append(hist, x);
+            block.finish(&[x])
+        };
+        let (post, logits) = {
+            let mut block = b.block("post", vec![carry]);
+            let x = block.cast(Ref::CarryIn(0), DType::I32);
+            let Ref::Node(n) = block.commit(x) else { unreachable!() };
+            (block.finish(&[]), n)
+        };
+        TirPlan::compile(&b.finish(pre, vec![layer; 5], post, logits)).unwrap()
+    }
+
+    #[test]
+    fn a_cell_allocates_only_touched_state_even_when_it_resumes() {
+        let plan = state_plan();
+        let params = TirParams::from_map(&plan, &misaka_palw_tir::MapParams::default()).unwrap();
+        let touched = plan.cell_state_instances(&(2..3)).unwrap();
+        assert_eq!(touched.len(), 3, "one layer's fixed/history plus its read-only state");
+        let mut exec = TirExecutor::new_cell(&plan, &params, 2..3).unwrap();
+        let check = |exec: &TirExecutor<'_>| {
+            for (k, inst) in plan.instances.iter().enumerate() {
+                if !touched.contains(&k) {
+                    assert_eq!(exec.run.fixed[k].len(), 0);
+                    assert_eq!(exec.run.fixed_next[k].len(), 0);
+                    assert_eq!(exec.run.hist[k].row, 0);
+                } else if matches!(inst.kind, StateKind::Fixed { .. }) {
+                    assert_eq!(exec.run.fixed[k].len(), 4);
+                }
+            }
+        };
+        check(&exec);
+        exec.import_state(&RunState::default()).unwrap();
+        check(&exec);
+        exec.import_cell_state(&RunState::default(), &|j, l| {
+            touched.iter().any(|k| plan.instances[*k].state == j && plan.instances[*k].layer == l)
+        })
+        .unwrap();
+        check(&exec);
+        assert_eq!(exec.export_state().fixed.len(), 2);
+        assert_eq!(exec.export_state().hist.len(), 1);
+        exec.step_cell(0, 2..3, &[vec![0; 4]], &mut NoSink).unwrap();
+        check(&exec);
+    }
+
+    #[test]
+    fn changing_a_cells_scope_or_restoring_other_shards_is_refused_before_execution() {
+        let plan = state_plan();
+        let params = TirParams::from_map(&plan, &misaka_palw_tir::MapParams::default()).unwrap();
+        assert!(TirExecutor::new_cell(&plan, &params, 0..0).is_err());
+        assert!(TirExecutor::new_cell(&plan, &params, 0..8).is_err());
+        let mut exec = TirExecutor::new_cell(&plan, &params, 2..3).unwrap();
+        assert!(exec.step_cell(0, 1..3, &[vec![0; 4]], &mut NoSink).is_err());
+        assert!(exec.step(0, &mut NoSink).is_err());
+        assert!(exec.import_cell_state(&RunState::default(), &|_, _| true).is_err());
+        assert_eq!(exec.pos(), 0);
+        let full = TirExecutor::new(&plan, &params).unwrap();
+        assert_eq!(full.export_state().fixed.len(), 11, "whole execution retains every layer");
     }
 }

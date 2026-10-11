@@ -995,9 +995,25 @@ pub(super) fn apply_covered_slices_v2(
             palw_settled_anchor_depth_v1(builder.extras),
         ) {
             Ok(admission) => {
-                accept_slice_v2(builder, ctx, carrier, admission)?;
-                folded += 1;
-                Ok(())
+                let checkpoint = builder.checkpoint();
+                match builder.hold_exec_recipient_v1(
+                    carrier.slice.root_claim_id,
+                    carrier.slice.executor_bond,
+                    carrier.slice.evidence_root,
+                    admission.work,
+                    ctx.daa_score,
+                ) {
+                    Ok(()) => {
+                        accept_slice_v2(builder, ctx, carrier, admission)?;
+                        folded += 1;
+                        Ok(())
+                    }
+                    Err(PalwStateV2Error::BondBudgetExhausted { .. } | PalwStateV2Error::BondBudgetRefused(_)) => {
+                        builder.restore(checkpoint);
+                        Err(PalwSliceRefusalV2::RecipientRewardBudget)
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Err(refusal) => Err(refusal),
         };
@@ -1193,6 +1209,20 @@ pub(super) fn settle_at_final_v2(
         }
     }
     settlement.slice_legs.retain(|(_, leg)| *leg > 0);
+    for bond in builder.state.exec_v2_participants_v1(claim_id, &root) {
+        if bond == root.root_bond {
+            continue;
+        }
+        let paid_later = settlement.slice_legs.iter().any(|(payee, _)| *payee == bond)
+            || builder
+                .state
+                .exec_v2_rewards
+                .get(claim_id)
+                .is_some_and(|receipt| receipt.legs.iter().any(|((payee, _), payout)| *payee == bond && payout.amount > 0));
+        if !paid_later {
+            builder.cancel_native_recipient_v1(*claim_id, bond, 2);
+        }
+    }
     release_executor_exposure_v2(builder, claim_id, &root)?;
     root.phase = PalwWorkRootPhaseV2::Settled { settled_daa: final_daa };
     builder.write_exec_root(*claim_id, Some(root));
@@ -1223,6 +1253,9 @@ pub(super) fn on_claim_voided_v2(
     voided_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let Some(root) = builder.state.exec_v2.roots.get(claim_id).cloned() else { return Ok(()) };
+    for bond in builder.state.exec_v2_participants_v1(claim_id, &root) {
+        builder.cancel_native_recipient_v1(*claim_id, bond, 2);
+    }
     super::palw_kernel_route_fold_v1::cancel_exec_rewards_v1(builder, *claim_id, voided_daa)?;
     if matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
         return Ok(());

@@ -372,7 +372,7 @@ pub fn collect_work_beacon_v1(
     events: &[WorkFinalEventV1],
     tip_position: u64,
 ) -> Result<WorkBeaconStateV1, PolicyRefusalV1> {
-    if ctx.policy.is_sealed_source() {
+    if ctx.policy.is_sealed_source() || ctx.policy.is_opt_in_source() {
         return Err(PolicyRefusalV1::WrongCollector("a sealed-source (v3) policy is collected by collect_sealed_work_beacon_v3"));
     }
     if ctx.policy.source_rule().is_some_and(SourceRuleV1::needs_attribution) {
@@ -394,7 +394,7 @@ pub fn collect_attributed_work_beacon_v1(
     if !ctx.policy.needs_beacon() {
         return Err(PolicyRefusalV1::NoBeacon);
     }
-    if ctx.policy.is_sealed_source() {
+    if ctx.policy.is_sealed_source() || ctx.policy.is_opt_in_source() {
         return Err(PolicyRefusalV1::WrongCollector("a sealed-source (v3) policy is collected by collect_sealed_work_beacon_v3"));
     }
     let rule = ctx.policy.source_rule().ok_or(PolicyRefusalV1::UnknownId("source_eligibility_policy_id"))?;

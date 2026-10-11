@@ -2857,6 +2857,8 @@ fn fp_capture_view(
 /// and each rebuild spends a fee. Long enough that a retry means the object really was dropped.
 const CLASS_REGISTRATION_RETRY_DAA: u64 = 200;
 
+mod signed_registration;
+
 /// **How long a class-registration carrier that has LEFT this node's mempool gets before the panel
 /// concludes its object did not stand** (the D-F drill of 2026-09-29: two IR registrations rode one
 /// block, the second was dropped with the block standing, and its node waited out
@@ -3121,6 +3123,7 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
                 | PalwConsensusObjectV2::ClassRegistered { .. }
                 | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
                 | PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
+                | PalwConsensusObjectV2::SignedRegistrationV1 { .. }
                 | PalwConsensusObjectV2::FreePromptCommitted { .. }
                 // RFC-0004: a candidate, a dataset and a licence register something, and a pool
                 // deposit moves money.
@@ -7372,7 +7375,23 @@ impl PalwPanelService {
             }
             *last = now;
         }
-        let pinned = self.foreign_pinned.lock().unwrap().clone();
+        let mut pinned = self.foreign_pinned.lock().unwrap().clone();
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let now_daa = session.get_virtual_daa_score();
+        if self.consensus_config.params.palw_material_income_active_at(now_daa) {
+            // Re-read each retained file's rooted physical-payment obligation. The
+            // seat's old finite duty cache cannot discharge a later queue + W hold.
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if let Some(name) = name.to_str() && let Some(stem) = name.split('.').next()
+                        && let Ok(claim) = stem.parse::<Hash64>()
+                        && session.palw_material_income_hold_until_v1(claim).is_some_and(|until| until == u64::MAX || now_daa < until) {
+                        pinned.insert(claim);
+                    }
+                }
+            }
+        }
         prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES);
     }
 
@@ -8754,7 +8773,7 @@ impl PalwPanelService {
                     });
                 } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await {
                     if let Some(object) = class_registration.clone() {
-                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
                                 let txid = tx.id();
                                 let change = tx.outputs[0].clone();
@@ -9079,6 +9098,7 @@ impl PalwPanelService {
             // ADR-0085 Decision 3: the intervals a close needs and this node does not hold, asked after the loop.
             let mut intervals_for_close: Vec<(Hash64, Vec<u32>)> = Vec::new();
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
+            shard_books.retain_public_court_rows_v1(&court_duties, current_daa);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
@@ -9120,6 +9140,30 @@ impl PalwPanelService {
                 // held route's, whose windowed builders an IR program has none of.
                 if session.palw_tir_class_record_v1(duty.class_id).is_none() && held_court.routes_v1(&held_host, duty, current_daa) {
                     held_duties.push(duty.clone());
+                    continue;
+                }
+                // A partial public challenger continues its local history court before the
+                // full-model resolver. This consumer never needs a whole-model backend.
+                if !duty.i_am_responder && !self.config.tir_shard_shadow
+                    && (self.config.tir_shard_fetch || self.config.tir_shard_mirror.is_some())
+                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
+                    && duty.tir_dissection.is_some()
+                    && let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
+                {
+                    match self.tir_shard_public_court_move_v1(&session, network_domain, current_daa, duty, mv,
+                        &materials, &mut interval_openings, &mut shard_books).await {
+                        Ok(Some(object)) => {
+                            court_due.insert((duty.session_id, move_round, false), palw_court_move_due_v1(duty));
+                            court_pending.push((duty.session_id, move_round, false, object));
+                        }
+                        Ok(None) => { *court_stalls.entry("the partial public bottom does not win").or_default() += 1; }
+                        Err(why) => {
+                            *court_stalls.entry("the partial public court waits for evidence").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1(&format!("tir-partial-court-{}", duty.session_id), || {
+                                format!("[{PALW_PANEL}] session {}: partial public court waits ({why})", duty.session_id)
+                            });
+                        }
+                    }
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -10698,6 +10742,15 @@ impl PalwPanelService {
                         format!("[{PALW_PANEL}] {refused} cell-masked receipt(s) this tick failed their signature check")
                     });
                 }
+                let watch = if self.config.tir_shard_watch
+                    && !self.config.tir_shard_shadow
+                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
+                {
+                    session.palw_tir_shard_watch_duties_v1(bond_key)
+                } else {
+                    Vec::new()
+                };
+                shard_books.retain_row_interests_v1(&shard_duties, &watch, current_daa);
                 if !shard_duties.is_empty() {
                     self.tir_shard_seat_pass_v1(
                         &session,
@@ -10716,24 +10769,18 @@ impl PalwPanelService {
                 }
                 // **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): the shards of live sharded claims this bond
                 // does not seat, verified from public material; a finding rides the seats' carrier path with this bond as accuser.
-                if self.config.tir_shard_watch
-                    && !self.config.tir_shard_shadow
-                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
-                {
-                    let watch = session.palw_tir_shard_watch_duties_v1(bond_key);
-                    if !watch.is_empty() {
-                        self.tir_shard_watch_pass_v1(
-                            &session,
-                            bond_key,
-                            network_domain,
-                            current_daa,
-                            &watch,
-                            &materials,
-                            &mut interval_openings,
-                            &mut shard_books,
-                        )
-                        .await;
-                    }
+                if !watch.is_empty() {
+                    self.tir_shard_watch_pass_v1(
+                        &session,
+                        bond_key,
+                        network_domain,
+                        current_daa,
+                        &watch,
+                        &materials,
+                        &mut interval_openings,
+                        &mut shard_books,
+                    )
+                    .await;
                 }
             }
             // **RFC-0006's pre-fence shadow** (`--palw-tir-shard-shadow`, fence dormant): the cell verifier beside the whole replay.
@@ -13536,7 +13583,7 @@ impl PalwPanelService {
                     if let Some(object) = class_registration.clone()
                         && let Some((funding_outpoint, funding_entry)) = funding.clone()
                     {
-                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
                                 let txid = tx.id();
                                 let change = tx.outputs[0].clone();
@@ -25118,6 +25165,16 @@ mod readiness_memory_and_stuck_carrier_tests {
             signature: vec![],
         };
         assert!(!palw_carrier_replaceable_v1(&carrier(bond, 1)), "a registration is never replaced");
+        let envelope = PalwConsensusObjectV2::SignedRegistrationV1 {
+            registration: Box::new(PalwConsensusObjectV2::ObjectChunk {
+                group: Hash64::from_u64_word(12), index: 0, count: 1, bytes: vec![],
+            }),
+            valid_from_daa: 1, valid_until_daa: 32, fork_digest: Default::default(),
+            signer: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(13), 0)), signature: vec![],
+        };
+        // Even a malformed wrapper must not be swapped for another object by
+        // the money-moving replacement path; native inclusion judges its bytes.
+        assert!(!palw_carrier_replaceable_v1(&carrier(envelope, 1)), "signed registrations are never replaced");
         let mut garbage = carrier(proof.clone(), 1);
         garbage.payload = vec![0xFF; 3];
         assert!(!palw_carrier_replaceable_v1(&garbage), "an object this node cannot read");

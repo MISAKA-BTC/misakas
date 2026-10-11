@@ -126,6 +126,7 @@ fn params() -> PalwStateParamsV2 {
         .with_worker_carve_permille(620)
         .unwrap()
         .with_panel_v3(Some(PalwPanelV3ParamsV1 {
+            wire_version: misaka_palw_panel::WIRE_VERSION_V2,
             from_daa: V3_AT,
             policy: engine_policy(),
             network: h64(0x4E37),

@@ -39,7 +39,7 @@ use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_atte
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirLogitsConsistencyV1, PalwTirStepLeafDisclosureV1,
-    build_tir_dissect_bottom_v1, build_tir_dissect_round_v1, build_tir_named_leaf_refutation_v1, build_tir_root_claim_v1,
+    build_tir_dissect_bottom_bounded_v1, build_tir_dissect_round_bounded_v1, build_tir_named_leaf_refutation_v1, build_tir_root_claim_bounded_v1,
     build_tir_step_leaf_disclosure_v1,
 };
 use kaspa_consensus_core::palw_tir_dissect_v1::{PalwTirDissectPhaseV1, PalwTirDissectRoundV1, PalwTirRootClaimV1};
@@ -60,6 +60,21 @@ pub const TIR_CAPTURE_MAGIC_V1: [u8; 8] = *b"PALWTIRC";
 /// capture); past it, a fold. (A leaf is up to 16 KiB of lanes — a 4,096-lane logits tile — so the
 /// cap is in bytes, not leaves.)
 pub const TIR_DENSE_CAPTURE_BYTES_V1: usize = 64 << 20;
+
+/// Node policy for one proof-construction move. The rule's work limit is shared
+/// across all evaluations; 65,536 requested output entries bound result/header
+/// materialization even when the values are supplied directly by committed leaves.
+/// A refusal means no move is built and certifies no verdict, soundness or fee.
+pub fn tir_court_builder_limits_v1(rules: &PalwTirCourtRulesV1) -> kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {
+    kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {
+        evaluation: rules.limits,
+        max_target_requests: 65_536,
+        // Explicit node policy, not a proof that the rule's element/term counters include
+        // all reads: eight input edges per computed item plus source-only target requests.
+        max_source_reads: rules.limits.max_elements.saturating_add(rules.limits.max_terms)
+            .saturating_mul(8).saturating_add(65_536),
+    }
+}
 
 /// Whether a new [`TirBackendV1`] runs the fused kernels ([`set_tir_fused_kernels_default_v1`]).
 static TIR_FUSED_KERNELS_DEFAULT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -91,9 +106,10 @@ pub fn tir_fused_kernels_default_v1() -> bool {
 /// **One retained job, kept process-wide** — keyed by the class and the job's context hash. A fold's
 /// every evidence build (an annex asked, a dissection's round) re-derives the execution it opens
 /// ([`TirBackendV1::retain`], a whole run); a backend is built per request, so the memo lives here.
-/// One entry: the retention is a class's leaf hashes, trace and resume points (≈ 180 MB for a 1.5B
-/// class at 512 positions), and one pursuit or one serve at a time is what a node runs.
-static TIR_RETAINED_MEMO: std::sync::Mutex<Option<(Hash64, Hash64, Arc<TirRetainedJobV1>)>> = std::sync::Mutex::new(None);
+/// One memo entry holds its reservation with the retained hashes/trace/resume points. Requests
+/// still using an evicted entry keep its reservation until the last owner drops it; concurrent
+/// re-executions must each pass admission. Byte envelopes are operational, not measured RSS.
+static TIR_RETAINED_MEMO: std::sync::Mutex<Option<(Hash64, Hash64, Arc<super::memory::TirRetainedJobLeaseV1>)>> = std::sync::Mutex::new(None);
 
 /// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
 /// Phase H. The node's backend, the RPC's pricing and the CLI refuse with these words.
@@ -137,12 +153,52 @@ impl TirCaptureV1 {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         let body = bytes.strip_prefix(&TIR_CAPTURE_MAGIC_V1[..]).ok_or("not an IR capture")?;
-        borsh::from_slice(body).map_err(|e| format!("the IR capture does not decode: {e}"))
+        super::capture_codec::decode(body, bytes.len())
     }
 
     pub fn is_dense(&self) -> bool {
         !self.leaves.is_empty()
     }
+}
+
+/// Authenticate a public capture's prompt/trace before a partial verifier uses its
+/// tokens. Matching claimed root fields alone does not authenticate the carried ids.
+/// Step preimages are authenticated independently by a dense tree or requested runs.
+pub fn tir_authenticate_capture_metadata_v1(
+    capture: &TirCaptureV1,
+    class_id: Hash64,
+    prompt_form: PalwPromptIdsFormV1,
+    cap: u64,
+) -> Result<(), String> {
+    let binding = &capture.binding;
+    let verified = verify_tir_binding_v1(binding, cap).map_err(|e| e.to_string())?;
+    let ctx = &binding.job_context;
+    // token_bound bounds INPUT token ids. A legal program can declare a different
+    // number of OUTPUT logits lanes (for example the H-window corpus is 16 -> 4).
+    // Match the core court's exact post/logits tensor shape, not the input bound.
+    let program = &verified.space.program;
+    let logits_lanes = program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1);
+    if binding.class.class_id(&binding.artifact_root) != class_id
+        || !prompt_token_ids_match_v1(prompt_form, &capture.prompt, &ctx.prompt_token_ids_hash)
+        || capture.prompt.len() as u64 != u64::from(ctx.declared_prefill_tokens)
+        || capture.generated.len() as u64 != u64::from(ctx.exact_decode_tokens)
+        || capture.logits_rows.len() != capture.generated.len()
+        || capture.prompt.iter().any(|t| *t >= program.token_bound)
+        || capture.generated.iter().any(|t| u64::from(*t) >= logits_lanes)
+        || capture.generated.iter().take(capture.generated.len().saturating_sub(1)).any(|t| *t >= program.token_bound)
+        || capture.logits_rows.iter().any(|row| row.len() as u64 != logits_lanes)
+    {
+        return Err("the public capture's class, prompt, token or trace shape is not its binding".into());
+    }
+    let trace = if Hash64::from_bytes(verified.space.program.logits_scheme_id) == tiled_logits_scheme_id_v1() {
+        kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &capture.logits_rows, &capture.generated)
+    } else {
+        Some(kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(ctx, &capture.logits_rows, &capture.generated))
+    };
+    if trace != Some(binding.full_logits_trace_root) {
+        return Err("the public capture's rows and generated ids do not produce its committed trace root".into());
+    }
+    Ok(())
 }
 
 /// **An IR capture's answer to a trace-event demand** (RFC-0002 Phase F, F6 D): the event `(row,
@@ -201,11 +257,12 @@ pub struct TirBackendV1 {
     attempt_rules: PalwAttemptRulesV1,
     /// The leaf hashes of the last fold re-executed, by job context — the ladder asks a fold's
     /// prefix state at every rung, and each answer would otherwise be a whole re-execution.
-    fold_hashes: std::sync::Mutex<Option<(Hash64, Arc<Vec<Hash64>>)>>,
+    fold_hashes: std::sync::Mutex<Option<(Hash64, Arc<super::memory::TirFoldHashesLeaseV1>)>>,
     /// The lane bytes up to which a capture is dense ([`TIR_DENSE_CAPTURE_BYTES_V1`] by default).
     dense_capture_bytes: usize,
     /// Run the fused kernels ([`set_tir_fused_kernels_default_v1`], [`Self::with_fused_kernels`]).
     fused: bool,
+    memory_reserver: Option<super::memory::TirMemoryReserverV1>,
 }
 
 impl TirBackendV1 {
@@ -246,7 +303,15 @@ impl TirBackendV1 {
             fold_hashes: std::sync::Mutex::new(None),
             dense_capture_bytes: TIR_DENSE_CAPTURE_BYTES_V1,
             fused: tir_fused_kernels_default_v1(),
+            memory_reserver: None,
         })
+    }
+
+    /// A scoped retained/fold-memo ledger probe. Executor/evidence-store working
+    /// reservations use the daemon's process-wide callback.
+    pub fn with_memory_reserver_v1(mut self, reserver: super::memory::TirMemoryReserverV1) -> Self {
+        self.memory_reserver = Some(reserver);
+        self
     }
 
     /// Run the fused kernels (or not), whatever the process default says.
@@ -307,23 +372,39 @@ impl TirBackendV1 {
         self.runner().retain(&self.class, self.artifact_root, job, prompt, self.ladder)
     }
 
-    /// [`Self::retain`], through the process-wide memo ([`TIR_RETAINED_MEMO`]): the same job of the same
-    /// class is run once, however many evidence builds read it.
-    pub fn retain_memo(&self, job: &PalwJobContextV2, prompt: &[u32]) -> Result<Arc<TirRetainedJobV1>, String> {
+    /// [`Self::retain`], through the process-wide memo ([`TIR_RETAINED_MEMO`]): evidence
+    /// builds can share a held job and its reservation. Concurrent misses each require admission.
+    pub fn retain_memo(&self, job: &PalwJobContextV2, prompt: &[u32]) -> Result<Arc<super::memory::TirRetainedJobLeaseV1>, String> {
         let ctx_hash = job.context_hash();
-        if let Ok(memo) = TIR_RETAINED_MEMO.lock()
-            && let Some((class, ctx, held)) = memo.as_ref()
-            && *class == self.class_id
-            && *ctx == ctx_hash
-            && held.prompt == prompt
-        {
-            return Ok(held.clone());
-        }
-        let job = Arc::new(self.retain(job, prompt)?);
+        let reserver = self.memory_reserver.clone().or_else(super::memory::memory_reserver_v1);
+        let admission_id = super::memory::reserver_id_v1(&reserver);
+        // A tool's previously unreserved memo must not bypass a newly armed daemon ledger.
         if let Ok(mut memo) = TIR_RETAINED_MEMO.lock() {
-            *memo = Some((self.class_id, ctx_hash, job.clone()));
+            if let Some((class, ctx, held)) = memo.as_ref()
+                && *class == self.class_id && *ctx == ctx_hash && held.prompt == prompt
+                && held.admission_id == admission_id {
+                return Ok(held.clone());
+            }
+            // Release idle memo data before asking admission; in-flight Arcs keep theirs.
+            *memo = None;
         }
-        Ok(job)
+        let need = super::memory::tir_retained_storage_need_v1(&self.space, &self.class, job, self.ladder)?;
+        let lease = super::memory::reserve_v1(&reserver, "tir-retained-job", self.class_id, job, need)?;
+        let retained = self.retain(job, prompt)?;
+        let held = Arc::new(super::memory::TirRetainedJobLeaseV1::new(retained, reserver, lease, need));
+        if let Ok(mut memo) = TIR_RETAINED_MEMO.lock() { *memo = Some((self.class_id, ctx_hash, held.clone())); }
+        Ok(held)
+    }
+
+    /// Evict this backend's idle memo; in-flight requests retain both data and reservation.
+    pub fn evict_retained_memo_v1(&self) {
+        let reserver = self.memory_reserver.clone().or_else(super::memory::memory_reserver_v1);
+        let admission = super::memory::reserver_id_v1(&reserver);
+        if let Ok(mut memo) = TIR_RETAINED_MEMO.lock()
+            && memo.as_ref().is_some_and(|(class, _, held)| *class == self.class_id && held.admission_id == admission) {
+            *memo = None;
+        }
+        if let Ok(mut memo) = self.fold_hashes.lock() { *memo = None; }
     }
 
     /// Run a job into a capture — dense while its lanes fit the dense-capture bytes —
@@ -463,11 +544,20 @@ impl TirBackendV1 {
 
     /// The leaf hashes a capture answers with: a dense capture's own; a fold's, replayed (which
     /// is its producer's execution when that execution was honest).
-    fn capture_leaf_hashes(&self, capture: &TirCaptureV1) -> Result<Arc<Vec<Hash64>>, String> {
+    fn capture_leaf_hashes(&self, capture: &TirCaptureV1) -> Result<Arc<super::memory::TirFoldHashesLeaseV1>, String> {
         let ctx = &capture.binding.job_context;
         let ctx_hash = ctx.context_hash();
+        let count = self.space.leaf_count_capped(ctx, self.ladder).map_err(|e| e.to_string())?;
+        if count != capture.binding.step_leaf_count || (capture.is_dense() && capture.leaves.len() as u64 != count) {
+            return Err("the capture hash count is not its capped job".into());
+        }
+        let reserver = self.memory_reserver.clone().or_else(super::memory::memory_reserver_v1);
+        let admission_id = super::memory::reserver_id_v1(&reserver);
+        let need = super::memory::tir_fold_hash_storage_need_v1(count)?;
         if capture.is_dense() {
-            return Ok(Arc::new(capture.leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect()));
+            let lease = super::memory::reserve_v1(&reserver, "tir-fold-hashes", self.class_id, ctx, need)?;
+            let hashes = capture.leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect();
+            return Ok(Arc::new(super::memory::TirFoldHashesLeaseV1 { hashes, admission_id, _lease: lease, _reserver: reserver }));
         }
         // The context commits to the prompt, so a re-execution is a function of the context once
         // the prompt is checked against it — which is what makes the context a sound memo key.
@@ -476,12 +566,16 @@ impl TirBackendV1 {
         }
         let mut memo = self.fold_hashes.lock().map_err(|_| "the fold memo is poisoned")?;
         if let Some((key, hashes)) = memo.as_ref()
-            && *key == ctx_hash
+            && *key == ctx_hash && hashes.admission_id == admission_id
         {
             return Ok(hashes.clone());
         }
+        // Drop only idle old data before admission. Arcs held by other requests
+        // continue to own the old reservation; failed admission publishes nothing.
+        *memo = None;
+        let lease = super::memory::reserve_v1(&reserver, "tir-fold-hashes", self.class_id, ctx, need)?;
         let run = self.runner().run(ctx, &capture.prompt, self.ladder, false, &mut |_| {})?;
-        let hashes = Arc::new(run.leaf_hashes);
+        let hashes = Arc::new(super::memory::TirFoldHashesLeaseV1 { hashes: run.leaf_hashes, admission_id, _lease: lease, _reserver: reserver });
         *memo = Some((ctx_hash, hashes.clone()));
         Ok(hashes)
     }
@@ -769,7 +863,8 @@ impl TirBackendV1 {
             rules.prompt_form,
             self.ladder,
         )?;
-        build_tir_dissect_bottom_v1(root_binding, phase, &store, rules).map_err(|e| e.to_string())
+        build_tir_dissect_bottom_bounded_v1(root_binding, phase, &store, rules, tir_court_builder_limits_v1(rules))
+            .map(|(object, _)| object).map_err(|e| e.to_string())
     }
 
     /// **RFC-0002 F7: the responder's IR root claim** at the narrowed dissected leaf `narrowed` of its
@@ -778,7 +873,8 @@ impl TirBackendV1 {
     /// strips it.
     pub fn root_claim(&self, material: &[u8], narrowed: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirRootClaimV1, String> {
         self.with_capture_store(material, rules.prompt_form, |store, binding| {
-            build_tir_root_claim_v1(binding, narrowed, store, rules).map_err(|e| e.to_string())
+            build_tir_root_claim_bounded_v1(binding, narrowed, store, rules, tir_court_builder_limits_v1(rules))
+                .map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -794,7 +890,8 @@ impl TirBackendV1 {
     ) -> Result<PalwTirDissectRoundV1, String> {
         let tile = self.space.layout.h_tile;
         self.with_capture_store(material, rules.prompt_form, |store, binding| {
-            build_tir_dissect_round_v1(binding, phase, tile, store, rules).map_err(|e| e.to_string())
+            build_tir_dissect_round_bounded_v1(binding, phase, tile, store, rules, tir_court_builder_limits_v1(rules))
+                .map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -808,7 +905,8 @@ impl TirBackendV1 {
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwTirConeRefutationV1, String> {
         self.with_capture_store(accused, rules.prompt_form, |store, binding| {
-            build_tir_dissect_bottom_v1(binding, phase, store, rules).map_err(|e| e.to_string())
+            build_tir_dissect_bottom_bounded_v1(binding, phase, store, rules, tir_court_builder_limits_v1(rules))
+                .map(|(object, _)| object).map_err(|e| e.to_string())
         })
     }
 
@@ -840,7 +938,7 @@ impl TirBackendV1 {
         accused_generated: &[u32],
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwTirConeRefutationV1, String> {
-        let own = self.retain(&accused.job_context, prompt)?;
+        let own = self.retain_memo(&accused.job_context, prompt)?;
         let runner = self.runner();
         let store = TirEvidenceV1::challenger(
             &runner,
@@ -1041,6 +1139,9 @@ impl TirBackendV1 {
             return Err("a fold discloses by replay: open its leaves with a node's own retention".into());
         }
         let hashes = self.capture_leaf_hashes(&capture)?;
+        let tree_need = super::memory::tir_full_tree_storage_need_v1(hashes.len() as u64)?;
+        let _tree_memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
+            "tir-full-tree", self.class_id, &capture.binding.job_context, tree_need)?;
         let opening = super::tree::TirStepTreeV1::full(&hashes).opening(index).ok_or("no such leaf")?;
         Ok((opening, capture.leaves[index as usize].clone()))
     }

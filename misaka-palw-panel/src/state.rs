@@ -108,10 +108,10 @@ impl PermissionlessPanelStateV1 {
 
     /// An empty state at `cursor` (its policy must validate, its version be this one).
     pub fn from_cursor(cursor: PanelCursorV1) -> Result<Self, PanelErrorV1> {
-        cursor.policy.validate()?;
-        if cursor.version != WIRE_VERSION_V2 {
+        if ![WIRE_VERSION_V2, WIRE_VERSION_COMPLETE_V1, WIRE_VERSION_RETIRED_V1].contains(&cursor.version) {
             return Err(PanelErrorV1::InvalidCarriage);
         }
+        cursor.policy.validate_for_version(cursor.version)?;
         Ok(Self {
             version: cursor.version,
             network: cursor.network,
@@ -224,7 +224,11 @@ impl PermissionlessPanelStateV1 {
         ruleset: Hash64,
         policy: PanelPolicyV1,
     ) -> Result<Self, PanelErrorV1> {
-        policy.validate()?;
+        let version = u16::from_le_bytes(bytes.get(..2).ok_or(PanelErrorV1::InvalidCarriage)?.try_into().unwrap());
+        if ![WIRE_VERSION_V2, WIRE_VERSION_COMPLETE_V1, WIRE_VERSION_RETIRED_V1].contains(&version) {
+            return Err(PanelErrorV1::InvalidCarriage);
+        }
+        policy.validate_for_version(version)?;
         // A stratified binding holds up to `MAX_STRATIFIED_SEATS_V1` seats, whatever the flat `seat_count` is.
         let seats = (policy.seat_count as u64).max(MAX_STRATIFIED_SEATS_V1 as u64);
         // Per candidate <= 349 bytes (including stratum bits). Each historical seat is 68 bytes
@@ -236,7 +240,14 @@ impl PermissionlessPanelStateV1 {
             + policy.max_tracked_claims as u64
                 * (4096 + policy.max_candidates as u64 * 400 + (policy.max_retries as u64 + 1) * (132 * seats + 400) + 152 * seats)
             // The frozen source sets (R10F): at most `max_pending` epochs, each at most `MAX_EPOCH_SOURCES_V1` 64-byte profiles.
-            + policy.max_pending as u64 * (32 + MAX_EPOCH_SOURCES_V1 as u64 * 64);
+            + epoch_sources_bytes_bound_v1(&policy);
+        // codex's complete-population versions cap the claims at `MAX_COMPLETE_STATE_BYTES_V1`; R10F's frozen source sets ride
+        // beside that cap in every version (R6781-F merge), so a state that froze its sets after filling the cap still imports.
+        let limit = if complete_population_version_v1(version) {
+            MAX_COMPLETE_STATE_BYTES_V1 + epoch_sources_bytes_bound_v1(&policy)
+        } else {
+            limit
+        };
         if bytes.len() as u64 > limit {
             return Err(PanelErrorV1::ResourceLimit);
         }
@@ -245,7 +256,7 @@ impl PermissionlessPanelStateV1 {
             return Err(PanelErrorV1::InvalidCarriage);
         }
         let state = Self::try_from_slice(bytes).map_err(|_| PanelErrorV1::InvalidCarriage)?;
-        if state.version != WIRE_VERSION_V2
+        if state.version != version
             || state.network != network
             || state.ruleset != ruleset
             || state.policy != policy
@@ -374,12 +385,36 @@ impl PermissionlessPanelStateV1 {
                 events.released.push(*id);
             }
         }
+        if self.version == WIRE_VERSION_RETIRED_V1 {
+            for (id, record) in &mut self.claims {
+                if !record.phase.terminal() || matches!(record.phase, ClaimPhaseV3::Retired(_)) { continue; }
+                let Some(authority) = view.retired_claim(id) else { continue };
+                if authority.native_parent_root == Hash64::default() || authority.native_parent_checkpoint == Hash64::default() {
+                    return Err(PanelErrorV1::InvalidSnapshot);
+                }
+                let prior_record_root = digest("misaka-palw/panel-v4/retired-record", record);
+                let population = record.snapshot.as_ref().map(|s| PanelPopulationArchiveV1 {
+                    root: s.root, checkpoint: s.checkpoint, checkpoint_height: s.checkpoint_height,
+                    checkpoint_daa: s.checkpoint_daa, candidate_count: s.candidates.len() as u32,
+                });
+                let bindings_root = digest("misaka-palw/panel-v4/retired-bindings", &record.binding_history);
+                let binding_count = u32::try_from(record.binding_history.len()).map_err(|_| PanelErrorV1::Overflow)?;
+                let operators_root = digest("misaka-palw/panel-v4/retired-operators", &record.used_operators);
+                let (last_seed, last_beacon_id) = record.binding_history.last().map(|b| (Some(b.panel_seed_v3), Some(b.beacon_id)))
+                    .unwrap_or((None, None));
+                record.snapshot = None; record.binding_history.clear(); record.used_operators.clear();
+                record.phase = ClaimPhaseV3::Retired(PanelRetiredClaimV1 { daa, authority, prior_record_root, population,
+                    bindings_root, binding_count, operators_root, last_seed, last_beacon_id });
+            }
+        }
         self.rebuild_reservations()
     }
 
     fn stage_seal(&mut self, step_daa: u64, view: &impl ConsensusViewV1, events: &mut PanelFoldEventsV1) -> Result<(), PanelErrorV1> {
         // Seal against the *parent* checkpoint, before this block's registrations/topups/objects.
         let (policy, network, ruleset, tip, height, daa) = (self.policy, self.network, self.ruleset, self.tip, self.height, self.daa);
+        let complete = complete_population_version_v1(self.version);
+        let mut retained: u64 = self.claims.values().filter_map(|r| r.snapshot.as_ref()).map(|s| s.candidates.len() as u64).sum();
         for record in self.claims.values_mut() {
             if record.phase != ClaimPhaseV3::PendingSeal {
                 continue;
@@ -402,23 +437,55 @@ impl PermissionlessPanelStateV1 {
             // A stratified claim's population carries each candidate's stratum bits; sorted with them, so they stay aligned.
             let (candidates, strata_members) = match &record.strata {
                 None => {
-                    let mut candidates = view.candidates(&record.claim)?;
-                    if candidates.len() > policy.max_candidates as usize {
+                    let mut candidates = match view.candidates(&record.claim) {
+                        Err(PanelErrorV1::ResourceLimit) if complete => {
+                            Self::void(record, step_daa, NonFraudReasonV1::PopulationResourceLimit, events);
+                            continue;
+                        }
+                        result => result?,
+                    };
+                    if candidates.len() > policy.max_candidates as usize
+                        || (complete && retained + candidates.len() as u64 > MAX_COMPLETE_RETAINED_CANDIDATES_V1)
+                    {
+                        if complete {
+                            Self::void(record, step_daa, NonFraudReasonV1::PopulationResourceLimit, events);
+                            continue;
+                        }
                         return Err(PanelErrorV1::ResourceLimit);
                     }
-                    candidates.sort_by_key(|s| s.bond);
+                    if complete {
+                        candidates.sort_by_key(|s| (s.operator, s.bond));
+                    } else {
+                        candidates.sort_by_key(|s| s.bond);
+                    }
                     (candidates, Vec::new())
                 }
                 Some(strata) => {
-                    let (candidates, members) = view.stratified_candidates(&record.claim, strata)?;
-                    if candidates.len() > policy.max_candidates as usize {
+                    let (candidates, members) = match view.stratified_candidates(&record.claim, strata) {
+                        Err(PanelErrorV1::ResourceLimit) if complete => {
+                            Self::void(record, step_daa, NonFraudReasonV1::PopulationResourceLimit, events);
+                            continue;
+                        }
+                        result => result?,
+                    };
+                    if candidates.len() > policy.max_candidates as usize
+                        || (complete && retained + candidates.len() as u64 > MAX_COMPLETE_RETAINED_CANDIDATES_V1)
+                    {
+                        if complete {
+                            Self::void(record, step_daa, NonFraudReasonV1::PopulationResourceLimit, events);
+                            continue;
+                        }
                         return Err(PanelErrorV1::ResourceLimit);
                     }
                     if candidates.len() != members.len() {
                         return Err(PanelErrorV1::InvalidSnapshot);
                     }
                     let mut paired: Vec<(SeatCandidateV1, u64)> = candidates.into_iter().zip(members).collect();
-                    paired.sort_by_key(|(s, _)| s.bond);
+                    if complete {
+                        paired.sort_by_key(|(s, _)| (s.operator, s.bond));
+                    } else {
+                        paired.sort_by_key(|(s, _)| s.bond);
+                    }
                     paired.into_iter().unzip()
                 }
             };
@@ -454,6 +521,9 @@ impl PermissionlessPanelStateV1 {
                 candidates,
                 strata_members,
             };
+            if complete {
+                retained += snapshot.candidates.len() as u64;
+            }
             snapshot.root = snapshot.computed_root();
             let id = claim_seal_id(network, ruleset, record, &snapshot, release, epoch);
             record.seal = Some(ClaimSealV1 {
@@ -550,7 +620,8 @@ impl PermissionlessPanelStateV1 {
                 let snapshot = record.snapshot.as_ref().ok_or(PanelErrorV1::InvalidCarriage)?;
                 record.entropy_output = Some(*output);
                 let seed = panel_seed_v3(network, ruleset, seal, snapshot, *output);
-                let beacon_id = digest("misaka-palw/panel-v3/beacon", &(network, ruleset, policy.beacon_scheme, seal.beacon_epoch, output));
+                let beacon_id =
+                    digest("misaka-palw/panel-v3/beacon", &(network, ruleset, policy.beacon_scheme, seal.beacon_epoch, output));
                 record.phase = ClaimPhaseV3::EntropyReady {
                     ready_daa: ready,
                     assignment_point: add(ready, policy.assignment_delay_daa)?,
@@ -602,6 +673,22 @@ impl PermissionlessPanelStateV1 {
             budget = budget.saturating_sub(cost);
             spent += cost;
             let mut r = self.claims.remove(&id).unwrap();
+            if complete_population_version_v1(self.version) {
+                let history: u64 = self
+                    .claims
+                    .values()
+                    .chain(std::iter::once(&r))
+                    .flat_map(|r| &r.binding_history)
+                    .map(|b| b.seats.len() as u64)
+                    .sum();
+                let need = r.strata.map_or(u64::from(policy.seat_count), |s| s.seat_count() as u64);
+                if history + need > MAX_COMPLETE_HISTORY_SEATS_V1 {
+                    Self::void(&mut r, step_daa, NonFraudReasonV1::PopulationResourceLimit, events);
+                    self.claims.insert(id, r);
+                    self.rebuild_reservations()?;
+                    continue;
+                }
+            }
             let (seed, beacon_id, ready, point, retry) = match &r.phase {
                 ClaimPhaseV3::EntropyReady { seed, beacon_id, ready_daa, assignment_point } => {
                     (*seed, *beacon_id, *ready_daa, *assignment_point, 0)
@@ -671,7 +758,21 @@ impl PermissionlessPanelStateV1 {
         let mut seats = Vec::new();
         for (role, needed) in [(OUTSIDER_ROLE_V1, policy.outsider_seats), (CLASS_ROLE_V1, policy.seat_count - policy.outsider_seats)] {
             let mut selected = 0;
-            for bond in seat_order_v1(snapshot, seed, retry, role, &used)? {
+            let ranking = if complete_population_version_v1(self.version) {
+                seat_prefix_streaming_v1(
+                    snapshot.candidates.iter().cloned(),
+                    seed,
+                    retry,
+                    role,
+                    &used,
+                    usize::from(needed),
+                    policy.max_candidates,
+                    |c| self.has_headroom(r, c, view),
+                )?
+            } else {
+                seat_order_v1(snapshot, seed, retry, role, &used)?
+            };
+            for bond in ranking {
                 if selected == needed {
                     break;
                 }
@@ -730,7 +831,27 @@ impl PermissionlessPanelStateV1 {
                     barred.extend(outsiders.iter().copied());
                 }
                 let mut selected = 0;
-                for bond in stratum_seat_order_v1(snapshot, stratum, seed, retry, role, &barred)? {
+                let ranking = if complete_population_version_v1(self.version) {
+                    let rows = snapshot
+                        .candidates
+                        .iter()
+                        .zip(&snapshot.strata_members)
+                        .filter(|(_, bits)| role != CLASS_ROLE_V1 || **bits & (1u64 << stratum) != 0)
+                        .map(|(s, _)| s.clone());
+                    seat_prefix_streaming_v1(
+                        rows,
+                        stratum_seed_v1(seed, stratum),
+                        retry,
+                        role,
+                        &barred,
+                        usize::from(needed),
+                        self.policy.max_candidates,
+                        |c| seats.contains(&c.bond) || self.has_headroom(r, c, view),
+                    )?
+                } else {
+                    stratum_seat_order_v1(snapshot, stratum, seed, retry, role, &barred)?
+                };
+                for bond in ranking {
                     if selected == needed {
                         break;
                     }
@@ -779,33 +900,31 @@ impl PermissionlessPanelStateV1 {
             return Err(PanelErrorV1::InvalidSnapshot);
         }
         let pending = self.claims.values().filter(|r| !r.phase.terminal());
-        if self.claims.len() >= self.policy.max_tracked_claims as usize
+        let active = self.claims.values().filter(|r| !matches!(r.phase, ClaimPhaseV3::Retired(_))).count();
+        if (self.version == WIRE_VERSION_RETIRED_V1 && self.claims.len() >= MAX_RETIRED_ARCHIVE_CLAIMS_V1)
+            || active >= self.policy.max_tracked_claims as usize
             || pending.clone().count() >= self.policy.max_pending as usize
             || pending.filter(|r| r.claim.producer == claim.producer).count() >= self.policy.max_pending_per_bond as usize
         {
             return Err(PanelErrorV1::ResourceLimit);
         }
         let order = self.next_order;
+        let record = ClaimRecordV3 {
+            claim: claim.clone(), accepted_block: block, accepted_daa: daa, accepted_height: height,
+            acceptance_order: order, occurrence_index: index, seal: None, snapshot: None,
+            entropy_output: None, used_operators: Vec::new(), binding_history: Vec::new(),
+            phase: ClaimPhaseV3::PendingSeal, strata,
+        };
+        if self.version == WIRE_VERSION_RETIRED_V1 {
+            let size = borsh::object_length(self).map_err(|_| PanelErrorV1::Overflow)? as u64;
+            let row = borsh::object_length(&record).map_err(|_| PanelErrorV1::Overflow)? as u64;
+            if size.checked_add(row).and_then(|n| n.checked_add(128)).is_none_or(|n| n > MAX_COMPLETE_STATE_BYTES_V1) {
+                return Err(PanelErrorV1::ResourceLimit);
+            }
+        }
         self.next_order = add(order, 1)?;
         self.work_ids.insert(claim.work_id);
-        self.claims.insert(
-            claim.claim_id,
-            ClaimRecordV3 {
-                claim: claim.clone(),
-                accepted_block: block,
-                accepted_daa: daa,
-                accepted_height: height,
-                acceptance_order: order,
-                occurrence_index: index,
-                seal: None,
-                snapshot: None,
-                entropy_output: None,
-                used_operators: Vec::new(),
-                binding_history: Vec::new(),
-                phase: ClaimPhaseV3::PendingSeal,
-                strata,
-            },
-        );
+        self.claims.insert(claim.claim_id, record);
         Ok(())
     }
 
@@ -865,10 +984,54 @@ impl PermissionlessPanelStateV1 {
         Ok(used)
     }
 
+    fn validate_retired_record_v1(&self, r: &ClaimRecordV3, t: &PanelRetiredClaimV1) -> Result<(), PanelErrorV1> {
+        if self.version != WIRE_VERSION_RETIRED_V1 || t.daa < r.accepted_daa || t.daa > self.daa
+            || r.accepted_height > self.height || r.accepted_daa > self.daa || r.claim.required_exposure == 0
+            || r.snapshot.is_some() || !r.binding_history.is_empty() || !r.used_operators.is_empty()
+            || t.prior_record_root == Hash64::default() || t.bindings_root == Hash64::default() || t.operators_root == Hash64::default()
+            || t.authority.native_parent_root == Hash64::default() || t.authority.native_parent_checkpoint == Hash64::default()
+            || r.strata.is_some_and(|s| s.validate().is_err()) || t.population.is_some() != r.seal.is_some()
+            || t.binding_count > u32::from(self.policy.max_retries) + 1 || t.last_seed.is_some() != (t.binding_count > 0)
+            || t.last_seed.is_some() != t.last_beacon_id.is_some()
+            || (t.last_seed.is_some() && r.entropy_output.is_none()) || (r.entropy_output.is_some() && r.seal.is_none()) {
+            return Err(PanelErrorV1::InvalidCarriage);
+        }
+        if let (Some(population), Some(seal)) = (&t.population, &r.seal) {
+            if population.candidate_count > self.policy.max_candidates || population.checkpoint != seal.checkpoint
+                || population.checkpoint_height > self.height || population.checkpoint_daa > self.daa
+                || population.checkpoint_daa < r.accepted_daa || population.root == Hash64::default()
+                || population.checkpoint_height != seal.checkpoint_height || population.checkpoint_daa != seal.checkpoint_daa
+                || seal.accepted_block != r.accepted_block || seal.accepted_daa != r.accepted_daa
+                || seal.accepted_height != r.accepted_height || seal.acceptance_order != r.acceptance_order
+                || seal.occurrence_index != r.occurrence_index || seal.checkpoint_height != add(r.accepted_height, self.policy.seal_depth_blocks)?
+                || seal.anchor_slot != seal.beacon_epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?
+                || seal.checkpoint_daa >= seal.anchor_slot || seal.beacon_epoch != add(seal.checkpoint_daa / self.policy.beacon_period_daa, 1)? {
+                return Err(PanelErrorV1::InvalidCarriage);
+            }
+            // The seal needs only the checkpoint and ORIGINAL complete population root.
+            let snapshot = PanelSnapshotV1 { root: population.root, checkpoint: population.checkpoint,
+                checkpoint_height: population.checkpoint_height, checkpoint_daa: population.checkpoint_daa,
+                class_id: r.claim.class_id, excluded_bond: r.claim.producer, excluded_operator: r.claim.producer_operator,
+                excluded_key: r.claim.producer_key, policy_id: self.policy.id(), candidates: Vec::new(), strata_members: Vec::new() };
+            if seal.id != claim_seal_id(self.network, self.ruleset, r, &snapshot, seal.anchor_slot, seal.beacon_epoch) { return Err(PanelErrorV1::InvalidCarriage); }
+            if let (Some(seed), Some(beacon_id), Some(output)) = (t.last_seed, t.last_beacon_id, r.entropy_output) {
+                if seed != panel_seed_v3(self.network, self.ruleset, seal, &snapshot, output)
+                    || beacon_id != digest("misaka-palw/panel-v3/beacon", &(self.network, self.ruleset, self.policy.beacon_scheme, seal.beacon_epoch, output)) {
+                    return Err(PanelErrorV1::InvalidCarriage);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), PanelErrorV1> {
-        self.policy.validate()?;
-        if self.version != WIRE_VERSION_V2
-            || self.claims.len() > self.policy.max_tracked_claims as usize
+        if ![WIRE_VERSION_V2, WIRE_VERSION_COMPLETE_V1, WIRE_VERSION_RETIRED_V1].contains(&self.version) {
+            return Err(PanelErrorV1::InvalidCarriage);
+        }
+        self.policy.validate_for_version(self.version)?;
+        if ![WIRE_VERSION_V2, WIRE_VERSION_COMPLETE_V1, WIRE_VERSION_RETIRED_V1].contains(&self.version)
+            || self.claims.values().filter(|r| !matches!(r.phase, ClaimPhaseV3::Retired(_))).count() > self.policy.max_tracked_claims as usize
+            || (self.version == WIRE_VERSION_RETIRED_V1 && self.claims.len() > MAX_RETIRED_ARCHIVE_CLAIMS_V1)
             || self.work_ids.len() != self.claims.len()
             || self.claims.values().filter(|r| !r.phase.terminal()).count() > self.policy.max_pending as usize
             || self.beacons.len() > self.policy.max_pending as usize
@@ -888,10 +1051,19 @@ impl PermissionlessPanelStateV1 {
                 return Err(PanelErrorV1::InvalidCarriage);
             }
         }
+        if complete_population_version_v1(self.version) {
+            let candidates: u64 = self.claims.values().filter_map(|r| r.snapshot.as_ref()).map(|s| s.candidates.len() as u64).sum();
+            let history: u64 = self.claims.values().flat_map(|r| &r.binding_history).map(|b| b.seats.len() as u64).sum();
+            if candidates > MAX_COMPLETE_RETAINED_CANDIDATES_V1 || history > MAX_COMPLETE_HISTORY_SEATS_V1 {
+                return Err(PanelErrorV1::ResourceLimit);
+            }
+        }
         let mut orders = BTreeSet::new();
         let mut ids = BTreeSet::new();
         for (id, r) in &self.claims {
-            if *id != r.claim.claim_id
+            if (!complete_population_version_v1(self.version)
+                && matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. }))
+                || *id != r.claim.claim_id
                 || !ids.insert(r.claim.work_id)
                 || !self.work_ids.contains(&r.claim.work_id)
                 || !orders.insert(r.acceptance_order)
@@ -899,6 +1071,10 @@ impl PermissionlessPanelStateV1 {
                 || r.binding_history.len() > self.policy.max_retries as usize + 1
             {
                 return Err(PanelErrorV1::InvalidCarriage);
+            }
+            if let ClaimPhaseV3::Retired(tombstone) = &r.phase {
+                self.validate_retired_record_v1(r, tombstone)?;
+                continue;
             }
             if r.accepted_height > self.height
                 || r.accepted_daa > self.daa
@@ -954,7 +1130,8 @@ impl PermissionlessPanelStateV1 {
                     || seal.acceptance_order != r.acceptance_order
                     || seal.occurrence_index != r.occurrence_index
                     || seal.checkpoint_height != add(r.accepted_height, self.policy.seal_depth_blocks)?
-                    || seal.anchor_slot != seal.beacon_epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?
+                    || seal.anchor_slot
+                        != seal.beacon_epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?
                     || seal.checkpoint_daa >= seal.anchor_slot
                     || seal.beacon_epoch != add(seal.checkpoint_daa / self.policy.beacon_period_daa, 1)?
                     || seal.checkpoint_height > self.height
@@ -964,8 +1141,12 @@ impl PermissionlessPanelStateV1 {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
                 let mut previous = None;
+                let mut distinct_bonds = BTreeSet::new();
                 for s in &snapshot.candidates {
-                    if previous.is_some_and(|p| p >= s.bond)
+                    let order =
+                        if complete_population_version_v1(self.version) { (s.operator, s.bond) } else { (Hash64::default(), s.bond) };
+                    if previous.is_some_and(|p| p >= order)
+                        || (complete_population_version_v1(self.version) && !distinct_bonds.insert(s.bond))
                         || s.collateral < self.policy.min_collateral
                         || add(s.registered_daa, self.policy.bond_maturity_daa)? > snapshot.checkpoint_daa
                         || s.bond == snapshot.excluded_bond
@@ -978,7 +1159,7 @@ impl PermissionlessPanelStateV1 {
                     {
                         return Err(PanelErrorV1::InvalidCarriage);
                     }
-                    previous = Some(s.bond);
+                    previous = Some(order);
                 }
                 if !strata_members_hold(r.strata.as_ref(), &snapshot.candidates, &snapshot.strata_members) {
                     return Err(PanelErrorV1::InvalidCarriage);
@@ -1038,6 +1219,13 @@ impl PermissionlessPanelStateV1 {
                 }
             }
         }
+        // The frozen source sets (R10F) are bounded separately (above) and ride beside the cap, as at import.
+        if self.version == WIRE_VERSION_RETIRED_V1
+            && borsh::object_length(self).map_err(|_| PanelErrorV1::Overflow)? as u64
+                > MAX_COMPLETE_STATE_BYTES_V1 + epoch_sources_bytes_bound_v1(&self.policy)
+        {
+            return Err(PanelErrorV1::ResourceLimit);
+        }
         let mut copy = self.clone();
         copy.rebuild_reservations()?;
         if copy.reservations != self.reservations {
@@ -1045,6 +1233,12 @@ impl PermissionlessPanelStateV1 {
         }
         Ok(())
     }
+}
+
+/// **The frozen source sets' byte bound** (R10F): at most `max_pending` epochs, each at most [`MAX_EPOCH_SOURCES_V1`] 64-byte
+/// profiles plus its key and clock. Added to the state-size bound of every wire version (R6781-F merge).
+fn epoch_sources_bytes_bound_v1(policy: &PanelPolicyV1) -> u64 {
+    policy.max_pending as u64 * (32 + MAX_EPOCH_SOURCES_V1 as u64 * 64)
 }
 
 /// Canonical accepted subject, pre-entropy checkpoint and frozen population. Lookup id/signature are absent.

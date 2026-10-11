@@ -163,6 +163,10 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **RFC-0004 Part II**: the `palw_typed_roots_v1` fence's activation (`None`: absent) — a genesis constant of the route, like the
     /// OPV policy: from this height the route's schedule holds the typed-roots extension `K2-TR-v1` Active.
     pub typed_roots: Option<u64>,
+    /// Dedicated source fence and immutable network terms; None below it and on all real presets.
+    pub beacon_source: Option<crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
+    /// Independent monetary fence for prepaid source contracts.
+    pub beacon_source_fee: Option<crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,

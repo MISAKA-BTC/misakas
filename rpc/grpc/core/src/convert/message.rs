@@ -871,6 +871,11 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         genesis_hash: item.genesis_hash.clone(),
         drill_salt_id: item.drill_salt_id.clone(),
         verification: item.verification.clone(),
+        import_session_available: item.import_session_available,
+        import_session_epoch: item.import_session_epoch,
+        import_session_point: item.import_session_point.clone(),
+        import_session_phase: item.import_session_phase.clone(),
+        pruning_import_stable: item.pruning_import_stable,
         error: None,
     }
 });
@@ -3340,6 +3345,11 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         genesis_hash: item.genesis_hash.clone(),
         drill_salt_id: item.drill_salt_id.clone(),
         verification: item.verification.clone(),
+        import_session_available: item.import_session_available,
+        import_session_epoch: item.import_session_epoch,
+        import_session_point: item.import_session_point.clone(),
+        import_session_phase: item.import_session_phase.clone(),
+        pruning_import_stable: item.pruning_import_stable,
     }
 });
 try_from!(_item: &protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest, {

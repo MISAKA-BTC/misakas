@@ -295,6 +295,7 @@ struct Inner {
 
     // Source Utxo Context (Used for source UtxoEntry aggregation)
     source_utxo_context: Option<UtxoContext>,
+    source_utxo_generation: Option<u64>,
     // Destination Utxo Context (Used only during transfer transactions)
     destination_utxo_context: Option<UtxoContext>,
     // Event multiplexer
@@ -475,6 +476,7 @@ impl Generator {
             signer,
             abortable: abortable.cloned(),
             mass_calculator,
+            source_utxo_generation: utxo_context.as_ref().map(|source| source.processor().utxo_observation_generation()),
             source_utxo_context: utxo_context,
             sig_op_count,
             minimum_signatures,
@@ -599,26 +601,36 @@ impl Generator {
     /// 3. From priority UTXO entries
     /// 4. From the UTXO source iterator (while filtering against priority UTXO entries)
     fn get_utxo_entry(&self, context: &mut Context, stage: &mut Stage) -> Option<UtxoEntryReference> {
-        context
-            .utxo_stash
-            .pop_front()
-            .or_else(|| stage.utxo_iterator.as_mut().and_then(|utxo_stage_iterator| utxo_stage_iterator.next()))
-            .or_else(|| context.priority_utxo_entries.as_mut().and_then(|entries| entries.pop_front()))
-            .or_else(|| {
-                loop {
-                    let utxo_entry = context.utxo_source_iterator.next()?;
+        loop {
+            let entry = context
+                .utxo_stash
+                .pop_front()
+                .or_else(|| stage.utxo_iterator.as_mut().and_then(|utxo_stage_iterator| utxo_stage_iterator.next()))
+                .or_else(|| context.priority_utxo_entries.as_mut().and_then(|entries| entries.pop_front()))
+                .or_else(|| {
+                    loop {
+                        let utxo_entry = context.utxo_source_iterator.next()?;
 
-                    if let Some(filter) = context.priority_utxo_entry_filter.as_ref()
-                        && filter.contains(&utxo_entry)
-                    {
-                        // skip the entry from the iterator intake
-                        // if it has been supplied as a priority entry
-                        continue;
+                        if let Some(filter) = context.priority_utxo_entry_filter.as_ref()
+                            && filter.contains(&utxo_entry)
+                        {
+                            // skip the entry from the iterator intake
+                            // if it has been supplied as a priority entry
+                            continue;
+                        }
+
+                        break Some(utxo_entry);
                     }
-
-                    break Some(utxo_entry);
-                }
-            })
+                })?;
+            // Priority entries and the mass-overflow stash bypass the context's
+            // iterator. Recheck them too when generating from a live wallet.
+            if self.inner.source_utxo_context.as_ref().is_none_or(|source| {
+                source.processor().network_id().ok() == Some(self.inner.network_id) && source.is_entry_spendable(&entry)
+                    && Some(source.processor().utxo_observation_generation()) == self.inner.source_utxo_generation
+            }) {
+                return Some(entry);
+            }
+        }
     }
 
     /// Adds a [`UtxoEntryReference`] to the UTXO stash. UTXO stash

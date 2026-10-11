@@ -200,6 +200,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
     /// every shipped preset walks the mergeset exactly as before.
     pub palw_round_verdicts: Option<PalwRoundVerdictsV1>,
+    pub palw_round_fee_incomes: Vec<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
 }
 
 /// **ADR-0125: a merging block's verdicts on its round blocks.** A round block outside `permitted`
@@ -210,13 +211,19 @@ pub(super) struct PalwRoundVerdictsV1 {
     pub round_blocks: BlockHashSet,
     /// Those whose permit the parent state grants.
     pub permitted: BlockHashSet,
+    /// Authenticated permit holders; fee previews only use this actual bond.
+    pub fee_recipients: BlockHashMap<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    pub fee_budget: Option<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeAdmissionV1>,
     /// The permits they use, sorted — what the fold records.
     pub uses: Vec<kaspa_consensus_core::palw_execution_lane_v1::PalwExecPermitUseV1>,
     /// Each round block's verdict as the telemetry ledger records it (lane SCAN): the lineage of the
     /// permit it holds, or the named reason it does not. Read by nobody in consensus.
     pub judged: Vec<(
         BlockHash,
-        Result<kaspa_consensus_core::palw_exec_view_v1::PalwRoundLineageV1, kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1>,
+        Result<
+            kaspa_consensus_core::palw_exec_view_v1::PalwRoundLineageV1,
+            kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1,
+        >,
     )>,
 }
 
@@ -244,6 +251,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
             palw_round_verdicts: None,
+            palw_round_fee_incomes: Vec::new(),
         }
     }
 
@@ -342,6 +350,33 @@ impl<'a> BondSpendFilter<'a> {
 }
 
 impl VirtualStateProcessor {
+    /// The amount the recipient can actually collect, shared by Round fee
+    /// admission, template preflight and the final coinbase reward calculation.
+    pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
+        let rent_active = self.palw_certification_rent_at(daa) || self.palw_model_lines_active_at(daa);
+        let rent = if rent_active && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
+                .objects
+                .first()
+                .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, daa))
+                .map(|carried| {
+                    // LG14-A: the canonical FP proof appended to contradiction 13 is priced past the public-filer fence, read at the
+                    // same DAA by the acceptance walk and here.
+                    kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
+                        &carried.object,
+                        self.palw_offence_attribution_at(daa),
+                        self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(daa)),
+                        self.palw_legacy_public_filer_at(daa),
+                    )
+                })
+                .unwrap_or(0)
+                .min(fee)
+        } else {
+            0
+        };
+        fee.saturating_sub(bond_burned.saturating_add(rent))
+    }
+
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state
     ///
     /// kaspa-pq Phase 10/11 (ADR-0016 §D.4): `selected_parent_bond_view` is the
@@ -457,8 +492,38 @@ impl VirtualStateProcessor {
                     palw_locked: &ctx.palw_v2_locked_bonds,
                     palw_burns: &ctx.palw_v2_bond_burns,
                 });
-            let (validated_transactions, inner_multiset) =
+            let (mut validated_transactions, mut inner_multiset) =
                 self.validate_transactions_with_muhash_in_parallel(&txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
+
+            // A permit grants execution rights, but cannot mint monetary R.
+            // Reserve the entire actual collectible native fee before any
+            // transaction changes the UTXO diff, accepted IDs or MuHash. On a
+            // refusal the native body is wholly unaccepted and charges no fee.
+            // The independently held execution permit still bounds EVM work.
+            let mut round_income = None;
+            if let Some(verdicts) = ctx.palw_round_verdicts.as_mut() {
+                if verdicts.permitted.contains(&merged_block) {
+                    if let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut()) {
+                        let maximum = validated_transactions.iter().try_fold(0u64, |sum, (tx, _)| {
+                            let burned = bond_filter.map(|filter| filter.burn_owed(tx.tx)).unwrap_or(0);
+                            sum.checked_add(self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score))
+                        });
+                        let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+                            block: merged_block,
+                            bond: *bond,
+                            maximum_sompi,
+                            actual_sompi: maximum_sompi,
+                        });
+                        if income.is_some_and(|income| budget.admit(income).is_ok()) {
+                            round_income = income;
+                        } else {
+                            validated_transactions.clear();
+                            inner_multiset = MuHash::new();
+                            info!("[palw-round-lane] Round {merged_block} native body refused: recipient reward budget exhausted");
+                        }
+                    }
+                }
+            }
 
             ctx.multiset_hash.combine(&inner_multiset);
 
@@ -522,39 +587,19 @@ impl VirtualStateProcessor {
                 // above the rent is ordinary carriage and stays with the miner, which is why an
                 // ordinary court move or a free-prompt commitment — objects no rule prices — burn
                 // nothing at all.
-                let rent_burned = if collect_carrier_fees && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
-                    kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(
-                        validated_tx.tx,
-                    ))
-                    .objects
-                    .first()
-                    // A-2 uniformity: a kind whose owning fence is not in force here is the live build's undecodable payload, and
-                    // undecodable bytes burn no rent there — so none here either, whatever a later kind's ceiling would say.
-                    .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, pov_daa_score))
-                    // ADR-0152 v3.1 (the Phase 3 review): past `palw_offence_attribution` a whole-prompt
-                    // `PromptNotAnchored` pays its prompt's carriage too; below it this is v1 exactly.
-                    // ADR-0160 F-B: and below the batch fence a kind-3 whose receipt is `Windowed`
-                    // prices as `0e8ec984e` reads it — undecodable, so no prompt rent — or this
-                    // burn, and so the coinbase, would differ between the two builds.
-                    .map(|carried| {
-                        kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
-                            &carried.object,
-                            self.palw_offence_attribution_at(pov_daa_score),
-                            self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(pov_daa_score)),
-                            self.palw_legacy_public_filer_at(pov_daa_score),
-                        )
-                    })
-                    .unwrap_or(0)
-                    .min(validated_tx.calculated_fee)
-                } else {
-                    0
-                };
-                block_fee += validated_tx.calculated_fee.saturating_sub(owed.saturating_add(rent_burned));
+                let collectible =
+                    self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                block_fee += collectible;
                 if finality_fee_active
                     && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
                 {
                     finality_fee += validated_tx.calculated_fee;
                 }
+            }
+
+            if let Some(income) = round_income {
+                debug_assert_eq!(income.actual_sompi, block_fee, "preflight and actual collectible fees share one rule");
+                ctx.palw_round_fee_incomes.push(income);
             }
 
             ctx.mergeset_acceptance_data.push(MergesetBlockAcceptanceData {
@@ -1011,7 +1056,9 @@ impl VirtualStateProcessor {
         // shipped chain carried one of these transactions (ADR-0134 §2).
         self.check_compute_overlay_retired(&txs, header.daa_score)?;
         if self.dns_retired_at(header.daa_score) {
-            if let Some(tx) = txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)) {
+            if let Some(tx) =
+                txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id))
+            {
                 return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
             }
         }
@@ -1053,8 +1100,19 @@ impl VirtualStateProcessor {
             validator_pool,
         );
         let (newly_included_stake, expected_stake) = if self.dns_retired_at(header.daa_score) {
-            self.native_inclusion_ratio(&ctx.ghostdag_data, &mergeset_non_daa, &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: header.hash, daa_score: header.daa_score, blue_score: header.blue_score, subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score) })
-        } else { (newly_included_stake, expected_stake) };
+            self.native_inclusion_ratio(
+                &ctx.ghostdag_data,
+                &mergeset_non_daa,
+                &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: header.hash,
+                    daa_score: header.daa_score,
+                    blue_score: header.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                },
+            )
+        } else {
+            (newly_included_stake, expected_stake)
+        };
         ctx.validator_rewarded_keys = rewarded_keys;
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): stash this block's validator
@@ -1554,8 +1612,14 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> AttestationShardDecision {
-        if self.dns_retired_at(daa_score) && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
-            return AttestationShardDecision::Drop { reason: AttestationDropReason::DnsRetired, bond: TransactionOutpoint::new(tx.id(), 0), epoch: 0 };
+        if self.dns_retired_at(daa_score)
+            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)
+        {
+            return AttestationShardDecision::Drop {
+                reason: AttestationDropReason::DnsRetired,
+                bond: TransactionOutpoint::new(tx.id(), 0),
+                epoch: 0,
+            };
         }
         let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated)
@@ -2197,7 +2261,9 @@ pub(super) fn proved_slashing_evidence_txs(
     evidence_window_blocks: u64,
 ) -> Vec<Transaction> {
     txs.iter()
-        .filter(|tx| !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty())
+        .filter(|tx| {
+            !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty()
+        })
         .cloned()
         .collect()
 }

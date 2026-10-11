@@ -23,11 +23,57 @@
 
 use super::*;
 use crate::palw_bond_budget_v1::*;
+#[path = "palw_bond_budget_fold_v1/material.rs"]
+mod material;
+#[path = "palw_bond_budget_fold_v1/consumer.rs"]
+mod consumer;
+pub(super) use consumer::sweep_paid_consumers_v1;
 
 impl PalwChainStateV2 {
+    /// UTXO validation and producer preflight use the same first-fence legacy
+    /// seeds and clock release as the native fold, before any fee is collected.
+    pub fn round_fee_admission_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        ctx: &PalwBlockContextV2,
+        escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+    ) -> Option<PalwRoundFeeAdmissionV1> {
+        let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
+        let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
+        let mut builder = TransitionBuilder::new(self, params, false, false, false, false, &extras);
+        tick_bond_budget_v1(&mut builder, ctx).ok()?;
+        Some(PalwRoundFeeAdmissionV1 {
+            policy: mirror.policy.clone(),
+            book: builder.state.bond_budget.take().expect("active tick creates the budget"),
+            capital: self.bonds.iter().map(|(bond, row)| (*bond, row.collateral)).collect(),
+            daa_score: ctx.daa_score,
+        })
+    }
+
     /// **Lane BUDGET: the bond budget's engine**, once the fence's first block has folded.
     pub fn bond_budget(&self) -> Option<&PalwBondBudgetStateV1> {
         self.bond_budget.as_ref()
+    }
+
+    /// **A claim's native income reservation** (codex RFC-8's kind-0 recipient hold, `native_income_id_v1(claim, bond, 0)`): the R its
+    /// admission reserved for `bond`, which Final pays out of — a public read for fixtures and observers (R6781-F merge).
+    pub fn bond_budget_native_claim_income_v1(
+        &self,
+        claim: &Hash64,
+        bond: &PalwBondKeyV2,
+    ) -> Option<&crate::palw_bond_budget_v1::PalwBudgetClaimRowV1> {
+        self.bond_budget.as_ref()?.claim_row(&native_income_id_v1(*claim, bond, 0))
+    }
+
+    /// The durable R receipt for one actual native queue key and recipient.
+    /// Several source/Panel/kernel grants may coalesce here without losing
+    /// their aggregate monetary cap or actual coinbase payment clock.
+    pub fn bond_budget_native_queue_income_v1(
+        &self,
+        queue: Hash64,
+        bond: &PalwBondKeyV2,
+    ) -> Option<&crate::palw_bond_budget_v1::PalwBudgetClaimRowV1> {
+        self.bond_budget.as_ref()?.claim_row(&native_queued_income_id_v1(queue, bond))
     }
 
     /// **Does `bond`'s budget hold its capital at `now_daa`?** — the withdrawal hold (design §2.4): the capital that earned a window cannot
@@ -114,6 +160,67 @@ impl PalwChainStateV2 {
     }
 }
 
+/// The native and kernel claim hash domains remain distinct even if a caller
+/// presents equal raw bytes. Neither lane can consume or close the other's row.
+pub(super) fn kernel_budget_claim_id_v1(claim: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/kernel-claim/v1");
+    hash.update(claim);
+    finish(hash)
+}
+
+/// One recipient's funded source promise, independent of carrier replay or
+/// income from another market/EXEC/native claim. `source` is the signed immutable
+/// source subject (job/seal before reveal), not an as-yet-unknown revealed claim.
+pub(super) fn source_income_id_v1(context: Hash64, source: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/source-income/v1");
+    hash.update(context.as_byte_slice());
+    hash.update(source.as_byte_slice());
+    hash.update(&borsh::to_vec(bond).expect("a bond serializes"));
+    finish(hash)
+}
+
+/// Actual recipient holds are independent of the issuer's allocation envelope.
+/// Panel and EXEC funds are different rights even when the bond is the same.
+pub(super) fn native_income_id_v1(root: Hash64, bond: &PalwBondKeyV2, kind: u8) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/native-income/v1");
+    hash.update(root.as_byte_slice());
+    hash.update(&borsh::to_vec(bond).expect("a bond serializes"));
+    hash.update(&[kind]);
+    finish(hash)
+}
+
+/// Queue identity is exact, including coalesced Panel/kernel payouts. Moving
+/// a finished hold here needs no new schema field and never changes total R.
+pub(super) fn native_queued_income_id_v1(queue: Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/native-queued-income/v1");
+    hash.update(queue.as_byte_slice());
+    hash.update(&borsh::to_vec(bond).expect("a bond serializes"));
+    finish(hash)
+}
+
+pub(super) fn native_reporter_binding_id_v1(offence: Hash64) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/native-reporter-binding/v1");
+    hash.update(offence.as_byte_slice());
+    finish(hash)
+}
+
+pub(super) fn legacy_queue_liability_id_v1(queue: Hash64) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/legacy-queue-liability/v1");
+    hash.update(queue.as_byte_slice());
+    finish(hash)
+}
+
+/// A tranche is unique to the immutable award and its already-queued progress.
+/// It never coalesces with a different award's physical payment clock.
+pub(super) fn reporter_tranche_queue_v1(award: Hash64, progress: u64) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/reporter-tranche/v1");
+    hash.update(award.as_byte_slice());
+    hash.update(&progress.to_le_bytes());
+    let mut bytes = finish(hash).as_bytes();
+    bytes[0] = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_PAYOUT_KEY_PREFIX_V1;
+    Hash64::from_bytes(bytes)
+}
+
 // ---- delta application ------------------------------------------------------------------------------------------------------
 
 /// Delta 190, verify-then-install.
@@ -185,6 +292,343 @@ fn budget_refused(bond: PalwBondKeyV2, why: PalwBudgetRefusalV1) -> PalwStateV2E
 }
 
 impl TransitionBuilder<'_> {
+    pub(super) fn hold_native_recipient_v1(
+        &mut self,
+        root: Hash64,
+        bond: PalwBondKeyV2,
+        kind: u8,
+        now: u64,
+        until: u64,
+        maximum: u64,
+        kernel_credits: &[Hash64],
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(now) else { return Ok(()) };
+        if maximum == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(
+                &mirror.policy,
+                capital,
+                native_income_id_v1(root, &bond, kind),
+                bond,
+                now,
+                until.max(now),
+                maximum,
+                kernel_credits,
+                true,
+                j,
+            )
+        })
+        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native income admission has no budget engine".into()))?
+        .map_err(|why| budget_refused(bond, why))?;
+        self.bind_material_income_root_v1(now, root, native_income_id_v1(root, &bond, kind))
+    }
+
+    /// Freeze the actual named/valid-reveal winner's full maximum before an
+    /// award can become income. This reservation is funded entitlement metadata,
+    /// independent of currently available R, so evidence remains permissionless.
+    pub(super) fn bind_native_reporter_v1(
+        &mut self, now: u64, offence: Hash64, winner: PalwRewardWinnerV1, amount: u64, accepted: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.reporter_income_active_at(now) { return Ok(()); }
+        let actual = self.state.bonds.get(&winner.reporter).ok_or(PalwStateV2Error::MissingBond(winner.reporter))?;
+        if actual.payout_payload != winner.payload { return Err(PalwStateV2Error::BondBudgetRefused("native reporter frozen payout differs".into())); }
+        self.bond_budget_op(|budget, _, j| budget.bind_reporter_income_v1(native_reporter_binding_id_v1(offence),
+            PalwReporterIncomeBindingV1 {
+                recipient: Some(winner.reporter), payload: winner.payload, maximum: amount, accepted_daa: accepted,
+                awarded_daa: None, queue: None, paid_daa: None, historical_boundary: None,
+            }, j)).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native reporter binding has no budget engine".into()))?
+            .map_err(|why| budget_refused(winner.reporter, why))
+    }
+
+    /// Close a funded native reporter entitlement into the same tranche engine
+    /// used by objective kernel courts. The immutable winner is rooted before
+    /// classification; physical cash is credited only with real R/queue room.
+    pub(super) fn award_native_reporter_v1(
+        &mut self, now: u64, offence: Hash64, winner: PalwRewardWinnerV1, amount: u64,
+    ) -> Result<bool, PalwStateV2Error> {
+        if !self.params.reporter_income_active_at(now) { return Ok(false); }
+        let verdict = self.state.consumed_offences.get(&offence).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter award has no rooted terminal verdict".into()))?;
+        if verdict.accepted_daa > now || amount > verdict.collected {
+            return Err(PalwStateV2Error::BondBudgetRefused("reporter award precedes verdict or exceeds collected collateral".into()));
+        }
+        let subject = verdict.claim_id;
+        let material = self.params.material_income_active_at(now) && subject != Hash64::default();
+        let id = native_reporter_binding_id_v1(offence);
+        let policy = self.bond_budget_mirror_at(now).expect("checked active mirror").policy;
+        let reporter_from = self.params.reporter_income_from().expect("checked reporter fence");
+        self.bond_budget_op(|budget, _, j| {
+            let binding = budget.reporter_income.get(&id).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?;
+            if binding.recipient != Some(winner.reporter) || binding.payload != winner.payload || binding.maximum != amount
+                || binding.awarded_daa.is_some() || binding.queue.is_some() || binding.paid_daa.is_some() || now < binding.accepted_daa {
+                return Err(PalwBudgetRefusalV1::Assignment("native reporter award differs from its frozen maximum"));
+            }
+            if binding.accepted_daa < reporter_from {
+                // Already accepted native reward rights retain their full cash
+                // entitlement, even for a retired recipient or an overfull cap.
+                // The actual winner came from rooted best/reveal provenance.
+                budget.hold_native_income_v1(&policy,
+                    0, native_income_id_v1(offence, &winner.reporter, 3), winner.reporter,
+                    binding.accepted_daa, now, amount, &[], false, j)?;
+                budget.mark_reporter_awarded_v1(id, now, j)?;
+                if material { budget.bind_material_income_v1(subject, native_income_id_v1(offence, &winner.reporter, 3), j)?; }
+                return Ok(false);
+            }
+            budget.stage_reporter_income_v1(id, winner.reporter, now, amount, j)?;
+            budget.mark_reporter_awarded_v1(id, now, j)?;
+            if material { budget.bind_material_income_v1(subject, id, j)?; }
+            Ok(true)
+        }).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native reporter award has no budget engine".into()))?
+            .map_err(|why| budget_refused(winner.reporter, why))
+    }
+
+    /// The settlement's authenticated bond and immutable funded receipt are
+    /// recorded even when the recipient has no R room. Conviction has already
+    /// collected this exact award from real collateral; no money is issued here.
+    pub(super) fn stage_reporter_recipient_v1(
+        &mut self, award: Hash64, bond: PalwBondKeyV2, now: u64, amount: u64, subject: Hash64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.reporter_income_active_at(now) { return Ok(()); }
+        if amount == 0 { return Ok(()); }
+        let payload = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.payout_payload;
+        let material = self.params.material_income_active_at(now);
+        self.bond_budget_op(|budget, _, j| {
+            // Preflight the existing immutable receipt before changing either
+            // rooted table. Its payee is frozen now, never looked up by address.
+            if budget.claim_row(&award).is_some_and(|row| row.origin != PalwBudgetOriginV1::DeferredReporterIncome
+                || row.bond != bond || row.accepted_daa != now || row.reserved.reward_sompi != amount) {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+            budget.bind_reporter_income_v1(award, PalwReporterIncomeBindingV1 {
+                recipient: Some(bond), payload, maximum: amount, accepted_daa: now,
+                awarded_daa: Some(now), queue: None, paid_daa: None, historical_boundary: None,
+            }, j)?;
+            budget.stage_reporter_income_v1(award, bond, now, amount, j)?;
+            if material { budget.bind_material_income_v1(subject, award, j)?; }
+            Ok(())
+        })
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter award has no budget engine".into()))?
+            .map_err(|why| budget_refused(bond, why))
+    }
+
+    pub(super) fn pay_native_recipient_v1(
+        &mut self,
+        root: Hash64,
+        bond: PalwBondKeyV2,
+        kind: u8,
+        now: u64,
+        amount: u64,
+        queue_key: Hash64,
+        finished: bool,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(now) else { return Ok(()) };
+        if amount == 0 {
+            if finished {
+                self.cancel_native_recipient_v1(root, bond, kind);
+            }
+            return Ok(());
+        }
+        self.bind_material_income_root_v1(now, root, native_income_id_v1(root, &bond, kind))?;
+        self.bond_budget_op(|budget, _, j| {
+            budget.pay_native_income_v1(
+                &mirror.policy,
+                &native_income_id_v1(root, &bond, kind),
+                now,
+                amount,
+                native_queued_income_id_v1(queue_key, &bond),
+                finished,
+                j,
+            )
+        })
+        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native payment has no budget engine".into()))?
+        .map_err(|why| budget_refused(bond, why))
+    }
+
+    pub(super) fn cancel_native_recipient_v1(&mut self, root: Hash64, bond: PalwBondKeyV2, kind: u8) {
+        let id = native_income_id_v1(root, &bond, kind);
+        if self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.claim_row(&id))
+            .is_some_and(|r| r.live && matches!(r.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial))
+        {
+            self.bond_budget_op(|budget, _, j| budget.cancel_native_income_v1(&id, j)).expect("checked engine").expect("native hold");
+        }
+    }
+
+    /// Panel admission reserves every actual seat before its receipt can earn
+    /// money. Flat Panels use their fixed per-seat maximum; shard Panels use
+    /// the whole pool as a conservative maximum until their fixed shares are
+    /// available (a bond may occupy several strata).
+    pub(super) fn hold_panel_recipients_v1(
+        &mut self,
+        root: Hash64,
+        seats: &[PalwPanelSeatV2],
+        now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.bond_budget_mirror_at(now).is_none() {
+            return Ok(());
+        }
+        let claim = self.state.claims.get(&root).ok_or(PalwStateV2Error::MissingClaim(root))?.clone();
+        if claim.escrowed_reward == 0 {
+            return Ok(());
+        }
+        let bonds: BTreeSet<_> = seats.iter().map(|seat| seat.bond).collect();
+        let permille = self
+            .state
+            .claim_economics
+            .get(&root)
+            .map_or(crate::palw_panel_economy_v1::PALW_PANEL_POOL_PERMILLE_V1 as u16, |e| e.panel_share_permille);
+        let pool = (u128::from(claim.escrowed_reward) * u128::from(permille) / 1000) as u64;
+        let shard = self.state.tir_shard_claims.contains_key(&root)
+            || self.state.panel_v3.as_ref().and_then(|engine| engine.claim(&root)).is_some_and(|record| record.strata.is_some());
+        let maximum = if shard { pool } else { pool / bonds.len().max(1) as u64 };
+        let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &root)?.unwrap_or(claim.trace_retention_daa);
+        let checkpoint = self.checkpoint();
+        for bond in bonds {
+            if let Err(error) = self.hold_native_recipient_v1(root, bond, 1, now, until, maximum, &[]) {
+                self.restore(checkpoint);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn cancel_panel_recipients_v1(&mut self, root: Hash64) {
+        let bonds: Vec<_> =
+            self.state.panels.get(&root).into_iter().flat_map(|panel| panel.seats.iter().map(|seat| seat.bond)).collect();
+        for bond in bonds {
+            self.cancel_native_recipient_v1(root, bond, 1);
+        }
+    }
+
+    /// An executor's full native work share is bounded by the funded original
+    /// escrow. Kernel fee maxima are atomically reclassified, not added twice.
+    pub(super) fn hold_exec_recipient_v1(
+        &mut self,
+        root_id: Hash64,
+        bond: PalwBondKeyV2,
+        evidence: Hash64,
+        work: u64,
+        now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.bond_budget_mirror_at(now).is_none() {
+            return Ok(());
+        }
+        let root = self.state.exec_v2.roots.get(&root_id).ok_or(PalwStateV2Error::MissingClaim(root_id))?;
+        let claim = self.state.claims.get(&root_id).ok_or(PalwStateV2Error::MissingClaim(root_id))?;
+        // The root executor already owns the single issuer allocation hold.
+        if root.root_bond == bond {
+            return Ok(());
+        }
+        let prior = self
+            .state
+            .exec_v2
+            .slices
+            .range((root_id, 0)..=(root_id, u32::MAX))
+            .filter(|(_, slice)| slice.executor == bond)
+            .try_fold(0u64, |sum, (_, slice)| sum.checked_add(slice.range.work()?))
+            .ok_or(PalwStateV2Error::Overflow("EXEC recipient work"))?;
+        let total = prior.checked_add(work).ok_or(PalwStateV2Error::Overflow("EXEC recipient work"))?;
+        let allocation = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.claim_row(&native_income_id_v1(root_id, &root.root_bond, 0)))
+            .map_or(0, |row| row.reserved.reward_sompi.min(claim.escrowed_reward));
+        let maximum = (u128::from(allocation) * u128::from(total) / u128::from(root.total_work)) as u64;
+        if maximum == 0 {
+            return Ok(());
+        }
+        let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &root_id)?.expect("existing root");
+        let standalone = native_income_id_v1(evidence, &bond, 3);
+        let budget = self.state.bond_budget.as_ref();
+        let credit = if budget.and_then(|b| b.claim_row(&standalone)).is_some_and(|r| r.live && r.consumed.reward_sompi == 0) {
+            standalone
+        } else {
+            kernel_budget_claim_id_v1(&evidence.as_bytes())
+        };
+        let credits = budget
+            .and_then(|b| b.claim_row(&credit))
+            .filter(|r| {
+                r.bond == bond
+                    && r.in_window
+                    && r.live
+                    && r.consumed.reward_sompi == 0
+                    && matches!(
+                        r.origin,
+                        PalwBudgetOriginV1::KernelRoute | PalwBudgetOriginV1::Legacy | PalwBudgetOriginV1::NativeIncome
+                    )
+            })
+            .map(|_| vec![credit])
+            .unwrap_or_default();
+        self.hold_native_recipient_v1(root_id, bond, 2, now, until, maximum, &credits)
+    }
+
+    /// Keep the original allocation ceiling for grant calculation while its
+    /// monetary R is reclassified into the issuer's unpaid income hold. This
+    /// creates no additional R and leaves Q/B/F/T in the original claim row.
+    fn hold_issuer_income_v1(&mut self, ctx: &PalwBlockContextV2, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let Some(row) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&claim_id)).copied() else { return Ok(()) };
+        if !matches!(row.origin, PalwBudgetOriginV1::Attempt | PalwBudgetOriginV1::Rider | PalwBudgetOriginV1::Legacy)
+            || row.reserved.reward_sompi == 0
+        {
+            return Ok(());
+        }
+        let capital = self.state.bonds.get(&row.bond).ok_or(PalwStateV2Error::MissingBond(row.bond))?.collateral;
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(
+                &mirror.policy,
+                capital,
+                native_income_id_v1(claim_id, &row.bond, 0),
+                row.bond,
+                row.accepted_daa,
+                ctx.daa_score,
+                row.reserved.reward_sompi,
+                &[claim_id],
+                false,
+                j,
+            )
+        })
+        .expect("claim engine")
+        .map_err(|why| budget_refused(row.bond, why))?;
+        self.bind_material_income_root_v1(ctx.daa_score, claim_id, native_income_id_v1(claim_id, &row.bond, 0))
+    }
+
+    pub(super) fn reserve_round_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        income: PalwRoundFeeIncomeV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        if income.maximum_sompi == 0 && income.actual_sompi == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bond(&income.bond).ok_or(PalwStateV2Error::MissingBond(income.bond))?.collateral;
+        if self.state.bond_budget.is_none() {
+            self.create_bond_budget_v1(ctx, &mirror)?;
+        }
+        self.bond_budget_op(|budget, _, j| {
+            budget.reserve_income_v1(
+                &mirror.policy,
+                capital,
+                palw_round_income_id_v1(income.block, &income.bond),
+                income.bond,
+                ctx.daa_score,
+                income.maximum_sompi,
+                income.actual_sompi,
+                PalwBudgetOriginV1::RoundFee,
+                j,
+            )
+        })
+        .expect("created")
+        .map_err(|why| budget_refused(income.bond, why))
+    }
+
     /// The engine's journal, as deltas.
     fn journal_bond_budget(&mut self, writes: Vec<PalwBudgetWriteV1>) {
         for write in writes {
@@ -273,7 +717,7 @@ impl TransitionBuilder<'_> {
     ) -> Result<(), PalwStateV2Error> {
         if self.state.bond_budget.is_none() {
             let mirror = self.bond_budget_mirror_at(ctx.daa_score).expect("a plan exists only past the fence");
-            self.create_bond_budget_v1(ctx, &mirror);
+            self.create_bond_budget_v1(ctx, &mirror)?;
         }
         let bond = plan.bond;
         let out = self
@@ -302,11 +746,15 @@ impl TransitionBuilder<'_> {
         // rows are written by now).
         out.map_err(|why| {
             PalwStateV2Error::BondBudgetRefused(format!("bond {bond:?}: the planned reservation could not be committed: {why}"))
-        })
+        })?;
+        if matches!(plan.origin, PalwBudgetOriginV1::Attempt | PalwBudgetOriginV1::Rider) {
+            self.hold_issuer_income_v1(ctx, claim_id)?;
+        }
+        Ok(())
     }
 
     /// Create the engine (delta 191, `None → Some`) and seed the window from every live old claim (design §2.9).
-    fn create_bond_budget_v1(&mut self, ctx: &PalwBlockContextV2, mirror: &PalwBondBudgetMirrorV1) {
+    fn create_bond_budget_v1(&mut self, ctx: &PalwBlockContextV2, mirror: &PalwBondBudgetMirrorV1) -> Result<(), PalwStateV2Error> {
         let budget = PalwBondBudgetStateV1::new(ctx.daa_score, &mirror.policy);
         self.entries.push(PalwDeltaEntryV2::BondBudgetHeader { old: None, new: Some(budget.header.clone()) });
         self.state.bond_budget = Some(budget);
@@ -315,8 +763,10 @@ impl TransitionBuilder<'_> {
         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
         let pricing = self.fp_pricing();
         let mut seeds: Vec<(Hash64, PalwBondKeyV2, u64, PalwBudgetVectorV1, u128)> = Vec::new();
+        let mut source_seeds: Vec<(Hash64, PalwBondKeyV2, u64, u64, u64, Option<(u64, Option<Hash64>)>)> = Vec::new();
         for (id, claim) in &self.state.claims {
-            if claim.accepted_daa.saturating_add(window) <= ctx.daa_score {
+            if claim.accepted_daa.saturating_add(window) <= ctx.daa_score && (claim.phase.is_terminal() || claim.escrowed_reward == 0)
+            {
                 continue;
             }
             let vector = match (&claim.source, &claim.phase) {
@@ -349,16 +799,104 @@ impl TransitionBuilder<'_> {
                     }
                 }
             };
+            let vector = if claim.accepted_daa.saturating_add(window) <= ctx.daa_score {
+                PalwBudgetVectorV1 { claims: 1, reward_sompi: vector.reward_sompi, ..PalwBudgetVectorV1::ZERO }
+            } else {
+                vector
+            };
             // PESG §6: an open old claim's liability collateral counts too (a Final one's FP spends hold none of their own).
             let liability = if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) { 0 } else { claim.reserved };
             seeds.push((*id, claim.bond, claim.accepted_daa, vector, liability));
+        }
+        // Old kernel work is also counted at the boundary, without changing
+        // its already signed economics. No old budget is silently minted anew.
+        if let Some(route) = &self.state.kernel_route {
+            let ledger = route.ledger().map_err(PalwStateV2Error::BondBudgetRefused)?;
+            {
+                for (claim, row) in &ledger.claims {
+                    if row.convicted || row.life.state.is_terminal() {
+                        continue;
+                    }
+                    let Some(bond) = route.bond_key_of(&row.producer) else { continue };
+                    seeds.push((
+                        kernel_budget_claim_id_v1(claim),
+                        bond,
+                        row.committed_daa,
+                        PalwBudgetVectorV1 {
+                            claims: 1,
+                            // Accepted EXEC work already owns one native allocation/share
+                            // hold seeded below. Its Q row creates no second R.
+                            reward_sompi: if self.state.exec_v2_root_of_kernel_claim_v1(&Hash64::from_bytes(*claim)).is_some() {
+                                0
+                            } else {
+                                ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount)
+                            },
+                            ..PalwBudgetVectorV1::ZERO
+                        },
+                        // PESG §6: a kernel claim reserves no V2 liability collateral of its own here.
+                        0,
+                    ));
+                }
+                // A fee promise is not a computation claim. Pending promises
+                // remain liabilities past accepted+W and even H+W on a sparse
+                // chain. Recent actual payment uses its payment+W clock.
+                use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1;
+                for ((context, producer), promise) in &ledger.beacon_source_fee_promises {
+                    let paid = match promise.outcome {
+                        None => None,
+                        Some(BeaconSourceFeeOutcomeV1::Refunded { .. }) => continue,
+                        Some(BeaconSourceFeeOutcomeV1::Paid { daa, .. }) => Some(daa),
+                    };
+                    let source = ledger
+                        .beacon_sources
+                        .get(&(*context, *producer))
+                        .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("migrating fee source is missing".into()))?;
+                    let bond = match route.bond_key_of(producer) {
+                        Some(bond) => bond,
+                        // A historical paid recipient whose immutable bond no
+                        // longer exists cannot accept new R under that key.
+                        None if paid.is_some() => continue,
+                        None => {
+                            return Err(PalwStateV2Error::BondBudgetRefused("migrating pending fee recipient bond is missing".into()));
+                        }
+                    };
+                    let paid = match paid {
+                        Some(daa) => {
+                            let payload = self.state.bonds.get(&bond).map(|row| row.payout_payload);
+                            let queue = payload.map(|p| crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&p));
+                            let queued = queue.filter(|key| {
+                                daa == ledger.daa
+                                    && (self.state.pending_payouts.get(key).is_some_and(|row| row.amount >= promise.fee)
+                                        || self.entries.iter().any(|entry| {
+                                            matches!(entry,
+                                                PalwDeltaEntryV2::Payout { key: drained, old: Some(row), new: None }
+                                                    if drained == key && row.amount >= promise.fee
+                                            )
+                                        }))
+                            });
+                            Some((daa, queued))
+                        }
+                        None => None,
+                    };
+                    let subject = super::palw_kernel_route_fold_v1::source_income_subject_v1(&source.job, &source.seal);
+                    source_seeds.push((
+                        source_income_id_v1(Hash64::from_bytes(*context), subject, &bond),
+                        bond,
+                        promise.accepted_daa,
+                        source.terms.hold_until,
+                        promise.fee,
+                        paid,
+                    ));
+                }
+            }
         }
         let policy = mirror.policy.clone();
         self.bond_budget_op(|budget, state, j| {
             for (id, bond, accepted, vector, liability) in seeds {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
-                // A seed is counted, never refused (the window may start over-full); its id is new to an empty engine.
-                let _ = budget.reserve_liable(
+                // Signed old rights are counted even if the first window is over-full (codex: a refusal is an error, never
+                // dropped); PESG §6's open liability collateral rides with each seed (integration).
+                budget.reserve_liable(
                     &policy,
                     capital,
                     id,
@@ -370,12 +908,548 @@ impl TransitionBuilder<'_> {
                     PalwBudgetOriginV1::Legacy,
                     false,
                     j,
-                );
+                )?;
             }
-        });
+            for (id, bond, accepted, hold_until, fee, paid) in source_seeds {
+                let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
+                budget.seed_source_income_v1(&policy, capital, id, bond, accepted, hold_until, fee, j)?;
+                if let Some((at, queue)) = paid {
+                    if let Some(queue) = queue {
+                        budget.queue_source_income_v1(
+                            &policy,
+                            &id,
+                            hold_until,
+                            at,
+                            fee,
+                            native_queued_income_id_v1(queue, &bond),
+                            j,
+                        )?;
+                    } else {
+                        // Old promises record logical Paid, not the physical
+                        // coinbase DAA. Count existing mapped income once until
+                        // first-fence + W as a conservative boundary hold;
+                        // this is not a claim that money was paid at the fence.
+                        budget.settle_source_income_v1(&policy, &id, hold_until, ctx.daa_score, fee, j)?;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .expect("created above")
+        .map_err(|why: PalwBudgetRefusalV1| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+        let pending: Vec<_> = self
+            .state
+            .kernel_route
+            .as_ref()
+            .map(|route| route.ledger())
+            .transpose()
+            .map_err(PalwStateV2Error::BondBudgetRefused)?
+            .into_iter()
+            .flat_map(|ledger| ledger.claims.into_iter())
+            .filter(|(_, row)| !row.convicted && !row.life.state.is_terminal())
+            .map(|(claim, row)| (Hash64::from_bytes(claim), row.liability_until.unwrap_or(ctx.daa_score)))
+            .collect();
+        for (claim, until) in pending {
+            self.hold_kernel_income_v1(ctx, claim, until)?;
+        }
+        self.seed_native_income_rights_v1(ctx, mirror)
+    }
+
+    fn initialize_reporter_income_v2(&mut self, ctx: &PalwBlockContextV2, mirror: &PalwBondBudgetMirrorV1) -> Result<(), PalwStateV2Error> {
+        self.bond_budget_op(|budget, _, j| budget.activate_reporter_income_v2(j)).expect("reporter fence requires budget");
+        // Pending old winners retain authenticated bond provenance in their
+        // rooted best record. Old awarded/pending cash does not: quarantine its
+        // exact queue rather than inferring recipient ownership from addresses.
+        let pending: Vec<_> = self.state.reward_pending.iter().filter_map(|(offence, row)|
+            row.best.map(|winner| (*offence, *row, winner))).collect();
+        for (offence, row, winner) in pending {
+            let accepted = self.state.consumed_offences.get(&offence).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("old pending reporter winner has no consumed provenance".into()))?.accepted_daa;
+            self.bond_budget_op(|budget, _, j| budget.bind_reporter_income_v1(native_reporter_binding_id_v1(offence),
+                PalwReporterIncomeBindingV1 {
+                    recipient: Some(winner.reporter), payload: winner.payload, maximum: row.amount, accepted_daa: accepted,
+                    awarded_daa: None, queue: None, paid_daa: None, historical_boundary: None,
+                }, j)).expect("created migration").map_err(|why| budget_refused(winner.reporter, why))?;
+        }
+        let mut unknown: BTreeMap<Hash64, (PalwPayoutV2, Option<u64>)> = self.state.pending_payouts.iter()
+            .map(|(queue, payout)| (*queue, (*payout, None))).collect();
+        for entry in &self.entries {
+            if let PalwDeltaEntryV2::Payout { key, old: Some(payout), new: None } = entry {
+                unknown.insert(*key, (*payout, Some(ctx.daa_score)));
+            }
+        }
+        for (offence, payout) in &self.state.reporter_rewards {
+            unknown.insert(crate::palw_vesting_v1::palw_reporter_payout_key_v1(offence), (*payout, None));
+        }
+        let book = self.state.bond_budget.as_ref().expect("created migration");
+        unknown.retain(|queue, _| !book.claims.iter().any(|(id, row)| row.origin == PalwBudgetOriginV1::NativeIncomeQueued
+            && *id == native_queued_income_id_v1(*queue, &row.bond)));
+        let historical_reporter_income = self.state.reporter_counters.awarded_sompi;
+        let boundary_until = ctx.daa_score.checked_add(mirror.policy.window_daa)
+            .ok_or(PalwStateV2Error::Overflow("legacy reporter income boundary"))?;
+        let mut boundary_hash = keyed(b"misaka-palw/bond-budget/legacy-reporter-history-boundary/v1");
+        boundary_hash.update(&ctx.daa_score.to_le_bytes());
+        let boundary_id = finish(boundary_hash);
+        self.bond_budget_op(|budget, _, j| {
+            if historical_reporter_income > 0 {
+                budget.bind_reporter_income_v1(boundary_id, PalwReporterIncomeBindingV1 {
+                    recipient: None, payload: Hash64::default(), maximum: 0, accepted_daa: ctx.daa_score,
+                    awarded_daa: None, queue: None, paid_daa: None,
+                    historical_boundary: Some((historical_reporter_income, boundary_until)),
+                }, j)?;
+            }
+            for (queue, (payout, paid)) in unknown {
+                if payout.amount == 0 { continue; }
+                budget.bind_reporter_income_v1(legacy_queue_liability_id_v1(queue), PalwReporterIncomeBindingV1 {
+                    recipient: None, payload: payout.payload, maximum: payout.amount, accepted_daa: ctx.daa_score,
+                    awarded_daa: None, queue: Some(queue), paid_daa: paid, historical_boundary: None,
+                }, j)?;
+            }
+            Ok(())
+        }).expect("created migration").map_err(|why: PalwBudgetRefusalV1| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
 
     // ---- hooks ---------------------------------------------------------------------------------------------------------------
+
+    /// Initial migration preserves already accepted native money, including
+    /// retired claim payees frozen in vesting receipts. Old pending rights can
+    /// make today's R overfull and refuse any additional monetary income.
+    fn seed_native_income_rights_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        mirror: &PalwBondBudgetMirrorV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let originals: Vec<_> = self
+            .state
+            .claims
+            .iter()
+            .filter(|(_, claim)| !claim.phase.is_terminal() && matches!(claim.source, PalwClaimSourceV2::Attempt))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in originals {
+            self.hold_issuer_income_v1(ctx, id)?;
+        }
+        let mut seeds: BTreeMap<(Hash64, PalwBondKeyV2, u8), (u64, u64, u64)> = BTreeMap::new();
+        for (root, row) in &self.state.vesting {
+            if row.producer.amount > 0 {
+                seeds.insert((*root, row.producer_bond, 0), (row.final_daa, row.expiry_daa, row.producer.amount));
+            }
+            for (bond, payout) in &row.seats {
+                if payout.amount == 0 {
+                    continue;
+                }
+                let seed = seeds.entry((*root, *bond, 1)).or_insert((row.final_daa, row.expiry_daa, 0));
+                seed.2 = seed.2.checked_add(payout.amount).ok_or(PalwStateV2Error::Overflow("old Panel income"))?;
+            }
+        }
+        for (root, row) in &self.state.exec_v2_rewards {
+            for ((bond, _), payout) in &row.legs {
+                let issuer = self.state.vesting.get(root).is_some_and(|native| native.producer_bond == *bond)
+                    || self.state.claims.get(root).is_some_and(|claim| claim.bond == *bond);
+                let seed = seeds.entry((*root, *bond, if issuer { 0 } else { 2 })).or_insert((row.final_daa, row.liability_until, 0));
+                seed.1 = seed.1.max(row.liability_until);
+                seed.2 = seed.2.checked_add(payout.amount).ok_or(PalwStateV2Error::Overflow("old EXEC income"))?;
+            }
+        }
+        // Existing bound work has already been accepted; reserve its maximum
+        // even if accepted+W elapsed before this fence.
+        for (root, duty) in &self.state.panel_duties {
+            let Some(claim) = self.state.claims.get(root).filter(|claim| !claim.phase.is_terminal()) else { continue };
+            let permille = self
+                .state
+                .claim_economics
+                .get(root)
+                .map_or(crate::palw_panel_economy_v1::PALW_PANEL_POOL_PERMILLE_V1 as u16, |e| e.panel_share_permille);
+            let pool = (u128::from(claim.escrowed_reward) * u128::from(permille) / 1000) as u64;
+            let maximum = if self.state.tir_shard_claims.contains_key(root) { pool } else { pool / duty.seats.len().max(1) as u64 };
+            for bond in duty.seats.keys() {
+                if maximum > 0 {
+                    seeds.insert((*root, *bond, 1), (claim.accepted_daa, claim.trace_retention_daa, maximum));
+                }
+            }
+        }
+        for (root_id, root) in &self.state.exec_v2.roots {
+            if matches!(
+                root.phase,
+                crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Settled { .. }
+                    | crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Voided { .. }
+            ) {
+                continue;
+            }
+            let claim = self.state.claims.get(root_id).ok_or(PalwStateV2Error::MissingClaim(*root_id))?;
+            let mut work: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+            for (_, slice) in self.state.exec_v2.slices.range((*root_id, 0)..=(*root_id, u32::MAX)) {
+                if slice.executor == root.root_bond {
+                    continue;
+                }
+                let sum = work.entry(slice.executor).or_default();
+                *sum = sum
+                    .checked_add(slice.range.work().ok_or(PalwStateV2Error::Overflow("old EXEC work"))?)
+                    .ok_or(PalwStateV2Error::Overflow("old EXEC work"))?;
+            }
+            let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, root_id)?.expect("root horizon");
+            for (bond, work) in work {
+                let maximum = (u128::from(claim.escrowed_reward) * u128::from(work) / u128::from(root.total_work)) as u64;
+                if maximum > 0 {
+                    seeds.insert((*root_id, bond, 2), (root.opened_daa, until, maximum));
+                }
+            }
+        }
+        for ((root, bond, kind), (accepted, until, maximum)) in seeds {
+            let capital = self.state.bonds.get(&bond).map_or(0, |row| row.collateral);
+            self.bond_budget_op(|budget, _, j| {
+                budget.hold_native_income_v1(
+                    &mirror.policy,
+                    capital,
+                    native_income_id_v1(root, &bond, kind),
+                    bond,
+                    accepted,
+                    until.max(ctx.daa_score),
+                    maximum,
+                    &[],
+                    false,
+                    j,
+                )
+            })
+            .expect("migration engine")
+            .map_err(|why| budget_refused(bond, why))?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn reserve_bond_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        maximum: u64,
+        actual: u64,
+        origin: PalwBudgetOriginV1,
+    ) -> Result<(), PalwStateV2Error> {
+        self.reserve_bond_income_for_queue_v1(ctx, bond, maximum, actual, origin, None)
+    }
+
+    /// Reserve the full collected fee before the fill and, when a positive
+    /// cash leg exists, retain it through that exact native queue's payment.
+    /// Pool-only owned income has no unpaid cash obligation and uses collection
+    /// plus W; a pool diversion is still counted once in the owner's full R.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reserve_bond_income_for_queue_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        maximum: u64,
+        actual: u64,
+        origin: PalwBudgetOriginV1,
+        queue: Option<Hash64>,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        if maximum == 0 && actual == 0 {
+            return Ok(());
+        }
+        let checkpoint = self.checkpoint();
+        let reserved = (|| {
+            let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+            if self.state.bond_budget.is_none() {
+                self.create_bond_budget_v1(ctx, &mirror)?;
+            }
+            let mut hash = keyed(b"misaka-palw/bond-budget/income/v1");
+            hash.update(ctx.block.as_byte_slice());
+            hash.update(&borsh::to_vec(&bond).expect("a bond serializes"));
+            hash.update(&[origin as u8]);
+            hash.update(&(self.entries.len() as u64).to_le_bytes());
+            let id = finish(hash);
+            self.bond_budget_op(|budget, _, j| {
+                budget.reserve_income_v1(&mirror.policy, capital, id, bond, ctx.daa_score, maximum, actual, origin, j)?;
+                if let Some(queue) = queue {
+                    budget.queue_collected_income_v1(&id, native_queued_income_id_v1(queue, &bond), j)?;
+                }
+                Ok(())
+            })
+            .expect("created")
+            .map_err(|why| budget_refused(bond, why))
+        })();
+        if let Err(error) = reserved {
+            self.restore(checkpoint);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Native paid-source admission reserves the signed fixed fee before its
+    /// opt-in becomes accepted. This row creates no computation or Round right.
+    pub(super) fn reserve_source_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: Hash64,
+        source: Hash64,
+        bond: PalwBondKeyV2,
+        liability_until: u64,
+        fee: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+        if self.state.bond_budget.is_none() {
+            self.create_bond_budget_v1(ctx, &mirror)?;
+        }
+        let id = source_income_id_v1(context, source, &bond);
+        self.bond_budget_op(|budget, _, j| {
+            budget.reserve_source_income_v1(&mirror.policy, capital, id, bond, ctx.daa_score, liability_until, fee, j)
+        })
+        .expect("created")
+        .map_err(|why| budget_refused(bond, why))
+    }
+
+    /// Settle through the same durable R row, including a tick delayed past
+    /// H + W. Initial migration supplies every old pending row; a missing
+    /// reservation cannot become an unbounded grandfathered payment.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn settle_source_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: Hash64,
+        source: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        liability_until: u64,
+        fee: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let budget = self
+            .state
+            .bond_budget
+            .as_ref()
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
+        let id = source_income_id_v1(context, source, &bond);
+        if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
+            return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
+        }
+        let payload = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.payout_payload;
+        let queue = native_queued_income_id_v1(crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload), &bond);
+        self.bond_budget_op(|budget, _, j| {
+            budget.queue_source_income_v1(&mirror.policy, &id, liability_until, ctx.daa_score, fee, queue, j)
+        })
+        .expect("checked")
+        .map_err(|why| budget_refused(bond, why))
+    }
+
+    pub(super) fn cancel_source_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: Hash64,
+        source: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
+            return Ok(());
+        }
+        let budget = self
+            .state
+            .bond_budget
+            .as_ref()
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
+        let id = source_income_id_v1(context, source, &bond);
+        if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
+            return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
+        }
+        self.bond_budget_op(|budget, _, j| budget.cancel_source_income_v1(&id, j))
+            .expect("checked")
+            .map_err(|why| budget_refused(bond, why))
+    }
+
+    /// Kernel Q belongs to its claim row; its unpaid monetary maximum uses
+    /// role 3 until an authenticated EXEC binding transfers that same money.
+    pub(super) fn hold_kernel_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim: Hash64,
+        liability_until: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        let id = kernel_budget_claim_id_v1(&claim.as_bytes());
+        let Some(row) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&id)).copied() else { return Ok(()) };
+        if row.reserved.reward_sompi == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bonds.get(&row.bond).map_or(0, |b| b.collateral);
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(
+                &mirror.policy,
+                capital,
+                native_income_id_v1(claim, &row.bond, 3),
+                row.bond,
+                row.accepted_daa,
+                liability_until.max(ctx.daa_score),
+                row.reserved.reward_sompi,
+                &[id],
+                false,
+                j,
+            )
+        })
+        .expect("kernel claim engine")
+        .map_err(|why| budget_refused(row.bond, why))?;
+        self.bind_material_income_root_v1(ctx.daa_score, claim, native_income_id_v1(claim, &row.bond, 3))
+    }
+
+    /// Called only after the kernel verified the consumer-frozen EXEC owner
+    /// binding. It cannot leave a second standalone payment entitlement.
+    pub(super) fn transfer_kernel_income_to_exec_v1(
+        &mut self,
+        root: Hash64,
+        evidence: Hash64,
+        bond: PalwBondKeyV2,
+        now: u64,
+        until: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(now) else { return Ok(()) };
+        let source = native_income_id_v1(evidence, &bond, 3);
+        let Some(held) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&source)).copied() else { return Ok(()) };
+        let issuer = self.state.claims.get(&root).is_some_and(|claim| claim.bond == bond);
+        if issuer {
+            // Its fee replaces part of the immutable issuer allocation. The
+            // separately admitted standalone maximum stays in the window
+            // (no early quota recovery), but cannot enlarge that allocation
+            // or retain an independent future payment entitlement.
+            self.cancel_native_recipient_v1(evidence, bond, 3);
+            return Ok(());
+        }
+        let kind = 2;
+        let id = native_income_id_v1(root, &bond, kind);
+        let maximum = self
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.claim_row(&id))
+            .map_or(held.reserved.reward_sompi, |row| row.reserved.reward_sompi.max(held.reserved.reward_sompi));
+        let capital = self.state.bonds.get(&bond).map_or(0, |row| row.collateral);
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(&mirror.policy, capital, id, bond, now, until, maximum, &[source], false, j)
+        })
+        .expect("kernel transfer engine")
+        .map_err(|why| budget_refused(bond, why))?;
+        self.bind_material_income_root_v1(now, root, id)
+    }
+
+    /// Kernel carriers create no reward block or consensus weight. Their one
+    /// standalone fee is Q/R-reserved before the trusted consumer commits it.
+    pub(super) fn plan_kernel_claim_budget_v1(
+        &self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        kernel_class: Hash64,
+        reward: u64,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        let model = if mirror.allocation_at(ctx.daa_score).is_some() {
+            // Use the actual native class/line which authenticated the kernel
+            // binding. An ambiguous or absent binding has no allocation right.
+            let mut classes: Vec<_> = self
+                .state
+                .kernel_route
+                .as_ref()
+                .into_iter()
+                .flat_map(|route| route.kernel_bindings_v1())
+                .filter(|(_, binding)| binding.kernel_class == kernel_class)
+                .map(|(class, _)| class)
+                .collect();
+            classes.sort();
+            classes.dedup();
+            if classes.len() != 1 {
+                return Err(PalwStateV2Error::BondBudgetRefused(
+                    "a kernel allocation requires exactly one authenticated native class".into(),
+                ));
+            }
+            Some(self.bond_budget_model_of(&classes[0], self.state.class(&classes[0]).map(|row| &row.artifact_root)))
+        } else {
+            None
+        };
+        self.plan_bond_budget_v1(
+            ctx,
+            bond,
+            model,
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: 0 },
+            PalwBudgetOriginV1::KernelRoute,
+            0,
+        )
+    }
+
+    /// Re-injected on every load; cache/restore never carries a prior branch's
+    /// consumer allowance. Legacy claims keep their admitted payment rule.
+    pub(super) fn kernel_final_reward_caps_v1(
+        &self,
+        ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    ) -> BTreeMap<misaka_palw_kernel::hash::Digest, u64> {
+        let Some(budget) = self.state.bond_budget.as_ref() else { return BTreeMap::new() };
+        ledger
+            .claims
+            .iter()
+            .filter_map(|(claim, row)| {
+                let id = kernel_budget_claim_id_v1(claim);
+                let income = self
+                    .state
+                    .kernel_route
+                    .as_ref()
+                    .and_then(|route| route.bond_key_of(&row.producer))
+                    .and_then(|bond| budget.claim_row(&native_income_id_v1(Hash64::from_bytes(*claim), &bond, 3)));
+                match budget.claim_row(&id) {
+                    Some(reservation)
+                        if matches!(reservation.origin, PalwBudgetOriginV1::Legacy | PalwBudgetOriginV1::KernelRoute) =>
+                    {
+                        Some((
+                            *claim,
+                            income
+                                .filter(|held| held.live && held.in_window)
+                                .map_or(0, |held| held.reserved.reward_sompi - held.consumed.reward_sompi),
+                        ))
+                    }
+                    _ if row.committed_daa >= budget.header.created_daa => Some((*claim, 0)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The kernel emits only the allowance injected from this same budget.
+    /// EXEC fees are paid by the root's R consumption, never through this hook.
+    pub(super) fn consume_kernel_final_reward_v1(
+        &mut self,
+        claim: &misaka_palw_kernel::hash::Digest,
+        bond: PalwBondKeyV2,
+        payload: Hash64,
+        now: u64,
+        amount: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.bond_budget_mirror_at(now).is_none() {
+            return Ok(());
+        }
+        self.pay_native_recipient_v1(
+            Hash64::from_bytes(*claim),
+            bond,
+            3,
+            now,
+            amount,
+            crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload),
+            true,
+        )
+    }
+
+    pub(super) fn close_terminal_kernel_budgets_v1(&mut self, ledger: &misaka_palw_kernel::ledger::KernelLedgerV1) {
+        if self.state.bond_budget.is_none() {
+            return;
+        }
+        for (claim, row) in &ledger.claims {
+            if row.convicted || row.life.state.is_terminal() {
+                let id = kernel_budget_claim_id_v1(claim);
+                // PESG §6: the liability hold starts at this block (the ledger's DAA).
+                self.bond_budget_close_v1(&id, ledger.daa);
+                if let Some(bond) = self.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&row.producer)) {
+                    self.cancel_native_recipient_v1(Hash64::from_bytes(*claim), bond, 3);
+                }
+                // The claim row remains public. Financial quota is forgotten
+                // only after its window releases; EXEC uses its root allocation.
+                self.bond_budget_forget_v1(&id);
+            }
+        }
+    }
 
     /// **An attempt's plan** (lead, merged or rider): Q 1, B `budget_block_units` (one block for a lead, its share for a rider),
     /// R its escrow, F its Final contribution; the block's units consumed at once.
@@ -509,7 +1583,10 @@ impl TransitionBuilder<'_> {
     ) -> bool {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return false };
         if self.state.bond_budget.is_none() {
-            self.create_bond_budget_v1(ctx, &mirror);
+            // The pre-object clock creates and validates the book. Without it
+            // no ticket may escape into the old uncapped fallback.
+            schedule.quanta.clear();
+            return true;
         }
         let policy = mirror.policy;
         {
@@ -533,13 +1610,21 @@ impl TransitionBuilder<'_> {
         }
         let span = schedule.span_index;
         let now = ctx.daa_score;
-        self.bond_budget_op(|budget, state, j| {
+        let checkpoint = self.checkpoint();
+        let reserved = self.bond_budget_op(|budget, state, j| {
             for (bond, n) in allocated {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
-                let fitted = budget.reserve_round_rights_v1(&policy, capital, span, bond, now, n, j);
-                debug_assert!(fitted.is_ok(), "the candidates were capped at the remaining rights of this same state: {fitted:?}");
+                budget.reserve_round_rights_v1(&policy, capital, span, bond, now, n, j)?;
             }
+            Ok::<(), PalwBudgetRefusalV1>(())
         });
+        if !matches!(reserved, Some(Ok(()))) {
+            // Refuse the whole draw atomically if migration, duplicate span
+            // identity or an arithmetic limit makes a reservation unavailable.
+            // No partially allocated ticket or virtual-processor panic survives.
+            self.restore(checkpoint);
+            schedule.quanta.clear();
+        }
         true
     }
 
@@ -555,6 +1640,11 @@ impl TransitionBuilder<'_> {
     /// **A Final's reward under the budget** (`finalize_claim`, before the buyback and the panel split, so every leg derives from it):
     /// the grant; the rest is never named — never minted. The input unchanged for an unbudgeted claim.
     pub(super) fn bond_budget_final_reward_v1(&mut self, claim_id: &Hash64, escrow: u64) -> u64 {
+        if let Some(bond) = self.state.claims.get(claim_id).map(|claim| claim.bond)
+            && let Some(held) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&native_income_id_v1(*claim_id, &bond, 0)))
+        {
+            return escrow.min(held.reserved.reward_sompi);
+        }
         self.bond_budget_op(|budget, _, j| budget.consume(claim_id, PalwBudgetDimV1::Reward, escrow as u128, false, j))
             .flatten()
             .map(|granted| granted.unwrap_or(0) as u64)
@@ -593,13 +1683,100 @@ impl TransitionBuilder<'_> {
 /// **Step 1f — the budget's clock** (design §2.4, §2.9, §3.2–3.4), before the sweeps and the objects: create the engine at the fence's
 /// first block (seeding the live old claims), release every reservation whose `reuse_not_before ≤ now`, roll the allocation epoch and
 /// accrue this block's carve. A no-op below the fence.
-pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
-    let Some(mirror) = builder.bond_budget_mirror_at(ctx.daa_score) else { return };
+pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    let Some(mirror) = builder.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
     if builder.state.bond_budget.is_none() {
-        builder.create_bond_budget_v1(ctx, &mirror);
+        builder.create_bond_budget_v1(ctx, &mirror)?;
     }
     let now = ctx.daa_score;
+    if builder.params.reporter_income_active_at(now)
+        && builder.state.bond_budget.as_ref().expect("created").header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 {
+        builder.initialize_reporter_income_v2(ctx, &mirror)?;
+    }
+    if builder.params.material_income_active_at(now)
+        && builder.state.bond_budget.as_ref().expect("created").header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 {
+        builder.initialize_material_income_v3(ctx, &mirror.policy)?;
+    }
+    if builder.params.paid_consumer_lifecycle_active_at(now)
+        && builder.state.bond_budget.as_ref().expect("created").header.version < PALW_BOND_BUDGET_STATE_VERSION_V4 {
+        // Existing accepted claims keep their old terms. Only new admissions
+        // write a contract, never retroactive or synthetic readiness/Final.
+        builder.bond_budget_op(|budget, _, j| budget.activate_consumer_contract_v4(j));
+    }
+    // Step 1b drained these exact obligations into the validated coinbase.
+    // Queued credits stay held through sparse DAA jumps until that payment.
+    let drained: BTreeSet<_> = builder
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            PalwDeltaEntryV2::Payout { key, old: Some(payout), new: None } if payout.amount > 0 => Some(*key),
+            _ => None,
+        })
+        .collect();
+    let paid: Vec<_> = builder
+        .state
+        .bond_budget
+        .as_ref()
+        .expect("created")
+        .claims
+        .iter()
+        .filter(|(_, row)| row.origin == PalwBudgetOriginV1::NativeIncomeQueued && row.live)
+        .filter(|(id, row)| drained.iter().any(|queue| native_queued_income_id_v1(*queue, &row.bond) == **id))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in paid {
+        builder
+            .bond_budget_op(|budget, _, j| budget.confirm_native_income_payment_v1(&mirror.policy, &id, now, j))
+            .expect("created")
+            .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+    }
+    let legacy_paid: Vec<_> = builder.state.bond_budget.as_ref().expect("created").reporter_income.iter()
+        .filter(|(_, row)| row.recipient.is_none() && row.paid_daa.is_none() && row.queue.is_some_and(|queue| drained.contains(&queue)))
+        .map(|(id, _)| *id).collect();
+    for id in legacy_paid {
+        builder.bond_budget_op(|budget, _, j| budget.confirm_unattributed_payment_v1(id, now, j))
+            .expect("created").map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+    }
+    for queue in &drained {
+        builder.bond_budget_op(|budget, _, j| budget.confirm_legacy_material_queue_v1(*queue, now, mirror.policy.window_daa, j))
+            .expect("created").map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+    }
+    builder.bond_budget_op(|budget, _, j| budget.release_material_income_v1(now, j));
+    builder.bond_budget_op(|budget, _, j| budget.release_reporter_income_v1(&mirror.policy, now, j));
     builder.bond_budget_op(|budget, _, j| budget.release_due(now, j));
+    // Funded court debt is redeemed only after the real queue drain and its
+    // W release. Full R or a full native queue defers cash, never conviction.
+    // Each award/progress pair creates a separate exact physical payout row.
+    let book = builder.state.bond_budget.as_ref().expect("created");
+    let awards: Vec<_> = book.unpaid_reporter_awards_v1().map(|id| {
+        let row = book.claim_row(id).expect("derived unpaid award index");
+        (*id, row.bond, row.consumed.reward_sompi)
+    }).collect();
+    for (award, bond, progress) in awards {
+        if builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS { break; }
+        let Some(record) = builder.state.bonds.get(&bond) else {
+            return Err(PalwStateV2Error::MissingBond(bond));
+        };
+        let capital = record.collateral;
+        let book = builder.state.bond_budget.as_ref().expect("created");
+        let binding = book.reporter_income.get(&award).ok_or_else(||
+            PalwStateV2Error::BondBudgetRefused("reporter tranche has no rooted frozen payee".into()))?;
+        if binding.recipient != Some(bond) || binding.maximum != book.claim_row(&award).expect("indexed award").reserved.reward_sompi
+            || binding.awarded_daa.is_none() {
+            return Err(PalwStateV2Error::BondBudgetRefused("reporter tranche differs from its immutable entitlement".into()));
+        }
+        let payload = binding.payload;
+        let queue = reporter_tranche_queue_v1(award, progress);
+        // A collision never replaces an existing native monetary obligation.
+        if builder.state.pending_payouts.contains_key(&queue) {
+            return Err(PalwStateV2Error::BondBudgetRefused("reporter tranche queue already exists".into()));
+        }
+        let amount = builder.bond_budget_op(|budget, _, j| budget.redeem_reporter_income_v1(
+            &mirror.policy, capital, &award, now, native_queued_income_id_v1(queue, &bond), u64::MAX, j,
+        )).expect("created").map_err(|why| budget_refused(bond, why))?;
+        if amount > 0 { builder.write_payout(queue, Some(PalwPayoutV2 { payload, amount })); }
+    }
+    builder.rearm_material_retirements_v1(now)?;
     if let (Some(policy), Some(epoch)) = (mirror.allocation_at(now).cloned(), mirror.allocation_epoch_at(now)) {
         let rolled = builder.state.bond_budget.as_ref().and_then(|b| b.header.allocation).is_some_and(|a| a.index >= epoch);
         if !rolled {
@@ -619,6 +1796,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
         builder.bond_budget_op(|budget, _, j| budget.accrue(carve, j));
     }
+    Ok(())
 }
 
 /// **Tag 140: a bond's capital assignment** (ADR-0177 D3; design §3.1). The signature is the acceptance layer's; here the fence, an
@@ -643,7 +1821,7 @@ pub(super) fn apply_capital_assignment_v1(
     }
     let capital = record.collateral;
     if builder.state.bond_budget.is_none() {
-        builder.create_bond_budget_v1(ctx, &mirror);
+        builder.create_bond_budget_v1(ctx, &mirror)?;
     }
     let bond = *bond;
     builder

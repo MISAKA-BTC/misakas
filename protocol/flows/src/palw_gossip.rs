@@ -2505,6 +2505,31 @@ mod tests {
         );
     }
 
+    /// Protocol 106 prepays a whole immutable traversal once, then its ordered
+    /// chunks spend that reservation. Re-reserving the 48 MiB peer window at each
+    /// 4 MiB chunk would starve a legal 384 MiB snapshot after its twelfth chunk.
+    #[test]
+    fn a_maximal_chunked_snapshot_traversal_is_prepaid_once_and_exhausts_the_window() {
+        let center = PalwGossipCenter::default();
+        let total = PALW_PRUNING_STATE_MAX_BYTES as u64;
+        assert_eq!(total, 384 << 20);
+        assert!(center.reserve_sidecar_serve(peer(1)), "first floor must admit a legal maximal snapshot");
+        center.charge_sidecar_serve(peer(1), total);
+        let charged = center.serve_budget.lock().unwrap().per_peer[&peer(1)];
+        // The floor prepays the first bytes; charge_sidecar_serve adds only
+        // the excess, so a successful traversal pays max(floor, total).
+        assert_eq!(charged, total.max(SERVE_ATTEMPT_FLOOR_BYTES));
+        let chunks = total.div_ceil(crate::palw_snapshot_chunks::CHUNK_BYTES as u64);
+        assert_eq!(chunks, 96);
+        // No further ledger reservation is needed while a live monotone sender
+        // consumes this prepaid stream. A new traversal (same or fresh peer) fails.
+        assert!(!center.reserve_sidecar_serve(peer(1)));
+        assert!(!center.reserve_sidecar_serve(peer(2)));
+        assert_eq!(center.serve_budget.lock().unwrap().bytes_served, charged);
+        center.serve_budget.lock().unwrap().window_started = std::time::Instant::now() - SERVE_BUDGET_WINDOW;
+        assert!(center.reserve_sidecar_serve(peer(1)), "window expiry permits an honest new attempt");
+    }
+
     /// **The window rolls once, for both halves of a sidecar serve.** Two copies of a window reset
     /// drift, and a budget that resets on the reservation path but not the charge path is not a
     /// budget: a peer would reserve inside the new window and be charged against a stale one.

@@ -11,7 +11,10 @@ use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
     dequeue, make_message,
-    pb::{PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, PruningPointPalwStateMessage, kaspad_message::Payload},
+    pb::{
+        PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, PruningPointPalwStateMessage,
+        RequestPruningPointPalwStateMessage, kaspad_message::Payload,
+    },
 };
 use std::sync::Arc;
 
@@ -138,6 +141,7 @@ impl RequestPruningPointOverlaySnapshotFlow {
 /// a network with no V2 ruleset it is the only one.
 pub struct RequestPruningPointPalwStateFlow {
     ctx: FlowContext,
+    chunks: Option<crate::palw_snapshot_chunks::SnapshotSender>,
     router: Arc<Router>,
     incoming_route: IncomingRoute,
 }
@@ -154,12 +158,32 @@ impl Flow for RequestPruningPointPalwStateFlow {
 
 impl RequestPruningPointPalwStateFlow {
     pub fn new(ctx: FlowContext, router: Arc<Router>, incoming_route: IncomingRoute) -> Self {
-        Self { ctx, router, incoming_route }
+        Self { ctx, router, incoming_route, chunks: None }
     }
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
         loop {
-            let msg = dequeue!(self.incoming_route, Payload::RequestPruningPointPalwState)?;
+            // A cached spill expires even if this peer stays connected but sends no more requests.
+            let msg = match tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                dequeue!(self.incoming_route, Payload::RequestPruningPointPalwState)
+            })
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    if self.chunks.as_ref().is_some_and(|s| s.expired()) {
+                        self.chunks = None;
+                    }
+                    continue;
+                }
+            };
+            if msg.chunked {
+                self.serve_chunked(msg).await?;
+                continue;
+            }
+            if !msg.snapshot_root.is_empty() || msg.chunk_index != 0 {
+                return Err(ProtocolError::Other("legacy PALW snapshot request carries chunk fields"));
+            }
             let pp = req_pruning_point(msg.pruning_point_hash)?;
             // **The asker is charged before the work, not after the egress** (mainnet audit H-1,
             // the same ordering audit3 H6 imposed on the material lane). This loop had no budget,
@@ -171,10 +195,17 @@ impl RequestPruningPointPalwStateFlow {
             let peer = self.router.key();
             if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
                 debug!("[palw-sidecar] {peer} is out of serve allowance this window; answering not-found for {pp}");
-                let refused = PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] };
+                let refused =
+                    PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() };
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
                 continue;
             }
+            // Legacy peers share the same node-wide materialization/session backstop.
+            // The empty lease file is removed as soon as this one response is queued.
+            let Ok(_snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
+                continue;
+            };
             let session = self.ctx.consensus().unguarded_session();
             // The state AND the declarations its classes were registered under (ADR-0067
             // Decision 6). A pruned-syncing peer never walks the blocks whose acceptance wrote
@@ -206,8 +237,11 @@ impl RequestPruningPointPalwStateFlow {
                             carriage,
                         })
                         .collect(),
+                    ..Default::default()
                 },
-                None => PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] },
+                None => {
+                    PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() }
+                }
             };
             // **Lane PA, B-F2: the serving side holds the requester's own cap.** A carriage the requester would refuse after the whole
             // transfer is answered `found: false` instead (the same answer an unprepared peer gives, so the requester tries another
@@ -220,7 +254,7 @@ impl RequestPruningPointPalwStateFlow {
                          answering not-found; pruned IBD needs the chunked transport (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
                         crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
                     );
-                    PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] }
+                    PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() }
                 } else {
                     if bytes > crate::palw_gossip::PALW_PRUNING_STATE_WARN_BYTES {
                         kaspa_core::warn!(
@@ -236,5 +270,82 @@ impl RequestPruningPointPalwStateFlow {
             self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
         }
+    }
+    async fn serve_chunked(&mut self, msg: RequestPruningPointPalwStateMessage) -> Result<(), ProtocolError> {
+        use crate::palw_snapshot_chunks::{SnapshotSender, SnapshotSpill, chunk_hash};
+        if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
+            return Err(ProtocolError::Other("PALW snapshot chunks require negotiated protocol 106"));
+        }
+        let pp = req_pruning_point(msg.pruning_point_hash)?;
+        let root = if msg.snapshot_root.is_empty() {
+            None
+        } else {
+            Some(kaspa_consensus_core::Hash64::from_bytes(
+                msg.snapshot_root.as_slice().try_into().map_err(|_| ProtocolError::Other("invalid PALW snapshot stream root"))?,
+            ))
+        };
+        if self.chunks.as_ref().is_some_and(|s| s.expired()) {
+            self.chunks = None;
+        }
+        if self.chunks.is_none() {
+            if (msg.chunk_index == 0) != root.is_none() {
+                return Err(ProtocolError::Other("PALW snapshot start/resume root and index disagree"));
+            }
+            let peer = self.router.key();
+            let refused = PruningPointPalwStateMessage { chunked: true, ..Default::default() };
+            if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                return Ok(());
+            }
+            // Acquire the node-wide lease BEFORE the consensus snapshot clone or serialization.
+            let Ok(spill) = SnapshotSpill::new() else {
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                return Ok(());
+            };
+            let session = self.ctx.consensus().unguarded_session();
+            let sender = session
+                .spawn_blocking(move |c| {
+                    c.pruning_point_palw_state(pp).map(|carriage| {
+                        let declarations = c.palw_class_carriages_for_sync_v1();
+                        SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations)
+                    })
+                })
+                .await;
+            let Some(Ok(mut sender)) = sender else {
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                return Ok(());
+            };
+            // Reserve/charge this ONE traversal exactly like the old whole-message response.
+            // Continuations may spend that traversal, but cannot rewind or duplicate a chunk.
+            self.ctx.palw_gossip().charge_sidecar_serve(peer, sender.total);
+            if let Some(root) = root {
+                if sender.resume(pp, root, msg.chunk_index).is_err() {
+                    self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                    return Ok(());
+                }
+            }
+            self.chunks = Some(sender);
+        }
+        let sender = self.chunks.as_mut().unwrap();
+        let bytes = sender
+            .chunk(pp, root, msg.chunk_index)
+            .map_err(|_| ProtocolError::Other("invalid PALW snapshot point/root/order/expiry"))?;
+        let reply = PruningPointPalwStateMessage {
+            found: true,
+            chunked: true,
+            pruning_point_hash: Some(pp.into()),
+            snapshot_root: sender.root.as_byte_slice().to_vec(),
+            chunk_index: msg.chunk_index,
+            chunk_count: sender.count,
+            total_bytes: sender.total,
+            chunk_hash: chunk_hash(pp, sender.root, sender.total, sender.count, msg.chunk_index, &bytes).as_byte_slice().to_vec(),
+            palw_state: bytes,
+            ..Default::default()
+        };
+        if sender.next_index() == sender.count {
+            self.chunks = None;
+        }
+        self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
+        Ok(())
     }
 }

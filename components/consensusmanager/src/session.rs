@@ -16,7 +16,7 @@ use kaspa_consensus_core::{
     errors::consensus::ConsensusResult,
     header::Header,
     mass::{ContextualMasses, NonContextualMasses},
-    pruning::{PruningPointProof, PruningPointTrustedData, PruningPointsList},
+    pruning::{PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList},
     trusted::{ExternalGhostdagData, TrustedBlock},
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionQueryResult, TransactionType, UtxoEntry},
 };
@@ -391,6 +391,11 @@ impl ConsensusSessionOwned {
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     ) -> Option<kaspa_consensus_core::Hash64> {
         self.consensus.palw_bond_payout_payload_v2(bond)
+    }
+
+    /// Root-exact owed material, including kernel-only source/reporter rights.
+    pub fn palw_material_income_hold_until_v1(&self, claim: Hash64) -> Option<u64> {
+        self.consensus.palw_material_income_hold_until_v1(claim)
     }
 
     pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
@@ -1214,8 +1219,23 @@ impl ConsensusSessionOwned {
     pub async fn async_finality_point(&self) -> BlockHash {
         self.clone().spawn_blocking(move |c| c.finality_point()).await
     }
-    pub async fn async_clear_pruning_utxo_set(&self) {
+    pub async fn async_clear_pruning_utxo_set(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.clear_pruning_utxo_set()).await
+    }
+    pub async fn async_begin_pruning_point_import(&self, point: BlockHash) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionV1> {
+        self.clone().spawn_blocking(move |c| c.begin_pruning_point_import(point)).await
+    }
+    pub async fn async_pruning_import_session(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionStateV1> {
+        self.clone().spawn_blocking(move |c| c.pruning_import_session()).await
+    }
+    pub async fn async_pruning_import_status(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<(PruningImportSessionStateV1, bool)> {
+        self.clone().spawn_blocking(move |c| c.pruning_import_status()).await
+    }
+    pub async fn async_clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+        self.clone().spawn_blocking(move |c| c.clear_pruning_utxo_set_for_session(session)).await
+    }
+    pub async fn async_complete_pruning_point_import_for_session(&self, session: PruningImportSessionV1) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+        self.clone().spawn_blocking(move |c| c.complete_pruning_point_import_for_session(session)).await
     }
     pub async fn async_is_pruning_utxoset_stable(&self) -> bool {
         self.clone().spawn_blocking(move |c| c.is_pruning_utxoset_stable()).await
@@ -1226,10 +1246,13 @@ impl ConsensusSessionOwned {
     pub async fn async_is_consensus_in_transitional_ibd_state(&self) -> bool {
         self.clone().spawn_blocking(move |c| c.is_consensus_in_transitional_ibd_state()).await
     }
-    pub async fn async_set_pruning_utxoset_unstable(&self) {
+    pub async fn async_set_pruning_utxoset_unstable(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(false)).await
     }
-    pub async fn async_set_pruning_utxoset_stable(&self) {
+    pub async fn async_complete_pruning_point_import(&self, point: BlockHash) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+        self.clone().spawn_blocking(move |c| c.complete_pruning_point_import(point)).await
+    }
+    pub async fn async_set_pruning_utxoset_stable(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(true)).await
     }
     pub async fn async_intrusive_pruning_point_update(

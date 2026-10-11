@@ -47,6 +47,7 @@ pub(super) fn require_native_session_window(
     root_id: &Hash64,
     required_until: u64,
 ) -> Result<(), PalwStateV2Error> {
+    state.require_paid_consumer_backstop_v1(root_id, required_until)?;
     let root = state.exec_v2.roots.get(root_id);
     let mut bound = match root {
         Some(root) => match &state.kernel_route {
@@ -93,6 +94,11 @@ pub(super) fn require_native_da_window(
     deadline: u64,
     opened_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
+    if state.paid_consumer_contract_v1(root_id).is_some() {
+        let through = deadline.checked_add(params.window_challenge_at(opened_daa))
+            .ok_or(PalwStateV2Error::Overflow("paid consumer DA whole path"))?;
+        state.require_paid_consumer_dispute_v1(root_id, opened_daa, through)?;
+    }
     // Preserve ordinary native admission, including its saturation behavior.
     if !state.exec_v2.roots.contains_key(root_id) && !state.exec_v2_rewards.contains_key(root_id) {
         return Ok(());
@@ -240,6 +246,13 @@ fn burn_actor(
     action: Action,
 ) -> Result<u64, PalwStateV2Error> {
     let Some(mut row) = builder.state.exec_v2_rewards.get(&root).cloned() else { return Ok(0) };
+    let issuer = builder
+        .state
+        .bond_budget
+        .as_ref()
+        .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, &bond, 0)))
+        .is_some();
+    builder.cancel_native_recipient_v1(root, bond, if issuer { 0 } else { 2 });
     let own: Vec<_> = row.legs.iter().filter(|((payee, _), _)| *payee == bond).map(|(who, leg)| (*who, *leg)).collect();
     let mut taken = 0u64;
     let mut c = builder.state.vesting_counters;
@@ -351,6 +364,16 @@ pub(super) fn finish(builder: &mut TransitionBuilder<'_>, root: Hash64) {
 
 pub(super) fn burn(builder: &mut TransitionBuilder<'_>, root: Hash64) -> Result<(), PalwStateV2Error> {
     let Some(row) = builder.state.exec_v2_rewards.get(&root).cloned() else { return Ok(()) };
+    for (bond, _) in row.legs.keys() {
+        let issuer = builder
+            .state
+            .bond_budget
+            .as_ref()
+            .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, bond, 0)))
+            .is_some();
+        builder.cancel_native_recipient_v1(root, *bond, if issuer { 0 } else { 2 });
+    }
+
     let mut c = builder.state.vesting_counters;
     c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC vesting burned"))?;
     let retained = if builder.state.vesting.contains_key(&root) { Some(Row { legs: BTreeMap::new(), ..row.clone() }) } else { None };
@@ -433,6 +456,23 @@ pub(super) fn mature(builder: &mut TransitionBuilder<'_>, daa: u64) -> Result<()
         }
         let mut row = builder.state.exec_v2_rewards[&root].clone();
         row.legs.remove(&who);
+        let finished = !row.legs.keys().any(|(bond, _)| *bond == who.0);
+        let issuer = builder.state.claims.get(&root).is_some_and(|claim| claim.bond == who.0)
+            || builder
+                .state
+                .bond_budget
+                .as_ref()
+                .and_then(|b| b.claim_row(&super::palw_bond_budget_fold_v1::native_income_id_v1(root, &who.0, 0)))
+                .is_some();
+        builder.pay_native_recipient_v1(
+            root,
+            who.0,
+            if issuer { 0 } else { 2 },
+            daa,
+            leg.amount,
+            key(who.1, &leg.payload),
+            finished,
+        )?;
         builder.write_exec_reward(root, if row.legs.is_empty() { None } else { Some(row) });
         let mut c = builder.state.vesting_counters;
         c.moved = c.moved.checked_add(u128::from(leg.amount)).ok_or(PalwStateV2Error::Overflow("EXEC vesting moved"))?;
@@ -463,6 +503,10 @@ pub(super) fn invalidate_final(
     builder.reverse_convicted_final(ctx, root, reason)?;
     builder.forfeit_minted_round_rights_of_claim(&root);
     if let Some(row) = builder.state.vesting.get(&root).cloned() {
+        for (bond, _) in &row.seats {
+            builder.cancel_native_recipient_v1(root, *bond, 1);
+        }
+        builder.cancel_native_recipient_v1(root, row.producer_bond, 0);
         let mut c = builder.state.vesting_counters;
         c.burned = c.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("EXEC native vesting burned"))?;
         builder.write_vesting(root, None);
@@ -479,7 +523,9 @@ pub(super) fn invalidate_final(
     Ok(())
 }
 
-/// Retirement is strictly after the dependency proof window; release/obligation deadlines are unchanged.
+/// Every finite retirement composes the physical-income material window.
+/// The legacy EXEC horizon still extends only the ordinary retirement; operational
+/// collateral-release entries are separately preserved by the terminal deadline caller.
 pub(super) fn retirement(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -491,9 +537,13 @@ pub(super) fn retirement(
         return Ok(at);
     }
     let ordinary = terminal_daa_of(claim).and_then(|daa| daa.checked_add(params.claim_retirement_daa));
+    let monetary = state.material_income_hold_until_v1(params, *id)
+        .max(state.paid_consumer_terms_v1(id).map(|terms| terms.material_until));
+    let held = at.map(|at| monetary.map_or(at, |until| at.max(if until == u64::MAX { u64::MAX } else { until.saturating_sub(1) })));
     if at != ordinary {
-        return Ok(at);
+        return Ok(held);
     }
+    let at = held;
     match horizon(state, params, id)? {
         Some(until) => {
             let after = until.checked_add(1).ok_or(PalwStateV2Error::Overflow("EXEC retirement horizon"))?;

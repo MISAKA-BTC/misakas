@@ -299,6 +299,34 @@ pub struct FreshReportV1 {
 /// given. Agreement: the chain says CONFORMANCE_PASSED (or later) exactly when the verifier finds bound, passing evidence whose
 /// window has closed and no leaf it re-read contradicts it; an open attempt agrees when the verifier finds nothing to refute yet.
 pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Option<&Path>) -> Result<FreshReportV1, Refusal> {
+    fresh_verify_reads_inner(reads, artifact, None)
+}
+
+/// v4 verification additionally requires source reservations and the frozen target from root-checked op 211 rows.
+pub fn fresh_verify_from_reads_v4(
+    reads: &PublicConformanceReadsV1,
+    sources: &VerifiedOptInSourcesV4,
+    artifact: Option<&Path>,
+) -> Result<FreshReportV1, Refusal> {
+    if sources.target.context.policy.is_paid_opt_in_source() {
+        return Err(Refusal::new("POLICY_SUBSTITUTED", "mandatory paid v5 needs its verified fee inventory"));
+    }
+    fresh_verify_reads_inner(reads, artifact, Some(sources))
+}
+
+pub fn fresh_verify_from_reads_v5(
+    reads: &PublicConformanceReadsV1,
+    sources: &VerifiedPaidOptInSourcesV5,
+    artifact: Option<&Path>,
+) -> Result<FreshReportV1, Refusal> {
+    fresh_verify_reads_inner(reads, artifact, Some(&sources.sources))
+}
+
+fn fresh_verify_reads_inner(
+    reads: &PublicConformanceReadsV1,
+    artifact: Option<&Path>,
+    opt_in: Option<&VerifiedOptInSourcesV4>,
+) -> Result<FreshReportV1, Refusal> {
     use misaka_palw_challenge::OnboardingStateV1 as S;
     let attempt: ConformanceAttemptRowV1 =
         borsh::from_slice(&reads.attempt_row).map_err(|e| Refusal::new("ROW_MALFORMED", format!("attempt row: {e}")))?;
@@ -325,6 +353,17 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
         ));
     }
     let ctx = attempt.beacon_context(&policy);
+    if attempt.is_opt_in_source() {
+        let sources = opt_in.ok_or_else(|| Refusal::new("OPT_IN_ROWS_REQUIRED", "v4 needs root-checked source reservations"))?;
+        if reads.attempt_row != sources.attempt_row || reads.evidence_row != sources.evidence_row || reads.program != sources.program {
+            return Err(Refusal::new("READS_NOT_THE_CHAIN", "v4 attempt, evidence and program must match the same rooted snapshot"));
+        }
+        if sources.target.context != ctx {
+            return Err(Refusal::new("TARGET_SUBSTITUTED", "source target belongs to another attempt/context"));
+        }
+    } else if opt_in.is_some() {
+        return Err(Refusal::new("POLICY_SUBSTITUTED", "v4 source rows cannot verify another policy"));
+    }
     let container = match artifact {
         Some(p) => Some(
             misaka_palw_tir_artifact::PalwTirContainerV1::open(p).map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e.to_string()))?,
@@ -354,7 +393,7 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
         r.read_range(leaf.param, leaf.layer, leaf.row_start as u64..leaf.row_start as u64 + leaf.len as u64, &mut out).ok()?;
         Some(out)
     };
-    let verdict = fresh_verify_v1(&FreshInputV1 {
+    let input = FreshInputV1 {
         commitment: &attempt.commitment,
         policy: &policy,
         ctx: &ctx,
@@ -364,7 +403,26 @@ pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Op
         program: &program,
         post: post.as_ref(),
         leaf_source: if artifact.is_some() { Some(&leaf_source) } else { None },
-    });
+    };
+    let verdict = match opt_in {
+        Some(sources) if sources.target.context.policy.is_paid_opt_in_source() => {
+            let (contract, facts, promises) = sources
+                .paid_material
+                .as_ref()
+                .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?;
+            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5(&input, contract, facts, promises)
+        }
+        Some(sources) => kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4(
+            &input,
+            &misaka_palw_challenge::OptInContractV4 {
+                context_id: sources.target.terms.context,
+                terms_id: sources.target.terms.id(),
+                source_final_by: sources.target.terms.final_by,
+            },
+            &sources.facts,
+        ),
+        None => fresh_verify_v1(&input),
+    };
     let chain_says_passed = matches!(attempt.record.state, S::ConformancePassed | S::G14Eligible | S::ActiveRewardable);
     let window_closed = attempt.evidence.is_some_and(|e| reads.tip_daa >= e.window_end_daa);
     let verifier_pass = matches!(verdict.posted, Some(Ok(()))) && verdict.leaf_faults.is_empty();
@@ -395,6 +453,158 @@ pub fn sealed_sources_from_kernel_rows_v1(
         kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
             .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
     route.beacon_sealed_sources_v1().map_err(|e| Refusal::new("ROWS_MALFORMED", e))
+}
+
+/// Constructed only by rebuilding the route against the roots supplied by the caller's authenticated chain view.
+/// Private fields prevent substituting ordinary seals or unrooted reservation facts through the SDK API.
+pub struct VerifiedOptInSourcesV4 {
+    target: misaka_palw_kernel::beacon_source::BeaconSourceTargetV1,
+    facts: Vec<misaka_palw_challenge::OptInSourceV4>,
+    attempt_row: Vec<u8>,
+    evidence_row: Option<Vec<u8>>,
+    program: Vec<u8>,
+    fee_contract: Option<misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1>,
+    fee_receipts:
+        std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1>,
+    paid_material: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PaidBeaconMaterialV5>,
+    paid_cost_bounds: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1>,
+}
+
+/// The v5 API can only obtain mandatory money facts from the same root-verified
+/// route as its immutable source and attempt. V4 cannot supply these facts.
+pub struct VerifiedPaidOptInSourcesV5 {
+    sources: VerifiedOptInSourcesV4,
+}
+/// Public monetary row type, so CLI consumers do not need the internal kernel crate.
+pub type SourceFeeFundingV1 = misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1;
+impl VerifiedPaidOptInSourcesV5 {
+    pub fn cost_bounds(&self) -> &kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1 {
+        self.sources.paid_cost_bounds.as_ref().expect("v5 constructor verifies frozen cost bounds")
+    }
+    pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
+        self.sources.fee_contract()
+    }
+    pub fn fee_receipt(
+        &self,
+        producer: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1> {
+        self.sources.fee_receipt(producer)
+    }
+}
+
+impl VerifiedOptInSourcesV4 {
+    /// Root-verified prepaid terms and money inventory for this exact context. None is an unpaid contract, not a profit floor.
+    pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
+        self.fee_contract.as_ref()
+    }
+    /// A source's signed fee promise/outcome from the same rooted snapshot as the verified beacon facts.
+    pub fn fee_receipt(
+        &self,
+        producer: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1> {
+        self.fee_receipts.get(producer)
+    }
+}
+
+pub fn opt_in_sources_from_kernel_rows_v4(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+) -> Result<VerifiedOptInSourcesV4, Refusal> {
+    opt_in_sources_from_kernel_rows_inner(header, rows, ledger_root, aux_root, context, false)
+}
+
+pub fn paid_opt_in_sources_from_kernel_rows_v5(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+) -> Result<VerifiedPaidOptInSourcesV5, Refusal> {
+    Ok(VerifiedPaidOptInSourcesV5 {
+        sources: opt_in_sources_from_kernel_rows_inner(header, rows, ledger_root, aux_root, context, true)?,
+    })
+}
+
+fn opt_in_sources_from_kernel_rows_inner(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+    paid: bool,
+) -> Result<VerifiedOptInSourcesV4, Refusal> {
+    let route =
+        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
+            .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    let target = route.beacon_source_target_v4(context).map_err(|e| Refusal::new("TARGET_MALFORMED", e))?;
+    let facts = route.beacon_opt_in_sources_v4(context).map_err(|e| Refusal::new("ROWS_MALFORMED", e))?;
+    use kaspa_consensus_core::palw_onboarding_v1::{
+        PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1, PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1,
+    };
+    let misaka_palw_challenge::RootV1::Present(candidate) = target.context.candidate_profile_id else {
+        return Err(Refusal::new("TARGET_MALFORMED", "v4 onboarding target needs its candidate"));
+    };
+    let class = Hash64::from_bytes(candidate);
+    let key = borsh::to_vec(&class).expect("class serializes");
+    let attempt_row = route
+        .aux
+        .get(&(PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1, key.clone()))
+        .cloned()
+        .ok_or_else(|| Refusal::new("TARGET_MALFORMED", "source target has no rooted attempt"))?;
+    let attempt =
+        route.conformance_attempt_v1(&class).ok_or_else(|| Refusal::new("ROW_MALFORMED", "rooted attempt does not decode"))?;
+    if !attempt.is_opt_in_source()
+        || attempt.is_paid_opt_in_source() != paid
+        || target.context != attempt.beacon_context(&attempt.policy())
+    {
+        return Err(Refusal::new("TARGET_SUBSTITUTED", "source target is not the current rooted attempt"));
+    }
+    let evidence_row = route.aux.get(&(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, key)).cloned();
+    let binding =
+        route.kernel_binding_v1(&class).ok_or_else(|| Refusal::new("ROWS_MALFORMED", "rooted attempt has no kernel binding"))?;
+    let program = route
+        .kernel_class_record_v1(&binding.kernel_class)
+        .ok_or_else(|| Refusal::new("ROWS_MALFORMED", "rooted binding has no kernel class"))?
+        .program_bytes;
+    let ledger = route.ledger().map_err(|e| Refusal::new("ROWS_MALFORMED", e))?;
+    let fee_contract = ledger.beacon_source_fees.get(context).cloned();
+    if fee_contract.as_ref().is_some_and(|f| f.target != target) {
+        return Err(Refusal::new("TARGET_SUBSTITUTED", "prepaid fee target differs from the rooted source target"));
+    }
+    let fee_receipts = ledger
+        .beacon_source_fee_promises
+        .range((*context, [0; 64])..=(*context, [255; 64]))
+        .map(|((_, producer), p)| (*producer, p.clone()))
+        .collect();
+    let paid_material = if paid {
+        Some(
+            route
+                .paid_beacon_material_v5(context)
+                .map_err(|e| Refusal::new("SOURCE_FEE_MALFORMED", e))?
+                .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?,
+        )
+    } else {
+        None
+    };
+    let paid_cost_bounds = if paid {
+        Some(route.beacon_source_cost_bounds_v5(context).map_err(|e| Refusal::new("SOURCE_COST_MALFORMED", e))?)
+    } else {
+        None
+    };
+    Ok(VerifiedOptInSourcesV4 {
+        target,
+        facts,
+        attempt_row,
+        evidence_row,
+        program,
+        fee_contract,
+        fee_receipts,
+        paid_material,
+        paid_cost_bounds,
+    })
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, String> {

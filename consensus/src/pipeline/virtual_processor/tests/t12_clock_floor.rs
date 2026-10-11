@@ -58,7 +58,7 @@ fn t12_at_genesis(config: &Config, premine: &[(TransactionOutpoint, UtxoEntry)])
     let consensus = TestConsensus::new(config);
     {
         let mut imported = MuHash::new();
-        consensus.append_imported_pruning_point_utxos(premine, &mut imported);
+        consensus.append_imported_pruning_point_utxos(premine, &mut imported).expect("initial epoch-zero genesis staging");
         consensus
             .import_pruning_point_utxo_set(config.params.genesis.hash, imported)
             .expect("the premine imports against the genesis commitment it was hashed into");

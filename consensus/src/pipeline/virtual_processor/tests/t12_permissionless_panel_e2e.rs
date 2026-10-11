@@ -478,3 +478,6 @@ async fn t12_a_certified_output_carried_below_the_fence_is_dropped_by_name_and_t
     assert!(state_of(&a).panel_v3().is_none(), "no engine below the fence; the dropped object left no trace");
     assert!(a.daa_of(child.header.hash) < FENCE);
 }
+
+#[path = "t12_complete_population_e2e.rs"]
+mod complete_population;

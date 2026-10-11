@@ -21,7 +21,7 @@
 //! verdict is what tells them apart. The logits-consistency accusation and the decode-token door are
 //! built here from the same retention.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use kaspa_consensus_core::Hash64;
@@ -38,7 +38,7 @@ use kaspa_consensus_core::palw_step_refute::{
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1,
-    PalwTirTraceLanesV1, build_tir_cone_refutation_v1, palw_tir_row_node_parts_v1,
+    PalwTirTraceLanesV1, PalwTirInventoryIndexV1, build_tir_cone_refutation_bounded_v1, palw_tir_row_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -139,6 +139,8 @@ pub fn tir_first_divergence_v1(ctx: &PalwJobContextV2, a: &[Hash64], b: &[Hash64
 enum Leaves<'a> {
     /// Every preimage, held (a dense capture).
     Dense(&'a [PalwStepTileLeafV1]),
+    /// Only the authenticated preimages fetched for the current cell/court.
+    Sparse(&'a BTreeMap<u64, PalwStepTileLeafV1>),
     /// Re-derived by replay from the resume points; the disputed leaf, when it is the accused's,
     /// overrides the replay's.
     Replay { points: &'a [TirResumePointV1], disputed: Option<(u64, PalwStepTileLeafV1)> },
@@ -191,14 +193,22 @@ pub struct TirEvidenceV1<'a> {
     binding: &'a PalwTirStepBindingV1,
     prompt: &'a [u32],
     trace: TirTraceV1<'a>,
-    tree: TirStepTreeV1,
+    tree: Box<dyn super::sparse_tree::TirProofTreeV1>,
+    _tree_memory: Option<super::memory::TirMemoryLeaseV1>,
     leaves: Leaves<'a>,
     params: &'a dyn TirParamOpenerV1,
     prompt_form: PalwPromptIdsFormV1,
     cap: u64,
-    /// Replayed positions' leaves, by position (bounded by `cache_budget` bytes of lanes).
+    /// One target position's replayed leaves. The admission budget also includes the
+    /// transient range hashes, logits rows, generated ids and native Vec headers.
     cache: RefCell<BTreeMap<u32, Vec<PalwStepTileLeafV1>>>,
+    cache_memory: RefCell<Option<super::memory::TirMemoryLeaseV1>>,
     cache_budget: usize,
+    max_replay_positions: u32,
+    replay_positions_used: Cell<u64>,
+    replay_cost: Option<super::cost::TirReplayCostBudgetV1>,
+    copies: super::copies::TirCarriedCopiesV1,
+    inventory: PalwTirInventoryIndexV1,
 }
 
 impl<'a> TirEvidenceV1<'a> {
@@ -211,19 +221,28 @@ impl<'a> TirEvidenceV1<'a> {
         prompt_form: PalwPromptIdsFormV1,
         cap: u64,
     ) -> Result<Self, String> {
+        let replay_cost = super::cost::TirReplayCostBudgetV1::new(runner.space, 4096)?;
+        let tree_memory = Self::reserve_tree(runner, &job.binding, cap)?;
         let tree = Self::check(runner, &job.binding, &job.leaf_hashes)?;
         Ok(Self {
             runner,
             binding: &job.binding,
             prompt: &job.prompt,
             trace: TirTraceV1::Rows { rows: &job.logits_rows, generated: &job.generated },
-            tree,
+            tree: Box::new(tree),
+            _tree_memory: tree_memory,
             leaves: Leaves::Replay { points: &job.points, disputed: None },
             params,
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
             cache_budget: 1 << 30,
+            max_replay_positions: 4096,
+            replay_positions_used: Cell::new(0),
+            replay_cost: Some(replay_cost),
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
         })
     }
 
@@ -242,6 +261,10 @@ impl<'a> TirEvidenceV1<'a> {
         cap: u64,
     ) -> Result<Self, String> {
         let ctx_hash = binding.job_context.context_hash();
+        if preimages.len() as u64 != binding.step_leaf_count {
+            return Err("the dense preimage count is not its binding".into());
+        }
+        let tree_memory = Self::reserve_tree(runner, binding, cap)?;
         let hashes: Vec<Hash64> = preimages.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &runner.class_id, p)).collect();
         let tree = Self::check(runner, binding, &hashes)?;
         Ok(Self {
@@ -249,13 +272,42 @@ impl<'a> TirEvidenceV1<'a> {
             binding,
             prompt,
             trace: TirTraceV1::Rows { rows: logits_rows, generated },
-            tree,
+            tree: Box::new(tree),
+            _tree_memory: tree_memory,
             leaves: Leaves::Dense(preimages),
             params,
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
             cache_budget: 0,
+            max_replay_positions: 0,
+            replay_positions_used: Cell::new(0),
+            replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
+        })
+    }
+
+    /// Sparse public evidence: the requested ranges and their Merkle siblings, with
+    /// no N-leaf allocation or prefix replay. Missing units remain unavailable.
+    #[allow(clippy::too_many_arguments)]
+    pub fn runs(
+        runner: &'a TirClassRunnerV1<'a>,
+        capture: &'a super::backend::TirCaptureV1,
+        inputs: &'a super::cell::TirRunInputsV1,
+        params: &'a dyn TirParamOpenerV1,
+        prompt_form: PalwPromptIdsFormV1,
+        cap: u64,
+    ) -> Result<Self, String> {
+        super::backend::tir_authenticate_capture_metadata_v1(capture, runner.class_id, prompt_form, cap)?;
+        let tree = inputs.proof_tree_v1(capture, runner.class_id, cap)?;
+        Ok(Self {
+            runner, binding: &capture.binding, prompt: &capture.prompt,
+            trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
+            tree: Box::new(tree), _tree_memory: None, leaves: Leaves::Sparse(inputs.preimages_v1()), params,
+            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_memory: RefCell::new(None), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0), replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(), inventory: Self::inventory_index(runner)?,
         })
     }
 
@@ -303,6 +355,8 @@ impl<'a> TirEvidenceV1<'a> {
         if step_tile_leaf_hash_v1(&ctx_hash, &runner.class_id, &disputed_preimage) != disputed_opening.leaf_hash {
             return Err("the disputed preimage is not the opened leaf".into());
         }
+        let replay_cost = super::cost::TirReplayCostBudgetV1::new(runner.space, 4096)?;
+        let tree_memory = Self::reserve_tree(runner, accused, cap)?;
         let tree = TirStepTreeV1::prefix_with_opening(&own.leaf_hashes, accused.step_leaf_count, disputed_opening)?;
         if tree.root() != Some(accused.step_merkle_root) {
             return Err("the prefix and the accused's opening do not produce the accused's step root".into());
@@ -313,14 +367,96 @@ impl<'a> TirEvidenceV1<'a> {
             binding: accused,
             prompt: &own.prompt,
             trace,
-            tree,
+            tree: Box::new(tree),
+            _tree_memory: tree_memory,
             leaves: Leaves::Replay { points: &own.points, disputed: Some((disputed_opening.leaf_index, disputed_preimage)) },
             params,
             prompt_form,
             cap,
             cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
             cache_budget: 1 << 30,
+            max_replay_positions: 4096,
+            replay_positions_used: Cell::new(0),
+            replay_cost: Some(replay_cost),
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
         })
+    }
+
+    fn inventory_index(runner: &TirClassRunnerV1<'_>) -> Result<PalwTirInventoryIndexV1, String> {
+        PalwTirInventoryIndexV1::new(&runner.space.program).ok_or_else(|| "the class has no inventory".into())
+    }
+
+    fn admit_copy(&self, bytes: u64) -> Option<()> {
+        self.copies.admit(self.runner.class_id, &self.binding.job_context, bytes)
+    }
+    fn copy_leaf(&self, leaf: &PalwStepTileLeafV1) -> Option<PalwStepTileLeafV1> {
+        let bytes = (leaf.values_le.len() as u64).checked_add(std::mem::size_of::<PalwStepTileLeafV1>() as u64)?
+            .checked_mul(2)?.checked_add(256)?;
+        self.admit_copy(bytes)?;
+        Some(leaf.clone())
+    }
+    /// Requested native copies over the entire current move and store life. These
+    /// counters include conservative proof/hash scratch; they are not measured RSS.
+    pub fn carried_copy_bytes_used_v1(&self) -> u64 { self.copies.used() }
+    pub fn carried_copy_lifetime_bytes_v1(&self) -> u64 { self.copies.lifetime_used() }
+    pub fn carried_copy_reserved_bytes_v1(&self) -> u64 { self.copies.reserved() }
+    /// Tool override only. Guards and prior lifetime usage survive tighter limits.
+    pub fn with_carried_copy_limits_v1(mut self, per_move: u64, lifetime: u64) -> Self {
+        self.copies.set_limits(per_move, lifetime);
+        self
+    }
+    fn param_copy_need(&self, leaves: &[u32]) -> Option<u64> {
+        let mut bytes = 1024u64;
+        for leaf in leaves {
+            let (j, _, _, len) = self.inventory.piece_of(*leaf)?;
+            let name = self.runner.space.program.params.get(j as usize)?.name.len() as u64;
+            // Operand data, intermediate openings, composite carriage/authentication
+            // copies, sorted leaf indices and at most 64 sibling hashes per path.
+            bytes = bytes.checked_add(u64::from(len).checked_add(name)?.checked_add(64 * 64 + 256)?.checked_mul(8)?)?;
+        }
+        Some(bytes)
+    }
+    fn param_scratch(&self, leaves: &[u32]) -> Option<Option<super::memory::TirMemoryLeaseV1>> {
+        let need = self.params.param_scratch_storage_v1(leaves)?;
+        self.copies.scratch(self.runner.class_id, &self.binding.job_context, need)
+    }
+    fn trace_scratch_need(&self) -> Option<u64> {
+        match self.trace {
+            TirTraceV1::Rows { rows, .. } => {
+                let tiles = rows.iter().map(|r| r.len().div_ceil(PALW_LOGITS_TILE_LANES)).max().unwrap_or(0) as u64;
+                (rows.len() as u64).checked_add(tiles)?.checked_mul(256)?.checked_add(16 << 10)
+            }
+            TirTraceV1::Summary { .. } | TirTraceV1::Absent => Some(0),
+        }
+    }
+    fn flat_trace_copy_need(&self) -> Option<u64> {
+        let TirTraceV1::Rows { rows, generated } = self.trace else { return None };
+        let mut bytes = (generated.len() as u64).checked_mul(4)?.checked_add(256)?;
+        for row in rows {
+            bytes = bytes.checked_add((row.len() as u64).checked_mul(4)?.checked_add(24)?)?;
+        }
+        bytes.checked_mul(2)
+    }
+    fn row_pin_copy_need(&self, row: u32, lane: u32) -> Option<u64> {
+        let bytes = match self.trace {
+            TirTraceV1::Rows { rows, generated } => {
+                let lanes = rows.get(row as usize)?;
+                if lane as usize >= lanes.len() || *generated.get(row as usize)? as usize >= lanes.len() { return None; }
+                (generated.len() as u64).checked_mul(4)?
+                    .checked_add(2 * PALW_LOGITS_TILE_LANES as u64 * 4 + 3 * 64 * 64 + 1024)?
+            }
+            TirTraceV1::Summary { pins, .. } => {
+                let p = pins.iter().find(|p| p.position == row && p.beat_lane as usize / PALW_LOGITS_TILE_LANES == lane as usize / PALW_LOGITS_TILE_LANES
+                    && lane as usize % PALW_LOGITS_TILE_LANES < p.beat_tile_lanes.len())?;
+                let values = p.generated_token_ids.len().checked_add(p.committed_tile_lanes.len())?.checked_add(p.beat_tile_lanes.len())? as u64;
+                let hashes = p.row_opening.siblings.len().checked_add(p.committed_opening.siblings.len())?.checked_add(p.beat_opening.siblings.len())? as u64;
+                values.checked_mul(4)?.checked_add(hashes.checked_mul(64)?)?.checked_add(1024)?
+            }
+            TirTraceV1::Absent => return None,
+        };
+        bytes.checked_mul(2)?.checked_add(self.trace_scratch_need()?)
     }
 
     fn check_binding(runner: &TirClassRunnerV1<'_>, binding: &PalwTirStepBindingV1) -> Result<(), String> {
@@ -329,6 +465,15 @@ impl<'a> TirEvidenceV1<'a> {
             return Err("the binding is of another class than this runner's".into());
         }
         Ok(())
+    }
+
+    fn reserve_tree(runner: &TirClassRunnerV1<'_>, binding: &PalwTirStepBindingV1, cap: u64) -> Result<Option<super::memory::TirMemoryLeaseV1>, String> {
+        Self::check_binding(runner, binding)?;
+        if runner.space.leaf_count_capped(&binding.job_context, cap).map_err(|e| e.to_string())? != binding.step_leaf_count {
+            return Err("the tree leaf count is not its capped job".into());
+        }
+        let need = super::memory::tir_full_tree_storage_need_v1(binding.step_leaf_count)?;
+        super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-full-tree", runner.class_id, &binding.job_context, need)
     }
 
     /// The held leaves' tree, refused unless it is the binding's.
@@ -350,7 +495,8 @@ impl<'a> TirEvidenceV1<'a> {
 
     /// **The canonical cone refutation of step leaf `leaf`** (F5's builder over this store).
     pub fn cone_refutation(&self, leaf: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
-        build_tir_cone_refutation_v1(self.binding, leaf, self, rules)
+        build_tir_cone_refutation_bounded_v1(self.binding, leaf, self, rules,
+            super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object)
     }
 
     /// **The logits-consistency accusation over logits step leaf `leaf`**: the step tile and the
@@ -369,10 +515,11 @@ impl<'a> TirEvidenceV1<'a> {
             let TirTraceV1::Rows { rows, generated } = self.trace else {
                 return Err("the flat scheme's door carries every row, and this store holds a summary".into());
             };
+            self.admit_copy(self.flat_trace_copy_need().ok_or("trace copy size overflow")?).ok_or("trace copy admission refused")?;
             PalwTirTraceLanesV1::Flat(PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: generated.to_vec() })
         } else if scheme == tiled_logits_scheme_id_v1() {
             let beat = u32::try_from(first_element).map_err(|_| "a logits lane past u32")?;
-            let pin = self.trace.pin(ctx, row, beat).ok_or("the trace this store holds has no such row or lane")?;
+            let pin = self.row_pin(row, beat).ok_or("the trace this store holds has no such row or lane")?;
             debug_assert_eq!(beat as usize / PALW_LOGITS_TILE_LANES, pin.beat_lane as usize / PALW_LOGITS_TILE_LANES);
             PalwTirTraceLanesV1::Tiled {
                 generated_token_ids: pin.generated_token_ids,
@@ -386,7 +533,7 @@ impl<'a> TirEvidenceV1<'a> {
         };
         Ok(PalwTirLogitsConsistencyV1 {
             binding: self.binding.clone(),
-            step_opening: self.tree.opening(leaf).ok_or("the step tree does not open that leaf")?,
+            step_opening: self.step_opening(leaf).ok_or("the step tree does not open that leaf")?,
             step_preimage: self.step_leaf(leaf).ok_or("the store does not hold that leaf")?,
             trace,
         })
@@ -395,52 +542,144 @@ impl<'a> TirEvidenceV1<'a> {
     /// **The tiled decode-token pin** for decode row `row`, the lane `beat_lane` said to beat the
     /// committed token (the tiled scheme's door).
     pub fn decode_token_pin(&self, row: u32, beat_lane: u32) -> Option<PalwTiledDecodePinV1> {
-        self.trace.pin(&self.binding.job_context, row, beat_lane)
+        self.row_pin(row, beat_lane)
     }
 
-    /// Replay the positions from the latest point before `a` through `a`, caching their leaves.
-    fn replay_through(&self, a: u32, points: &[TirResumePointV1], disputed: Option<&(u64, PalwStepTileLeafV1)>) -> Option<()> {
-        let point = points.iter().rev().find(|p| p.position < a);
+    /// Override local replay admission for a tool/resource probe. Actual node stores
+    /// default to at most 4096 positions and 1 GiB of requested replay buffers.
+    pub fn with_replay_limits_v1(mut self, positions: u32, requested_bytes: usize) -> Self {
+        self.max_replay_positions = positions;
+        if let Some(cost) = self.replay_cost.as_mut() { cost.set_positions(positions); }
+        self.cache_budget = requested_bytes;
+        self.replay_positions_used.set(0);
+        self.cache.borrow_mut().clear();
+        self.cache_memory.borrow_mut().take();
+        self
+    }
+
+    pub fn replay_positions_used_v1(&self) -> u64 { self.replay_positions_used.get() }
+
+    /// Tool override of the shared symbolic §8 cost vector; no public fee or
+    /// consensus class limit changes. Clearing the cache prevents policy bypass.
+    pub fn with_replay_cost_limits_v1(mut self, limits: misaka_palw_tir::admit::CostV1) -> Self {
+        if let Some(cost) = self.replay_cost.as_mut() { cost.set_limit(limits); }
+        self.replay_positions_used.set(0);
+        self.cache.borrow_mut().clear();
+        self.cache_memory.borrow_mut().take();
+        self
+    }
+
+    pub fn replay_cost_used_v1(&self) -> misaka_palw_tir::admit::CostV1 {
+        self.replay_cost.as_ref().map_or_else(Default::default, |cost| cost.used())
+    }
+
+    /// Conservative requested replay cost, using every occurrence at H=window.
+    /// Excludes restore/checkpoint serialization, physical instructions and time.
+    pub fn replay_requested_cost_v1(&self, a: u32) -> Option<misaka_palw_tir::admit::CostV1> {
+        let Leaves::Replay { points, .. } = &self.leaves else { return None };
+        if a >= self.runner.space.job_shape(&self.binding.job_context).ok()?.positions { return None; }
+        let first = points.iter().rev().find(|p| p.position < a).map_or(Some(0), |p| p.position.checked_add(1))?;
+        let span = u64::from(a.checked_add(1)?.checked_sub(first)?);
+        if span > u64::from(self.max_replay_positions) { return None; }
+        self.replay_cost.as_ref()?.requested(span)
+    }
+
+    /// Requested native buffer storage for one replay: range hashes, selecting logits
+    /// rows, generated ids and the target position's leaf headers/lanes. Executor
+    /// tensors, retained resume points, the immutable proof tree and allocator/RSS
+    /// overhead are separate; the fixed 16 KiB allowance covers the single-entry map.
+    pub fn replay_requested_storage_v1(&self, a: u32) -> Option<usize> {
+        let Leaves::Replay { points, .. } = &self.leaves else { return None };
         let ctx = &self.binding.job_context;
-        let mut fresh: BTreeMap<u32, Vec<PalwStepTileLeafV1>> = BTreeMap::new();
+        let space = self.runner.space;
+        let job = space.job_shape(ctx).ok()?;
+        if a >= job.positions { return None; }
+        let first = points.iter().rev().find(|p| p.position < a)
+            .map_or(Some(0), |p| p.position.checked_add(1))?;
+        let end = a.checked_add(1)?;
+        if end.checked_sub(first)? > self.max_replay_positions { return None; }
+        let hashes = space.running_total(&job, end).checked_sub(space.running_total(&job, first))?;
+        let selected = end.saturating_sub(job.prefill - 1) as u128;
+        let rows = selected.checked_sub(first.saturating_sub(job.prefill - 1) as u128)?;
+        let post = space.program.schedule.post as usize;
+        let width = space.program.blocks.get(post)?.nodes.get(space.program.logits as usize)?.out.elements_at(1) as u128;
+        let leaf_headers = u128::from(space.leaves_at_position(&job, a))
+            .checked_mul(std::mem::size_of::<PalwStepTileLeafV1>() as u128)?;
+        let leaf_lanes = space.lane_count_at_position_v1(&job, a).checked_mul(4)?;
+        let trace = rows.checked_mul(width.checked_mul(4)?.checked_add(std::mem::size_of::<Vec<i32>>() as u128)?)?;
+        // drive converts one selecting row through i128 before retaining i32, and
+        // reuses an emitter buffer whose canonical leaf has at most 65,536 lanes.
+        let row_conversion = if rows == 0 { 0 } else { width.checked_mul(16)? };
+        let emitter = (kaspa_consensus_core::palw_step::PALW_STEP_MAX_TILE_LEN as u128).checked_mul(8)?;
+        let bytes = hashes.checked_mul(std::mem::size_of::<Hash64>() as u128)?
+            .checked_add(trace)?.checked_add(row_conversion)?.checked_add(emitter)?
+            .checked_add(selected.checked_mul(4)?)?
+            .checked_add(leaf_headers)?.checked_add(leaf_lanes)?.checked_add(16 << 10)?;
+        usize::try_from(bytes).ok()
+    }
+
+    /// Replay only after bounded admission, keeping the target position's preimages.
+    /// Earlier replayed positions are consumed by the executor and never cloned here.
+    fn replay_through(&self, a: u32, points: &[TirResumePointV1], disputed: Option<&(u64, PalwStepTileLeafV1)>) -> Option<()> {
+        let requested = self.replay_requested_storage_v1(a)?;
+        if requested > self.cache_budget { return None; }
+        let point = points.iter().rev().find(|p| p.position < a);
+        let first = point.map_or(Some(0), |p| p.position.checked_add(1))?;
+        let span = u64::from(a.checked_add(1)?.checked_sub(first)?);
+        let total = self.replay_positions_used.get().checked_add(span)?;
+        if total > u64::from(self.max_replay_positions) { return None; }
+        // Failed work consumes the move's budget too; cache misses cannot multiply
+        // 4096 positions by an unbounded number of logical source reads.
+        self.replay_cost.as_ref()?.admit(span)?;
+        self.replay_positions_used.set(total);
+        let ctx = &self.binding.job_context;
+        let job = self.runner.space.job_shape(ctx).ok()?;
+        let count = usize::try_from(self.runner.space.leaves_at_position(&job, a)).ok()?;
+        let lane_bytes = usize::try_from(self.runner.space.lane_count_at_position_v1(&job, a).checked_mul(4)?).ok()?;
+        // Drop all prior positions before transient buffers are allocated: even one
+        // oversized position is refused, rather than retained beyond the cache cap.
+        self.cache.borrow_mut().clear();
+        self.cache_memory.borrow_mut().take();
+        let cache_memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
+            "tir-replay-output", self.runner.class_id, ctx, u64::try_from(requested).ok()?).ok()?;
+        let mut fresh = Vec::new();
+        fresh.try_reserve_exact(count).ok()?;
+        let (mut copied_bytes, mut malformed) = (0usize, false);
         self.runner
-            .replay(ctx, self.prompt, self.cap, point, Some(a + 1), &mut |leaf| {
-                let mut p = leaf.preimage.clone();
-                if let Some((i, accused)) = disputed
-                    && *i == leaf.index
-                {
-                    p = accused.clone();
-                }
-                fresh.entry(leaf.position).or_default().push(p);
-            })
-            .ok()?;
-        let mut cache = self.cache.borrow_mut();
-        let mut bytes: usize = cache.values().flatten().map(|l| l.values_le.len()).sum();
-        for (pos, leaves) in fresh {
-            bytes += leaves.iter().map(|l| l.values_le.len()).sum::<usize>();
-            cache.insert(pos, leaves);
-        }
-        // Evict the positions furthest before `a` first (the evaluation reads backwards from it).
-        while bytes > self.cache_budget && cache.len() > 1 {
-            let (&first, _) = cache.iter().next().expect("non-empty");
-            if first == a {
-                break;
-            }
-            let gone = cache.remove(&first).expect("present");
-            bytes -= gone.iter().map(|l| l.values_le.len()).sum::<usize>();
-        }
+            .replay(ctx, self.prompt, self.cap, point, Some(a.checked_add(1)?), &mut |leaf| {
+                if leaf.position != a || malformed { return; }
+                let preimage = match disputed {
+                    Some((index, accused)) if *index == leaf.index => accused,
+                    _ => leaf.preimage,
+                };
+                let Some(next) = copied_bytes.checked_add(preimage.values_le.len()) else { malformed = true; return; };
+                if fresh.len() == count || next > lane_bytes { malformed = true; return; }
+                copied_bytes = next;
+                fresh.push(preimage.clone());
+            }).ok()?;
+        if malformed || fresh.len() != count || copied_bytes != lane_bytes { return None; }
+        self.cache.borrow_mut().insert(a, fresh);
+        *self.cache_memory.borrow_mut() = cache_memory;
         Some(())
     }
+
 }
 
 impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
+    fn begin_builder_move_v1(&self) {
+        self.replay_positions_used.set(0);
+        if let Some(cost) = self.replay_cost.as_ref() { cost.reset(); }
+        self.copies.reset_move();
+    }
+
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
         match &self.leaves {
-            Leaves::Dense(all) => all.get(index as usize).cloned(),
+            Leaves::Dense(all) => self.copy_leaf(all.get(usize::try_from(index).ok()?)?),
+            Leaves::Sparse(all) => self.copy_leaf(all.get(&index)?),
             Leaves::Replay { points, disputed } => {
                 if let Some((i, accused)) = disputed {
                     if *i == index {
-                        return Some(accused.clone());
+                        return self.copy_leaf(accused);
                     }
                     if index > *i {
                         // Past the disputed leaf the challenger holds nothing of the accused's.
@@ -456,36 +695,45 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
                 }
                 let job = space.job_shape(ctx).ok()?;
                 let first = space.running_total(&job, a) as u64;
-                self.cache.borrow().get(&a)?.get((index - first) as usize).cloned()
+                self.copy_leaf(self.cache.borrow().get(&a)?.get(usize::try_from(index.checked_sub(first)?).ok()?)?)
             }
         }
     }
 
     fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
+        self.admit_copy(2 * 64 * 64 + 512)?;
         self.tree.opening(index)
     }
 
     fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
+        self.admit_copy(4 * 64 * 64 + 512)?;
         self.tree.range_siblings(first, count)
     }
 
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        self.admit_copy(self.param_copy_need(&[leaf])?)?;
+        let _scratch = self.param_scratch(&[leaf])?;
         self.params.param_opening(leaf)
     }
 
     /// One multiproof read off the held inventory's levels (the builder's bytes; see
     /// [`super::inventory::TirInventoryTreeV1::multiproof`]) — not assembled from a path per leaf.
     fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.admit_copy(self.param_copy_need(leaves)?)?;
+        let _scratch = self.param_scratch(leaves)?;
         self.params.param_multiproof(leaves)
     }
 
     /// The carriage the class's artifact makes: one multiproof, or — a composite candidate's — the
     /// two sub-roots' (RFC-0004 §6.3).
     fn param_carriage(&self, leaves: &[u32]) -> Option<kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1> {
+        self.admit_copy(self.param_copy_need(leaves)?)?;
+        let _scratch = self.param_scratch(leaves)?;
         self.params.param_carriage(leaves)
     }
 
     fn prompt_token_ids(&self) -> Option<Vec<u32>> {
+        self.admit_copy((self.prompt.len() as u64).checked_mul(8)?.checked_add(256)?)?;
         Some(self.prompt.to_vec())
     }
 
@@ -493,6 +741,8 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
         if self.prompt_form != PalwPromptIdsFormV1::MerkleV1 {
             return None;
         }
+        let tiles = (self.prompt.len() as u64).div_ceil(u64::from(PALW_PROMPT_IDS_TILE_LEN));
+        self.admit_copy(tiles.checked_mul(256)?.checked_add(2 * PALW_PROMPT_IDS_TILE_LEN as u64 * 4 + 8192)?)?;
         prompt_ids_opening_v1(self.prompt, tile.checked_mul(PALW_PROMPT_IDS_TILE_LEN)?).ok()
     }
 
@@ -500,15 +750,18 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
         let scheme = Hash64::from_bytes(self.runner.space.program.logits_scheme_id);
         match (self.trace, scheme) {
             (TirTraceV1::Rows { rows, generated }, s) if s == tiled_logits_scheme_id_v1() => {
+                self.admit_copy((generated.len() as u64).checked_mul(8)?.checked_add(256)?.checked_add(self.trace_scratch_need()?)?)?;
                 Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 {
                     rows_root: tiled_logits_rows_root_v1(&self.binding.job_context, rows)?,
                     generated_token_ids: generated.to_vec(),
                 }))
             }
             (TirTraceV1::Summary { rows_root, generated, .. }, s) if s == tiled_logits_scheme_id_v1() => {
+                self.admit_copy((generated.len() as u64).checked_mul(8)?.checked_add(256)?)?;
                 Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.to_vec() }))
             }
             (TirTraceV1::Rows { rows, generated }, s) if s == flat_logits_scheme_id_v1() => {
+                self.admit_copy(self.flat_trace_copy_need()?)?;
                 Some(PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 {
                     logits_rows: rows.to_vec(),
                     generated_token_ids: generated.to_vec(),
@@ -522,6 +775,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     /// `TirStepLeaf` answer): from the rows (a capture's, or this node's own run), or from a held pin
     /// of that row whose beat tile holds the lane (a served annex's, an on-chain disclosure's).
     fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        self.admit_copy(self.row_pin_copy_need(row, lane)?)?;
         self.trace.pin(&self.binding.job_context, row, lane)
     }
 
@@ -529,6 +783,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     /// unit), off this store's tree — whole for the executor's own capture or run; a challenger's
     /// partial tree answers only the nodes it holds.
     fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        self.admit_copy(2 * ((1 << 10) + 64) * 64 + 512)?;
         self.tree.node_parts(level, index)
     }
 
@@ -537,7 +792,10 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     /// (`palw_tir_row_node_parts_v1`). A store holding only a summary of the trace answers none.
     fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
         match self.trace {
-            TirTraceV1::Rows { rows, .. } => palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index),
+            TirTraceV1::Rows { rows, .. } => {
+                self.admit_copy(self.trace_scratch_need()?.checked_add(2 * ((1 << 10) + 64) * 64 + 512)?)?;
+                palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index)
+            },
             TirTraceV1::Summary { .. } | TirTraceV1::Absent => None,
         }
     }

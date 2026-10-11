@@ -7,7 +7,9 @@
 //! envelope-sign     request.json, re-derived and checked against THIS build's network and fork digest  ── the key ──►  envelope.borsh
 //!                   (file it: `misaka palw submit-object --object envelope.borsh`)
 //! status            op 231: the lifecycle state, the attempt, the beacon, the posted evidence, the gate
-//! verify            one root-checked op 211 snapshot (+ the artifact): the fresh verifier rebuilds the verdict
+//! verify            op 231; a complete-check attempt against caller-pinned roots (`model_complete`); every other attempt
+//!                   from one root-checked op 211 snapshot (+ its v4/v5 source books; + the artifact): the fresh verifier
+//!                   rebuilds the verdict
 //!                   and says whether it agrees with the chain
 //! ```
 //!
@@ -20,8 +22,7 @@ use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_rpc_core::GetPalwConformanceEvidenceRequest;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use misaka_palw_sdk::onboarding_chain::{
-    EnvelopeSigner, PublicOnboardingReadsV1, SignedRegistrationRequestV1, fresh_verify_complete_check_file_v1,
-    fresh_verify_from_reads_v1, verify_signed_registration_v1,
+    EnvelopeSigner, PublicOnboardingReadsV1, SignedRegistrationRequestV1, fresh_verify_from_reads_v1, verify_signed_registration_v1,
 };
 use std::path::Path;
 use std::str::FromStr;
@@ -186,12 +187,26 @@ pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
     Ok(())
 }
 
+enum VerifiedBeaconSources {
+    OptIn(misaka_palw_sdk::onboarding_chain::VerifiedOptInSourcesV4),
+    Paid(misaka_palw_sdk::onboarding_chain::VerifiedPaidOptInSourcesV5),
+}
+impl VerifiedBeaconSources {
+    fn fee_contract(&self) -> Option<&misaka_palw_sdk::onboarding_chain::SourceFeeFundingV1> {
+        match self {
+            Self::OptIn(s) => s.fee_contract(),
+            Self::Paid(s) => s.fee_contract(),
+        }
+    }
+}
+
 /// **One conformance snapshot from op 211**: the SDK rebuilds every page and checks both served roots.
-/// The tip, roots, header and row count must match across pages; a moved snapshot is refused.
+/// The tip, roots, header and row count must match across pages; a moved snapshot is refused. An opt-in (v4) or paid (v5) source
+/// attempt also rebuilds its rooted target, reservations and fee book from the SAME rows (codex RFC-7; R6781-F merge).
 async fn kernel_conformance_reads(
     nv: &crate::wallet::NodeView,
     class: kaspa_consensus_core::Hash64,
-) -> Result<PublicOnboardingReadsV1, CliError> {
+) -> Result<(PublicOnboardingReadsV1, Option<VerifiedBeaconSources>), CliError> {
     use kaspa_rpc_core::GetPalwKernelRowsRequest;
     use misaka_palw_sdk::onboarding_snapshot::{KernelRowsPageV1, KernelRowsSnapshotV1, MAX_SNAPSHOT_BYTES_V1};
     let mut snapshot = KernelRowsSnapshotV1::default();
@@ -244,7 +259,7 @@ async fn kernel_conformance_reads(
             })
             .map_err(refusal)?;
         match next {
-            None => return snapshot.into_onboarding_reads_v1(class).map_err(refusal),
+            None => break,
             Some((table, key)) => {
                 request = GetPalwKernelRowsRequest {
                     has_cursor: true,
@@ -255,57 +270,111 @@ async fn kernel_conformance_reads(
             }
         }
     }
+    let (header, rows, ledger_root, aux_root) = snapshot.served_v1().map_err(refusal)?;
+    let reads = snapshot.into_onboarding_reads_v1(class).map_err(refusal)?;
+    let PublicOnboardingReadsV1::Sampled(sampled) = &reads else { return Ok((reads, None)) };
+    // v4 rebuilds its exact rooted target/reservations/fee book; ordinary sealed sources cannot substitute (codex).
+    let attempt = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&sampled.attempt_row)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
+    if !attempt.is_opt_in_source() {
+        return Ok((reads, None));
+    }
+    let context = attempt.beacon_context(&attempt.policy()).id();
+    let sources = if attempt.is_paid_opt_in_source() {
+        VerifiedBeaconSources::Paid(
+            misaka_palw_sdk::onboarding_chain::paid_opt_in_sources_from_kernel_rows_v5(
+                &header,
+                rows,
+                &ledger_root,
+                &aux_root,
+                &context,
+            )
+            .map_err(refusal)?,
+        )
+    } else {
+        VerifiedBeaconSources::OptIn(
+            misaka_palw_sdk::onboarding_chain::opt_in_sources_from_kernel_rows_v4(&header, rows, &ledger_root, &aux_root, &context)
+                .map_err(refusal)?,
+        )
+    };
+    Ok((reads, Some(sources)))
 }
 
 fn or_dash(s: &str) -> &str {
     if s.is_empty() { "-" } else { s }
 }
 
-/// **`verify`**: the fresh verifier over one root-checked op-211 snapshot (and the public artifact).
-pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> CliResult {
+/// **`verify`**: op 231 names the attempt; a complete-check attempt is verified against the caller's pinned roots
+/// (`model_complete`, codex), every other one from one root-checked op-211 snapshot (and the public artifact).
+pub(crate) async fn verify(
+    ctx: &Ctx,
+    class: &str,
+    artifact: Option<&Path>,
+    ledger_root: Option<&str>,
+    aux_root: Option<&str>,
+    tip_daa: Option<u64>,
+) -> CliResult {
     let nv = crate::wallet::connect(ctx).await?;
     let class_id =
         kaspa_consensus_core::Hash64::from_str(class).map_err(|_| CliError::new(exit::CONFIG, "class is not a full class id"))?;
-    let reads = match kernel_conformance_reads(&nv, class_id).await? {
+    let r = nv
+        .client
+        .get_palw_conformance_evidence(GetPalwConformanceEvidenceRequest { class_id: class.to_string() })
+        .await
+        .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwConformanceEvidence: {e}")))?;
+    if !r.found || r.attempt_row.is_empty() {
+        return Err(CliError::new(exit::NOT_READY, format!("class {class}: no conformance record on this node")));
+    }
+    if r.attempt_row.len() > 2 << 20 || r.program.len() > misaka_palw_sdk::complete_check::COMPLETE_CHECK_MAX_PROGRAM_BYTES_V1 * 2 {
+        return Err(CliError::new(exit::GENERIC, "the conformance response exceeds the tooling read limits"));
+    }
+    if r.class_id != class {
+        return Err(CliError::new(exit::GENERIC, "the node served a conformance record for another class"));
+    }
+    let check = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&unhex(&r.attempt_row)?)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
+    if check.is_complete_check() {
+        return super::model_complete::verify(ctx, &nv, &r, artifact, ledger_root, aux_root, tip_daa).await;
+    }
+    let (reads, opt_in_sources) = kernel_conformance_reads(&nv, class_id).await?;
+    let reads = match reads {
         PublicOnboardingReadsV1::Sampled(reads) => reads,
-        PublicOnboardingReadsV1::CompleteCheck(reads) => {
-            let artifact = artifact.ok_or_else(|| {
-                CliError::new(exit::CONFIG, "complete-check verification requires --artifact: the verifier's own registered model")
-            })?;
-            let report = fresh_verify_complete_check_file_v1(&reads, artifact).map_err(refusal)?;
-            let attempt: kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1 =
-                borsh::from_slice(&reads.attempt_row).map_err(|e| CliError::new(exit::GENERIC, format!("attempt row: {e}")))?;
-            if ctx.output == OutputFormat::Json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "schema": "misaka.palw.onboard.complete-check-verify.v1",
-                        "class": class,
-                        "honest_post_id": misaka_palw_sdk::runtime_pack::commit::hex(&report.honest_post_id),
-                        "chain_post_id": report.chain_post_id.map(|id| misaka_palw_sdk::runtime_pack::commit::hex(&id)),
-                        "honest_passes": report.honest_passes,
-                        "chain_says_passed": report.chain_says_passed,
-                        "chain_state": attempt.record.state.code(),
-                        "agrees": report.agrees,
-                        "why": report.why,
-                    })
-                );
-            } else {
-                println!("complete check   every input and artifact leaf re-executed");
-                println!("honest post      {}", misaka_palw_sdk::runtime_pack::commit::hex(&report.honest_post_id));
-                println!("honest passes    {}", report.honest_passes);
-                println!("chain passed     {}", report.chain_says_passed);
-                println!("chain            {} — {}", attempt.record.state.code(), if report.agrees { "AGREES" } else { "DISAGREES" });
-                println!("                 {}", report.why);
-            }
-            return if report.agrees {
-                Ok(())
-            } else {
-                Err(CliError::new(exit::GENERIC, "the fresh verifier disagrees with the chain"))
-            };
+        PublicOnboardingReadsV1::CompleteCheck(_) => {
+            return Err(CliError::new(
+                exit::GENERIC,
+                "SNAPSHOT_MOVED: op 211's attempt is a complete check where op 231's is not; run verify again",
+            ));
         }
     };
-    let report = fresh_verify_from_reads_v1(&reads, artifact).map_err(refusal)?;
+    let report = match opt_in_sources.as_ref() {
+        Some(VerifiedBeaconSources::OptIn(sources)) => {
+            misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v4(&reads, sources, artifact)
+        }
+        Some(VerifiedBeaconSources::Paid(sources)) => {
+            misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v5(&reads, sources, artifact)
+        }
+        None => fresh_verify_from_reads_v1(&reads, artifact),
+    }
+    .map_err(refusal)?;
+    let source_fee = opt_in_sources.as_ref().and_then(|s| s.fee_contract()).map(|f| {
+        serde_json::json!({
+            "fee_per_source_sompi":f.terms.fee_per_source,"max_sources":f.terms.max_sources,
+            "held_sompi":f.held,"paid_sompi":f.paid,"refunded_sompi":f.refunded,
+        })
+    });
+    let source_cost_bounds = match opt_in_sources.as_ref() {
+        Some(VerifiedBeaconSources::Paid(s)) => {
+            let b = s.cost_bounds();
+            Some(serde_json::json!({
+                "execution_sompi":b.execution_sompi,"carrier_sompi":b.carrier_sompi,
+                "material_sompi":b.material_sompi,"public_court_sompi":b.public_court_sompi,
+                "locked_capital_sompi":b.locked_capital_sompi,"minimum_net_receipt_sompi":b.minimum_net_receipt_sompi,
+                "maximum_source_deposit_sompi":b.maximum_source_deposit_sompi,"maximum_liability_daa":b.maximum_liability_daa,
+                "report_root":misaka_palw_sdk::runtime_pack::commit::hex(&b.report_root),
+            }))
+        }
+        _ => None,
+    };
     let v = &report.verdict;
     let posted = match &v.posted {
         None => "none".to_string(),
@@ -318,6 +387,8 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
             serde_json::json!({
                 "schema": "misaka.palw.onboard.verify.v1",
                 "class": class,
+                "source_fee":source_fee,
+                "source_cost_bounds":source_cost_bounds,
                 "beacon": v.beacon,
                 "seed": v.seed.map(|s| misaka_palw_sdk::runtime_pack::commit::hex(&s)),
                 "posted": posted,
@@ -333,6 +404,15 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
         );
     } else {
         println!("beacon           {}", v.beacon);
+        if let Some(f) = opt_in_sources.as_ref().and_then(|s| s.fee_contract()) {
+            println!(
+                "source fee       {} sompi/source, {} slots; held {}, paid {}, refunded {} sompi",
+                f.terms.fee_per_source, f.terms.max_sources, f.held, f.paid, f.refunded
+            );
+        }
+        if let Some(VerifiedBeaconSources::Paid(s)) = opt_in_sources.as_ref() {
+            println!("source net floor {} sompi under the frozen cost bounds", s.cost_bounds().minimum_net_receipt_sompi);
+        }
         println!("posted evidence  {posted}");
         println!(
             "selection        {} vector(s), {} leaf(s); re-read {} leaf(s) from the artifact, {} contradict it",

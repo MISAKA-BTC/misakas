@@ -789,10 +789,84 @@ enum ModelCmd {
     /// conformance record (op 231), re-verified from public material.
     #[command(subcommand)]
     Onboard(OnboardCmd),
+    /// Inspect an immutable paid-source contract against caller-pinned route roots.
+    #[command(subcommand)]
+    Source(SourceCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum SourceCmd {
+    /// Read the complete authenticated source and fee inventory, including old attempts.
+    Inspect {
+        #[arg(long, value_name = "CONTEXT_ID")]
+        context: String,
+        /// Ledger root from the caller's authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        ledger_root: String,
+        /// Auxiliary root from the same authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        aux_root: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 enum OnboardCmd {
+    /// Prepare a signed complete-check bootstrap object from the retained registration and exact public artifact.
+    BootstrapPrepare {
+        #[arg(value_enum)]
+        stage: operator::model_bootstrap::Stage,
+        /// Locally retained ClassRegisteredTirV1 object (Borsh); this file does not prove prior inclusion.
+        #[arg(long, value_name = "FILE")]
+        registration: std::path::PathBuf,
+        #[arg(long, value_name = "FILE")]
+        artifact: std::path::PathBuf,
+        #[arg(long)]
+        max_positions: u32,
+        #[arg(long)]
+        bond: String,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+        /// Maximum existing binding collateral reservation, fixed before preparation.
+        #[arg(long)]
+        maximum_binding_reservation_sompi: u64,
+        /// Maximum existing complete-check bond fee, fixed before preparation.
+        #[arg(long)]
+        maximum_check_fee_sompi: u64,
+        /// Required except artifact-bind: root from the caller's trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: Option<String>,
+        #[arg(long, value_name = "HASH")]
+        aux_root: Option<String>,
+        #[arg(long, value_name = "DAA")]
+        tip_daa: Option<u64>,
+        /// Commit stage only: caller-supplied ConformanceCommitmentV1 including provenance/scope/resource roots.
+        #[arg(long, value_name = "FILE")]
+        commitment_borsh: Option<std::path::PathBuf>,
+    },
+    /// Exhaustively execute a rooted complete-check attempt and prepare its signed tag-109 post locally.
+    CompletePost {
+        #[arg(long)]
+        class: String,
+        /// Ledger root from the caller's trusted chain view, independently of this node's response.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: String,
+        /// Auxiliary root from the same trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        aux_root: String,
+        /// Current DAA from the same trusted chain view; it authenticates the post deadline.
+        #[arg(long, value_name = "DAA")]
+        tip_daa: u64,
+        #[arg(long, value_name = "FILE")]
+        artifact: std::path::PathBuf,
+        #[arg(long)]
+        bond: String,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
     /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid in
     /// [--valid-from, --valid-until] while the chain's fork digest is this build's at --valid-from.
     EnvelopeExport {
@@ -836,6 +910,15 @@ enum OnboardCmd {
         /// The class's artifact (PALWTIR1), from its public source; its inventory must root to the registered artifact root.
         #[arg(long, value_name = "FILE")]
         artifact: Option<std::path::PathBuf>,
+        /// Required for complete checks: the ledger root from the caller's trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: Option<String>,
+        /// Required for complete checks: the auxiliary root from the same trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        aux_root: Option<String>,
+        /// Required for complete checks: the current DAA from the same trusted chain view.
+        #[arg(long, value_name = "DAA")]
+        tip_daa: Option<u64>,
     },
 }
 
@@ -1454,6 +1537,9 @@ enum PalwCmd {
         /// (`DUPLICATE_CLASS`) or hold it in conflict (`CLASS_CONFLICT`), or cannot be read. Without it those are refused before any fee.
         #[arg(long)]
         allow_duplicate: bool,
+        /// Refuse the entire batch before broadcast if its actual carrier fees exceed this total.
+        #[arg(long)]
+        maximum_total_fee_sompi: Option<u64>,
     },
     /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
@@ -3164,8 +3250,23 @@ async fn run_cli() -> std::process::ExitCode {
                     operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
                 }
                 OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
-                OnboardCmd::Verify { class, artifact } => operator::model_onboard::verify(&ctx, &class, artifact.as_deref()).await,
+                OnboardCmd::BootstrapPrepare { stage, registration, artifact, max_positions, bond, key, out,
+                    maximum_binding_reservation_sompi, maximum_check_fee_sompi, ledger_root, aux_root, tip_daa, commitment_borsh } => {
+                    operator::model_bootstrap::prepare(&ctx, operator::model_bootstrap::PrepareArgs {
+                        stage, registration, artifact, max_positions, bond, key: key.source(), out,
+                        maximum_binding_reservation_sompi, maximum_check_fee_sompi, ledger_root, aux_root, tip_daa, commitment: commitment_borsh,
+                    }).await
+                }
+                OnboardCmd::CompletePost { class, artifact, bond, key, out, ledger_root, aux_root, tip_daa } => {
+                    operator::model_complete::post(&ctx, &class, &artifact, &bond, &key.source(), &out, &ledger_root, &aux_root, tip_daa).await
+                }
+                OnboardCmd::Verify { class, artifact, ledger_root, aux_root, tip_daa } => {
+                    operator::model_onboard::verify(&ctx, &class, artifact.as_deref(), ledger_root.as_deref(), aux_root.as_deref(), tip_daa).await
+                },
             }
+        }),
+        Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => Box::pin(async move {
+            operator::model_source::inspect(&ctx, &context, &ledger_root, &aux_root).await
         }),
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {
@@ -3285,9 +3386,12 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }),
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate }) => {
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate, maximum_total_fee_sompi }) => {
             Box::pin(
-                async move { palw_fp::submit_objects_v2(&ctx, &key.source(), &object, yes, allow_duplicate).await.map(|_| ()) },
+                async move {
+                    palw_fp::submit_objects_v2_capped(&ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
+                        .await.map(|_| ())
+                },
             )
         }
         Command::Palw(PalwCmd::TirRegistration {

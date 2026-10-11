@@ -97,6 +97,12 @@ pub mod tir_registration;
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
 pub mod onboarding_snapshot;
+/// Bounded complete-check builder and verifier over a rooted public snapshot.
+pub mod complete_check;
+/// File-derived bootstrap preparation with rooted public binding checks.
+pub mod bootstrap_check;
+/// Bounded, ordered collection of the public kernel-route inventory.
+pub mod kernel_rows;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
 pub use lineage::{

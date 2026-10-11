@@ -47,10 +47,10 @@ use crate::{
             ghostdag::{DbGhostdagStore, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStore, HeaderStoreReader},
             headers_selected_tip::DbHeadersSelectedTipStore,
-            past_pruning_points::{DbPastPruningPointsStore, PastPruningPointsStore},
+            past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},
             pruning_meta::PruningMetaStores,
-            pruning_samples::{DbPruningSamplesStore, PruningSamplesStore},
+            pruning_samples::DbPruningSamplesStore,
             reachability::DbReachabilityStore,
             relations::{DbRelationsStore, RelationsStoreReader},
             selected_chain::DbSelectedChainStore,
@@ -379,23 +379,31 @@ impl PruningProofManager {
             }
             insert_headers.push(needs_header);
         }
+        let new_pruning_point = pruning_points.last().unwrap().hash;
+        info!("Setting {new_pruning_point} as the staging pruning point");
+        // Shape/history preflight above has written nothing. Hold the marker
+        // guard through the one authority batch, so readers cannot observe cached
+        // replacement rows while still seeing a stable old context.
+        let mut meta = self._pruning_meta_stores.write();
+        let mut batch = WriteBatch::default();
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, format!("history incomplete marker: {e}"))
+        })?;
         for (i, header) in pruning_points.iter().enumerate() {
-            self.past_pruning_points_store.set(i as u64, header.hash).unwrap();
+            self.past_pruning_points_store.set_batch(&mut batch, i as u64, header.hash).unwrap();
             if insert_samples[i] {
-                self.pruning_samples_store.insert(header.hash, pruning_points[i - 1].hash).unwrap();
+                self.pruning_samples_store.insert_batch(&mut batch, header.hash, pruning_points[i - 1].hash).unwrap();
             }
             if insert_headers[i] {
                 let block_level = calc_block_level_layer0(header, &self.network_id, self.max_block_level);
-                self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
+                self.headers_store.insert_batch(&mut batch, header.hash, header.clone(), block_level).unwrap();
             }
         }
-        let new_pruning_point = pruning_points.last().unwrap().hash;
-        info!("Setting {new_pruning_point} as the staging pruning point");
-        let mut batch = WriteBatch::default();
         pruning_point_write.set_batch(&mut batch, new_pruning_point, (pruning_points.len() - 1) as u64).unwrap();
         pruning_point_write.set_retention_checkpoint(&mut batch, new_pruning_point).unwrap();
         pruning_point_write.set_retention_period_root(&mut batch, new_pruning_point).unwrap();
         self.db.write(batch).unwrap();
+        drop(meta);
         drop(pruning_point_write);
         Ok(())
     }

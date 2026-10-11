@@ -789,7 +789,49 @@ mod tests {
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             "palw_model_refutation_seal_v1" => params.palw_model_refutation_seal_v1 = Some(at),
             // codex RFC-7's per-attempt beacon source opt-in (inner 40): refused when armed by `validate_palw_v2`, which the probe does not run.
-            "palw_beacon_source_opt_in_v1" => params.palw_beacon_source_opt_in_v1 = Some(at),
+            "palw_beacon_source_opt_in_v1" => {
+                params.palw_beacon_source_opt_in_v1 =
+                    Some(crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1::unapproved_probe_at(at))
+            }
+            // codex G14 final's dormant fences (bare heights, refused when armed; the probe does not validate).
+            "palw_class_semantics_v1" => params.palw_class_semantics_v1 = Some(at),
+            "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
+            "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
+            // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
+            // unapproved probe terms (its values only ride along).
+            "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
+            "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
+            "palw_paid_consumer_lifecycle_v1" => {
+                params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
+                    activation: at,
+                    policy: crate::palw_bond_budget_v1::PalwPaidConsumerLifecyclePolicyV1 {
+                        version: 1,
+                        service_span_daa: 60,
+                        dispute_tail_daa: 700,
+                        material_tail_daa: 500,
+                    },
+                })
+            }
+            // codex RFC-7 final's prepaid source fees (inner 61/62): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_beacon_source_fee_v1" => {
+                params.palw_beacon_source_fee_v1 =
+                    Some(crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1::unapproved_probe_at(at))
+            }
+            // codex RFC-10's complete-population and retired-archive Panel profiles: refused when armed (the probe does not validate);
+            // the height rides with the V2 probe policy below, whose values only ride along.
+            "palw_permissionless_panel_complete_v1" | "palw_permissionless_panel_retired_v1" => {
+                let mut probe = params.clone();
+                probe.palw_permissionless_panel_v1 = None;
+                set_fence_for_probe(&mut probe, "palw_permissionless_panel_v1", at);
+                let policy = probe.palw_permissionless_panel_v1.expect("armed above").policy;
+                if name == "palw_permissionless_panel_complete_v1" {
+                    params.palw_permissionless_panel_complete_v1 =
+                        Some(crate::palw_permissionless_panel_v1::PalwPermissionlessPanelCompleteV1 { activation: at, policy });
+                } else {
+                    params.palw_permissionless_panel_retired_v1 =
+                        Some(crate::palw_permissionless_panel_v1::PalwPermissionlessPanelRetiredV1 { activation: at, policy });
+                }
+            }
             "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
             "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
             // RFC-0006 per-segment pricing (SHARD): refused when armed by `validate_palw_v2`, which the probe does not run.

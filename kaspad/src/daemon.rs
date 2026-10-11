@@ -474,6 +474,21 @@ fn configure_rocksdb(args: &Args) -> (RocksDbPreset, Option<usize>, Option<PathB
 /// (dropped) before the `Core` is shut down.
 ///
 pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget: i32) -> (Arc<Core>, Arc<RpcCoreService>) {
+    // A production invocation cannot open a DB owned by the unpublished private
+    // probe, even if it shares the probe's salted genesis through existing flags.
+    if args.appdir.as_ref().is_some_and(|dir| Path::new(dir).join("rfc12-private-probe-v1.json").exists()) {
+        println!("this data directory belongs to the test-only RFC12 private probe; ordinary kaspad refuses it");
+        exit(1);
+    }
+    create_core_with_runtime_inner(runtime, args, fd_total_budget, None)
+}
+
+pub(crate) fn create_core_with_runtime_inner(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    private_config: Option<kaspa_consensus_core::config::Config>,
+) -> (Arc<Core>, Arc<RpcCoreService>) {
     let network = args.network();
     let mut fd_remaining = fd_total_budget;
     let utxo_files_limit = if args.utxoindex {
@@ -548,7 +563,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     );
 
     let params = {
-        let params: Params = network.into();
+        let params: Params = private_config.as_ref().map(|config| config.params.clone()).unwrap_or_else(|| network.into());
         match &args.override_params_file {
             Some(path) => {
                 if network.is_mainnet() {
@@ -632,9 +647,16 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         }
     }
 
-    let config = Arc::new(
-        ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|config| args.apply_to_config(config)).build(),
-    );
+    let config = Arc::new(match private_config {
+        Some(mut config) => {
+            // Available only to the library's feature-gated private constructor.
+            // Args validation above remains the production validation. A private
+            // profile has already validated its complete Params before opening DB.
+            args.apply_to_config(&mut config);
+            config
+        }
+        None => ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|config| args.apply_to_config(config)).build(),
+    });
 
     let app_dir = get_app_dir_from_args(args);
     let db_dir = app_dir.join(network.to_prefixed()).join(DEFAULT_DATA_DIR);

@@ -99,6 +99,18 @@ impl KernelRowsSnapshotV1 {
         }
     }
 
+    /// **The complete snapshot's served material** — `(header, rows, ledger root, aux root)` — for a consumer that rebuilds more than
+    /// the onboarding reads from the SAME rows (codex's v4 / v5 opt-in source books, `onboarding_chain::*_from_kernel_rows_v*`, which
+    /// check the rows against these roots themselves; R6781-F merge). The rows are copied: the snapshot is still consumed by
+    /// [`Self::into_onboarding_reads_v1`].
+    pub fn served_v1(&self) -> Result<(Vec<u8>, Vec<ServedRowV1>, Hash64, Hash64), Refusal> {
+        if !self.complete {
+            return Err(Refusal::new("SNAPSHOT_INCOMPLETE", "no complete snapshot was received"));
+        }
+        let (_, ledger_root, aux_root, header, _) = self.identity.as_ref().expect("a completed snapshot has a header");
+        Ok((header.clone(), self.rows.clone(), *ledger_root, *aux_root))
+    }
+
     /// Rebuild one complete coherent snapshot against its served roots. The caller
     /// must separately authenticate those roots and the tip to its local chain.
     pub fn into_route_v1(self) -> Result<(u64, PalwKernelRouteStateV1), Refusal> {

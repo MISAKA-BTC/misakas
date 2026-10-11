@@ -7,6 +7,20 @@ use std::collections::BTreeMap;
 pub const WIRE_VERSION_V1: u16 = 1;
 /// Dormant engine carriage with a per-claim retained entropy output. V1 is not silently upgraded.
 pub const WIRE_VERSION_V2: u16 = 2;
+/// Complete-population carriage; version 2 retains its 4096 eligibility and ordering.
+pub const WIRE_VERSION_COMPLETE_V1: u16 = 3;
+/// Native-retirement population compaction, kept distinct from historical version 2/3.
+pub const WIRE_VERSION_RETIRED_V1: u16 = 4;
+/// Permanent claim/work tombstones. At capacity, NEW admission refuses atomically.
+/// This finite archive is not an approved infinite-history liveness solution.
+pub const MAX_RETIRED_ARCHIVE_CLAIMS_V1: usize = 65_536;
+pub fn complete_population_version_v1(version: u16) -> bool {
+    matches!(version, WIRE_VERSION_COMPLETE_V1 | WIRE_VERSION_RETIRED_V1)
+}
+pub const MAX_COMPLETE_CANDIDATES_V1: u32 = 100_000;
+pub const MAX_COMPLETE_RETAINED_CANDIDATES_V1: u64 = 400_000;
+pub const MAX_COMPLETE_HISTORY_SEATS_V1: u64 = 65_536;
+pub const MAX_COMPLETE_STATE_BYTES_V1: u64 = 256 << 20;
 pub const CLASS_ROLE_V1: u8 = 1;
 pub const OUTSIDER_ROLE_V1: u8 = 2;
 pub const MAX_CANDIDATES_V1: u32 = 4096;
@@ -129,6 +143,25 @@ impl PanelPolicyV1 {
             return Err(PanelErrorV1::InvalidPolicy);
         }
         Ok(())
+    }
+
+    /// Separate experimental resource profile; the historical policy validator is unchanged.
+    pub fn validate_for_version(&self, version: u16) -> Result<(), PanelErrorV1> {
+        if version == WIRE_VERSION_V2 {
+            return self.validate();
+        }
+        if !complete_population_version_v1(version)
+            || self.max_candidates > MAX_COMPLETE_CANDIDATES_V1
+            || self.max_pending > 128
+            || self.max_tracked_claims > 1024
+            || self.max_assignments_per_block != 1
+            || self.max_admissions_per_block != 1
+        {
+            return Err(PanelErrorV1::InvalidPolicy);
+        }
+        let mut historical = *self;
+        historical.max_candidates = self.max_candidates.min(MAX_CANDIDATES_V1);
+        historical.validate()
     }
 
     pub fn id(&self) -> Hash64 {
@@ -273,6 +306,10 @@ pub trait ConsensusViewV1 {
     fn verify_beacon(&self, request: &BeaconRequestV1, proof: &BeaconProofV1) -> Result<(), PanelErrorV1>;
     /// Validate a terminal claim outcome under the existing receipt/court/payout rules.
     fn terminal_claim(&self, claim: &Hash64) -> bool;
+    /// Explicit native retirement authority; terminal receipts alone cannot compact data.
+    /// The production host returns this only after its complete monetary/DA dependency
+    /// retirement funnel removed the claim from BOTH current and parent native states.
+    fn retired_claim(&self, _claim: &Hash64) -> Option<PanelRetirementAuthorityV1> { None }
     /// The host's receipt clock for a currently bound claim; `None` (the default) is the engine's own
     /// `bound_daa + receipt_window_daa`.
     fn receipt_clock(&self, _claim: &Hash64) -> Option<ReceiptClockV1> {
@@ -338,6 +375,40 @@ pub enum NonFraudReasonV1 {
     BeaconUnavailable,
     NoCapablePanel,
     PanelUnavailable,
+    /// Complete-profile capacity refusal before any population is truncated or seed is drawn.
+    PopulationResourceLimit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelRetirementAuthorityV1 {
+    pub native_parent_root: Hash64,
+    pub native_parent_checkpoint: Hash64,
+}
+
+/// The original frozen population commitment and checkpoint, without candidate bodies.
+/// This is an authenticated historical tombstone, not a standalone population proof.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelPopulationArchiveV1 {
+    pub root: Hash64,
+    pub checkpoint: Hash64,
+    pub checkpoint_height: u64,
+    pub checkpoint_daa: u64,
+    pub candidate_count: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelRetiredClaimV1 {
+    pub daa: u64,
+    pub authority: PanelRetirementAuthorityV1,
+    pub prior_record_root: Hash64,
+    pub population: Option<PanelPopulationArchiveV1>,
+    pub bindings_root: Hash64,
+    pub binding_count: u32,
+    pub operators_root: Hash64,
+    pub last_seed: Option<Hash64>,
+    pub last_beacon_id: Option<Hash64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
@@ -359,11 +430,13 @@ pub enum ClaimPhaseV3 {
         daa: u64,
         reason: NonFraudReasonV1,
     },
+    /// Appended discriminant; every old phase's Borsh bytes remain unchanged.
+    Retired(PanelRetiredClaimV1),
 }
 
 impl ClaimPhaseV3 {
     pub fn terminal(&self) -> bool {
-        matches!(self, Self::Released { .. } | Self::Voided { .. })
+        matches!(self, Self::Released { .. } | Self::Voided { .. } | Self::Retired(_))
     }
 }
 

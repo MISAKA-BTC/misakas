@@ -185,6 +185,8 @@ async fn g14r_lg14a_a_pruned_import_after_the_reservation_and_binding_carries_th
             store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
         }
     }
+    // codex RFC-12 (R6781-F merge): an import installs only against the pruning target its session established.
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the served carriage installs against T's committed root");
     assert_eq!(importer.tip_state().1.state_root(), root_at(&lg.chain, p), "the imported state is P's");
     assert!(importer.tip_state().1.legacy_dispute_v1(&id).is_some(), "the reservation rode the carriage");

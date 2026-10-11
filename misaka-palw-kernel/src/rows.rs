@@ -246,6 +246,11 @@ impl KernelLedgerV1 {
         for (k, v) in &self.verifier_pay {
             rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
         }
+        // codex RFC-7's prepaid source fees ride table 27 as kinds 5 / 6 (R6781-F merge: every ledger number below the aux boundary
+        // 32 is spent). The same rows `state_root` hashes for table 27 (`source_fee_verifier_pay_rows_v1`).
+        for (k, v) in &self.source_fee_verifier_pay_rows_v1() {
+            rows.insert((TABLE_VERIFIER_PAY_V1, bytes_of(k)), bytes_of(v));
+        }
         for (k, v) in &self.court_scope {
             rows.insert((TABLE_COURT_SCOPE_V1, bytes_of(k)), bytes_of(v));
         }
@@ -397,10 +402,10 @@ impl KernelLedgerV1 {
                     );
                 }
                 TABLE_VERIFIER_PAY_V1 => {
-                    l.verifier_pay.insert(
-                        dec::<(u8, Digest)>(key, "verifier pay key")?,
-                        dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?,
-                    );
+                    let key = dec::<(u8, Digest)>(key, "verifier pay key")?;
+                    let row = dec::<crate::verifier_pay::VerifierPayRowV1>(row, "verifier pay row")?;
+                    // Kinds 5 / 6 are codex RFC-7's prepaid source fees, decoded back into their own books (never `verifier_pay`).
+                    l.insert_verifier_pay_row_v1(key, row)?;
                 }
                 TABLE_COURT_SCOPE_V1 => {
                     l.court_scope
@@ -470,6 +475,7 @@ impl KernelLedgerV1 {
         l.opv_rebuild_live();
         l.validate_exec_reward_holds()?;
         l.validate_beacon_sources()?;
+        l.validate_beacon_source_fees()?;
         Ok(l)
     }
 }
@@ -491,6 +497,8 @@ impl KernelLedgerV1 {
         self.provider_liable = Default::default();
         self.commitment_scope_from_daa = None;
         self.beacon_source_inputs = Default::default();
+        self.beacon_source_fee_inputs = Default::default();
+        self.consumer_final_reward_caps.clear();
         self
     }
 }

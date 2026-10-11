@@ -219,13 +219,24 @@ impl KernelLedgerV1 {
                 &collection_root(&d("job-posters"), self.job_posters.len(), self.job_posters.iter()),
             )
         };
-        // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row.
-        let base = if self.verifier_pay.is_empty() {
+        // `palw_verifier_pay_v1` (table 27): an extension only once it holds a row. Table 27 also carries codex RFC-7's prepaid
+        // source fees as kinds 5 / 6 (R6781-F merge; codex's own tables 29 / 30 and fee extension are gone): the same rows
+        // `rows::to_rows` writes, after `verifier_pay`'s kinds 0–4 — the order the rows' byte keys sort in.
+        let source_fees = self.source_fee_verifier_pay_rows_v1();
+        debug_assert!(
+            self.verifier_pay.keys().all(|(kind, _)| *kind < crate::verifier_pay::VERIFIER_PAY_SOURCE_FEE_FUNDING_V1),
+            "a source-fee kind in the verifier-pay book"
+        );
+        let base = if self.verifier_pay.is_empty() && source_fees.is_empty() {
             base
         } else {
             crate::rows::verifier_pay_root_extension_v1(
                 &base,
-                &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
+                &collection_root(
+                    &d("verifier-pay"),
+                    self.verifier_pay.len() + source_fees.len(),
+                    self.verifier_pay.iter().chain(source_fees.iter()),
+                ),
             )
         };
         // The court scope (table 28, `palw_provider_court_v1`, G14-S): an extension only once it holds a row.

@@ -1,0 +1,354 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc12-owned-construction-observation-excerpt",
+  "recordedDate": "2026-10-11",
+  "scope": "Actual three-process ordinary-P2P construction/genesis money and owned cold DB reopen; no mined work or pruning",
+  "binaryRevisionPinnedInResult": false,
+  "runs": [
+    {
+      "profile": "native-v1",
+      "sourceResultFile": "rfc12-private-native-smoke-v2.json",
+      "sourceResultSha256": "0b31e50a338e608ef83f5ab4e3f4175fc86e9c71c30717b842cc456e4d8d6d6d",
+      "planSha256": "88d07f11b9d64ddbfaf3da2da29fd74bdbbfde27733d702cd968ea55e9d170ee",
+      "status": "CONSTRUCTION_TRANSPORT_PASS",
+      "observations": [
+        {
+          "role": "A",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "B",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "JOIN",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "A",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 2,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "B",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 1,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "JOIN",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 1,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "JOIN",
+          "daa": 0,
+          "sink": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "genesis": "27484e6bc6e3c73edc38e4ec12312f0c2a917cd01acf161a34fc64cb88aa92a67bf81092972209204f4f954547c55cc8bae9f0b7dc69bec78e3862e351040713",
+          "consensusParamsId": "6a3e68c3d9bbf0f9f695834ec11cfbcdbe0093ac435c6df4cb428b6acd233cb8",
+          "bondsTotal": 8,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "a5e90f8b7de301ef9959529b41ea0cb9206bdbd3bce480da1d36502a6b0f9cab83cedf22a8f45809dc019bc62d59c1f7efca78912f706089d95049b1707712e1",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": null,
+          "genesisMoneyReadCount": 9
+        }
+      ],
+      "ownedDatabaseLogicalBytes": {
+        "A": 232781,
+        "B": 232780,
+        "JOIN": 384312
+      },
+      "probeLatenciesMs": [
+        25.601333007216454,
+        5.111250007757917,
+        5.532583978492767,
+        4.144915990764275,
+        4.028458002721891,
+        3.564540995284915,
+        10.506624996196479
+      ],
+      "release100kMeasured": false,
+      "prunedIbdMeasured": false,
+      "matureUsefulWorkMeasured": false,
+      "marketFillsMeasured": false,
+      "fullRfc12SecurityApproval": false
+    },
+    {
+      "profile": "population-v1/17",
+      "sourceResultFile": "rfc12-private-pop17-v1.json",
+      "sourceResultSha256": "1a1e6df84afe05dfe43878e2061f18672ea8ddad2285e064093c82f08d6b2339",
+      "planSha256": "a45515221202a692669b0a94cee668a684ab1a1c829c8be45b3f8cda1bd78c5c",
+      "status": "CONSTRUCTION_TRANSPORT_PASS",
+      "observations": [
+        {
+          "role": "A",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "B",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "JOIN",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "A",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 2,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "B",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 1,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "JOIN",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 1,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        },
+        {
+          "role": "JOIN",
+          "daa": 0,
+          "sink": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "genesis": "32861f87e88f8a3c98bf5118a58334f5453ebbd1e83998d1fa9042174c81ded2fe0dbdd74620b6a1d63e2e0b49f5d64147eb1ab4024fe4ca95eee69a7785c5c0",
+          "consensusParamsId": "0b95702b143f1fd0a9729c231e11234380051f7bf195992e526dfe0d4bb984f8",
+          "bondsTotal": 17,
+          "peersObserved": 0,
+          "importEpoch": 0,
+          "importStable": true,
+          "palwStateRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "utxoCommitment": "83ff4154553831a34764918bea7b80d1d7ef505dd5916c35380bec3ef8c8f7e9659e943157021e2b443ada30ef8c9d289aed1f414f207257f844b420da66a62c",
+          "evmCommitmentRoot": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "coinSupply": {
+            "circulatingSompi": 1000000000000000000,
+            "maxSompi": 2500000000000000000
+          },
+          "genesisMoneyReadCount": 9
+        }
+      ],
+      "ownedDatabaseLogicalBytes": {
+        "A": 289541,
+        "B": 289540,
+        "JOIN": 440516
+      },
+      "probeLatenciesMs": [
+        20.988958014640957,
+        4.858542000874877,
+        6.309624994173646,
+        4.030583018902689,
+        3.64212499698624,
+        3.640375012764707,
+        4.978457989636809
+      ],
+      "release100kMeasured": false,
+      "prunedIbdMeasured": false,
+      "matureUsefulWorkMeasured": false,
+      "marketFillsMeasured": false,
+      "fullRfc12SecurityApproval": false,
+      "factorySeconds": 0.9917652500153054,
+      "resourceLimits": {
+        "schemaVersion": 1,
+        "kind": "rfc12-construction-resource-bounds",
+        "maximumOwnedProcessRssKiB": 500000,
+        "maximumOwnedDatabaseLogicalBytes": 67108864,
+        "maximumProbeMs": 1000,
+        "maximumFactorySeconds": 30,
+        "samplePeriodMs": 250
+      },
+      "resourceLimitsMet": true,
+      "sampledOwnedResources": {
+        "samplePeriodMs": 250,
+        "ownedChildren": {
+          "MANIFEST": {
+            "sampledPeakRssKiB": 29680,
+            "lastRssKiB": 29680,
+            "samples": 4,
+            "launches": 1
+          },
+          "A": {
+            "sampledPeakRssKiB": 116464,
+            "lastRssKiB": 116464,
+            "samples": 807,
+            "launches": 1
+          },
+          "B": {
+            "sampledPeakRssKiB": 110816,
+            "lastRssKiB": 110704,
+            "samples": 603,
+            "launches": 1
+          },
+          "JOIN": {
+            "sampledPeakRssKiB": 108032,
+            "lastRssKiB": 105616,
+            "samples": 420,
+            "launches": 2
+          }
+        },
+        "observationFailures": 0,
+        "violation": null,
+        "osHardQuotaApplied": false,
+        "completePeakRssMeasured": false
+      }
+    }
+  ]
+}

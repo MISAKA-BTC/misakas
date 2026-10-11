@@ -150,6 +150,7 @@ async fn pruned_node(main: &mut Net) -> Net {
             store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the carriage installs");
     for blk in &all[k + 1..] {
         arrive(&importer, blk.clone(), "a block after P").await;

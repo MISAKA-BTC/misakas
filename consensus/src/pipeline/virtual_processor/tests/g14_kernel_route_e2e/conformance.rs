@@ -273,11 +273,11 @@ impl Cw {
         self.net.api().expect("the route").conformance_attempt_v1(&self.v2_class).expect("a conformance record")
     }
 
-    /// **`n` honest OPV claims of the SOURCE class**, committed now (after the attempt's start): each a job by the registrant, sealed
-    /// and revealed by a rotating producer. They reach Final with no Panel when their window closes.
+    /// **`n` honest OPV claims of the SOURCE class**, committed now (after the attempt's start): jobs funded by distinct real
+    /// consumers and sealed/revealed by rotating producers. The DISTINCT beacon authenticates both identities from ledger rows.
+    /// They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
         let mut jobs = Vec::new();
-        let mut payers = Vec::new();
         for _ in 0..n {
             self.jobs += 1;
             jobs.push(KernelJobV1 {
@@ -287,12 +287,14 @@ impl Cw {
                 decode: DecodeRuleV1::Greedy,
                 nonce: [self.jobs; 64],
             });
-            // The beacon's distinct rule binds the authenticated job payer too (codex d7bcb9a51: table 18's poster is the source's
-            // consumer): each source job is signed and funded by its own bond, never one payer behind several producers.
-            payers.push(PRODUCERS[self.jobs as usize % PRODUCERS.len()]);
         }
-        let posts: Vec<(usize, Obj)> =
-            jobs.iter().zip(&payers).map(|(j, &payer)| (payer, self.net.route(payer, &K::PostJob { job: j.clone() }))).collect();
+        let consumers = [REGISTRANT, OUTSIDER, 0, 2, 4, 5, 6, 7];
+        assert!(n <= consumers.len(), "the fixture must fund independent source consumers");
+        let posts: Vec<(usize, Obj)> = jobs
+            .iter()
+            .zip(consumers)
+            .map(|(job, card)| (card, self.net.route(card, &K::PostJob { job: job.clone() })))
+            .collect();
         self.net.send(posts).await;
         let src = self.src.clone_fixture();
         let class = self.src_class;
@@ -1032,6 +1034,7 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
             store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the carriage installs");
     assert_eq!(importer.tip_state().1.state_root(), root_at(&cw.net.chain, p), "the imported state is P's");
     assert!(

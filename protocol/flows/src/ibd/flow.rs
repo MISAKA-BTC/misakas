@@ -22,7 +22,7 @@ use kaspa_consensus_core::{
     block::Block,
     config::ibd_checkpoint::{self, IbdCheckpoint, IbdCheckpointViolation},
     header::Header,
-    pruning::{PruningPointProof, PruningPointsList, PruningProofMetadata},
+    pruning::{PruningImportSessionV1, PruningPointProof, PruningPointsList, PruningProofMetadata},
     trusted::TrustedBlock,
     tx::Transaction,
 };
@@ -741,7 +741,7 @@ impl IbdFlow {
             claimed_tip_blue_work,
             proof_hash,
             genesis_hash: self.ctx.config.genesis.hash,
-            consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            consensus_params_id: self.ctx.boot_consensus_params_id(),
             descends_from_checkpoint,
         };
         match authorize_candidate_validation(RecoveryRequest {
@@ -749,7 +749,7 @@ impl IbdFlow {
             candidate,
             provisional_blue_work,
             local_genesis: self.ctx.config.genesis.hash,
-            local_consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            local_consensus_params_id: self.ctx.boot_consensus_params_id(),
             checkpoint: self.ctx.config.trusted_checkpoint.as_ref(),
             reserved_candidate: Some(reserved.candidate_id),
             switch_limit: MAX_CHAIN_SWITCHES,
@@ -1223,7 +1223,7 @@ impl IbdFlow {
         let (descends_from_checkpoint, checkpoint_params_match) = match self.ctx.config.trusted_checkpoint {
             Some(cp) => (
                 Some(staging.async_is_chain_ancestor_of(cp.block_hash, tip).await.unwrap_or(false)),
-                Some(cp.consensus_params_id == self.ctx.config.params.consensus_params_id()),
+                Some(cp.consensus_params_id == self.ctx.boot_consensus_params_id()),
             ),
             None => (None, None),
         };
@@ -1490,7 +1490,7 @@ impl IbdFlow {
                     "--trusted-checkpoint was taken under consensus params {} but this node runs {}. A block hash means \
                      nothing without the rules it was validated under, so this node cannot act on that checkpoint.",
                     cp.consensus_params_id,
-                    self.ctx.config.params.consensus_params_id()
+                    self.ctx.boot_consensus_params_id()
                 )
             }
             CommitVerdict::RefuseCheckpointMissing => {
@@ -1940,7 +1940,8 @@ impl IbdFlow {
         // barrier. So the comparison had nothing to compare and fell through. Import here, into
         // STAGING, and the challenger becomes a real value.
         if let Some((carriage, declarations)) = self.request_pruning_point_palw_state(pruning_point).await? {
-            self.import_pruning_point_palw_state(&staging_session, pruning_point, carriage, declarations).await?;
+            let import_session = staging_session.async_begin_pruning_point_import(pruning_point).await?;
+            self.import_pruning_point_palw_state(&staging_session, import_session, carriage, declarations).await?;
         }
         self.validate_staging_palw_order(&self.ctx.consensus().session().await, &staging_session).await?;
         Ok(pruning_point)
@@ -2526,6 +2527,9 @@ impl IbdFlow {
         } else {
             None
         };
+        // Beginning a fresh durable epoch invalidates delayed chunks and sidecars
+        // from every earlier attempt, including an attempt at the same point.
+        let import_session = consensus.async_begin_pruning_point_import(pruning_point).await?;
         // **The two child-verified sidecars are imported here — still before anything is
         // destroyed** (audit M1-2). Both check the peer's bytes against a child header of the
         // pruning point, so they need only headers and the peer's answer; running them after the
@@ -2538,14 +2542,14 @@ impl IbdFlow {
         // utxoset and the EVM state land, and a failure anywhere leaves it unset, so the next IBD
         // re-runs the whole import. These two writes are idempotent under that retry.
         if pruning_point != self.ctx.config.genesis.hash {
-            self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
+            self.sync_pruning_point_overlay_snapshot(consensus, import_session).await?;
             if let Some((carriage, declarations)) = palw_carriage {
-                self.import_pruning_point_palw_state(consensus, pruning_point, carriage, declarations).await?;
+                self.import_pruning_point_palw_state(consensus, import_session, carriage, declarations).await?;
             }
         }
         // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
-        consensus.async_clear_pruning_utxo_set().await; // this deletes the old pruning utxoset and also sets the pruning utxo as invalidated
-        self.sync_pruning_point_utxoset(consensus, pruning_point).await?;
+        consensus.async_clear_pruning_utxo_set_for_session(import_session).await?;
+        self.sync_pruning_point_utxoset(consensus, import_session).await?;
         // kaspa-pq ADR-0022: import the pruning point's EVM execution state + DNS/PoS-v2 overlay snapshot
         // as part of the SAME "make the pruning point usable" step — BEFORE marking the utxoset stable.
         // Atomicity matters: async_set_pruning_utxoset_stable() below latches is_utxo_stable=true, and a
@@ -2558,10 +2562,12 @@ impl IbdFlow {
         // below-genesis state and the peer has captured no snapshot (it would answer not-found and abort).
         if pruning_point != self.ctx.config.genesis.hash {
             // The overlay and PALW sidecars landed above, before the clear.
-            self.sync_pruning_point_evm_state(consensus, pruning_point).await?;
+            self.sync_pruning_point_evm_state(consensus, import_session).await?;
         }
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
-        consensus.async_set_pruning_utxoset_stable().await;
+        // The target may have changed after virtual/head commit released its pruning
+        // guard. Refuse completion unless UTXO and all sidecars share this generation.
+        consensus.async_complete_pruning_point_import_for_session(import_session).await?;
         // Once a new utxoset is stored, the utxoindex needs to be resynced as well. This happens through the reset handler mechanism.
         let consensus_manager = self.ctx.consensus_manager.clone();
         spawn_blocking(move || consensus_manager.invoke_consensus_reset_handlers()).await.unwrap();
@@ -2638,7 +2644,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
     }
 
-    async fn sync_pruning_point_utxoset(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
+    async fn sync_pruning_point_utxoset(&mut self, consensus: &ConsensusProxy, import_session: PruningImportSessionV1) -> Result<(), ProtocolError> {
+        let pruning_point = import_session.point;
         info!("downloading the pruning point utxoset, this can take a little while.");
         self.router
             .enqueue(make_message!(
@@ -2652,12 +2659,12 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             multiset = consensus
                 .clone()
                 .spawn_blocking(move |c| {
-                    c.append_imported_pruning_point_utxos(&chunk, &mut multiset);
-                    multiset
+                    c.append_imported_pruning_point_utxos_for_session(import_session, &chunk, &mut multiset)?;
+                    Ok::<_, kaspa_consensus_core::errors::pruning::PruningImportError>(multiset)
                 })
-                .await;
+                .await?;
         }
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_utxo_set(pruning_point, multiset)).await?;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_utxo_set_for_session(import_session, multiset)).await?;
         Ok(())
     }
 
@@ -2666,8 +2673,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn sync_pruning_point_evm_state(
         &mut self,
         consensus: &ConsensusProxy,
-        pruning_point: BlockHash,
+        import_session: PruningImportSessionV1,
     ) -> Result<(), ProtocolError> {
+        let pruning_point = import_session.point;
         let evm_active = {
             let pp = pruning_point;
             let pp_daa = consensus.clone().spawn_blocking(move |c| c.get_header(pp)).await.map(|h| h.daa_score).unwrap_or(0);
@@ -2706,7 +2714,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             .map_err(|_| ProtocolError::Other("invalid EVM execution header in PruningPointEvmState"))?;
         let snapshot: kaspa_consensus_core::evm::EvmStateSnapshot = borsh::from_slice(&msg.evm_state_snapshot)
             .map_err(|_| ProtocolError::Other("invalid EVM state snapshot in PruningPointEvmState"))?;
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_evm_state(pruning_point, header, snapshot)).await?;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_evm_state_for_session(import_session, header, snapshot)).await?;
         info!("imported the EVM state of the pruning point {}", pruning_point);
         Ok(())
     }
@@ -2716,8 +2724,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn sync_pruning_point_overlay_snapshot(
         &mut self,
         consensus: &ConsensusProxy,
-        pruning_point: BlockHash,
+        import_session: PruningImportSessionV1,
     ) -> Result<(), ProtocolError> {
+        let pruning_point = import_session.point;
         let overlay_active = self.ctx.config.dns_params.is_some();
         self.router
             .enqueue(make_message!(
@@ -2743,7 +2752,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot = borsh::from_slice(&msg.overlay_snapshot)
             .map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot(pruning_point, snapshot)).await?;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot_for_session(import_session, snapshot)).await?;
         info!("imported the overlay snapshot of the pruning point {}", pruning_point);
         Ok(())
     }
@@ -2796,15 +2805,24 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !palw_active {
             return Ok(None);
         }
+        if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
+            return self.request_pruning_point_palw_chunks(pruning_point).await;
+        }
+        let _snapshot_lease = crate::palw_snapshot_chunks::SnapshotSpill::new()
+            .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", pruning_point.to_string()))?;
         self.router
             .enqueue(make_message!(
                 Payload::RequestPruningPointPalwState,
-                RequestPruningPointPalwStateMessage { pruning_point_hash: Some(pruning_point.into()) }
+                RequestPruningPointPalwStateMessage { pruning_point_hash: Some(pruning_point.into()), ..Default::default() }
             ))
             .await?;
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, Duration::from_secs(600))?;
         if !msg.found {
             return Err(ProtocolError::PruningSidecarUnavailable("PALW state", pruning_point.to_string()));
+        }
+        if msg.chunked || !msg.snapshot_root.is_empty() || msg.chunk_count != 0 || msg.total_bytes != 0
+            || msg.chunk_index != 0 || !msg.chunk_hash.is_empty() || msg.pruning_point_hash.is_some() {
+            return Err(ProtocolError::Other("legacy PALW snapshot reply carries unnegotiated chunk metadata"));
         }
         // Bounded before deserializing, like the overlay beside it: the carriage is bonds, classes
         // and claims, far smaller than the EVM state.
@@ -2854,11 +2872,12 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn import_pruning_point_palw_state(
         &mut self,
         consensus: &ConsensusProxy,
-        pruning_point: BlockHash,
+        import_session: PruningImportSessionV1,
         carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
         declarations: Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>,
     ) -> Result<(), ProtocolError> {
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state(pruning_point, carriage)).await?;
+        let pruning_point = import_session.point;
+        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state_for_session(import_session, carriage)).await?;
         info!("imported the PALW state of the pruning point {}", pruning_point);
         // **After the state, because each declaration is checked against it** (ADR-0067
         // Decision 6). A refusal is per-entry and never fatal: the state is the consensus half and

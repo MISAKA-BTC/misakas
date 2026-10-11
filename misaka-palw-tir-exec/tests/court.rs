@@ -394,3 +394,149 @@ fn the_inventory_tree_opens_as_the_consensus_inventory() {
     }
     assert!(opened > 100, "{opened}");
 }
+
+#[test]
+fn bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary() {
+    use kaspa_consensus_core::palw_tir_court_v1::{
+        PalwTirBuilderWorkLimitsV1, build_tir_cone_refutation_bounded_v1, build_tir_cone_refutation_v1,
+    };
+    let mut kinds = std::collections::BTreeSet::new();
+    let (mut moves, mut maximum_reads) = (0, 0);
+    for case in cases() {
+        let f = fixture(&case);
+        let rules = rules(case.form);
+        let tparams = TirParams::from_map(&f.plan, &case.params).unwrap();
+        let source = TirParamsSourceV1(&tparams);
+        let inventory = TirHeldInventoryV1::build(&case.program, &source).unwrap();
+        let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
+        let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
+        let own = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap();
+        // Last of each kind covers its largest reached history/checkpoint while avoiding a
+        // second exhaustive replay of every leaf performed by the existing conformance test.
+        let mut selected = BTreeMap::new();
+        for index in 0..honest.binding.step_leaf_count {
+            let leaf = f.space.leaf_at(&f.ctx, index).unwrap();
+            let kind = match leaf.kind {
+                PalwTirLeafKindV1::Commit { .. } => "commit",
+                PalwTirLeafKindV1::State { .. } => "checkpoint",
+                PalwTirLeafKindV1::HistTile { .. } => "history tile",
+            };
+            selected.insert(kind, index);
+        }
+        for (kind, index) in selected {
+            kinds.insert(kind);
+            let expected = build_tir_cone_refutation_v1(&honest.binding, index, &own, &rules).unwrap();
+            let (actual, meter) = build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules,
+                misaka_palw_tir_exec::node::tir_court_builder_limits_v1(&rules)).unwrap();
+            assert_eq!(actual, expected, "{} {kind}: bounded cone retains canonical wire", case.name);
+            let mut exact = PalwTirBuilderWorkLimitsV1 {
+                evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: meter.work.elements, max_terms: meter.work.terms },
+                max_target_requests: meter.target_requests,
+                max_source_reads: meter.source_reads,
+            };
+            assert_eq!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).unwrap().0, actual);
+            assert!(meter.target_requests > 0);
+            exact.max_target_requests -= 1;
+            assert!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).is_err());
+            exact.max_target_requests += 1;
+            if meter.source_reads > 0 {
+                exact.max_source_reads -= 1;
+                assert!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).is_err(),
+                    "{} {kind}: source-only history copies and zero states are bounded too", case.name);
+            }
+            maximum_reads = maximum_reads.max(meter.source_reads);
+            moves += 1;
+        }
+    }
+    assert_eq!(kinds.len(), 3, "commit, Fixed checkpoint and Hist tile all exercise bounds");
+    println!("RFC06 bounded cones: {moves} model/kind moves; maximum logical source reads {maximum_reads}");
+}
+
+#[test]
+fn replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_model_leaf() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let (mut positions, mut maximum_requested) = (0, 0);
+    for case in cases() {
+        let f = fixture(&case);
+        let tparams = TirParams::from_map(&f.plan, &case.params).unwrap();
+        let source = TirParamsSourceV1(&tparams);
+        let inventory = TirHeldInventoryV1::build(&case.program, &source).unwrap();
+        let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
+        let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
+        let mut dense = BTreeMap::<u32, Vec<(u64, PalwStepTileLeafV1)>>::new();
+        runner.run(&f.ctx, &f.prompt, CAP, true, &mut |leaf| {
+            dense.entry(leaf.position).or_default().push((leaf.index, leaf.preimage.clone()));
+        }).unwrap();
+        let own = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap();
+        let job = f.space.job_shape(&f.ctx).unwrap();
+        for (position, leaves) in &dense {
+            assert_eq!(f.space.lane_count_at_position_v1(&job, *position),
+                leaves.iter().map(|(_, leaf)| u128::from(leaf.value_count)).sum::<u128>(),
+                "{}: nonallocating lane accounting matches every actual emitted commit/checkpoint/history", case.name);
+            let requested = own.replay_requested_storage_v1(*position).unwrap();
+            maximum_requested = maximum_requested.max(requested);
+            let tight = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
+                .with_replay_limits_v1(4096, requested);
+            for (index, expected) in leaves {
+                assert_eq!(tight.step_leaf(*index).as_ref(), Some(expected), "{}: exact budget position {position}", case.name);
+            }
+            let below = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
+                .with_replay_limits_v1(4096, requested - 1);
+            assert_eq!(below.step_leaf(leaves[0].0), None, "one-less requested storage refuses even a single cached position");
+            let no_positions = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
+                .with_replay_limits_v1(0, usize::MAX);
+            assert_eq!(no_positions.step_leaf(leaves[0].0), None, "replay span cap refuses before source materialization");
+            positions += 1;
+        }
+    }
+    println!("RFC06 replay probes: {positions} model positions; maximum requested replay buffers {maximum_requested} bytes");
+}
+
+#[test]
+fn one_position_replay_does_not_allocate_for_a_100k_position_job() {
+    let case = cases().remove(0);
+    let mut f = fixture(&case);
+    f.class.layout.max_context = 100_004;
+    let class_id = f.class.class_id(&f.artifact_root);
+    f.space = PalwTirStepSpaceV1::new(&f.class).unwrap();
+    f.ctx = job(&case.program, PREFILL, 100_001, class_id, &f.prompt, case.form);
+    f.ctx.max_context_tokens = 100_004;
+    let params = TirParams::from_map(&f.plan, &case.params).unwrap();
+    let runner = TirClassRunnerV1::new(&f.space, &f.plan, &params, class_id).unwrap();
+    let shape = f.space.job_shape(&f.ctx).unwrap();
+    assert_eq!(shape.positions, 100_004);
+    let mut emitted = 0;
+    let range = runner.replay(&f.ctx, &f.prompt, CAP, None, Some(1), &mut |_| emitted += 1).unwrap();
+    assert_eq!(range.leaf_hashes.len(), emitted);
+    assert_eq!(emitted as u64, f.space.leaves_at_position(&shape, 0));
+    assert!(range.logits_rows.is_empty());
+    assert!(range.generated.is_empty());
+    let requested_buffers = range.leaf_hashes.capacity() * std::mem::size_of::<Hash64>()
+        + range.logits_rows.capacity() * std::mem::size_of::<Vec<i32>>()
+        + range.generated.capacity() * std::mem::size_of::<u32>();
+    assert!(requested_buffers <= 64 << 10, "a one-position replay requests {requested_buffers} output-buffer bytes");
+    println!("RFC06 100k-context one-position replay requested output buffers: {requested_buffers} bytes; full run unmeasured");
+}
+
+#[test]
+fn replay_work_is_shared_across_all_source_requests_until_the_next_builder_move() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let case = cases().into_iter().find(|case| case.c == 1).unwrap();
+    let f = fixture(&case);
+    let params = TirParams::from_map(&f.plan, &case.params).unwrap();
+    let source = TirParamsSourceV1(&params);
+    let inventory = TirHeldInventoryV1::build(&case.program, &source).unwrap();
+    let runner = TirClassRunnerV1::new(&f.space, &f.plan, &params, f.class.class_id(&f.artifact_root)).unwrap();
+    let job = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
+    let store = TirEvidenceV1::own(&runner, &job, &inventory, case.form, CAP).unwrap().with_replay_limits_v1(1, 1 << 30);
+    let shape = f.space.job_shape(&f.ctx).unwrap();
+    let next = f.space.running_total(&shape, 1) as u64;
+    assert!(store.step_leaf(0).is_some());
+    assert_eq!(store.replay_positions_used_v1(), 1);
+    assert!(store.step_leaf(next).is_none(), "a second one-position cache miss must not reset the whole-move budget");
+    assert_eq!(store.replay_positions_used_v1(), 1, "refused span is never executed");
+    store.begin_builder_move_v1();
+    assert_eq!(store.replay_positions_used_v1(), 0);
+    assert!(store.step_leaf(next).is_some());
+    assert_eq!(store.replay_positions_used_v1(), 1);
+}

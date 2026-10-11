@@ -1932,6 +1932,12 @@ message GetPalwNodeStatusResponseMessage {
   // with and without reclaimable pages, this seat's slots, schedule and receipts in the last hour, and
   // the producer's backpressure gate. Empty from an older node.
   string verification = 33;
+  // RFC12: one metadata observation, unknown on older senders.
+  bool importSessionAvailable = 34;
+  uint64 importSessionEpoch = 35;
+  string importSessionPoint = 36;
+  string importSessionPhase = 37;
+  bool pruningImportStable = 38;
   RPCError error = 1000;
 }
 

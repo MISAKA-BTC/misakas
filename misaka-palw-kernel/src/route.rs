@@ -115,6 +115,11 @@ pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 /// target. codex used 21 (RFC-02's `RegisterConformanceClass` on the integration line); renumbered to 40 at the merge.
 pub const TAG_OPT_IN_BEACON_SOURCE_V1: u8 = 40;
 pub const MAX_OPT_IN_BEACON_SOURCE_BYTES_V1: usize = 384;
+// 61–62: codex RFC-7 final prepaid source fees (lane R6781-F merge, 2026-10-12): codex numbered them 22 / 23 (RFC-02's here).
+pub const TAG_FUND_BEACON_SOURCE_FEE_V1: u8 = 61;
+pub const TAG_OPT_IN_PAID_BEACON_SOURCE_V1: u8 = 62;
+pub const MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1: usize = 256;
+pub const MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1: usize = 448;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -576,6 +581,21 @@ pub enum KernelRouteObjectV1 {
         context: Digest,
         terms: Digest,
     } = 40,
+    /// The authorized sponsor signs exact prepaid fee terms. Separate fee fence, no implied source approval.
+    /// (codex RFC-7 final numbered it 22; renumbered to 61 at the R6781-F merge.)
+    FundBeaconSourceFee {
+        terms: crate::beacon_source_fee::BeaconSourceFeeTermsV1,
+    } = 61,
+    /// The source producer signs the prepaid contract's exact fee as well as its original source terms.
+    /// (codex RFC-7 final numbered it 23; renumbered to 62 at the R6781-F merge.)
+    OptInPaidBeaconSource {
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+        context: Digest,
+        source_terms: Digest,
+        fee_terms: Digest,
+    } = 62,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -720,6 +740,8 @@ impl KernelRouteObjectV1 {
             Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
             Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
             Self::OptInBeaconSource { .. } => TAG_OPT_IN_BEACON_SOURCE_V1,
+            Self::FundBeaconSourceFee { .. } => TAG_FUND_BEACON_SOURCE_FEE_V1,
+            Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
             Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
@@ -957,6 +979,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_SEAL_PROOF_V1 => "SealProof",
         TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
         TAG_OPT_IN_BEACON_SOURCE_V1 => "OptInBeaconSource",
+        TAG_FUND_BEACON_SOURCE_FEE_V1 => "FundBeaconSourceFee",
+        TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
         TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
@@ -1017,6 +1041,8 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
         TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
         TAG_OPT_IN_BEACON_SOURCE_V1 => MAX_OPT_IN_BEACON_SOURCE_BYTES_V1,
+        TAG_FUND_BEACON_SOURCE_FEE_V1 => MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1,
+        TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1142,10 +1168,14 @@ mod tests {
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!((38..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "38/39 are reserved for G14R, not allocated");
-        assert!(max_encoded_bytes_of_tag(61).is_none(), "61 is not allocated");
-        for tag in (22..=37).chain(40..=60) {
+        // 61/62: codex RFC-7 final prepaid source fees (codex used 22/23); 63 is the first unallocated inner kind.
+        assert!(max_encoded_bytes_of_tag(63).is_none(), "63 is not allocated");
+        for tag in (22..=37).chain(40..=62) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
+        assert_eq!(name_of_tag(TAG_FUND_BEACON_SOURCE_FEE_V1), "FundBeaconSourceFee");
+        assert_eq!(name_of_tag(TAG_OPT_IN_PAID_BEACON_SOURCE_V1), "OptInPaidBeaconSource");
+        assert_eq!((TAG_FUND_BEACON_SOURCE_FEE_V1, TAG_OPT_IN_PAID_BEACON_SOURCE_V1), (61, 62));
         // RFC-0002 P0 (RFC02-T): the seal and reveal round-trip at their declared discriminants and within their ceilings.
         for o in [
             KernelRouteObjectV1::SealModelRefutationV4 { slot: 3, seal: [5; 64] },
