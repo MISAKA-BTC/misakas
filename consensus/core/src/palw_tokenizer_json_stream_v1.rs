@@ -409,6 +409,13 @@ enum Lex {
     Keyword { kind: u8, index: u8 },
 }
 
+/// Host observers receive only tentative bounded digests. Uniqueness/schema and the
+/// immutable exact-length flat raw hash must all authenticate at EOF before use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTokenizerRenderingEventV1 {
+    Ordinary { id: u32, rendering: Option<PalwTokenizerRenderingDigestV1> },
+    Added { id: u32, rendering: PalwTokenizerRenderingDigestV1 },
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwTokenizerJsonStreamV1 {
     context: Hash64,
@@ -549,6 +556,17 @@ impl PalwTokenizerJsonStreamV1 {
     /// carries only the unconsumed suffix again, with this exact offset. No skipped/replayed raw
     /// bytes can enter the flat tokenizer hash. All fields are owned by the surrounding court.
     pub fn push(&mut self, context: Hash64, offset: u64, bytes: &[u8]) -> Result<usize, String> {
+        self.push_with_observer_v1(context, offset, bytes, |_| {})
+    }
+    /// Same consensus parser and proof pauses, with transient host notifications. No events
+    /// or extra state are serialized. Added-token overrides may precede ordinary vocab.
+    pub fn push_with_observer_v1(
+        &mut self,
+        context: Hash64,
+        offset: u64,
+        bytes: &[u8],
+        mut observer: impl FnMut(PalwTokenizerRenderingEventV1),
+    ) -> Result<usize, String> {
         self.check()?;
         if context != self.context
             || offset != self.offset
@@ -567,7 +585,7 @@ impl PalwTokenizerJsonStreamV1 {
                 break;
             }
             let b = bytes[consumed];
-            if self.parse_byte(b).is_err() {
+            if self.parse_byte(b, &mut observer).is_err() {
                 self.invalid = true;
             }
             consumed += 1;
@@ -595,7 +613,7 @@ impl PalwTokenizerJsonStreamV1 {
             match lex {
                 Lex::Idle => {}
                 Lex::Number(n) => {
-                    if self.number_end(n).is_err() {
+                    if self.number_end(n, &mut |_| {}).is_err() {
                         self.invalid = true;
                     }
                 }
@@ -639,10 +657,10 @@ impl PalwTokenizerJsonStreamV1 {
         };
         Ok(PalwTokenizerJsonVerdictV1::Rendering(rendering))
     }
-    fn parse_byte(&mut self, b: u8) -> Result<(), ()> {
+    fn parse_byte(&mut self, b: u8, observer: &mut dyn FnMut(PalwTokenizerRenderingEventV1)) -> Result<(), ()> {
         let lex = std::mem::replace(&mut self.lex, Lex::Idle);
         match lex {
-            Lex::Idle => self.idle(b),
+            Lex::Idle => self.idle(b, observer),
             Lex::String(mut s) => {
                 if s.byte(b)? {
                     self.string_end(s)
@@ -656,8 +674,8 @@ impl PalwTokenizerJsonStreamV1 {
                     self.lex = Lex::Number(n);
                     Ok(())
                 } else {
-                    self.number_end(n)?;
-                    self.idle(b)
+                    self.number_end(n, observer)?;
+                    self.idle(b, observer)
                 }
             }
             Lex::Keyword { kind, index } => {
@@ -676,7 +694,7 @@ impl PalwTokenizerJsonStreamV1 {
             }
         }
     }
-    fn idle(&mut self, b: u8) -> Result<(), ()> {
+    fn idle(&mut self, b: u8, observer: &mut dyn FnMut(PalwTokenizerRenderingEventV1)) -> Result<(), ()> {
         if matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
             return Ok(());
         }
@@ -694,7 +712,7 @@ impl PalwTokenizerJsonStreamV1 {
                         self.lex = Lex::String(StringState::new(true));
                         Ok(())
                     } else if b == b'}' && last.phase == 0 {
-                        self.close(true)
+                        self.close(true, observer)
                     } else {
                         Err(())
                     }
@@ -712,7 +730,7 @@ impl PalwTokenizerJsonStreamV1 {
                         self.stack.last_mut().unwrap().phase = 1;
                         Ok(())
                     }
-                    b'}' => self.close(true),
+                    b'}' => self.close(true, observer),
                     _ => Err(()),
                 },
                 _ => Err(()),
@@ -721,7 +739,7 @@ impl PalwTokenizerJsonStreamV1 {
             match last.phase {
                 0 | 1 => {
                     if b == b']' && last.phase == 0 {
-                        self.close(false)
+                        self.close(false, observer)
                     } else {
                         self.value(b)
                     }
@@ -731,7 +749,7 @@ impl PalwTokenizerJsonStreamV1 {
                         self.stack.last_mut().unwrap().phase = 1;
                         Ok(())
                     }
-                    b']' => self.close(false),
+                    b']' => self.close(false, observer),
                     _ => Err(()),
                 },
                 _ => Err(()),
@@ -869,7 +887,7 @@ impl PalwTokenizerJsonStreamV1 {
             _ => Err(()),
         }
     }
-    fn close(&mut self, object: bool) -> Result<(), ()> {
+    fn close(&mut self, object: bool, observer: &mut dyn FnMut(PalwTokenizerRenderingEventV1)) -> Result<(), ()> {
         let frame = self.stack.pop().ok_or(())?;
         if frame.object != object {
             return Err(());
@@ -881,6 +899,7 @@ impl PalwTokenizerJsonStreamV1 {
             Scope::AddedEntry => {
                 let id = frame.added_id.ok_or(())?;
                 let content = frame.added_content.ok_or(())?;
+                observer(PalwTokenizerRenderingEventV1::Added { id, rendering: content.clone() });
                 if id == self.target {
                     self.added_chosen = Some(content);
                 }
@@ -916,7 +935,7 @@ impl PalwTokenizerJsonStreamV1 {
         }
         Ok(())
     }
-    fn number_end(&mut self, n: NumberState) -> Result<(), ()> {
+    fn number_end(&mut self, n: NumberState, observer: &mut dyn FnMut(PalwTokenizerRenderingEventV1)) -> Result<(), ()> {
         if !n.finite() {
             return Err(());
         }
@@ -924,6 +943,7 @@ impl PalwTokenizerJsonStreamV1 {
         if frame.scope == Scope::Vocab {
             let id = n.id().ok_or(())?;
             self.highest = self.highest.max(id);
+            observer(PalwTokenizerRenderingEventV1::Ordinary { id, rendering: frame.candidate.clone() });
             if id == self.target {
                 self.chosen = Some(frame.candidate.clone());
             }
