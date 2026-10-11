@@ -178,3 +178,51 @@ Native named/reveal reporter maxima, authenticated legacy pending/awarded rights
 migration, whole material/producer liability retention and bounded completed-award
 history compaction still need closure. This candidate is not full RFC08 completion,
 all-model soundness, economic approval or production activation evidence.
+
+
+### Dormant reporter monetary schema v2 (implementation candidate)
+
+`palw_reporter_income_v2` is a distinct Some-only activation field. All shipped
+presets leave it `None`. Its params/schedule identity names it, identity
+normalization collapses `never()`, validation requires the bond budget at or
+below it and then refuses all public arming. The private state mirror carries
+its height independently of the budget. State v1 retains exactly its original
+six-field Borsh wire and five table roots until this fence. State v2 appends the
+new typed table6 reporter book; its digest is committed through the header
+root, and every table6/header write is verified by exact forward/reverse delta.
+
+A named native court/DA winner or valid earlier commit-reveal winner freezes
+its authenticated bond, payout payload, full funded maximum and original
+acceptance DAA before award. A pending winner keeps that bond collectible.
+Classification after the reveal horizon records the whole funded debt, even
+when recipient R is full or the total exceeds one R window. Redemption uses
+the frozen payload, never a later bond payout lookup, and creates exact unique
+R-limited native queue tranches. No reward, Q/B/F/T right or second award is
+created by redemption. Each actual drain starts its own payment+W clock.
+The native consumed-verdict test uses an explicit court-outcome seam with a
+real collateral debit; it is not evidence that a model court is sound.
+
+At the new fence, old pending winners whose rooted consumed-offence and best
+record authenticate the actual bond retain their exact already-accepted cash,
+even if that recipient is retired or today's R cap is overfull. Old awarded
+cash whose carriage has only a payout payload is not attributed by matching
+an address to a current bond. Its exact queue, amount and payload become an
+explicit unattributed liability. Such accepted cash remains payable. New R
+admission is conservatively quarantined globally until every such queue has
+actually drained and its W elapsed. The old cumulative awarded counter cannot
+prove a historical physical payment DAA: a separate first-fence+W uncertainty
+boundary is committed without inventing a payment timestamp. An unpaid exact
+queue outlives that boundary and cannot expire on a logical award clock.
+This migration trades temporary global monetary admission delay for preserving
+old rights without false ownership. Zero-R rights and objective conviction/
+funded debt recording remain possible; positive new R admission refuses
+without a partial monetary mutation.
+
+New tests cover table6 wire/root, winner immutability, W280/436 legacy quarantine,
+physical sparse drain, restart and exact reorg; native named debt above one cap;
+and independent late reporter-fence migration over a live v1 engine. These are
+parser-reviewed candidates pending the parent's central compile/runtime.
+Remaining RFC08 work includes complete native all-positive Final validation,
+all reporter pre-work maxima and material/liability lifecycle, bounded completed
+award history, EVM H160 ownership and gas-income reservation, and full external
+pruned-join/profitability evidence. No economic/security approval is implied.

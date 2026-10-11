@@ -134,6 +134,18 @@ pub(super) fn native_queued_income_id_v1(queue: Hash64, bond: &PalwBondKeyV2) ->
     finish(hash)
 }
 
+pub(super) fn native_reporter_binding_id_v1(offence: Hash64) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/native-reporter-binding/v1");
+    hash.update(offence.as_byte_slice());
+    finish(hash)
+}
+
+pub(super) fn legacy_queue_liability_id_v1(queue: Hash64) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/legacy-queue-liability/v1");
+    hash.update(queue.as_byte_slice());
+    finish(hash)
+}
+
 /// A tranche is unique to the immutable award and its already-queued progress.
 /// It never coalesces with a different award's physical payment clock.
 pub(super) fn reporter_tranche_queue_v1(award: Hash64, progress: u64) -> Hash64 {
@@ -249,15 +261,78 @@ impl TransitionBuilder<'_> {
         .map_err(|why| budget_refused(bond, why))
     }
 
+    /// Freeze the actual named/valid-reveal winner's full maximum before an
+    /// award can become income. This reservation is funded entitlement metadata,
+    /// independent of currently available R, so evidence remains permissionless.
+    pub(super) fn bind_native_reporter_v1(
+        &mut self, now: u64, offence: Hash64, winner: PalwRewardWinnerV1, amount: u64, accepted: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.reporter_income_active_at(now) { return Ok(()); }
+        let actual = self.state.bonds.get(&winner.reporter).ok_or(PalwStateV2Error::MissingBond(winner.reporter))?;
+        if actual.payout_payload != winner.payload { return Err(PalwStateV2Error::BondBudgetRefused("native reporter frozen payout differs".into())); }
+        self.bond_budget_op(|budget, _, j| budget.bind_reporter_income_v1(native_reporter_binding_id_v1(offence),
+            PalwReporterIncomeBindingV1 {
+                recipient: Some(winner.reporter), payload: winner.payload, maximum: amount, accepted_daa: accepted,
+                awarded_daa: None, queue: None, paid_daa: None, historical_boundary: None,
+            }, j)).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native reporter binding has no budget engine".into()))?
+            .map_err(|why| budget_refused(winner.reporter, why))
+    }
+
+    /// Close a funded native reporter entitlement into the same tranche engine
+    /// used by objective kernel courts. The immutable winner is rooted before
+    /// classification; physical cash is credited only with real R/queue room.
+    pub(super) fn award_native_reporter_v1(
+        &mut self, now: u64, offence: Hash64, winner: PalwRewardWinnerV1, amount: u64,
+    ) -> Result<bool, PalwStateV2Error> {
+        if !self.params.reporter_income_active_at(now) { return Ok(false); }
+        let id = native_reporter_binding_id_v1(offence);
+        let policy = self.bond_budget_mirror_at(now).expect("checked active mirror").policy;
+        let reporter_from = self.params.reporter_income_from().expect("checked reporter fence");
+        self.bond_budget_op(|budget, _, j| {
+            let binding = budget.reporter_income.get(&id).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?;
+            if binding.recipient != Some(winner.reporter) || binding.payload != winner.payload || binding.maximum != amount
+                || binding.awarded_daa.is_some() || binding.queue.is_some() || binding.paid_daa.is_some() || now < binding.accepted_daa {
+                return Err(PalwBudgetRefusalV1::Assignment("native reporter award differs from its frozen maximum"));
+            }
+            if binding.accepted_daa < reporter_from {
+                // Already accepted native reward rights retain their full cash
+                // entitlement, even for a retired recipient or an overfull cap.
+                // The actual winner came from rooted best/reveal provenance.
+                budget.hold_native_income_v1(&policy,
+                    0, native_income_id_v1(offence, &winner.reporter, 3), winner.reporter,
+                    binding.accepted_daa, now, amount, &[], false, j)?;
+                budget.mark_reporter_awarded_v1(id, now, j)?;
+                return Ok(false);
+            }
+            budget.stage_reporter_income_v1(id, winner.reporter, now, amount, j)?;
+            budget.mark_reporter_awarded_v1(id, now, j)?;
+            Ok(true)
+        }).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native reporter award has no budget engine".into()))?
+            .map_err(|why| budget_refused(winner.reporter, why))
+    }
+
     /// The settlement's authenticated bond and immutable funded receipt are
     /// recorded even when the recipient has no R room. Conviction has already
     /// collected this exact award from real collateral; no money is issued here.
     pub(super) fn stage_reporter_recipient_v1(
         &mut self, award: Hash64, bond: PalwBondKeyV2, now: u64, amount: u64,
     ) -> Result<(), PalwStateV2Error> {
-        if self.bond_budget_mirror_at(now).is_none() { return Ok(()); }
-        if !self.state.bonds.contains_key(&bond) { return Err(PalwStateV2Error::MissingBond(bond)); }
-        self.bond_budget_op(|budget, _, j| budget.stage_reporter_income_v1(award, bond, now, amount, j))
+        if !self.params.reporter_income_active_at(now) { return Ok(()); }
+        if amount == 0 { return Ok(()); }
+        let payload = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.payout_payload;
+        self.bond_budget_op(|budget, _, j| {
+            // Preflight the existing immutable receipt before changing either
+            // rooted table. Its payee is frozen now, never looked up by address.
+            if budget.claim_row(&award).is_some_and(|row| row.origin != PalwBudgetOriginV1::DeferredReporterIncome
+                || row.bond != bond || row.accepted_daa != now || row.reserved.reward_sompi != amount) {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+            budget.bind_reporter_income_v1(award, PalwReporterIncomeBindingV1 {
+                recipient: Some(bond), payload, maximum: amount, accepted_daa: now,
+                awarded_daa: Some(now), queue: None, paid_daa: None, historical_boundary: None,
+            }, j)?;
+            budget.stage_reporter_income_v1(award, bond, now, amount, j)
+        })
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter award has no budget engine".into()))?
             .map_err(|why| budget_refused(bond, why))
     }
@@ -783,6 +858,59 @@ impl TransitionBuilder<'_> {
             self.hold_kernel_income_v1(ctx, claim, until)?;
         }
         self.seed_native_income_rights_v1(ctx, mirror)
+    }
+
+    fn initialize_reporter_income_v2(&mut self, ctx: &PalwBlockContextV2, mirror: &PalwBondBudgetMirrorV1) -> Result<(), PalwStateV2Error> {
+        self.bond_budget_op(|budget, _, j| budget.activate_reporter_income_v2(j)).expect("reporter fence requires budget");
+        // Pending old winners retain authenticated bond provenance in their
+        // rooted best record. Old awarded/pending cash does not: quarantine its
+        // exact queue rather than inferring recipient ownership from addresses.
+        let pending: Vec<_> = self.state.reward_pending.iter().filter_map(|(offence, row)|
+            row.best.map(|winner| (*offence, *row, winner))).collect();
+        for (offence, row, winner) in pending {
+            let accepted = self.state.consumed_offences.get(&offence).ok_or_else(|| PalwStateV2Error::BondBudgetRefused("old pending reporter winner has no consumed provenance".into()))?.accepted_daa;
+            self.bond_budget_op(|budget, _, j| budget.bind_reporter_income_v1(native_reporter_binding_id_v1(offence),
+                PalwReporterIncomeBindingV1 {
+                    recipient: Some(winner.reporter), payload: winner.payload, maximum: row.amount, accepted_daa: accepted,
+                    awarded_daa: None, queue: None, paid_daa: None, historical_boundary: None,
+                }, j)).expect("created migration").map_err(|why| budget_refused(winner.reporter, why))?;
+        }
+        let mut unknown: BTreeMap<Hash64, (PalwPayoutV2, Option<u64>)> = self.state.pending_payouts.iter()
+            .map(|(queue, payout)| (*queue, (*payout, None))).collect();
+        for entry in &self.entries {
+            if let PalwDeltaEntryV2::Payout { key, old: Some(payout), new: None } = entry {
+                unknown.insert(*key, (*payout, Some(ctx.daa_score)));
+            }
+        }
+        for (offence, payout) in &self.state.reporter_rewards {
+            unknown.insert(crate::palw_vesting_v1::palw_reporter_payout_key_v1(offence), (*payout, None));
+        }
+        let book = self.state.bond_budget.as_ref().expect("created migration");
+        unknown.retain(|queue, _| !book.claims.iter().any(|(id, row)| row.origin == PalwBudgetOriginV1::NativeIncomeQueued
+            && *id == native_queued_income_id_v1(*queue, &row.bond)));
+        let historical_reporter_income = self.state.reporter_counters.awarded_sompi;
+        let boundary_until = ctx.daa_score.checked_add(mirror.policy.window_daa)
+            .ok_or(PalwStateV2Error::Overflow("legacy reporter income boundary"))?;
+        let mut boundary_hash = keyed(b"misaka-palw/bond-budget/legacy-reporter-history-boundary/v1");
+        boundary_hash.update(&ctx.daa_score.to_le_bytes());
+        let boundary_id = finish(boundary_hash);
+        self.bond_budget_op(|budget, _, j| {
+            if historical_reporter_income > 0 {
+                budget.bind_reporter_income_v1(boundary_id, PalwReporterIncomeBindingV1 {
+                    recipient: None, payload: Hash64::default(), maximum: 0, accepted_daa: ctx.daa_score,
+                    awarded_daa: None, queue: None, paid_daa: None,
+                    historical_boundary: Some((historical_reporter_income, boundary_until)),
+                }, j)?;
+            }
+            for (queue, (payout, paid)) in unknown {
+                if payout.amount == 0 { continue; }
+                budget.bind_reporter_income_v1(legacy_queue_liability_id_v1(queue), PalwReporterIncomeBindingV1 {
+                    recipient: None, payload: payout.payload, maximum: payout.amount, accepted_daa: ctx.daa_score,
+                    awarded_daa: None, queue: Some(queue), paid_daa: paid, historical_boundary: None,
+                }, j)?;
+            }
+            Ok(())
+        }).expect("created migration").map_err(|why: PalwBudgetRefusalV1| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
 
     // ---- hooks ---------------------------------------------------------------------------------------------------------------
@@ -1436,6 +1564,10 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         builder.create_bond_budget_v1(ctx, &mirror)?;
     }
     let now = ctx.daa_score;
+    if builder.params.reporter_income_active_at(now)
+        && builder.state.bond_budget.as_ref().expect("created").header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 {
+        builder.initialize_reporter_income_v2(ctx, &mirror)?;
+    }
     // Step 1b drained these exact obligations into the validated coinbase.
     // Queued credits stay held through sparse DAA jumps until that payment.
     let drained: BTreeSet<_> = builder
@@ -1463,6 +1595,14 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .expect("created")
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
     }
+    let legacy_paid: Vec<_> = builder.state.bond_budget.as_ref().expect("created").reporter_income.iter()
+        .filter(|(_, row)| row.recipient.is_none() && row.paid_daa.is_none() && row.queue.is_some_and(|queue| drained.contains(&queue)))
+        .map(|(id, _)| *id).collect();
+    for id in legacy_paid {
+        builder.bond_budget_op(|budget, _, j| budget.confirm_unattributed_payment_v1(id, now, j))
+            .expect("created").map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
+    }
+    builder.bond_budget_op(|budget, _, j| budget.release_reporter_income_v1(&mirror.policy, now, j));
     builder.bond_budget_op(|budget, _, j| budget.release_due(now, j));
     // Funded court debt is redeemed only after the real queue drain and its
     // W release. Full R or a full native queue defers cash, never conviction.
@@ -1477,7 +1617,15 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         let Some(record) = builder.state.bonds.get(&bond) else {
             return Err(PalwStateV2Error::MissingBond(bond));
         };
-        let (capital, payload) = (record.collateral, record.payout_payload);
+        let capital = record.collateral;
+        let book = builder.state.bond_budget.as_ref().expect("created");
+        let binding = book.reporter_income.get(&award).ok_or_else(||
+            PalwStateV2Error::BondBudgetRefused("reporter tranche has no rooted frozen payee".into()))?;
+        if binding.recipient != Some(bond) || binding.maximum != book.claim_row(&award).expect("indexed award").reserved.reward_sompi
+            || binding.awarded_daa.is_none() {
+            return Err(PalwStateV2Error::BondBudgetRefused("reporter tranche differs from its immutable entitlement".into()));
+        }
+        let payload = binding.payload;
         let queue = reporter_tranche_queue_v1(award, progress);
         // A collision never replaces an existing native monetary obligation.
         if builder.state.pending_payouts.contains_key(&queue) {

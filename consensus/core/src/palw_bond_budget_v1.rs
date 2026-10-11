@@ -33,6 +33,8 @@ pub const PALW_BOND_BUDGET_POLICY_VERSION_V1: u16 = 1;
 pub const PALW_MODEL_ALLOCATION_POLICY_VERSION_V2: u16 = 2;
 /// The engine state's own version (its header).
 pub const PALW_BOND_BUDGET_STATE_VERSION_V1: u16 = 1;
+/// Dormant monetary extension: authenticated reporter binding / legacy quarantine.
+pub const PALW_BOND_BUDGET_STATE_VERSION_V2: u16 = 2;
 /// The V2 carriage tail of the engine (the Lead's allocation; present only when the engine exists).
 pub const PALW_CARRIAGE_BOND_BUDGET_TAIL_V1: u8 = 0xEF;
 /// The object tag of a bond's signed capital assignment (the Lead's allocation 140–149).
@@ -61,6 +63,7 @@ pub const PALW_BUDGET_TABLE_CLAIMS_V1: u8 = 2;
 pub const PALW_BUDGET_TABLE_RELEASES_V1: u8 = 3;
 pub const PALW_BUDGET_TABLE_ASSIGNMENTS_V1: u8 = 4;
 pub const PALW_BUDGET_TABLE_MODELS_V1: u8 = 5;
+pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 6;
 
 // ---- the four dimensions ------------------------------------------------------------------------------------------------------
 
@@ -521,6 +524,18 @@ impl Params {
         self.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa_score))
     }
 
+    pub fn palw_reporter_income_active_at(&self, daa: u64) -> bool {
+        self.palw_bond_budget_active_at(daa) && self.palw_reporter_income_v2.is_some_and(|at| at != ForkActivation::never() && at.is_active(daa))
+    }
+
+    pub fn validate_palw_reporter_income_v2(&self) -> Result<(), PalwModeV2Error> {
+        let Some(at) = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
+        if !self.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.daa_score() <= at.daa_score()) {
+            return Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 requires palw_bond_budget_v1 at or below it"));
+        }
+        Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 cannot be armed: monetary schema v2 and legacy cash migration are dormant pending complete activation validation"))
+    }
+
     /// Whether the model-bond allocation is in force at `daa_score` — never, in this binary (it needs the budget too).
     pub fn palw_model_bond_allocation_active_at(&self, daa_score: u64) -> bool {
         self.palw_bond_budget_active_at(daa_score)
@@ -607,7 +622,8 @@ impl Params {
                     .map(|a| (a.activation.daa_score().max(f.activation.daa_score()), a.policy.clone())),
             });
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_bond_budget(mirror);
+            bundle.state = bundle.state.clone().with_bond_budget(mirror).with_reporter_income_from(
+                self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()));
         }
     }
 }
@@ -921,8 +937,39 @@ pub struct PalwModelBudgetRowV1 {
     pub reserved_sompi: u64,
 }
 
+/// A frozen native reporter income binding. `None` explicitly means legacy
+/// cash whose actual recipient cannot be authenticated from the old carriage;
+/// it is quarantined globally, never assigned by matching payout payloads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwReporterIncomeBindingV1 {
+    pub recipient: Option<PalwBondKeyV2>,
+    pub payload: Hash64,
+    pub maximum: u64,
+    pub accepted_daa: u64,
+    pub awarded_daa: Option<u64>,
+    pub queue: Option<Hash64>,
+    pub paid_daa: Option<u64>,
+    /// Historical awarded income with no physical clock in the old carriage:
+    /// `(observed cumulative amount, conservative first-fence+W expiry)`.
+    /// This is an uncertainty boundary, never a fabricated payment timestamp.
+    pub historical_boundary: Option<(u128, u64)>,
+}
+
+impl PalwReporterIncomeBindingV1 {
+    fn valid(&self) -> bool {
+        if self.awarded_daa.is_some_and(|daa| daa < self.accepted_daa) || self.paid_daa.is_some_and(|daa| daa < self.accepted_daa) { return false; }
+        match (self.recipient, self.historical_boundary) {
+            (Some(_), None) => self.maximum > 0 && self.queue.is_none() && self.paid_daa.is_none(),
+            (None, None) => self.maximum > 0 && self.queue.is_some() && self.awarded_daa.is_none(),
+            (None, Some((amount, until))) => amount > 0 && until >= self.accepted_daa && self.maximum == 0
+                && self.queue.is_none() && self.paid_daa.is_none() && self.awarded_daa.is_none(),
+            _ => false,
+        }
+    }
+}
+
 /// **The engine state** (`PalwChainStateV2::bond_budget`): the header and five tables. Borsh for the carriage (tail `0xEF`).
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwBondBudgetStateV1 {
     pub header: PalwBondBudgetHeaderV1,
     pub bonds: BTreeMap<PalwBondKeyV2, PalwBudgetBondRowV1>,
@@ -930,30 +977,61 @@ pub struct PalwBondBudgetStateV1 {
     pub releases: BTreeSet<(u64, Hash64)>,
     pub assignments: BTreeMap<PalwBondKeyV2, PalwCapitalAssignmentRowV1>,
     pub models: BTreeMap<Hash64, PalwModelBudgetRowV1>,
+    pub reporter_income: BTreeMap<Hash64, PalwReporterIncomeBindingV1>,
     /// Derived withdrawal hold: no extra serialized/rooted field or history scan.
-    #[borsh(skip)]
     deferred_by_bond: BTreeMap<PalwBondKeyV2, usize>,
-    #[borsh(skip)]
     deferred_awards: BTreeSet<Hash64>,
+    unattributed_income: usize,
+    pending_reporters: BTreeMap<PalwBondKeyV2, usize>,
+}
+
+impl BorshSerialize for PalwBondBudgetStateV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.header.serialize(writer)?;
+        self.bonds.serialize(writer)?;
+        self.claims.serialize(writer)?;
+        self.releases.serialize(writer)?;
+        self.assignments.serialize(writer)?;
+        self.models.serialize(writer)?;
+        match self.header.version {
+            PALW_BOND_BUDGET_STATE_VERSION_V1 if self.reporter_income.is_empty() => Ok(()),
+            PALW_BOND_BUDGET_STATE_VERSION_V2 => self.reporter_income.serialize(writer),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version")),
+        }
+    }
 }
 
 impl BorshDeserialize for PalwBondBudgetStateV1 {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let header: PalwBondBudgetHeaderV1 = BorshDeserialize::deserialize_reader(reader)?;
+        if !matches!(header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version"));
+        }
+        let version = header.version;
         let mut state = Self {
-            header: BorshDeserialize::deserialize_reader(reader)?,
+            header,
             bonds: BorshDeserialize::deserialize_reader(reader)?,
             claims: BorshDeserialize::deserialize_reader(reader)?,
             releases: BorshDeserialize::deserialize_reader(reader)?,
             assignments: BorshDeserialize::deserialize_reader(reader)?,
             models: BorshDeserialize::deserialize_reader(reader)?,
+            reporter_income: if version == PALW_BOND_BUDGET_STATE_VERSION_V2 {
+                BorshDeserialize::deserialize_reader(reader)?
+            } else { BTreeMap::new() },
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
+            unattributed_income: 0,
+            pending_reporters: BTreeMap::new(),
         };
         for (id, row) in &state.claims {
             if Self::unpaid_reporter_debt(row) {
                 *state.deferred_by_bond.entry(row.bond).or_default() += 1;
                 state.deferred_awards.insert(*id);
             }
+        }
+        state.unattributed_income = state.reporter_income.values().filter(|row| row.recipient.is_none()).count();
+        for row in state.reporter_income.values().filter(|row| row.awarded_daa.is_none()) {
+            if let Some(bond) = row.recipient { *state.pending_reporters.entry(bond).or_default() += 1; }
         }
         Ok(state)
     }
@@ -1022,8 +1100,11 @@ impl PalwBondBudgetStateV1 {
             releases: BTreeSet::new(),
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
+            reporter_income: BTreeMap::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
+            unattributed_income: 0,
+            pending_reporters: BTreeMap::new(),
         }
     }
 
@@ -1036,8 +1117,11 @@ impl PalwBondBudgetStateV1 {
             releases: BTreeSet::new(),
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
+            reporter_income: BTreeMap::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
+            unattributed_income: 0,
+            pending_reporters: BTreeMap::new(),
         }
     }
 
@@ -1069,7 +1153,7 @@ impl PalwBondBudgetStateV1 {
     /// A pending monetary right uses `u64::MAX` until the ordinary release
     /// clock removes its last reservation, because its payment DAA is unknown.
     pub fn window_holds(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
-        self.deferred_by_bond.contains_key(bond)
+        self.deferred_by_bond.contains_key(bond) || self.pending_reporters.contains_key(bond)
             || self.bonds.get(bond).is_some_and(|row| !row.window.is_zero() && row.latest_release_daa > now)
     }
 
@@ -1083,7 +1167,11 @@ impl PalwBondBudgetStateV1 {
     /// The table roots and the header digest the V2 root block writes, in table order.
     pub fn root_parts(&self) -> (Hash64, [Hash64; 5]) {
         use crate::palw_state_v2::palw_collection_root_of_entries_v1 as root;
-        let header = keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]);
+        let header = if self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V2 {
+            let income = root(b"bond_budget_reporter_income/v1", self.reporter_income.len(),
+                self.reporter_income.iter().map(|(k, v)| (enc(k), enc(v))));
+            keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice()])
+        } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]) };
         (
             header,
             [
@@ -1132,6 +1220,15 @@ impl PalwBondBudgetStateV1 {
             }
             PALW_BUDGET_TABLE_ASSIGNMENTS_V1 => swap_row(&mut self.assignments, key, expected, install),
             PALW_BUDGET_TABLE_MODELS_V1 => swap_row(&mut self.models, key, expected, install),
+            PALW_BUDGET_TABLE_REPORTER_INCOME_V1 => {
+                if self.header.version != PALW_BOND_BUDGET_STATE_VERSION_V2 { return Err("reporter income needs monetary state v2"); }
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "reporter income key does not decode")?;
+                let old = self.reporter_income.get(&id).copied();
+                swap_row(&mut self.reporter_income, key, expected, install)?;
+                let new = self.reporter_income.get(&id).copied();
+                self.update_reporter_binding_index_v1(old.as_ref(), new.as_ref());
+                Ok(())
+            }
             _ => Err("a budget row names an unknown table"),
         }
     }
@@ -1143,6 +1240,7 @@ impl PalwBondBudgetStateV1 {
             && self.releases.is_empty()
             && self.assignments.is_empty()
             && self.models.is_empty()
+            && self.reporter_income.is_empty()
     }
 
     // ---- journaled writers ----
@@ -1190,6 +1288,90 @@ impl PalwBondBudgetStateV1 {
                 new: present.then(Vec::new),
             });
         }
+    }
+
+    fn update_reporter_binding_index_v1(&mut self, old: Option<&PalwReporterIncomeBindingV1>, new: Option<&PalwReporterIncomeBindingV1>) {
+        if let Some(old) = old {
+            if old.recipient.is_none() { self.unattributed_income -= 1; }
+            if old.awarded_daa.is_none() && let Some(bond) = old.recipient {
+                if let Some(count) = self.pending_reporters.get_mut(&bond) {
+                    *count -= 1;
+                    if *count == 0 { self.pending_reporters.remove(&bond); }
+                }
+            }
+        }
+        if let Some(new) = new {
+            if new.recipient.is_none() { self.unattributed_income += 1; }
+            if new.awarded_daa.is_none() && let Some(bond) = new.recipient {
+                *self.pending_reporters.entry(bond).or_default() += 1;
+            }
+        }
+    }
+
+    pub fn activate_reporter_income_v2(&mut self, j: &mut Vec<PalwBudgetWriteV1>) {
+        if self.header.version != PALW_BOND_BUDGET_STATE_VERSION_V2 {
+            let mut header = self.header.clone();
+            header.version = PALW_BOND_BUDGET_STATE_VERSION_V2;
+            self.put_header(header, j);
+        }
+    }
+
+    fn put_reporter_income_v1(&mut self, id: &Hash64, row: Option<PalwReporterIncomeBindingV1>, j: &mut Vec<PalwBudgetWriteV1>) {
+        self.activate_reporter_income_v2(j);
+        let old = self.reporter_income.get(id).copied();
+        self.update_reporter_binding_index_v1(old.as_ref(), row.as_ref());
+        put(&mut self.reporter_income, PALW_BUDGET_TABLE_REPORTER_INCOME_V1, id, row, j);
+    }
+
+    /// An exact old native liability has no authenticated recipient. Preserve
+    /// its cash and refuse only new monetary admissions until physical pay+W.
+    pub fn has_unattributed_income_v1(&self) -> bool { self.unattributed_income > 0 }
+
+    /// Freeze a valid named/revealed winner's full funded maximum before award.
+    /// Improving an unawarded commit-reveal winner updates only the binding;
+    /// after award, its actual recipient, amount and payload are immutable.
+    pub fn bind_reporter_income_v1(&mut self, id: Hash64, row: PalwReporterIncomeBindingV1, j: &mut Vec<PalwBudgetWriteV1>)
+        -> Result<(), PalwBudgetRefusalV1> {
+        if !row.valid() {
+            return Err(PalwBudgetRefusalV1::Assignment("invalid reporter monetary binding"));
+        }
+        if let Some(old) = self.reporter_income.get(&id) {
+            if *old == row { return Ok(()); }
+            if old.recipient.is_none() || old.awarded_daa.is_some() || old.queue.is_some() || old.paid_daa.is_some()
+                || old.maximum != row.maximum || old.accepted_daa != row.accepted_daa {
+                return Err(PalwBudgetRefusalV1::Duplicate);
+            }
+        }
+        self.put_reporter_income_v1(&id, Some(row), j);
+        Ok(())
+    }
+
+    pub fn mark_reporter_awarded_v1(&mut self, id: Hash64, now: u64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        let mut row = self.reporter_income.get(&id).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if row.awarded_daa.is_some() { return Err(PalwBudgetRefusalV1::Duplicate); }
+        if row.recipient.is_none() || now < row.accepted_daa { return Err(PalwBudgetRefusalV1::Assignment("invalid reporter award clock")); }
+        row.awarded_daa = Some(now);
+        self.put_reporter_income_v1(&id, Some(row), j);
+        Ok(())
+    }
+
+    /// Exactly identified old queue cash has now actually drained. Never use
+    /// logical award/vesting DAA as its monetary release clock.
+    pub fn confirm_unattributed_payment_v1(&mut self, id: Hash64, now: u64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
+        let mut row = self.reporter_income.get(&id).copied().filter(|row| row.recipient.is_none() && row.queue.is_some() && row.paid_daa.is_none())
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now < row.accepted_daa { return Err(PalwBudgetRefusalV1::Assignment("legacy payment precedes monetary migration")); }
+        row.paid_daa = Some(now);
+        self.put_reporter_income_v1(&id, Some(row), j);
+        Ok(())
+    }
+
+    pub fn release_reporter_income_v1(&mut self, policy: &PalwBondBudgetPolicyV1, now: u64, j: &mut Vec<PalwBudgetWriteV1>) {
+        let due: Vec<_> = self.reporter_income.iter().filter(|(_, row)| row.recipient.is_none()
+            && (row.historical_boundary.is_some_and(|(_, until)| until <= now)
+                || row.paid_daa.is_some_and(|paid| paid.checked_add(policy.window_daa).is_some_and(|until| until <= now))))
+            .map(|(id, _)| *id).collect();
+        for id in due { self.put_reporter_income_v1(&id, None, j); }
     }
 
     fn put_header(&mut self, header: PalwBondBudgetHeaderV1, j: &mut Vec<PalwBudgetWriteV1>) {
@@ -1252,6 +1434,9 @@ impl PalwBondBudgetStateV1 {
         }
         let row = self.bonds.get(&bond).copied();
         if admit {
+            if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
+                return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+            }
             palw_bond_budget_admit_v1(policy, capital, row.as_ref(), &reservation)?;
         }
         let reuse_not_before = accepted_daa.saturating_add(policy.window_daa);
@@ -1298,6 +1483,9 @@ impl PalwBondBudgetStateV1 {
         origin: PalwBudgetOriginV1,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
+        if maximum > 0 && self.has_unattributed_income_v1() {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
         if !matches!(origin, PalwBudgetOriginV1::MarketFee | PalwBudgetOriginV1::RoundFee) || actual > maximum {
             return Err(PalwBudgetRefusalV1::Assignment("invalid fee-income origin or unfunded maximum"));
         }
@@ -1455,7 +1643,7 @@ impl PalwBondBudgetStateV1 {
         let extra = held.checked_sub(prior).and_then(|v| v.checked_sub(credit)).ok_or(PalwBudgetRefusalV1::Overflow)?;
         let mut bond_row = self.bonds.get(&bond).copied().unwrap_or_default();
         let total = bond_row.window.reward_sompi.checked_add(extra).ok_or(PalwBudgetRefusalV1::Overflow)?;
-        if check_cap && total > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
+        if check_cap && ((extra > 0 && self.has_unattributed_income_v1()) || total > palw_bond_budget_caps_v1(policy, capital).reward_sompi) {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
         // Preflight ends here. Reclassification leaves Q/B/F/T and open slots
@@ -1681,7 +1869,9 @@ impl PalwBondBudgetStateV1 {
         let mut bond = self.bonds.get(&debt.bond).copied().unwrap_or_default();
         let remaining = debt.reserved.reward_sompi.checked_sub(debt.consumed.reward_sompi)
             .ok_or(PalwBudgetRefusalV1::Overflow)?;
-        let capacity = palw_bond_budget_caps_v1(policy, capital).reward_sompi.saturating_sub(bond.window.reward_sompi);
+        let capacity = if self.has_unattributed_income_v1() { 0 } else {
+            palw_bond_budget_caps_v1(policy, capital).reward_sompi.saturating_sub(bond.window.reward_sompi)
+        };
         let amount = remaining.min(capacity).min(maximum_tranche);
         if amount == 0 { return Ok(0); }
         if self.claims.contains_key(&queue_id) { return Err(PalwBudgetRefusalV1::Duplicate); }
@@ -1792,7 +1982,7 @@ impl PalwBondBudgetStateV1 {
             return Err(PalwBudgetRefusalV1::Overflow);
         }
         let held = row.window.reward_sompi.checked_add(fee).ok_or(PalwBudgetRefusalV1::Overflow)?;
-        if check_cap && held > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
+        if check_cap && (self.has_unattributed_income_v1() || held > palw_bond_budget_caps_v1(policy, capital).reward_sompi) {
             return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
         }
         self.reserve(
@@ -1944,6 +2134,9 @@ impl PalwBondBudgetStateV1 {
         if let (Some(m), Some(_)) = (model, self.header.allocation) {
             reservation.reward_sompi = reservation.reward_sompi.min(self.model_available(&m));
         }
+        if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
         palw_bond_budget_admit_v1(policy, capital, self.bonds.get(&bond), &reservation)?;
         Ok(reservation)
     }
@@ -2072,6 +2265,23 @@ impl PalwBondBudgetStateV1 {
     /// in-window reservations and its open count the number of its open rows; every in-window row has its release and no other release
     /// exists; consumption within reservation; a model's reservations this epoch within its availability base.
     pub fn check_consistency(&self) -> Result<(), &'static str> {
+        if !matches!(self.header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2)
+            || (self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 && !self.reporter_income.is_empty()) {
+            return Err("invalid reporter monetary state version");
+        }
+        if self.unattributed_income != self.reporter_income.values().filter(|row| row.recipient.is_none()).count() {
+            return Err("the unattributed monetary index disagrees with rooted liabilities");
+        }
+        let mut pending_reporters = BTreeMap::new();
+        for row in self.reporter_income.values() {
+            if row.awarded_daa.is_none() && let Some(bond) = row.recipient {
+                *pending_reporters.entry(bond).or_insert(0usize) += 1;
+            }
+            if !row.valid() {
+                return Err("invalid reporter income binding or legacy physical queue liability");
+            }
+        }
+        if pending_reporters != self.pending_reporters { return Err("the pending reporter withdrawal index disagrees with rooted bindings"); }
         let mut windows: BTreeMap<PalwBondKeyV2, PalwBudgetBondRowV1> = BTreeMap::new();
         let mut deferred = BTreeMap::new();
         let mut awards = BTreeSet::new();
@@ -2433,6 +2643,87 @@ mod tests {
                 replay.apply_row(*table, key, old, new, false).unwrap();
             }
             assert_eq!(replay, s);
+            replay.check_consistency().unwrap();
+        }
+    }
+
+    #[test]
+    fn reporter_monetary_v2_freezes_payee_and_quarantines_legacy_cash_until_physical_pay_plus_w() {
+        fn replay_write(s: &mut PalwBondBudgetStateV1, write: &PalwBudgetWriteV1, revert: bool) {
+            match write {
+                PalwBudgetWriteV1::Header { old, new } => {
+                    let (expected, install) = if revert { (new, old) } else { (old, new) };
+                    assert_eq!(Some(&s.header), expected.as_ref());
+                    s.header = install.clone().unwrap();
+                }
+                PalwBudgetWriteV1::Row { table, key, old, new } => s.apply_row(*table, key, old, new, revert).unwrap(),
+            }
+        }
+        for w in [280, 436] {
+            let mut p = policy(1, false);
+            p.window_daa = w;
+            let capital = 1_000 * BILI;
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let initial = s.clone();
+            let mut j = Vec::new();
+            let binding = PalwReporterIncomeBindingV1 { recipient: Some(bond(1)), payload: h(91), maximum: 125 * BILI,
+                accepted_daa: 20, awarded_daa: None, queue: None, paid_daa: None, historical_boundary: None };
+            s.bind_reporter_income_v1(h(500), binding, &mut j).unwrap();
+            assert_eq!(s.header.version, PALW_BOND_BUDGET_STATE_VERSION_V2);
+            assert!(s.window_holds(&bond(1), u64::MAX), "the named full entitlement keeps its actual recipient collectible");
+            // Earlier valid reveal order is checked by the native consumer. Its
+            // still-unawarded winner may improve, but an awarded right cannot.
+            let winner = PalwReporterIncomeBindingV1 { recipient: Some(bond(2)), payload: h(92), ..binding };
+            s.bind_reporter_income_v1(h(500), winner, &mut j).unwrap();
+            assert!(!s.window_holds(&bond(1), u64::MAX));
+            assert!(s.window_holds(&bond(2), u64::MAX));
+            s.stage_reporter_income_v1(h(500), bond(2), 21, winner.maximum, &mut j).unwrap();
+            s.mark_reporter_awarded_v1(h(500), 21, &mut j).unwrap();
+            let awarded = (s.clone(), j.len());
+            assert!(s.bind_reporter_income_v1(h(500), binding, &mut j).is_err());
+            assert_eq!((s.clone(), j.len()), awarded, "awarded actual recipient, payout and total are immutable");
+            let legacy = PalwReporterIncomeBindingV1 { recipient: None, payload: h(92), maximum: 9 * BILI,
+                accepted_daa: 30, awarded_daa: None, queue: Some(h(501)), paid_daa: None, historical_boundary: None };
+            s.bind_reporter_income_v1(h(502), legacy, &mut j).unwrap();
+            let history = PalwReporterIncomeBindingV1 { recipient: None, payload: h(0), maximum: 0,
+                accepted_daa: 30, awarded_daa: None, queue: None, paid_daa: None, historical_boundary: Some((9 * u128::from(BILI), 30 + w)) };
+            s.bind_reporter_income_v1(h(503), history, &mut j).unwrap();
+            assert!(s.has_unattributed_income_v1());
+            let held = (s.clone(), j.len());
+            let refusal = PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward };
+            assert_eq!(s.reserve_income_v1(&p, capital, h(510), bond(3), 31, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j), Err(refusal.clone()));
+            assert_eq!(s.reserve_source_income_v1(&p, capital, h(511), bond(3), 31, 100, 1, &mut j), Err(refusal.clone()));
+            assert_eq!(s.hold_native_income_v1(&p, capital, h(512), bond(3), 31, 100, 1, &[], true, &mut j), Err(refusal.clone()));
+            assert_eq!(s.preview_claim_v1(&p, capital, bond(3), None, PalwBudgetAskV1 { reward_sompi: 1, ..Default::default() }), Err(refusal));
+            assert_eq!(s.redeem_reporter_income_v1(&p, capital, &h(500), 31, h(513), u64::MAX, &mut j).unwrap(), 0);
+            assert_eq!((s.clone(), j.len()), held, "quarantine denies only new R, never consumes debt or any budget dimension");
+            s = borsh::from_slice(&enc(&s)).unwrap();
+            assert!(s.has_unattributed_income_v1());
+            assert!(s.window_holds(&bond(2), u64::MAX));
+            s.release_reporter_income_v1(&p, 30 + w, &mut j);
+            assert!(!s.reporter_income.contains_key(&h(503)), "the history uncertainty boundary is first fence + W");
+            assert!(s.has_unattributed_income_v1(), "a still-unpaid exact queue cannot expire with the history boundary");
+            s.release_reporter_income_v1(&p, 30 + 10 * w, &mut j);
+            assert!(s.has_unattributed_income_v1());
+            let paid = 31 + 10 * w;
+            s.confirm_unattributed_payment_v1(h(502), paid, &mut j).unwrap();
+            let paid_state = s.clone();
+            s.release_reporter_income_v1(&p, paid + w - 1, &mut j);
+            assert!(s.has_unattributed_income_v1());
+            s.release_reporter_income_v1(&p, paid + w, &mut j);
+            assert!(!s.has_unattributed_income_v1());
+            assert_eq!(s.redeem_reporter_income_v1(&p, capital, &h(500), paid + w, h(514), u64::MAX, &mut j).unwrap(), 50 * BILI);
+            assert_eq!(s.reporter_income[&h(500)].payload, h(92), "the debt redeems the frozen winner, never a matching address's owner");
+            s.check_consistency().unwrap();
+            assert_eq!(borsh::from_slice::<PalwBondBudgetStateV1>(&enc(&paid_state)).unwrap(), paid_state);
+            let mut different = s.clone();
+            different.reporter_income.get_mut(&h(500)).unwrap().payload = h(93);
+            assert_ne!(different.root_parts(), s.root_parts(), "table6 frozen payload is rooted even though v1's five-table API is unchanged");
+            let mut replay = initial.clone();
+            for write in &j { replay_write(&mut replay, write, false); }
+            assert_eq!(replay, s);
+            for write in j.iter().rev() { replay_write(&mut replay, write, true); }
+            assert_eq!(replay, initial, "reorg restores the original v1 schema and exact wire bytes");
             replay.check_consistency().unwrap();
         }
     }
@@ -3734,6 +4025,38 @@ mod tests {
         let mut both = armed.clone();
         both.palw_model_bond_allocation_v1 = Some(PalwModelBondAllocationFenceV1::at(ForkActivation::new(9_000_000)));
         assert!(both.validate_palw_model_bond_allocation_v1().is_err(), "an armed allocation is refused even over the budget");
+    }
+
+    #[test]
+    fn reporter_monetary_fence_is_separate_dormant_hashed_and_requires_budget_before_it() {
+        use crate::config::params::{MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params, palw_t12_shipped_params};
+        for params in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+            assert!(params.palw_reporter_income_v2.is_none());
+            assert!(!params.palw_reporter_income_active_at(u64::MAX));
+            assert!(params.validate_palw_reporter_income_v2().is_ok());
+            assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_reporter_income_v2" && at.is_none()));
+            let mut future = params.clone();
+            future.palw_reporter_income_v2 = Some(ForkActivation::new(9_000_001));
+            assert_ne!(params.consensus_params_id(), future.consensus_params_id());
+            assert_ne!(params.consensus_schedule_id(), future.consensus_schedule_id());
+            assert_eq!(params.consensus_identity_id(), future.consensus_identity_id());
+            assert!(future.validate_palw_reporter_income_v2().is_err(), "reporter fence without earlier budget refuses");
+            future.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1::at(ForkActivation::new(9_000_002)));
+            let PalwModeV2Error::Invalid(why) = future.validate_palw_reporter_income_v2().unwrap_err() else { panic!("Invalid") };
+            assert!(why.contains("at or below"));
+            future.palw_bond_budget_v1.as_mut().unwrap().activation = ForkActivation::new(9_000_000);
+            let PalwModeV2Error::Invalid(why) = future.validate_palw_reporter_income_v2().unwrap_err() else { panic!("Invalid") };
+            assert!(why.contains("cannot be armed"));
+            future.sync_palw_bond_budget_v1();
+            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &future.palw_consensus_mode {
+                assert!(!bundle.state.reporter_income_active_at(9_000_000));
+                assert!(bundle.state.reporter_income_active_at(9_000_001));
+            }
+            let mut never = params.clone();
+            never.palw_reporter_income_v2 = Some(ForkActivation::never());
+            assert_eq!(params.consensus_identity_id(), never.consensus_identity_id());
+            assert!(never.validate_palw_reporter_income_v2().is_ok());
+        }
     }
 
     #[test]

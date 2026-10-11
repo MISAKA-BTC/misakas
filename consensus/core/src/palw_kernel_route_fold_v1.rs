@@ -574,7 +574,7 @@ fn apply_settlements_to_exec_vesting(
     // The old ledger root and this exact ordered settlement batch identify
     // objective court receipts independently of payout payloads or a retry.
     // The event ordinal also separates several demanders/defaults in one tick.
-    let reporter_batch = if builder.bond_budget_mirror_at(now).is_some() {
+    let reporter_batch = if builder.params.reporter_income_active_at(now) {
         let mut hash = keyed(b"misaka-palw/bond-budget/kernel-reporter-batch/v1");
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refused("reporter route missing"))?;
         hash.update(route.ledger_root().as_byte_slice());

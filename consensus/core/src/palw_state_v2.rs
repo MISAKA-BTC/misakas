@@ -1787,6 +1787,9 @@ pub struct PalwStateParamsV2 {
     /// preset, and validation refuses both armed.
     #[borsh(skip)]
     bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1>,
+    /// Separate dormant monetary schema v2 fence, synchronized with Params.
+    #[borsh(skip)]
+    reporter_income_from_daa: Option<u64>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
@@ -2035,6 +2038,7 @@ impl PalwStateParamsV2 {
             anchor_window_from_daa: None,
             panel_v3: None,
             bond_budget: None,
+            reporter_income_from_daa: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
         })
@@ -2467,6 +2471,17 @@ impl PalwStateParamsV2 {
     }
 
     /// The bond budget's mirror, if the network arms the fence.
+    pub fn with_reporter_income_from(mut self, from: Option<u64>) -> Self {
+        self.reporter_income_from_daa = from;
+        self
+    }
+
+    pub fn reporter_income_from(&self) -> Option<u64> { self.reporter_income_from_daa }
+
+    pub fn reporter_income_active_at(&self, daa: u64) -> bool {
+        self.bond_budget_active_at(daa) && self.reporter_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
     pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
         self.bond_budget.as_ref()
     }
@@ -23248,6 +23263,9 @@ impl<'a> TransitionBuilder<'a> {
                 payload: bond.payout_payload,
             })
         });
+        if let Some(winner) = best {
+            self.bind_native_reporter_v1(now_daa, offence_key, winner, amount, now_daa)?;
+        }
         self.write_reward_pending(offence_key, Some(PalwPendingRewardV1 { amount, reveal_until, evidence_id, best }));
         Ok(Some(amount))
     }
@@ -29455,6 +29473,31 @@ impl<'a> TransitionBuilder<'a> {
                 .is_some_and(|receipt| receipt.legs.keys().any(|(bond, _)| *bond == row.producer_bond));
             self.pay_native_recipient_v1(*claim_id, row.producer_bond, 0, now, row.producer.amount, palw_vesting_payout_key_v1(claim_id), finished)?;
         }
+        if let PalwVestingSourceV1::Reporter { offence_id } = &next.source
+            && self.params.reporter_income_active_at(now)
+        {
+            let book = self.state.bond_budget.as_ref().ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter move has no budget".into()))?;
+            let binding = book.reporter_income.get(&palw_bond_budget_fold_v1::native_reporter_binding_id_v1(*offence_id)).copied();
+            if let Some(binding) = binding.filter(|row| row.recipient.is_some()) {
+                if binding.accepted_daa >= self.params.reporter_income_from().expect("checked reporter fence") || binding.awarded_daa.is_none()
+                    || next.legs.iter().any(|leg| leg.payload != binding.payload || leg.amount != binding.maximum) {
+                    return Err(PalwStateV2Error::BondBudgetRefused("legacy reporter move differs from frozen entitlement".into()));
+                }
+                self.pay_native_recipient_v1(*offence_id, binding.recipient.expect("filtered"), 3, now,
+                    binding.maximum, palw_reporter_payout_key_v1(offence_id), true)?;
+            }
+            else {
+                let queue = palw_reporter_payout_key_v1(offence_id);
+                let legacy = book.reporter_income.get(&palw_bond_budget_fold_v1::legacy_queue_liability_id_v1(queue))
+                    .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("payload-only reporter move has no exact legacy liability".into()))?;
+                if legacy.recipient.is_some() || legacy.queue != Some(queue) || legacy.paid_daa.is_some()
+                    || next.legs.iter().any(|leg| leg.payload != legacy.payload || leg.amount != legacy.maximum) {
+                    return Err(PalwStateV2Error::BondBudgetRefused("payload-only reporter move differs from old exact cash".into()));
+                }
+            }
+            // Old payload-only awarded rows are exact migration liabilities:
+            // they retain cash; a global new-R quarantine closes their W clock.
+        }
         let own_key = match &next.source {
             PalwVestingSourceV1::Row { claim_id } => palw_vesting_payout_key_v1(claim_id),
             PalwVestingSourceV1::Reporter { offence_id } => palw_reporter_payout_key_v1(offence_id),
@@ -34318,7 +34361,9 @@ fn apply_reporter_revealed(
     let Some(payload) = builder.state.bonds.get(&reporter).map(|bond| bond.payout_payload) else {
         return refuse("the reporter is not a bond on this chain");
     };
+    let accepted = consumed.accepted_daa;
     let best = PalwRewardWinnerV1 { committed_daa: committed.committed_daa, commitment, reporter, payload };
+    builder.bind_native_reporter_v1(ctx.daa_score, offence_key, best, pending.amount, accepted)?;
     builder.write_reward_pending(offence_key, Some(PalwPendingRewardV1 { best: Some(best), ..pending }));
     Ok(())
 }
@@ -34363,7 +34408,9 @@ fn sweep_reward_reveals(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                         why: "an award under the key is still waiting for step 3d",
                     });
                 }
-                builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }));
+                if !builder.award_native_reporter_v1(ctx.daa_score, offence_key, winner, pending.amount)? {
+                    builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }));
+                }
                 // The award names its reporter's bond in the journal (S-7's note): the reward row
                 // and 3d's `Moved` carry only the payload, and the vesting reads, the per-payee
                 // index and the economics ledger read the bond off this note (M5, T75).

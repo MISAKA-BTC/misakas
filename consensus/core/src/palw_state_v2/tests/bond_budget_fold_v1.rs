@@ -205,7 +205,7 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
         let mut policy = test_policy(1);
         policy.window_daa = 280;
         policy.reward_per_unit_sompi = 50;
-        let p = armed_with(policy, None);
+        let p = armed_with(policy, None).with_reporter_income_from(Some(100));
         let mut objects = register_class_and_bond();
         objects.push(bond_registration_with_collateral(2, 8, 22, 1_000));
         let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
@@ -282,6 +282,135 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
         assert!(idle.pending_payouts.is_empty());
         assert_eq!(idle.bond_budget().unwrap().claim_row(&award).unwrap().reserved.reward_sompi, 125);
     }
+}
+
+/// The consumed court verdict is an explicit mechanics seam; collateral debit,
+/// named winner binding, reveal sweep, R-limited native queue, physical payment,
+/// carriage and reorg are the production APIs. This proves no court soundness.
+#[test]
+fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tranches() {
+    use super::super::palw_bond_budget_fold_v1::{native_reporter_binding_id_v1, reporter_tranche_queue_v1};
+    use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
+    let mut policy = test_policy(1);
+    policy.window_daa = 280;
+    policy.reward_per_unit_sompi = 50;
+    let p = armed_with(policy, None).with_reporter_income_from(Some(100)).with_rcore_plus_mirrors(Some(0), 12_900, Vec::new());
+    let mut objects = register_class_and_bond();
+    objects.push(bond_registration_with_collateral(2, 8, 22, 2_000));
+    let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+    let extras = PalwTransitionExtrasV1::default();
+    let point = ctx(2, 200, 2);
+    let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
+    b.reserve_bond_income_v1(&point, bond_key(1), 50, 50, PalwBudgetOriginV1::MarketFee).unwrap();
+    let collected = b.slash_bond(bond_key(2), 1_250).unwrap();
+    assert_eq!(collected, 1_250);
+    let offence = h64(0xCD08);
+    b.write_consumed_offence(offence, Some(PalwConsumedOffenceV1 {
+        kind: PalwOffenceKindV1::CourtConviction, accused: bond_key(2).0, amount: 1_250, accepted_daa: 200,
+        execution_root: Hash64::default(), collected, claim_id: Hash64::default(),
+    }));
+    assert_eq!(b.open_reporter_reward(200, offence, 0, PalwConvictionBasisV1::CourtVerdict { challenger: bond_key(1) }).unwrap(), Some(125));
+    let award = native_reporter_binding_id_v1(offence);
+    let frozen = b.state.bond_budget().unwrap().reporter_income[&award];
+    assert_eq!(frozen.recipient, Some(bond_key(1)));
+    assert_eq!(frozen.payload, registered.bond(&bond_key(1)).unwrap().payout_payload);
+    assert_eq!(frozen.maximum, 125);
+    assert!(frozen.awarded_daa.is_none());
+    assert!(b.state.bond_budget_window_holds(&bond_key(1), u64::MAX));
+    // A later bond-row payout change is a private mutation seam. The actual
+    // monetary entitlement must still redeem its original authenticated payee.
+    let mut changed = b.state.bond(&bond_key(1)).unwrap().clone();
+    changed.payout_payload = h64(0xBAD08);
+    b.write_bond(bond_key(1), Some(changed));
+    let reveal_until = b.state.reward_pending[&offence].reveal_until;
+    b.entries.push(PalwDeltaEntryV2::LastPoint { old: registered.last_point, new: Some(point) });
+    b.state.last_point = Some(point);
+    let staged = b.state;
+    let delta = PalwStateDeltaV2 { point, entries: b.entries };
+    assert_replayable(&p, &registered, &staged, &delta);
+    let (closed, delta) = apply(&staged, &p, &ctx(3, reveal_until + 1, 3), &[], None);
+    assert_replayable(&p, &staged, &closed, &delta);
+    assert!(closed.reporter_rewards.is_empty() && closed.pending_payouts.is_empty(), "R-full award is exact funded debt, with no uncapped cash");
+    assert_eq!(closed.reporter_counters.awarded_sompi, 125);
+    assert_eq!(closed.bond(&bond_key(2)).unwrap().collateral, 750);
+    let debt = closed.bond_budget().unwrap().claim_row(&award).unwrap();
+    assert_eq!((debt.reserved.reward_sompi, debt.consumed.reward_sompi), (125, 0));
+    let (mut state, delta) = apply(&closed, &p, &ctx(4, 480, 4), &[], None);
+    assert_replayable(&p, &closed, &state, &delta);
+    let mut progress = 0;
+    let mut queued_at = 480;
+    for (i, expected) in [50, 50, 25].into_iter().enumerate() {
+        let queue = reporter_tranche_queue_v1(award, progress);
+        let payout = *state.pending_payout(&queue).unwrap();
+        assert_eq!(payout, PalwPayoutV2 { payload: frozen.payload, amount: expected });
+        assert_ne!(payout.payload, state.bond(&bond_key(1)).unwrap().payout_payload, "redemption uses the immutable entitlement payload");
+        let payment = queued_at + 1_000;
+        let (paid, delta) = apply(&state, &p, &ctx(5 + 2 * i as u64, payment, 5 + 2 * i as u64), &[], None);
+        assert_replayable(&p, &state, &paid, &delta);
+        assert!(paid.pending_payouts.is_empty());
+        assert_eq!(paid.reporter_counters.awarded_sompi, 125, "tranches never classify the award again");
+        progress += expected;
+        queued_at = payment + 280;
+        let (next, delta) = apply(&paid, &p, &ctx(6 + 2 * i as u64, queued_at, 6 + 2 * i as u64), &[], None);
+        assert_replayable(&p, &paid, &next, &delta);
+        state = next;
+    }
+    assert_eq!(progress, 125);
+    assert!(state.pending_payouts.is_empty());
+    assert!(!state.bond_budget_window_holds(&bond_key(1), queued_at));
+    assert_eq!(state.bond_budget().unwrap().claim_row(&award).unwrap().consumed.reward_sompi, 125);
+}
+
+/// An old awarded row carries only a payload; migration preserves its exact
+/// cash, never guesses a bond from that address, and starts W on real drain.
+#[test]
+fn reporter_v2_fence_preserves_v1_and_quarantines_old_exact_cash_with_carriage_reorg() {
+    let p = armed_with(test_policy(1), None).with_rcore_plus_mirrors(Some(0), 12_900, Vec::new()).with_reporter_income_from(Some(105));
+    let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    assert_eq!(registered.bond_budget().unwrap().header.version, PALW_BOND_BUDGET_STATE_VERSION_V1);
+    let extras = PalwTransitionExtrasV1::default();
+    let point = ctx(2, 101, 2);
+    let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
+    let offence = h64(0xAE08);
+    let payout = PalwPayoutV2 { payload: registered.bond(&bond_key(1)).unwrap().payout_payload, amount: 125 };
+    b.write_reporter_reward(offence, Some(payout));
+    b.write_reporter_counters(PalwReporterCountersV1 { awarded_sompi: 125, forgone_sompi: 0 });
+    b.entries.push(PalwDeltaEntryV2::LastPoint { old: registered.last_point, new: Some(point) });
+    b.state.last_point = Some(point);
+    let before = b.state;
+    let delta = PalwStateDeltaV2 { point, entries: b.entries };
+    assert_replayable(&p, &registered, &before, &delta);
+    let old_wire = borsh::to_vec(before.bond_budget().unwrap()).unwrap();
+    let (absent, _) = apply(&before, &p.clone().with_reporter_income_from(None), &ctx(3, 105, 3), &[], None);
+    assert_eq!(absent.bond_budget().unwrap().header.version, PALW_BOND_BUDGET_STATE_VERSION_V1);
+    assert!(absent.bond_budget().unwrap().reporter_income.is_empty());
+    let (migrated, delta) = apply(&before, &p, &ctx(3, 105, 3), &[], None);
+    assert_replayable(&p, &before, &migrated, &delta);
+    assert_eq!(borsh::to_vec(revert_delta_v2(&migrated, &delta, &p).unwrap().bond_budget().unwrap()).unwrap(), old_wire);
+    let book = migrated.bond_budget().unwrap();
+    assert_eq!(book.header.version, PALW_BOND_BUDGET_STATE_VERSION_V2);
+    assert!(book.has_unattributed_income_v1());
+    assert!(book.reporter_income.values().all(|row| row.recipient.is_none()), "a matching actual bond payout is not authenticated ownership");
+    let queue = crate::palw_vesting_v1::palw_reporter_payout_key_v1(&offence);
+    assert_eq!(*migrated.pending_payout(&queue).unwrap(), payout);
+    let mut b = TransitionBuilder::new(&migrated, &p, false, false, false, false, &extras);
+    let held = (b.state.clone(), b.entries.len());
+    assert!(b.reserve_bond_income_v1(&ctx(4, 106, 4), bond_key(1), 1, 1, PalwBudgetOriginV1::MarketFee).is_err());
+    assert_eq!((b.state.clone(), b.entries.len()), held);
+    let (paid, delta) = apply(&migrated, &p, &ctx(4, 1_000, 4), &[], None);
+    assert_replayable(&p, &migrated, &paid, &delta);
+    assert!(paid.pending_payouts.is_empty());
+    assert!(paid.bond_budget().unwrap().has_unattributed_income_v1(), "late drain outlives first fence + W");
+    let physical = paid.bond_budget().unwrap().reporter_income.values().find(|row| row.queue == Some(queue)).unwrap();
+    assert_eq!(physical.paid_daa, Some(1_000));
+    let (held, delta) = apply(&paid, &p, &ctx(5, 1_049, 5), &[], None);
+    assert_replayable(&p, &paid, &held, &delta);
+    assert!(held.bond_budget().unwrap().has_unattributed_income_v1());
+    let (released, delta) = apply(&held, &p, &ctx(6, 1_050, 6), &[], None);
+    assert_replayable(&p, &held, &released, &delta);
+    assert!(!released.bond_budget().unwrap().has_unattributed_income_v1());
+    assert!(released.pending_payouts.is_empty());
+    assert_eq!(released.reporter_counters.awarded_sompi, 125);
 }
 
 /// Exact production recipient/queue/drain APIs; the admitted bond and queued

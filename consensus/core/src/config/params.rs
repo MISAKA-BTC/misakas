@@ -3006,6 +3006,9 @@ pub struct Params {
     /// activation height**: `None` on every preset and in no flag-day list, hashed Some-only (value included) in both fingerprints,
     /// collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_bond_budget_v1`]).
     pub palw_bond_budget_v1: Option<crate::palw_bond_budget_v1::PalwBondBudgetFenceV1>,
+    /// RFC08 monetary schema v2: authenticated reporter debt and legacy cash
+    /// quarantine. Separate dormant fence; requires the budget at or below it.
+    pub palw_reporter_income_v2: Option<ForkActivation>,
     /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
     /// assignment (tag 140) counts toward `S_m`, and a claim's reward reservation is also bounded by its model's share
     /// `R_PALW · f(S_m) / Σ f(S_j)` of the realized PALW carve. Needs `palw_bond_budget_v1` at or below it. **Dormant**, as the budget
@@ -4230,6 +4233,7 @@ impl Params {
         self.validate_palw_legacy_held_da_v2()?;
         // **ADR-0176 / ADR-0177's dormant fences** (`crate::palw_bond_budget_v1`): refused when armed.
         self.validate_palw_bond_budget_v1()?;
+        self.validate_palw_reporter_income_v2()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
@@ -6621,6 +6625,9 @@ impl Params {
             self.palw_legacy_held_da_v2 = None;
         }
         // ADR-0176 / ADR-0177's fences, collapsed whole (their policies are never read there).
+        if self.palw_reporter_income_v2 == Some(ForkActivation::never()) {
+            self.palw_reporter_income_v2 = None;
+        }
         if self.palw_bond_budget_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_bond_budget_v1 = None;
         }
@@ -10366,6 +10373,7 @@ impl Params {
             palw_provider_court_v1,
             palw_legacy_held_da_v2,
             palw_bond_budget_v1,
+            palw_reporter_income_v2,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
@@ -10649,6 +10657,7 @@ impl Params {
             ("palw_provider_court_v1", *palw_provider_court_v1),
             ("palw_legacy_held_da_v2", *palw_legacy_held_da_v2),
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
+            ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
@@ -10982,6 +10991,10 @@ impl Params {
             h.write(at.daa_score().to_le_bytes());
         }
         // ADR-0176 / ADR-0177's fences (lane BUDGET), NAMED likewise, with their policies (Some-only: every preset leaves them None).
+        if let Some(at) = self.palw_reporter_income_v2 {
+            h.write(b"palw_reporter_income_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
         if let Some(fence) = &self.palw_bond_budget_v1 {
             h.write(b"palw_bond_budget_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -11697,6 +11710,7 @@ impl Params {
             palw_provider_court_v1,
             palw_legacy_held_da_v2,
             palw_bond_budget_v1,
+            palw_reporter_income_v2,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
@@ -12486,6 +12500,9 @@ impl Params {
             fork(activation, visit);
         }
         // ADR-0176 / ADR-0177's fences. Some-only; the activation alone.
+        if let Some(at) = palw_reporter_income_v2.as_mut() {
+            fork(at, visit);
+        }
         if let Some(fence) = palw_bond_budget_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -13047,6 +13064,7 @@ impl Params {
             palw_provider_court_v1,
             palw_legacy_held_da_v2,
             palw_bond_budget_v1,
+            palw_reporter_income_v2,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
@@ -13887,6 +13905,10 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // The provider court's fence (DA16), Some-only for the same reason.
+        if let Some(at) = palw_reporter_income_v2 {
+            h.write(b"palw_reporter_income_v2");
+            h.write(at.daa_score().to_le_bytes());
+        }
         if let Some(fence) = &palw_bond_budget_v1 {
             h.write(b"palw_bond_budget_v1");
             h.write(fence.activation.daa_score().to_le_bytes());
@@ -14726,6 +14748,7 @@ impl Params {
             palw_provider_court_v1: self.palw_provider_court_v1,
             palw_legacy_held_da_v2: self.palw_legacy_held_da_v2,
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
+            palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
@@ -15833,6 +15856,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
@@ -16136,6 +16160,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
@@ -16421,6 +16446,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
@@ -24048,6 +24074,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_provider_court_v1: None,
     palw_legacy_held_da_v2: None,
     palw_bond_budget_v1: None,
+    palw_reporter_income_v2: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
