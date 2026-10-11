@@ -39629,17 +39629,40 @@ impl<'a> TransitionBuilder<'a> {
         line: &crate::palw_model_lines_v1::PalwModelLineV1,
         leg: u64,
         after: &mut crate::palw_model_market_v1::PalwModelMarketV1,
-    ) {
-        let owner = line.owner.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
-        let contributor = self
+    ) -> Result<(), PalwStateV2Error> {
+        let owner_bond = line.owner.filter(|b| self.state.bonds.contains_key(b));
+        let owner = owner_bond.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
+        let contributor_bond = self
             .state
             .model_version(line_id, line.current)
             .and_then(|v| v.adopted_from)
             .and_then(|p| self.state.model_proposals.get(&p).map(|p| p.by))
-            .and_then(|b| self.state.bonds.get(&b))
-            .map(|b| b.payout_payload);
+            .filter(|b| self.state.bonds.contains_key(b));
+        let contributor = contributor_bond.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
         let (to_contributor, to_owner) =
             crate::palw_model_lines_v1::split_owner_leg_v1(leg, line.contributor_permille_of_leg, contributor.is_some());
+        // The accepted signed quote fixes the entire collectible fee. Reserve
+        // both actual bond recipients before any payout, position or pool write;
+        // the pool diversion remains the owner's income. Principal is separate.
+        // EVM action refusals retain the block, so the first leg must roll back
+        // if the second leg fails (including first-time budget migration).
+        if self.params.bond_budget_active_at(ctx.daa_score) {
+            let checkpoint = self.checkpoint();
+            let reserve = (|| {
+                use crate::palw_bond_budget_v1::PalwBudgetOriginV1;
+                if let Some(bond) = owner_bond {
+                    self.reserve_bond_income_v1(ctx, bond, to_owner, to_owner, PalwBudgetOriginV1::MarketFee)?;
+                }
+                if let Some(bond) = contributor_bond {
+                    self.reserve_bond_income_v1(ctx, bond, to_contributor, to_contributor, PalwBudgetOriginV1::MarketFee)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = reserve {
+                self.restore(checkpoint);
+                return Err(error);
+            }
+        }
         // RFC-0004 (spec 17 §17.11.1): φ of a governed line's owner part feeds its improvement pool.
         // The market counts the pool's part as the owner's leg paid (ADR-0087 M2 keeps closing): φ is
         // the owner's money, routed.
@@ -39655,6 +39678,7 @@ impl<'a> TransitionBuilder<'a> {
         after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
         after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner).saturating_add(to_pool);
         after.contributor_paid_sompi = after.contributor_paid_sompi.saturating_add(to_contributor - burned_contributor);
+        Ok(())
     }
 
     /// **ADR-0091 Decision 2: the chain's own move at a claim's `Final`.** The slice of the escrow
@@ -39925,7 +39949,7 @@ fn model_buy_v1(
         return Err(PalwStateV2Error::ModelBuyBelowFloor { want: min_units_out, got: quote.units_out });
     }
     let mut after = quote.after;
-    builder.pay_model_leg(ctx, line_id, holder, b"buy", &line, quote.fees.registrant, &mut after);
+    builder.pay_model_leg(ctx, line_id, holder, b"buy", &line, quote.fees.registrant, &mut after)?;
     builder.write_model_market(*line_id, Some(after));
     let held = builder.state.model_position(line_id, holder);
     builder.write_model_position((*line_id, *holder), held.saturating_add(quote.units_out));
@@ -40009,7 +40033,7 @@ fn model_sell_v1(
         .is_some_and(|c| matches!(c.status, PalwClassStatusV2::Active));
     let mut after = quote.after;
     match &line {
-        Some(line) => builder.pay_model_leg(ctx, line_id, holder, b"sell", line, quote.fees.registrant, &mut after),
+        Some(line) => builder.pay_model_leg(ctx, line_id, holder, b"sell", line, quote.fees.registrant, &mut after)?,
         None => {
             // A line whose class is gone: the leg is burned, the net leg is still paid.
             after.burned_sompi = after.burned_sompi.saturating_add(quote.fees.registrant);
@@ -71998,6 +72022,118 @@ pub(crate) mod tests {
                 None,
                 "and a claim on the founding root cannot reach it: the buyback pays no pair rather than the wrong one"
             );
+        }
+    }
+
+    /// Private fold mechanics with an already admitted synthetic class. These
+    /// quotes/fills exercise the shared carrier and EVM consumers; they are not
+    /// approved class economics or shipped-node/P2P bridge evidence.
+    mod rfc12_market_income {
+        use super::*;
+        use crate::palw_bond_budget_v1::*;
+        use crate::palw_model_lines_v1::PalwModelProposalV1;
+        use crate::palw_model_market_v1::{PalwModelMarketV1, PALW_MODEL_SEED_MIN_SOMPI_V1};
+        use crate::evm::model_market::*;
+
+        const GROSS: u64 = 100 * 100_000_000;
+
+        fn fixture(reward_cap: u64) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+            let (p, mut state, class) = super::model_lines::owned_class_chain();
+            for key in [bond_key(1), bond_key(2)] {
+                state.bonds.get_mut(&key).unwrap().collateral = 1_000_000;
+            }
+            let mut line = state.model_line_or_founding(&class).unwrap();
+            line.contributor_permille_of_leg = 500;
+            let proposal = h64(0x12_fee);
+            let mut version = state.model_version(&class, line.current).unwrap();
+            version.adopted_from = Some(proposal);
+            state.model_proposals.insert(proposal, PalwModelProposalV1 {
+                line_id: class, root: version.root, note_hash: h64(77), by: bond_key(2), posted_daa: 250, adopted_in: Some(line.current),
+            });
+            state.model_versions.insert((class, line.current), version);
+            state.model_lines.insert(class, line);
+            state.model_markets.insert(class, PalwModelMarketV1::seed_v1(250, PALW_MODEL_SEED_MIN_SOMPI_V1, h64(99)));
+            let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+            policy.window_daa = 300;
+            policy.capital_unit_sompi = 1_000_000;
+            policy.reward_per_unit_sompi = reward_cap;
+            let p = p.with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 251, policy, allocation: None }));
+            (p, state, class)
+        }
+
+        fn extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, evm_market_active: true, ..Default::default() }
+        }
+
+        #[test]
+        fn rfc12_carrier_buy_sell_income_uses_only_r_and_excludes_returned_principal() {
+            let (p, state, class) = fixture(GROSS);
+            let e = extras();
+            let point = ctx(3, 251, 3);
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            let holder = h64(88);
+            let buy = model_buy_v1(&mut b, &point, &class, &holder, GROSS, 0).unwrap();
+            let sell = model_sell_v1(&mut b, &point, &class, &holder, buy.units_out, 0, Some(holder), Some(buy.units_out)).unwrap();
+            assert_eq!(b.state.model_position(&class, &holder), 0);
+            let fee = buy.fees.registrant + sell.fees.registrant;
+            assert!(sell.fees.net > fee, "the principal return is economically distinct from fee income");
+            let budget = b.state.bond_budget().unwrap();
+            let contributor_fee = buy.fees.registrant / 2 + sell.fees.registrant / 2;
+            for (key, amount) in [(bond_key(1), fee - contributor_fee), (bond_key(2), contributor_fee)] {
+                let row = budget.bond_row(&key).unwrap();
+                assert_eq!(row.window, PalwBudgetVectorV1 { reward_sompi: amount, ..PalwBudgetVectorV1::ZERO });
+                assert_eq!(row.open_claims, 0, "a fee receipt creates no execution claim");
+            }
+            assert!(budget.claims.values().all(|r| r.origin == PalwBudgetOriginV1::MarketFee && !r.open && !r.live));
+            budget.check_consistency().unwrap();
+            let delta = PalwStateDeltaV2 { point, entries: b.entries.clone() };
+            assert_eq!(apply_delta_v2(&state, &delta, &p).unwrap().state_root(), b.state.state_root(), "the complete fee and market journals replay together");
+            assert_eq!(revert_delta_v2(&b.state, &delta, &p).unwrap(), state, "reorg restores both the budget and principal books");
+            let below = p.clone().with_bond_budget(None);
+            let mut legacy = TransitionBuilder::new(&state, &below, false, false, false, false, &e);
+            assert!(model_buy_v1(&mut legacy, &point, &class, &holder, GROSS, 0).is_ok());
+            assert!(legacy.state.bond_budget().is_none(), "the added consumer is dormant below its fence");
+        }
+
+        #[test]
+        fn rfc12_second_market_fee_recipient_failure_reverts_first_reservation_and_migration() {
+            let (p, mut state, class) = fixture(GROSS);
+            state.bonds.get_mut(&bond_key(2)).unwrap().collateral = 0;
+            let e = extras();
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            let before = b.state.clone();
+            let entries = b.entries.clone();
+            let err = model_buy_v1(&mut b, &ctx(3, 251, 3), &class, &h64(88), GROSS, 0).unwrap_err();
+            assert!(matches!(err, PalwStateV2Error::BondBudgetRefused(_)), "the second recipient has no R headroom: {err}");
+            assert_eq!(b.state, before, "owner reservation, first migration, payouts, pool, reserve and position all roll back");
+            assert_eq!(b.entries, entries, "a refused EVM action must leave no leaked fee journal");
+        }
+
+        #[test]
+        fn rfc12_evm_filled_buy_then_cap_refusal_preserves_quote_and_full_refund() {
+            let fee_per_recipient = GROSS / 100 / 2;
+            let (p, state, class) = fixture(fee_per_recipient);
+            let account = crate::evm::EvmAddress::from_bytes([0x42; 20]);
+            let actions = (0..2).map(|seq| PalwEvmMarketActionV1 {
+                seq, account, line_id: class, kind: PalwEvmMarketActionKindV1::Buy { min_units_out: 0 }, gross_sompi: GROSS,
+            }).collect();
+            let e = PalwTransitionExtrasV1 { evm_actions: actions, ..extras() };
+            let point = ctx(3, 251, 3);
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            apply_evm_market_actions(&mut b, &point).unwrap();
+            let rows: Vec<_> = b.state.evm_settlements.values().copied().collect();
+            assert_eq!(rows.len(), 2);
+            assert!(matches!(rows[0].outcome, PalwEvmSettlementOutcomeV1::Filled { .. }));
+            assert!(matches!(rows[1].outcome, PalwEvmSettlementOutcomeV1::Refused { .. }));
+            assert_eq!(rows[1].escrow_sompi, GROSS, "the refused order retains its whole refund entitlement");
+            let holder = evm_holder_v1(crate::evm::EVM_CHAIN_ID, &account);
+            let quote = crate::palw_model_market_v1::palw_model_buy_quote_v1(state.model_market(&class).unwrap(), GROSS).unwrap();
+            assert_eq!(b.state.model_position(&class, &holder), quote.units_out, "only the filled order moves the position");
+            assert_eq!(b.state.model_market(&class).unwrap().msk_reserve, quote.after.msk_reserve, "the refusal cannot add gross to backing");
+            for key in [bond_key(1), bond_key(2)] {
+                assert_eq!(b.state.bond_budget().unwrap().bond_row(&key).unwrap().window.reward_sompi, fee_per_recipient);
+            }
+            b.state.bond_budget().unwrap().check_consistency().unwrap();
         }
     }
 
