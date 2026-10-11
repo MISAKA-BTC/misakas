@@ -404,6 +404,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // (A2U finding #1: an isolation-time refusal of bytes an older build tolerates is a split). The fence, the signature and ADR-0177
         // D3's rules are the acceptance walk's and the fold's, which DROP it; the block stands.
         PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
                 Err("a signed registration envelope must carry its signer's signature")
@@ -1136,11 +1137,13 @@ pub enum PalwLifecycleKindFenceV1 {
     ExecPayloadV2 = 6,
     /// `Params::palw_legacy_public_filer_v1` — lane LG14-A's dispute reservation and its release (tags 154–156).
     LegacyPublicFilerV1 = 7,
+    /// Independently versioned registered semantic metadata (tag164).
+    ClassSemanticsV1 = 8,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1149,6 +1152,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::ModelBondAllocationV1,
         Self::ExecPayloadV2,
         Self::LegacyPublicFilerV1,
+        Self::ClassSemanticsV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1162,6 +1166,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::ModelBondAllocationV1 => "palw_model_bond_allocation_v1",
             Self::ExecPayloadV2 => "palw_exec_payload_v2",
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
+            Self::ClassSemanticsV1 => "palw_class_semantics_v1",
         }
     }
 }
@@ -1316,6 +1321,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         }
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
+        O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
@@ -1458,6 +1464,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (161, "LegacyHeldAnswerChunkV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (162, "ObjectiveEvidenceDeclaredV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
     (163, "ObjectiveEvidenceChunkV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (164, "ClassSemanticsDeclaredV1", PalwLifecycleKindFenceV1::ClassSemanticsV1),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1537,6 +1544,7 @@ impl crate::config::params::Params {
                     // RFC-0008 v2: only on a `ConsensusV2` network (`palw_exec_payload_v2_fence` folds the mode in).
                     PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
                     PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
+                    PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                 },
             )
         })
@@ -1903,6 +1911,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 161 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 162, hi: 163 }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 164, hi: 164 }, "palw_class_semantics_v1", "G14 prospective registered semantics", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -4225,6 +4234,7 @@ pub(crate) mod tests {
             (159, 0x0395636b651f74fa),
             (160, 0x730c4ce9aa0ff75e),
             (161, 0xec0447b18452362b),
+            (164, 0xbb72a90c08f862db),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

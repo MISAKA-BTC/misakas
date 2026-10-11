@@ -8775,6 +8775,8 @@ pub enum PalwConsensusObjectV2 {
     LegacyHeldAnswerChunkV2 { chunk: Box<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2> } = 161,
     ObjectiveEvidenceDeclaredV1 { declaration: Box<crate::palw_terminal_carriage_v1::PalwTerminalDeclarationV1> } = 162,
     ObjectiveEvidenceChunkV1 { part: Box<crate::palw_terminal_carriage_v1::PalwTerminalPartV1> } = 163,
+    /// A prospective immutable tokenizer/config/table assignment by the original class registrant.
+    ClassSemanticsDeclaredV1 { declaration: Box<crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1>, signature: Vec<u8> } = 164,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -36837,6 +36839,26 @@ fn apply_object(
             // **RFC-0007 Part II**: past `palw_witness_manifest_v1` the class pins its witness profile (infallible).
             palw_mesh_fold_v1::record_witness_profile_v1(builder, ctx, class_id, &program, admission.class.layout.max_context);
         }
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration, .. } => {
+            if !builder.extras.class_semantics_active {
+                return Err(PalwStateV2Error::ImmutableModelUpdate("semantic declaration before its independent fence"));
+            }
+            declaration.check().map_err(PalwStateV2Error::ImmutableModelUpdate)?;
+            let class = builder.state.class(&declaration.class_id).ok_or(PalwStateV2Error::ImmutableModelUpdate("semantic declaration class is unregistered"))?;
+            if class.artifact_root != declaration.artifact_root || class.registrant_bond.is_none() {
+                return Err(PalwStateV2Error::ImmutableModelUpdate("semantic declaration must name the originally registered artifact and registrant"));
+            }
+            let mut next = declaration.as_bound_row(ctx.daa_score);
+            if let Some(previous) = builder.state.class_semantics.get(&declaration.class_id) {
+                next.bound_from_daa = previous.bound_from_daa;
+                let mut expected = previous.clone();
+                if expected.token_table_root.is_none() { expected.token_table_root = next.token_table_root; }
+                if expected != next {
+                    return Err(PalwStateV2Error::ImmutableModelUpdate("registered semantic identities and a filled table root are immutable"));
+                }
+            }
+            builder.write_class_semantics_v1(declaration.class_id, Some(next));
+        }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
             artifact_root,
@@ -57236,6 +57258,31 @@ pub(crate) mod tests {
         assert_eq!(writer.state.claim_semantics_v1(&h64(0xFC)), Some(row));
         writer.write_claim(h64(0xFD), Some(old_claim));
         assert_eq!(writer.state.claim_semantics_v1(&h64(0xFD)).unwrap().token_table_root, Some(h64(888)));
+        let declaration = crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1 {
+            version: row.version, class_id: row.class_id, artifact_root: row.artifact_root,
+            model_profile_id: row.model_profile_id, runtime_manifest_hash: row.runtime_manifest_hash,
+            runtime_class_id: row.runtime_class_id, tokenizer_id: row.tokenizer_id,
+            cu_ruleset_id: row.cu_ruleset_id, token_table_root: h64(888),
+        };
+        let declare = |d: crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
+            declaration: Box::new(d), signature: vec![],
+        };
+        let fold_declaration = |parent: &PalwChainStateV2, d, extras: &PalwTransitionExtrasV1| {
+            apply_palw_transition_v2_with_extras(parent, &p, &ctx(3, 102, 3), &[declare(d)],
+                None, false, false, false, false, extras)
+        };
+        let (filled, _) = fold_declaration(&state, declaration.clone(), &on).unwrap();
+        assert_eq!(filled.class_semantics_v1(&h64(1)).unwrap().token_table_root, Some(h64(888)));
+        assert_eq!(filled.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 100);
+        assert_eq!(filled.claim_semantics_v1(&h64(0xFC)).unwrap().token_table_root, None);
+        assert!(fold_declaration(&state, declaration.clone(), &Default::default()).is_err());
+        let mut changed = declaration.clone(); changed.tokenizer_id = h64(99);
+        assert!(fold_declaration(&state, changed, &on).is_err());
+        let mut changed = declaration.clone(); changed.token_table_root = h64(999);
+        assert!(fold_declaration(&filled, changed, &on).is_err());
+        let (prospective, _) = fold_declaration(&historical, declaration, &on).unwrap();
+        assert_eq!(prospective.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 102);
+        assert!(prospective.claim_semantics.is_empty(), "migration cannot stamp already accepted historical claims");
         writer.write_claim(h64(0xFD), None);
         assert!(writer.state.claim_semantics_v1(&h64(0xFD)).is_none());
     }

@@ -60,6 +60,50 @@ impl PalwClassSemanticsV1 {
     }
 }
 
+/// A registrant's prospective assignment, not proof of a historical tokenizer/config binding.
+/// No caller-supplied timestamp can make the statement apply before its accepting block.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassSemanticsDeclarationV1 {
+    pub version: u16,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub model_profile_id: Hash64,
+    pub runtime_manifest_hash: Hash64,
+    pub runtime_class_id: Hash64,
+    pub tokenizer_id: Hash64,
+    pub cu_ruleset_id: Hash64,
+    pub token_table_root: Hash64,
+}
+
+pub const PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka/palw/class-semantics/v1";
+
+impl PalwClassSemanticsDeclarationV1 {
+    pub fn as_bound_row(&self, bound_from_daa: u64) -> PalwClassSemanticsV1 {
+        PalwClassSemanticsV1 {
+            version: self.version, class_id: self.class_id, artifact_root: self.artifact_root,
+            bound_from_daa, model_profile_id: self.model_profile_id,
+            runtime_manifest_hash: self.runtime_manifest_hash, runtime_class_id: self.runtime_class_id,
+            tokenizer_id: self.tokenizer_id, cu_ruleset_id: self.cu_ruleset_id,
+            token_table_root: Some(self.token_table_root),
+        }
+    }
+
+    pub fn check(&self) -> Result<(), &'static str> {
+        if self.version != PALW_CLASS_SEMANTICS_VERSION_V1 || self.tokenizer_id == Hash64::default()
+            || self.token_table_root == Hash64::default()
+        { return Err("a semantic declaration needs version1, a nonzero tokenizer and a canonical table root"); }
+        Ok(())
+    }
+}
+
+pub fn palw_class_semantics_message_v1(network_domain: Hash64, declaration: &PalwClassSemanticsDeclarationV1) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).personal(b"MISAKA_PALW_V1").to_state();
+    h.update(b"class_semantics_declaration/v1");
+    h.update(network_domain.as_byte_slice());
+    h.update(&borsh::to_vec(declaration).expect("a semantic declaration has an infallible Vec writer"));
+    Hash64::from_bytes(h.finalize().as_bytes().try_into().expect("the requested hash length"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

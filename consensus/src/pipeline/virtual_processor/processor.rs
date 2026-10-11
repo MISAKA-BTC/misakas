@@ -13989,6 +13989,27 @@ impl VirtualStateProcessor {
                 }
                 // **Lane BUDGET (tag 140): a bond's capital assignment** — the fence, an Active signer, its signature; ADR-0177 D3's rules
                 // are the fold's.
+                Obj::ClassSemanticsDeclaredV1 { declaration, signature } => {
+                    use kaspa_consensus_core::palw_class_semantics_v1 as semantics;
+                    if !self.palw_class_semantics_v1.is_some_and(|f| f.is_active(point.daa_score)) {
+                        return Err("semantic declaration is below palw_class_semantics_v1".into());
+                    }
+                    declaration.check().map_err(str::to_string)?;
+                    let class = state.class(&declaration.class_id).ok_or("semantic declaration names an unknown class")?;
+                    if class.artifact_root != declaration.artifact_root {
+                        return Err("semantic declaration names another artifact".into());
+                    }
+                    let registrant = class.registrant_bond.as_ref().ok_or("a sentinel registration has no signing registrant for prospective migration")?;
+                    let bond = state.bond(registrant).ok_or("the signing registrant is not a public bond")?;
+                    if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                        return Err("the signing registrant is not Active".into());
+                    }
+                    let message = semantics::palw_class_semantics_message_v1(self.palw_network_domain_v2(), declaration);
+                    if !Self::verify_mldsa87_with_context_bool(&bond.pubkey, message.as_byte_slice(), signature,
+                        semantics::PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1) {
+                        return Err("the original class registrant did not sign this prospective semantic declaration".into());
+                    }
+                }
                 Obj::BondCapitalAssignedV1 { bond, assignments, sequence, signature } => {
                     self.palw_capital_assignment_signature_ok(state, point.daa_score, bond, assignments, *sequence, signature)?;
                 }
@@ -23057,6 +23078,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ObjectiveEvidenceChunkV1 { .. } => "ObjectiveEvidenceChunkV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
+        O::ClassSemanticsDeclaredV1 { .. } => "ClassSemanticsDeclaredV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",
