@@ -800,13 +800,18 @@ impl PalwFraudFilerBookV1 {
         if !waiting {
             return;
         }
+        self.evict_oldest_capture();
+    }
+
+    /// Resource pressure can require the remaining replica too, even below the count cap.
+    fn evict_oldest_capture(&mut self) -> bool {
         let victim = self
             .cases
             .values()
             .filter(|case| matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if Arc::strong_count(run) == 1))
             .min_by_key(|case| (case.replay_turn, case.candidate.accepted_daa, case.candidate.claim_id))
             .map(|case| case.candidate.claim_id);
-        let Some(victim) = victim else { return };
+        let Some(victim) = victim else { return false };
         let case = self.cases.get_mut(&victim).expect("selected case");
         let PalwFraudFilerVerdictV1::Mismatch(run) = std::mem::replace(&mut case.verdict, PalwFraudFilerVerdictV1::DeferredMismatch)
         else {
@@ -819,8 +824,12 @@ impl PalwFraudFilerBookV1 {
                     .take()
                     .map(|job| Arc::new(PalwFraudFilerDeferredPublicV1 { job, _reservation: run._job_reservation.take() }));
                 // `run` drops here: only authenticated public metadata survives its replica.
+                true
             }
-            Err(run) => case.verdict = PalwFraudFilerVerdictV1::Mismatch(run),
+            Err(run) => {
+                case.verdict = PalwFraudFilerVerdictV1::Mismatch(run);
+                false
+            }
         }
     }
 
@@ -2540,7 +2549,8 @@ impl PalwPanelService {
             (ctx, prompt, None)
         };
         let backends = self.backends();
-        let reserved =
+        let mut cache_evictions = 0;
+        let reserved = loop {
             match self.reserve_replay_at_widest_run_v1(PALW_FRAUD_FILER_REPLAY_ROLE_V1, backend.as_mut(), job.class_id, claim, |b| {
                 backends.role_memory_need_for_backend_or_chain_v1(
                     b,
@@ -2551,7 +2561,10 @@ impl PalwPanelService {
                     |id| self.chain_carriage_v1(session, id),
                 )
             }) {
-                Ok((reserved, _)) => reserved,
+                Ok((reserved, _)) => break reserved,
+                Err(_) if cache_evictions < PALW_FRAUD_FILER_HELD_RUNS_V1 && book.evict_oldest_capture() => {
+                    cache_evictions += 1;
+                }
                 Err(why) => {
                     book.cases.get_mut(&claim).expect("held above").input_retry_at =
                         current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
@@ -2560,7 +2573,8 @@ impl PalwPanelService {
                     });
                     return;
                 }
-            };
+            }
+        };
         // Canonical derivation and replay input copies hold the full ticket. Acquired user ids
         // were already authenticated under the small ticket, off the loop, or by the DA learner.
         let fp_job = if let Some(payload) = fp_payload {
@@ -3082,6 +3096,15 @@ pub(super) mod tests {
         book.settle(&claims[0].claim_id, PalwFraudFilerVerdictV1::Settled(PalwFilerPhaseV1::Convicted));
         assert!(book.cases[&claims[0].claim_id].deferred_public.is_none());
         assert_eq!(ledger.reserved_bytes(), 5120, "settlement releases the retained public descriptor ticket");
+        let key = PalwMemoryReservationKeyV1 { role: "new-wider-replay", class_id: claims[2].job.class_id, job: claims[2].claim_id };
+        assert!(ledger.reserve(key.clone(), 12_000).is_err(), "one older replica can still block a wider profile below the count cap");
+        assert!(book.evict_oldest_capture());
+        assert_eq!(ledger.reserved_bytes(), 1024);
+        let wider = ledger.reserve(key, 12_000).expect("the wider replay progresses after bounded pressure eviction");
+        assert_eq!(book.held_runs(), 0);
+        assert!(book.cases[&claims[1].claim_id].pursued());
+        drop(wider);
+        assert_eq!(ledger.reserved_bytes(), 1024);
     }
 
     #[test]
