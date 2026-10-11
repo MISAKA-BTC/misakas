@@ -1026,10 +1026,16 @@ fn bounded_requested_cell_runs_reject_hostile_lengths_and_verify_a_fold_without_
             PalwPromptIdsFormV1::Flat, LADDER, &mut kaspa_cpu()).unwrap(),
             palw_tir_shard_outcome_over_v1(&holding, &capture, &d, &mut kaspa_cpu()).unwrap());
         let mut books = PalwTirShardBooksV1::default();
-        let key = (d.claim_id, 2, shard, 2, d.tir_shard.unwrap().segments.0);
+        let key = (d.claim_id, 2, shard, 2, d.tir_shard.unwrap().segments.0, None);
         books.cell_run_inputs.insert(key, (inputs.clone(), d.execution_root, 700));
+        let own_court = (d.claim_id, 2, shard, 1, 1, Some(0));
+        let another_court = (d.claim_id, 2, shard, 1, 1, Some(1));
+        books.cell_run_inputs.insert(own_court, (inputs.clone(), d.execution_root, 700));
+        books.cell_run_inputs.insert(another_court, (inputs.clone(), d.execution_root, 700));
         books.keep_public_court_rows_v1(d.claim_id, 0, (ir.class_id, 2, shard), 900).unwrap();
         books.retain_row_interests_v1(&[], &[], 900); assert!(books.cell_run_inputs.contains_key(&key));
+        assert!(books.cell_run_inputs.contains_key(&own_court));
+        assert!(!books.cell_run_inputs.contains_key(&another_court), "same shard is not the named court's requested coverage");
         books.retain_row_interests_v1(&[], &[], 901); assert!(books.cell_run_inputs.is_empty());
         assert_eq!(ledger.reserved_bytes(), reserved, "an in-flight proof still holds the inputs");
         drop(inputs); assert_eq!(ledger.reserved_bytes(), 0);

@@ -52,6 +52,37 @@ pub struct TirCellV1 {
     pub positions: Range<u32>,
 }
 
+/// Conservative committed-input closure for one public history court. Its local
+/// evaluation reads the named occurrence, preceding carry outputs, and its own
+/// checkpoint/history instances. A post node reading a global state also needs the
+/// pre occurrence's committed state/history units (NF-15/NF-19). Start at zero so this does not invent an
+/// unaligned state restore or replace committed inputs with a replayed prefix.
+/// The ordinary bounded cell-run planner still admits/refuses the resulting size.
+pub fn tir_public_court_cells_v1(
+    space: &PalwTirStepSpaceV1,
+    ctx: &PalwJobContextV2,
+    named_leaf: u64,
+    shard: u16,
+) -> Result<Vec<TirCellV1>, String> {
+    let leaf = space.leaf_at(ctx, named_leaf).ok_or("the public court leaf is outside the job")?;
+    let PalwTirLeafKindV1::Commit { occurrence, .. } = leaf.kind else {
+        return Err("a public history court must name a committed node".into());
+    };
+    let first = usize::try_from(occurrence).map_err(|_| "the court occurrence does not fit usize")?;
+    let end = first.checked_add(1).ok_or("the court occurrence overflows")?;
+    let positions = leaf.position.checked_add(1).ok_or("the court position overflows")?;
+    let mut cells = Vec::new();
+    if end == space.occurrences().len() {
+        let post = &space.program.blocks[space.program.schedule.post as usize];
+        if post.nodes.iter().any(|node| node.inputs.iter().any(|input|
+            matches!(input, misaka_palw_tir::Ref::State(state) if !space.program.states[*state as usize].per_layer))) {
+            cells.push(TirCellV1 { shard, occ: 0..1, positions: 0..positions });
+        }
+    }
+    cells.push(TirCellV1 { shard, occ: first..end, positions: 0..positions });
+    Ok(cells)
+}
+
 /// **Where a cell's committed inputs come from.** Every answer is authenticated against the claim's step root by the
 /// implementation: the verifier never opens a path itself.
 pub trait TirCellInputsV1 {

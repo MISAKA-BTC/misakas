@@ -239,7 +239,7 @@ impl super::super::PalwPanelService {
                     let Ok(shape) = holding.space.job_shape(&capture.binding.job_context) else { continue };
                     let Ok(cells) = misaka_palw_sdk::lineages::tir::tir_shard_cells_over_v1(&holding.space, shape.positions,
                         place.shard, place.s_l, place.s_p, place.segments) else { continue };
-                    let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0);
+                    let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0, None);
                     let Ok(Some(inputs)) = self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
                         duty.receipt_deadline, interval_openings, books, ladder).await else { continue };
                     Some(inputs)

@@ -782,9 +782,10 @@ impl PalwTirShardBooksV1 {
             .collect();
         keep.extend(self.court_row_interests.values().map(|(key, _)| *key));
         let live: HashSet<_> = seats.iter().chain(watch).filter(|d| daa <= d.receipt_deadline)
-            .filter_map(|d| d.tir_shard.map(|p| (d.claim_id, p.s_l, p.shard, p.s_p, p.segments.0))).collect();
+            .filter_map(|d| d.tir_shard.map(|p| (d.claim_id, p.s_l, p.shard, p.s_p, p.segments.0, None))).collect();
         let court_keeps = |key: &cell_runs::CellRunKeyV1| self.court_row_interests.iter()
-            .any(|((claim, _), ((_, s_l, shard), _))| *claim == key.0 && *s_l == key.1 && *shard == key.2);
+            .any(|((claim, leaf), ((_, s_l, shard), _))| *claim == key.0 && *s_l == key.1 && *shard == key.2
+                && key.5.is_none_or(|named| named == *leaf));
         self.cell_run_pursuits.retain(|key, p| daa <= p.until && (live.contains(key) || court_keeps(key)));
         self.cell_run_inputs.retain(|key, (_, _, until)| daa <= *until && (live.contains(key) || court_keeps(key)));
         self.holdings.retain(|k, _| keep.contains(k));
@@ -808,10 +809,10 @@ impl PalwTirShardBooksV1 {
             return Err("the node's partial public court retention budget is full".into());
         }
         for (cell, (_, _, expiry)) in &mut self.cell_run_inputs {
-            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 { *expiry = (*expiry).max(until); }
+            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 && cell.5.is_none_or(|named| named == leaf) { *expiry = (*expiry).max(until); }
         }
         for (cell, pursuit) in &mut self.cell_run_pursuits {
-            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 { pursuit.until = pursuit.until.max(until); }
+            if cell.0 == claim && cell.1 == key.1 && cell.2 == key.2 && cell.5.is_none_or(|named| named == leaf) { pursuit.until = pursuit.until.max(until); }
         }
         self.court_row_interests.entry((claim, leaf)).and_modify(|old| {
             if old.0 == key { old.1 = old.1.max(until); } else { *old = (key, until); }
@@ -1249,7 +1250,7 @@ impl super::PalwPanelService {
             let Ok(cells) = tir_shard_cells_over_v1(&space, shape.positions, place.shard, place.s_l, place.s_p, place.segments) else { return };
             let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
             if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, self.class_prompt_ids_form(duty.class_id), ladder).is_err() { return; }
-            let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0);
+            let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0, None);
             let Ok(Some(inputs)) = self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
                 duty.receipt_deadline, interval_openings, books, ladder).await else { return };
             Some(inputs)
@@ -1452,10 +1453,9 @@ impl super::PalwPanelService {
             .await.ok_or("the public court's proven rows are not held yet")?;
         let (rules, arity) = self.tir_dissection_rules_for_class_v1(duty.class_id, current_daa).ok_or("the public court has no V2 rules")?;
         let inputs = if capture.is_dense() { None } else {
-            let shape = holding.space.job_shape(&capture.binding.job_context).map_err(|e| e.to_string())?;
-            let cells = tir_shard_cells_over_v1(&holding.space, shape.positions, shard, s_l, 1,
-                kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::full(1))?;
-            let key = (duty.claim_id, s_l, shard, 1, 1);
+            let cells = misaka_palw_sdk::lineages::tir::tir_public_court_cells_v1(
+                &holding.space, &capture.binding.job_context, phase.leaf_index(), shard)?;
+            let key = (duty.claim_id, s_l, shard, 1, 1, Some(phase.leaf_index()));
             Some(self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
                 duty.session_deadline_daa, interval_openings, books, rules.max_step_leaf_count).await?
                 .ok_or("the public court's bounded committed runs are not held yet")?)

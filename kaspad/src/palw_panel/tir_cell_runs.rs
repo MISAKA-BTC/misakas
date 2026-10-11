@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub(in crate::palw_panel) type CellRunKeyV1 = (Hash64, u16, u16, u16, u32);
+// Last field: None for a seat/watch mask, Some(named leaf) for a public court's
+// occurrence/prefix closure. Equal shard geometry is not equal requested coverage.
+pub(in crate::palw_panel) type CellRunKeyV1 = (Hash64, u16, u16, u16, u32, Option<u64>);
 const MAX_LEAVES: usize = 65_536;
 const MAX_RUNS: usize = 1024;
 const MAX_CACHE_BYTES: u64 = 256 << 20;

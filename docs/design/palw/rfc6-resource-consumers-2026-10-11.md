@@ -23,6 +23,21 @@ all ten hostile Vec-length locations, a 1.5-million empty-row frame, and strict 
 These fixtures are candidates pending the central node-feature run; requested element
 storage accounting does not certify allocator overhead or subsequent plan/prover RSS.
 
+Public fold history courts now plan the named occurrence through the named leaf's
+position, rather than the whole shard through every job position. A post occurrence
+reading global state additionally requests pre's committed state/history closure under
+NF-15/NF-19. All units are still authenticated producer runs; the planner does not
+substitute a replayed prefix or infer honesty. Public court caches include the named
+leaf, so same-shard courts cannot reuse a different requested coverage or extend each
+other's deadline. Missing/binding-mismatched input sets refuse proof construction.
+The all-corpus fixture additionally compares requested-run and dense/full honest and
+false rounds/bottoms, exercises the penultimate position, and adds a legal global-pre
+history read by post. It measures actual stripped run disclosure bytes and requested
+leaf counts. This candidate is pending central execution. The 65,536-leaf/1,024-run/
+256-MiB budgets remain; very large single-occurrence prefix closures can still refuse,
+and a minimal phase-dependent/dynamic-routing acquisition plan and real peak RSS/cost
+certification remain acceptance work.
+
 A second defect defeated the intended shard memory scope. `TirExecutor::new_cell` initialized all `Fixed` state instances in the class, including every other layer. Restoring a segment repeated that full allocation. The executor now derives exactly the state instances touched by its immutable occurrence range, including read-only state. Other instances retain their indices with empty buffers. Checkpoint import/export respects that scope. An attempted wider cell, a whole-schedule step through a cell executor, or a checkpoint predicate naming another shard is refused before execution. Whole-schedule execution keeps its existing full state.
 
 These changes are node execution/resource behavior. They allocate no consensus tag, delta, rooted field or new fence, and do not change live shard v1 pricing, draws, receipt rules, or public preset parameters.

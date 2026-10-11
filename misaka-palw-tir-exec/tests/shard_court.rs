@@ -11,7 +11,9 @@ use kaspa_consensus_core::palw_mode_v2::{
     DEFAULT_MAX_CLOSE_BYTES, DEFAULT_MAX_OPERAND_COUNT, DEFAULT_MAX_TERMINAL_MACS, PalwCourtParamsV2,
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
-use kaspa_consensus_core::palw_step_leg::{step_merkle_root_v1, step_tile_leaf_hash_v1};
+use kaspa_consensus_core::palw_step_leg::{
+    PalwStepRangeOpeningV1, step_merkle_range_siblings_v1, step_merkle_root_v1, step_tile_leaf_hash_v1,
+};
 use kaspa_consensus_core::palw_step_refute::PalwStepRefuteError;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirCourtRulesV1, check_tir_dissect_bottom_v1, check_tir_root_claim_v1, tir_root_claim_finalizes_to_v1,
@@ -23,8 +25,8 @@ use kaspa_consensus_core::palw_tir_dissect_v1::{
 use kaspa_consensus_core::palw_tir_step_v1::{PalwTirLeafKindV1, palw_tir_execution_root_v1};
 use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_exec::node::{
-    TirArtifactV1, TirBackendV1, TirCaptureV1, TirClassRunnerV1, TirEvidenceV1, TirFileMirrorV1, TirShardHoldingV1,
-    fetch_shard_params_v1, tir_dissect_choice_v1, tir_shard_geometry_over_v1,
+    TirArtifactV1, TirBackendV1, TirCaptureV1, TirClassRunnerV1, TirEvidenceV1, TirFileMirrorV1, TirRunInputsV1, TirShardHoldingV1,
+    cell_runs_capped_v1, fetch_shard_params_v1, tir_dissect_choice_v1, tir_public_court_cells_v1, tir_shard_geometry_over_v1,
 };
 use std::sync::Arc;
 
@@ -57,6 +59,63 @@ fn reroot(capture: &mut TirCaptureV1, class_id: Hash64) {
         capture.binding.step_leaf_count,
         &capture.binding.step_merkle_root,
     );
+}
+
+// The exact conservative planner used by the actual public-court consumer. Answers
+// are authenticated producer runs, not a verifier's separately replayed prefix.
+fn public_court_inputs(holding: &TirShardHoldingV1, capture: &TirCaptureV1, named: u64) -> (TirCaptureV1, TirRunInputsV1, usize) {
+    let cells = tir_public_court_cells_v1(&holding.space, &capture.binding.job_context, named, holding.shard).unwrap();
+    let leaf = holding.space.leaf_at(&capture.binding.job_context, named).unwrap();
+    let PalwTirLeafKindV1::Commit { occurrence, .. } = leaf.kind else { panic!("commit") };
+    let cell = cells.last().unwrap();
+    assert_eq!(cell.occ, occurrence as usize..occurrence as usize + 1);
+    assert_eq!(cell.positions, 0..leaf.position + 1);
+    let hashes: Vec<_> = capture
+        .leaves
+        .iter()
+        .map(|l| step_tile_leaf_hash_v1(&capture.binding.job_context.context_hash(), &holding.class_id, l))
+        .collect();
+    let mut inputs = TirRunInputsV1::default();
+    let mut bytes = 0;
+    for (first, count, _) in
+        cells.iter().flat_map(|cell| cell_runs_capped_v1(&holding.space, &capture.binding.job_context, cell, 65_536).unwrap())
+    {
+        let first = first as usize;
+        let end = first + count as usize;
+        assert!(
+            holding.space.leaf_at(&capture.binding.job_context, (end - 1) as u64).unwrap().position <= leaf.position,
+            "the public court never fetches future positions"
+        );
+        let range = PalwStepRangeOpeningV1 {
+            first_leaf_index: first as u64,
+            leaf_hashes: hashes[first..end].to_vec(),
+            siblings: step_merkle_range_siblings_v1(&hashes, first as u64, u64::from(count)).unwrap(),
+        };
+        inputs
+            .add_run(
+                &capture.binding.job_context,
+                &holding.class_id,
+                capture.binding.step_leaf_count,
+                &capture.binding.step_merkle_root,
+                &range,
+                &capture.leaves[first..end],
+                1 << 26,
+            )
+            .unwrap();
+        // Measure the actual stripped DA disclosure bytes rather than just lane bytes.
+        let mut binding = capture.binding.clone();
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
+        bytes += borsh::object_length(&kaspa_consensus_core::palw_tir_court_v1::PalwTirStepRunDisclosureV1 {
+            binding,
+            preimages: capture.leaves[first..end].to_vec(),
+            range,
+        })
+        .unwrap();
+    }
+    assert!(inputs.leaves() < capture.binding.step_leaf_count as usize, "one occurrence cannot acquire the whole job");
+    let mut fold = capture.clone();
+    fold.leaves.clear();
+    (fold, inputs, bytes)
 }
 
 // Make a protocol-admissible false root: finalize its lying totals and commit the resulting
@@ -140,13 +199,49 @@ fn pushed_children(
     truth
 }
 
+// Global histories are written by pre and may be read by post. The public court's
+// closure must include those authenticated units across a different occurrence.
+fn global_post_history() -> (String, misaka_palw_tir::TirProgramV1, misaka_palw_tir::MapParams) {
+    use misaka_palw_tir::{DType, Ref as R, Tensor, TensorType, builder::ProgramBuilder};
+    let mut pb = ProgramBuilder::new(16, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
+    let emb = pb.param("embed", DType::I8, &[16, 4], false);
+    let hist = pb.hist_state("global.rows", DType::I8, &[4], 5, false);
+    let carry = TensorType::fixed(DType::I8, &[4]);
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let x = b.gather(emb, R::Input(0), 0, 0);
+        b.hist_append(hist, x);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![carry.clone()]);
+        let x = b.cast(R::CarryIn(0), DType::I8);
+        b.finish(&[x])
+    };
+    let (post, logits) = {
+        let mut b = pb.block("post", vec![carry]);
+        let rows = b.cast(R::State(hist), DType::I32);
+        let rows = b.commit(rows);
+        let sum = b.reduce_sum(rows, 0, DType::I32);
+        let sum = b.reshape_fixed(sum, &[4]);
+        let logits = b.commit(sum);
+        let R::Node(node) = logits else { unreachable!() };
+        (b.finish(&[]), node)
+    };
+    let program = node_common::flat(pb.finish(pre, vec![layer, layer], post, logits));
+    let mut params = misaka_palw_tir::MapParams::default();
+    params.tensors.insert((0, None), Tensor::new(DType::I8, vec![16, 4], (0..64).map(|i| i % 11 - 5).collect()).unwrap());
+    ("global-pre-history-post-reduction".into(), program, params)
+}
+
 #[test]
 fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_site() {
     let rules = rules();
     let dir = std::env::temp_dir().join(format!("tir-exec-partial-court-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (mut models, mut sites, mut reductions, mut maximum_close, mut maximum_root, mut maximum_round) = (0, 0, 0, 0, 0, 0);
-    for (k, (name, program, params)) in node_common::programs().into_iter().enumerate() {
+    let (mut maximum_court_leaves, mut maximum_court_da_bytes) = (0, 0);
+    for (k, (name, program, params)) in node_common::programs().into_iter().chain(std::iter::once(global_post_history())).enumerate() {
         let Ok(intervals) = analyze_ranges(&program) else { continue };
         if program.schedule.layers.len() < 2 {
             continue;
@@ -179,13 +274,22 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
         let mut model_sites = 0;
         for index in 0..capture.binding.step_leaf_count {
             let leaf = full.space().leaf_at(&job, index).unwrap();
-            if leaf.position != last {
+            if leaf.position != last && leaf.position != last.saturating_sub(1) {
                 continue;
             }
             let Some(site) = palw_tir_dissect_site_v1(full.space(), &intervals, &leaf) else { continue };
             let PalwTirLeafKindV1::Commit { occurrence, .. } = leaf.kind else { panic!("dissected commit") };
-            let shard = parts.iter().position(|part| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_occurrences_v1(part, program.schedule.layers.len()).contains(&(occurrence as usize))).unwrap() as u16;
+            let shard = parts
+                .iter()
+                .position(|part| {
+                    kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_occurrences_v1(part, program.schedule.layers.len())
+                        .contains(&(occurrence as usize))
+                })
+                .unwrap() as u16;
             let partial = fetch_shard_params_v1(&class, class_id, artifact_root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
+            let (fold, inputs, da_bytes) = public_court_inputs(&partial, &capture, index);
+            maximum_court_leaves = maximum_court_leaves.max(inputs.leaves());
+            maximum_court_da_bytes = maximum_court_da_bytes.max(da_bytes);
             let root = partial.root_claim(&capture, index, &rules).unwrap_or_else(|e| panic!("{name} leaf {index}: {e}"));
             assert_eq!(root, full.root_claim(&honest.material, index, &rules).unwrap(), "{name}: partial root is canonical");
             assert_eq!(check_tir_root_claim_v1(&root, index, &rules).unwrap(), site);
@@ -195,6 +299,11 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             while phase.turn() == PalwBisectTurnV1::AwaitDisclosure {
                 let round = partial.dissect_round(&capture, &phase, &rules).unwrap();
                 assert_eq!(round, full.dissect_round(&honest.material, &phase, &rules).unwrap(), "{name}: same child partials");
+                assert_eq!(
+                    partial.dissect_round_from_runs(&fold, &inputs, &phase, &rules).unwrap(),
+                    round,
+                    "{name}: one occurrence/prefix closes the same honest round"
+                );
                 maximum_round = maximum_round.max(borsh::object_length(&round).unwrap());
                 phase.apply_round(&round, daa, 10).unwrap();
                 assert_eq!(tir_dissect_choice_v1(&phase, &round), None, "honest children yield no allegation");
@@ -209,7 +318,16 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             }
             let bottom = partial.dissect_bottom(&capture, &phase, &rules).unwrap();
             assert_eq!(bottom, full.dissect_bottom(&honest.material, &phase, &rules).unwrap());
+            assert_eq!(
+                partial.dissect_bottom_from_runs(&fold, &inputs, &phase, &rules).unwrap(),
+                bottom,
+                "{name}: same honest bottom over requested committed inputs"
+            );
             assert_eq!(check_tir_dissect_bottom_v1(&phase, &bottom, index, &rules), Err(PalwStepRefuteError::NoFaultFound));
+            assert!(
+                partial.dissect_bottom_from_runs(&fold, &TirRunInputsV1::default(), &phase, &rules).is_err(),
+                "missing committed inputs cannot create a public bottom"
+            );
             let mut close = kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) };
             close.tir_strip_program_v1();
             let close_bytes = borsh::object_length(&close).unwrap();
@@ -222,11 +340,17 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
                 let (forged, lie) = lying_root(&partial, &capture, index, &root, &site, reduction, &rules)
                     .unwrap_or_else(|| panic!("{name} leaf {index} reduction {reduction}: no admissible lie"));
                 let forged_material = forged.encode();
+                let (forged_fold, forged_inputs, _) = public_court_inputs(&partial, &forged, index);
                 let mut phase = PalwTirDissectPhaseV1::open(SESSION, index, &site, &lie, 2, 0, 10).unwrap();
+                assert!(
+                    partial.dissect_round_from_runs(&forged_fold, &inputs, &phase, &rules).is_err(),
+                    "honest inputs under another step root cannot be reused for a re-rooted lie"
+                );
                 let mut daa = 1;
                 while phase.turn() == PalwBisectTurnV1::AwaitDisclosure {
                     let truth = partial.dissect_round(&forged, &phase, &rules).unwrap();
                     assert_eq!(truth, full.dissect_round(&forged_material, &phase, &rules).unwrap());
+                    assert_eq!(partial.dissect_round_from_runs(&forged_fold, &forged_inputs, &phase, &rules).unwrap(), truth);
                     let pushed = pushed_children(truth.clone(), &phase, &site);
                     phase
                         .apply_round(&pushed, daa, 10)
@@ -243,6 +367,7 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
                 }
                 let bottom = partial.dissect_bottom(&forged, &phase, &rules).unwrap();
                 assert_eq!(bottom, full.dissect_bottom(&forged_material, &phase, &rules).unwrap());
+                assert_eq!(partial.dissect_bottom_from_runs(&forged_fold, &forged_inputs, &phase, &rules).unwrap(), bottom);
                 assert!(
                     check_tir_dissect_bottom_v1(&phase, &bottom, index, &rules).is_ok(),
                     "{name}: legal false reduction convicted at bottom"
@@ -279,7 +404,7 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
     }
     std::fs::remove_dir(&dir).unwrap();
     eprintln!(
-        "RFC06_PARTIAL_COURT models={models} sites={sites} forged_reductions={reductions} max_root_bytes={maximum_root} max_round_bytes={maximum_round} max_close_bytes={maximum_close}"
+        "RFC06_PARTIAL_COURT models={models} sites={sites} forged_reductions={reductions} max_root_bytes={maximum_root} max_round_bytes={maximum_round} max_close_bytes={maximum_close} max_court_run_leaves={maximum_court_leaves} max_court_da_bytes={maximum_court_da_bytes}"
     );
     assert!(models >= 3 && sites >= models && reductions >= sites, "history corpus must be exercised");
 }
