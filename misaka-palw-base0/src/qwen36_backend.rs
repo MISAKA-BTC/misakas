@@ -1788,6 +1788,38 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         self.execute_free_prompt_streaming(job, prompt_tokens, &mut |_| {})
     }
 
+    /// Prospective Q36HybridCacheV1: every attention KV byte, every recurrence head and
+    /// the oldest-first convolution window. The class's signed semantic descriptor must name
+    /// this relation before a public court can apply it; historical unspecified states remain
+    /// unspecified. Full replay remains available independently of a false named prefix.
+    fn prefix_state_v1(
+        &self,
+        class_id: Hash64,
+        _tokenizer_id: Hash64,
+        prefix_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        self.artifact_read_probe_v1()?;
+        let profile = self
+            .profile
+            .as_ref()
+            .filter(|p| p.shape_profile_id() == class_id)
+            .ok_or("the prefix class is not this registered graph")?;
+        let prefix_tokens = u32::try_from(prefix_ids.len()).map_err(|_| "prefix length overflows")?;
+        if prefix_ids.is_empty()
+            || prefix_ids.iter().any(|id| *id as usize >= self.artifact.shape.vocab)
+            || prefix_ids.len() > self.artifact.shape.max_position
+        {
+            return Err("the prefix ids are empty or outside the registered vocabulary/context".into());
+        }
+        let engine = Qwen36Engine::new(&self.artifact);
+        let mut cache = Qwen36Cache::new(&self.artifact.shape);
+        for (position, id) in prefix_ids.iter().enumerate() {
+            self.forward(&engine, &mut cache, *id as usize, position)?;
+        }
+        let state_root = qwen36_prefix_cache_root_v1(profile, prefix_tokens, &cache)?;
+        Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 { state_root, prefix_tokens, class_id })
+    }
+
     /// The streaming verb IS the run; the non-streaming one is this with a callback that does
     /// nothing (ADR-0077 Decision 2). One inference, one capture, one commitment.
     fn execute_free_prompt_streaming(
@@ -2943,6 +2975,47 @@ fn qwen36_leaves_by_position(
     leaves
 }
 
+/// Shared actual-cache encoder. Public courts must authenticate each component independently;
+/// this host-only helper has no authority to certify a producer-supplied cache.
+fn qwen36_prefix_cache_root_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    prefix_tokens: u32,
+    cache: &Qwen36Cache,
+) -> Result<Hash64, String> {
+    use kaspa_consensus_core::palw_prefix_family_state_v1::{PalwPrefixCacheUnitV1, PalwQwen36PrefixCacheDigestV1};
+    let mut digest = PalwQwen36PrefixCacheDigestV1::new(profile, prefix_tokens)?;
+    while let Some((unit, length, offset)) = digest.next_unit() {
+        if offset != 0 {
+            return Err("the native cache codec skipped a unit suffix".into());
+        }
+        let row: &[i32] = match unit {
+            PalwPrefixCacheUnitV1::Key { layer, position } => {
+                cache.keys.get(layer as usize).and_then(|rows| rows.get(position as usize)).map(Vec::as_slice)
+            }
+            PalwPrefixCacheUnitV1::Value { layer, position } => {
+                cache.values.get(layer as usize).and_then(|rows| rows.get(position as usize)).map(Vec::as_slice)
+            }
+            PalwPrefixCacheUnitV1::GdnHead { layer, head } => {
+                cache.gdn.get(layer as usize).and_then(|heads| heads.get(head as usize)).map(|head| head.s.as_slice())
+            }
+            PalwPrefixCacheUnitV1::Convolution { layer, age } => {
+                cache.conv.get(layer as usize).and_then(|rows| rows.get(age as usize)).map(Vec::as_slice)
+            }
+        }
+        .ok_or("the actual native cache omits a declared state component")?;
+        if row.len() as u64 * 4 != length {
+            return Err("the actual cache component width differs from its declared graph".into());
+        }
+        let mut at = 0u64;
+        for words in row.chunks(16_384) {
+            let bytes: Vec<_> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            digest.push(unit, at, &bytes)?;
+            at += bytes.len() as u64;
+        }
+    }
+    digest.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2957,6 +3030,144 @@ mod tests {
             Hash64::from_u64_word(0x36),
             b"misaka-palw-test".to_vec(),
         )
+    }
+
+    #[test]
+    fn registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order() {
+        use kaspa_consensus_core::palw_prefix_family_state_v1::{PalwPrefixCacheUnitV1, PalwQwen36PrefixCacheDigestV1};
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let profile =
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4))
+                .unwrap();
+        let backend =
+            Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (4, 2)).unwrap();
+        let ids = [1, 2, 3];
+        let k = ids.len() as u32;
+        let class = profile.shape_profile_id();
+        let named = backend.prefix_state_v1(class, Hash64::from_u64_word(0x71), &ids).unwrap();
+        assert_eq!(named.class_id, class);
+        assert_eq!(named.prefix_tokens, k);
+        let engine = Qwen36Engine::new(&artifact);
+        let mut cache = Qwen36Cache::new(&artifact.shape);
+        for (position, id) in ids.iter().enumerate() {
+            backend.forward(&engine, &mut cache, *id as usize, position).unwrap();
+        }
+        // Independently enumerate the actual runtime's resume state, without the public plan's
+        // unit generator. This catches omitted heads, conv history, phase and component order.
+        let mut direct = blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(kaspa_consensus_core::palw_prefix_family_state_v1::PALW_Q36_PREFIX_CACHE_DOMAIN_V1)
+            .to_state();
+        direct.update(&1u16.to_le_bytes());
+        direct.update(class.as_byte_slice());
+        direct.update(&k.to_le_bytes());
+        let mut ordinal = 0u64;
+        for (layer, kind) in artifact.shape.layer_types.iter().enumerate() {
+            let rows: Vec<&[i32]> = match kind {
+                Qwen36LayerKind::FullAttention => {
+                    cache.keys[layer].iter().chain(cache.values[layer].iter()).map(Vec::as_slice).collect()
+                }
+                Qwen36LayerKind::LinearAttention => {
+                    cache.gdn[layer].iter().map(|h| h.s.as_slice()).chain(cache.conv[layer].iter().map(Vec::as_slice)).collect()
+                }
+            };
+            for row in rows {
+                direct.update(&ordinal.to_le_bytes());
+                direct.update(&(row.len() as u64 * 4).to_le_bytes());
+                for word in row {
+                    direct.update(&word.to_le_bytes());
+                }
+                ordinal += 1;
+            }
+        }
+        let digest = Hash64::from_bytes(direct.finalize().as_bytes().try_into().unwrap());
+        assert_eq!(named.state_root, kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&class, k, &digest));
+        assert_eq!(qwen36_prefix_cache_root_v1(&profile, k, &cache).unwrap(), named.state_root);
+        let mut staged = PalwQwen36PrefixCacheDigestV1::new(&profile, k).unwrap();
+        assert!(staged.finish().is_err());
+        while let Some((unit, length, offset)) = staged.next_unit() {
+            assert_eq!(offset, 0);
+            let row = match unit {
+                PalwPrefixCacheUnitV1::Key { layer, position } => &cache.keys[layer as usize][position as usize],
+                PalwPrefixCacheUnitV1::Value { layer, position } => &cache.values[layer as usize][position as usize],
+                PalwPrefixCacheUnitV1::GdnHead { layer, head } => &cache.gdn[layer as usize][head as usize].s,
+                PalwPrefixCacheUnitV1::Convolution { layer, age } => &cache.conv[layer as usize][age as usize],
+            };
+            assert_eq!(row.len() as u64 * 4, length);
+            for (index, word) in row.iter().enumerate() {
+                let bytes = word.to_le_bytes();
+                let at = index as u64 * 4;
+                let before = borsh::to_vec(&staged).unwrap();
+                assert!(staged.push(unit, at + 4, &bytes).is_err());
+                assert_eq!(borsh::to_vec(&staged).unwrap(), before);
+                staged.push(unit, at, &bytes).unwrap();
+                staged = borsh::from_slice(&borsh::to_vec(&staged).unwrap()).unwrap();
+            }
+        }
+        assert_eq!(staged.finish().unwrap(), named.state_root);
+        // All four families of resume bytes affect the root, including a non-last GDN head.
+        let probes = [(0usize, 0usize), (0, 1)];
+        for (layer, head) in probes {
+            cache.gdn[layer][head].s[0] ^= 1;
+            assert_ne!(qwen36_prefix_cache_root_v1(&profile, k, &cache).unwrap(), named.state_root);
+            cache.gdn[layer][head].s[0] ^= 1;
+        }
+        cache.conv[0][0][0] ^= 1;
+        assert_ne!(qwen36_prefix_cache_root_v1(&profile, k, &cache).unwrap(), named.state_root);
+        cache.conv[0][0][0] ^= 1;
+        cache.keys[3][0][0] ^= 1;
+        assert_ne!(qwen36_prefix_cache_root_v1(&profile, k, &cache).unwrap(), named.state_root);
+        cache.keys[3][0][0] ^= 1;
+        cache.values[3][0][0] ^= 1;
+        assert_ne!(qwen36_prefix_cache_root_v1(&profile, k, &cache).unwrap(), named.state_root);
+        cache.values[3][0][0] ^= 1;
+        // Both initial and inherited receipts use this exact class-specific state relation.
+        // The seat refuses a false named root; the full model replay still runs independently.
+        use kaspa_consensus_core::palw_freeprompt_v3::{DecodeConfigV4, PalwFpJobTailV1, PalwFreePromptJobV3};
+        let prompt = [1u32, 2, 3, 4];
+        for inherited in [false, true] {
+            let mut job = PalwFreePromptJobV3 {
+                version: if inherited { 12 } else { 11 },
+                network_domain: Hash64::from_u64_word(0xd0),
+                class_id: class,
+                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(0xb0),
+                    0,
+                ),
+                executor_pubkey: vec![0x11; 32],
+                operator_id: Hash64::from_u64_word(0xb),
+                anchor_block: Hash64::from_u64_word(0xa0),
+                anchor_daa: 4242,
+                job_nonce: [0x5a; 32],
+                tokenizer_id: Hash64::from_u64_word(0x71),
+                prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    &prompt,
+                )
+                .unwrap(),
+                prompt_tokens: 4,
+                decode_token_limit: 1,
+                max_context_tokens: profile.n_ctx,
+                privacy_mode: 0,
+                prompt_mode: 0,
+                sampling_seed: [0; 32],
+                temperature_q: 0,
+                decode: Some(DecodeConfigV4::NOOP),
+                tail: Some(PalwFpJobTailV1::Prefix(named)),
+            };
+            backend.verify_prefix_state_v1(&job, &prompt).unwrap();
+            let good = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
+            job.tail = Some(PalwFpJobTailV1::Prefix(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+                state_root: Hash64::from_u64_word(0xbad17),
+                ..named
+            }));
+            assert!(backend.verify_prefix_state_v1(&job, &prompt).is_err());
+            let bad = backend.execute_free_prompt(&job, &prompt.map(|id| id as usize)).unwrap();
+            assert_eq!(good.outcome.output_root, bad.outcome.output_root, "a named lie does not manufacture a different model answer");
+        }
+        assert!(backend.prefix_state_v1(Hash64::from_u64_word(0xbad), Hash64::default(), &ids).is_err());
+        assert!(backend.prefix_state_v1(class, Hash64::default(), &[]).is_err());
+        assert!(backend.prefix_state_v1(class, Hash64::default(), &[artifact.shape.vocab as u32]).is_err());
     }
 
     /// **A producer can run the job an anchor implies, and two producers get the same roots.**

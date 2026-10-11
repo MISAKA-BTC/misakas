@@ -1051,6 +1051,27 @@ pub(crate) mod tests {
         }
     }
     #[test]
+    fn required_schema_and_merge_types_match_the_whole_file_rule() {
+        let cases: [&[u8]; 10] = [
+            br#"{}"#,
+            br#"{"model":{}}"#,
+            br#"{"model":{"vocab":{}}}"#,
+            br#"{"model":{"merges":[]}}"#,
+            br#"{"model":{"vocab":{},"merges":["unspaced"]}}"#,
+            br#"{"model":{"vocab":{},"merges":[["a"]]}}"#,
+            br#"{"model":{"vocab":{},"merges":[["a",1]]}}"#,
+            br#"{"model":{"vocab":{},"merges":[["a","b","c"]]}}"#,
+            br#"{"model":{"vocab":{},"merges":[]}}"#,
+            br#"{"model":{"vocab":{},"merges":["a b",["a","b"]]}}"#,
+        ];
+        for raw in cases {
+            for chunk in [1, 7, 65_536] {
+                assert_eq!(derive(raw, 0, chunk), expected(raw, 0), "{}", String::from_utf8_lossy(raw));
+            }
+        }
+    }
+
+    #[test]
     fn exact_json_grammar_and_renderer_agree_across_every_cursor_boundary_and_restart() {
         let samples:[&[u8];9]=[
             br#"{"added_tokens":[{"id":0,"content":"literal"}],"model":{"vocab":{"a":0},"merges":[]}}"#,
