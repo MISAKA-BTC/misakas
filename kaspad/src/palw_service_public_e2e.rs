@@ -96,6 +96,7 @@ fn fixture_config(
     fp_v4: bool,
     fp_input_bootstrap: bool,
     before_job_retention: bool,
+    constraint_v2: bool,
 ) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
@@ -134,11 +135,16 @@ fn fixture_config(
     params.skip_proof_of_work = true;
     params.evm_activation_daa_score = u64::MAX;
     params.palw_model_evm = None;
-    if fp_v4 {
+    if fp_v4 || constraint_v2 {
         // Exercise the admitted V4 family under the normal deployable decode-rules fence.
         // No public-prosecution eligibility/admission callback is substituted.
         params.palw_fp_decode_rules = Some(ForkActivation::new(0));
         params.sync_palw_fp_decode_rules();
+    }
+    if constraint_v2 {
+        params.palw_fp_decode_constraint = Some(ForkActivation::new(0));
+        params.sync_palw_fp_decode_constraint_v1();
+        params.palw_fp_constraint_v2 = Some(ForkActivation::new(0));
     }
     params.validate_palw_v2().expect("fixture keys and the ordinary decode-rules fence validate");
     params.palw_legacy_public_filer_v1 = Some(ForkActivation::new(if before_job_retention { 1060 } else { 0 }));
@@ -561,6 +567,16 @@ async fn fresh_public_bond_service_reconstructs_a_multipart_unretained_job_then_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_replays_an_admitted_large_constraint_job_from_public_multipart_history() {
+    fresh_public_service(PublicCase::UnretainedLargeConstraintJob).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_public_bond_service_defaults_on_a_withheld_large_constraint_job() {
+    fresh_public_service(PublicCase::UnretainedWithheldLargeConstraintJob).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fresh_public_bond_service_defaults_on_a_withheld_job_preimage_after_a_correct_binding() {
     fresh_public_service(PublicCase::UnretainedWithheldFpV3Job).await;
 }
@@ -579,6 +595,8 @@ enum PublicCase {
     UnretainedWithheldFpV3Binding,
     UnretainedHonestFpV3Job,
     UnretainedMultipartHonestFpV3Job,
+    UnretainedLargeConstraintJob,
+    UnretainedWithheldLargeConstraintJob,
     UnretainedWithheldFpV3Job,
 }
 
@@ -596,6 +614,8 @@ impl PublicCase {
                 | Self::UnretainedWithheldFpV3Binding
                 | Self::UnretainedHonestFpV3Job
                 | Self::UnretainedMultipartHonestFpV3Job
+                | Self::UnretainedLargeConstraintJob
+                | Self::UnretainedWithheldLargeConstraintJob
                 | Self::UnretainedWithheldFpV3Job
         )
     }
@@ -608,12 +628,95 @@ impl PublicCase {
     fn da_default(self) -> bool {
         matches!(
             self,
-            Self::Withholding | Self::PrunedWithheldFpV3Input | Self::UnretainedWithheldFpV3Binding | Self::UnretainedWithheldFpV3Job
+            Self::Withholding
+                | Self::PrunedWithheldFpV3Input
+                | Self::UnretainedWithheldFpV3Binding
+                | Self::UnretainedWithheldFpV3Job
+                | Self::UnretainedWithheldLargeConstraintJob
         )
     }
     fn reacquire_honest(self) -> bool {
-        matches!(self, Self::PrunedHonestFpV3Job | Self::UnretainedHonestFpV3Job | Self::UnretainedMultipartHonestFpV3Job)
+        matches!(
+            self,
+            Self::PrunedHonestFpV3Job
+                | Self::UnretainedHonestFpV3Job
+                | Self::UnretainedMultipartHonestFpV3Job
+                | Self::UnretainedLargeConstraintJob
+        )
     }
+    fn large_constraint(self) -> bool {
+        matches!(self, Self::UnretainedLargeConstraintJob | Self::UnretainedWithheldLargeConstraintJob)
+    }
+}
+
+/// A public table and a well-formed second-form DFA large enough that a signed answer cannot
+/// fit a single lifecycle carrier. Its ordinary job transaction must still pass the real mass
+/// and admission checks below. This fixture is not a claim about the maximum of every profile.
+fn public_constraint_table(tokenizer_id: Hash64) -> kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+    let vocab = misaka_palw_base0::rc::palw_rc_base0_shape_v1().vocab;
+    kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+        entries: vec![Some(b"a".to_vec()); vocab],
+        eog_token_ids: vec![(vocab - 1) as u32],
+        tokenizer_id,
+    }
+}
+
+fn large_public_constraint_job(
+    job: &mut kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Arc<kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableV1> {
+    use kaspa_consensus_core::palw_decode_constraint_v1::*;
+    use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1;
+    // The producer holds its own copy. It does not populate the verifier's public registry.
+    let table = Arc::new(public_constraint_table(job.tokenizer_id));
+    let root = table.root();
+    let edges = (0..128).map(|byte| PalwConstraintEdgeV1 { lo: byte, hi: byte, action: PalwConstraintActionV1::Goto(0) }).collect();
+    let constraint = PalwDecodeConstraintV1 {
+        version: 2,
+        compiler_id: Hash64::from_u64_word(0xC014_0200),
+        start_frame: 0,
+        frames: vec![PalwConstraintFrameV1 { start: 0, nodes: vec![PalwConstraintNodeV1 { accepting: true, edges }; 169] }],
+    }
+    .to_bytes();
+    assert!(constraint.len() > 100_000);
+    kaspa_consensus_core::palw_fp_constraint_v2::palw_constraint_admitted_v1(&constraint, true).unwrap();
+    job.version = PALW_FP_CONSTRAINT_VERSION;
+    job.decode = None;
+    job.tail = Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint, table_root: root }));
+    table
+}
+
+/// The CLI's 48 KiB payload cap does not bound ordinary consensus admission. Construct a
+/// genuine PQ-signed transaction for the large fixture and submit it to the ordinary validators.
+fn large_constraint_transaction(
+    commitment: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    funding: &Funding,
+    fee: u64,
+) -> Transaction {
+    use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+    use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+    use kaspa_consensus_core::palw_freeprompt_v3::*;
+    use kaspa_consensus_core::tx::{TransactionInput, TransactionOutput};
+    use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
+    let signature = signed(0, fp_claim_id_v3(&commitment).as_byte_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT);
+    let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
+    let tx = Transaction::new(
+        kaspa_consensus_core::constants::TX_VERSION,
+        vec![TransactionInput::new(funding.0, vec![], u64::MAX, 1)],
+        vec![TransactionOutput::new(funding.1.amount - fee, funding.1.script_public_key.clone())],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+        0,
+        borsh::to_vec(&payload).unwrap(),
+    );
+    let mut populated = MutableTransaction::with_entries(tx, vec![funding.1.clone()]);
+    let sighash = calc_mldsa87_signature_hash(&populated.as_verifiable(), 0, SIG_HASH_ALL, &Mldsa87SigHashReusedValuesUnsync::new());
+    let mut signature = signed(0, sighash.as_byte_slice(), MLDSA87_TX_CONTEXT);
+    signature.push(SIG_HASH_ALL.to_u8());
+    populated.tx.inputs[0].signature_script =
+        ScriptBuilder::new().add_data(&signature).unwrap().add_data(&card_pubkey(0)).unwrap().drain();
+    populated.tx
 }
 
 /// The producer executes a real registered model under FP job B, then claims the roots
@@ -622,6 +725,7 @@ impl PublicCase {
 fn public_fp_job(
     chain: &Chain,
     identity_fault: bool,
+    large_constraint: bool,
 ) -> (
     kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1,
     kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
@@ -664,9 +768,14 @@ fn public_fp_job(
         decode: None,
         tail: None,
     };
-    if chain.config.params.palw_fp_decode_rules_active_at(chain.daa()) {
+    let producer_table = if large_constraint {
+        Some(large_public_constraint_job(&mut job))
+    } else if chain.config.params.palw_fp_decode_rules_active_at(chain.daa()) {
         job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
-    }
+        None
+    } else {
+        None
+    };
     let derive = |job: &mut PalwFreePromptJobV3| {
         let (ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(job)).unwrap();
         job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
@@ -680,7 +789,15 @@ fn public_fp_job(
         prompt
     };
     let prompt = derive(&mut job);
-    let run = backend.execute_free_prompt(&job, &prompt).unwrap();
+    let mask = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+        &job,
+        producer_table.or_else(|| backend.token_table_for_job_v1(&job)),
+    )
+    .unwrap();
+    let run = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+        backend.execute_free_prompt(&job, &prompt)
+    })
+    .unwrap();
     let shape = backend.capture_shape(&run.outcome.material).unwrap();
     let mut commitment = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(
         &job,
@@ -708,8 +825,12 @@ fn public_fp_job(
 
 async fn fresh_public_service(case: PublicCase) {
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
-    let (config, bundle, premine, mut floats) =
-        fixture_config(case == PublicCase::ForeignFpJob, case.pruned_fp() || case == PublicCase::HonestFpV3Job, case.unretained_fp());
+    let (config, bundle, premine, mut floats) = fixture_config(
+        case == PublicCase::ForeignFpJob,
+        case.pruned_fp() || case == PublicCase::HonestFpV3Job,
+        case.unretained_fp(),
+        case.large_constraint(),
+    );
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     if case.is_fp() {
@@ -797,7 +918,7 @@ async fn fresh_public_service(case: PublicCase) {
     eprintln!("[service-public] ordinary bond registered before DAA {registered_before}, maturity {maturity}, now {}", chain.daa());
     let foreign = (case != PublicCase::Withholding).then(|| {
         if case.is_fp() {
-            return public_fp_job(&chain, case.identity_fault());
+            return public_fp_job(&chain, case.identity_fault(), case.large_constraint());
         }
         use misaka_palw_base0::classes::resolve_class_v1;
         let backend = misaka_palw_base0::backend::Base0Backend::new(
@@ -838,6 +959,9 @@ async fn fresh_public_service(case: PublicCase) {
             .expect("the ordinary registry admits and prices this FP job");
         let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
         let build = |fee| {
+            if case.large_constraint() {
+                return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
+            }
             signer
                 .build_fp_commitment_tx(
                     chain.network_domain,
@@ -859,6 +983,20 @@ async fn fresh_public_service(case: PublicCase) {
             params.mass_per_sig_op,
             params.storage_mass_parameter,
         );
+        if case.large_constraint() {
+            let masses = mass.calc_non_contextual_masses(&probe);
+            let job_bytes = borsh::object_length(&commitment.job).unwrap();
+            assert!(
+                job_bytes > 100_000
+                    && job_bytes as u64 <= kaspa_consensus_core::palw_legacy_held_da_v2::PALW_LEGACY_FP_JOB_MAX_BYTES_V2
+            );
+            assert!(masses.transient_mass <= params.max_block_mass);
+            assert!(masses.transient_mass > params.max_block_mass * 99 / 100, "exercise the real ordinary transaction mass boundary");
+            eprintln!(
+                "[service-public] large constraint job bytes {job_bytes}, ordinary transaction transient mass {} / {}",
+                masses.transient_mass, params.max_block_mass
+            );
+        }
         let fee = relay_fee_for_compute_mass(mass.calc_non_contextual_masses(&probe).compute_mass).max(250_000);
         let mut validated = MutableTransaction::from_tx(build(fee));
         chain.tc.validate_mempool_transaction(&mut validated, &Default::default()).unwrap();
@@ -1038,6 +1176,13 @@ async fn fresh_public_service(case: PublicCase) {
     ));
     let retained_flow = flow.clone();
     let dir = tempfile::tempdir().unwrap();
+    if case.large_constraint() {
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+        // Independently rebuild and load the fixture's PUBLIC tokenizer file for the outside
+        // verifier. The producer's table Arc, capture and pending state are never handed over.
+        let public_file = palw_token_table_file_encode_v1(&public_constraint_table(Hash64::default()));
+        palw_token_tables_v1().register(palw_token_table_file_decode_v1(&public_file).unwrap());
+    }
     let service =
         Arc::new(PalwPanelService::new(panel_config(&chain, dir.path(), bond, &floats[OUTSIDER]), manager.clone(), flow, config));
     assert!(service.keypair.is_some());
@@ -1226,8 +1371,12 @@ async fn fresh_public_service(case: PublicCase) {
             );
             eprintln!("[service-public] authenticated binding carried; answered = {}", !case.identity_fault());
         }
-        if matches!(case, PublicCase::UnretainedHonestFpV3Job | PublicCase::UnretainedMultipartHonestFpV3Job)
-            && !job_preimage_submitted
+        if matches!(
+            case,
+            PublicCase::UnretainedHonestFpV3Job
+                | PublicCase::UnretainedMultipartHonestFpV3Job
+                | PublicCase::UnretainedLargeConstraintJob
+        ) && !job_preimage_submitted
             && chain.view(claim).sessions.iter().any(|(who, s)| {
                 *who == bond
                     && s.units.contains(&kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(
@@ -1246,6 +1395,17 @@ async fn fresh_public_service(case: PublicCase) {
                 let mut job = correct_job.clone();
                 if corrupt {
                     job.job_nonce[0] ^= 1;
+                    if case.large_constraint() {
+                        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1;
+                        let Some(PalwFpJobTailV1::Constraint(tail)) = job.tail.as_mut() else { unreachable!() };
+                        let mut constraint =
+                            kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&tail.constraint).unwrap();
+                        constraint.frames[0].nodes.truncate(1);
+                        tail.constraint = constraint.to_bytes();
+                        // A wrong direct preimage does not occupy the session's immutable signed
+                        // manifest. A wrong multipart manifest instead owes its existing default;
+                        // it cannot be replaced merely because the last part was refused.
+                    }
                 }
                 let mut answer = PalwLegacyHeldAnswerCarriageV2 {
                     version: PALW_LEGACY_HELD_VERSION_V2,
@@ -1258,12 +1418,20 @@ async fn fresh_public_service(case: PublicCase) {
                 };
                 let message = palw_legacy_held_answer_message_v2(chain.network_domain.as_byte_slice(), &answer);
                 answer.signature = signed(0, message.as_byte_slice(), PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2);
-                let objects = if !corrupt && case == PublicCase::UnretainedMultipartHonestFpV3Job {
+                let objects = if !corrupt
+                    && matches!(case, PublicCase::UnretainedMultipartHonestFpV3Job | PublicCase::UnretainedLargeConstraintJob)
+                {
                     use kaspa_consensus_core::palw_legacy_answer_chunks_v2::*;
-                    // Exercise actual history reconstruction with two authenticated parts of this
-                    // ordinary small job. This is not a maximum-job/profile benchmark and does
-                    // not exercise the producer's automatic splitting worker.
-                    let part_bytes = borsh::object_length(&answer).unwrap().div_ceil(2) as u32;
+                    // Both fixtures use real authenticated history. The old small job forces two
+                    // parts; the large constraint genuinely exceeds one carrier. Neither fixture
+                    // exercises the producer's automatic splitting worker or every maximum profile.
+                    let answer_bytes = borsh::object_length(&answer).unwrap();
+                    let part_bytes = if case == PublicCase::UnretainedLargeConstraintJob {
+                        assert!(answer_bytes + 1 > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES);
+                        PALW_LEGACY_ANSWER_CHUNK_BYTES_V2
+                    } else {
+                        answer_bytes.div_ceil(2) as u32
+                    };
                     let (declaration, chunks) =
                         palw_legacy_answer_split_v2(&answer, part_bytes, chain.bundle.court.max_close_bytes(), |d| {
                             let message = palw_legacy_answer_declaration_message_v2(chain.network_domain.as_byte_slice(), d);
@@ -1467,7 +1635,7 @@ async fn fresh_public_service(case: PublicCase) {
                     .filter_map(|tx| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).ok())
                     .map(|p| p.object)
                     .collect();
-                if case == PublicCase::UnretainedMultipartHonestFpV3Job {
+                if matches!(case, PublicCase::UnretainedMultipartHonestFpV3Job | PublicCase::UnretainedLargeConstraintJob) {
                     use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
                     assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration }
                         if declaration.claim == claim && declaration.unit == PalwLegacyHeldUnitV2::FpJob)));
@@ -1627,7 +1795,7 @@ async fn fresh_public_service(case: PublicCase) {
                             && matches!(demand.unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }))),
                     "the default follows an actual authenticated-input obligation, not a missing binding");
             }
-            if case == PublicCase::UnretainedWithheldFpV3Job {
+            if matches!(case, PublicCase::UnretainedWithheldFpV3Job | PublicCase::UnretainedWithheldLargeConstraintJob) {
                 assert!(answer_submitted.is_some(), "the producer disclosed the correct binding first");
                 assert!(
                     carriers.iter().any(|object| matches!(object,

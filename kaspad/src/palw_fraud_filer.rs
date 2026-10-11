@@ -1187,7 +1187,16 @@ pub(super) fn palw_fraud_filer_execute_v1(
 ) -> Result<PalwFraudFilerRunV1, String> {
     let prompt: Vec<usize> = prompt32.iter().map(|id| *id as usize).collect();
     let outcome = if let Some(job) = fp_job.as_ref() {
-        let run = backend.execute_free_prompt(job, &prompt)?;
+        // The public replay owns its scope just as the producer and interval verifier do.
+        // A constraint's authenticated job tail and this host's matching token table determine
+        // the mask; a missing/mismatched table is a host refusal, never a fraud verdict.
+        let mask = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(
+            job,
+            backend.token_table_for_job_v1(job),
+        )?;
+        let run = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            backend.execute_free_prompt(job, &prompt)
+        })?;
         ctx = backend
             .fp_job_context_for_executed_v1(job, run.facts.decode_tokens_executed)
             .ok_or("the backend cannot derive its own FP executed context")?;
@@ -2267,6 +2276,70 @@ pub(super) mod tests {
         book.refresh(vec![changed, b], 151);
         assert!(book.cases[&a.claim_id].fp_bootstrap.is_none());
         assert_eq!(book.next_replay_at(151), Some(a.claim_id));
+    }
+
+    #[test]
+    fn public_fp_replay_opens_its_own_constraint_mask_and_refuses_unavailable_tables() {
+        use kaspa_consensus_core::palw_decode_constraint_v1::*;
+        use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1;
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let (mut job, ids) = crate::palw_panel::seat_s_tests::floor_fp_job(&backend);
+        let constraint = PalwDecodeConstraintV1 {
+            version: 1,
+            compiler_id: Hash64::from_u64_word(0xC014),
+            start_frame: 0,
+            frames: vec![PalwConstraintFrameV1 {
+                start: 0,
+                nodes: vec![PalwConstraintNodeV1 {
+                    accepting: true,
+                    edges: vec![PalwConstraintEdgeV1 { lo: b'a', hi: b'a', action: PalwConstraintActionV1::Goto(0) }],
+                }],
+            }],
+        };
+        let vocab = misaka_palw_base0::rc::palw_rc_base0_shape_v1().vocab;
+        let mut table = PalwTokenTableV1 {
+            entries: vec![Some(b"b".to_vec()); vocab],
+            eog_token_ids: vec![(vocab - 1) as u32],
+            tokenizer_id: job.tokenizer_id,
+        };
+        table.entries[0] = Some(b"a".to_vec());
+        let root = palw_token_tables_v1().register(table);
+        job.version = PALW_FP_CONSTRAINT_VERSION;
+        job.decode = None;
+        job.tail = Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: constraint.to_bytes(), table_root: root }));
+        let prompt: Vec<_> = ids.iter().map(|id| *id as usize).collect();
+        assert!(backend.execute_free_prompt(&job, &prompt).is_err(), "a constrained run requires its host scope");
+        let expected = palw_fp_with_constraint_scope_v1(
+            palw_fp_constraint_mask_for_host_v1(&job, backend.token_table_for_job_v1(&job)).unwrap(),
+            || backend.execute_free_prompt(&job, &prompt),
+        )
+        .unwrap();
+        assert!(expected.output_token_ids.iter().all(|id| *id == 0), "the constraint permits only lane zero");
+        let ctx = backend.fp_job_context_for_executed_v1(&job, expected.facts.decode_tokens_executed).unwrap();
+        let replay = |job| {
+            palw_fraud_filer_execute_v1(
+                Box::new(crate::palw_panel::seat_s_tests::floor_backend()),
+                ctx.clone(),
+                ids.clone(),
+                backend.prompt_ids_form(),
+                None,
+                Some(job),
+                None,
+            )
+        };
+        let actual = replay(job.clone()).expect("the outside verifier holds the public table and its own registered model");
+        assert_eq!(actual.execution_root, expected.outcome.execution_root);
+        assert_eq!(actual.trace_root, expected.outcome.trace_root);
+        assert_eq!(actual.output_root, expected.outcome.output_root);
+        assert!(palw_fp_constraint_scope_v1().is_none(), "the replay restores its thread scope");
+        let mut wrong_tokenizer = job.clone();
+        wrong_tokenizer.tokenizer_id = Hash64::from_u64_word(0xBAD_C015);
+        assert!(replay(wrong_tokenizer).is_err(), "a held table from another tokenizer cannot drive a judgement");
+        let Some(PalwFpJobTailV1::Constraint(tail)) = job.tail.as_mut() else { unreachable!() };
+        tail.table_root = Hash64::from_u64_word(0xBAD_C014);
+        assert!(replay(job).is_err(), "an unavailable table is a refusal, never a judgement");
+        assert!(palw_fp_constraint_scope_v1().is_none());
     }
 
     #[test]
