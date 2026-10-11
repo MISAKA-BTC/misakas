@@ -1136,10 +1136,15 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
             .ok_or_else(|| refused("settled fee recipient bond missing"))?;
         let subject = source_income_subject_v1(&source.job, &source.seal);
         match outcome {
-            BeaconSourceFeeOutcomeV1::Paid { daa, .. } => {
+            BeaconSourceFeeOutcomeV1::Paid { daa, claim, .. } => {
                 if daa != ctx.daa_score {
                     return Err(refused("source income payment position differs"));
                 }
+                builder.bind_material_income_root_v1(
+                    ctx.daa_score,
+                    Hash64::from_bytes(claim),
+                    super::palw_bond_budget_fold_v1::source_income_id_v1(Hash64::from_bytes(context), subject, &bond),
+                )?;
                 builder.settle_source_income_v1(
                     ctx,
                     Hash64::from_bytes(context),
