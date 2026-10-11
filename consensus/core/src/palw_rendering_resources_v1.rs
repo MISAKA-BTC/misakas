@@ -272,3 +272,77 @@ impl PalwStagedPublicCourtConfigV1 {
         PalwRenderingClaimTermsV1::derive(accepted_daa, plan, self.acquisition_daa, self.collection_daa, self.reorg_retention_daa)
     }
 }
+
+/// Exact signed raw tokenizer length is a prospective PREIMAGE OBLIGATION, not evidence that
+/// any prefix is genuine. The raw legacy length-prefixed hash must authenticate EOF before
+/// derivation can expose a result. An owner unable to answer that exact preimage defaults DA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwTokenizerResourcePlanV1 {
+    pub exact_raw_bytes: u64,
+    pub maximum_key_proofs: u64,
+    pub maximum_moves: u64,
+    pub maximum_carrier_bytes: u64,
+    pub maximum_parser_steps: u64,
+    pub maximum_blake_blocks: u64,
+    pub inclusion_daa: u64,
+    pub rent_sompi: u64,
+    pub deposit_sompi: u64,
+    pub resident_ram_bytes: u64,
+}
+impl PalwTokenizerResourcePlanV1 {
+    pub fn derive(exact_raw_bytes: u64, p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
+        if p.inclusion_margin_daa == 0 {
+            return Err("tokenizer obligation requires finite positive inclusion margin".into());
+        }
+        let raw = u128::from(exact_raw_bytes);
+        let proofs = raw; // Every completed object key or numeric ID consumes at least one raw byte.
+        let part = 65_536u128;
+        // Every key pause can split a raw part. Include seed/seal/result and finite reorg replay.
+        let moves = raw.div_ceil(part) + 2 * proofs + 3 + u128::from(p.reorg_replay_moves);
+        // All512 hash siblings retain full consensus collision security. Include signature/header
+        // for EACH fragmented raw or key carrier rather than pricing just the raw model file.
+        let carriers = raw + proofs * (512 * 64 + 512) + moves * 5_632;
+        // Fixed JSON depth127 and incremental key/UTF8 grammar. Both membership verdicts and
+        // an insertion walk use at most1536 keyed nodes;6 blocks/node is conservative.
+        let parser_steps = raw * 256 + proofs * 1_536;
+        let blake_blocks = raw.div_ceil(128) * 8 + proofs * 9_216 + 32;
+        let resident = 196_608u128; // <64KiB parser +65KiB rawpart +33KiB proof +hash/key scratch.
+        let rent = carriers * u128::from(p.rent_per_stream_byte)
+            + parser_steps * u128::from(p.rent_per_parser_step)
+            + resident * u128::from(p.rent_per_row_byte);
+        Ok(Self {
+            exact_raw_bytes,
+            maximum_key_proofs: narrow(proofs)?,
+            maximum_moves: narrow(moves)?,
+            maximum_carrier_bytes: narrow(carriers)?,
+            maximum_parser_steps: narrow(parser_steps)?,
+            maximum_blake_blocks: narrow(blake_blocks)?,
+            inclusion_daa: narrow(moves * u128::from(p.inclusion_margin_daa))?,
+            rent_sompi: narrow(rent)?,
+            deposit_sompi: narrow(moves * u128::from(p.deposit_per_move))?,
+            resident_ram_bytes: narrow(resident)?,
+        })
+    }
+}
+#[cfg(test)]
+mod tokenizer_resource_tests {
+    use super::*;
+    #[test]
+    fn raw_flat_hash_is_not_assigned_an_invented_file_cap_and_all_key_carriers_are_priced() {
+        let prices = PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let plan = PalwTokenizerResourcePlanV1::derive(256 * 1024 * 1024, prices).unwrap();
+        assert_eq!(plan.maximum_key_proofs, 256 * 1024 * 1024);
+        assert!(plan.maximum_carrier_bytes > 8_000_000_000_000);
+        assert!(plan.resident_ram_bytes < 256 * 1024);
+        assert!(plan.inclusion_daa > 2_000_000_000);
+        assert!(PalwTokenizerResourcePlanV1::derive(u64::MAX, prices).is_err());
+        assert!(
+            PalwTokenizerResourcePlanV1::derive(10, PalwRenderingResourcePricesV1 { rent_per_parser_step: u64::MAX, ..prices })
+                .is_err()
+        );
+        let smaller = PalwTokenizerResourcePlanV1::derive(1, prices).unwrap();
+        assert!(smaller.maximum_moves < plan.maximum_moves);
+        // This is only a finite prospective obligation; no result authenticates before hash EOF.
+        assert_eq!(PalwTokenizerResourcePlanV1::derive(0, prices).unwrap().maximum_key_proofs, 0);
+    }
+}
