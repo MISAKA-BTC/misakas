@@ -232,18 +232,27 @@ pub fn palw_token_table_file_decode_v1(bytes: &[u8]) -> Result<PalwTokenTableV1,
 /// and a seat that holds none of the claim's abstains (`Unverifiable`).
 #[derive(Default)]
 pub struct PalwTokenTableSetV1 {
-    by_root: std::sync::RwLock<std::collections::BTreeMap<Hash64, Arc<PalwTokenTableV1>>>,
+    by_root: std::sync::RwLock<std::collections::BTreeMap<(Hash64, Hash64), Arc<PalwTokenTableV1>>>,
 }
 
 impl PalwTokenTableSetV1 {
     pub fn register(&self, table: PalwTokenTableV1) -> Hash64 {
         let root = table.root();
-        self.by_root.write().unwrap_or_else(|e| e.into_inner()).insert(root, Arc::new(table));
+        self.by_root.write().unwrap_or_else(|e| e.into_inner()).insert((root, table.tokenizer_id), Arc::new(table));
         root
     }
 
     pub fn for_root(&self, root: &Hash64) -> Option<Arc<PalwTokenTableV1>> {
-        self.by_root.read().unwrap_or_else(|e| e.into_inner()).get(root).cloned()
+        let held = self.by_root.read().unwrap_or_else(|e| e.into_inner());
+        let mut matches = held.range((*root, Hash64::default())..=(*root, Hash64::from_bytes([0xFF; 64])));
+        let first = matches.next()?.1;
+        if matches.next().is_some() { None } else { Some(first.clone()) }
+    }
+
+    /// A table root commits renderings and EOGs, not the tokenizer label. Keep distinct labels
+    /// side by side, so loading another model cannot overwrite the table an existing job needs.
+    pub fn for_root_and_tokenizer(&self, root: &Hash64, tokenizer: &Hash64) -> Option<Arc<PalwTokenTableV1>> {
+        self.by_root.read().unwrap_or_else(|e| e.into_inner()).get(&(*root, *tokenizer)).cloned()
     }
 
     pub fn len(&self) -> usize {
@@ -264,7 +273,7 @@ pub fn palw_token_tables_v1() -> &'static PalwTokenTableSetV1 {
 
 /// **The table a constrained job names, if this process holds it** (`None` for any other job).
 pub fn palw_token_table_for_job_v1(job: &PalwFreePromptJobV3) -> Option<Arc<PalwTokenTableV1>> {
-    palw_token_tables_v1().for_root(&palw_fp_constraint_table_root_v1(job)?)
+    palw_token_tables_v1().for_root_and_tokenizer(&palw_fp_constraint_table_root_v1(job)?, &job.tokenizer_id)
 }
 
 /// Key of a token-table leaf.
@@ -760,6 +769,23 @@ mod tests {
         };
         t.tokenizer_id = h64(0x70);
         Arc::new(t)
+    }
+
+    #[test]
+    fn tables_with_identical_renderings_and_distinct_tokenizer_labels_do_not_overwrite_each_other() {
+        let a = table().as_ref().clone();
+        let mut b = a.clone();
+        b.tokenizer_id = h64(0x71);
+        assert_eq!(a.root(), b.root(), "the rendering tree does not authenticate its tokenizer label");
+        for reverse in [false, true] {
+            let set = PalwTokenTableSetV1::default();
+            for t in if reverse { [b.clone(), a.clone()] } else { [a.clone(), b.clone()] } { set.register(t); }
+            assert_eq!(set.for_root_and_tokenizer(&a.root(), &a.tokenizer_id).as_deref(), Some(&a));
+            assert_eq!(set.for_root_and_tokenizer(&b.root(), &b.tokenizer_id).as_deref(), Some(&b));
+            assert!(set.for_root_and_tokenizer(&a.root(), &h64(0x72)).is_none());
+            assert!(set.for_root(&a.root()).is_none(), "a label-free lookup cannot choose an ambiguous table");
+            assert_eq!(set.len(), 2);
+        }
     }
 
     fn job(constraint: Vec<u8>, limit: u32) -> PalwFreePromptJobV3 {
