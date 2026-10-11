@@ -134,16 +134,25 @@ struct Inner {
     binding: UtxoContextBinding,
     context: Mutex<Context>,
     processor: UtxoProcessor,
+    // Monetary provenance belongs to the context, independently of a mutable
+    // processor connection. A same-network reconnect keeps lawful entries.
+    network_id: Mutex<Option<NetworkId>>,
 }
 
 impl Inner {
     pub fn new(processor: &UtxoProcessor, binding: UtxoContextBinding) -> Self {
-        Self { id: binding.id(), binding, context: Mutex::new(Context::default()), processor: processor.clone() }
+        Self {
+            id: binding.id(), binding, context: Mutex::new(Context::default()), processor: processor.clone(),
+            network_id: Mutex::new(processor.network_id().ok()),
+        }
     }
 
     pub fn new_with_mature_entries(processor: &UtxoProcessor, binding: UtxoContextBinding, mature: Vec<UtxoEntryReference>) -> Self {
         let context = Context::new_with_mature(mature);
-        Self { id: binding.id(), binding, context: Mutex::new(context), processor: processor.clone() }
+        Self {
+            id: binding.id(), binding, context: Mutex::new(context), processor: processor.clone(),
+            network_id: Mutex::new(processor.network_id().ok()),
+        }
     }
 }
 
@@ -199,9 +208,34 @@ impl UtxoContext {
         &self.inner.id
     }
 
+    pub(crate) fn network_matches_processor(&self) -> bool {
+        let owned = *self.inner.network_id.lock().unwrap();
+        owned.is_some() && self.processor().network_id().ok() == owned
+    }
+
+    fn require_context_network(&self, context: &Context) -> Result<()> {
+        let mut owned = self.inner.network_id.lock().unwrap();
+        let current = self.processor().network_id()?;
+        match *owned {
+            Some(network) if network != current => Err(Error::UtxoContextNetworkMismatch),
+            Some(_) => Ok(()),
+            // Accounts can be constructed before selecting a network. Bind only
+            // an empty context's first monetary import, never reinterpret money.
+            None if context.map.is_empty() && context.mature.is_empty() && context.pending.is_empty()
+                && context.stasis.is_empty() && context.outgoing.is_empty() => {
+                *owned = Some(current);
+                Ok(())
+            }
+            None => Err(Error::UtxoContextNetworkMismatch),
+        }
+    }
+
     /// Recheck coinbase authority at each input consumer. Non-coinbase change and
     /// relay entries retain the existing explicit force-maturity behavior.
     pub(crate) fn is_entry_spendable(&self, entry: &UtxoEntryReference) -> bool {
+        if !self.network_matches_processor() {
+            return false;
+        }
         if !entry.is_coinbase() {
             return true;
         }
@@ -216,6 +250,9 @@ impl UtxoContext {
     /// keep the output and its money so a fresh confirmation or long maturity
     /// can promote it again. No mutex is held across an RPC or notification.
     pub(crate) fn refresh_mature_coinbases(&self) -> bool {
+        if !self.network_matches_processor() {
+            return false;
+        }
         let params = self.processor().network_params().ok();
         let daa = self.processor().current_daa_score();
         let mut context = self.context();
@@ -252,16 +289,25 @@ impl UtxoContext {
     }
 
     pub fn mature_utxo_size(&self) -> usize {
+        if !self.network_matches_processor() {
+            return 0;
+        }
         self.refresh_mature_coinbases();
         self.context().mature.len()
     }
 
     pub fn pending_utxo_size(&self) -> usize {
+        if !self.network_matches_processor() {
+            return 0;
+        }
         self.refresh_mature_coinbases();
         self.context().pending.len()
     }
 
     pub fn balance(&self) -> Option<Balance> {
+        if !self.network_matches_processor() {
+            return None;
+        }
         let previous = self.context().balance.clone()?;
         self.refresh_mature_coinbases();
         let mut current = self.calculate_balance_now();
@@ -288,16 +334,22 @@ impl UtxoContext {
         }
 
         self.context().clear();
+        *self.inner.network_id.lock().unwrap() = None;
 
         Ok(())
     }
 
     pub async fn update_balance(&self) -> Result<Balance> {
+        {
+            let context = self.context();
+            self.require_context_network(&context)?;
+        }
         let balance = {
             let previous_balance = self.context().balance.clone();
             let mut balance = self.calculate_balance().await;
             balance.delta(&previous_balance);
             let mut context = self.context();
+            self.require_context_network(&context)?;
             context.balance.replace(balance.clone());
             balance
         };
@@ -314,6 +366,7 @@ impl UtxoContext {
                 self.processor().current_daa_score().ok_or(Error::MissingDaaScore("register_outgoing_transaction()"))?;
 
             let mut context = self.context();
+            self.require_context_network(&context)?;
             let pending_utxo_entries = pending_tx.utxo_entries();
             context.mature.retain(|entry| !pending_utxo_entries.contains_key(&entry.id()));
 
@@ -342,6 +395,9 @@ impl UtxoContext {
     /// Cancel outgoing transaction in case of a submission error. Removes [`OutgoingTransaction`] from the
     /// [`UtxoProcessor`] and returns UtxoEntries from the outgoing transaction back to the mature pool.
     pub(crate) async fn cancel_outgoing_transaction(&self, pending_tx: &PendingTransaction) -> Result<()> {
+        if !self.network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         self.processor().cancel_outgoing_transaction(pending_tx.id());
 
         let mut context = self.context();
@@ -358,6 +414,7 @@ impl UtxoContext {
     /// NOTE: The insert will be ignored if already present in the inner map.
     pub async fn insert(&self, utxo_entry: UtxoEntryReference, current_daa_score: u64, force_maturity: bool) -> Result<()> {
         let mut context = self.context();
+        self.require_context_network(&context)?;
         if let std::collections::hash_map::Entry::Vacant(e) = context.map.entry(utxo_entry.id().clone()) {
             e.insert(utxo_entry.clone());
             if force_maturity {
@@ -391,6 +448,7 @@ impl UtxoContext {
 
     pub async fn update(&self, utxo_entry: UtxoEntryReference, _current_daa_score: u64, _force_maturity: bool) -> Result<bool> {
         let mut context = self.context();
+        self.require_context_network(&context)?;
         if context.map.get(&utxo_entry.id()).is_some() {
             // if old_entry.block_daa_score() > utxo_entry.block_daa_score() {
             //     return Ok(false);
@@ -418,6 +476,7 @@ impl UtxoContext {
 
     pub async fn remove(&self, utxos: Vec<UtxoEntryReference>) -> Result<Vec<UtxoEntryVariant>> {
         let mut context = self.context();
+        self.require_context_network(&context)?;
         let mut removed = vec![];
         let mut remove_mature_ids = vec![];
 
@@ -457,6 +516,9 @@ impl UtxoContext {
 
     /// This function handles `Pending` to `Mature` transformation.
     pub async fn promote(&self, utxos: Vec<UtxoEntryReference>) -> Result<()> {
+        if !self.network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         let transactions = HashMap::group_from(utxos.iter().map(|utxo| (utxo.transaction_id(), utxo.clone())));
 
         for (txid, utxos) in transactions.into_iter() {
@@ -483,6 +545,9 @@ impl UtxoContext {
 
     /// This function handles `Stasis` to `Pending` transformation.
     pub async fn revive(&self, utxos: Vec<UtxoEntryReference>) -> Result<()> {
+        if !self.network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         let transactions = HashMap::group_from(utxos.into_iter().map(|utxo| (utxo.transaction_id(), utxo)));
 
         for (txid, utxos) in transactions.into_iter() {
@@ -523,6 +588,7 @@ impl UtxoContext {
     ) -> Result<()> {
         let classify = || -> Result<_> {
             let mut context = self.context();
+            self.require_context_network(&context)?;
 
             let mut pending = vec![];
             let mut mature = Vec::with_capacity(utxo_entries.len());
@@ -584,6 +650,9 @@ impl UtxoContext {
     }
 
     pub async fn calculate_balance(&self) -> Balance {
+        if !self.network_matches_processor() {
+            return Balance::default();
+        }
         self.refresh_mature_coinbases();
         self.calculate_balance_now()
     }
@@ -660,6 +729,9 @@ impl UtxoContext {
     }
 
     pub(crate) async fn handle_utxo_added(&self, utxos: Vec<UtxoEntryReference>, current_daa_score: u64) -> Result<()> {
+        if !self.network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         // add UTXOs to account set
 
         let params = self.processor().network_params()?;
@@ -714,6 +786,9 @@ impl UtxoContext {
     }
 
     pub(crate) async fn handle_utxo_removed(&self, utxos: Vec<UtxoEntryReference>, current_daa_score: u64) -> Result<()> {
+        if !self.network_matches_processor() {
+            return Err(Error::UtxoContextNetworkMismatch);
+        }
         // remove UTXOs from account set
 
         let outgoing_transactions = self.processor().outgoing();
@@ -787,6 +862,10 @@ impl UtxoContext {
     }
 
     pub async fn register_addresses(&self, addresses: &[Address]) -> Result<()> {
+        {
+            let context = self.context();
+            self.require_context_network(&context)?;
+        }
         if addresses.is_empty() {
             log_error!("utxo processor: register for an empty address set");
         }

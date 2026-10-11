@@ -80,6 +80,9 @@ pub enum Error {
     #[error("UTXO observation belongs to a previous wallet RPC or network connection")]
     StaleUtxoObservation,
 
+    #[error("UTXO context belongs to another wallet network; clear it explicitly or use that network's context")]
+    UtxoContextNetworkMismatch,
+
     #[error("No network selected. Please use `network (mainnet|testnet-10|testnet-11)` to select a network.")]
     MissingNetworkId,
 

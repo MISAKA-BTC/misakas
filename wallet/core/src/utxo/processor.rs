@@ -377,12 +377,17 @@ impl UtxoProcessor {
             // scan and remove any pending entries that gained maturity
             let mut mature_entries = vec![];
             let pending_entries = &self.inner.pending;
-            pending_entries.retain(|_, pending_entry| match pending_entry.maturity(&params, current_daa_score) {
-                Maturity::Confirmed => {
-                    mature_entries.push(pending_entry.clone());
-                    false
+            pending_entries.retain(|_, pending_entry| {
+                if !pending_entry.utxo_context().network_matches_processor() {
+                    return true;
                 }
-                _ => true,
+                match pending_entry.maturity(&params, current_daa_score) {
+                    Maturity::Confirmed => {
+                        mature_entries.push(pending_entry.clone());
+                        false
+                    }
+                    _ => true,
+                }
             });
 
             // scan and remove any stasis entries that can now become pending
@@ -390,6 +395,9 @@ impl UtxoProcessor {
             let mut revived_entries = vec![];
             let stasis_entries = &self.inner.stasis;
             stasis_entries.retain(|_, stasis_entry| {
+                if !stasis_entry.utxo_context().network_matches_processor() {
+                    return true;
+                }
                 match stasis_entry.maturity(&params, current_daa_score) {
                     Maturity::Confirmed => {
                         mature_entries.push(stasis_entry.clone());
@@ -438,6 +446,9 @@ impl UtxoProcessor {
         let longevity = self.network_params()?.user_transaction_maturity_period_daa();
 
         self.inner.outgoing.retain(|_, outgoing| {
+            if !outgoing.originating_context().network_matches_processor() {
+                return true;
+            }
             if outgoing.acceptance_daa_score() != 0 && (outgoing.acceptance_daa_score() + longevity) < current_daa_score {
                 outgoing.originating_context().remove_outgoing_transaction(&outgoing.id());
                 false
@@ -1020,6 +1031,16 @@ mod dns_observation_generation_tests {
         let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
         generator.stash([entry.clone()]);
 
+        let pending: crate::utxo::UtxoEntryReference = UtxoEntry {
+            address: None,
+            outpoint: TransactionOutpoint::new(TransactionId::from_bytes([24; 64]), 0).into(),
+            amount: 3_000_000,
+            script_public_key: ScriptPublicKey::new(0, Default::default()),
+            block_daa_score: 1_500,
+            is_coinbase: false,
+        }.into();
+        context.insert(pending.clone(), 1_550, false).await.unwrap();
+
         processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
         assert!(matches!(
             context.extend_from_scan_for_generation(vec![], 1_550, current).await,
@@ -1027,11 +1048,31 @@ mod dns_observation_generation_tests {
         ), "an empty old response must also refuse");
         assert!(saved_iterator.next().is_none(), "non-coinbase saved selection also pins its network");
         assert!(generator.generate_transaction().unwrap().is_none(), "saved priority and stash cannot fund another network");
-        assert_eq!(context.context().map.len(), 1, "refusal preserves existing lawful entries");
-        assert_eq!(context.balance().unwrap().mature, 2_000_000);
-        context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation()).await.unwrap();
+        assert!(UtxoIterator::new(&context).next().is_none(), "a newly constructed iterator also checks context provenance");
+        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64])
+            .address(kaspa_addresses::Prefix::Testnet);
+        assert!(matches!(crate::tx::GeneratorSettings::try_new_with_context(
+            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
+            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
+        ), Err(Error::UtxoContextNetworkMismatch)), "fresh generation cannot reinterpret the old ledger");
+        assert_eq!(context.context().map.len(), 2, "refusal preserves existing lawful entries");
+        assert!(context.balance().is_none(), "another network cannot publish this ledger's balance");
+        assert!(matches!(context.extend_from_scan_for_generation(
+            vec![], 1_550, processor.utxo_observation_generation(),
+        ).await, Err(Error::UtxoContextNetworkMismatch)));
+        assert!(matches!(context.remove(vec![entry.clone()]).await, Err(Error::UtxoContextNetworkMismatch)));
+        processor.handle_pending(1_000_000).await.unwrap();
+        assert!(processor.pending().contains_key(&pending.id()), "other-network time cannot consume the original pending right");
+        assert_eq!(context.context().pending.len(), 1);
         processor.set_network_id(&network);
         assert!(saved_iterator.next().is_none(), "returning to the same network does not revive an earlier generation");
+        context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation()).await.unwrap();
+        assert!(UtxoIterator::new(&context).next().is_some(), "original-network fresh selection preserves lawful money");
+        assert_eq!(context.balance().unwrap().mature, 2_000_000);
+        processor.bind_rpc(None).await.unwrap();
+        processor.mock_set_connected(true);
+        context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation()).await.unwrap();
+        assert!(UtxoIterator::new(&context).next().is_some(), "same-network RPC rebind has a lawful fresh path");
     }
 
     #[tokio::test]
