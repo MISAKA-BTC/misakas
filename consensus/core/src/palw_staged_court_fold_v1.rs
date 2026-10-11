@@ -168,12 +168,22 @@ pub(super) fn open(
             .registered_semantics
             .as_ref()
             .ok_or_else(|| stage_refused(seed.claim, "tokenizer court has no immutable claim semantics"))?;
-        let (Some(raw), Some(bound)) = (semantics.raw_tokenizer_bytes, semantics.tokenizer_key_events) else {
+        let (Some(_raw), Some(bound)) = (semantics.raw_tokenizer_bytes, semantics.tokenizer_key_events) else {
             return Err(stage_refused(seed.claim, "historical tokenizer has no prospective raw/work obligation"));
         };
-        let plan = crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
-            .and_then(|p| p.court_envelope(seed.binding.shape_profile.vocab_size, config.prices))
-            .map_err(|e| stage_refused(seed.claim, e))?;
+        let Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+            operand_tokenizer_bytes, ..
+        }) = &seed.auxiliary
+        else {
+            unreachable!()
+        };
+        let plan = crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+            *operand_tokenizer_bytes,
+            bound,
+            config.prices,
+        )
+        .and_then(|p| p.court_envelope(seed.binding.shape_profile.vocab_size, config.prices))
+        .map_err(|e| stage_refused(seed.claim, e))?;
         b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
         let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
         let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];

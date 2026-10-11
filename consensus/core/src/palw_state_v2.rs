@@ -9639,9 +9639,9 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
             let config=crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
             match &seed.auxiliary {
                 Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
-                    raw_tokenizer_bytes,tokenizer_key_events,..}) => {
+                    operand_tokenizer_bytes,tokenizer_key_events,..}) => {
                     crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
-                        *raw_tokenizer_bytes,*tokenizer_key_events,config.prices)
+                        *operand_tokenizer_bytes,*tokenizer_key_events,config.prices)
                         .and_then(|p|p.court_envelope(seed.binding.shape_profile.vocab_size,config.prices))
                         .map(|p|p.rent_sompi).unwrap_or(u64::MAX)
                 }

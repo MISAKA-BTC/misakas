@@ -110,6 +110,8 @@ pub struct PalwTokenizerStreamPacketV1 {
 pub struct PalwTokenizerTableStreamV1 {
     context: Hash64,
     signed_key_bound: u64,
+    signed_raw_length: u64,
+    operand_raw_length: u64,
     parser: PalwTokenizerJsonStreamV1,
     table: PalwAuthenticatedRenderingDigestStreamV1,
 }
@@ -124,6 +126,25 @@ impl PalwTokenizerTableStreamV1 {
         present: bool,
         length: u32,
         opening: &PalwStepOpeningV1,
+    ) -> Result<Self, String> {
+        let signed = target
+            .registered_semantics
+            .as_ref()
+            .and_then(|r| r.raw_tokenizer_bytes)
+            .ok_or("tokenizer has no prospective exact raw length")?;
+        Self::new_with_operand_length(context, target, binding, job, id, present, length, opening, signed)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_operand_length(
+        context: Hash64,
+        target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        id: u32,
+        present: bool,
+        length: u32,
+        opening: &PalwStepOpeningV1,
+        operand_raw_length: u64,
     ) -> Result<Self, String> {
         crate::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
         let registered = target
@@ -145,7 +166,9 @@ impl PalwTokenizerTableStreamV1 {
         Ok(Self {
             context,
             signed_key_bound: bound,
-            parser: PalwTokenizerJsonStreamV1::new(context, registered.tokenizer_id, raw_length, id),
+            signed_raw_length: raw_length,
+            operand_raw_length,
+            parser: PalwTokenizerJsonStreamV1::new(context, registered.tokenizer_id, operand_raw_length, id),
             table: PalwAuthenticatedRenderingDigestStreamV1::new(
                 context,
                 root,
@@ -158,15 +181,25 @@ impl PalwTokenizerTableStreamV1 {
         })
     }
     pub(crate) fn same_contract_v1(&self, other: &Self) -> bool {
-        (self.context, self.signed_key_bound, self.table.context, self.table.present, self.table.length, self.table.expected_leaf)
-            == (
-                other.context,
-                other.signed_key_bound,
-                other.table.context,
-                other.table.present,
-                other.table.length,
-                other.table.expected_leaf,
-            )
+        (
+            self.context,
+            self.signed_key_bound,
+            self.signed_raw_length,
+            self.operand_raw_length,
+            self.table.context,
+            self.table.present,
+            self.table.length,
+            self.table.expected_leaf,
+        ) == (
+            other.context,
+            other.signed_key_bound,
+            other.signed_raw_length,
+            other.operand_raw_length,
+            other.table.context,
+            other.table.present,
+            other.table.length,
+            other.table.expected_leaf,
+        )
     }
     pub fn check(&self) -> Result<(), String> {
         self.parser.check()?;
@@ -251,7 +284,11 @@ impl PalwTokenizerTableStreamV1 {
     /// True is an authenticated rule/table/declared-work violation, not incomplete material.
     pub fn finish(&self) -> Result<bool, String> {
         let actual = self.table.finish()?;
-        Ok(match self.parser.finish()? {
+        let verdict = self.parser.finish()?;
+        if self.operand_raw_length != self.signed_raw_length {
+            return Ok(true);
+        }
+        Ok(match verdict {
             PalwTokenizerJsonVerdictV1::Invalid | PalwTokenizerJsonVerdictV1::WorkBoundExceeded => true,
             PalwTokenizerJsonVerdictV1::Rendering(expected) => expected != actual,
         })
@@ -286,6 +323,8 @@ mod tests {
         let mut court = PalwTokenizerTableStreamV1 {
             context,
             signed_key_bound: bound,
+            signed_raw_length: raw.len() as u64,
+            operand_raw_length: raw.len() as u64,
             parser: PalwTokenizerJsonStreamV1::new(
                 context,
                 crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),

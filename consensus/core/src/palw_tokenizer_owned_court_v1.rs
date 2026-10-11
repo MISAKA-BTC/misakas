@@ -71,6 +71,7 @@ impl PalwOwnedTokenizerCourtV1 {
             opening,
             raw_tokenizer_bytes,
             tokenizer_key_events,
+            operand_tokenizer_bytes,
         }) = &seed.auxiliary
         else {
             return Err("owned tokenizer admission requires typed tokenizer seed".into());
@@ -82,7 +83,7 @@ impl PalwOwnedTokenizerCourtV1 {
         if (*raw_tokenizer_bytes, *tokenizer_key_events) != (raw, bound) {
             return Err("tokenizer seed changes immutable raw length/work declaration".into());
         }
-        let tokenizer_plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, prices)?;
+        let tokenizer_plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(*operand_tokenizer_bytes, bound, prices)?;
         let plan = tokenizer_plan.court_envelope(seed.binding.shape_profile.vocab_size, prices)?;
         if plan.maximum_moves > claim_terms.plan.maximum_moves
             || plan.inclusion_daa > claim_terms.plan.inclusion_daa
@@ -98,7 +99,17 @@ impl PalwOwnedTokenizerCourtV1 {
             return Err("tokenizer owner has not funded complete admitted work".into());
         }
         let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "staged seed digest has wrong width")?);
-        let court = PalwTokenizerTableStreamV1::new(seed_id, target, &seed.binding, actual_job, *id, *present, *length, opening)?;
+        let court = PalwTokenizerTableStreamV1::new_with_operand_length(
+            seed_id,
+            target,
+            &seed.binding,
+            actual_job,
+            *id,
+            *present,
+            *length,
+            opening,
+            *operand_tokenizer_bytes,
+        )?;
         // Includes all token raw/proof fragments, all original table chunks and signed carriers,
         // plus the maximum admitted seed. No table length assertion reduces the old global cap.
         let table = crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64;
@@ -224,9 +235,21 @@ pub(crate) mod tests {
     use crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1;
     use crate::tx::{TransactionId, TransactionOutpoint};
     pub(crate) fn admitted_case(fault: bool, bound: u64) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
+        admitted_case_with_lengths(fault, bound, 0, 0)
+    }
+    fn admitted_case_with_lengths(
+        fault: bool,
+        bound: u64,
+        signed_delta: i64,
+        operand_delta: i64,
+    ) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
         let raw = br#"{"model":{"vocab":{"a":0,"b":1},"merges":[]}}"#;
-        let (target, binding, job, raw, opening) =
+        let (mut target, binding, job, raw, opening) =
             crate::palw_offence_attribution_v1::tests::qualified_rendering_case_for_tests_v1(raw, fault, bound);
+        let signed_length = raw.len() as u64;
+        let signed_length = signed_length.checked_add_signed(signed_delta).unwrap();
+        let operand_length = (raw.len() as u64).checked_add_signed(operand_delta).unwrap();
+        target.registered_semantics.as_mut().unwrap().raw_tokenizer_bytes = Some(signed_length);
         // The selection pin is irrelevant to a typed tokenizer court; use the actual existing
         // public fixture's pin rather than manufacturing another semantic binding.
         let (_, selection) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
@@ -247,13 +270,14 @@ pub(crate) mod tests {
                 present: true,
                 length: bytes.len() as u32,
                 opening: opening.opening,
-                raw_tokenizer_bytes: raw.len() as u64,
+                raw_tokenizer_bytes: signed_length,
+                operand_tokenizer_bytes: operand_length,
                 tokenizer_key_events: bound,
             }),
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let config = PalwStagedPublicCourtConfigV1::network_v1();
-        let plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(raw.len() as u64, bound, config.prices)
+        let plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(operand_length, bound, config.prices)
             .unwrap()
             .court_envelope(seed.binding.shape_profile.vocab_size, config.prices)
             .unwrap();
@@ -338,6 +362,19 @@ pub(crate) mod tests {
         row.movement(100, &m).unwrap();
         moves.push(m);
         moves
+    }
+    #[test]
+    fn actual_operand_eof_convicts_false_signed_length_without_trusting_the_operand_length() {
+        for (signed_delta, bound) in [(-1, 64), (1, 64), (-1, 0)] {
+            let (mut row, raw, table) = admitted_case_with_lengths(false, bound, signed_delta, 0);
+            complete(&mut row, &raw, &table);
+            assert!(row.certificate().unwrap().is_some());
+        }
+        // A caller-chosen short operand cannot create a false offence: even a different
+        // signed declaration still requires the ORIGINAL length-prefixed raw hash at EOF.
+        let (mut row, raw, table) = admitted_case_with_lengths(false, 64, 0, -1);
+        complete(&mut row, &raw[..raw.len() - 1], &table);
+        assert!(row.certificate().is_err());
     }
     #[test]
     fn owned_public_tokenizer_contract_refuses_false_identity_and_completes_only_after_both_original_hashes() {
