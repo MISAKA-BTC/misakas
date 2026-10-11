@@ -22,7 +22,7 @@ pub struct PalwRenderingResourcePlanV1 {
     pub row_bytes: u64,
     pub resident_ram_bytes: u64,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwRenderingResourcePricesV1 {
     /// The maximum permitted time to include one eligible move, stated by the NEW contract.
     /// This is a feasibility assumption on inclusion, not a power to compel miners.
@@ -221,5 +221,37 @@ mod claim_terms_tests {
         assert!(t.check_holds(t.material_until_daa, t.bond_exit_after_daa, &[t.bond_exit_after_daa; 5]).is_ok());
         assert!(t.check_holds(t.material_until_daa, t.bond_exit_after_daa, &[t.bond_exit_after_daa - 1]).is_err());
         assert!(PalwRenderingClaimTermsV1::derive(u64::MAX, plan, 1000, 100, 80).is_err());
+    }
+}
+
+/// Normative prospective prices/windows. A dormant chain supplies None in fold extras.
+/// These terms stamp future claims; they never reinterpret an earlier claim's obligations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStagedPublicCourtConfigV1 {
+    pub prices: PalwRenderingResourcePricesV1,
+    pub acquisition_daa: u64,
+    pub collection_daa: u64,
+    pub reorg_retention_daa: u64,
+    pub maximum_owned_rows_per_claim: u32,
+}
+impl PalwStagedPublicCourtConfigV1 {
+    pub fn check(&self) -> Result<(), String> {
+        if self.prices.inclusion_margin_daa == 0
+            || self.prices.rent_per_stream_byte == 0
+            || self.prices.rent_per_parser_step == 0
+            || self.prices.rent_per_row_byte == 0
+            || self.prices.deposit_per_move == 0
+            || self.acquisition_daa == 0
+            || self.collection_daa == 0
+            || self.maximum_owned_rows_per_claim == 0
+        {
+            return Err("prospective court needs positive priced work, finite windows and owner capacity".into());
+        }
+        Ok(())
+    }
+    pub fn claim_terms(&self, accepted_daa: u64, prefix_tokens: u32, vocab: u32) -> Result<PalwRenderingClaimTermsV1, String> {
+        self.check()?;
+        let plan = PalwRenderingResourcePlanV1::derive(prefix_tokens, vocab, self.prices)?;
+        PalwRenderingClaimTermsV1::derive(accepted_daa, plan, self.acquisition_daa, self.collection_daa, self.reorg_retention_daa)
     }
 }
