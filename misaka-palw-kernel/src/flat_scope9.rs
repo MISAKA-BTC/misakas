@@ -97,6 +97,34 @@ fn grammar_boundary_positions(pr: &PreparedV1<'_>, maximum: u32, s: u16, n: u16)
     }
     positions.into_iter().collect()
 }
+/// Geometry-only quotation for the complete scope metadata pass. A native
+/// consumer pays its preliminary bounded wiring walk before calling this, and
+/// pays the returned relation visits before any terminal scope construction.
+/// It reads no tensor values and uses exactly the scope's boundary probes.
+pub fn flat_scope_metadata_work_v9(
+    program: &TirProgramV1,
+    max_positions: u32,
+    encoder: Option<&EncoderBindingV1>,
+) -> Result<u64, DismissalV1> {
+    if max_positions == 0 || max_positions > program.history_bound
+        || max_positions > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD {
+        return Err(bad("invalid flat-v9 metadata extent"));
+    }
+    let bytes = common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
+        .map_err(|_| bad("oversized v9 metadata program"))?;
+    let pr = PreparedV1::without_scope(program, encoder).map_err(DismissalV1::NotAuthentic)?;
+    if pr.node_count as u128 * 23 > MAX_SCOPE_RELATION_VISITS_V9 {
+        return Err(bad("v9 metadata relation-visit limit"));
+    }
+    let mut work = bytes as u128 * 1024 + pr.node_count as u128 * 1024;
+    for (s, (b, _)) in pr.w.occurrences.iter().enumerate() {
+        for n in 0..program.blocks[*b as usize].nodes.len() {
+            work += grammar_boundary_positions(&pr, max_positions, s as u16, n as u16).len() as u128 * 4096;
+        }
+    }
+    u64::try_from(work).map_err(|_| bad("v9 metadata work overflow"))
+}
+
 /// Before allocation or per-occurrence source scans, cap the number of metadata
 /// relation visits. Validated types have at most one H axis; source initialization
 /// changes at p=1. Probe both sides of each 64-element grammar boundary and max H.

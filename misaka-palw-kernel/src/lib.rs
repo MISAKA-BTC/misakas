@@ -109,11 +109,13 @@ pub mod flat_history8;
 pub mod flat_point9;
 pub mod flat_scope9;
 pub mod flat_resources10;
+pub mod flat_quota11;
 pub mod flat_court9;
 pub mod flat_detect9;
 pub mod flat_replay9;
 pub mod flat_lengths7;
 pub mod flat_inputs12;
+pub mod flat_execution11;
 pub mod flat_replay6;
 pub mod flat_replay7;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
@@ -164,3 +166,5 @@ pub use plan::{VerificationPlanV1, plan_for_tir_program_v1};
 pub use verify::{
     ClaimVerdictV1, KernelFaultProofV1, ScopeV1, ScopeVerdictV1, verify_claim_v1, verify_fault_proof_v1, verify_scope_v1,
 };
+
+pub mod flat_seal9;

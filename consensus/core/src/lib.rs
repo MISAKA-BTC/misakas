@@ -812,3 +812,6 @@ mod tests {
         assert_eq!(hasher.finish(), 8);
     }
 }
+
+pub mod palw_flat_model_vector_v9;
+pub mod palw_flat_model_vector_da_v9;

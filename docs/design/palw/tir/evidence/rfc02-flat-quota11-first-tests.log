@@ -1,0 +1,43 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+error[E0433]: failed to resolve: unresolved import
+   --> misaka-palw-kernel/src/flat_quota11.rs:426:29
+    |
+426 |     let structural = crate::flat_candidate7::flat_candidate_registration_work_v7(bytes as usize, pc.by_instance.len())
+    |                             ^^^^^^^^^^^^^^^ unresolved import
+    |
+help: a similar path exists
+    |
+426 |     let structural = crate::ledger::flat_candidate7::flat_candidate_registration_work_v7(bytes as usize, pc.by_instance.len())
+    |                             ++++++++
+help: consider importing this module
+    |
+ 10 + use crate::ledger::flat_candidate7;
+    |
+help: if you import `flat_candidate7`, refer to it directly
+    |
+426 -     let structural = crate::flat_candidate7::flat_candidate_registration_work_v7(bytes as usize, pc.by_instance.len())
+426 +     let structural = flat_candidate7::flat_candidate_registration_work_v7(bytes as usize, pc.by_instance.len())
+    |
+
+error[E0433]: failed to resolve: unresolved import
+   --> misaka-palw-kernel/src/flat_quota11.rs:428:27
+    |
+428 |     let metadata = crate::flat_candidate7::flat_candidate_metadata_work_v7(program).ok_or("quota ordinary metadata work overflow")?;
+    |                           ^^^^^^^^^^^^^^^ unresolved import
+    |
+help: a similar path exists
+    |
+428 |     let metadata = crate::ledger::flat_candidate7::flat_candidate_metadata_work_v7(program).ok_or("quota ordinary metadata work overflow")?;
+    |                           ++++++++
+help: consider importing this module
+    |
+ 10 + use crate::ledger::flat_candidate7;
+    |
+help: if you import `flat_candidate7`, refer to it directly
+    |
+428 -     let metadata = crate::flat_candidate7::flat_candidate_metadata_work_v7(program).ok_or("quota ordinary metadata work overflow")?;
+428 +     let metadata = flat_candidate7::flat_candidate_metadata_work_v7(program).ok_or("quota ordinary metadata work overflow")?;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `misaka-palw-kernel` (lib test) due to 2 previous errors

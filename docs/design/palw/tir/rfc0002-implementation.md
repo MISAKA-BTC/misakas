@@ -2610,3 +2610,155 @@ or provider-internal work. Native job binding/codec/transport/retention and the
 shared resource10/quota11 envelope remain required before media execution or
 Final. Source-PC namespace continuity grants no original BF16 fidelity, actual
 media task, network reward or A6/A8 credit. The full RFC02 goal remains active.
+
+## Verified actual components — generic public localization and context128
+
+The ordinary locator validates complete scope and requested coordinates before
+callbacks, then authenticates public headers/hashes and descends to an unknown
+leaf. Six-dtype header authentication retains authentic malformed metadata for
+the appropriate court. Two new graph tests pass, six graph tests total. The
+protected component pool increases from307 to309; pending candidate9/SDK/quota11/
+execution11/native tests are recorded separately and are not credited here.
+
+The actual Qwen fixture independently matches all7,658 honest node roots. It
+finds occurrence1/node27/element1500 after35 agreeing roots using nine public
+queries and5,853 returned bytes. Its17,816-byte point proof convicts through the
+same complete scope9/court9; missing evidence requests acquisition or dismisses.
+The authentic/false R-PC pair covers one actual tile, not model-wide original
+arithmetic equality. Exact source and immutable binary identities, fixture/proof
+hashes and retained pricing snapshots appear in
+[the generic observation](evidence/qwen25-real-generic9-observation.json).
+Native service/prosecution and honest execution Final remain independent gates.
+
+Fresh lowering produces a distinct context128 program with both history windows
+changed, the same1,636 parameter instances and independently reconstructed four
+positional fills. All borrowed raw parameters authenticate to their unchanged
+registered roots; the32-position calibration is reused explicitly. The fixed
+two-sequence/256-position comparison to independently loaded original weights
+passes the unchanged predeclared gates: top1=.984375, meanKL=.0023050215582,
+slope=.9977334375, correlation=.9995311810. Integer auditing/execution observes
+574.41s/RSS2,438,201,344B and source inference8.61s/RSS6,544,982,016B. These are
+different diagnostic workloads, not a production speed or peak-memory contract.
+
+[The context128 observation](evidence/qwen25-borrowed-context128-observation.json)
+retains the frozen protocol, newly canonical program, exact tokens, immutable
+executable and tool hashes, source outputs and initial scale/disk refusals.
+Full concurrently changing dependency compiler preimages are not claimed by
+these example receipts. This passes a context128 teacher-forced diagnostic,
+without original context32768, complete free-running tasks, media, native
+Final/redemption or A6/A8 credit. The prior greedy-task FAIL remains retained;
+the full goal stays active.
+
+## Verified components — funded execution and persisted quota, v11
+
+The checked class binds matured authenticated source identities, candidate9
+maximum scope/replay/resource10 and fixed policy/horizons/reward/reserve. Each
+text job fixes its actual scope/resource/quota roots, complete fed positions,
+requester/producer/nonce and original escrow debit. Semantic job identity ignores
+funding/admission aliases; the native permanent requester/nonce guard is a
+separate required anchor. Private job state allows one claim and one settlement.
+Final pays original escrow after retention/proof/DA/answer closure. Faults refund
+the same escrow and pay finder/burn only from actually collected original slash.
+Exact identities, checked totals, duplicate payout and anchored rewind guards
+run before mutation. Trusted late close/refund preserves access to original
+funding after DAA jumps without reopening source/computation proof windows;
+late trace-DA default uses its immutable established deadline.
+
+Twelve execution tests pass at the frozen quota20 snapshot (392s including
+cargo-lock wait, with the test runner reporting0.00s). Two new tests restore original classes after revocation while fixing
+private admission permission to false, preserve original escrow recovery and
+refuse all changed original roots/policy. No revocation flag creates a fault;
+fresh funded policy requires all future guarantee kinds. The initial ENOSPC
+archive build ran no tests and is retained alongside
+the passing immutable executable in
+[the execution verdict](evidence/rfc02-execution11-verdict.json). Its owned
+source/binary identities are fixed; full concurrent compiler dependency preimages
+are not claimed. This receipt verifies pure trusted-boundary arithmetic/state,
+not actual original-coin authentication or native Final.
+
+Quota20 passes all21 axes/four cap scopes, rooted actual/class/program/PC/input
+bindings, exact producer reserved actions, public challenger ordinary debits,
+paid failed work, flood-resistant mature guarantees, bounded snapshot grammar,
+trusted equal-DAA/rollback behavior and expired current-ordinary terminal close.
+The late private token binds exact state/epoch and a genuine conserved book;
+failed bodies retain debit and old guarantees are never restored.
+[Its verdict](evidence/rfc02-persisted-quota11-isolated-verdict.json) preserves
+earlier10/11/12/14/17/19 binaries and failures but counts only20 current distinct
+tests. Twelve execution plus20 quota tests increase the protected component pool
+from309 to341; pending SDK/candidate/native tests are not counted here.
+
+Native-rooted quota restoration refuses conserving-but-forged counter snapshots.
+A prepaid close leaves a subject open until an authenticated terminal book and
+atomic coin application authorize its private token. Native metadata restore and
+class-maximum court/chunk assembly costs are reserved separately from actual job
+resources. The priced stored-post cap still needs its native pre-copy guard.
+
+Atomic native original coins, policy/nonce/quota persistence, UTXO redemption,
+mature challenger entitlements and retained-source lifecycle remain required.
+Bounded quota-row collection now requires paid per-row work and independent
+permanent native spent-request/job anchors; same-interval consumption and live
+guarantees remain intact. Native must preserve these anchors atomically so a
+collected row cannot recreate baseline credit. Existing funded jobs retain
+restore-only class access after source revocation. The initial
+job grammar rejects patch/audio; shared media resource/transport/retention and
+actual media Final remain open. No actual complete task or A6/A8 credit is added;
+the full goal remains active.
+
+## Verified actual diagnostic — complete free-running tasks, context128
+
+A new fixed protocol predates outputs and admits three complete arithmetic,
+translation and Python-function jobs, with maximum32 generated tokens and first
+EOS included. Cap without EOS is incomplete; semantic rules and95% token/
+2-of-3 exact-job/100% source-and-integer quality gates are frozen. Missing IDs
+count unequal. The old context32/eight-output FAIL remains unchanged.
+
+Original source and integer both complete/answer3-of-3 correctly. All17 output
+IDs match exactly, with EOS-included counts3/2/12 and exact-job agreement3/3.
+The independent tokenizer/semantic scorer passes. Six meaningful Python
+validation/scoring controls pass separately from the kernel component pool.
+Source12.28s/RSS6,480,707,584B and integer261.35s/RSS2,009,333,760B include different
+workloads; integer includes all1,636 PC-instance authentication, fresh lowering
+and dev-profile execution. Neither result certifies backend performance.
+
+[The complete-task observation](evidence/qwen25-borrowed-context128-complete-task-observation.json)
+preserves the predeclared protocol, original and integer outputs, independent
+scores, immutable binary and before/after owned source identities, retained
+source replay and controls. Full concurrent Rust dependency compiler preimages
+are not claimed. These three short24/20/36-token prompts use the fresh128 graph
+and reused32 calibration; original context32768 and other real model families,
+sparse/media/routing/state feature acceptance remain open.
+
+EOS-stop here is a distinct offline diagnostic, without changing native9 or
+the first exact fixed-count job11 grammar. It adds no accepted active-kernel
+cohort record, native honest Final/redemption or A6/A8 credit. Full population
+denominators and the user's90% targets remain unchanged; the goal is active.
+
+## Native mixed-court conformance and bounded candidate restoration, v9
+
+The explicit v9 path binds candidate/post/typed selected DA/own seal/reveal/chunk
+and settlement to one full scope and court. Ordinary native ledger projection
+prepays at most128 fixed candidate headers, preserving large raw rows outside
+the journal diff. Candidate-local court/DA rechecks its authenticated full scope
+without copying/deriving all candidates. Public bulk import keeps independent
+validation with bounded row/raw-byte/aggregate-work preflight.
+
+Both v7 and v9 owner withdrawal now retain candidate metadata while protected
+claims or pending own proofs/DA need it. Expired metadata retires only without
+live dependencies; catalog bounds and normal admission caps remain unchanged.
+The SDK independently derives v9 scope/replay/resource10 from public metadata.
+
+An actual-model Qwen fixture proves selected DA, own seal/reveal, original
+collateral finder payout and IBD replay on native nodes. That fixture passes a
+prepared actual-model proof to its finder; the separate fresh outsider consumer
+must execute once and derive its unknown-coordinate proof from public data.
+Neither this conformance route nor its slash payout is honest funded-job Final,
+active-model population coverage or A6/A8 completion.
+
+The coherent native milestone passes51 selected core regressions,35 real-node
+conformance regressions,134 SDK tests and five candidate-import/adversarial
+tests. The new distinct tests are five candidate, four SDK, three typed-DA and
+eight node tests; these20 increase the protected component pool from341 to361.
+Existing regression tests and previous quota snapshots are not counted again.
+Exact source preimages, immutable binaries, trial failures and test-only
+inventory corrections are retained in
+[the native milestone verdict](evidence/rfc02-native9-typed-da-node-verdict.json).

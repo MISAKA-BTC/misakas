@@ -100,6 +100,8 @@ use crate::pipeline_public::{
 use crate::plan::VerificationPlanV1;
 #[path = "flat_candidate7.rs"]
 pub mod flat_candidate7;
+#[path = "flat_candidate9.rs"]
+pub mod flat_candidate9;
 use crate::public::{
     FreshVerifierV1, ProfileMaterialV1, PublicClaimRecordV1, ServedPositionV1, TensorWireV1, classify_position_response_v1,
     program_root_v1,
@@ -516,6 +518,7 @@ pub enum LedgerEventV1 {
     FlatConformanceClassRegisteredV7 {
         class: Digest,
     } = 33,
+    FlatConformanceClassRegisteredV9 { class: Digest } = 34,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -781,6 +784,9 @@ pub const MAX_CONFORMANCE_CLASSES_PER_BOND_V1: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct KernelLedgerV1 {
+    pub flat_conformance_classes_v9: BTreeMap<Digest, (Digest, flat_candidate9::FlatCandidateRecordV9)>,
+    /// Derived native projection index; never serialized/hashed or a checker of remote data.
+    pub(crate) native_flat_candidate_ids_v9: BTreeSet<Digest>,
     pub flat_conformance_classes_v7: BTreeMap<Digest, (Digest, flat_candidate7::FlatCandidateRecordV7)>,
     pub policy: LedgerPolicyV1,
     pub schedule: KernelScheduleV1,
@@ -902,6 +908,8 @@ impl KernelLedgerV1 {
             classes: BTreeMap::new(),
             conformance_classes: BTreeMap::new(),
             flat_conformance_classes_v7: BTreeMap::new(),
+            flat_conformance_classes_v9: BTreeMap::new(),
+            native_flat_candidate_ids_v9: BTreeSet::new(),
             conformance_class_owners: BTreeMap::new(),
             pipeline_classes: BTreeMap::new(),
             jobs: BTreeMap::new(),
@@ -1027,7 +1035,14 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::PostFlatModelVectorV7 {..}
+            KernelRouteObjectV1::PostFlatModelVectorV9 {..}
+            | KernelRouteObjectV1::SealFlatModelProofV9 {..}
+            | KernelRouteObjectV1::RevealFlatModelProofV9 {..}
+            | KernelRouteObjectV1::ExpireFlatModelSealV9 {..}
+            | KernelRouteObjectV1::DemandFlatModelUnitV9 {..}
+            | KernelRouteObjectV1::AnswerFlatModelUnitV9 {..}
+            | KernelRouteObjectV1::SettleFlatModelDemandV9 {..}
+            | KernelRouteObjectV1::PostFlatModelVectorV7 {..}
             | KernelRouteObjectV1::SealFlatModelProofV7 {..}
             | KernelRouteObjectV1::RevealFlatModelProofV7 {..}
             | KernelRouteObjectV1::ExpireFlatModelSealV7 {..}
@@ -1074,6 +1089,29 @@ impl KernelLedgerV1 {
                     auth.signer_bond,
                 )?;
                 out.push(LedgerEventV1::FlatConformanceClassRegisteredV7 { class });
+            }
+            KernelRouteObjectV1::RegisterFlatModelCandidateV9 {
+                binding,
+                descriptor,
+                program_bytes,
+                param_commitments,
+                max_positions,
+                scope_root,
+                replay_root,
+                resource_root,
+            } => {
+                let class = self.register_flat_candidate_v9(
+                    *binding,
+                    *descriptor,
+                    program_bytes,
+                    param_commitments,
+                    *max_positions,
+                    *scope_root,
+                    *replay_root,
+                    *resource_root,
+                    auth.signer_bond,
+                )?;
+                out.push(LedgerEventV1::FlatConformanceClassRegisteredV9 { class });
             }
             KernelRouteObjectV1::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } => {
                 let class = self.register_class_impl(
@@ -1308,6 +1346,8 @@ impl KernelLedgerV1 {
                             for class in classes {
                                 self.conformance_classes.remove(&class);
                                 self.flat_conformance_classes_v7.remove(&class);
+                                self.flat_conformance_classes_v9.remove(&class);
+                                self.native_flat_candidate_ids_v9.remove(&class);
                             }
                         }
                         out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });

@@ -2,7 +2,7 @@
 //! route, model-fidelity, network-load or ExecutionFinal claim.
 use misaka_palw_kernel::{
     element::SegClaimContextV1,
-    flat_court5::{FlatFaultV5, FlatOperandV5, FlatSegContextV5, flat_profile_commitment_v5, flat_trace_profile_id_v5},
+    flat_court5::{FlatFaultV5, FlatHeaderV5, FlatOperandV5, FlatSegContextV5, flat_profile_commitment_v5, flat_trace_profile_id_v5},
     flat_court9::*,
     flat_detect5::*,
     flat_detect9::*,
@@ -484,4 +484,151 @@ fn public_value9_roundtrip_all_types_and_hostile_bounds_are_strict() {
     }
     assert!(FlatValueV9::from_bytes(&vec![0; TYPED_VALUE_MAX_BYTES_V9 as usize + 1]).is_err());
     assert!(FlatHeaderValueV9::from_bytes(&vec![0; TYPED_HEADER_MAX_BYTES_V9 as usize + 1]).is_err());
+}
+
+#[test]
+fn ordinary_relation_helper_descends_nonfirst_leaf_and_validates_coordinate_before_callbacks() {
+    let mut pb = ProgramBuilder::new(256, HISTORY_BOUND_V1_SMALL);
+    let mut pre = pb.block("unknown-element", vec![]);
+    let scalar = pre.cast(Ref::Input(0), DType::I32);
+    let row = pre.broadcast(scalar, &[Dim::Fixed(256)]);
+    let pre = pre.finish(&[row]);
+    let mut post = pb.block("post", vec![TensorType::fixed(DType::I32, &[256])]);
+    let logits = post.cast(Ref::CarryIn(0), DType::I32);
+    post.commit(logits);
+    let post = post.finish(&[]);
+    let p = pb.finish(pre, vec![], post, 0);
+    let mut trial = Trial::new(p, MapParams::default(), 1);
+    let expected = trial.trace.values[0][0][1].clone();
+    let inputs = vec![trial.trace.values[0][0][0].clone()];
+    trial.trace.values[0][0][1].data[255] += 1;
+    trial.refresh();
+    let unit = FlatReadV5 { position: 0, occurrence: 0, node: 1, leaf: None };
+    let public = trial.public();
+    let FlatFindingV9::Fault(f) =
+        locate_ordinary_relation_v9(&trial.context(), &public, unit, &expected, &|| Ok(inputs.clone()), &|| None)
+    else {
+        panic!("no ordinary fault")
+    };
+    let FlatFaultV9::Ordinary(point) = f else { panic!("wrong namespace") };
+    assert_eq!(point.element, 255);
+    assert_eq!(point.output.flat[0].opening.index, 3);
+    assert_eq!(public.values.get(), 1);
+    assert!(public.calls.get() > 2, "unknown divergent leaf requires hash descent");
+    for invalid in [
+        FlatReadV5 { position: 1, ..unit },
+        FlatReadV5 { occurrence: u16::MAX, ..unit },
+        FlatReadV5 { node: u16::MAX, ..unit },
+        FlatReadV5 { leaf: Some(0), ..unit },
+    ] {
+        let public = trial.public();
+        assert!(matches!(
+            locate_ordinary_relation_v9(
+                &trial.context(),
+                &public,
+                invalid,
+                &expected,
+                &|| panic!("own callback before coordinate validation"),
+                &|| panic!("token callback before coordinate validation")
+            ),
+            FlatFindingV9::Inconsistent(_)
+        ));
+        assert_eq!(public.calls.get(), 0);
+        assert_eq!(public.values.get(), 0);
+    }
+    let mut foreign_scope = trial.scope.clone();
+    foreign_scope.max_positions += 1;
+    let mut c = trial.context();
+    c.scope = &foreign_scope;
+    let public = trial.public();
+    assert!(matches!(
+        locate_ordinary_relation_v9(&c, &public, unit, &expected, &|| panic!("own callback before scope validation"), &|| None),
+        FlatFindingV9::Inconsistent(_)
+    ));
+    assert_eq!(public.calls.get(), 0);
+    let mut missing = trial.public();
+    missing.mode = 3;
+    assert!(matches!(
+        locate_ordinary_relation_v9(&trial.context(), &missing, unit, &expected, &|| Ok(inputs.clone()), &|| None),
+        FlatFindingV9::ValueDemand(_)
+    ));
+    let mut borrowed = trial.public();
+    borrowed.mode = 4;
+    assert!(matches!(
+        locate_ordinary_relation_v9(&trial.context(), &borrowed, unit, &expected, &|| Ok(inputs.clone()), &|| None),
+        FlatFindingV9::ValueDemand(_)
+    ));
+}
+
+#[test]
+fn public_header_authentication_binds_all_dtypes_both_grammars_and_malformed_metadata() {
+    for dtype in DType::ALL {
+        for n in [1, 63, 64, 127, 129] {
+            let t = Tensor::new(dtype, vec![n], vec![0; n]).unwrap();
+            let legacy = TreesV3::of(&t);
+            let header = FlatHeaderValueV9 {
+                version: 9,
+                scope: [19; 64],
+                header: FlatHeaderV5::Legacy {
+                    dtype: dtype.tag(),
+                    shape: vec![n as u64],
+                    row_root: legacy.row_root(),
+                    col_root: legacy.col_root(),
+                },
+            };
+            assert!(header.authenticates(&misaka_palw_kernel::merkle3::tensor_commitment_v3(&t)));
+            let mut borrowed = header.clone();
+            borrowed.version = 7;
+            assert!(!borrowed.authenticates(&misaka_palw_kernel::merkle3::tensor_commitment_v3(&t)));
+            if n >= 64 {
+                let tree = FlatTreeV5::of(&t).unwrap();
+                let root = tree.commitment();
+                let flat = FlatHeaderValueV9 {
+                    version: 9,
+                    scope: [19; 64],
+                    header: FlatHeaderV5::Flat { dtype: dtype.tag(), shape: vec![n as u64], root: tree.root() },
+                };
+                assert!(flat.authenticates(&root));
+                assert!(!header.authenticates(&root));
+                let mut wrong = flat.clone();
+                if let FlatHeaderV5::Flat { root, .. } = &mut wrong.header {
+                    root[0] ^= 1
+                };
+                assert!(!wrong.authenticates(&root));
+                let mut wrong = flat.clone();
+                if let FlatHeaderV5::Flat { shape, .. } = &mut wrong.header {
+                    shape.push(1)
+                };
+                assert!(!wrong.authenticates(&root));
+            }
+        }
+    }
+    // The bounded hash grammar must authenticate wrong metadata so a Header DA
+    // answer can be prosecuted by the existing malformed court. No allocation
+    // proportional to the dimension values takes place.
+    for shape in [vec![0], vec![u64::MAX, 2], vec![1, 1, 1, 1]] {
+        let mut h = misaka_palw_kernel::hash::keyed(misaka_palw_kernel::merkle3::TENSOR_COMMITMENT_DOMAIN_V3);
+        h.update(&[DType::I16.tag(), shape.len() as u8]);
+        for dim in &shape {
+            h.update(&u64::to_le_bytes(*dim));
+        }
+        h.update(&[7; 64]).update(&[8; 64]);
+        let root = misaka_palw_kernel::hash::finish(h);
+        let value = FlatHeaderValueV9 {
+            version: 9,
+            scope: [0; 64],
+            header: FlatHeaderV5::Legacy { dtype: DType::I16.tag(), shape, row_root: [7; 64], col_root: [8; 64] },
+        };
+        assert!(value.authenticates(&root));
+        assert!(FlatHeaderValueV9::from_bytes(&value.to_bytes().unwrap()).unwrap().authenticates(&root));
+    }
+    let rank5 = FlatHeaderValueV9 {
+        version: 9,
+        scope: [0; 64],
+        header: FlatHeaderV5::Legacy { dtype: DType::I16.tag(), shape: vec![1; 5], row_root: [7; 64], col_root: [8; 64] },
+    };
+    assert!(!rank5.authenticates(&[0; 64]));
+    let invalid_dtype =
+        FlatHeaderValueV9 { version: 9, scope: [0; 64], header: FlatHeaderV5::Flat { dtype: 255, shape: vec![64], root: [7; 64] } };
+    assert!(!invalid_dtype.authenticates(&[0; 64]));
 }

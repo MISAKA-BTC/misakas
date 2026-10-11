@@ -218,6 +218,9 @@ pub(super) fn demand(
     enabled(builder, ctx)?;
     let id = Hash64::from_bytes(*vector);
     let route = builder.state.kernel_route.as_ref().unwrap();
+    if route.flat_vector_slot_v9(signer, slot).and_then(|id| route.flat_vector_demand_v9(&id)).is_some_and(|d| !d.settled) {
+        return Err(refused("shared new requester slot held"));
+    }
     let prior_slot = route.model_vector_demand_slot_v2(signer, slot);
     if route.flat_vector_slot_v7(signer, slot).and_then(|d| route.flat_vector_demand_v7(&d)).is_some_and(|d| !d.settled) {
         return Err(refused("shared v7 requester slot held"));

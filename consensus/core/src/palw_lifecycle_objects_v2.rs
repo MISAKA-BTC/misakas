@@ -1649,7 +1649,15 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         // these can act where that fence is not armed either.
         K::CommitSegmentedClaim { .. } | K::PostTiledJob { .. } | K::PostPromptTile { .. } => None,
         K::CommitClaimSalted { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
-        K::PostFlatModelVectorV7 { .. }
+        K::PostFlatModelVectorV9 { .. }
+        | K::SealFlatModelProofV9 { .. }
+        | K::RevealFlatModelProofV9 { .. }
+        | K::ExpireFlatModelSealV9 { .. }
+        | K::DemandFlatModelUnitV9 { .. }
+        | K::AnswerFlatModelUnitV9 { .. }
+        | K::SettleFlatModelDemandV9 { .. }
+        | K::RegisterFlatModelCandidateV9 { .. }
+        | K::PostFlatModelVectorV7 { .. }
         | K::SealFlatModelProofV7 { .. }
         | K::RevealFlatModelProofV7 { .. }
         | K::ExpireFlatModelSealV7 { .. }
@@ -1731,6 +1739,14 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (45, "DemandFlatModelUnitV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (46, "AnswerFlatModelUnitV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (47, "SettleFlatModelDemandV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (48, "RegisterFlatModelCandidateV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (49, "PostFlatModelVectorV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (50, "SealFlatModelProofV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (51, "RevealFlatModelProofV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (52, "ExpireFlatModelSealV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (53, "DemandFlatModelUnitV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (54, "AnswerFlatModelUnitV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (55, "SettleFlatModelDemandV9", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1962,6 +1978,13 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 22, hi: 35 }, "palw_panel_free_v1", "RFC-0002 model artifact role binding", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 36, hi: 39 }, "palw_panel_free_v1", "RFC-0002 protected flat candidate v6", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 40, hi: 47 }, "palw_panel_free_v1", "RFC-0002 complete-scope mixed candidate v7", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 48, hi: 55 }, "palw_panel_free_v1", "RFC-0002 ordinary-point mixed candidate v9", true),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FlatProofV9 (5) inside KernelRouteChunkV1 (tag 113)" },
+        "palw_panel_free_v1",
+        "RFC-0002 actor-owned mature v9 proof chunks (also needs tag 113 probabilistic constraints fence)",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FlatProofV7 (4) inside KernelRouteChunkV1 (tag 113)" },
         "palw_panel_free_v1",
@@ -4198,7 +4221,7 @@ pub(crate) mod tests {
             (109, 0xcd35f41524be4a4f), // OPVB: PostComplete and the derived-eligibility forms of tag 109 (under palw_probabilistic_constraints_v1)
             (110, 0x7da0346d0633de78),
             (111, 0x2d490db20d075bfe),
-            (113, 0x7f9269cd557944a6), // FlatProofV7 (4) is appended; its own actor/maturity checks keep the panel-free fence.
+            (113, 0x99d687403e235f27), // FlatProofV9 (5) appends its own authenticated actor/maturity lane under the same dormant fence.
             (120, 0xcbb24fb8f993e5c6),
             // X8R's RFC-0008 v2 work-root declaration, under `palw_exec_payload_v2` (lifecycle kind fence 6).
             (130, 0x5774ef35c9a3fdaa),

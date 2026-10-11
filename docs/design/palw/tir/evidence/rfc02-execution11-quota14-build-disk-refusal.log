@@ -1,0 +1,5 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+error: failed to build archive at `/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/libmisaka_palw_kernel-fd704a81a36a6069.rlib`: No space left on device (os error 28)
+
+error: could not compile `misaka-palw-kernel` (lib) due to 1 previous error

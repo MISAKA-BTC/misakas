@@ -2028,3 +2028,5 @@ async fn flat_candidate7_native_shares_legacy_catalog_and_cannot_spend_reserved_
 }
 
 mod flat_native_v7;
+
+mod flat_native_v9;

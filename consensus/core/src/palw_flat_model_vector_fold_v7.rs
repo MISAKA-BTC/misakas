@@ -51,8 +51,8 @@ pub(super) fn post_seal(
     let route = builder.state.kernel_route.as_ref().unwrap();
     let mut ids = route.flat_model_seals_of_v7(signer);
     let count = route.flat_model_seal_count_v7();
-    if ids.len() + route.flat_model_seals_of_v6(signer).len() >= FLAT_NATIVE_SEALS_PER_BOND_V7
-        || count.saturating_add(route.flat_model_seal_count_v6()) >= FLAT_NATIVE_SEALS_MAX_V7
+    if ids.len() + route.flat_model_seals_of_v6(signer).len() + route.flat_model_seals_of_v9(signer).len() >= FLAT_NATIVE_SEALS_PER_BOND_V7
+        || count.saturating_add(route.flat_model_seal_count_v6()).saturating_add(route.flat_model_seal_count_v9()) >= FLAT_NATIVE_SEALS_MAX_V7
         || route.flat_model_seal_v7(&id, &actor).is_some()
     {
         return Err(refused("protected flat seal slot already occupied or full"));

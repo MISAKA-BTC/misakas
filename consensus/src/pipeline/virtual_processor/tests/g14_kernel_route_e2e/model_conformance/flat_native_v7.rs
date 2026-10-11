@@ -651,3 +651,42 @@ async fn flat_v7_native_mature_proof_uses_guaranteed_budget_after_admission_floo
     let replay = net.replay().await;
     net.assert_same(&replay, "mature mixed7 public proof retains shared guaranteed work and run after admissions");
 }
+
+#[tokio::test]
+async fn flat_v7_candidate_owner_withdraw_retains_live_metadata_and_reuses_catalog_after_liability() {
+    let f = sparse7(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let (bind, class, record) = admitted(&mut net, &f).await;
+    let (post, server) = statement(&net, &f, bind, class, &record, None);
+    let (id, o) = prepare_flat_model_post_v7(Hash64::from_bytes(class), bind, &record, post).unwrap();
+    send(&mut net, 4, &o).await;
+    let held = net.api().unwrap().flat_model_vector_header_v3(&id).unwrap().liability_until;
+    for max in [1u32, 2, 4, 5, 6, 7, 8] {
+        let next =
+            misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7(bind.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, max)
+                .unwrap();
+        send(&mut net, 0, &next.object).await;
+    }
+    assert_eq!(net.ledger().flat_conformance_classes_v7.len(), 8);
+    let ninth =
+        misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7(bind.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, 9).unwrap();
+    send(&mut net, 0, &ninth.object).await;
+    assert_eq!(net.ledger().flat_conformance_classes_v7.len(), 8);
+    let owner = net.kid(0);
+    send(&mut net, 0, &K::RequestExit { bond: owner }).await;
+    let exit = net.daa() + net.ledger().policy.exit_delay_daa + 1;
+    assert!(exit < held);
+    net.beat_to(exit).await;
+    send(&mut net, 0, &K::Withdraw { bond: owner }).await;
+    assert!(net.ledger().bonds.contains_key(&owner));
+    assert_eq!(net.ledger().flat_conformance_classes_v7[&class].1, record);
+    assert_eq!(independent(&mut net, &f, id, class, bind, &server).await, FlatFindingV7::Clean);
+    net.beat_to(held).await;
+    send(&mut net, 0, &K::Withdraw { bond: owner }).await;
+    assert!(!net.ledger().bonds.contains_key(&owner));
+    assert!(net.ledger().flat_conformance_classes_v7.is_empty());
+    send(&mut net, 0, &ninth.object).await;
+    assert!(net.ledger().flat_conformance_classes_v7.contains_key(&ninth.class));
+    let replay = net.replay().await;
+    net.assert_same(&replay, "candidate metadata survives live prosecution then owner catalog safely reuses expired capacity");
+}

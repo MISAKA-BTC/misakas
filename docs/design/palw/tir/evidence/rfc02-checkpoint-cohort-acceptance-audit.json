@@ -1,6 +1,6 @@
 {
   "schema": "misaka.rfc02.acceptance-checkpoint-cohort-audit.v1",
-  "observed_at_utc": "2026-10-11T08:36:36.915949+00:00",
+  "observed_at_utc": "2026-10-11T11:43:25.158965+00:00",
   "mode": "conditional-external-verification-A; no distribution-consensus requirement",
   "user_current_target": {
     "A6_minimum_percent": 90,
@@ -100,8 +100,84 @@
         "interim_consumer_admission_work_limit": 536870912,
         "scope_derivation_passed": false,
         "scope_refusal": "NotAuthentic(\"flat relation exceeds court resource caps\")",
-        "network_activation_or_state_admission_tested": false
+        "network_activation_or_state_admission_tested": false,
+        "historical_snapshot_retained": true
+      },
+      "new_v9_staged_metadata_pricing": {
+        "file": "qwen25-real-generic9-observation.json",
+        "sha256": "218c3ce1c03c64a87ea271bc3ee576381a224721d0f910d310d0b7a86d6c7760",
+        "registration_work": 519670105,
+        "binding_work": 15346880,
+        "total_shared_block_work_excluding_registry_prefix": 535016985,
+        "unchanged_normal_cap": 536870912,
+        "current_native_requote_and_actual_admission_pending": false,
+        "scope": "Distinct opt-in v9 graph contract; actual native candidate admission and prepared-proof conformance pass under unchanged caps. Old v7 scope/tariff failure is retained.",
+        "actual_native_candidate_admission_and_prepared_proof_prosecution_passed": true,
+        "native_evidence": "rfc02-native9-typed-da-node-verdict.json",
+        "shipping_activation_or_honest_funded_final_proven": false
       }
+    },
+    {
+      "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "source_storage": "BF16 safetensors",
+      "integer_storage": "PALWTIR1 typed integer params",
+      "task": "causal teacher-forced logit diagnostic with freshly lowered borrowed context128",
+      "complete_task": false,
+      "source_declared_maximum_context": 32768,
+      "tested_context_maximum": 128,
+      "sequences": 2,
+      "positions": 256,
+      "calibration_reused_from_context": 32,
+      "new_integer_artifact_copied": false,
+      "program_sha256": "245b31fc77e8ddc730c91acc5d92cf7c6b771348a5e27a81693a7a31d780bca2",
+      "observation": {
+        "file": "qwen25-borrowed-context128-observation.json",
+        "sha256": "0dece8446d5b7058004daf5b3a42572ca2823baecb2b0b8c42ffe6d2dd98a21b"
+      },
+      "predeclared_diagnostic_fidelity_passed": true,
+      "metrics": {
+        "top1": 0.984375,
+        "kl_mean": 0.002305021558196732,
+        "slope": 0.9977334374639023,
+        "correlation": 0.99953118101942
+      },
+      "native_final_or_cohort_credit": false
+    },
+    {
+      "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "source_storage": "BF16 safetensors",
+      "integer_storage": "PALWTIR1 typed integer params",
+      "task": "three predeclared complete EOS-stop arithmetic/translation/Python-function offline diagnostics",
+      "complete_task": true,
+      "population_or_active_kernel_cohort_member": false,
+      "source_declared_maximum_context": 32768,
+      "tested_context_maximum": 128,
+      "prompt_lengths": [
+        24,
+        20,
+        36
+      ],
+      "generated_counts_including_eos": [
+        3,
+        2,
+        12
+      ],
+      "max_generated_tokens": 32,
+      "protocol_sha256": "7cfe136887fecfe1a5272194e2d5cbaabf6b0cd8c379c2e3175454158b7f6d66",
+      "observation": {
+        "file": "qwen25-borrowed-context128-complete-task-observation.json",
+        "sha256": "fce4d1caf150fb7e569a5cc7ee30fa020c577dead54489651808a2b9608660ff"
+      },
+      "predeclared_gates_passed": true,
+      "raw_output_ids_equal": 17,
+      "raw_output_ids_denominator": 17,
+      "exact_jobs": 3,
+      "source_complete_and_correct_jobs": 3,
+      "integer_complete_and_correct_jobs": 3,
+      "native_decode_stopping_contract_changed": false,
+      "native_final_or_cohort_credit": false
     }
   ],
   "full_task_checkpoint_revision_task_context_storage_arithmetic_kernel_plan_records": 0,
@@ -110,12 +186,12 @@
   "A8_L_listed_L_files_dated_end_to_end_cohort_available": false,
   "whole_goal_complete": false,
   "remaining": [
-    "actual v7 metadata registration tariff and ordinary flat relation cap refusal; diagnostic independent float-source fidelity passed",
-    "full tasks and original contexts across pinned dense/hybrid/MoE/sparse/multimodal actualcheckpoints",
-    "independent source fidelity, routing agreement, state saturation/continuity and complete taskquality",
-    "actualkernel eligibility without hooks plus fresh outsider whole-claim prosecution and honest independentFinal/redemption",
-    "retained full A6/A8 denominators, real-size activecohort, confidence and sustainedissuance evidence",
-    "complete shared resources/economics and v7native integration owned byotheragents"
+    "Frozen v7 ordinary scope refusal remains historical; v9 staged metadata fits the unchanged cap and actual candidate/DA/prepared-proof prosecution pass. Fresh own-execution outsider whole-claim prosecution and funded Final remain required.",
+    "Complete tasks and original contexts across pinned dense/hybrid/MoE/sparse/multimodal checkpoints; context128 logit PASS does not satisfy original32768 context.",
+    "Independent source fidelity, routing agreement, state saturation/continuity and complete task quality; historical context32 free-running FAIL retained.",
+    "Actual funded native class/job eligibility plus fresh outsider whole-claim prosecution and honest independent Final/redemption.",
+    "Retained full A6/A8 denominators, real-size active cohort, confidence and sustained issuance evidence; listed-file historical subset remains only72.081687% of D_all.",
+    "Native shared resources/economics, protected reservations, original escrow, transport/retention and bounded catalog lifecycle."
   ],
   "new_preallocation_validation": {
     "tests_passed": 4,
@@ -125,5 +201,32 @@
     "test_log_sha256": "53ad629ddeb7a90dbe1f62449a4af93ad7d0ac799f7d3389969b73043b3a6999",
     "source_tool": "misaka-palw-tir-lower/tools/hf_checkpoint_reference.py",
     "source_tool_sha256": "b76a7afc0a23386e8923f83a73f9cb6f76549c8dc9e268456045007d6d767253"
-  }
+  },
+  "ordinary_generic_public_prosecution_component": {
+    "file": "qwen25-real-generic9-observation.json",
+    "sha256": "218c3ce1c03c64a87ea271bc3ee576381a224721d0f910d310d0b7a86d6c7760",
+    "executed_positions": 1,
+    "metadata_max_positions": 32,
+    "all_honest_nodes": 7658,
+    "located_element": 1500,
+    "public_hash_descent": true,
+    "public_queries": 9,
+    "wire_bytes": 17816,
+    "actual_native_service_and_execution_final_pending": true,
+    "actual_native_service_conformance_passed": true,
+    "actual_execution_final_pending": true,
+    "fresh_own_execution_outsider_prosecution_pending": true,
+    "native_evidence": "rfc02-native9-typed-da-node-verdict.json",
+    "combined_pending_flag_reason": "Native service/prepared actual-model proof passes; fresh own-execution finder and funded execution Final remain pending."
+  },
+  "retained_greedy_task_failure": {
+    "file": "qwen25-independent-greedy-task-verdict.json",
+    "sha256": "3f51ea8ddac828d02593a02a15811ec704459ac0c67439d678d7495b6f8ebd90",
+    "protocol_version": "historical fixed eight-output context32 protocol",
+    "overall_verdict": "FAIL",
+    "unchanged_gates_and_membership": true,
+    "cohort_credit": false
+  },
+  "offline_complete_task_diagnostic_records": 3,
+  "full_task_checkpoint_revision_task_context_storage_arithmetic_kernel_plan_record_definition": "Accepted active-kernel/native-Final population cohort records only; the three offline complete-task diagnostics are tracked separately and add no A6/A8 coverage."
 }

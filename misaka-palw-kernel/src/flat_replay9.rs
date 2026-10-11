@@ -45,7 +45,17 @@ pub fn flat_replay_envelope_v9(
     encoder: Option<&EncoderBindingV1>,
 ) -> Result<FlatReplayEnvelopeV9, DismissalV1> {
     check_flat_resource_scope_v9(program, scope.max_positions, encoder, scope)?;
-    let mut reference = crate::flat_replay6::replay_costs_v6(program, scope.max_positions, scope.root(), encoder)
+    replay_envelope_from_verified_scope_v9(program, scope, scope.root(), encoder)
+}
+/// Only freshly, independently derived scope metadata enters this helper from
+/// native candidate preparation. Public replay/checkers always rederive scope.
+pub(crate) fn replay_envelope_from_verified_scope_v9(
+    program: &TirProgramV1,
+    scope: &FlatResourceScopeV9,
+    scope_root: Digest,
+    encoder: Option<&EncoderBindingV1>,
+) -> Result<FlatReplayEnvelopeV9, DismissalV1> {
+    let mut reference = crate::flat_replay6::replay_costs_v6(program, scope.max_positions, scope_root, encoder)
         .map_err(DismissalV1::NotAuthentic)?;
     let pr = crate::element::PreparedV1::without_scope(program, encoder).map_err(DismissalV1::NotAuthentic)?;
     let (mut topk_work, mut aux, mut reads) = (0u128, 0u128, 63u128);
@@ -78,7 +88,7 @@ pub fn flat_replay_envelope_v9(
     reference.reply_bytes_per_attempt += typed_reply + header_reply;
     Ok(FlatReplayEnvelopeV9 {
         version: 9,
-        scope: scope.root(),
+        scope: scope_root,
         reference,
         topk_scan_work_per_attempt: topk_work,
         topk_auxiliary_bytes: aux,

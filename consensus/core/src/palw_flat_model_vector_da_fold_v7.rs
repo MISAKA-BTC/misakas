@@ -42,6 +42,9 @@ pub(super) fn demand(
     if builder.state.bonds.get(&h.poster).map(|b| b.operator_id) == builder.state.bonds.get(signer).map(|b| b.operator_id) {
         return Err(refused("flat poster operator cannot demand its own bounty"));
     }
+    if route.flat_vector_slot_v9(signer, slot).and_then(|id| route.flat_vector_demand_v9(&id)).is_some_and(|d| !d.settled) {
+        return Err(refused("shared new requester slot held"));
+    }
     let prior_slot = route.flat_vector_slot_v7(signer, slot);
     if route.flat_vector_slot_v3(signer, slot).and_then(|d| route.flat_vector_demand_v3(&d)).is_some_and(|d| !d.settled) {
         return Err(refused("shared old/new flat requester slot held"));

@@ -3741,7 +3741,8 @@ Every present modality MUST bind an external stage input axis. Refuse source
 weight or persistent-state resizing, random sources and post-write stages.
 Maximum and actual graphs MUST independently pass frozen validation, range
 analysis and full scope9. Actual lengths and positions become immutable job
-admission fields; zero/absent and over-maximum modalities MUST refuse.
+admission fields. Present modalities MUST have nonzero lengths, absent modalities
+MUST remain zero, and over-maximum lengths MUST refuse.
 
 At most16 external inputs and16,384 real PC instances are allowed. Both maximum
 and actual raw payload MUST be at most16 MiB and i128 payload at most32 MiB.
@@ -3760,3 +3761,96 @@ Native consumers MUST bind the job-root/admission/combined-PC contract and
 charge the independently derived full resource/quota envelope before those
 operations. Native wire/retention, per-position input sources, stage edges,
 escrow and media Final are not supplied by this component.
+
+### §18.13 — Public ordinary localization and checkpoint evidence
+
+Before ordinary locator callbacks, independently check the complete scope9 and
+exact requested relation coordinates. Authenticate public node headers and
+hash replies against the committed namespace before descending to an unknown
+leaf. Headers MUST cover all six frozen dtypes and retain authentic malformed
+metadata for its admitted header court. Missing evidence MUST request acquisition
+or dismiss; it MUST NOT fabricate a value or conviction.
+
+Changing a checkpoint history bound creates a distinct canonical program and
+scope/resource/replay roots. Borrowing old raw payloads MUST independently check
+every registered parameter instance, positional fill and declared recipe against
+the new program before execution. Record whether calibration is reused. Freeze
+context, input sequences, original-model reference and fidelity gates before
+outputs; preserve prior failed protocols. A teacher-forced logit diagnostic and
+its process RSS/timing MUST NOT substitute for completed tasks, maximum source
+context, native Final or the unchanged A6/A8 denominator.
+
+### §18.14 — Funded job and persisted quota component contracts, v11
+
+Bind exact native-authenticated mature source identities, candidate9 maximum
+scope/replay/resource10 and immutable execution/quota policy in the class.
+Fix actual input lengths, positions and independently derived actual scope/
+resource/quota roots at job admission. Native MUST authorize an actual original
+requester debit and permanent requester/nonce uniqueness before atomic funding.
+Admission time, funding receipt, producer/class substitutions MUST NOT permit
+reuse of that nonce. The initial funded grammar admits exact text jobs only.
+
+One job admits one protected claim. Native MUST authenticate its exact trace
+and original producer reserve before committing. Final requires completed
+retention, no pending own proof or DA, and elapsed latest-answer grace; pay
+original escrow only once. Fault refunds use that same escrow, and finder/burn
+MUST use actually collected original slash with checked balance before mutation.
+Restore fixed job state against independent native job/state anchors, never
+anchors supplied by the same body. Preserve access to settlement of existing
+jobs if source eligibility is later revoked, while refusing new admission.
+
+Persist all21 consumed/reserved axes under trusted chain-derived block and
+interval context. Prepay expensive work and retain failed attempts. Reserved
+actions MUST authenticate the exact producer; challenger attempts MUST spend
+only their ordinary unreserved pool. Mature protected challenger entitlements
+require their own native reservation. Expired closing MAY debit a fixed current
+ordinary envelope without old quota refunds; mark terminal only using its exact
+private prepaid token and genuinely conserved native terminal book. A DAA jump
+MUST NOT strand escrow or reopen computation/source proofs. Late trace-DA
+default collection MUST authenticate its original unanswered deadline.
+
+Restore quota state against an independent native root; a structurally valid
+conserved snapshot alone grants no credits. Paying a terminal attempt MUST leave
+its subject open until the native terminal book and actual payout authorize the
+private close token. Reserve class-maximum court/chunk/restore costs separately
+from actual job resources, and guard the priced native stored-post cap before
+copying or decoding.
+
+Native MUST apply quota, original debits/reservations, job state and UTXO payouts
+atomically. Bound retained catalogs and reclaim terminal rows only with permanent
+native spent-request anchors, preserving same-interval consumed work and unused
+guarantees. Clearing a catalog MUST NOT recreate baseline credit or reopen a
+spent job. Unavailable externally acquired R has no source-fault entitlement.
+
+### §18.15 — Complete-task diagnostic evidence and stopping grammar
+
+Freeze task membership, maximum generation, stopping rule, semantic answer
+rules and fidelity/quality gates before source or integer outputs. A protocol
+that stops at first EOS MUST include that EOS in output agreement and count a
+missing EOS at its cap as incomplete. Count missing output IDs as unequal.
+Independently score both original-model correctness and integer correctness,
+separately from token agreement and fixed-count trace bit equality. Preserve
+prior failed protocols and record the exact program/context/calibration.
+
+An offline EOS-stop diagnostic MUST NOT silently change a native fixed-count
+job/court contract. Native variable stopping needs its own immutable admission,
+bounded maximum resource reservation, exact claimed actual extent and checked
+stop/output relation before it can receive native Final or active-cohort credit.
+Small completed diagnostics do not establish A6/A8 population coverage.
+
+### §18.16 — Native v9 conformance and candidate metadata lifetime
+
+Bind candidate registration, post, selected DA, own seal/reveal/chunks and court
+to the exact same full v9 scope, replay and immutable resource root. Preserve
+legacy empty-table roots and require explicit opt-in for the new route.
+Independent public import MUST derive full candidate metadata; authenticated
+local restoration MAY reuse admitted rooted resource metadata only while
+rechecking the complete scope and paying its bounded native restore tariff.
+
+Prepay bounded candidate-prefix projection before reading headers, and retain
+large unmodified raw rows outside local ledger journal diffs. Bound aggregate
+row count, raw bytes and independent derivation work before public bulk import.
+Owner withdrawal MUST retain candidate metadata while protected traces, pending
+own proofs or DA still depend on it, including legacy v7 claims. Catalog reuse
+requires expiry and absence of all such dependencies. Conformance settlement
+and original-collateral finder payout do not establish funded execution Final.

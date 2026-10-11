@@ -83,6 +83,8 @@ pub mod kernel_execution;
 pub mod flat_candidate_v6;
 /// Explicit v7 mixed-court candidate metadata registration.
 pub mod flat_candidate_v7;
+/// Independent full-resource preparation of the opt-in non-reward v9 candidate.
+pub mod flat_candidate_v9;
 pub mod flat_vector_v7;
 pub mod flat_snapshot_v7;
 /// RFC-0002 Phase F (F6, node half): registering an IR class.
@@ -587,3 +589,7 @@ mod tests {
         assert!(probe.contains("shape.legal_job_bound,"), "and the shared probe forwards the shape's reading");
     }
 }
+
+pub mod flat_vector_v9;
+pub mod flat_snapshot_v9;
+pub mod flat_checkpoint_fixture9;

@@ -255,7 +255,7 @@ pub fn palw_panel_v3_epoch_sources_v1(
     match source {
         PalwPanelV3BeaconSourceV1::Chain => {
             let (Some(route), Some(opv)) = (checkpoint.kernel_route.as_ref(), opv) else { return Vec::new() };
-            let Ok(ledger) = route.ledger() else { return Vec::new() };
+            let Ok(ledger) = route.ledger_native_projection_v9() else { return Vec::new() };
             route.opv_eligible_set_v1(&ledger, release_daa, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv))
         }
         PalwPanelV3BeaconSourceV1::Reference { eligible_profiles, .. } => {

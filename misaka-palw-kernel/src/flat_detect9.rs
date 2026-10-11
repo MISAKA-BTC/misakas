@@ -69,6 +69,34 @@ pub struct FlatHeaderValueV9 {
     pub header: FlatHeaderV5,
 }
 impl FlatHeaderValueV9 {
+    /// Authenticate only the bounded typed header image. The caller separately
+    /// authenticates the node, scope and job. Zero, small or overflowing shapes
+    /// are intentionally hashable: an authentic wrong header must remain
+    /// available to the existing malformed-header court.
+    pub fn authenticates(&self, commitment: &Digest) -> bool {
+        if self.version != 9 {
+            return false;
+        }
+        let (tag, shape) = match &self.header {
+            FlatHeaderV5::Flat { dtype, shape, .. } | FlatHeaderV5::Legacy { dtype, shape, .. } => (*dtype, shape),
+        };
+        if shape.len() > 4 || !DType::ALL.iter().any(|d| d.tag() == tag) {
+            return false;
+        }
+        let root = match &self.header {
+            FlatHeaderV5::Flat { root, .. } => crate::merkle4::header_commitment::<5>(tag, shape, root),
+            FlatHeaderV5::Legacy { row_root, col_root, .. } => {
+                let mut h = crate::hash::keyed(crate::merkle3::TENSOR_COMMITMENT_DOMAIN_V3);
+                h.update(&[tag, shape.len() as u8]);
+                for dim in shape {
+                    h.update(&dim.to_le_bytes());
+                }
+                h.update(row_root).update(col_root);
+                Some(crate::hash::finish(h))
+            }
+        };
+        root.as_ref() == Some(commitment)
+    }
     pub fn to_bytes(&self) -> io::Result<Vec<u8>> {
         if self.version != 9 {
             return Err(invalid());
@@ -517,6 +545,36 @@ fn ordinary_relation(
         }
     }
     checked(c, FlatFaultV9::Ordinary(FlatPointFaultV9 { version: 9, element, output: cached.unwrap(), inputs, token: token() }))
+}
+/// Locate a discrepancy in one independently replayed ordinary relation. The
+/// complete program scope and exact relation coordinate are checked before any
+/// public or own-source callback. The provider is queried by generic hash
+/// descent and returns only the requested authenticated typed output leaf.
+///
+/// The caller must establish the first divergent relation from its own replay
+/// and reserve execution, source preparation, metadata checking and all public
+/// read/retry quotas before calling. This helper does not replay the model or
+/// implement a session quota; use `FlatReplaySessionV9` for that contract.
+pub fn locate_ordinary_relation_v9(
+    c: &FlatContextV9<'_>,
+    public: &dyn FlatPublicReadsV9,
+    unit: FlatReadV5,
+    expected: &Tensor,
+    own: &dyn Fn() -> Result<Vec<Tensor>, String>,
+    token: &dyn Fn() -> Option<crate::seg::PromptTileOpeningV1>,
+) -> FlatFindingV9 {
+    let pr = match c.prepare() {
+        Ok(pr) => pr,
+        Err(e) => return error(e),
+    };
+    if unit.position >= c.base.claim.positions
+        || unit.leaf.is_some()
+        || !pr.valid(unit.occurrence, unit.node)
+        || matches!(pr.w.node(unit.occurrence, unit.node).prim, Prim::TopK { .. })
+    {
+        return error("ordinary9 locator requires an in-scope ordinary node coordinate");
+    }
+    ordinary_relation(c, &c.scope.root(), &pr, public, unit, expected, own, token)
 }
 /// Internal engine: the public caller must reserve a complete independent replay
 /// attempt, typed/header replies and all retries before invoking any callback.

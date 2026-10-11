@@ -199,7 +199,8 @@ pub(super) fn candidate(
 ) -> Result<Option<(KernelRouteObjectV1, Hash64)>, PalwStateV2Error> {
     let (binding, descriptor, program_bytes, param_commitments) = match object {
         KernelRouteObjectV1::RegisterModelConformanceClassV2 { binding, descriptor, program_bytes, param_commitments, .. }
-        | KernelRouteObjectV1::RegisterFlatModelCandidateV7 { binding, descriptor, program_bytes, param_commitments, .. } => {
+        | KernelRouteObjectV1::RegisterFlatModelCandidateV7 { binding, descriptor, program_bytes, param_commitments, .. }
+        | KernelRouteObjectV1::RegisterFlatModelCandidateV9 { binding, descriptor, program_bytes, param_commitments, .. } => {
             (binding, descriptor, program_bytes, param_commitments)
         }
         _ => return Ok(None),
@@ -225,7 +226,7 @@ pub(super) fn candidate(
             plan: plan.clone(),
             param_commitments: param_commitments.clone(),
         },
-        KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. } => object.clone(),
+        KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. } | KernelRouteObjectV1::RegisterFlatModelCandidateV9 { .. } => object.clone(),
         _ => unreachable!(),
     };
     Ok(Some((candidate, id)))
@@ -251,4 +252,24 @@ pub(super) fn flat_candidate_v7(
     let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(None) };
     builder.slash_bond(*signer, fee)?;
     Ok(candidate(builder, ctx, object).ok().flatten())
+}
+
+pub(super) fn flat_candidate_v9(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    object: &KernelRouteObjectV1,
+) -> Result<Option<(KernelRouteObjectV1, Hash64, super::palw_kernel_route_fold_v1::NativeProjectionPrepaidV9)>, PalwStateV2Error> {
+    let KernelRouteObjectV1::RegisterFlatModelCandidateV9 { program_bytes, param_commitments, .. } = object else {
+        return Err(refused("wrong flat-v9 candidate kind"));
+    };
+    let work = misaka_palw_kernel::ledger::flat_candidate9::flat_candidate_binding_work_v9(
+        program_bytes.len(),
+        param_commitments.by_instance.len(),
+    )
+    .and_then(|work|work.checked_add(super::palw_kernel_route_fold_v1::projection_work_v9(builder).ok()?))
+    .ok_or_else(|| refused("flat-v9 binding/projection work overflow"))?;
+    let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(None) };
+    builder.slash_bond(*signer, fee)?;
+    Ok(candidate(builder, ctx, object).ok().flatten().map(|(o,id)|(o,id,super::palw_kernel_route_fold_v1::paid_projection_v9())))
 }

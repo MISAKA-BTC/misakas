@@ -186,6 +186,7 @@ pub(super) fn refute(
     let id = Hash64::from_bytes(*vector);
     if builder.state.kernel_route.as_ref().unwrap().flat_model_vector_protected_v6(&id)
         || builder.state.kernel_route.as_ref().unwrap().flat_model_vector_protected_v7(&id)
+        || builder.state.kernel_route.as_ref().unwrap().flat_model_vector_protected_v9(&id)
     {
         return Err(refused("protected flat vector requires its actor's mature seal/reveal"));
     }
@@ -260,6 +261,9 @@ pub(super) fn demand(
     }
     if builder.state.bonds.get(&h.poster).map(|b| b.operator_id) == builder.state.bonds.get(signer).map(|b| b.operator_id) {
         return Err(refused("flat poster operator cannot demand its own bounty"));
+    }
+    if route.flat_vector_slot_v9(signer,slot).and_then(|id|route.flat_vector_demand_v9(&id)).is_some_and(|d|!d.settled) {
+        return Err(refused("shared typed9 requester slot held"));
     }
     let prior_slot = route.flat_vector_slot_v3(signer, slot);
     if route.flat_vector_slot_v7(signer, slot).and_then(|d| route.flat_vector_demand_v7(&d)).is_some_and(|d| !d.settled) {
