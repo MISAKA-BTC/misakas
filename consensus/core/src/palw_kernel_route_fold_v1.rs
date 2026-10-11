@@ -251,6 +251,7 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
             .map_err(refused)?;
         ledger.set_beacon_source_fee_inputs(inputs).map_err(refused)?;
     }
+    ledger.consumer_final_reward_caps = builder.kernel_final_reward_caps_v1(&ledger);
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -650,6 +651,10 @@ fn apply_settlements_to_exec_vesting(
                     )?;
                     continue;
                 }
+                if s.kind == SettlementKindV1::FinalReward {
+                    let claim = s.claim.ok_or_else(|| refused("a Final fee has no claim"))?;
+                    builder.consume_kernel_final_reward_v1(&claim, amount)?;
+                }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
                     Some(payload) => match builder.add_kernel_payout(payload, amount) {
@@ -804,6 +809,24 @@ pub(super) fn apply_kernel_route_object_v1(
             }
         }
     }
+    // Reserve the shared Q/R window before any accepted claim/fee/bond write.
+    // A refused plan still pays the public verification budget it already used.
+    for event in &events {
+        if let LedgerEventV1::ClaimCommitted { claim } = event {
+            let row = ledger.claims.get(claim).ok_or_else(|| refused("accepted kernel claim is missing"))?;
+            let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
+            match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward) {
+                Ok(Some(plan)) => {
+                    builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    persist_budget(builder, ctx, &ledger);
+                    return Ok(());
+                }
+            }
+        }
+    }
     // The object stands: the route has now seen its signer.
     builder.note_kernel_bond(signer);
     for event in &events {
@@ -827,6 +850,7 @@ pub(super) fn apply_kernel_route_object_v1(
     // (A settlement the real bonds cannot honour fails the object — the walk's rehearsal drops it with its builder, so no half-applied
     // slash survives; the sync above makes this unreachable.)
     apply_settlements(builder, &events, true)?;
+    builder.close_terminal_kernel_budgets_v1(&ledger);
     persist_budget(builder, ctx, &ledger);
     flush(builder, &ledger, &before);
     if let Some((subject, row)) = scope {
@@ -1005,6 +1029,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     }
     let events = ledger.tick();
     apply_settlements(builder, &events, false)?;
+    builder.close_terminal_kernel_budgets_v1(&ledger);
     // Assignments and counted receipts of claims that can no longer be covered are dropped.
     let stale: Vec<misaka_palw_kernel::hash::Digest> = builder
         .state

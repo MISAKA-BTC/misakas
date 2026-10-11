@@ -710,6 +710,8 @@ fn check_commitment_set(
 pub struct KernelLedgerV1 {
     pub policy: LedgerPolicyV1,
     pub schedule: KernelScheduleV1,
+    /// Trusted native consumer caps for standalone Final fees. Not rows or transaction inputs.
+    pub consumer_final_reward_caps: BTreeMap<Digest, u64>,
     /// Descriptors this binary implements (never bytes from a transaction).
     pub known: Vec<KernelDescriptorV1>,
     pub daa: u64,
@@ -821,6 +823,7 @@ impl KernelLedgerV1 {
         Ok(Self {
             policy,
             schedule,
+            consumer_final_reward_caps: BTreeMap::new(),
             known,
             daa: 0,
             bonds: BTreeMap::new(),
@@ -1316,7 +1319,8 @@ impl KernelLedgerV1 {
     /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
     /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
-        self.pay_from_job_escrow_capped(job, claim, producer, u64::MAX, out)
+        let cap = self.consumer_final_reward_caps.get(claim).copied().unwrap_or(u64::MAX);
+        self.pay_from_job_escrow_capped(job, claim, producer, cap, out)
     }
 
     pub(crate) fn pay_from_job_escrow_capped(

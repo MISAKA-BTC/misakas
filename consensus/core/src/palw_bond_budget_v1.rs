@@ -184,6 +184,10 @@ pub enum PalwBudgetOriginV1 {
     KernelRoute = 4,
     /// A bond's Round rights drawn in one span (readiness §3e): reserved and used at the draw, released at `draw + W`.
     RoundRights = 5,
+    /// Actual registrant/contributor market fee income; no claim/block/weight credit.
+    MarketFee = 6,
+    /// Fee-only execution Round income; no reward-bearing block credit.
+    RoundFee = 7,
 }
 
 /// Why the engine refused.
@@ -1123,6 +1127,60 @@ impl PalwBondBudgetStateV1 {
         Ok(())
     }
 
+    /// Reserve a collectible income maximum before its payment is committed.
+    /// Monetary income consumes R only: no Q, B, F or execution rights, and no
+    /// open-claim slot survives this atomic operation. The maximum occupies the
+    /// common window even when an actual fill collects less. No fee is clipped
+    /// after a seller has already transferred its asset.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        income_id: Hash64,
+        bond: PalwBondKeyV2,
+        accepted_daa: u64,
+        maximum: u64,
+        actual: u64,
+        origin: PalwBudgetOriginV1,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if !matches!(origin, PalwBudgetOriginV1::MarketFee | PalwBudgetOriginV1::RoundFee) || actual > maximum {
+            return Err(PalwBudgetRefusalV1::Assignment("invalid fee-income origin or unfunded maximum"));
+        }
+        if self.claims.contains_key(&income_id) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        if accepted_daa.checked_add(policy.window_daa).is_none() {
+            return Err(PalwBudgetRefusalV1::Overflow);
+        }
+        let held = self.bonds.get(&bond).map_or(0, |row| row.window.reward_sompi);
+        if self.bonds.get(&bond).is_some_and(|row| row.open_claims == u32::MAX) {
+            return Err(PalwBudgetRefusalV1::Overflow);
+        }
+        let after = held.checked_add(maximum).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        if after > palw_bond_budget_caps_v1(policy, capital).reward_sompi {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        self.reserve(
+            policy,
+            capital,
+            income_id,
+            bond,
+            None,
+            accepted_daa,
+            PalwBudgetVectorV1 { reward_sompi: maximum, ..PalwBudgetVectorV1::ZERO },
+            origin,
+            false,
+            j,
+        )?;
+        let grant = self.consume(&income_id, PalwBudgetDimV1::Reward, u128::from(actual), true, j);
+        debug_assert!(matches!(grant, Some(Ok(amount)) if amount == u128::from(actual)));
+        self.close(&income_id, j);
+        self.forget(&income_id, j);
+        Ok(())
+    }
+
     /// **A claim's whole acceptance step** (design §2.5, §3.5), atomic: the reservation from the ask (per-claim ceilings), its reward
     /// clipped to the model's available budget when `model` names one in the current epoch, the bond's admission, then the writes
     /// (the model's reservation with the claim's). Returns the reservation taken. Nothing is written on a refusal.
@@ -1559,6 +1617,74 @@ mod tests {
         fn below(&mut self, n: u64) -> u64 {
             self.next() % n.max(1)
         }
+    }
+
+    #[test]
+    fn market_and_round_income_share_reward_room_with_issuance_without_manufacturing_claims_or_blocks() {
+        let mut p = policy(1, false);
+        p.max_open_claims_per_bond = 1;
+        p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 7 };
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(1, &p);
+        let mut j = Vec::new();
+        s.reserve_claim_v1(
+            &p,
+            capital,
+            h(1),
+            bond(0),
+            None,
+            10,
+            PalwBudgetAskV1 { reward_sompi: 30 * BILI, ..Default::default() },
+            PalwBudgetOriginV1::Attempt,
+            &mut j,
+        )
+        .unwrap();
+        // Open Q is already full. A real fee is monetary income, not another claim.
+        s.reserve_income_v1(&p, capital, h(2), bond(0), 10, 15 * BILI, 10 * BILI, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.reserve_income_v1(&p, capital, h(3), bond(0), 10, 5 * BILI, 5 * BILI, PalwBudgetOriginV1::RoundFee, &mut j).unwrap();
+        let row = s.bond_row(&bond(0)).unwrap();
+        assert_eq!(row.open_claims, 1);
+        assert_eq!(row.window.claims, 1);
+        assert_eq!(row.window.block_units, 0);
+        assert_eq!(row.window.final_weight, 0);
+        assert_eq!(row.window.round_rights, 0);
+        assert_eq!(row.window.reward_sompi, 50 * BILI);
+        assert_eq!(s.claim_row(&h(2)).unwrap().consumed.reward_sompi, 10 * BILI);
+        assert!(!s.claim_row(&h(2)).unwrap().open && !s.claim_row(&h(2)).unwrap().live);
+        let root = s.root_parts();
+        let len = j.len();
+        assert_eq!(
+            s.reserve_income_v1(&p, capital, h(4), bond(0), 10, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j),
+            Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward })
+        );
+        assert_eq!((s.root_parts(), j.len()), (root, len));
+        s.check_consistency().unwrap();
+        s.release_due(109, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        s.release_due(110, &mut j);
+        assert!(s.claim_row(&h(2)).is_none() && s.claim_row(&h(3)).is_none());
+        s.reserve_income_v1(&p, capital, h(4), bond(0), 110, 50 * BILI, 50 * BILI, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn fee_income_refuses_duplicate_unfunded_and_overflowing_promises_before_journal_writes() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(1, &p);
+        let mut j = Vec::new();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(1), bond(0), 10, 2, 1, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        for (id, daa, maximum, actual, origin) in [
+            (h(1), 10, 2, 1, PalwBudgetOriginV1::MarketFee),
+            (h(2), 10, 2, 3, PalwBudgetOriginV1::MarketFee),
+            (h(2), 10, 2, 1, PalwBudgetOriginV1::KernelRoute),
+            (h(2), u64::MAX, 2, 1, PalwBudgetOriginV1::RoundFee),
+        ] {
+            let root = s.root_parts();
+            let len = j.len();
+            assert!(s.reserve_income_v1(&p, 1_000 * BILI, id, bond(0), daa, maximum, actual, origin, &mut j).is_err());
+            assert_eq!((s.root_parts(), j.len()), (root, len));
+        }
+        s.check_consistency().unwrap();
     }
 
     #[test]

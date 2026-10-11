@@ -65,6 +65,14 @@ impl PalwChainStateV2 {
     }
 }
 
+/// The native and kernel claim hash domains remain distinct even if a caller
+/// presents equal raw bytes. Neither lane can consume or close the other's row.
+pub(super) fn kernel_budget_claim_id_v1(claim: &misaka_palw_kernel::hash::Digest) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/kernel-claim/v1");
+    hash.update(claim);
+    finish(hash)
+}
+
 // ---- delta application ------------------------------------------------------------------------------------------------------
 
 /// Delta 190, verify-then-install.
@@ -302,6 +310,28 @@ impl TransitionBuilder<'_> {
             };
             seeds.push((*id, claim.bond, claim.accepted_daa, vector));
         }
+        // Old kernel work is also counted at the boundary, without changing
+        // its already signed economics. No old budget is silently minted anew.
+        if let Some(route) = &self.state.kernel_route {
+            if let Ok(ledger) = route.ledger() {
+                for (claim, row) in &ledger.claims {
+                    if row.convicted || row.life.state.is_terminal() || row.committed_daa.saturating_add(window) <= ctx.daa_score {
+                        continue;
+                    }
+                    let Some(bond) = route.bond_key_of(&row.producer) else { continue };
+                    seeds.push((
+                        kernel_budget_claim_id_v1(claim),
+                        bond,
+                        row.committed_daa,
+                        PalwBudgetVectorV1 {
+                            claims: 1,
+                            reward_sompi: ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount),
+                            ..PalwBudgetVectorV1::ZERO
+                        },
+                    ));
+                }
+            }
+        }
         let policy = mirror.policy.clone();
         self.bond_budget_op(|budget, state, j| {
             for (id, bond, accepted, vector) in seeds {
@@ -313,6 +343,157 @@ impl TransitionBuilder<'_> {
     }
 
     // ---- hooks ---------------------------------------------------------------------------------------------------------------
+
+    /// Shared monetary R admission used before market/fee-only Round payment.
+    /// `maximum` must come from the authenticated quote/carrier, not a projected
+    /// future sale. Each recipient's entire maximum is held through the window.
+    pub(super) fn reserve_bond_income_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        maximum: u64,
+        actual: u64,
+        origin: PalwBudgetOriginV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
+        if maximum == 0 && actual == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+        if self.state.bond_budget.is_none() {
+            self.create_bond_budget_v1(ctx, &mirror);
+        }
+        let mut hash = keyed(b"misaka-palw/bond-budget/income/v1");
+        hash.update(ctx.block.as_byte_slice());
+        hash.update(&borsh::to_vec(&bond).expect("a bond serializes"));
+        hash.update(&[origin as u8]);
+        hash.update(&(self.entries.len() as u64).to_le_bytes());
+        let id = finish(hash);
+        self.bond_budget_op(|budget, _, j| {
+            budget.reserve_income_v1(&mirror.policy, capital, id, bond, ctx.daa_score, maximum, actual, origin, j)
+        })
+        .expect("created")
+        .map_err(|why| budget_refused(bond, why))
+    }
+
+    /// Kernel carriers create no reward block or consensus weight. Their one
+    /// standalone fee is Q/R-reserved before the trusted consumer commits it.
+    pub(super) fn plan_kernel_claim_budget_v1(
+        &self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        kernel_class: Hash64,
+        reward: u64,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
+        let model = if mirror.allocation_at(ctx.daa_score).is_some() {
+            // Use the actual native class/line which authenticated the kernel
+            // binding. An ambiguous or absent binding has no allocation right.
+            let mut classes: Vec<_> = self
+                .state
+                .kernel_route
+                .as_ref()
+                .into_iter()
+                .flat_map(|route| route.kernel_bindings_v1())
+                .filter(|(_, binding)| binding.kernel_class == kernel_class)
+                .map(|(class, _)| class)
+                .collect();
+            classes.sort();
+            classes.dedup();
+            if classes.len() != 1 {
+                return Err(PalwStateV2Error::BondBudgetRefused(
+                    "a kernel allocation requires exactly one authenticated native class".into(),
+                ));
+            }
+            Some(self.bond_budget_model_of(&classes[0], self.state.class(&classes[0]).map(|row| &row.artifact_root)))
+        } else {
+            None
+        };
+        self.plan_bond_budget_v1(
+            ctx,
+            bond,
+            model,
+            PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0 },
+            PalwBudgetOriginV1::KernelRoute,
+            0,
+        )
+    }
+
+    /// Re-injected on every load; cache/restore never carries a prior branch's
+    /// consumer allowance. Legacy claims keep their admitted payment rule.
+    pub(super) fn kernel_final_reward_caps_v1(
+        &self,
+        ledger: &misaka_palw_kernel::ledger::KernelLedgerV1,
+    ) -> BTreeMap<misaka_palw_kernel::hash::Digest, u64> {
+        let Some(budget) = self.state.bond_budget.as_ref() else { return BTreeMap::new() };
+        ledger
+            .claims
+            .iter()
+            .filter_map(|(claim, row)| {
+                let id = kernel_budget_claim_id_v1(claim);
+                match budget.claim_row(&id) {
+                    Some(reservation) if reservation.origin == PalwBudgetOriginV1::Legacy => None,
+                    Some(reservation) if reservation.origin == PalwBudgetOriginV1::KernelRoute => Some((
+                        *claim,
+                        if reservation.open { reservation.reserved.reward_sompi - reservation.consumed.reward_sompi } else { 0 },
+                    )),
+                    _ if row.committed_daa >= budget.header.created_daa => Some((*claim, 0)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The kernel emits only the allowance injected from this same budget.
+    /// EXEC fees are paid by the root's R consumption, never through this hook.
+    pub(super) fn consume_kernel_final_reward_v1(
+        &mut self,
+        claim: &misaka_palw_kernel::hash::Digest,
+        amount: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(budget) = self.state.bond_budget.as_ref() else { return Ok(()) };
+        let id = kernel_budget_claim_id_v1(claim);
+        let row = budget.claim_row(&id);
+        if row.is_none_or(|row| row.origin == PalwBudgetOriginV1::Legacy) {
+            let old = self
+                .state
+                .kernel_route
+                .as_ref()
+                .and_then(|route| route.ledger().ok())
+                .and_then(|ledger| ledger.claims.get(claim).map(|row| row.committed_daa < budget.header.created_daa))
+                .unwrap_or(false);
+            if old {
+                return Ok(());
+            }
+            if amount == 0 {
+                return Ok(());
+            }
+            return Err(PalwStateV2Error::BondBudgetRefused("a standalone kernel Final has no budget reservation".into()));
+        }
+        if row.is_some_and(|row| row.origin != PalwBudgetOriginV1::KernelRoute) {
+            return Err(PalwStateV2Error::BondBudgetRefused("a kernel Final cannot consume another lane's budget".into()));
+        }
+        let granted = self.bond_budget_final_reward_v1(&id, amount);
+        if granted != amount {
+            return Err(PalwStateV2Error::BondBudgetRefused("kernel Final allowance and actual grant differ".into()));
+        }
+        Ok(())
+    }
+
+    pub(super) fn close_terminal_kernel_budgets_v1(&mut self, ledger: &misaka_palw_kernel::ledger::KernelLedgerV1) {
+        if self.state.bond_budget.is_none() {
+            return;
+        }
+        for (claim, row) in &ledger.claims {
+            if row.convicted || row.life.state.is_terminal() {
+                let id = kernel_budget_claim_id_v1(claim);
+                self.bond_budget_close_v1(&id);
+                // The claim row remains public. Financial quota is forgotten
+                // only after its window releases; EXEC uses its root allocation.
+                self.bond_budget_forget_v1(&id);
+            }
+        }
+    }
 
     /// **An attempt's plan** (lead, merged or rider): Q 1, B `budget_block_units` (one block for a lead, its share for a rider),
     /// R its escrow, F its Final contribution; the block's units consumed at once.
