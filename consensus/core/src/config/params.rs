@@ -2416,6 +2416,9 @@ pub struct Params {
     pub palw_class_semantics_v1: Option<ForkActivation>,
     /// Independent G14 rule activation; absent preserves historical consensus.
     pub palw_court_commitment_scope_v1: Option<ForkActivation>,
+    /// Prospective staged proof contract. Shipping presets remain dormant; old claims keep
+    /// their original court, collateral and material horizons.
+    pub palw_staged_public_court_v1: Option<ForkActivation>,
     /// **ADR-0095 §4.11 as corrected: the membership needs its OWN fence.**
     ///
     /// The first draft put it under `palw_model_lines`, which is wrong on any chain where the
@@ -4269,6 +4272,7 @@ impl Params {
         self.validate_palw_model_immutable_v1()?;
         self.validate_palw_class_semantics_v1()?;
         self.validate_palw_court_commitment_scope_v1()?;
+        self.validate_palw_staged_public_court_v1()?;
         // **RFC-0003 decision 22: the held leaf challenge's refusals** (`crate::palw_held_close_v1`).
         self.validate_palw_held_close_chunks_v1()?;
         // **RFC-0007 Part I: the verification vertex's refusals** (`crate::palw_vertex_v1`).
@@ -6481,6 +6485,9 @@ impl Params {
         if self.palw_court_commitment_scope_v1 == Some(ForkActivation::never()) {
             self.palw_court_commitment_scope_v1 = None;
         }
+        if self.palw_staged_public_court_v1 == Some(ForkActivation::never()) {
+            self.palw_staged_public_court_v1 = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -8515,6 +8522,24 @@ impl Params {
         Ok(())
     }
 
+    pub fn palw_staged_public_court_v1_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_staged_public_court_v1) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_staged_public_court_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_staged_public_court_v1_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    pub fn validate_palw_staged_public_court_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        if self.palw_staged_public_court_v1.is_some_and(|f| f != ForkActivation::never()) && self.palw_staged_public_court_v1_fence().is_none() {
+            return Err(crate::palw_state_v2::PalwStateV2Error::InvalidParams("palw_staged_public_court_v1 requires ConsensusV2"));
+        }
+        Ok(())
+    }
+
     pub fn palw_model_immutable_v1_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_model_immutable_v1) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
@@ -10372,6 +10397,7 @@ impl Params {
             palw_model_immutable_v1,
             palw_class_semantics_v1,
             palw_court_commitment_scope_v1,
+            palw_staged_public_court_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -10654,6 +10680,7 @@ impl Params {
             ("palw_model_immutable_v1", *palw_model_immutable_v1),
             ("palw_class_semantics_v1", *palw_class_semantics_v1),
             ("palw_court_commitment_scope_v1", *palw_court_commitment_scope_v1),
+            ("palw_staged_public_court_v1", *palw_staged_public_court_v1),
             ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_seed_v2", *palw_model_seed_v2),
@@ -11024,6 +11051,10 @@ impl Params {
         }
         if let Some(at) = self.palw_court_commitment_scope_v1 {
             h.write(b"palw_court_commitment_scope_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_staged_public_court_v1 {
+            h.write(b"palw_staged_public_court_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // The provider court's fence (DA16), NAMED likewise.
@@ -11705,6 +11736,7 @@ impl Params {
             palw_model_immutable_v1,
             palw_class_semantics_v1,
             palw_court_commitment_scope_v1,
+            palw_staged_public_court_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -12287,6 +12319,9 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_court_commitment_scope_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_staged_public_court_v1.as_mut() {
             fork(activation, visit);
         }
         match palw_model_lines.as_mut() {
@@ -13057,6 +13092,7 @@ impl Params {
             palw_model_immutable_v1,
             palw_class_semantics_v1,
             palw_court_commitment_scope_v1,
+            palw_staged_public_court_v1,
             palw_model_benefits,
             palw_model_leg_v2,
             palw_model_seed_v2,
@@ -13709,6 +13745,10 @@ impl Params {
         }
         if let Some(activation) = palw_court_commitment_scope_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_court_commitment_scope_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_staged_public_court_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_staged_public_court_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_model_lines {
@@ -14734,6 +14774,7 @@ impl Params {
             palw_model_immutable_v1: self.palw_model_immutable_v1,
             palw_class_semantics_v1: self.palw_class_semantics_v1,
             palw_court_commitment_scope_v1: self.palw_court_commitment_scope_v1,
+            palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
             palw_model_seed_v2: self.palw_model_seed_v2,
@@ -15845,6 +15886,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_immutable_v1: None,
     palw_class_semantics_v1: None,
     palw_court_commitment_scope_v1: None,
+    palw_staged_public_court_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -16148,6 +16190,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_immutable_v1: None,
     palw_class_semantics_v1: None,
     palw_court_commitment_scope_v1: None,
+    palw_staged_public_court_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -16433,6 +16476,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_immutable_v1: None,
     palw_class_semantics_v1: None,
     palw_court_commitment_scope_v1: None,
+    palw_staged_public_court_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -24044,6 +24088,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_immutable_v1: None,
     palw_class_semantics_v1: None,
     palw_court_commitment_scope_v1: None,
+    palw_staged_public_court_v1: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
@@ -27872,6 +27917,29 @@ mod consensus_params_id_tests {
             t11.dns_params.as_ref().map(|d| (d.min_active_validators, d.min_bond_amount_sompi)),
             Some((1, 10 * SOMPI_PER_KASPA))
         );
+    }
+
+    #[test]
+    fn staged_public_court_has_independent_dormant_schedule_and_block_clock() {
+        for p in [MAINNET_PARAMS, TESTNET_PARAMS, DEVNET_PARAMS, SIMNET_PARAMS, palw_rc_shipped_params(), palw_t12_shipped_params()] {
+            assert!(p.palw_staged_public_court_v1.is_none());
+            assert!(!p.palw_staged_public_court_v1_active_at(u64::MAX));
+            let mut future = p.clone();
+            future.palw_staged_public_court_v1 = Some(ForkActivation::new(9_000_000));
+            assert_eq!(p.consensus_identity_id(), future.consensus_identity_id());
+            assert_ne!(p.consensus_params_id(), future.consensus_params_id());
+            future.palw_staged_public_court_v1 = Some(ForkActivation::never());
+            assert_eq!(p.consensus_params_id(), future.consensus_params_id());
+        }
+        let mut p = palw_t12_shipped_params();
+        p.palw_staged_public_court_v1 = Some(ForkActivation::new(47));
+        p.validate_palw_staged_public_court_v1().unwrap();
+        assert!(!p.palw_staged_public_court_v1_active_at(46));
+        assert!(p.palw_staged_public_court_v1_active_at(47));
+        p.for_each_fence(&mut |height| *height = height.saturating_add(3));
+        assert_eq!(p.palw_staged_public_court_v1.unwrap().daa_score(), 50);
+        let p = Params { palw_staged_public_court_v1: Some(ForkActivation::new(1)), ..MAINNET_PARAMS };
+        assert!(p.validate_palw_staged_public_court_v1().is_err());
     }
 
     #[test]
