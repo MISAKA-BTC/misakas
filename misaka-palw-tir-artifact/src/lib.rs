@@ -302,8 +302,17 @@ pub struct PalwTirContainerV1 {
 impl PalwTirContainerV1 {
     /// Read and check the header (no tensor is read).
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_bounded(path, u64::MAX, PALW_TIR_MAX_HEADER_BYTES_V1)
+    }
+
+    /// Local tooling may tighten the file/header caps before allocation. The
+    /// normal loader retains its format cap; this does not widen either bound.
+    pub fn open_bounded(path: &Path, maximum_file_bytes: u64, maximum_header_bytes: u32) -> Result<Self> {
         let mut f = std::fs::File::open(path)?;
         let file_len = f.metadata()?.len();
+        if file_len > maximum_file_bytes {
+            return Err(PalwTirContainerError::Header(format!("a file of {file_len} bytes exceeds the local limit")));
+        }
         let mut prefix = [0u8; PREFIX as usize];
         f.read_exact(&mut prefix).map_err(|_| PalwTirContainerError::Magic)?;
         if &prefix[0..8] != PALW_TIR_CONTAINER_MAGIC_V1 || u16::from_le_bytes([prefix[8], prefix[9]]) != PALW_TIR_CONTAINER_VERSION_V1
@@ -311,7 +320,7 @@ impl PalwTirContainerV1 {
             return Err(PalwTirContainerError::Magic);
         }
         let hl = u32::from_le_bytes(prefix[10..14].try_into().expect("4 bytes"));
-        if hl > PALW_TIR_MAX_HEADER_BYTES_V1 || PREFIX + hl as u64 > file_len {
+        if hl > PALW_TIR_MAX_HEADER_BYTES_V1.min(maximum_header_bytes) || PREFIX + hl as u64 > file_len {
             return Err(PalwTirContainerError::Header(format!("a header of {hl} bytes in a file of {file_len}")));
         }
         let mut hb = vec![0u8; hl as usize];

@@ -4,6 +4,27 @@ This record covers the full RFC12 requirements inventory in the [joint audit](..
 
 ## Concrete changes
 
+The SDK `complete_check::VerifiedCompleteCheckV1` and `misaka model onboard verify`
+support the complete-check bootstrap consumer. They finish one bounded op-211
+inventory, check its ledger/aux roots, bind op-231's attempt/program to that same
+snapshot, and derive the program, position limit, commitment, registrant and
+kernel parameter root from the rooted rows. A file is accepted only for that
+program and artifact; the entire admitted input/leaf domain is executed. The
+2-MiB local container/header limit is checked before allocation, beside the
+consensus 64-KiB tensor and 90,000-byte post limits. `model onboard complete-post`
+prepares a signed tag-109 object for an open, unposted, unexpired attempt;
+submission uses the existing public object path. There is no required beacon or
+pre-existing Final in this consumer.
+
+These are tooling and snapshot-integrity checks. The caller must authenticate
+the served roots against its trusted chain view. The tiny typed program in the
+SDK controls is explicitly a fixture, not a trained-model, native mature-work,
+operator-independence, sampled-soundness or release result. Production kernel
+and Panel=0 activation refusals remain intact. The complete-only private process
+profile and actual public registration/work/Final/pruned-join run remain
+separate requirements; construction-only process logs do not satisfy them.
+This candidate has scoped parse/diff checks; its Rust execution is centralized.
+
 | Requirement | Implementation and actual consumers | Verification scope |
 | --- | --- | --- |
 | AUTHORITY / HEADS | EVM, PALW, legacy overlay and UTXO imports require the established pruning target. The sidecar imports recheck and pin it through their durable batches. A historic authentic root cannot authorize arbitrary replacement of the live tip. Existing pruned fixtures establish context through `import_pruning_points`; root-negative and selected-child-witness coverage remains. | New target controls are native consensus API tests. Rust execution for the latest guards is centralized in the integration checkout; parse checks alone are not execution evidence. |

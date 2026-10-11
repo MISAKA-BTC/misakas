@@ -294,6 +294,17 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
     if !r.found || r.attempt_row.is_empty() {
         return Err(CliError::new(exit::NOT_READY, format!("class {class}: no conformance record on this node")));
     }
+    if r.attempt_row.len() > 2 << 20 || r.program.len() > misaka_palw_sdk::complete_check::COMPLETE_CHECK_MAX_PROGRAM_BYTES_V1 * 2 {
+        return Err(CliError::new(exit::GENERIC, "the conformance response exceeds the tooling read limits"));
+    }
+    if r.class_id != class {
+        return Err(CliError::new(exit::GENERIC, "the node served a conformance record for another class"));
+    }
+    let check = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&unhex(&r.attempt_row)?)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
+    if check.is_complete_check() {
+        return super::model_complete::verify(ctx, &nv, &r, artifact).await;
+    }
     let finals = nv
         .client
         .get_palw_kernel_finals(GetPalwKernelFinalsRequest { limit: 0 })

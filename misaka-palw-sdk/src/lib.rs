@@ -76,6 +76,8 @@ pub mod tir_registration;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
+/// Bounded complete-check builder and verifier over a rooted public snapshot.
+pub mod complete_check;
 /// Bounded, ordered collection of the public kernel-route inventory.
 pub mod kernel_rows;
 

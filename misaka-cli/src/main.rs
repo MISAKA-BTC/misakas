@@ -793,6 +793,19 @@ enum ModelCmd {
 
 #[derive(Subcommand, Debug)]
 enum OnboardCmd {
+    /// Exhaustively execute a rooted complete-check attempt and prepare its signed tag-109 post locally.
+    CompletePost {
+        #[arg(long)]
+        class: String,
+        #[arg(long, value_name = "FILE")]
+        artifact: std::path::PathBuf,
+        #[arg(long)]
+        bond: String,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
     /// Step 1, no key and no node: wrap a registration object (Borsh) in an UNSIGNED tag-108 request for BOND, valid in
     /// [--valid-from, --valid-until] while the chain's fork digest is this build's at --valid-from.
     EnvelopeExport {
@@ -3164,6 +3177,9 @@ async fn run_cli() -> std::process::ExitCode {
                     operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
                 }
                 OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
+                OnboardCmd::CompletePost { class, artifact, bond, key, out } => {
+                    operator::model_complete::post(&ctx, &class, &artifact, &bond, &key.source(), &out).await
+                }
                 OnboardCmd::Verify { class, artifact } => operator::model_onboard::verify(&ctx, &class, artifact.as_deref()).await,
             }
         }),
