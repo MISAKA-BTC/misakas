@@ -18994,7 +18994,7 @@ mod accepted_objects_walk_tests {
             hash(n),
             Arc::new(vec![MergesetBlockAcceptanceData {
                 block_hash: hash(n),
-                accepted_transactions: vec![AcceptedTxEntry { transaction_id: Default::default(), index_within_block: 0 }],
+                accepted_transactions: vec![AcceptedTxEntry { transaction_id: chain.blocks[&hash(n)].transactions[0].id(), index_within_block: 0 }],
             }]),
         );
         chain.sink = hash(n);
@@ -19156,6 +19156,8 @@ mod accepted_objects_walk_tests {
             borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap());
         let mut chain = repeated_daa_chain();
         chain.blocks.insert(hash(8), Block::new(chain.headers[&hash(8)].as_ref().clone(), vec![tx]));
+        chain.acceptance.insert(hash(8), Arc::new(vec![MergesetBlockAcceptanceData {block_hash:hash(8),
+            accepted_transactions:vec![AcceptedTxEntry{transaction_id:chain.blocks[&hash(8)].transactions[0].id(),index_within_block:0}]}]));
         let wanted = BTreeMap::from([(claim, run.outcome.execution_root)]);
         let (_, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
             &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
@@ -19167,6 +19169,19 @@ mod accepted_objects_walk_tests {
             &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
         assert!(reset && answers.is_empty(), "end-of-page branch recheck discards the old branch's otherwise authentic bytes");
         assert_eq!(walk.anchor, hash(20)); assert_eq!(walk.next, Some(hash(20))); assert_eq!(walk.floor, 100);
+    }
+
+    #[test]
+    fn public_filer_treats_native_body_acceptance_identity_mismatch_as_a_hole() {
+        let mut chain=repeated_daa_chain();
+        let mut row=chain.acceptance[&hash(7)].as_ref().clone();
+        row[0].accepted_transactions[0].transaction_id=hash(999);
+        chain.acceptance.insert(hash(7),Arc::new(row));
+        let mut seen=Vec::new();
+        let (next,hole)=super::palw_fraud_filer::history::walk_available_v1(&chain,chain.sink,100,8,
+            &mut |_,object|seen.push(claim_of(&object))).unwrap();
+        assert!(next.is_none() && hole);
+        assert_eq!(seen,vec![8,6,5,4,3,2,1],"an index cannot substitute another body for an accepted tx identity; older authenticated material remains reachable");
     }
 
     #[test]
@@ -19365,7 +19380,7 @@ mod accepted_objects_walk_tests {
             Arc::new(vec![MergesetBlockAcceptanceData {
                 block_hash: hash(2),
                 accepted_transactions: (0..count)
-                    .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                    .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(2)].transactions[i].id(), index_within_block: i as u32 })
                     .collect(),
             }]),
         );
@@ -19397,6 +19412,8 @@ mod accepted_objects_walk_tests {
         let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
             borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: good.clone() }).unwrap());
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), vec![tx]));
+        chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {block_hash:hash(9),
+            accepted_transactions:vec![AcceptedTxEntry{transaction_id:chain.blocks[&hash(9)].transactions[0].id(),index_within_block:0}]}]));
         let (fresh, _, delivered) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
             &chain, 100, 100, Some(partial), 100, &wanted, &selected_units,
         ).unwrap();
@@ -19416,7 +19433,7 @@ mod accepted_objects_walk_tests {
         )).collect();
         chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {
             block_hash: hash(9), accepted_transactions: (0..txs.len()).map(|i| AcceptedTxEntry {
-                transaction_id: Default::default(), index_within_block: i as u32,
+                transaction_id: txs[i].id(), index_within_block: i as u32,
             }).collect(),
         }]));
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
@@ -19453,7 +19470,7 @@ mod accepted_objects_walk_tests {
         chain.blocks.insert(hash(40), Block::new(Header::from_precomputed_hash(hash(40), vec![]), txs));
         chain.acceptance.insert(hash(2), Arc::new(vec![MergesetBlockAcceptanceData {
             block_hash: hash(40), accepted_transactions: (0..2).map(|i| AcceptedTxEntry {
-                transaction_id: Default::default(), index_within_block: i,
+                transaction_id: chain.blocks[&hash(40)].transactions[i as usize].id(), index_within_block: i,
             }).collect(),
         }]));
         let mut previous = None;
@@ -19521,7 +19538,7 @@ mod accepted_objects_walk_tests {
                 Arc::new(vec![MergesetBlockAcceptanceData {
                     block_hash: hash(block),
                     accepted_transactions: (0..count)
-                        .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: i as u32 })
+                        .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(block)].transactions[i].id(), index_within_block: i as u32 })
                         .collect(),
                 }]),
             );
@@ -19664,7 +19681,7 @@ mod accepted_objects_walk_tests {
             block_hash: hash(block),
             accepted_transactions: indices
                 .iter()
-                .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: *i })
+                .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(block)].transactions[*i as usize].id(), index_within_block: *i })
                 .collect(),
         };
         chain.acceptance.insert(hash(4), Arc::new(vec![accepted(14, &[0, 1, 2])]));

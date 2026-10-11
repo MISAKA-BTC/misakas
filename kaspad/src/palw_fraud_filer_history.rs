@@ -2,10 +2,7 @@
 //! never invents an answer and never marks the watermark complete. Older independently
 //! authenticated accepted bodies remain reachable in the same bounded page.
 use kaspa_consensus_core::{
-    Hash64,
-    api::ConsensusApi,
-    palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2,
-    palw_state_v2::PalwConsensusObjectV2,
+    Hash64, api::ConsensusApi, palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2, palw_state_v2::PalwConsensusObjectV2,
 };
 
 pub(in crate::palw_panel) fn walk_available_v1(
@@ -40,6 +37,10 @@ pub(in crate::palw_panel) fn walk_available_v1(
                             incomplete = true;
                             continue;
                         };
+                        if tx.id() != entry.transaction_id {
+                            incomplete = true;
+                            continue;
+                        }
                         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
                             && let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload)
                         {
