@@ -241,6 +241,16 @@ pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
             builder.state.kernel_route.as_ref().expect("created").beacon_source_inputs_v4(fence, ctx.daa_score).map_err(refused)?;
         ledger.set_beacon_source_inputs(inputs).map_err(refused)?;
     }
+    if let Some(fence) = extras.beacon_source_fee.filter(|f| f.activation.is_active(ctx.daa_score)) {
+        let inputs = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .expect("created")
+            .beacon_source_fee_inputs_v1(fence, &ledger.beacon_source_inputs, ctx.daa_score)
+            .map_err(refused)?;
+        ledger.set_beacon_source_fee_inputs(inputs).map_err(refused)?;
+    }
     // RFC-0015 admission is no longer a list read here: a class is admitted to the mode at its own registration, and only while
     // DERIVED-eligible (`opv_gate_v1`), so the ledger's admitted rows are exactly the classes that were eligible when they registered.
     Ok(ledger)
@@ -535,10 +545,57 @@ fn apply_settlements_to_exec_vesting(
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
     let mut escrow_debited: std::collections::BTreeMap<Option<misaka_palw_kernel::hash::Digest>, u64> = Default::default();
+    // Persistent source escrows were debited in an earlier fold. Their backing is the rooted funding row, never a later
+    // sponsor balance or this batch's job escrow. All fee instructions are strict, including sweeps.
+    let fee_ledger = if events.iter().any(|e| {
+        matches!(e, LedgerEventV1::Settlement(s) if matches!(s.kind,
+        SettlementKindV1::FundSourceFeeEscrow | SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow))
+    }) {
+        Some(builder.state.kernel_route.as_ref().ok_or_else(|| refused("source fee route missing"))?.ledger().map_err(refused)?)
+    } else {
+        None
+    };
+    let mut fee_held: std::collections::BTreeMap<_, _> =
+        fee_ledger.as_ref().map(|l| l.beacon_source_fees.iter().map(|(c, f)| (*c, f.held)).collect()).unwrap_or_default();
+    let mut fee_paid = std::collections::BTreeSet::new();
     for event in events {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
+            SettlementKindV1::FundSourceFeeEscrow => {
+                let context = s.claim.ok_or_else(|| refused("source fee funding context missing"))?;
+                if s.amount == 0 || fee_held.contains_key(&context) {
+                    return Err(refused("zero or duplicate source fee escrow funding"));
+                }
+                let key = key.ok_or_else(|| refused("source fee sponsor bond missing"))?;
+                let debit = builder.slash_bond(key, u128::from(s.amount))?;
+                if debit != s.amount {
+                    return Err(refused("source fee escrow not fully prepaid"));
+                }
+                fee_held.insert(context, debit);
+            }
+            SettlementKindV1::PaySourceFeeEscrow | SettlementKindV1::RefundSourceFeeEscrow => {
+                let context = s.claim.ok_or_else(|| refused("source fee payout context missing"))?;
+                let l = fee_ledger.as_ref().expect("loaded for fee settlements");
+                let funding = l.beacon_source_fees.get(&context).ok_or_else(|| refused("source fee payout not prepaid"))?;
+                if s.kind == SettlementKindV1::RefundSourceFeeEscrow {
+                    if s.bond != funding.terms.sponsor {
+                        return Err(refused("source fee refund recipient substituted"));
+                    }
+                } else {
+                    let promise =
+                        l.beacon_source_fee_promises.get(&(context, s.bond)).ok_or_else(|| refused("source fee promise missing"))?;
+                    if promise.outcome.is_some() || promise.fee != s.amount || !fee_paid.insert((context, s.bond)) {
+                        return Err(refused("source fee receipt differs from the once-only promise"));
+                    }
+                }
+                let held = fee_held.get_mut(&context).ok_or_else(|| refused("source fee escrow missing"))?;
+                *held = held.checked_sub(s.amount).ok_or_else(|| refused("source fee payout exceeds prepaid escrow"))?;
+                let payload = key
+                    .and_then(|k| builder.state.bonds.get(&k).map(|b| b.payout_payload))
+                    .ok_or_else(|| refused("source fee payee missing"))?;
+                builder.add_kernel_payout(payload, s.amount)?;
+            }
             SettlementKindV1::SlashFraud
             | SettlementKindV1::SlashDefault
             | SettlementKindV1::SlashFiling

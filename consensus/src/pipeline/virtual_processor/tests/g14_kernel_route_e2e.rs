@@ -1737,12 +1737,13 @@ pub(super) struct KernelMoneyV1 {
     pub slashed: u128,
     pub paid: u128,
     pub burned: u128,
+    pub source_fee_held: u128,
 }
 
 pub(super) fn kernel_money_v1(chain: &T12Chain) -> KernelMoneyV1 {
     let state = chain.tip_state().1;
     let blocks = chain_blocks(chain, chain.sink());
-    let mut m = KernelMoneyV1 { collateral: 0, slashed: 0, paid: 0, burned: 0 };
+    let mut m = KernelMoneyV1 { collateral: 0, slashed: 0, paid: 0, burned: 0, source_fee_held: 0 };
     for bond in &chain.bonds {
         let b = state.bond(bond).expect("a card's bond");
         m.collateral += u128::from(b.collateral);
@@ -1762,6 +1763,11 @@ pub(super) fn kernel_money_v1(chain: &T12Chain) -> KernelMoneyV1 {
         m.paid += state.pending_payouts_iter().find(|(k, _)| **k == key).map_or(0, |(_, p)| u128::from(p.amount));
     }
     m.burned = chain.ctx.consensus.palw_kernel_route_v1().map_or(0, |r| u128::from(r.header.scalars.burned));
+    m.source_fee_held = chain
+        .ctx
+        .consensus
+        .palw_kernel_route_v1()
+        .map_or(0, |r| u128::from(r.ledger().expect("rooted fee ledger").source_fee_escrow_total().expect("bounded fee escrow")));
     m
 }
 
@@ -1776,9 +1782,9 @@ pub(super) fn assert_kernel_conserved_v1(before: KernelMoneyV1, after: KernelMon
         "{what}: Δcollateral = −Δslashed ({before:?} → {after:?})"
     );
     assert_eq!(
-        after.slashed - before.slashed,
-        (after.paid - before.paid) + (after.burned - before.burned),
-        "{what}: every debit is paid or burned ({before:?} → {after:?})"
+        before.collateral + before.paid + before.burned + before.source_fee_held,
+        after.collateral + after.paid + after.burned + after.source_fee_held,
+        "{what}: every debit is paid, burned or held in source escrow ({before:?} → {after:?})"
     );
 }
 

@@ -1091,6 +1091,21 @@ fn fresh_v3(net: &Net, o: &Onb) -> misaka_palw_sdk::onboarding_chain::FreshRepor
         let context = a.beacon_context(&a.policy()).id();
         let sources = opt_in_sources_from_kernel_rows_v4(&header, rows.clone(), &api.ledger_root(), &api.aux_root(), &context)
             .expect("v4 target and reservations are rooted to the chain");
+        let ledger = net.ledger();
+        assert_eq!(sources.fee_contract(), ledger.beacon_source_fees.get(&context), "SDK fee book uses the same rooted snapshot");
+        for ((id, producer), promise) in &ledger.beacon_source_fee_promises {
+            if *id == context {
+                assert_eq!(sources.fee_receipt(producer), Some(promise));
+            }
+        }
+        if ledger.beacon_source_fees.contains_key(&context) {
+            let mut bad = rows.clone();
+            bad.iter_mut().find(|(t, _, _)| *t == misaka_palw_kernel::rows::TABLE_BEACON_SOURCE_FEES_V1).unwrap().2.push(0);
+            assert!(
+                opt_in_sources_from_kernel_rows_v4(&header, bad, &api.ledger_root(), &api.aux_root(), &context).is_err(),
+                "forged funding row is refused"
+            );
+        }
         let mut corrupt = rows;
         corrupt
             .iter_mut()
@@ -1354,11 +1369,23 @@ fn opt_in_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     (Config::new(params), bundle, premine, floats)
 }
 
-async fn opt_in_world(mut net: Net, seed: u64) -> (Net, Onb, Onb) {
+async fn opt_in_world(net: Net, seed: u64) -> (Net, Onb, Onb) {
+    opt_in_world_with_binding(net, seed, false).await
+}
+async fn opt_in_world_with_binding(mut net: Net, seed: u64, false_binding: bool) -> (Net, Onb, Onb) {
     net.beat_to(1).await;
-    let mut onbs =
-        onboard_all(&mut net, vec![Spec::honest(seed, BOOT, true), Spec { opt_in: true, ..Spec::honest(seed + 1, CAND, false) }])
-            .await;
+    let mut onbs = onboard_all(
+        &mut net,
+        vec![
+            Spec::honest(seed, BOOT, true),
+            Spec {
+                opt_in: true,
+                kernel: onb_fixture(if false_binding { seed + 2 } else { seed + 1 }),
+                ..Spec::honest(seed + 1, CAND, false)
+            },
+        ],
+    )
+    .await;
     let c = onbs.pop().unwrap();
     let b = onbs.pop().unwrap();
     commit(&mut net, &b, 0x22).await;
@@ -1510,4 +1537,212 @@ async fn g14_opv_bootstrap_v4_opted_in_withholding_vetoes_and_burns_its_own_rese
     assert!(fresh.verdict.beacon.starts_with("Vetoed"), "{}", fresh.verdict.beacon);
     let z = net.replay().await;
     net.assert_same(&z, "v4 veto replay");
+}
+
+// ---- Prepaid fees: independent dormant monetary fence, actual bond debits and coinbase payouts -----------------------------
+fn source_fee_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (cfg, bundle, premine, floats) = opt_in_config();
+    let mut params = cfg.params.clone();
+    params.palw_beacon_source_fee_v1 =
+        Some(kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1::unapproved_probe_at(ForkActivation::new(1)));
+    assert!(params.validate_palw_v2().is_err());
+    (Config::new(params), bundle, premine, floats)
+}
+fn fee_terms(net: &Net, c: &Onb, capacity: u32) -> misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 {
+    let a = net.attempt(c.v2);
+    let target = net.api().unwrap().beacon_source_target_v4(&a.beacon_context(&a.policy()).id()).unwrap();
+    misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 {
+        source: target.terms,
+        sponsor: net.kid(CAND),
+        fee_per_source: 50,
+        max_sources: capacity,
+    }
+}
+async fn paid_sources(
+    net: &mut Net,
+    terms: misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1,
+    jobs: &[KernelJobV1],
+    producers: &[usize],
+) {
+    let before = net.ledger();
+    let mut objects = Vec::new();
+    for (job, p) in jobs.iter().zip(producers) {
+        let producer = net.kid(*p);
+        let seal = before.seals[&(job.id(), producer)].seal;
+        let k = K::OptInPaidBeaconSource {
+            producer,
+            job: job.id(),
+            seal,
+            context: terms.source.context,
+            source_terms: terms.source.id(),
+            fee_terms: terms.id(),
+        };
+        objects.push((*p, net.route(*p, &k)));
+    }
+    net.send(objects).await;
+    for p in producers {
+        assert_eq!(net.ledger().beacon_source_fee_promises[&(terms.source.context, net.kid(*p))].fee, 50);
+    }
+}
+
+#[tokio::test]
+async fn g14_opv_bootstrap_source_fee_prepaid_final_horizon_db_replay_and_two_reorgs_pay_once() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1 as F;
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg(source_fee_config(), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
+    net._keep.push(Box::new(receiver));
+    let (mut net, b, c) = opt_in_world(net, 71).await;
+    let terms = fee_terms(&net, &c, 3);
+    let context = terms.source.context;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0xA0).await;
+    net.beat_to(terms.source.seal_start).await;
+    let object = K::FundBeaconSourceFee { terms };
+    let collateral = net.collateral(CAND);
+    let slashed = net.slashed(CAND);
+    let wrong = net.route(BOOT, &object);
+    net.send(vec![(BOOT, wrong)]).await;
+    assert!(net.ledger().beacon_source_fees.is_empty(), "wrong sponsor signature cannot fund");
+    let low = K::FundBeaconSourceFee {
+        terms: misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 { fee_per_source: 49, ..terms },
+    };
+    let o = net.route(CAND, &low);
+    net.send(vec![(CAND, o)]).await;
+    assert_eq!(net.collateral(CAND), collateral, "below-minimum funding is refused before debit");
+    let before = kernel_money_v1(&net.chain);
+    let o = net.route(CAND, &object);
+    net.send(vec![(CAND, o)]).await;
+    assert_eq!(net.collateral(CAND), collateral - 150);
+    assert_eq!(net.slashed(CAND), slashed + 150);
+    assert_eq!(net.ledger().source_fee_escrow_total().unwrap(), 150);
+    assert_kernel_conserved_v1(before, kernel_money_v1(&net.chain), "actual fee prepayment");
+    let o = net.route(CAND, &object);
+    net.send(vec![(CAND, o)]).await;
+    assert_eq!(net.collateral(CAND), collateral - 150, "duplicate funding cannot debit twice");
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
+    paid_sources(&mut net, terms, &jobs, &PRODUCERS[..2]).await;
+    let before = kernel_money_v1(&net.chain);
+    net.beat_to(terms.source.seal_end).await;
+    reveal_now(&mut net, &reveals).await;
+    let f = &net.ledger().beacon_source_fees[&context];
+    assert_eq!((f.held, f.refunded, f.paid), (100, 50, 0), "unused principal refunded; no fee at reveal");
+    net.beat_to(terms.source.final_by).await;
+    assert!(net.ledger().beacon_source_fee_promises.values().all(|p| p.outcome.is_none()), "Final alone does not vest fees");
+    fresh_v3(&net, &c); // Actual served rows include pending fee backing and receipts.
+    let z = net.replay().await;
+    net.assert_same(&z, "pending fee replay");
+    let roots = (net.api().unwrap().ledger_root(), net.api().unwrap().aux_root());
+    let mut net = net.restart(db);
+    assert_eq!((net.api().unwrap().ledger_root(), net.api().unwrap().aux_root()), roots, "real DB reopens prepaid rights");
+    net.beat_to(terms.source.hold_until).await;
+    assert_eq!(net.ledger().beacon_source_fees[&context].paid, 0);
+    let fork = net.chain.sink();
+    let fork_daa = net.daa();
+    net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    assert_eq!(net.daa(), fork_daa + 1, "fee fork A stays within the shallow reorg window");
+    assert_eq!(net.ledger().beacon_source_fees[&context].paid, 100);
+    assert_eq!(net.ledger().source_fee_escrow_total().unwrap(), 0);
+    assert!(net.ledger().beacon_source_fee_promises.values().all(|p| matches!(p.outcome, Some(F::Paid { .. }))));
+    fresh_v3(&net, &c); // The same public SDK entry point verifies once-only settled outcomes.
+    assert_kernel_conserved_v1(before, kernel_money_v1(&net.chain), "fee principal and vested income");
+    let z = net.replay().await;
+    net.assert_same(&z, "paid fee replay");
+    let zn = net.on_chain(z);
+    let mut branch = t12_genesis_chain(&net.config, &net.bundle, &net.premine, &net.floats);
+    let shared = chain_blocks(&net.chain, fork);
+    let fork_time = shared.last().unwrap().header.timestamp;
+    for blk in shared {
+        arrive(&branch, blk, "source fee common prefix").await;
+    }
+    branch.ctx.simulated_time = fork_time;
+    branch.set_nonce_for_fork(1_000_000);
+    let ttpb = net.ttpb();
+    // A has one block and B has two. Both switches stay inside the node's two-DAA
+    // shallow window; extending B farther would correctly prevent the second switch.
+    for _ in 0..2 {
+        let blk = branch.heartbeat(ttpb, Vec::new()).await;
+        arrive(&zn.chain, blk, "source fee branch B").await;
+    }
+    assert_eq!(zn.chain.sink(), branch.sink());
+    assert_eq!(zn.daa(), fork_daa + 2);
+    assert_eq!(zn.ledger().beacon_source_fees[&context].paid, 100, "reorg reapplies payout once");
+    assert_eq!(kernel_money_v1(&zn.chain).paid, kernel_money_v1(&branch).paid);
+    let old_len = chain_blocks(&net.chain, net.chain.sink()).len();
+    for _ in 0..2 {
+        net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for blk in chain_blocks(&net.chain, net.chain.sink()).into_iter().skip(old_len) {
+        arrive(&zn.chain, blk, "source fee branch A again").await;
+    }
+    net.assert_same(&zn.chain, "source fee second reorg");
+    assert_eq!(zn.daa(), fork_daa + 3);
+    assert_eq!(zn.slashed(CAND), slashed + 150, "only the original source fee principal was debited");
+    for p in &PRODUCERS[..2] {
+        let reward = net.ledger().policy.claim_reward;
+        let (minted, owed) = minted_and_owed(&net, &zn.chain, *p);
+        assert_eq!(minted + owed, reward + 50, "one ordinary Final reward plus one vested source fee");
+    }
+}
+
+#[tokio::test]
+async fn g14_opv_bootstrap_source_fee_withheld_source_refunds_but_honest_sources_in_vetoed_target_get_paid() {
+    use misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1 as F;
+    kaspa_core::log::try_init_logger("warn");
+    let (mut net, b, c) = opt_in_world_with_binding(Net::over_cfg(source_fee_config(), TestConsensus::new), 73, true).await;
+    let terms = fee_terms(&net, &c, 3);
+    let context = terms.source.context;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..3], b.opv, 0xA8).await;
+    net.beat_to(terms.source.seal_start).await;
+    let before = kernel_money_v1(&net.chain);
+    let k = K::FundBeaconSourceFee { terms };
+    let o = net.route(CAND, &k);
+    net.send(vec![(CAND, o)]).await;
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..3]).await;
+    paid_sources(&mut net, terms, &jobs, &PRODUCERS[..3]).await;
+    net.beat_to(terms.source.seal_end).await;
+    reveal_now(&mut net, &reveals[..2]).await;
+    net.beat_to(terms.source.reveal_end + 1).await;
+    assert!(matches!(net.attempt(c.v2).last_end, Some((ConformanceAttemptEndV1::BeaconVetoed, _))));
+    let ledger = net.ledger();
+    let f = &ledger.beacon_source_fees[&context];
+    assert_eq!((f.held, f.refunded, f.paid), (100, 50, 0));
+    assert!(matches!(ledger.beacon_source_fee_promises[&(context, net.kid(PRODUCERS[2]))].outcome, Some(F::Refunded { .. })));
+    assert_kernel_conserved_v1(before, kernel_money_v1(&net.chain), "fee funding and forfeit before other-lane slash");
+    let capital = net.collateral(CAND);
+    let debits = net.slashed(CAND);
+    let kernel_root = Hash64::from_bytes(c.kernel.pc.root());
+    let proof = row_mismatch_proof(&c.f, &c.kernel);
+    let o = net.artifact_challenged(OUTSIDER, c.v2, kernel_root, proof);
+    net.send(vec![(OUTSIDER, o)]).await;
+    assert!(net.api().unwrap().artifact_binding_v1(&c.v2, &kernel_root).unwrap().refuted);
+    assert!(net.collateral(CAND) < capital && net.slashed(CAND) > debits, "an actual different court debits the sponsor");
+    assert_eq!(net.ledger().beacon_source_fees[&context].held, 100, "the prepaid promise survives the sponsor slash");
+    let before = kernel_money_v1(&net.chain); // Outside-lane slash is not a kernel burn; audit the following kernel window separately.
+    net.beat_to(terms.source.hold_until + 1).await;
+    let ledger = net.ledger();
+    let f = &ledger.beacon_source_fees[&context];
+    assert_eq!((f.held, f.refunded, f.paid), (0, 50, 100), "target veto cannot take another source's fulfilled fee");
+    for p in &PRODUCERS[..2] {
+        assert!(matches!(ledger.beacon_source_fee_promises[&(context, net.kid(*p))].outcome, Some(F::Paid { .. })));
+    }
+    assert_kernel_conserved_v1(before, kernel_money_v1(&net.chain), "failed and honest source contracts");
+    let z = net.replay().await;
+    net.assert_same(&z, "fee refund plus fee income replay");
+}
+
+#[tokio::test]
+async fn g14_opv_bootstrap_source_fee_is_refused_without_its_independent_monetary_fence() {
+    let (mut net, _, c) = opt_in_world(Net::over_cfg(opt_in_config(), TestConsensus::new), 75).await;
+    let terms = fee_terms(&net, &c, 3);
+    net.beat_to(terms.source.seal_start).await;
+    let collateral = net.collateral(CAND);
+    let k = K::FundBeaconSourceFee { terms };
+    let o = net.route(CAND, &k);
+    let tx = net.carrier(CAND, &o);
+    let refusal = net.mempool(&tx).expect_err("fee fence refuses the carrier at mempool acceptance");
+    assert!(refusal.to_string().contains("palw_beacon_source_fee_v1"));
+    assert_eq!(net.collateral(CAND), collateral);
+    assert!(net.ledger().beacon_source_fees.is_empty());
 }

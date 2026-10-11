@@ -20,7 +20,12 @@
 //! | `FinalReward` | paid out to the bond's owner | from the `PayJobEscrow` before it — the poster pays; **never newly issued** (GAP-5) |
 //! | `Withdraw` | `C −= amount`; the ledger forgets the bond | collateral returns to its owner |
 //!
-//! Conservation: within one receipt batch, `Σ debits == Σ (AccuserReward + DemanderShare + FinalReward + Burn)` — every payout,
+//! Source fees debit free sponsor collateral into a rooted, separately owned context escrow (`FundSourceFeeEscrow`).
+//! `PaySourceFeeEscrow` / `RefundSourceFeeEscrow` route only that escrow after source settlement / unused-slot expiry.
+//! No source fee is paid at funding or source reveal.
+//!
+//! Conservation, including source escrows held across batches: `Σ debits == Σ payouts + Σ burns + Σ held source fees`.
+//! For the original kinds, within one receipt batch, `Σ debits == Σ (AccuserReward + DemanderShare + FinalReward + Burn)` — every payout,
 //! the Final reward included, is routed out of a debit of a real bond in the same batch; nothing is issued. [`SettlementBookV1`] is a
 //! reference consumer that applies instructions to a toy bond book and checks that and the reservation rules; the tests use it to
 //! prove the ledger's own view and the instructions agree.
@@ -79,6 +84,12 @@ pub enum SettlementKindV1 {
     /// The demand bond of a position served on chain, burned because the claim's liability horizon ended with no conviction (routed
     /// by the burn after it). Refunded instead (`ReleaseDemand`) on conviction, default or timeout.
     ForfeitDemandBond = 21,
+    /// Debit free sponsor collateral into a separate prepaid escrow; `claim` identifies its context, not a computation claim.
+    FundSourceFeeEscrow = 22,
+    /// Pay a vested source fee from that prepaid context's escrow, never from its sponsor's later balance.
+    PaySourceFeeEscrow = 23,
+    /// Return an unused/failed source fee from prepaid escrow to its sponsor.
+    RefundSourceFeeEscrow = 24,
 }
 
 impl SettlementKindV1 {
@@ -93,12 +104,21 @@ impl SettlementKindV1 {
                 | Self::PayJobEscrow
                 | Self::ForfeitSealDeposit
                 | Self::ForfeitDemandBond
+                | Self::FundSourceFeeEscrow
         )
     }
 
     /// Paid out of a debit (a slash, a fee, a spent escrow).
     pub const fn is_routed_payout(self) -> bool {
-        matches!(self, Self::AccuserReward | Self::DemanderShare | Self::FinalReward | Self::Burn)
+        matches!(
+            self,
+            Self::AccuserReward
+                | Self::DemanderShare
+                | Self::FinalReward
+                | Self::Burn
+                | Self::PaySourceFeeEscrow
+                | Self::RefundSourceFeeEscrow
+        )
     }
 }
 
@@ -127,6 +147,7 @@ pub struct SettlementBookV1 {
     pub final_rewards: u64,
     /// Σ `PayJobEscrow`: the escrows Final rewards were paid out of.
     pub escrow_spent: u64,
+    pub source_fee_escrows: BTreeMap<Digest, u64>,
 }
 
 impl SettlementBookV1 {
@@ -195,6 +216,25 @@ impl SettlementBookV1 {
                 self.final_rewards += a;
                 self.routed += a;
             }
+            K::FundSourceFeeEscrow => {
+                let context = s.claim.ok_or("source fee escrow needs its context")?;
+                if self.source_fee_escrows.contains_key(&context) || a > c.saturating_sub(r) {
+                    return Err("invalid/duplicate source fee funding".into());
+                }
+                self.collateral.insert(b, c - a);
+                self.slashed += a;
+                self.source_fee_escrows.insert(context, a);
+            }
+            K::PaySourceFeeEscrow | K::RefundSourceFeeEscrow => {
+                let context = s.claim.ok_or("source fee payout needs its context")?;
+                let held = self.source_fee_escrows.get_mut(&context).ok_or("unfunded source fee payout")?;
+                if a > *held {
+                    return Err("source fee payout exceeds escrow".into());
+                }
+                *held -= a;
+                *self.paid.entry(b).or_default() += a;
+                self.routed += a;
+            }
             K::Withdraw => {
                 if r != 0 || a != c {
                     return Err(format!("withdraw {a} of {c} collateral with {r} reserved"));
@@ -216,8 +256,13 @@ impl SettlementBookV1 {
         self.balanced()
     }
 
-    /// `slashed == routed`: nothing a slash took is unaccounted for.
+    /// `slashed == routed + held source escrows`: every debit has an owner.
     pub fn balanced(&self) -> Result<(), String> {
-        if self.slashed == self.routed { Ok(()) } else { Err(format!("slashed {} but routed {}", self.slashed, self.routed)) }
+        let held: u128 = self.source_fee_escrows.values().map(|a| u128::from(*a)).sum();
+        if u128::from(self.slashed) == u128::from(self.routed) + held {
+            Ok(())
+        } else {
+            Err(format!("debited {} but routed {} and held {held}", self.slashed, self.routed))
+        }
     }
 }

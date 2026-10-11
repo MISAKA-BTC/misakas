@@ -55,6 +55,8 @@ pub enum HistoryGapV1 {
     ReachabilityUnreadable,
     /// The walk ran off the start of the DAG without meeting the pruning point or genesis.
     ChainOpenEnded,
+    /// A pruning import has durably replaced a sidecar but has not completed all ledgers.
+    PruningImportIncomplete,
 }
 
 /// The phase an unresolved claim is in. `Voided` is never open; it exists so the mapping is total.

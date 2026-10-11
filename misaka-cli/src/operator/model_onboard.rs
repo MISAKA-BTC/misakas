@@ -7,7 +7,7 @@
 //! envelope-sign     request.json, re-derived and checked against THIS build's network and fork digest  ── the key ──►  envelope.borsh
 //!                   (file it: `misaka palw submit-object --object envelope.borsh`)
 //! status            op 231: the lifecycle state, the attempt, the beacon, the posted evidence, the gate
-//! verify            ops 231 + 212 (+ 211 for a sealed-source v3 attempt; + the artifact): the fresh verifier rebuilds the verdict
+//! verify            ops 231 + 212 (+ 211 for a sealed-source v3/v4 attempt; + the artifact): the fresh verifier rebuilds the verdict
 //!                   and says whether it agrees with the chain
 //! ```
 //!
@@ -185,11 +185,15 @@ pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
     Ok(())
 }
 
-/// **A v3 attempt's seal facts from op 211**: every page of the route's rows, rebuilt by the SDK and checked against the served roots.
+/// A v3 attempt's seals or v4 opt-ins from op 211, rebuilt by the SDK against the served roots.
 /// The roots and header must be the same on every page (a route that moved between pages is refused: read again).
-async fn kernel_sealed_sources(
+async fn kernel_beacon_sources(
     nv: &crate::wallet::NodeView,
-) -> Result<Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, CliError> {
+    opt_in_context: Option<[u8; 64]>,
+) -> Result<
+    (Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, Option<misaka_palw_sdk::onboarding_chain::VerifiedOptInSourcesV4>),
+    CliError,
+> {
     use kaspa_rpc_core::GetPalwKernelRowsRequest;
     let mut rows = Vec::new();
     let mut request = GetPalwKernelRowsRequest::default();
@@ -224,13 +228,19 @@ async fn kernel_sealed_sources(
     let root = |s: &str| {
         kaspa_consensus_core::Hash64::from_str(s).map_err(|_| CliError::new(exit::GENERIC, "the node served a malformed root"))
     };
-    misaka_palw_sdk::onboarding_chain::sealed_sources_from_kernel_rows_v1(
-        &unhex(&header)?,
-        rows,
-        &root(&ledger_root)?,
-        &root(&aux_root)?,
-    )
-    .map_err(refusal)
+    let header = unhex(&header)?;
+    let ledger_root = root(&ledger_root)?;
+    let aux_root = root(&aux_root)?;
+    if let Some(context) = opt_in_context {
+        let sources =
+            misaka_palw_sdk::onboarding_chain::opt_in_sources_from_kernel_rows_v4(&header, rows, &ledger_root, &aux_root, &context)
+                .map_err(refusal)?;
+        Ok((Vec::new(), Some(sources)))
+    } else {
+        let sources = misaka_palw_sdk::onboarding_chain::sealed_sources_from_kernel_rows_v1(&header, rows, &ledger_root, &aux_root)
+            .map_err(refusal)?;
+        Ok((sources, None))
+    }
 }
 
 fn or_dash(s: &str) -> &str {
@@ -264,11 +274,12 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
         }
     }
     let attempt_row = unhex(&r.attempt_row)?;
-    // A sealed-source (v3) attempt's beacon reads the route's seals: every page of op 211, rebuilt and checked against its roots.
-    let sealed = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&attempt_row)
-        .map(|a| a.is_sealed_source())
-        .unwrap_or(false);
-    let sealed_sources = if sealed { kernel_sealed_sources(&nv).await? } else { Vec::new() };
+    // v4 rebuilds its exact rooted target/reservations/fee book; ordinary sealed sources cannot substitute.
+    let attempt = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&attempt_row)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
+    let context = attempt.is_opt_in_source().then(|| attempt.beacon_context(&attempt.policy()).id());
+    let (sealed_sources, opt_in_sources) =
+        if context.is_some() || attempt.is_sealed_source() { kernel_beacon_sources(&nv, context).await? } else { (Vec::new(), None) };
     let reads = PublicConformanceReadsV1 {
         attempt_row,
         evidence_row: if r.evidence_row.is_empty() { None } else { Some(unhex(&r.evidence_row)?) },
@@ -277,7 +288,17 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
         tip_daa: r.tip_daa,
         program: unhex(&r.program)?,
     };
-    let report = fresh_verify_from_reads_v1(&reads, artifact).map_err(refusal)?;
+    let report = match opt_in_sources.as_ref() {
+        Some(sources) => misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v4(&reads, sources, artifact),
+        None => fresh_verify_from_reads_v1(&reads, artifact),
+    }
+    .map_err(refusal)?;
+    let source_fee = opt_in_sources.as_ref().and_then(|s| s.fee_contract()).map(|f| {
+        serde_json::json!({
+            "fee_per_source_sompi":f.terms.fee_per_source,"max_sources":f.terms.max_sources,
+            "held_sompi":f.held,"paid_sompi":f.paid,"refunded_sompi":f.refunded,
+        })
+    });
     let v = &report.verdict;
     let posted = match &v.posted {
         None => "none".to_string(),
@@ -290,6 +311,7 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
             serde_json::json!({
                 "schema": "misaka.palw.onboard.verify.v1",
                 "class": class,
+                "source_fee":source_fee,
                 "beacon": v.beacon,
                 "seed": v.seed.map(|s| misaka_palw_sdk::runtime_pack::commit::hex(&s)),
                 "posted": posted,
@@ -305,6 +327,12 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
         );
     } else {
         println!("beacon           {}", v.beacon);
+        if let Some(f) = opt_in_sources.as_ref().and_then(|s| s.fee_contract()) {
+            println!(
+                "source fee       {} sompi/source, {} slots; held {}, paid {}, refunded {} sompi",
+                f.terms.fee_per_source, f.terms.max_sources, f.held, f.paid, f.refunded
+            );
+        }
         println!("posted evidence  {posted}");
         println!(
             "selection        {} vector(s), {} leaf(s); re-read {} leaf(s) from the artifact, {} contradict it",

@@ -2960,6 +2960,9 @@ impl ConsensusApi for Consensus {
         &self,
     ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
         let sink = self.get_sink();
+        if !self.pruning_meta_stores.read().pruning_utxoset_stable_flag() {
+            return Err(ConsensusError::General("pruning import is incomplete; native settlement is unavailable"));
+        }
         let Some(retirement) =
             self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(self.get_sink_daa_score_timestamp().daa_score))
         else {
@@ -3021,6 +3024,9 @@ impl ConsensusApi for Consensus {
 
     fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<kaspa_consensus_core::evm::CanonicalEvmHeads>> {
         use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
+        if !self.pruning_meta_stores.read().pruning_utxoset_stable_flag() {
+            return Err(ConsensusError::General("pruning import is incomplete; canonical EVM heads are unavailable"));
+        }
         let mut heads = self
             .storage
             .evm_heads_store

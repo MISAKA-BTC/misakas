@@ -434,6 +434,23 @@ pub struct VerifiedOptInSourcesV4 {
     attempt_row: Vec<u8>,
     evidence_row: Option<Vec<u8>>,
     program: Vec<u8>,
+    fee_contract: Option<misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1>,
+    fee_receipts:
+        std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1>,
+}
+
+impl VerifiedOptInSourcesV4 {
+    /// Root-verified prepaid terms and money inventory for this exact context. None is an unpaid contract, not a profit floor.
+    pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
+        self.fee_contract.as_ref()
+    }
+    /// A source's signed fee promise/outcome from the same rooted snapshot as the verified beacon facts.
+    pub fn fee_receipt(
+        &self,
+        producer: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1> {
+        self.fee_receipts.get(producer)
+    }
 }
 
 pub fn opt_in_sources_from_kernel_rows_v4(
@@ -473,7 +490,17 @@ pub fn opt_in_sources_from_kernel_rows_v4(
         .kernel_class_record_v1(&binding.kernel_class)
         .ok_or_else(|| Refusal::new("ROWS_MALFORMED", "rooted binding has no kernel class"))?
         .program_bytes;
-    Ok(VerifiedOptInSourcesV4 { target, facts, attempt_row, evidence_row, program })
+    let ledger = route.ledger().map_err(|e| Refusal::new("ROWS_MALFORMED", e))?;
+    let fee_contract = ledger.beacon_source_fees.get(context).cloned();
+    if fee_contract.as_ref().is_some_and(|f| f.target != target) {
+        return Err(Refusal::new("TARGET_SUBSTITUTED", "prepaid fee target differs from the rooted source target"));
+    }
+    let fee_receipts = ledger
+        .beacon_source_fee_promises
+        .range((*context, [0; 64])..=(*context, [255; 64]))
+        .map(|((_, producer), p)| (*producer, p.clone()))
+        .collect();
+    Ok(VerifiedOptInSourcesV4 { target, facts, attempt_row, evidence_row, program, fee_contract, fee_receipts })
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, String> {

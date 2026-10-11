@@ -773,6 +773,16 @@ fn heads_of(rig: &Rig) -> Option<CanonicalEvmHeads> {
     rig.api().get_evm_canonical_heads().expect("readable heads")
 }
 
+// These older recovery fixtures retain their already verified UTXO/PALW ledgers
+// and replace only missing EVM rows. Explicitly model the IBD completion marker
+// after checking the new partial-import refusal; this is not a pruned join drill.
+fn finish_existing_ledger_fixture_import(rig: &Rig) {
+    assert!(!rig.api().is_pruning_utxoset_stable());
+    assert!(rig.api().get_evm_canonical_heads().is_err());
+    assert!(rig.api().get_native_settlement_snapshot().is_err());
+    rig.api().set_pruning_utxoset_stable_flag(true);
+}
+
 fn plant_dns(rig: &Rig, anchor: BlockHash, anchor_daa: u64, at_sink: BlockHash, sink_daa: u64) {
     use kaspa_consensus_core::dns_finality::{DnsHealth, DnsRolloutStage, DnsState, StakeScore};
     rig.vp()
@@ -1143,6 +1153,7 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
         vp.db.write(batch).unwrap();
     }
     a.vp().import_pruning_point_evm_state(pp, header, snapshot).expect("a root-verified import");
+    finish_existing_ledger_fixture_import(&a);
     assert_eq!(snapshot_of(&a), None, "the import clears native evidence until reconstruction supplies proof");
     assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
     assert_ne!(readiness_of(&a).stop, Some(SettlementStopV1::FinalizedConflict), "same-generation memo is invalidated immediately");
@@ -1340,6 +1351,7 @@ async fn rfc12_publication_legacy_negative_snapshot_requires_recovery_not_invent
         a.vp().db.write(batch).unwrap();
     }
     a.vp().import_pruning_point_evm_state(pp, header, state).unwrap();
+    finish_existing_ledger_fixture_import(&a);
     assert_eq!(snapshot_of(&a), None);
     assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
     assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
@@ -1434,6 +1446,7 @@ async fn rfc12_import_retry_after_a_processor_restart_is_idempotent() {
     a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
     a.vp().db.write(batch).unwrap();
     a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()).unwrap();
+    finish_existing_ledger_fixture_import(&a);
     let checkpoint = a.vp().evm_state_checkpoint_store.get(pp).unwrap().unwrap();
     assert_eq!(checkpoint.decode_snapshot().unwrap(), state);
     let first_heads = heads_of(&a).unwrap();
@@ -1453,6 +1466,7 @@ async fn rfc12_import_retry_after_a_processor_restart_is_idempotent() {
     a.vp()
         .import_pruning_point_evm_state(pp, header.clone(), state.clone())
         .expect("retrying a committed import must not panic on existing immutable rows");
+    finish_existing_ledger_fixture_import(&a);
     assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(header));
     assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(state));
     assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(checkpoint));
@@ -1494,6 +1508,7 @@ async fn rfc12_import_partial_execution_rows_are_completed_without_overwriting_i
         }
         a.vp().db.write(batch).unwrap();
         a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()).unwrap();
+        finish_existing_ledger_fixture_import(&a);
         assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(header.clone()));
         assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(state.clone()));
         assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(checkpoint.clone()));
@@ -1506,9 +1521,7 @@ async fn rfc12_import_partial_execution_rows_are_completed_without_overwriting_i
 
 #[tokio::test]
 async fn rfc12_import_conflicting_existing_rows_preserve_incident_and_flat_head() {
-    use crate::model::stores::evm::{
-        EvmCanonicalHeadsStoreReader, EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore,
-    };
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore};
     use kaspa_consensus_core::errors::pruning::PruningImportError;
     let mut p = parts(Some(FENCE));
     p.0.evm_shadow_state_backend = true;
@@ -2851,4 +2864,217 @@ async fn rfc12_c3_a_market_orders_cross_the_fence_with_the_virtual_market_armed_
     assert!(rig.log.iter().any(|s| s.retired) && rig.log.iter().any(|s| !s.retired), "both sides of the fence");
     let last = rig.log.last().expect("blocks");
     assert!(last.snapshot.as_ref().expect("readable").is_some(), "a native snapshot from the fence on");
+}
+
+// A separate OS process holds each DB. The parent forcibly kills the importing process
+// after the durable sidecar batch and BEFORE the UTXO clear, then another process opens
+// RocksDB from disk. No Arc DB, cache or Rust destructor crosses that boundary.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct SidecarCrashManifest {
+    point: BlockHash,
+    utxos: Vec<(TransactionOutpoint, UtxoEntry)>,
+    palw_at: BlockHash,
+    palw_root: Hash64,
+    evm_header: kaspa_consensus_core::evm::EvmExecutionHeader,
+    evm_state: kaspa_consensus_core::evm::EvmStateSnapshot,
+    overlay: Option<kaspa_consensus_core::dns_finality::OverlaySnapshot>,
+    carriage: Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>,
+    raw_heads: CanonicalEvmHeads,
+}
+
+fn sorted_process_utxos(consensus: &TestConsensus) -> Vec<(TransactionOutpoint, UtxoEntry)> {
+    let mut rows = consensus.get_virtual_utxos(None, 1_000_000, false);
+    rows.sort_by_cached_key(|(out, _)| borsh::to_vec(out).unwrap());
+    rows
+}
+
+/// Worker entry used only by the parent below. Returning without its env is intentional:
+/// the ordinary suite never opens a peer's DB or recursively starts a crash drill.
+#[tokio::test]
+async fn rfc12_process_sidecar_crash_worker() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmStateCheckpointStoreReader};
+    use kaspa_database::prelude::ConnBuilder;
+    let Ok(root) = std::env::var("MISAKA_RFC12_CRASH_DIRECTORY") else {
+        return;
+    };
+    let kind = std::env::var("MISAKA_RFC12_CRASH_SIDECAR").unwrap();
+    let phase = std::env::var("MISAKA_RFC12_CRASH_PHASE").unwrap();
+    let root = std::path::PathBuf::from(root);
+    let db = ConnBuilder::default()
+        .with_files_limit(10)
+        .with_db_path(root.join("db"))
+        .with_create_if_missing(phase == "seed")
+        .build()
+        .unwrap();
+    let mut p = parts(if kind == "overlay" { None } else { Some(FENCE) });
+    if phase == "reopen" {
+        p.0.process_genesis = false;
+    }
+    let (sender, _rx) = async_channel::unbounded();
+    let consensus = TestConsensus::with_db(db, &p.0, sender);
+    if phase == "seed" {
+        let mut rig = Rig::on(consensus, &p, 0x12_ca55_0000);
+        let run = scripted_run(&mut rig, "").await;
+        let point = if kind == "evm" {
+            rig.chain.sink()
+        } else {
+            // Child-witnessed imports need the next genuine selected-chain header.
+            run.names.iter().find(|(name, _)| *name == "e1-lock").unwrap().1
+        };
+        let vp = rig.vp();
+        // Serve the historical sidecar before changing the importer's context;
+        // moving its pruning boundary first would truncate the legacy window walk.
+        let pending_overlay = (kind == "overlay").then(|| vp.compute_overlay_snapshot(point, &vp.initial_active_bond_view()));
+        let pending_carriage = (kind == "palw").then(|| {
+            vp.capture_pruning_point_palw_state(point);
+            vp.pruning_point_palw_state(point).expect("the node serves its root-verified historical carriage")
+        });
+        rig.api()
+            .import_pruning_points(vec![
+                rig.api().get_header(rig.config.params.genesis.hash).unwrap(),
+                rig.api().get_header(point).unwrap(),
+            ])
+            .unwrap();
+        let evm_header = rig.api().get_evm_header_of(point).unwrap().unwrap();
+        let evm_state = rig.api().get_evm_state_snapshot_of(point).unwrap().unwrap();
+        let mut overlay = None;
+        let mut carriage = None;
+        match kind.as_str() {
+            "evm" => vp.import_pruning_point_evm_state(point, evm_header.clone(), evm_state.clone()).unwrap(),
+            "palw" => {
+                let imported = pending_carriage.unwrap();
+                vp.import_pruning_point_palw_state(point, imported.clone()).unwrap();
+                carriage = Some(imported);
+            }
+            "overlay" => {
+                let imported = pending_overlay.unwrap();
+                vp.import_pruning_point_overlay_snapshot(point, imported.clone()).unwrap();
+                overlay = Some(imported);
+            }
+            _ => panic!("unknown sidecar"),
+        }
+        let tip = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap();
+        let manifest = SidecarCrashManifest {
+            point,
+            utxos: sorted_process_utxos(rig.api()),
+            palw_at: tip.block,
+            palw_root: tip.state_root,
+            evm_header,
+            evm_state,
+            overlay,
+            carriage,
+            raw_heads: vp.evm_heads_store.read().get().unwrap(),
+        };
+        let mut file = std::fs::File::create(root.join("manifest.borsh")).unwrap();
+        use std::io::Write;
+        file.write_all(&borsh::to_vec(&manifest).unwrap()).unwrap();
+        file.sync_all().unwrap();
+        std::fs::write(root.join("ready"), b"durable-sidecar-before-utxo-clear").unwrap();
+        // The parent calls Child::kill; no processor stop, DB close, flush, or destructor.
+        loop {
+            std::thread::park();
+        }
+    }
+    assert_eq!(phase, "reopen");
+    let manifest: SidecarCrashManifest = borsh::from_slice(&std::fs::read(root.join("manifest.borsh")).unwrap()).unwrap();
+    assert!(!consensus.is_pruning_utxoset_stable(), "the sidecar and incomplete marker must survive the SAME process crash");
+    assert!(consensus.is_consensus_in_transitional_ibd_state(), "real IBD must choose recovery, not stable Sync");
+    assert_eq!(sorted_process_utxos(&consensus), manifest.utxos, "no deposit credit or withdrawal UTXO is repeated or lost");
+    let vp = consensus.virtual_processor();
+    let tip = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap();
+    assert_eq!((tip.block, tip.state_root), (manifest.palw_at, manifest.palw_root));
+    assert_eq!(vp.evm_heads_store.read().get().unwrap(), manifest.raw_heads, "durable heads are kept, not silently relabelled");
+    assert!(consensus.get_evm_canonical_heads().is_err(), "a partial import cannot expose canonical ETH tags");
+    if kind != "overlay" {
+        assert!(consensus.get_native_settlement_snapshot().is_err(), "stored native labels cannot certify mixed ledger generations");
+        let readiness = consensus.get_native_safe_readiness().unwrap().unwrap();
+        assert_eq!(
+            readiness.stopped_early,
+            Some(kaspa_consensus_core::palw_native_readiness_v1::SafeWaitV1::MissingHistory {
+                gap: kaspa_consensus_core::palw_native_readiness_v1::HistoryGapV1::PruningImportIncomplete,
+                block: Some(manifest.point),
+            })
+        );
+    }
+    // Retry actual root-verified import in a cold process. It cannot double credit,
+    // erase recovery state, or mark the OTHER ledgers complete.
+    match kind.as_str() {
+        "evm" => {
+            consensus.import_pruning_point_evm_state(manifest.point, manifest.evm_header.clone(), manifest.evm_state.clone()).unwrap();
+            let checkpoint = vp.evm_state_checkpoint_store.get(manifest.point).unwrap().unwrap();
+            assert_eq!(checkpoint.decode_snapshot().unwrap(), manifest.evm_state);
+        }
+        "palw" => consensus.import_pruning_point_palw_state(manifest.point, manifest.carriage.unwrap()).unwrap(),
+        "overlay" => consensus.import_pruning_point_overlay_snapshot(manifest.point, manifest.overlay.unwrap()).unwrap(),
+        _ => unreachable!(),
+    }
+    assert!(!consensus.is_pruning_utxoset_stable(), "only the whole IBD completion may clear this marker");
+    assert_eq!(sorted_process_utxos(&consensus), manifest.utxos);
+    assert!(consensus.get_evm_canonical_heads().is_err());
+}
+
+#[test]
+fn rfc12_process_crash_before_utxo_clear_requires_recovery_for_every_sidecar() {
+    // These are real OS-process/WAL crash boundaries with ordinary node-generated
+    // deposit/withdrawal blocks. They do not constitute P2P, a pruning proof/GC,
+    // a completed pruned join, power-loss durability, or approved Final-work evidence.
+    let suffix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("misaka-rfc12-process-crash-{}-{suffix}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let worker = format!("{}::rfc12_process_sidecar_crash_worker", module_path!().split_once("::").unwrap().1);
+    for kind in ["palw", "overlay", "evm"] {
+        let directory = root.join(kind);
+        std::fs::create_dir(&directory).unwrap();
+        let command = |phase: &str| {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", &worker, "--nocapture", "--test-threads=1"])
+                .env("MISAKA_RFC12_CRASH_DIRECTORY", &directory)
+                .env("MISAKA_RFC12_CRASH_SIDECAR", kind)
+                .env("MISAKA_RFC12_CRASH_PHASE", phase);
+            command
+        };
+        let mut child = command("seed").spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !directory.join("ready").exists() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("{kind} seed exited before crash boundary: {status}");
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("{kind} seed did not reach crash boundary in 60 seconds");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success(), "the import process was forcibly killed");
+        assert!(command("reopen").status().unwrap().success(), "{kind} cold recovery process verified the interrupted import");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    std::fs::remove_dir(root).unwrap();
+}
+
+
+#[tokio::test]
+async fn rfc12_partial_import_invalidates_same_sink_memo_until_completion() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_ca56_0000);
+    prefix(&mut a).await;
+    let before = readiness_of(&a); // warm a positive/evidence-derived memo at this exact sink
+    let sink = a.chain.sink();
+    let pruning = a.api().pruning_point();
+    a.api().set_pruning_utxoset_stable_flag(false);
+    assert!(a.api().get_evm_canonical_heads().is_err());
+    assert!(a.api().get_native_settlement_snapshot().is_err());
+    let partial = readiness_of(&a);
+    assert_eq!(partial.stopped_early, Some(SafeWaitV1::MissingHistory {
+        gap: HistoryGapV1::PruningImportIncomplete, block: Some(pruning),
+    }));
+    assert_eq!(a.chain.sink(), sink);
+    // This test edits no ledger: its marker-only seam isolates memo invalidation.
+    a.api().set_pruning_utxoset_stable_flag(true);
+    assert_eq!(readiness_of(&a), before, "the negative memo cannot survive completion at the same sink and pruning point");
+    assert!(a.api().get_evm_canonical_heads().is_ok());
 }

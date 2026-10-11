@@ -362,6 +362,12 @@ async fn rfc12_c2_a_pruned_join_with_evm_state_installs_the_sidecars_and_follows
             borsh::from_slice(&wire_evm_state).expect("decodes"),
         )
         .expect("a root-verified import of P's EVM state");
+    assert!(!joiner.api().is_pruning_utxoset_stable());
+    assert!(joiner.api().get_native_settlement_snapshot().is_err());
+    assert!(joiner.api().get_evm_canonical_heads().is_err());
+    // This existing fixture retained its verified P UTXOs throughout. Model the
+    // whole-import completion only after PALW and EVM sidecars both landed.
+    joiner.api().set_pruning_utxoset_stable_flag(true);
     assert_eq!(joiner.api().get_evm_header_of(pp).unwrap(), Some(evm_header.clone()), "P's EVM header is installed byte for byte");
     assert_eq!(
         joiner.api().get_native_settlement_snapshot().unwrap(),

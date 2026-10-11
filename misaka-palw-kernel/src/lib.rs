@@ -94,6 +94,7 @@ pub mod job;
 pub mod ledger;
 pub mod exec_reward;
 pub mod beacon_source;
+pub mod beacon_source_fee;
 pub mod lifecycle;
 pub mod merkle;
 pub mod merkle3;

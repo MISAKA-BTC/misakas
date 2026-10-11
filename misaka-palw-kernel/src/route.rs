@@ -60,12 +60,16 @@ pub const TAG_POST_TILED_JOB_V1: u8 = 17;
 pub const TAG_POST_PROMPT_TILE_V1: u8 = 18;
 /// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
 pub const TAG_SPEC_V1: u8 = 19;
-// 16–18 are K2S's (K2-TIR-v4); 22 remains free.
+// 16–18 are K2S's (K2-TIR-v4); 24 remains free.
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 /// Per-attempt beacon source opt-in. Refused without its own consumer-supplied fence and authenticated target.
 pub const TAG_OPT_IN_BEACON_SOURCE_V1: u8 = 21;
 pub const MAX_OPT_IN_BEACON_SOURCE_BYTES_V1: usize = 384;
+pub const TAG_FUND_BEACON_SOURCE_FEE_V1: u8 = 22;
+pub const TAG_OPT_IN_PAID_BEACON_SOURCE_V1: u8 = 23;
+pub const MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1: usize = 256;
+pub const MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1: usize = 448;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -310,6 +314,19 @@ pub enum KernelRouteObjectV1 {
         context: Digest,
         terms: Digest,
     } = 21,
+    /// The authorized sponsor signs exact prepaid fee terms. Separate fee fence, no implied source approval.
+    FundBeaconSourceFee {
+        terms: crate::beacon_source_fee::BeaconSourceFeeTermsV1,
+    } = 22,
+    /// The source producer signs the prepaid contract's exact fee as well as its original source terms.
+    OptInPaidBeaconSource {
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+        context: Digest,
+        source_terms: Digest,
+        fee_terms: Digest,
+    } = 23,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -419,6 +436,8 @@ impl KernelRouteObjectV1 {
             Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
             Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
             Self::OptInBeaconSource { .. } => TAG_OPT_IN_BEACON_SOURCE_V1,
+            Self::FundBeaconSourceFee { .. } => TAG_FUND_BEACON_SOURCE_FEE_V1,
+            Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
             Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
@@ -512,6 +531,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_SEAL_PROOF_V1 => "SealProof",
         TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
         TAG_OPT_IN_BEACON_SOURCE_V1 => "OptInBeaconSource",
+        TAG_FUND_BEACON_SOURCE_FEE_V1 => "FundBeaconSourceFee",
+        TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
         TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
@@ -540,6 +561,8 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
         TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
         TAG_OPT_IN_BEACON_SOURCE_V1 => MAX_OPT_IN_BEACON_SOURCE_BYTES_V1,
+        TAG_FUND_BEACON_SOURCE_FEE_V1 => MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1,
+        TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -607,7 +630,7 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_OPT_IN_BEACON_SOURCE_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(22).is_none(), "22 remains free");
+        assert!(max_encoded_bytes_of_tag(24).is_none(), "24 remains free");
         assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");
     }
 

@@ -709,6 +709,7 @@ pub struct VirtualStateProcessor {
     /// real network (its validation refuses every height); a test builds the config without that validation.
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
+    pub(super) palw_beacon_source_fee_v1: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1364,6 +1365,7 @@ impl VirtualStateProcessor {
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_beacon_source_opt_in_v1: params.palw_beacon_source_opt_in_v1,
+            palw_beacon_source_fee_v1: params.palw_beacon_source_fee_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
             palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
@@ -14289,6 +14291,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                     "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
+                    "a funded source contract is refused: palw_beacon_source_fee_v1 is not in force at this block".to_string()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
                     "a source opt-in is refused: palw_beacon_source_opt_in_v1 is not in force at this block".to_string()
                 }
@@ -14308,6 +14313,12 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> bool {
         match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
+                self.palw_beacon_source_fee_v1
+                    .is_some_and(|f| f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score))
+                    && self.palw_kernel_inner_fence_at(
+                        kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1, daa_score)
+            }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                 self.palw_kernel_typed_roots_at(daa_score)
@@ -15954,6 +15965,8 @@ impl VirtualStateProcessor {
                 }),
                 typed_roots: self.palw_kernel_typed_roots_activation(),
                 beacon_source: self.palw_beacon_source_opt_in_v1.filter(|f|
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)),
+                beacon_source_fee: self.palw_beacon_source_fee_v1.filter(|f|
                     f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)),
                 // DA16: the provider court's activation, where its (never armable) fence is in force at this block.
                 provider_court: self
@@ -22178,7 +22191,13 @@ impl VirtualStateProcessor {
             heads_write.set_native_batch(&mut batch, None).unwrap();
             heads_write.set_batch(&mut batch, heads).unwrap();
         }
+        // Importing a sidecar starts a cross-ledger recovery transaction. Persist the
+        // incomplete marker WITH the state, before any UTXO clear/copy can occur. A
+        // crash here must make IBD retry all sidecars, never reuse old stable UTXOs.
+        let mut pruning_meta_write = self.pruning_meta_stores.write();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        drop(pruning_meta_write);
         *readiness_memo = None;
         drop(pruning_point_read);
         Ok(())
@@ -22378,7 +22397,12 @@ impl VirtualStateProcessor {
                 .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
                 .expect("writing the verified PALW pruning snapshot cannot fail");
         }
+        // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
+        // crash between those steps must leave a durable incomplete-import flag.
+        let mut pruning_meta_write = self.pruning_meta_stores.write();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        drop(pruning_meta_write);
         Ok(())
     }
 
@@ -22614,7 +22638,12 @@ impl VirtualStateProcessor {
             .write()
             .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
             .unwrap();
+        // Legacy monetary/bond rights are another sidecar of the same import.
+        // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
+        let mut pruning_meta_write = self.pruning_meta_stores.write();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        drop(pruning_meta_write);
         Ok(())
     }
 

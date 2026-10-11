@@ -85,6 +85,8 @@ pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
 pub const TABLE_EXEC_REWARD_HOLDS_V1: u8 = 27;
 /// `(context, producer) → per-attempt source opt-in, reservation and permanent outcome`.
 pub const TABLE_BEACON_SOURCES_V1: u8 = 28;
+pub const TABLE_BEACON_SOURCE_FEES_V1: u8 = 29;
+pub const TABLE_BEACON_SOURCE_FEE_PROMISES_V1: u8 = 30;
 pub const BEACON_SOURCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-sources-extension/v1";
 pub const EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-exec-reward-holds-extension/v1";
 /// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
@@ -133,6 +135,8 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_MEMORY_LINES_V1 => "memory-lines",
         TABLE_EXEC_REWARD_HOLDS_V1 => "exec-reward-holds",
         TABLE_BEACON_SOURCES_V1 => "beacon-sources",
+        TABLE_BEACON_SOURCE_FEES_V1 => "beacon-source-fees",
+        TABLE_BEACON_SOURCE_FEE_PROMISES_V1 => "source-fee-promises",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -182,6 +186,12 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.proof_seals {
             rows.insert((TABLE_PROOF_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.beacon_source_fees {
+            rows.insert((TABLE_BEACON_SOURCE_FEES_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.beacon_source_fee_promises {
+            rows.insert((TABLE_BEACON_SOURCE_FEE_PROMISES_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, v) in &self.beacon_sources {
             rows.insert((TABLE_BEACON_SOURCES_V1, bytes_of(k)), bytes_of(v));
@@ -301,6 +311,12 @@ impl KernelLedgerV1 {
                         dec::<crate::ledger::ForfeitedSealRowV1>(row, "forfeited seal")?,
                     );
                 }
+                TABLE_BEACON_SOURCE_FEES_V1 => {
+                    l.beacon_source_fees.insert(dec(key, "source fee context")?, dec(row, "source fee funding")?);
+                }
+                TABLE_BEACON_SOURCE_FEE_PROMISES_V1 => {
+                    l.beacon_source_fee_promises.insert(dec(key, "source fee promise key")?, dec(row, "source fee promise")?);
+                }
                 TABLE_BEACON_SOURCES_V1 => {
                     l.beacon_sources.insert(dec(key, "beacon source key")?, dec(row, "beacon source")?);
                 }
@@ -345,6 +361,7 @@ impl KernelLedgerV1 {
         l.opv_rebuild_live();
         l.validate_exec_reward_holds()?;
         l.validate_beacon_sources()?;
+        l.validate_beacon_source_fees()?;
         Ok(l)
     }
 }
@@ -365,6 +382,7 @@ impl KernelLedgerV1 {
         // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
         self.provider_liable = Default::default();
         self.beacon_source_inputs = Default::default();
+        self.beacon_source_fee_inputs = Default::default();
         self
     }
 }
@@ -551,11 +569,20 @@ pub fn root_of_rows(
     } else {
         base
     };
-    if by_table.contains_key(&TABLE_BEACON_SOURCES_V1) {
+    let base = if by_table.contains_key(&TABLE_BEACON_SOURCES_V1) {
         beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1))
     } else {
         base
+    };
+    if by_table.contains_key(&TABLE_BEACON_SOURCE_FEES_V1) || by_table.contains_key(&TABLE_BEACON_SOURCE_FEE_PROMISES_V1) {
+        beacon_source_fee_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCE_FEES_V1), &coll(TABLE_BEACON_SOURCE_FEE_PROMISES_V1))
+    } else {
+        base
     }
+}
+
+pub fn beacon_source_fee_root_extension_v1(base: &Digest, funding: &Digest, promises: &Digest) -> Digest {
+    object_id(b"misaka-palw/kernel/ledger-source-fees-extension/v1", &(base, funding, promises))
 }
 
 pub fn beacon_source_root_extension_v1(base: &Digest, sources: &Digest) -> Digest {

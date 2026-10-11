@@ -247,6 +247,9 @@ impl VirtualStateProcessor {
             pruning,
             detail: NativeDetail::Stopped(wait),
         };
+        if !self.pruning_meta_stores.read().pruning_utxoset_stable_flag() {
+            return stopped(result, gap(HistoryGapV1::PruningImportIncomplete, Some(pruning)));
+        }
         let previous = match self.evm_heads_store.read().native_snapshot() {
             Ok(Some(s))
                 if s.version == 1
@@ -516,7 +519,10 @@ impl VirtualStateProcessor {
         let mut memo = self.native_readiness_memo.lock();
         let pruning = self.pruning_point_store.read().pruning_point().unwrap();
         if let Some((at, readiness)) = memo.as_ref() {
-            if *at == sink && readiness.finalized.pruning_point == pruning {
+            if *at == sink
+                && readiness.finalized.pruning_point == pruning
+                && self.pruning_meta_stores.read().pruning_utxoset_stable_flag()
+            {
                 return Some(readiness.clone());
             }
         }
@@ -590,7 +596,9 @@ impl VirtualStateProcessor {
                 })
             }
         };
-        *memo = Some((sink, readiness.clone()));
+        // The stable bit can change without advancing either sink or pruning point.
+        // Never memoize an incomplete-import result past the IBD completion marker.
+        *memo = if self.pruning_meta_stores.read().pruning_utxoset_stable_flag() { Some((sink, readiness.clone())) } else { None };
         Some(readiness)
     }
 }
