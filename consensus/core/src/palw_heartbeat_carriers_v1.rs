@@ -117,6 +117,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::GenShardCourtAccused { .. } => true,
         // RFC-0003 decision 22: the held leaf challenge opens a session, a court opening too.
         O::HeldLeafChallengeDeclared { .. } => true,
+        O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }

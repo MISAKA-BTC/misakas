@@ -14619,6 +14619,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
         PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. } => "LegacyHeldAnswerDeclaredV2",
         PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
+        PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } => "ObjectiveEvidenceDeclaredV1",
+        PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. } => "ObjectiveEvidenceChunkV1",
         PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         // Lane BUDGET (tag 140): a bond's capital assignment.
         PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",

@@ -147,6 +147,8 @@ mod palw_provider_court_fold_v1;
 mod palw_legacy_public_filer_fold_v1;
 #[path = "palw_legacy_answer_chunks_fold_v2.rs"]
 mod palw_legacy_answer_chunks_fold_v2;
+#[path = "palw_terminal_carriage_fold_v1.rs"]
+mod palw_terminal_carriage_fold_v1;
 pub use palw_legacy_public_filer_fold_v1::{
     PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1, PalwLegacyDisputeObservationV1,
     PalwLegacyDisputeViewV1, palw_bond_text_v1, palw_legacy_dispute_reservation_check_v1,
@@ -8771,6 +8773,8 @@ pub enum PalwConsensusObjectV2 {
     LegacyHeldAnsweredV2 { answer: Box<crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2> } = 158,
     LegacyHeldAnswerDeclaredV2 { declaration: Box<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerDeclarationV2> } = 160,
     LegacyHeldAnswerChunkV2 { chunk: Box<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2> } = 161,
+    ObjectiveEvidenceDeclaredV1 { declaration: Box<crate::palw_terminal_carriage_v1::PalwTerminalDeclarationV1> } = 162,
+    ObjectiveEvidenceChunkV1 { part: Box<crate::palw_terminal_carriage_v1::PalwTerminalPartV1> } = 163,
     /// **(tag 159): a non-fused step convicted by its committed leaf hash** — the one-move court's kernel over the committed inputs
     /// and the accuser's own model rows, without the output preimage. A direct objective proof: it lands whatever session or court
     /// is open on the claim. Signed by the accuser's bond. **Tag 159.**
@@ -9618,6 +9622,8 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
+        PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => palw_court_close_min_fee_v1(declaration.part_digests.len() as u64)
+            .saturating_add(if declaration.heavy_prompt_ids>0 { palw_relay_fee_for_mass_v1(u64::from(declaration.heavy_prompt_ids).saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)) } else { 0 }),
         // RFC-0003 decision 22: a held leaf challenge IS a declaration (it writes the group `CourtCloseDeclared`
         // writes), so it buys the same one grading, priced on the same field.
         PalwConsensusObjectV2::HeldLeafChallengeDeclared { challenge } => palw_court_close_min_fee_v1(u64::from(challenge.count)),
@@ -10267,6 +10273,10 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
 /// FACE — index, presence, size, the pinned per-chunk digest — and nothing that requires touching
 /// the assembly.
 pub fn palw_court_close_completes_a_group_v1(state: &PalwChainStateV2, object: &PalwConsensusObjectV2) -> bool {
+    if let PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = object {
+        return state.terminal_pending_v1(&(part.claim,part.reserver)).is_some_and(|r|
+            r.parts.len()+1 == r.declaration.part_digests.len() && r.check_part(part).is_ok());
+    }
     let PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } = object else {
         return false;
     };
@@ -12037,6 +12047,7 @@ pub struct PalwChainStateV2 {
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
     legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
+    terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
@@ -12270,6 +12281,7 @@ impl PalwChainStateV2 {
             legacy_disputes: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             legacy_answers: BTreeMap::new(),
+            terminal_evidence: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -14721,6 +14733,10 @@ impl PalwChainStateV2 {
         }
         // **Lane LG14-A.** Its own block, Some-only: empty until the first reservation past `palw_legacy_public_filer_v1`, which no
         // network can arm, so a dormant network roots exactly as before.
+        if !self.terminal_evidence.is_empty() {
+            state.update(b"terminal_evidence/v1");
+            state.update(collection_root(b"terminal_evidence", &self.terminal_evidence).as_byte_slice());
+        }
         if !self.legacy_answers.is_empty() {
             state.update(b"legacy_answers/v2");
             state.update(collection_root(b"legacy_answers", &self.legacy_answers).as_byte_slice());
@@ -15582,6 +15598,7 @@ impl PalwChainStateV2 {
         self.assert_legacy_disputes_consistency_v1(params)?;
         self.assert_public_fp_jobs_consistency_v1(params)?;
         self.assert_legacy_answers_v2()?;
+        self.assert_terminal_evidence_v1()?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -17001,6 +17018,8 @@ pub enum PalwDeltaEntryV2 {
     /// Lane LG14-A (delta 201): original accepted public FP commitment, retained until claim retirement.
     PublicFpJob { key: Hash64, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 201,
     LegacyAnswer { key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, old: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>, new: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2> } = 202,
+    TerminalEvidence { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, old: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, new: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1> } = 203,
+    TerminalPart { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, index: u8, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 205,
     /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's): a claim's dispute record**
     /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
     LegacyDispute {
@@ -23614,6 +23633,18 @@ impl<'a> TransitionBuilder<'a> {
         evidence_id: Hash64,
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
+        self.consume_objective_offence_with_budget_v1(ctx, kind, accused, evidence_id, evidence, crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::DirectCarrier)
+    }
+
+    fn consume_objective_offence_with_budget_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+        accused: PalwBondKeyV2,
+        evidence_id: Hash64,
+        evidence: &[u8],
+        evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
+    ) -> Result<(), PalwStateV2Error> {
         use crate::palw_offence_v1::{
             PalwConsumedOffenceV1, PalwOffenceKindV1, PalwPanelFalseValidEvidenceV1, palw_offence_id_v1,
             palw_panel_contradiction_convicts_execution_v1,
@@ -23645,13 +23676,13 @@ impl<'a> TransitionBuilder<'a> {
                         crate::palw_offence_v1::PalwOffenceVerifyError::SupersededOnThisNetwork.to_string(),
                     ));
                 }
-                PalwOffenceKindV1::PanelFalseValidV2 => return self.consume_false_valid_v2(ctx, accused, evidence_id, evidence),
+                PalwOffenceKindV1::PanelFalseValidV2 => return self.consume_false_valid_v2(ctx, accused, evidence_id, evidence, evidence_budget),
                 // ADR-0152 v3.1 J-4 (F1): the executor's own conviction, judged by the same reading.
-                PalwOffenceKindV1::ExecutorRefuted => return self.consume_executor_refuted_v1(ctx, accused, evidence_id, evidence),
+                PalwOffenceKindV1::ExecutorRefuted => return self.consume_executor_refuted_v1(ctx, accused, evidence_id, evidence, evidence_budget),
                 // RFC-0002 Phase F: an IR executor's identity conviction. Below `palw_tir_v1` the lock
                 // at the top of `apply_object` refused it already (an older build cannot decode it).
                 PalwOffenceKindV1::TirIdentityMismatch => {
-                    return self.consume_tir_identity_mismatch_v1(ctx, accused, evidence_id, evidence);
+                    return self.consume_tir_identity_mismatch_v1(ctx, accused, evidence_id, evidence, evidence_budget);
                 }
                 PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                 // Refused above; listed so a routing change that forgets them fails to compile.
@@ -23892,8 +23923,9 @@ impl<'a> TransitionBuilder<'a> {
         accused: PalwBondKeyV2,
         evidence_id: Hash64,
         evidence: &[u8],
+        evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_panel_false_valid_at_v2, palw_false_valid_offence_id_v2};
+        use crate::palw_offence_attribution_v1::{palw_check_panel_false_valid_at_v2_with_budget_v1, palw_false_valid_offence_id_v2};
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -23914,9 +23946,9 @@ impl<'a> TransitionBuilder<'a> {
                 "a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".into(),
             ));
         }
-        self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
+        self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence, evidence_budget)?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
-        let finding = palw_check_panel_false_valid_at_v2(
+        let finding = palw_check_panel_false_valid_at_v2_with_budget_v1(
             &self.state,
             &accused,
             evidence,
@@ -23925,6 +23957,7 @@ impl<'a> TransitionBuilder<'a> {
             self.identity_rules_v1(ctx.daa_score),
             None,
             self.session_rule_v1(ctx.daa_score),
+            evidence_budget,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -24187,8 +24220,9 @@ impl<'a> TransitionBuilder<'a> {
         kind: crate::palw_offence_v1::PalwOffenceKindV1,
         evidence_id: Hash64,
         evidence: &[u8],
+        evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        let Some(charge) = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2(
+        let Some(charge) = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(
             &self.state,
             accused,
             kind,
@@ -24197,6 +24231,7 @@ impl<'a> TransitionBuilder<'a> {
             // ADR-0160 F-B: below the batch fence a `Windowed` kind-3 is the base's undecodable junk.
             self.params.capacity_batch_active_at(now_daa),
             crate::palw_offence_attribution_v1::PalwSessionRuleV1::at(self.params.legacy_public_filer_active_at(now_daa)),
+            evidence_budget,
         ) else {
             return Ok(());
         };
@@ -24345,8 +24380,9 @@ impl<'a> TransitionBuilder<'a> {
         accused: PalwBondKeyV2,
         evidence_id: Hash64,
         evidence: &[u8],
+        evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_executor_refuted_at_v1, palw_executor_refuted_offence_id_v1};
+        use crate::palw_offence_attribution_v1::{palw_check_executor_refuted_at_v1_with_budget_v1, palw_executor_refuted_offence_id_v1};
         use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -24354,8 +24390,8 @@ impl<'a> TransitionBuilder<'a> {
                 "evidence_id is not the digest of the evidence bytes".into(),
             ));
         }
-        self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::ExecutorRefuted, evidence_id, evidence)?;
-        let finding = palw_check_executor_refuted_at_v1(
+        self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::ExecutorRefuted, evidence_id, evidence, evidence_budget)?;
+        let finding = palw_check_executor_refuted_at_v1_with_budget_v1(
             &self.state,
             &accused,
             evidence,
@@ -24363,6 +24399,7 @@ impl<'a> TransitionBuilder<'a> {
             false,
             self.identity_rules_v1(ctx.daa_score),
             self.session_rule_v1(ctx.daa_score),
+            evidence_budget,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -24444,8 +24481,9 @@ impl<'a> TransitionBuilder<'a> {
         accused: PalwBondKeyV2,
         evidence_id: Hash64,
         evidence: &[u8],
+        evidence_budget: crate::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_offence_attribution_v1::{palw_check_tir_identity_mismatch_at_v1, palw_tir_identity_offence_id_v1};
+        use crate::palw_offence_attribution_v1::{palw_check_tir_identity_mismatch_at_v1_with_budget_v1, palw_tir_identity_offence_id_v1};
         use crate::palw_offence_v1::PalwOffenceKindV1;
         if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -24456,13 +24494,14 @@ impl<'a> TransitionBuilder<'a> {
         if !self.params.rcore_plus_active_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
-        let finding = palw_check_tir_identity_mismatch_at_v1(
+        let finding = palw_check_tir_identity_mismatch_at_v1_with_budget_v1(
             &self.state,
             &accused,
             evidence,
             false,
             self.identity_rules_v1(ctx.daa_score),
             self.session_rule_v1(ctx.daa_score),
+            evidence_budget,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -29681,6 +29720,7 @@ pub fn palw_v2_pre_object_base_v1(
     // ADR-0152 DA-7 (M3): the pre-object base mirrors step 2 exactly (V-4's fold order).
     sweep_da_sessions(&mut builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
+    palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
     // Lane LG14-A: the dispute reservations' lapse, as the fold's step 2 runs it.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
@@ -30107,6 +30147,7 @@ fn apply_palw_transition_v7_inner(
     // before the courts.
     sweep_da_sessions(&mut builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
+    palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
     // Lane LG14-A: every dispute reservation whose claim's hard deadline is behind this block lapses, right after the DA sweep.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     // A declared close is swept at ITS OWN window before the session's backstop is read (audit
@@ -30641,6 +30682,7 @@ fn apply_palw_transition_v7_inner(
     //    the next block. A no-op below the fence and while the breaker holds no row.
     apply_rho_breaker_epoch_v1(&mut builder, ctx);
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
+    palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
 
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -35909,6 +35951,12 @@ fn apply_object(
         PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk } => {
             palw_legacy_answer_chunks_fold_v2::chunk(builder, ctx, chunk)?;
         }
+        PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => {
+            palw_terminal_carriage_fold_v1::declare(builder, ctx, declaration)?;
+        }
+        PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } => {
+            palw_terminal_carriage_fold_v1::part(builder, ctx, part)?;
+        }
         PalwConsensusObjectV2::LegacyLeafRecomputedV2 { accusation } => {
             apply_legacy_leaf_recompute_v2(builder, ctx, accusation)?;
         }
@@ -39652,6 +39700,8 @@ pub struct PalwTransitionExtrasV1 {
     /// live, and a verified `ObjectiveOffence` debits the accused PALW bond. `None` by `Default`
     /// and on every shipped preset until the live gates are met.
     pub objective_offence_daa: Option<u64>,
+    /// Public-filer owned terminal budget resolved from the accepting block court.
+    pub terminal_evidence_max_bytes: Option<u64>,
     /// **ADR-0133 §7: `Params::palw_seat_gate_possession`'s HEIGHT.** Past it
     /// `required_ready_seats` is the possession question alone — the panel plus the spare — and a
     /// class heavier than its fleet is admitted RARELY (one claim in flight, the smallest
@@ -41953,6 +42003,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
         PalwDeltaEntryV2::PublicFpJob { key, old, new } => swap_write!(state.fp_public_jobs, key, old, new),
         PalwDeltaEntryV2::LegacyAnswer { key, old, new } => swap_write!(state.legacy_answers, key, old, new),
+        PalwDeltaEntryV2::TerminalEvidence { key, old, new } => swap_write!(state.terminal_evidence, key, old, new),
+        PalwDeltaEntryV2::TerminalPart { key, index, old, new } => {
+            if old.is_some() || new.is_some() {
+                let row = state.terminal_evidence.get_mut(key).ok_or(PalwStateV2Error::DeltaMismatch("terminal part has no declaration"))?;
+                swap_write!(row.parts, index, old, new);
+            }
+        }
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
@@ -42394,6 +42451,7 @@ pub struct PalwStateCarriageV2 {
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
     pub legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
+    pub terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
     /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
     pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
@@ -43097,6 +43155,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if !self.terminal_evidence.is_empty() {
+            crate::palw_terminal_carriage_v1::PALW_TERMINAL_TAIL_V1.serialize(writer)?;
+            self.terminal_evidence.serialize(writer)?;
+        }
         if !self.legacy_answers.is_empty() {
             crate::palw_legacy_answer_chunks_v2::PALW_CARRIAGE_LEGACY_ANSWERS_TAIL_V2.serialize(writer)?;
             self.legacy_answers.serialize(writer)?;
@@ -43309,6 +43371,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_kernel_route = false;
         let mut legacy_disputes = BTreeMap::new();
         let mut legacy_answers = BTreeMap::new();
+        let mut terminal_evidence = BTreeMap::new();
+        let mut seen_terminal_evidence = false;
         let mut seen_legacy_answers = false;
         let mut fp_public_jobs = BTreeMap::new();
         let mut seen_fp_public_jobs = false;
@@ -43588,6 +43652,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
                 }
+                crate::palw_terminal_carriage_v1::PALW_TERMINAL_TAIL_V1 if !seen_terminal_evidence => {
+                    seen_terminal_evidence = true;
+                    terminal_evidence = BTreeMap::deserialize_reader(reader)?;
+                    if terminal_evidence.is_empty() { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "empty terminal evidence tail")); }
+                }
                 crate::palw_legacy_answer_chunks_v2::PALW_CARRIAGE_LEGACY_ANSWERS_TAIL_V2 if !seen_legacy_answers => {
                     seen_legacy_answers = true;
                     legacy_answers = BTreeMap::deserialize_reader(reader)?;
@@ -43759,6 +43828,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             legacy_disputes,
             fp_public_jobs,
             legacy_answers,
+            terminal_evidence,
             bond_budget,
             exec_v2,
         })
@@ -43881,6 +43951,7 @@ impl PalwStateCarriageV2 {
             legacy_disputes: state.legacy_disputes.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
             legacy_answers: state.legacy_answers.clone(),
+            terminal_evidence: state.terminal_evidence.clone(),
             bond_budget: state.bond_budget.clone(),
             exec_v2: state.exec_v2.clone(),
             model_versions: state.model_versions.clone(),
@@ -44105,6 +44176,7 @@ impl PalwStateCarriageV2 {
             legacy_disputes: self.legacy_disputes,
             fp_public_jobs: self.fp_public_jobs,
             legacy_answers: self.legacy_answers,
+            terminal_evidence: self.terminal_evidence,
             kernel_route: self.kernel_route,
             bond_budget: self.bond_budget,
             exec_v2: self.exec_v2,
@@ -44230,6 +44302,7 @@ impl PalwStateBookV2 {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod terminal_carriage_v1;
     use super::*;
     use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
     use crate::palw_fork_choice::compare_palw_candidates_v1;
@@ -61382,6 +61455,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
                     PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
                     PalwDeltaEntryV2::LegacyAnswer { .. } => "legacy_answer",
+                    PalwDeltaEntryV2::TerminalEvidence { .. } => "terminal_evidence",
+                    PalwDeltaEntryV2::TerminalPart { .. } => "terminal_part",
                     // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
                     PalwDeltaEntryV2::BondBudgetRow { .. } => "bond_budget_row",
                     PalwDeltaEntryV2::BondBudgetHeader { .. } => "bond_budget_header",
@@ -61808,6 +61883,8 @@ pub(crate) mod tests {
             (200, PalwDeltaEntryV2::LegacyDispute { key, old: None, new: None }),
             (201, PalwDeltaEntryV2::PublicFpJob { key, old: None, new: None }),
             (202, PalwDeltaEntryV2::LegacyAnswer { key: (key, crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob, bond_key(1)), old: None, new: None }),
+            (203, PalwDeltaEntryV2::TerminalEvidence { key: (key,bond_key(1)), old: None, new: None }),
+            (205, PalwDeltaEntryV2::TerminalPart { key: (key,bond_key(1)), index: 0, old: None, new: None }),
             // Lane BUDGET (the bond budget, 190–199), declared explicitly.
             (190, PalwDeltaEntryV2::BondBudgetRow { table: 1, key: Vec::new(), old: None, new: None }),
             (191, PalwDeltaEntryV2::BondBudgetHeader { old: None, new: None }),
@@ -62475,6 +62552,7 @@ pub(crate) mod tests {
             legacy_disputes: _,
             fp_public_jobs: _,
             legacy_answers: _,
+            terminal_evidence: _,
             // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
             bond_budget: _,
             // RFC-0008 v2: one Some-only block of three, empty here.

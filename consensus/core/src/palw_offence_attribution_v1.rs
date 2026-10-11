@@ -90,6 +90,25 @@ pub const PALW_PANEL_FALSE_VALID_VERSION_V2: u16 = 2;
 /// hundred bytes. Kind 3 is not chunked in this stage.
 pub const PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES: u64 = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
 
+/// Only an admitted reservation-owned assembly may use the block's court byte budget.
+/// Old direct-carrier entrypoints preserve their 100,000-byte refusal at every height.
+#[derive(Clone, Copy, Debug)]
+pub enum PalwObjectiveEvidenceBudgetV1 {
+    DirectCarrier,
+    ReservedTerminal { court_maximum: u64 },
+}
+impl PalwObjectiveEvidenceBudgetV1 {
+    fn maximum(self, sessions: PalwSessionRuleV1) -> u64 {
+        match self {
+            Self::DirectCarrier => PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES,
+            Self::ReservedTerminal { court_maximum } if matches!(sessions, PalwSessionRuleV1::DirectProofFirst) => {
+                court_maximum.min(crate::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1)
+            }
+            Self::ReservedTerminal { .. } => PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES,
+        }
+    }
+}
+
 /// Keyed-BLAKE2b-512 domain of [`palw_false_valid_ledger_key_v2`].
 pub const PALW_FALSE_VALID_KEY_DOMAIN_V2: &[u8] = b"misaka-palw/false-valid-key/v2";
 
@@ -318,7 +337,12 @@ pub fn palw_false_valid_receipts_of_licence_for_v1(
                     .filter(|seat| seat.verdict == PalwReceiptVerdictV2::Valid)
                     .filter_map(|seat| {
                         let root = roots.get(seat.root_index as usize)?;
-                        crate::palw_batch_licence_v1::PalwWindowedReceiptV1::of_batch_entry(roots, entry, seat.seat_index, root.seat_bond)
+                        crate::palw_batch_licence_v1::PalwWindowedReceiptV1::of_batch_entry(
+                            roots,
+                            entry,
+                            seat.seat_index,
+                            root.seat_bond,
+                        )
                     })
                     .map(PalwFalseValidReceiptV1::Windowed)
                     .collect(),
@@ -1592,7 +1616,10 @@ fn palw_prompt_proof_fence_v1(
     sessions: PalwSessionRuleV1,
 ) -> Result<(), PalwOffenceVerifyError> {
     if sessions != PalwSessionRuleV1::DirectProofFirst
-        && matches!(contradiction, PalwPanelContradictionV1::ConstrainedDecode { .. } | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. })
+        && matches!(
+            contradiction,
+            PalwPanelContradictionV1::ConstrainedDecode { .. } | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
+        )
     {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("constrained direct proof is below the public-filer fence"));
     }
@@ -1655,7 +1682,11 @@ pub fn palw_prompt_not_anchored_admit_v1(
 /// `windowed_admitted` is `Params::palw_capacity_batch_licence` at the block's DAA: below it a kind-3
 /// payload whose receipt is `Windowed` reads as undecodable ([`palw_false_valid_evidence_decode_v1`]),
 /// as it does on `0e8ec984e`, so it prices nothing.
-pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8], windowed_admitted: bool) -> u64 {
+pub fn palw_offence_heavy_prompt_ids_v1(
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+    windowed_admitted: bool,
+) -> u64 {
     palw_offence_heavy_prompt_ids_at_v2(kind, evidence, windowed_admitted, false)
 }
 
@@ -1746,8 +1777,30 @@ pub fn palw_offence_heavy_prompt_charge_at_v2(
     windowed_admitted: bool,
     sessions: PalwSessionRuleV1,
 ) -> Option<PalwHeavyPromptChargeV1> {
+    palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(
+        state,
+        accused,
+        kind,
+        evidence,
+        rules,
+        windowed_admitted,
+        sessions,
+        PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+    )
+}
+
+pub fn palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+    rules: PalwIdentityRulesV1,
+    windowed_admitted: bool,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+) -> Option<PalwHeavyPromptChargeV1> {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
-    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+    if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return None;
     }
     let (claim_id, contradiction, executor_only) = match kind {
@@ -1970,7 +2023,31 @@ pub fn palw_check_panel_false_valid_at_v2(
     sig: Option<PalwFalseValidSigCheckV1<'_>>,
     sessions: PalwSessionRuleV1,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
-    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+    palw_check_panel_false_valid_at_v2_with_budget_v1(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sig,
+        sessions,
+        PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+    )
+}
+
+pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sig: Option<PalwFalseValidSigCheckV1<'_>>,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
+    if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
     let payload: PalwPanelFalseValidEvidenceV2 =
@@ -2021,11 +2098,12 @@ pub fn palw_check_panel_false_valid_at_v2(
     let da_confirmed = rules.da_signer_liability
         && matches!(payload.contradiction, PalwPanelContradictionV1::ProducerWithholding { voided_daa }
             if palw_da_default_confirms_withholding_v1(state, &target, voided_daa));
-    let admission = if let (true, PalwPanelContradictionV1::ProducerWithholding { voided_daa }) = (da_confirmed, &payload.contradiction) {
-        PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa: *voided_daa }
-    } else {
-        palw_false_valid_admission_v1(&payload.contradiction)?
-    };
+    let admission =
+        if let (true, PalwPanelContradictionV1::ProducerWithholding { voided_daa }) = (da_confirmed, &payload.contradiction) {
+            PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa: *voided_daa }
+        } else {
+            palw_false_valid_admission_v1(&payload.contradiction)?
+        };
     if let PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } = admission
         && !da_confirmed
     {
@@ -2186,7 +2264,27 @@ pub fn palw_check_tir_identity_mismatch_at_v1(
     rules: PalwIdentityRulesV1,
     sessions: PalwSessionRuleV1,
 ) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
-    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+    palw_check_tir_identity_mismatch_at_v1_with_budget_v1(
+        state,
+        accused,
+        evidence,
+        reporter_armed,
+        rules,
+        sessions,
+        PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+    )
+}
+
+pub fn palw_check_tir_identity_mismatch_at_v1_with_budget_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
     let payload: PalwTirIdentityEvidenceV1 =
@@ -2351,7 +2449,29 @@ pub fn palw_check_executor_refuted_at_v1(
     rules: PalwIdentityRulesV1,
     sessions: PalwSessionRuleV1,
 ) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
-    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+    palw_check_executor_refuted_at_v1_with_budget_v1(
+        state,
+        accused,
+        evidence,
+        fp_decode_rules_active,
+        reporter_armed,
+        rules,
+        sessions,
+        PalwObjectiveEvidenceBudgetV1::DirectCarrier,
+    )
+}
+
+pub fn palw_check_executor_refuted_at_v1_with_budget_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+    sessions: PalwSessionRuleV1,
+    evidence_budget: PalwObjectiveEvidenceBudgetV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    if evidence.len() as u64 > evidence_budget.maximum(sessions) {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
     let payload: PalwExecutorRefutedEvidenceV1 =
@@ -2504,9 +2624,8 @@ mod tests {
             let mut state = PalwChainStateV2::genesis();
             state.set_false_valid_rows_for_tests(h64(CLAIM), Some(row), Some(five_seat_panel()), None, 3);
             let target = palw_offence_target_v1(&state, &h64(CLAIM)).unwrap();
-            let contradiction = PalwPanelContradictionV1::ConstrainedDecode {
-                binding: binding.clone(), accusation: Box::new(accusation.clone()),
-            };
+            let contradiction =
+                PalwPanelContradictionV1::ConstrainedDecode { binding: binding.clone(), accusation: Box::new(accusation.clone()) };
             let encoded = borsh::to_vec(&contradiction).unwrap();
             assert_eq!(encoded[0], 14, "append-only wire tag");
             assert_eq!(borsh::from_slice::<PalwPanelContradictionV1>(&encoded).unwrap(), contradiction);
@@ -2517,14 +2636,22 @@ mod tests {
             for (kind, accused, evidence) in [(K::ExecutorRefuted, executor_bond, executor), (K::PanelFalseValidV2, seat(1), panel)] {
                 assert!(evidence.len() as u64 <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
                 let object = crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
-                    kind, accused, evidence_id: crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence), evidence: evidence.clone(),
+                    kind,
+                    accused,
+                    evidence_id: crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence),
+                    evidence: evidence.clone(),
                 };
-                assert!(crate::palw_state_v2::palw_object_is_constrained_decode_v1(&object), "processor/fold share the constraint fence classifier");
+                assert!(
+                    crate::palw_state_v2::palw_object_is_constrained_decode_v1(&object),
+                    "processor/fold share the constraint fence classifier"
+                );
                 for sessions in [PalwSessionRuleV1::RefusedUnderSession, PalwSessionRuleV1::DirectProofFirst] {
                     let result = if kind == K::ExecutorRefuted {
-                        palw_check_executor_refuted_at_v1(&state, &accused, &evidence, true, false, rules(), sessions).map(|f| f.forfeit)
+                        palw_check_executor_refuted_at_v1(&state, &accused, &evidence, true, false, rules(), sessions)
+                            .map(|f| f.forfeit)
                     } else {
-                        palw_check_panel_false_valid_at_v2(&state, &accused, &evidence, true, false, rules(), None, sessions).map(|f| f.forfeit)
+                        palw_check_panel_false_valid_at_v2(&state, &accused, &evidence, true, false, rules(), None, sessions)
+                            .map(|f| f.forfeit)
                     };
                     if sessions == PalwSessionRuleV1::RefusedUnderSession {
                         assert!(matches!(result, Err(E::ContradictionNotAdmitted(_))));
@@ -2566,18 +2693,53 @@ mod tests {
             let producer = row.bond;
             let mut state = PalwChainStateV2::genesis();
             state.set_false_valid_rows_for_tests(h64(CLAIM), Some(row), Some(five_seat_panel()), None, 3);
-            let proof = PalwPanelContradictionV1::ConstrainedDecodeFlat { binding: binding.clone(), accusation: Box::new(accusation.clone()) };
+            let proof =
+                PalwPanelContradictionV1::ConstrainedDecodeFlat { binding: binding.clone(), accusation: Box::new(accusation.clone()) };
             assert_eq!(borsh::to_vec(&proof).unwrap()[0], 15);
             let (_, executor) = palw_executor_refuted_evidence_v1(h64(CLAIM), proof.clone(), None);
             let expected = if fault { Ok(PalwForfeitScopeV1::ByRoot) } else { Err(E::TokenHolds) };
-            assert_eq!(palw_check_executor_refuted_at_v1(&state, &producer, &executor, true, false, rules(),
-                PalwSessionRuleV1::DirectProofFirst).map(|f| f.forfeit), expected);
+            assert_eq!(
+                palw_check_executor_refuted_at_v1(
+                    &state,
+                    &producer,
+                    &executor,
+                    true,
+                    false,
+                    rules(),
+                    PalwSessionRuleV1::DirectProofFirst
+                )
+                .map(|f| f.forfeit),
+                expected
+            );
             for n in 1..=5 {
                 let panel = bytes(&evidence(full(n), proof.clone()));
-                assert_eq!(palw_check_panel_false_valid_at_v2(&state, &seat(n), &panel, true, false, rules(), None,
-                    PalwSessionRuleV1::DirectProofFirst).map(|f| f.forfeit), expected);
-                assert!(matches!(palw_check_panel_false_valid_at_v2(&state, &seat(n), &panel, true, false, rules(), None,
-                    PalwSessionRuleV1::RefusedUnderSession), Err(E::ContradictionNotAdmitted(_))));
+                assert_eq!(
+                    palw_check_panel_false_valid_at_v2(
+                        &state,
+                        &seat(n),
+                        &panel,
+                        true,
+                        false,
+                        rules(),
+                        None,
+                        PalwSessionRuleV1::DirectProofFirst
+                    )
+                    .map(|f| f.forfeit),
+                    expected
+                );
+                assert!(matches!(
+                    palw_check_panel_false_valid_at_v2(
+                        &state,
+                        &seat(n),
+                        &panel,
+                        true,
+                        false,
+                        rules(),
+                        None,
+                        PalwSessionRuleV1::RefusedUnderSession
+                    ),
+                    Err(E::ContradictionNotAdmitted(_))
+                ));
             }
             if fault {
                 for edit in 0..4 {
@@ -2588,10 +2750,23 @@ mod tests {
                         2 => bad.pin.logits_rows[0][0] ^= 1,
                         _ => bad.position = bad.pin.generated_token_ids.len() as u32,
                     }
-                    let (_, encoded) = palw_executor_refuted_evidence_v1(h64(CLAIM),
-                        PalwPanelContradictionV1::ConstrainedDecodeFlat { binding: binding.clone(), accusation: Box::new(bad) }, None);
-                    assert!(palw_check_executor_refuted_at_v1(&state, &producer, &encoded, true, false, rules(),
-                        PalwSessionRuleV1::DirectProofFirst).is_err());
+                    let (_, encoded) = palw_executor_refuted_evidence_v1(
+                        h64(CLAIM),
+                        PalwPanelContradictionV1::ConstrainedDecodeFlat { binding: binding.clone(), accusation: Box::new(bad) },
+                        None,
+                    );
+                    assert!(
+                        palw_check_executor_refuted_at_v1(
+                            &state,
+                            &producer,
+                            &encoded,
+                            true,
+                            false,
+                            rules(),
+                            PalwSessionRuleV1::DirectProofFirst
+                        )
+                        .is_err()
+                    );
                 }
             }
         }
@@ -3552,10 +3727,9 @@ mod tests {
             PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_job_pin_v1, palw_fp_run_facts_for_executed_v1,
         };
         use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1 as P};
-        for (base, form, v4) in [
-            (true, Form::Flat, false), (true, Form::MerkleV1, true),
-            (false, Form::MerkleV1, false), (false, Form::MerkleV1, true),
-        ] {
+        for (base, form, v4) in
+            [(true, Form::Flat, false), (true, Form::MerkleV1, true), (false, Form::MerkleV1, false), (false, Form::MerkleV1, true)]
+        {
             let template = if base {
                 floor_binding_for_tests_v1(&h64(0xCF), form)
             } else {
@@ -3630,16 +3804,34 @@ mod tests {
                     {
                         let active = mode == PalwSessionRuleV1::DirectProofFirst;
                         let declared = u64::from(binding.job_context.declared_prefill_tokens);
-                        assert_eq!(palw_offence_heavy_prompt_ids_v1(kind, bytes, false), 0, "the old price cannot know FP proof tag 2");
+                        assert_eq!(
+                            palw_offence_heavy_prompt_ids_v1(kind, bytes, false),
+                            0,
+                            "the old price cannot know FP proof tag 2"
+                        );
                         assert_eq!(palw_offence_heavy_prompt_ids_at_v2(kind, bytes, false, active), if active { declared } else { 0 });
                         let object = crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
-                            kind, accused, evidence_id: h64(0xCF33), evidence: bytes.clone(),
+                            kind,
+                            accused,
+                            evidence_id: h64(0xCF33),
+                            evidence: bytes.clone(),
                         };
-                        assert_eq!(crate::palw_state_v2::palw_object_rent_ceiling_v2(&object, true, false), 0, "below the new fence the coinbase burns exactly the old rent");
+                        assert_eq!(
+                            crate::palw_state_v2::palw_object_rent_ceiling_v2(&object, true, false),
+                            0,
+                            "below the new fence the coinbase burns exactly the old rent"
+                        );
                         let rent = crate::palw_state_v2::palw_object_rent_ceiling_v3(&object, true, false, active);
-                        assert_eq!(rent, if active {
-                            crate::palw_state_v2::palw_relay_fee_for_mass_v1(declared * crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)
-                        } else { 0 });
+                        assert_eq!(
+                            rent,
+                            if active {
+                                crate::palw_state_v2::palw_relay_fee_for_mass_v1(
+                                    declared * crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1,
+                                )
+                            } else {
+                                0
+                            }
+                        );
                         assert_eq!(crate::palw_state_v2::palw_object_rent_ceiling_v3(&object, false, false, active), 0);
                         assert_eq!(
                             palw_offence_heavy_prompt_charge_at_v2(&state, &accused, kind, bytes, rules, false, mode),
@@ -3743,7 +3935,8 @@ mod tests {
             edit(&mut moved_ctx);
             assert_ne!(palw_fp_job_pin_of_context_v1(&moved_ctx), pin, "the pin reads the {what}");
         }
-        let rules = PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id, da_signer_liability: false };
+        let rules =
+            PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id, da_signer_liability: false };
         let fp_binding = moved(&floor, |b| {
             b.job_context = ctx.clone();
             b.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&ctx);
@@ -4115,7 +4308,11 @@ mod f1c_tests {
         assert_eq!(judge(&relabel, &tile_of(&anchored_ids, 0)), Err(E::PanelFalseValidNeedsContradiction));
         // The refusals.
         let floor = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(&anchor, form);
-        let floor_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: floor.shape_profile.shape_profile_id(), da_signer_liability: false };
+        let floor_rules = PalwIdentityRulesV1 {
+            prompt_ids_form: form,
+            base_class_id: floor.shape_profile.shape_profile_id(),
+            da_signer_liability: false,
+        };
         assert!(matches!(
             palw_prompt_not_anchored_fault_v1(&target_of(&floor, anchor), &floor, &PalwPromptProofV1::Whole, floor_rules),
             Err(E::ContradictionNotAdmitted(_))
@@ -4160,7 +4357,9 @@ mod f1c_tests {
                 let template = floor_binding_for_tests_v1(&h64(0xD01), Form::Flat);
                 let mut binding = moved(&template, |b| {
                     b.shape_profile.vocab_size = 17;
-                    if tiled { b.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1(); }
+                    if tiled {
+                        b.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+                    }
                     b.job_context.shape_profile_id = b.shape_profile.shape_profile_id();
                 });
                 let count = binding.job_context.exact_decode_tokens as usize;
@@ -4199,10 +4398,19 @@ mod f1c_tests {
                 let mut state = PalwChainStateV2::genesis();
                 state.set_false_valid_rows_for_tests(h64(CLAIM), Some(row), Some(five_seat_panel()), None, 0);
                 let (_, executor_bytes) = palw_executor_refuted_evidence_v1(h64(CLAIM), proof.clone(), None);
-                assert!(matches!(palw_check_executor_refuted_v1(&state, &seat(99), &executor_bytes, true, false, rules()),
-                    Err(E::ContradictionNotAdmitted(_))));
-                let judged = palw_check_executor_refuted_at_v1(&state, &seat(99), &executor_bytes, true, false, rules(),
-                    PalwSessionRuleV1::DirectProofFirst);
+                assert!(matches!(
+                    palw_check_executor_refuted_v1(&state, &seat(99), &executor_bytes, true, false, rules()),
+                    Err(E::ContradictionNotAdmitted(_))
+                ));
+                let judged = palw_check_executor_refuted_at_v1(
+                    &state,
+                    &seat(99),
+                    &executor_bytes,
+                    true,
+                    false,
+                    rules(),
+                    PalwSessionRuleV1::DirectProofFirst,
+                );
                 if committed >= 17 {
                     assert_eq!(judged.map(|f| f.forfeit), Ok(PalwForfeitScopeV1::ByRoot));
                 } else if tiled {
@@ -4212,8 +4420,16 @@ mod f1c_tests {
                 }
                 for signer in 1..=5 {
                     let payload = evidence(full(signer), proof.clone());
-                    let judged = palw_check_panel_false_valid_at_v2(&state, &seat(signer), &bytes(&payload),
-                        true, false, rules(), None, PalwSessionRuleV1::DirectProofFirst);
+                    let judged = palw_check_panel_false_valid_at_v2(
+                        &state,
+                        &seat(signer),
+                        &bytes(&payload),
+                        true,
+                        false,
+                        rules(),
+                        None,
+                        PalwSessionRuleV1::DirectProofFirst,
+                    );
                     if committed >= 17 {
                         assert_eq!(judged.map(|f| f.forfeit), Ok(PalwForfeitScopeV1::ByRoot));
                     } else {
@@ -4228,22 +4444,45 @@ mod f1c_tests {
                         pin: tiled_decode_pin_v1(&binding.job_context, &rows, &ids, (count - 1) as u32, 0).unwrap(),
                     };
                     let target = palw_offence_target_v1(&state, &h64(CLAIM)).unwrap();
-                    assert!(matches!(palw_forged_output_tiled_fault_at_v2(&target, &binding, &selection,
-                        binding.step_leaf_count, true, PalwSessionRuleV1::DirectProofFirst),
-                        Err(E::ContradictionNotAdmitted(_))), "FP greedy selection remains inadmissible");
+                    assert!(
+                        matches!(
+                            palw_forged_output_tiled_fault_at_v2(
+                                &target,
+                                &binding,
+                                &selection,
+                                binding.step_leaf_count,
+                                true,
+                                PalwSessionRuleV1::DirectProofFirst
+                            ),
+                            Err(E::ContradictionNotAdmitted(_))
+                        ),
+                        "FP greedy selection remains inadmissible"
+                    );
                 }
                 if committed >= 17 {
                     let mut bad = proof.clone();
                     match &mut bad {
                         PalwPanelContradictionV1::ForgedOutput { pin, .. } => pin.generated_token_ids[0] ^= 1,
                         PalwPanelContradictionV1::ForgedOutputTiled {
-                            proof: PalwForgedOutputTiledProofV1::OutOfVocab { tokens, .. }, ..
+                            proof: PalwForgedOutputTiledProofV1::OutOfVocab { tokens, .. },
+                            ..
                         } => tokens.generated_token_ids[0] ^= 1,
                         _ => unreachable!(),
                     }
                     let (_, bad_bytes) = palw_executor_refuted_evidence_v1(h64(CLAIM), bad, None);
-                    assert!(palw_check_executor_refuted_at_v1(&state, &seat(99), &bad_bytes, true, false, rules(),
-                        PalwSessionRuleV1::DirectProofFirst).is_err(), "unauthenticated ID never convicts");
+                    assert!(
+                        palw_check_executor_refuted_at_v1(
+                            &state,
+                            &seat(99),
+                            &bad_bytes,
+                            true,
+                            false,
+                            rules(),
+                            PalwSessionRuleV1::DirectProofFirst
+                        )
+                        .is_err(),
+                        "unauthenticated ID never convicts"
+                    );
                 }
             }
         }
@@ -4291,7 +4530,13 @@ mod f1c_tests {
         let whole = PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole };
         let seat = PalwBondKeyV2(TransactionOutpoint::new(h64(0x5EA7), 0));
         let signed = PalwSeatReceiptV3 {
-            receipt: PalwSeatReceiptV2 { claim: h64(0xC1A1), verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat, signed_daa: 9, signature: vec![7; 8] },
+            receipt: PalwSeatReceiptV2 {
+                claim: h64(0xC1A1),
+                verdict: PalwReceiptVerdictV2::Valid,
+                seat_bond: seat,
+                signed_daa: 9,
+                signature: vec![7; 8],
+            },
             segments: crate::palw_verification_v2::PalwSegmentMaskV2(0b1),
         };
         let windowed = PalwFalseValidReceiptV1::Windowed(crate::palw_batch_licence_v1::PalwWindowedReceiptV1 {

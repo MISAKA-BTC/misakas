@@ -391,7 +391,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // Lane LG14-A (tags 154–155): the dispute reservation and its release ride at every height with NO stateless refusal — the live
         // int-12 build cannot decode them and tolerates their bytes, so refusing any shape here would mark invalid a block it accepts
         // (A-2). The fence, the signature, the bond and the rules are the acceptance layer's and the fold's.
-        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => Ok(()),
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } | PalwConsensusObjectV2::DisputeReleasedV1 { .. } | PalwConsensusObjectV2::DisputeReacquiredV1 { .. }
+            | PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. } => Ok(()),
         // LG14-B (tags 157–159): the legacy held DA objects ride at every height, refused nowhere at isolation (A-2 rule 5: the live
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
@@ -1318,7 +1319,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
-        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
+        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } | O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
 }
 
@@ -1455,6 +1456,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (160, "LegacyHeldAnswerDeclaredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (161, "LegacyHeldAnswerChunkV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (162, "ObjectiveEvidenceDeclaredV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
+    (163, "ObjectiveEvidenceChunkV1", PalwLifecycleKindFenceV1::LegacyPublicFilerV1),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1899,6 +1902,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // LG14-A: reservation, release and nonce-bound public DA reacquisition (RFC-0014 §6–§7).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 161 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 162, hi: 163 }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -2047,6 +2051,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14-B multipart answers",
         true,
     ),
+    a2_row(PalwA2SlotV1::StateEncoding { what: "reservation-owned terminal evidence (delta 203, tail 0xF2, root terminal_evidence/v1)" }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2084,6 +2089,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
     (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
     (157, 161, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
+    (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
 ];
 
 #[cfg(test)]

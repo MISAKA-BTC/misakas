@@ -8998,6 +8998,26 @@ impl VirtualStateProcessor {
                     heavy_prompt_claims.insert(charge.claim_id);
                 }
             }
+            // A completing owned terminal carries the same heavy-prompt budget as a direct offence.
+            // Its rent was bought by the signed declaration; partial chunks never consume this slot.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = &object {
+                if let Some(row)=folded.terminal_pending_v1(&(part.claim,part.reserver)) {
+                    let maximum=self.palw_court_params_v2.as_ref().map_or(0,|c|c.max_close_bytes());
+                    if let Ok(Some(evidence))=row.preview(part,maximum) {
+                        let d=&row.declaration;
+                        if let Some(charge)=kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(
+                            &folded,&d.accused,d.kind,&evidence,self.palw_identity_rules_v1(point.daa_score),batch_licence,self.palw_session_rule_at(point.daa_score),
+                            kaspa_consensus_core::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::ReservedTerminal{court_maximum:maximum}) {
+                            if charge.prompt_ids>u64::from(d.heavy_prompt_ids) {continue;}
+                            if !heavy_prompt_claims.contains(&charge.claim_id) {
+                                if heavy_prompt_ids_charged.saturating_add(charge.prompt_ids)>kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1 {continue;}
+                                heavy_prompt_ids_charged+=charge.prompt_ids;
+                                heavy_prompt_claims.insert(charge.claim_id);
+                            }
+                        }
+                    }
+                }
+            }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
             if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
@@ -13821,6 +13841,40 @@ impl VirtualStateProcessor {
                         bytes,
                     )?;
                 }
+                Obj::ObjectiveEvidenceDeclaredV1 { declaration } => {
+                    use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
+                    if !self.palw_legacy_public_filer_at(point.daa_score) || !self.palw_objective_offence_at(point.daa_score) || !self.palw_offence_attribution_at(point.daa_score) {
+                        return Err("terminal evidence is below its public-filer/objective-attribution fence".into());
+                    }
+                    let court=self.palw_court_params_v2.as_ref().ok_or("terminal evidence needs V2 court parameters")?;
+                    declaration.check(court.max_close_bytes())?;
+                    let owner=state.bond(&declaration.reserver).ok_or("terminal reserver has no registered bond")?;
+                    let reservation=state.legacy_dispute_reservation_v1(&declaration.claim,&declaration.reserver).ok_or("terminal reserver has no live reservation")?;
+                    if reservation.reserved_daa != declaration.reserved_daa { return Err("terminal declaration belongs to another reservation".into()); }
+                    if !matches!(owner.status,kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {return Err("terminal reserver is not active".into());}
+                    let message=t::palw_terminal_message_v1(self.palw_network_domain_v2(),declaration)?;
+                    if !Self::verify_mldsa87_with_context_bool(&owner.pubkey,message.as_byte_slice(),&declaration.signature,t::PALW_TERMINAL_CONTEXT_V1){return Err("terminal declaration is not signed by the reserver".into());}
+                }
+                Obj::ObjectiveEvidenceChunkV1 { part } => {
+                    use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
+                    if !self.palw_legacy_public_filer_at(point.daa_score) || !self.palw_objective_offence_at(point.daa_score) || !self.palw_offence_attribution_at(point.daa_score) {
+                        return Err("terminal evidence is below its public-filer/objective-attribution fence".into());
+                    }
+                    let row=state.terminal_pending_v1(&(part.claim,part.reserver)).ok_or("terminal part has no owned declaration")?;
+                    let court=self.palw_court_params_v2.as_ref().ok_or("terminal evidence needs V2 court parameters")?;
+                    if let Some(evidence)=row.preview(part,court.max_close_bytes())? {
+                        let d=&row.declaration;
+                        if matches!(d.kind,kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch) && !self.palw_tir_at(point.daa_score){return Err("terminal IR identity proof below its IR fence".into());}
+                        if t::palw_terminal_is_constraint_v1(d.kind,&evidence) && !state_params.fp_decode_constraint_active_at(point.daa_score){return Err("terminal constraint proof below its constraint fence".into());}
+                        if !state_params.capacity_batch_active_at(point.daa_score) && kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_evidence_is_windowed_v1(&evidence){return Err("terminal Windowed receipt below its batch fence".into());}
+                        let accused=state.bond(&d.accused).ok_or("terminal accused has no registered bond")?;
+                        t::palw_terminal_adjudicate_v1(state,d,&evidence,court.max_close_bytes(),state_params.fp_decode_rules_at(point.daa_score),self.palw_identity_rules_v1(point.daa_score),self.palw_session_rule_at(point.daa_score),Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
+                            chain_domain:self.palw_network_domain_v2(),seat_pubkey:&accused.pubkey,
+                            seat_active:matches!(accused.status,kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring{..}),
+                            verify:&Self::verify_mldsa87_with_context_bool,
+                        }))?;
+                    }
+                }
                 Obj::LegacyHeldAnswerDeclaredV2 { declaration } => {
                     use kaspa_consensus_core::palw_legacy_answer_chunks_v2 as chunks;
                     let court = self.palw_court_params_v2.as_ref().ok_or("multipart DA answer needs V2 court parameters")?;
@@ -15740,6 +15794,7 @@ impl VirtualStateProcessor {
             // ADR-0144 §9: the HEIGHT, not this block's yes/no. Written explicitly so an unwritten
             // default cannot silently leave the lock ledger off on a network that has armed it.
             objective_offence_daa: self.palw_objective_offence_daa(),
+            terminal_evidence_max_bytes: self.palw_legacy_public_filer_at(daa_score).then(|| self.palw_court_params_v2.as_ref().map(|c|c.max_close_bytes())).flatten(),
             // ADR-0133 §7: the HEIGHT, so the profile a row is derived with is a function of the
             // block that derived it and a resync folds what the live chain folded.
             seat_gate_possession_daa: self.palw_seat_gate_possession_daa(),
@@ -22929,6 +22984,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
         O::LegacyHeldAnswerDeclaredV2 { .. } => "LegacyHeldAnswerDeclaredV2",
         O::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
+        O::ObjectiveEvidenceDeclaredV1 { .. } => "ObjectiveEvidenceDeclaredV1",
+        O::ObjectiveEvidenceChunkV1 { .. } => "ObjectiveEvidenceChunkV1",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",

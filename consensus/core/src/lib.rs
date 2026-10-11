@@ -552,6 +552,7 @@ pub mod palw_court_scope_v1;
 /// fence `palw_legacy_held_da_v2` (refused when armed).
 pub mod palw_legacy_held_da_v2;
 pub mod palw_legacy_answer_chunks_v2;
+pub mod palw_terminal_carriage_v1;
 /// Lane INTF (ADR-0032's 2026-10-10 amendment): the PALW reporter share, 10% below and 49% at or past the dormant fence
 /// `palw_reporter_share_v2` (refused when armed) — R-1 fixed at the conviction's close, DA-6 at the session's open.
 pub mod palw_reporter_share_v2;
