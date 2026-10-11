@@ -1020,6 +1020,8 @@ impl PalwBondBudgetStateV1 {
 
     /// **Does the bond still hold a reservation inside its window at `now`?** (the withdrawal hold, design §2.4) — exact: the latest
     /// `reuse_not_before` among its in-window reservations is still ahead.
+    /// A pending monetary right uses `u64::MAX` until the ordinary release
+    /// clock removes its last reservation, because its payment DAA is unknown.
     pub fn window_holds(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
         self.bonds.get(bond).is_some_and(|row| !row.window.is_zero() && row.latest_release_daa > now)
     }
@@ -1336,7 +1338,10 @@ impl PalwBondBudgetStateV1 {
             }
         }
         bond_row.window.reward_sompi = total;
-        bond_row.latest_release_daa = bond_row.latest_release_daa.max(release);
+        // Pending money has no known actual payment clock. The sentinel keeps
+        // the existing O(1) withdrawal gate closed across sparse DAA jumps.
+        // Once all due reservations release, put_bond deletes the zero row.
+        bond_row.latest_release_daa = u64::MAX;
         self.put_bond(&bond, bond_row, j);
         let mut row = old.unwrap_or(PalwBudgetClaimRowV1 {
             bond,
@@ -1536,6 +1541,9 @@ impl PalwBondBudgetStateV1 {
         )?;
         self.close(&income_id, j);
         self.extend_income_window_v1(&income_id, release, j);
+        let mut row = *self.bonds.get(&bond).expect("pending source income bond");
+        row.latest_release_daa = u64::MAX;
+        self.put_bond(&bond, row, j);
         Ok(())
     }
 
@@ -2099,6 +2107,7 @@ mod tests {
         s.forget(&h(70), &mut j);
         s.release_due(900, &mut j);
         assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 45 * BILI, ..PalwBudgetVectorV1::ZERO });
+        assert!(s.window_holds(&bond(0), 900), "unpaid income still holds collateral past its initial H+W");
         let before = (s.root_parts(), j.len());
         assert!(s.hold_native_income_v1(&p, capital, h(71), bond(0), 900, 1_000, 51 * BILI, &[], true, &mut j).is_err());
         assert_eq!((s.root_parts(), j.len()), before, "refusal reclassifies and reserves nothing");
@@ -2107,6 +2116,7 @@ mod tests {
         assert!(s.claim_row(&h(71)).is_none());
         assert_eq!(s.claim_row(&h(72)).unwrap().origin, PalwBudgetOriginV1::NativeIncomeQueued);
         s.release_due(2_000, &mut j);
+        assert!(s.window_holds(&bond(0), 2_000), "queued income also keeps the physical withdrawal gate closed");
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 45 * BILI, "queued money cannot expire before actual payment");
         s.confirm_native_income_payment_v1(&p, &h(72), 2_000, &mut j).unwrap();
         assert_eq!(s.claim_row(&h(72)).unwrap().reuse_not_before, 2_100);
@@ -2241,6 +2251,7 @@ mod tests {
         assert_eq!(row.reuse_not_before, 600);
         assert!(!row.open && row.live && row.in_window);
         s.release_due(900, &mut j);
+        assert!(s.window_holds(&bond(0), 900), "old unpaid fee still holds collateral beyond signed H+W");
         let held = *s.bond_row(&bond(0)).unwrap();
         assert_eq!(held.window, PalwBudgetVectorV1 { reward_sompi: fee, ..PalwBudgetVectorV1::ZERO });
         assert_eq!(held.open_claims, 0);
