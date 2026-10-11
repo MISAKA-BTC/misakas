@@ -50,6 +50,13 @@ impl PalwClassSemanticsV1 {
 
     /// Each stored value is the registration's exact statement, including zero; a caller
     /// must explicitly handle an unlisted pre-fence class rather than substitute local facts.
+    /// The public immutable snapshot's digest; the state's claim-keyed map binds it to a claim.
+    pub fn commitment(&self) -> Hash64 {
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"PalwClassSemantics/v1").to_state();
+        h.update(&borsh::to_vec(self).expect("a semantic snapshot has an infallible Vec writer"));
+        Hash64::from_bytes(h.finalize().as_bytes().try_into().expect("the requested hash length"))
+    }
+
     pub fn matches_context(&self, ctx: &PalwJobContextV2) -> bool {
         ctx.shape_profile_id == self.class_id
             && ctx.model_profile_id == self.model_profile_id

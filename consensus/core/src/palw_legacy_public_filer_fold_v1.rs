@@ -599,6 +599,7 @@ impl PalwChainStateV2 {
             trace_retention_daa: claim.trace_retention_daa,
             job_identity: claim.job_identity,
             public_fp_job: self.fp_public_jobs.get(claim_id).cloned(),
+            registered_semantics: self.claim_semantics_v1(claim_id).cloned(),
             work_leaves: claim.work_leaves,
             deadline_daa: self.deadline_of(claim_id),
             hard_deadline_daa: palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)),
@@ -645,6 +646,8 @@ pub struct PalwLegacyDisputeViewV1 {
     pub job_identity: Hash64,
     /// Borsh of the original accepted FP commitment, from rooted state. No prompt IDs or capture.
     pub public_fp_job: Option<Vec<u8>>,
+    /// Immutable statement stamped when this claim was accepted, never the latest mutable listing.
+    pub registered_semantics: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub work_leaves: u64,
     /// DL-1's deadline (`None` while a reservation, a seat-like session or a court holds the claim).
     pub deadline_daa: Option<u64>,
@@ -751,6 +754,11 @@ pub struct PalwLegacyDisputeObservationV1 {
     /// Canonical Borsh commitment bytes as hex, authenticated by the claim id and tip state root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_fp_job: Option<String>,
+    /// Exact Borsh snapshot; None preserves unqualified historical semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registered_semantics: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registered_semantics_commitment: Option<Hash64>,
     pub work_leaves: u64,
     pub deadline_daa: Option<u64>,
     pub hard_deadline_daa: u64,
@@ -789,6 +797,8 @@ impl PalwLegacyDisputeObservationV1 {
             trace_retention_daa: view.trace_retention_daa,
             job_identity: view.job_identity,
             public_fp_job: view.public_fp_job.as_ref().map(|wire| faster_hex::hex_string(wire)),
+            registered_semantics: view.registered_semantics.as_ref().map(|row| faster_hex::hex_string(&borsh::to_vec(row).expect("Vec writer"))),
+            registered_semantics_commitment: view.registered_semantics.as_ref().map(|row| row.commitment()),
             work_leaves: view.work_leaves,
             deadline_daa: view.deadline_daa,
             hard_deadline_daa: view.hard_deadline_daa,

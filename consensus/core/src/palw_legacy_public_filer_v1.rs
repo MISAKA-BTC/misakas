@@ -992,6 +992,7 @@ mod tests {
             trace_retention_daa: 5_000,
             job_identity: Hash64::default(),
             public_fp_job: None,
+            registered_semantics: None,
             work_leaves: 0,
             deadline_daa: None,
             hard_deadline_daa: 3_800,

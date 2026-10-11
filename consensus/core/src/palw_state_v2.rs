@@ -24918,7 +24918,8 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
             | PalwPanelContradictionV1::PromptNotAnchored { .. }
             | PalwPanelContradictionV1::ConstrainedDecode { .. }
-            | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => {
+            | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
+            | PalwPanelContradictionV1::RegisteredTableMismatch { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }
@@ -57232,6 +57233,12 @@ pub(crate) mod tests {
         let (state, claim_delta) = apply_palw_transition_v2_with_extras(
             &parent, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None, false, false, false, false, &on).unwrap();
         assert_eq!(state.claim_semantics_v1(&h64(0xFC)), Some(row));
+        let view = state.palw_legacy_dispute_view_v1(&p, &h64(0xFC)).unwrap();
+        assert_eq!(view.registered_semantics.as_ref(), Some(row));
+        let public = PalwLegacyDisputeObservationV1::of(&view);
+        assert_eq!(public.registered_semantics_commitment, Some(row.commitment()));
+        assert_eq!(public.registered_semantics, Some(faster_hex::hex_string(&borsh::to_vec(row).unwrap())));
+        assert!(public.to_json().contains("registeredSemanticsCommitment"));
         assert!(state.fp_public_jobs.is_empty());
         assert_eq!(apply_delta_v2(&parent, &claim_delta, &p).unwrap(), state);
         assert_eq!(revert_delta_v2(&state, &claim_delta, &p).unwrap(), parent);

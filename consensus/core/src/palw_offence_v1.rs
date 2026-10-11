@@ -252,6 +252,12 @@ pub enum PalwPanelContradictionV1 {
         binding: crate::palw_step_leg::PalwStepBindingV2,
         accusation: Box<crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1>,
     } = 15,
+    /// The authenticated FP job selected a table different from the immutable registered
+    /// canonical table stamped on this claim. No rendering or model bytes ride in this proof.
+    RegisteredTableMismatch {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+    } = 16,
 }
 
 /// **How a `ForgedOutputTiled` (11) proves the committed token forged.**
@@ -297,6 +303,7 @@ impl PalwPanelContradictionV1 {
                 | Self::PromptNotAnchored { .. }
                 | Self::ConstrainedDecode { .. }
                 | Self::ConstrainedDecodeFlat { .. }
+                | Self::RegisteredTableMismatch { .. }
         )
     }
 }
@@ -463,6 +470,7 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
+        | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
@@ -773,6 +781,7 @@ where
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
+        | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
         }
@@ -840,6 +849,7 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
+        | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }

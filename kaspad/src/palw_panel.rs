@@ -19065,7 +19065,7 @@ mod accepted_objects_walk_tests {
             claim_id: claim, class_id: target.class_id, producer: target.executor_bond,
             phase: kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional, execution_root: target.execution_root, trace_root: target.trace_root,
             accepted_daa: candidate.accepted_daa, trace_retention_daa: 9999, job_identity: target.job_identity,
-            public_fp_job: Some(metadata), work_leaves: c.work_leaves, deadline_daa: None, hard_deadline_daa: 9990,
+            public_fp_job: Some(metadata), registered_semantics: None, work_leaves: c.work_leaves, deadline_daa: None, hard_deadline_daa: 9990,
             record: None, sessions: vec![], answered: vec![], flat_answered_rows: 0, open_courts: 0,
             executor_refuted: false, court_convicted: false, da_defaulted: false,
         };

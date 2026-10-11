@@ -795,7 +795,7 @@ pub fn palw_false_valid_admission_v1(
         | C::LogitsNotStepOutput { .. }
         | C::ConstrainedDecode { .. }
         | C::ConstrainedDecodeFlat { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
-        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } => {
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } => {
             Ok(PalwFalseValidAdmissionV1::ClaimProving)
         }
         C::ProducerWithholding { .. } => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
@@ -936,6 +936,7 @@ pub fn palw_false_valid_fault_site_v1(
         | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
         | PalwPanelContradictionV1::ConstrainedDecode { .. }
         | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
+        | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ProducerWithholding { .. }
         | PalwPanelContradictionV1::CourtFraud { .. }
@@ -960,7 +961,7 @@ pub fn palw_claim_proving_site_v1(
 ) -> Option<PalwFaultSiteV1> {
     use PalwIdentityFaultV1 as J;
     match contradiction {
-        PalwPanelContradictionV1::PromptNotAnchored { .. } => Some(PalwFaultSiteV1::AnyValid),
+        PalwPanelContradictionV1::PromptNotAnchored { .. } | PalwPanelContradictionV1::RegisteredTableMismatch { .. } => Some(PalwFaultSiteV1::AnyValid),
         PalwPanelContradictionV1::IdentityMismatch { .. } => match identity_fault? {
             J::ClassNotTheClaims | J::JobNotTheClaims | J::SeedNotTheJobs | J::ContextNotCanonical | J::PromptNotTheAnchors => {
                 Some(PalwFaultSiteV1::AnyValid)
@@ -1343,6 +1344,22 @@ pub fn palw_constrained_job_target_v1(
     Ok(())
 }
 
+/// Authenticate the accepted job, then compare its selected table to the claim's immutable
+/// registered statement. An unqualified historical snapshot or absent constraint is refused.
+pub fn palw_registered_table_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<bool, PalwOffenceVerifyError> {
+    palw_constrained_job_target_v1(target, binding, job)?;
+    let expected = target.registered_semantics.as_ref().and_then(|row| row.token_table_root)
+        .ok_or(PalwOffenceVerifyError::ContradictionNotAdmitted("this historical claim has no immutable registered table statement"))?;
+    let Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &job.tail else {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("this job selects no constraint table"));
+    };
+    Ok(tail.table_root != expected)
+}
+
 /// Public constrained-token conviction uses the same authenticated predicate as court proof
 /// 17. Pin the descriptor to the RECORDED FP identity as well as the execution binding; a
 /// fabricated constraint beside another accepted job is not evidence against that claim.
@@ -1630,7 +1647,9 @@ fn palw_prompt_proof_fence_v1(
     if sessions != PalwSessionRuleV1::DirectProofFirst
         && matches!(
             contradiction,
-            PalwPanelContradictionV1::ConstrainedDecode { .. } | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
+            PalwPanelContradictionV1::ConstrainedDecode { .. }
+                | PalwPanelContradictionV1::ConstrainedDecodeFlat { .. }
+                | PalwPanelContradictionV1::RegisteredTableMismatch { .. }
         )
     {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("constrained direct proof is below the public-filer fence"));
@@ -1870,6 +1889,10 @@ fn claim_proving_fault_v1(
     match contradiction {
         PalwPanelContradictionV1::IdentityMismatch { binding } => {
             palw_binding_identity_fault_v1(target, binding, rules, true)?.map(Some).ok_or(PalwOffenceVerifyError::IdentityHolds)
+        }
+        PalwPanelContradictionV1::RegisteredTableMismatch { binding, job } => {
+            if palw_registered_table_fault_v1(target, binding, job)? { Ok(None) }
+            else { Err(PalwOffenceVerifyError::IdentityHolds) }
         }
         PalwPanelContradictionV1::OutputMismatch { binding, pin } => {
             if palw_output_fault_v1(target, binding, pin)? {
@@ -2408,7 +2431,7 @@ pub fn palw_executor_refuted_admission_v1(
         | C::LogitsNotStepOutput { .. }
         | C::ConstrainedDecode { .. }
         | C::ConstrainedDecodeFlat { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
-        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } => {
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } | C::RegisteredTableMismatch { .. } => {
             Ok(PalwFalseValidAdmissionV1::ClaimProving)
         }
         C::ExecutorEquivocation(_)

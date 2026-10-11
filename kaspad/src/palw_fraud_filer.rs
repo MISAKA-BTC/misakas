@@ -1211,6 +1211,10 @@ pub(super) fn palw_fraud_filer_public_filing_with_budget_v3(
     });
     let contradiction = if palw_binding_identity_fault_v1(target, binding, rules, true).map_err(|e| e.to_string())?.is_some() {
         PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() }
+    } else if let Some(job) = fp_job
+        && kaspa_consensus_core::palw_offence_attribution_v1::palw_registered_table_fault_v1(target, binding, job).is_ok_and(|fault| fault)
+    {
+        PalwPanelContradictionV1::RegisteredTableMismatch { binding: binding.clone(), job: Box::new(job.clone()) }
     } else if kaspa_consensus_core::palw_step_leg::check_step_refutation_capped_v1(&structural, binding.step_leaf_count).is_ok() {
         PalwPanelContradictionV1::StepStructural(structural)
     } else if let Some(proof) = fp_proof
@@ -2468,6 +2472,7 @@ pub(super) mod tests {
             trace_retention_daa: 5_000,
             job_identity: Hash64::default(),
             public_fp_job: None,
+            registered_semantics: None,
             work_leaves: 0,
             deadline_daa: None,
             hard_deadline_daa: 3_800,

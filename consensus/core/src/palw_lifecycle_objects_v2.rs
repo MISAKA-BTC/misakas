@@ -1750,6 +1750,10 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
     ),
     (
+        "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_class_semantics_v1", digest: 0xfaefd33947f31aed },
+    ),
+    (
         "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
     ),
@@ -1961,6 +1965,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", true),
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
+    a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
+        "palw_class_semantics_v1",
+        "G14 registered table mismatch in opaque ObjectiveOffence evidence; old unstamped targets refuse and the public proof fence preserves the old acceptance stage",
+        true,
+    ),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1" },
@@ -2099,6 +2109,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
     (157, 161, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
     (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
+    (164, 164, "G14 prospective registered semantics", &["palw_class_semantics_v1"]),
 ];
 
 #[cfg(test)]
