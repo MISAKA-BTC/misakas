@@ -13,9 +13,20 @@ async fn automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_
     fresh_public_service_with_recovery(PublicCase::UnretainedLargeConstraintJob, Some(RecoveryMode::Network)).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases() {
+    fresh_public_service_with_recovery(PublicCase::UnretainedLargeConstraintJob, Some(RecoveryMode::NetworkVerifier)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default() {
+    fresh_public_service_with_recovery(PublicCase::UnretainedWithheldFpV3Binding, Some(RecoveryMode::NetworkVerifier)).await;
+}
+
 pub(super) struct NetworkRun {
     receiver: Chain,
     _flow: Arc<FlowContext>,
+    manager: Arc<ConsensusManager>,
     rules: Arc<MiningRuleEngine>,
     primary: Arc<Adaptor>,
     client: Arc<Adaptor>,
@@ -85,7 +96,7 @@ impl NetworkRun {
             Arc::new(kaspa_core::chain_participation::ChainParticipationGate::new(true)),
         ));
         let flow = Arc::new(FlowContext::new(
-            manager,
+            manager.clone(),
             addresses,
             config,
             pool,
@@ -105,7 +116,15 @@ impl NetworkRun {
             .expect("loopback connection has a bounded deadline")
             .expect("actual P2P handshake accepts the same rules");
         eprintln!("[service-network] actual socket P2P handshake completed at DAA {}", chain.daa());
-        Self { receiver, _metadata: metadata, _flow: flow, rules, primary, client, relayed: chain.history.len() }
+        Self { receiver, _metadata: metadata, _flow: flow, manager, rules, primary, client, relayed: chain.history.len() }
+    }
+
+    pub(super) async fn verifier_endpoint(&self) -> (Arc<ConsensusManager>, Arc<FlowContext>) {
+        assert!(
+            self._flow.is_nearly_synced(&self.manager.consensus().unguarded_session()).await,
+            "the normal transaction relay sync predicate must hold without a bypass"
+        );
+        (self.manager.clone(), self._flow.clone())
     }
 
     pub(super) async fn relay(&mut self, chain: &Chain) {
@@ -125,12 +144,20 @@ impl NetworkRun {
         self.relayed = chain.history.len();
     }
 
-    pub(super) async fn finish(&mut self, chain: &Chain, claim: Hash64, service_start: usize) {
+    pub(super) async fn finish(&mut self, chain: &Chain, claim: Hash64, service_start: usize, material_answered: bool) {
         self.relay(chain).await;
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while self.receiver.tc.get_sink() != chain.tc.get_sink() {
             assert!(std::time::Instant::now() < deadline, "socket relay never validated the complete public suffix");
             tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if !material_answered {
+            assert!(chain.view(claim).da_defaulted, "the source accepted the remote verifier's objective default");
+            assert!(self.receiver.view(claim).da_defaulted, "the independent receiver validates the same default");
+            assert_eq!(self.receiver.view(claim), chain.view(claim));
+            self.client.close().await;
+            self.primary.close().await;
+            return;
         }
         let floor = chain.history[service_start].header.daa_score;
         let wanted = [(claim, chain.view(claim).execution_root)].into_iter().collect();

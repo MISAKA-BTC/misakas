@@ -176,6 +176,7 @@ struct Chain {
     bonds: Vec<PalwBondKeyV2>,
     network_domain: Hash64,
     time: u64,
+    realtime: bool,
     nonce: u64,
     history: Vec<Block>,
     _pruned_db: Option<kaspa_database::utils::DbLifetime>,
@@ -202,7 +203,7 @@ impl Chain {
             Some(config.params.genesis.hash),
         );
         let time = config.params.genesis.timestamp;
-        Self { tc, handles, config, bundle, bonds, network_domain, time, nonce: 0, history: vec![], _pruned_db: None }
+        Self { tc, handles, config, bundle, bonds, network_domain, time, realtime: false, nonce: 0, history: vec![], _pruned_db: None }
     }
     fn daa(&self) -> u64 {
         self.tc.get_virtual_daa_score()
@@ -217,7 +218,11 @@ impl Chain {
         block
     }
     fn stamp(&mut self, block: &mut MutableBlock) {
-        self.time += self.config.params.target_time_per_block();
+        self.time = if self.realtime {
+            kaspa_core::time::unix_now().max(self.time.saturating_add(1))
+        } else {
+            self.time + self.config.params.target_time_per_block()
+        };
         self.nonce += 1;
         block.header.timestamp = self.time;
         block.header.nonce = self.nonce;
@@ -1431,14 +1436,17 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     assert!(service.keypair.is_some());
     assert_eq!(service.bond, Some(bond.0));
     let cloned = service.clone();
-    let task = tokio::spawn(async move {
-        cloned.start().await.unwrap();
-    });
-    let mut running = ServiceRun { service: service.clone(), task: Some(task) };
+    let task = if recovery_mode == Some(recovery::RecoveryMode::NetworkVerifier) {
+        // The sole outsider is launched on the independent socket receiver below.
+        None
+    } else {
+        Some(tokio::spawn(async move { cloned.start().await.unwrap() }))
+    };
+    let mut running = ServiceRun { service: service.clone(), task };
     let mut recovery = if automatic_recovery {
         Some(
             recovery::RecoveryRun::start(
-                &chain,
+                &mut chain,
                 case,
                 foreign.as_ref(),
                 &floats[0],
@@ -1453,6 +1461,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     } else {
         None
     };
+    if let Some(recovery) = recovery.as_mut() {
+        recovery.activate_network_verifier(&mut service, &mut running).await;
+    }
     let deadline = std::time::Instant::now() + Duration::from_secs(360);
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;

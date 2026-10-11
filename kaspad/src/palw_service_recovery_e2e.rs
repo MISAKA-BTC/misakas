@@ -35,6 +35,7 @@ pub(super) enum RecoveryMode {
     Restart,
     Reorg,
     Network,
+    NetworkVerifier,
     Pruned,
 }
 
@@ -71,7 +72,7 @@ async fn launch(
 
 impl RecoveryRun {
     pub(super) async fn start(
-        chain: &Chain,
+        chain: &mut Chain,
         case: PublicCase,
         foreign: Option<&Foreign>,
         funding: &Funding,
@@ -81,6 +82,13 @@ impl RecoveryRun {
         mode: RecoveryMode,
         premine: &[Funding],
     ) -> Self {
+        if mode == RecoveryMode::NetworkVerifier {
+            // Real transaction relay checks normal near-sync status against wall time.
+            // Mine one normally validated recent heartbeat; no gate or cursor rule is waived.
+            chain.realtime = true;
+            chain.time = kaspa_core::time::unix_now().saturating_sub(1);
+            chain.heartbeat(vec![]).await;
+        }
         let directory = tempfile::tempdir().unwrap();
         let mut producer_config = panel_config(chain, directory.path(), chain.bonds[0], funding);
         // Separate key, fee chain, state and retention. The shared node is only the public
@@ -102,7 +110,7 @@ impl RecoveryRun {
                 Some((path, kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&commitment.job, prompt)));
         }
         let config = Arc::new(chain.config.clone());
-        let network = if mode == RecoveryMode::Network {
+        let network = if matches!(mode, RecoveryMode::Network | RecoveryMode::NetworkVerifier) {
             Some(
                 network::NetworkRun::start(
                     chain,
@@ -134,6 +142,19 @@ impl RecoveryRun {
             reorged: false,
             network,
         }
+    }
+
+    pub(super) async fn activate_network_verifier(&mut self, service: &mut Arc<PalwPanelService>, verifier: &mut ServiceRun) {
+        if self.mode != RecoveryMode::NetworkVerifier {
+            return;
+        }
+        assert!(verifier.task.is_none(), "the primary node never starts a second outsider service");
+        let network = self.network.as_ref().expect("independent socket receiver");
+        let (manager, flow) = network.verifier_endpoint().await;
+        let launched = launch(self.verifier_config.clone(), manager, flow, self.config.clone()).await;
+        *service = launched.service.clone();
+        *verifier = launched;
+        eprintln!("[service-network] sole outside verifier runs on the independently validated receiver DB");
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -319,7 +340,7 @@ impl RecoveryRun {
             assert!(chain.view(claim).da_defaulted);
         }
         if let Some(network) = self.network.as_mut() {
-            network.finish(chain, claim, service_start).await;
+            network.finish(chain, claim, service_start, self.honest).await;
         }
         self.producer.finish().await;
     }
