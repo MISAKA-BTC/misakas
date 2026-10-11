@@ -24,6 +24,20 @@ pub(super) fn fixture(chain: &Chain) -> tiled::TiledFixture {
     // provide an actual accepted partial raw stream at which to restart an empty worker.
     tiled::TiledFixture::new_with_tokenizer_padding(chain, 1_048_576)
 }
+pub(super) fn copy_own_holding(fixture: &tiled::TiledFixture, directory: &std::path::Path) -> std::path::PathBuf {
+    let directory = directory.join("own-registered-model");
+    std::fs::create_dir(&directory).unwrap();
+    let own = directory.join(fixture.path.file_name().unwrap());
+    std::fs::copy(&fixture.path, &own).unwrap();
+    std::fs::copy(fixture.path.parent().unwrap().join("tokenizer.json"), directory.join("tokenizer.json")).unwrap();
+    std::fs::copy(
+        crate::palw_backends::token_table_sidecar_path_v1(&fixture.path),
+        crate::palw_backends::token_table_sidecar_path_v1(&own),
+    )
+    .unwrap();
+    assert_ne!(std::fs::canonicalize(&own).unwrap(), std::fs::canonicalize(&fixture.path).unwrap());
+    own
+}
 fn declared(fixture: &tiled::TiledFixture, case: PublicCase) -> (u64, u64) {
     let path = fixture.path.parent().unwrap().join("tokenizer.json");
     let raw = std::fs::read(path).unwrap();

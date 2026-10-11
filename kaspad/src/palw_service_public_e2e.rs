@@ -1528,7 +1528,11 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         verifier_config.public_claims = vec![claim];
     }
     if let Some(fixture) = &tiled {
-        verifier_config.class_artifacts.push(fixture.path.clone());
+        verifier_config.class_artifacts.push(if case.staged_tokenizer() {
+            staged_tokenizer::copy_own_holding(fixture, dir.path())
+        } else {
+            fixture.path.clone()
+        });
         verifier_config.chain_classes = true;
     }
     let mut service = Arc::new(PalwPanelService::new(verifier_config.clone(), manager.clone(), flow, config));
