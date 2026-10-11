@@ -281,7 +281,13 @@ pub(crate) mod tests {
             .unwrap()
             .court_envelope(seed.binding.shape_profile.vocab_size, config.prices)
             .unwrap();
-        let terms = PalwRenderingClaimTermsV1::derive(100, plan, 100, 100, 10).unwrap();
+        let declared_plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(signed_length, bound, config.prices)
+            .unwrap()
+            .court_envelope(seed.binding.shape_profile.vocab_size, config.prices)
+            .unwrap();
+        let original_terms = PalwRenderingClaimTermsV1::derive(100, declared_plan, 100, 100, 10).unwrap();
+        let terms = original_terms.extend_paid_work_v1(100, plan).unwrap();
+        assert_eq!((terms.accepted_daa, terms.open_until_daa), (original_terms.accepted_daa, original_terms.open_until_daa));
         let funding = plan.rent_sompi + plan.deposit_sompi;
         let admit = |seed: &PalwConstraintStreamSeedV1, capital, material, panels: &[u64]| {
             PalwOwnedTokenizerCourtV1::admit(

@@ -120,6 +120,9 @@ pub(super) fn open(
     seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1,
 ) -> Result<(), PalwStateV2Error> {
     let contract = gate(b, &seed.claim, seed.reserver, seed.reserved_daa, ctx.daa_score)?.clone();
+    if ctx.daa_score >= contract.terms.open_until_daa {
+        return Err(stage_refused(seed.claim, "seed is after immutable prospective opening deadline"));
+    }
     let key = PalwStagedCourtKeyV1::Owner(seed.claim, seed.reserver);
     if b.state.staged_courts.contains_key(&key) {
         return Err(stage_refused(seed.claim, "owned staged seed is immutable"));
@@ -184,24 +187,64 @@ pub(super) fn open(
         )
         .and_then(|p| p.court_envelope(seed.binding.shape_profile.vocab_size, config.prices))
         .map_err(|e| stage_refused(seed.claim, e))?;
+        let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
+        let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
+        extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
+        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
+            &extended_claim,
+            palw_da_disclose_window_daa_v1(b.params),
+        );
+        let until = hard
+            .checked_add(b.params.window_challenge_at(ctx.daa_score))
+            .ok_or(PalwStateV2Error::Overflow("paid DA extension"))?
+            .max(extended_terms.bond_exit_after_daa);
         b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
         let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
-        let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
+        let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit(
             seed,
             &original.job,
             &target,
-            contract.terms,
+            extended_terms,
             config.prices,
             ctx.daa_score,
             funded,
             b.extras.terminal_evidence_max_bytes.unwrap_or(100000),
-            b.state.claim(&seed.claim).ok_or(PalwStateV2Error::MissingClaim(seed.claim))?.trace_retention_daa,
-            contract.terms.bond_exit_after_daa,
+            extended_claim.trace_retention_daa,
+            extended_terms.bond_exit_after_daa,
             &exits,
         )
         .map_err(|e| stage_refused(seed.claim, e))?;
+        // Fee validation already burned the full declared carrier rent; the paid row reserves
+        // the ordinary owner deposit before accused/material clocks are enlarged. Every
+        // fallible identity/funding/overflow check is above these journaled writes.
         b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row))));
+        if extended_terms != contract.terms {
+            b.write_staged_row_v1(
+                PalwStagedCourtKeyV1::Claim(seed.claim),
+                Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
+            );
+            b.write_claim(seed.claim, Some(extended_claim));
+            if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
+                dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
+                b.write_legacy_dispute(seed.claim, Some(dispute));
+            }
+            b.da_rekey_v1(seed.claim, until, ctx.daa_score);
+            if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned() {
+                if liability.voided_daa.is_none() && liability.void_reason.is_none() && liability.expiry_daa < until {
+                    liability.expiry_daa = until;
+                    b.write_panel_liability(seed.claim, Some(liability));
+                }
+            }
+            // The initial prospective holds keep these locks economically attributed even if
+            // an older ordinary lock expiry has passed. Extend the actual saved locked rows.
+            for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
+                if lock.expiry_daa < until {
+                    lock.expiry_daa = until;
+                    b.write_slashable_lock(lock_key, Some(lock));
+                }
+            }
+        }
         return Ok(());
     }
     // A root-authenticated profile may narrow a global fallback plan after seed admission.

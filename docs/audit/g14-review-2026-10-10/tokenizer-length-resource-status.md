@@ -48,11 +48,10 @@ silently assigned these new rules.
 ## Remaining resource limitation
 
 Owner rent/deposit and bounded movement counts are derived from L' and B before
-work. Admission still refuses when that actual workload exceeds the claim-wide
-contract stamped at acceptance. A producer/registrant that understates L can
-therefore nominate a correctly hashed file larger than its stamped resource
-contract. The EOF predicate is correct; universal arrival at EOF is not yet
-closed by this checkpoint.
+work. The original owner admission required the actual workload to fit the claim-wide
+contract stamped at acceptance. The paid extension below can now enlarge that
+contract before its immutable opening deadline. The EOF predicate is correct;
+universal arrival at EOF remains limited by finite funding/platform bounds.
 
 At current positive unit prices, B=0 already costs at least 256 parser-step units
 per raw byte plus byte/carrier charges. A 2^56-byte (64 PiB) operand needs
@@ -68,11 +67,11 @@ current prices (including 64 reorg replay moves, excluding the separate largest
 table envelope). These are deterministic worst-case terms retaining full512-bit
 SMT authentication; compressed common proofs do not weaken the bound.
 
-## Prospective adaptive extension design, not implemented here
+## Prospective paid adaptive extension checkpoint
 
 A verifier can request additional paid work before the original immutable
 open-until deadline. At that point existing claim-wide holds already prevent
-producer and every bound Panel seat from exiting. A new accepted extension could:
+producer and every bound Panel seat from exiting. The next checkpoint implements the following prospective extension:
 
 1. Check the literal existing claim, owner reservation and timely opening.
 2. Derive candidate L' workload; charge corresponding rent and lock ordinary
@@ -82,8 +81,8 @@ producer and every bound Panel seat from exiting. A new accepted extension could
 4. Keep L' untrusted until original flat-hash EOF. A false operand produces no
    conviction and still pays/occupies its own allowance.
 
-This would cover finite fundable understated lengths without producer publication.
-It would also let a funded bogus operand extend all accused holds; the grief cost
+The extension is intended to cover finite fundable understated lengths without producer publication; integrated tests are still pending.
+It also lets a funded bogus operand extend all accused holds; the grief cost
 and reservation/registration liability must be part of the normative economics.
 It does not by itself cover legal operands exceeding finite capital/time/platform
 bounds. Closing that remaining case requires an independent authenticated length

@@ -79477,6 +79477,34 @@ mod staged_court_state_tests_v1 {
     use crate::palw_staged_court_state_v1::*;
 
     #[test]
+    fn paid_claim_work_extension_holds_every_bound_seat_and_restores_all_indexes() {
+        let config=crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+        let small=crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(1,0,config.prices).unwrap()
+            .court_envelope(17,config.prices).unwrap();
+        let large=crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(1<<30,1024,config.prices).unwrap()
+            .court_envelope(17,config.prices).unwrap();
+        let terms=crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(100,small,100,100,20).unwrap();
+        let panel:BTreeSet<_>=(1..=5).map(|i|PalwBondKeyV2(TransactionOutpoint {transaction_id:crate::tx::TransactionId::from_u64_word(i),index:0})).collect();
+        let original=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms,producer:PALW_BOND_KEY_V2_MIN,panel:panel.clone()});
+        let next_terms=terms.extend_paid_work_v1(terms.open_until_daa-1,large).unwrap();
+        let extended=PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:next_terms,producer:PALW_BOND_KEY_V2_MIN,panel:panel.clone()});
+        let key=PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(819));
+        let mut state=PalwChainStateV2::genesis();
+        apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key,old:None,new:Some(original.clone())},false).unwrap();
+        let before=state.state_root();let holds_before=state.staged_holds.clone();let due_before=state.staged_due.clone();
+        let delta=PalwDeltaEntryV2::StagedCourtSeed {key,old:Some(original),new:Some(extended)};
+        apply_delta_entry(&mut state,&delta,false).unwrap();
+        for seat in panel.iter().chain(std::iter::once(&PALW_BOND_KEY_V2_MIN)) {
+            assert!(state.staged_bond_exit_held_v1(seat,terms.bond_exit_after_daa));
+            assert!(state.staged_bond_exit_held_v1(seat,next_terms.bond_exit_after_daa-1));
+            assert!(!state.staged_bond_exit_held_v1(seat,next_terms.bond_exit_after_daa));
+        }
+        let after=state.state_root();assert_ne!(after,before);
+        assert!(apply_delta_entry(&mut state,&delta,false).is_err());assert_eq!(state.state_root(),after);
+        apply_delta_entry(&mut state,&delta,true).unwrap();assert_eq!(state.state_root(),before);
+        assert_eq!(state.staged_holds,holds_before);assert_eq!(state.staged_due,due_before);
+    }
+    #[test]
     fn tokenizer_owned_moves_root_reload_and_reorg_preserve_exact_certificate_and_capital() {
         use crate::palw_tokenizer_owned_court_v1::tests::{admitted_case,complete};
         for guilty in [false,true] {

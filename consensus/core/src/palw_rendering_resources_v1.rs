@@ -200,6 +200,23 @@ impl PalwRenderingClaimTermsV1 {
             plan,
         })
     }
+    /// A paid owner may enlarge future work only before the ORIGINAL opening deadline.
+    /// The opening/acceptance clocks never move, so no replay buys a later opening door.
+    pub fn extend_paid_work_v1(&self,now:u64,actual:PalwRenderingResourcePlanV1)->Result<Self,String> {
+        if now<self.accepted_daa || now>=self.open_until_daa {
+            return Err("paid work extension is outside immutable opening clock".into());
+        }
+        let collection=self.collect_until_daa.checked_sub(self.stream_until_daa).ok_or("bad collection clock")?;
+        let retention=self.material_until_daa.checked_sub(self.collect_until_daa).ok_or("bad retention clock")?;
+        let exit=self.bond_exit_after_daa.checked_sub(self.material_until_daa).ok_or("bad exit clock")?;
+        let plan=self.plan.cover(actual);
+        let stream=self.stream_until_daa.max(plan.deadline(self.open_until_daa)?);
+        let collect=stream.checked_add(collection).ok_or("paid collection extension overflows")?;
+        let material=collect.checked_add(retention).ok_or("paid material extension overflows")?;
+        let bond_exit=material.checked_add(exit).ok_or("paid participant exit extension overflows")?;
+        Ok(Self {plan,stream_until_daa:stream,collect_until_daa:collect,material_until_daa:material,
+            bond_exit_after_daa:bond_exit,..*self})
+    }
     /// Acceptance must use these prospective terms for EVERY liable producer/Panel bond and
     /// each mandatory public material row; a shorter ordinary clock cannot silently substitute.
     pub fn check_holds(&self, material_until: u64, producer_exit_after: u64, panel_exit_after: &[u64]) -> Result<(), String> {
@@ -216,6 +233,27 @@ impl PalwRenderingClaimTermsV1 {
 #[cfg(test)]
 mod claim_terms_tests {
     use super::*;
+    #[test]
+    fn paid_extension_preserves_first_opening_clock_and_monotonic_future_work() {
+        let config=PalwStagedPublicCourtConfigV1::network_v1();
+        let small=PalwTokenizerResourcePlanV1::derive_with_key_bound(16,0,config.prices).unwrap().court_envelope(17,config.prices).unwrap();
+        let large=PalwTokenizerResourcePlanV1::derive_with_key_bound(1<<30,1024,config.prices).unwrap().court_envelope(17,config.prices).unwrap();
+        let old=PalwRenderingClaimTermsV1::derive(100,small,100,100,20).unwrap();
+        assert!(old.extend_paid_work_v1(99,large).is_err());
+        assert!(old.extend_paid_work_v1(old.open_until_daa,large).is_err());
+        assert!(old.extend_paid_work_v1(old.open_until_daa+1,large).is_err());
+        let new=old.extend_paid_work_v1(old.open_until_daa-1,large).unwrap();
+        assert_eq!((new.accepted_daa,new.open_until_daa),(old.accepted_daa,old.open_until_daa));
+        assert!(new.stream_until_daa>old.stream_until_daa);
+        assert!(new.collect_until_daa>old.collect_until_daa);
+        assert!(new.material_until_daa>old.material_until_daa);
+        assert!(new.bond_exit_after_daa>old.bond_exit_after_daa);
+        assert!(new.check_holds(old.material_until_daa,old.bond_exit_after_daa,&[old.bond_exit_after_daa;5]).is_err());
+        assert!(new.check_holds(new.material_until_daa,new.bond_exit_after_daa,&[new.bond_exit_after_daa;5]).is_ok());
+        assert_eq!(new.extend_paid_work_v1(100,small).unwrap(),new);
+        let mut impossible=large;impossible.inclusion_daa=u64::MAX;
+        assert!(old.extend_paid_work_v1(100,impossible).is_err());
+    }
     #[test]
     fn long_stream_contract_refuses_any_shorter_liability_or_material_clock_and_overflow() {
         let plan = PalwRenderingResourcePlanV1::derive(
