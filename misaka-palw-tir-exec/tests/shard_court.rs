@@ -184,7 +184,7 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             }
             let Some(site) = palw_tir_dissect_site_v1(full.space(), &intervals, &leaf) else { continue };
             let PalwTirLeafKindV1::Commit { occurrence, .. } = leaf.kind else { panic!("dissected commit") };
-            let shard = parts.iter().position(|part| part.contains(&(occurrence as usize))).unwrap() as u16;
+            let shard = parts.iter().position(|part| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_occurrences_v1(part, program.schedule.layers.len()).contains(&(occurrence as usize))).unwrap() as u16;
             let partial = fetch_shard_params_v1(&class, class_id, artifact_root, 2, shard, &TirFileMirrorV1(path.clone())).unwrap();
             let root = partial.root_claim(&capture, index, &rules).unwrap_or_else(|e| panic!("{name} leaf {index}: {e}"));
             assert_eq!(root, full.root_claim(&honest.material, index, &rules).unwrap(), "{name}: partial root is canonical");

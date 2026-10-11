@@ -1351,7 +1351,7 @@ impl super::PalwPanelService {
             let s_l = session.palw_tir_shard_plans_v1().into_iter().find(|(class, _)| *class == duty.class_id)
                 .map(|(_, plan)| plan.s_l).ok_or("the public court has no registered shard partition")?;
             let (parts, _) = misaka_palw_sdk::lineages::tir::tir_shard_geometry_over_v1(&space, s_l)?;
-            let shard = parts.iter().position(|p| p.contains(&(occurrence as usize))).ok_or("no shard contains the narrowed occurrence")? as u16;
+            let shard = parts.iter().position(|p| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_occurrences_v1(p, space.program.schedule.layers.len()).contains(&(occurrence as usize))).ok_or("no shard contains the narrowed occurrence")? as u16;
             (s_l, shard)
         };
         let hold_key = (duty.class_id, s_l, shard);
