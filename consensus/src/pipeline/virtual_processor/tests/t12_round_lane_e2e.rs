@@ -348,7 +348,7 @@ impl T12Chain {
     /// **A heartbeat (algo 8)**, `step_ms` after the simulated clock — the lane testnet-12's clock
     /// runs on: past `palw_anchor_clock` no other lane moves the DAA score.
     pub(super) async fn heartbeat(&mut self, step_ms: u64, txs: Vec<Transaction>) -> Block {
-        let miner = self.heartbeat_payload.map(|payload| MinerData::new(p2pkh_mldsa87_spk(payload.as_bytes()), vec![])).unwrap_or_else(new_miner_data);
+        let miner = self.heartbeat_payload.map(|payload| MinerData::new(p2pkh_mldsa87_spk(&payload.as_bytes()), vec![])).unwrap_or_else(new_miner_data);
         self.heartbeat_paying(miner, step_ms, txs).await
     }
 
