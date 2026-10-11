@@ -212,7 +212,7 @@ impl BlockrateParams {
     }
 
     /// Blockrate params for the **120 s/block** PALW public testnet (decided 2026-08-12 from
-    /// fleet measurements; see docs/testnet10-palw-rollout-runbook.md §"Why 120 s").
+    /// fleet measurements; see docs/history/testnet10-palw-rollout-runbook.md §"Why 120 s").
     ///
     /// The block interval on a network whose PoW is an LLM inference is not a UX preference: a
     /// validator replays every OTHER miner's winning attempt, so its steady-state load is
@@ -28957,7 +28957,7 @@ mod consensus_params_id_tests {
             // the blockrate, the DAA window duration and every VLT window are in the hash.
             // Moved before that by the t10 PALW re-genesis ("-palw" marker + trivial bits + 0.1-bps
             // blockrate + palw activation + the wall-clock-preserving DnsParams re-sizing) —
-            // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
+            // see docs/history/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
             ("testnet", TESTNET_PARAMS, "0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88"),

@@ -361,7 +361,7 @@ network; operator's call), so those ten addresses are currently refused on 5c to
    rather than grinding, and while the bonded lane produces at 120 s the one-hour slot never opens;
    sibling floods are chunked at parent selection, so extra miners cost nothing but a warm process.
 
-   > **Corrected 2026-09-11 ([ADR-0105](adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md)).**
+   > **Corrected 2026-09-11 ([ADR-0105](../adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md)).**
    > "While the bonded lane produces at 120 s" is the premise that failed: the fleet's Qwen3.6 draws
    > take ~17 minutes, and on 2026-09-10 four heartbeat miners kept the chain on heartbeats for an
    > hour and a half after one bonded outage, every bonded block landing red behind them. Run **at

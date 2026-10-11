@@ -67,7 +67,7 @@ with its fence height and the finding that forced it, and the soak clock restart
    Fix the leg and re-run the failed jobs. The source archives come from GitHub's own release
    page.
 
-6. Update [Release status](../README.md#release-status) and
+6. Update [Current network](README.md#current-network--testnet-12) and
    [mainnet-readiness.md](mainnet-readiness.md) in the same PR as the release notes.
 
 `RELEASE-INFO.json` looks like this. Nothing in it is typed into the workflow:

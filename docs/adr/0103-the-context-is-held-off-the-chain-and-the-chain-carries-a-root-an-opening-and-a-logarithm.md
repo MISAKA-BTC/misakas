@@ -83,7 +83,7 @@ That is the requirement (§2), and the six terms are §1.
 
 Read on `feat/adr-0099-sharded-seat` at `3e9c3b59` on 2026-09-11. Nothing was re-run for this
 ADR: every figure is what `palw-model-fit` printed on 2026-09-10
-(`docs/palw-model-fit-testnet11-2026-09-10.md`, ADR-0097 §1), what ADR-0082 §10 and ADR-0086 §1/§7
+(`docs/history/palw-model-fit-testnet11-2026-09-10.md`, ADR-0097 §1), what ADR-0082 §10 and ADR-0086 §1/§7
 measured, or what ADR-0098 §1.2 generated — each cited where it is used. The RC's own constants:
 ladder `2^26`, close `2,250,000` bytes / `27` carriers, turn deadline `42` DAA, terminal rounds
 `2`, `window_court` `3,000`, `window_receipt` `600`, standard transaction `120,000` bytes

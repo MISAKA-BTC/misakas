@@ -47,7 +47,7 @@ PostgreSQL 16（127.0.0.1:5432、所有者 `kaspa`）:
 
 既存のバックアップ（別 session が作成）: `app.js.bak-before-t12p-20260923T150853`、`index.html.bak-before-t12p-20260923T150853`、`/root/misakascan.nginx.bak-before-t12p-20260923T144704`、`/root/patch_app_t12p.py`。
 
-前回（旧 t12 `a8cabac4`）の再 genesis では explorer に何もしていない — `docs/testnet-12-regenesis-2026-09-23.md` に explorer の記述は無く、filler は `kaspa_t11` にそのまま t12 を書き足した。DB の回し方の前例は t11 5f（`docs/testnet11-relaunch-5f-genesis-card.md` の Explorer 節: 旧 DB を退避 → 新 DB → `vars.vspc_last_start_hash` に genesis を入れて block 0 から索引）。
+前回（旧 t12 `a8cabac4`）の再 genesis では explorer に何もしていない — `docs/testnet-12-regenesis-2026-09-23.md` に explorer の記述は無く、filler は `kaspa_t11` にそのまま t12 を書き足した。DB の回し方の前例は t11 5f（`docs/history/testnet11-relaunch-5f-genesis-card.md` の Explorer 節: 旧 DB を退避 → 新 DB → `vars.vspc_last_start_hash` に genesis を入れて block 0 から索引）。
 
 ## 2. app.js の中身（`app.js.orig` → scratch の `app.js`）
 
@@ -120,7 +120,7 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
 | 場所 | 内容 | 扱い |
 |---|---|---|
 | `index.html` 告知 | t11 の 2026-09-19 リリース、fp `c3a5e91d…`、フェンス列、"genesis did not move" | `deploy.sh` が外す（既定） |
-| Faucet ページ（478, 497, 524 行） | "(testnet-11 — coins with no value)"、`docs/testnet11-node-operator.md`、"That is not a testnet-11 address" | **backend も t11**（ibm の `misaka-faucet`、`/opt/misaka-faucet.py`、RPC 26313 は ibm に存在しない、未入金）。t12 用の鍵と入金は運用者判断 |
+| Faucet ページ（478, 497, 524 行） | "(testnet-11 — coins with no value)"、`docs/history/testnet11-node-operator.md`、"That is not a testnet-11 address" | **backend も t11**（ibm の `misaka-faucet`、`/opt/misaka-faucet.py`、RPC 26313 は ibm に存在しない、未入金）。t12 用の鍵と入金は運用者判断 |
 | LLM ページの replay 手順（3212–3226 行） | `--network testnet-11`、QWEN36 の root `f4aad4fd…`、A16 v5 の変換 hash | 文面の更新が要る（今回は触っていない） |
 | MTP ページ（4325–4343, 4479 行）と `/mtp/` | `misaka key gen --network testnet-11`、"Point a miner at testnet-11"… 台帳自体が t11 | MTP を t12 で続けるかは未決。collector の pin（GENESIS / DB_ANCHOR）と crontab の `MTP_DB=kaspa_t11` を新 chain に合わせない限り、fence が拒否し続ける（安全側） |
 | `/info/stake-bonds` | `SEED_BOND_OUTPOINTS` に t11 の validator bond `e9e3ebba…:0` を固定 | 画面側が `getStakeBond` で確認して落とすので実害なし。REST のコードは今回触らない |

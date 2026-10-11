@@ -326,11 +326,11 @@ transaction the executor rail would submit.
 The units landed and the network they were written for is running, so the pages a person actually
 follows are elsewhere and this one should not be competing with them:
 
-* [testnet11-join-mining.md](testnet11-join-mining.md) — joining, bonding, producing, and §7 for
+* [testnet11-join-mining.md](history/testnet11-join-mining.md) — joining, bonding, producing, and §7 for
   the free-prompt lane end to end.
 * [palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) — the gateway and the worker protocol
   as they are.
-* [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) — the artifact path, and the widths
+* [testnet11-ask-for-a-file.md](history/testnet11-ask-for-a-file.md) — the artifact path, and the widths
   that bound it today.
 
 What this page is still worth reading for is the argument in "The atomic units": the reason each

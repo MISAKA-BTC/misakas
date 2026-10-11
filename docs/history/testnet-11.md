@@ -131,7 +131,7 @@ scores, peers and commands describe testnet-11 at the time and are not current o
 > `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, and that line is the check. Do **not**
 > run `7f4dded4` (the first build with that fence): it cannot sync from an empty datadir. To rejoin,
 > rebuild, move your `datadir` aside (keep the rest of the appdir) and resync — the steps are in
-> [the node-operator doc](../testnet11-node-operator.md). Validators: restart yours once the node
+> [the node-operator doc](testnet11-node-operator.md). Validators: restart yours once the node
 > is synced. DNS finality stalled from DAA 2,246 while most bonded stake attested on the dead arm; it
 > recovered on the network's chain on 2026-09-10, and the EVM bridge carried its first deposit the
 > same day.
@@ -265,7 +265,16 @@ operational state and can change or be withdrawn.
 
 | I want to… | read |
 |---|---|
-| run a node / verify the chain | [docs/testnet11-node-operator.md](../testnet11-node-operator.md) |
-| join as a PALW verifier / panel seat | [docs/testnet11-verification-participation-ja.md](../testnet11-verification-participation-ja.md) |
-| produce blocks (floor class, no model needed) | [docs/testnet11-join-mining.md](../testnet11-join-mining.md) |
+| run a node / verify the chain | [docs/history/testnet11-node-operator.md](testnet11-node-operator.md) |
+| join as a PALW verifier / panel seat | [docs/history/testnet11-verification-participation-ja.md](testnet11-verification-participation-ja.md) |
+| produce blocks (floor class, no model needed) | [docs/history/testnet11-join-mining.md](testnet11-join-mining.md) |
 | produce or verify with the LLM classes | [docs/palw-public-testnet-classes-runbook.md](../palw-public-testnet-classes-runbook.md) |
+
+## Invariants (moved from docs/README.md on 2026-10-12; testnet-11, not current)
+
+- network: `testnet-11`
+- fingerprint: `400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8` (the current main build; DAA 7,100 is the held/deep-audit boundary, 7,101 is the `6001`-named PALW upgrade bundle including ADR-0125's 1-BPS execution lane, 7,200 arms ADR-0133 Verification V2/readiness multiproofs, 7,300 shortens the execution span 5 DAA → 1 DAA, and 7,301 retires the compute overlay)
+- PALW cadence: 120 seconds per block
+- class shares at Relaunch 5f genesis: Floor 22‰, A16 489‰, QWEN36 489‰
+- DNS Testnet-11 minimum stake Bond: 10 BILI
+- ADR-0123 epoch-budget release: implemented, dormant on shipped presets

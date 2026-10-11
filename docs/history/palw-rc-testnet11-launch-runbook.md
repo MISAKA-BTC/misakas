@@ -1,6 +1,6 @@
 # PALW-RC (testnet-11 / ConsensusV2) — launch runbook
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Status: the code path is complete and tested end to end; every remaining step is an operator
 decision this repository cannot make.** A block produced by the real production path — a real
@@ -578,7 +578,7 @@ The reason it must stay shut until then is liveness, not caution. Opening it wit
 would hand cadence share to a lane nobody can fill, and the per-class
 DAA retarget then reads the floor as an over-producer at every epoch boundary — dividing its target
 by four each time until the class lottery refuses every attempt. That is the exact wedge §6 of the
-[launch blockers](palw-rc-launch-blockers-2026-08-21.md) records, and it is why
+[launch blockers](../palw-rc-launch-blockers-2026-08-21.md) records, and it is why
 `ATTEMPT_SHARE_PERMILLE` is 1000: **a lane that cannot produce holds no cadence.**
 
 Opening it is therefore one piece of work, not two: build the receipt producer, split the share,
@@ -638,7 +638,7 @@ still has a clock.
 ## 6. What is NOT in place, and should be said out loud
 
 > **The complete, evidenced list is
-> [palw-rc-launch-blockers-2026-08-21.md](palw-rc-launch-blockers-2026-08-21.md).** This section is
+> [palw-rc-launch-blockers-2026-08-21.md](../palw-rc-launch-blockers-2026-08-21.md).** This section is
 > the short form; that document is the authority on current state.
 >
 > **Status 2026-08-22 (`9d8c7645`): the consensus blockers this section used to warn about are

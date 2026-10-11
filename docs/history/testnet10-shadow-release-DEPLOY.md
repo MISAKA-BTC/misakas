@@ -97,7 +97,7 @@ Read the binary's own startup line instead — `Consensus params fingerprint:` �
 `8bf48730…`. Do NOT read it from a peer's rejection: in a received reject, `local:` is the
 PEER's value, and reading it the other way is what cost two rounds of debugging here.
 
-## 3. Roll out — A2 pattern, `docs/testnet10-transition.md`
+## 3. Roll out — A2 pattern, `docs/history/testnet10-transition.md`
 
 Every validator, miner and seeder binary inside the fleet **before** DAA 30_200_000. The
 collector's per-host version table is the go/no-go gate. A host that crosses the fence on the old

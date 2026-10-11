@@ -2,7 +2,7 @@
 
 > Cleanup, 2026-10-10: The algo-4/5 driver and its tests have been removed. The V1 runtime discussion below records the earlier launch; current network behavior follows the V2 preset.
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Branch** `palw-testnet-5f` · **tip at writing** `fc496331` · public at github.com/MISAKA-BTC/misakas
 
@@ -3044,7 +3044,7 @@ the rules itself and priced with them. **t11's actual shape is `ladder: None`.**
 **And the announcement's decision survives its fourth number.** It carries **no byte count at
 all** — one carrier and a real command instead. Checked mechanically just now: `83,175`, `83175`,
 `81312` and `81,312` all appear **zero** times in
-`docs/testnet11-relaunch-5f-announcement-draft.md`. *A figure that has moved four times under
+`docs/history/testnet11-relaunch-5f-announcement-draft.md`. *A figure that has moved four times under
 three configurations is not a figure a launch document should carry, and the decision to drop it
 was made before three of those movements were known.*
 
@@ -3968,7 +3968,7 @@ function" — is exactly the shape that has been wrong four times tonight.*
 ### The exposure the merge closes too late
 
 ```
-palw-adr0082-impl  docs/palw-rc-testnet11-launch-runbook.md:369
+palw-adr0082-impl  docs/history/palw-rc-testnet11-launch-runbook.md:369
     pgrep -af kaspad | grep -oE 'appdir=[^ ]+' | sort -u        <- the bare imperative
 ```
 
@@ -4320,7 +4320,7 @@ TABLE=/path/to/extracted-pins.txt scripts/check-repin-predictions.sh <frozen-sha
 
 # 1. the four re-pins on 5f, one commit, values pasted FROM THE TABLE (never retyped)
 #    t11 / devnet fingerprints, fp golden, premine, source_tree_sha256 + the eight ids
-#    then: scripts/check-doc-citations.sh docs/testnet11-relaunch-5f-genesis-card.md <5f-tip>
+#    then: scripts/check-doc-citations.sh docs/history/testnet11-relaunch-5f-genesis-card.md <5f-tip>
 #          scripts/check-derive-freeze.sh    (derive/src must still read 4969f8dc…)
 
 # 2. the merge impl -> 5f — RE-MEASURED 2026-09-04 against impl 971b2eff x 5f ee27ef4e:
@@ -6166,7 +6166,7 @@ registers. Also observed: the floor's target eased ×4 at the epoch-1 boundary (
 
 ### 10k. The join path re-pinned and the release published (05:55Z)
 
-README, `docs/testnet11-join-mining.md`, `docs/testnet11-node-operator.md` now name genesis `ad30b5cb…`,
+README, `docs/history/testnet11-join-mining.md`, `docs/history/testnet11-node-operator.md` now name genesis `ad30b5cb…`,
 fingerprint `71b35c25…`, floor `f1c5635c…`, the tag, the DAA-1150 parting rule, the optional pay address,
 and the withdrawn `.114` entry node is gone (main `03c90495`). GitHub release
 **`testnet-11-relaunch-5f-adr0083-h1150`** carries `kaspad-linux-x86_64` (53,938,328 B, sha256
@@ -6485,7 +6485,7 @@ the same three dormant fences (`palw_model_market`, `palw_model_lines`, `palw_mo
 on every shipped preset), so this section changes nothing about the live chain until they are armed
 — which is one release, and the only thing still outstanding for either ADR.
 
-**[ADR-0090](adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
+**[ADR-0090](../adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
 — the pair is made, not conjured.** The virtual reserve and the lazy opening are gone: a line's
 market exists only once a **seed of at least 100,000 MSK** reaches its sink, and the whole seed
 becomes the reserve, fee-free and never payable out (the curve's product never falls, so the
@@ -6494,7 +6494,7 @@ are **500,000** a line, so 10r's worked numbers (positions of 10^6 units, a 1,00
 reserve) do not describe today's curve. A third move rides beside the buy and the sell on both
 lanes: the carrier object `ModelSeed`, the writer's action 3, the facade's `seed()`.
 
-**[ADR-0091](adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) — the reward buys the
+**[ADR-0091](../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) — the reward buys the
 pair, and no holder is paid.** At a claim's `Final`, **5 % of its escrowed worker reward** (the
 ADR-0042 Decision 10 carve, which on every shipped preset is the miner's whole subsidy reward)
 buys from the pair of the **line the claim ran**, and the miner is named the other **95 %**. The

@@ -68,7 +68,7 @@ add more rules.
 | status | item | evidence / what is missing |
 |---|---|---|
 | **PASS** | Node, CLI and validator runbooks | [testnet12-join-mining.md](testnet12-join-mining.md), [validator-runbook.md](validator-runbook.md), `misaka node doctor` |
-| **PARTIAL** | Recovery from real incidents | testnet-11 recovered from a partition, stale-build arms and re-mints ([history](history/testnet-11.md), [testnet11-regenesis-2026-08-30.md](testnet11-regenesis-2026-08-30.md)). Recovery was done by hand; no automated test proves that the same failure cannot recur |
+| **PARTIAL** | Recovery from real incidents | testnet-11 recovered from a partition, stale-build arms and re-mints ([history](history/testnet-11.md), [testnet11-regenesis-2026-08-30.md](history/testnet11-regenesis-2026-08-30.md)). Recovery was done by hand; no automated test proves that the same failure cannot recur |
 | **PARTIAL** | Drills | [palw-court-round-trip-drill.md](palw-court-round-trip-drill.md), [palw-economy-studio-drill-2026-09-20.md](palw-economy-studio-drill-2026-09-20.md). The testnet-12 drill kit ([contrib/t12-drill-kit](../contrib/t12-drill-kit/README.md), D-1…D-10) is ready but has not run yet |
 | **TODO** | Recovery drills run and published | fresh sync from genesis, crash and restart mid-IBD, DB corruption, network partition and heal, validator loss, seeder loss. Each should run as a CI job or scheduled job, and its result should be published |
 | **TODO** | Large-scale simulation | `simpa` exists, but no published multi-node (e.g. 1,000-node) PALW simulation result |

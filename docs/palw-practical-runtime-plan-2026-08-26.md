@@ -314,4 +314,4 @@ MISAKA_PALW_NETWORK_ID=testnet-11 \
   ジョブごとに 8 分かけていたのはこの部分だった。
 * 同じジョブの 4 つの root は `v3-job` と `v3-serve` で**バイト一致**する（W6）。常駐は
   コストの決定であって、意味論の決定ではない。
-* 手順・フラグ・露出の上限は [testnet11-join-mining.md](testnet11-join-mining.md) §7。
+* 手順・フラグ・露出の上限は [testnet11-join-mining.md](history/testnet11-join-mining.md) §7。

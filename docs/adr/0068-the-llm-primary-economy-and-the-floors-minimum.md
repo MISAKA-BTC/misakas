@@ -50,7 +50,7 @@
   assembly. Note the measured correction to Phase 0's own text: the LIVE reserve was 500‰
   (`BASE_CLASS_RESERVE_PERMILLE`, which the bundle builder writes over the struct default of
   100), so the walk could never pass the half-table on the running chain — the 90% figure was
-  only ever reachable through this train. Execution = `docs/testnet11-relaunch5-runbook.md`,
+  only ever reachable through this train. Execution = `docs/history/testnet11-relaunch5-runbook.md`,
   gated on the Phase 1 fleet deploy and the operator's re-genesis go (every host wipes;
   seat 5 re-keys off the lost 160.16 host, returning unmanned seats to ≤ 2).
 - Date: 2026-09-01

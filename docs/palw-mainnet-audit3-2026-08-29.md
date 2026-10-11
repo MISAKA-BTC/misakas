@@ -667,7 +667,7 @@ That collateral is at the wallet's own address by construction:
 `palw_bond_registration_binds_its_carrier_v2` requires `output.script_public_key ==
 p2pkh_mldsa87_spk(&payout_payload)` (`consensus/core/src/palw_lifecycle_objects_v2.rs:217-227`),
 and `pay_payee()` takes that payload from `--palw-producer-pay-address`
-(`kaspad/src/palw_panel.rs:430-444`), which `docs/testnet11-join-mining.md:59-70` tells the
+(`kaspad/src/palw_panel.rs:430-444`), which `docs/history/testnet11-join-mining.md:59-70` tells the
 operator to produce with `misaka key address --key-file ~/.misaka/miner.seed` — the same key file
 `misaka wallet send --key-file` spends from. It is non-coinbase, so `is_spendable_settled` returns
 `true` unconditionally (`kaspa-pq-validator-core/src/lib.rs:1813-1815`) and it is always `mature`.
@@ -685,7 +685,7 @@ The same blind spot covers the second PALW obligation the wallet cannot see:
 `palw_burns`/`burn_owed` (`utxo_validation.rs:1953-1968`) rejects a spend of a released-but-
 slashed bond that does not leave `slashed` sompi unclaimed.
 
-**Failure scenario.** A testnet-11 producer follows `docs/testnet11-join-mining.md` §3: `kaspad --testnet --netsuffix=11
+**Failure scenario.** A testnet-11 producer follows `docs/history/testnet11-join-mining.md` §3: `kaspad --testnet --netsuffix=11
 --palw-register-bond --palw-producer-key=~/.misaka/miner.seed --palw-producer-pay-address=<addr>`.
 `Params::from(testnet-11)` = `palw_rc_shipped_params()` (`config/params.rs:1573`), a `ConsensusV2`
 network, so `palw_state` is `Some` and `palw_v2_locked_bonds` is non-empty on every block. The
@@ -1376,7 +1376,7 @@ neither related. The four params tests at 5148/5177/5227/5258 call consensus_ide
 directly and never build a Version. ibd_participation_tests.rs:180 diverges on
 timestamp_deviation_tolerance, which for_each_fence binds `timestamp_deviation_tolerance: _`
 (params.rs:874) — a r
-- `[low]` **The launch runbook still tells third-party miners the domain is `H(network_id)`, and no RPC serves the value that replaced it** — `docs/palw-rc-testnet11-launch-runbook.md:372`
+- `[low]` **The launch runbook still tells third-party miners the domain is `H(network_id)`, and no RPC serves the value that replaced it** — `docs/history/palw-rc-testnet11-launch-runbook.md:372`
   - held: Holds as stated; every sub-claim verified in code. (1) docs/palw-rc-testnet11-launch-
 runbook.md:372 says verbatim "(`network_domain` is `H(network_id)`, derivable from what the node
 already publishes)", and it is the ONLY line in that runbook mentioning a domain — ADR-0042 (:165,
@@ -1384,9 +1384,9 @@ already publishes)", and it is the ONLY line in that runbook mentioning a domain
 the only stated derivation for an external implementer. (2) The value is no longer the name alone:
 consensus/core/src/palw_attempt_v2.rs:155-163 mixes a length prefix, the id, and the genesis under
 a keyed BLAKE2b, and eve
-  - refuted: VERIFIED (the residual, real part): `docs/palw-rc-testnet11-launch-runbook.md:372` still reads
+  - refuted: VERIFIED (the residual, real part): `docs/history/palw-rc-testnet11-launch-runbook.md:372` still reads
 "(`network_domain` is `H(network_id)`, derivable from what the node already publishes)", and `git
-diff --stat 8e982b7e..HEAD -- docs/palw-rc-testnet11-launch-runbook.md` returns empty — untouched
+diff --stat 8e982b7e..HEAD -- docs/history/palw-rc-testnet11-launch-runbook.md` returns empty — untouched
 by the 34-fix remediation, by f0715718, and by the R-8 fix. The live value is
 `palw_network_domain_v2_for` = keyed-BLAKE2b(len_le ‖ network_id ‖ genesis)
 (`consensus/core/src/palw_attempt_v2.rs:155-166`), and every consensus verifier passes

@@ -382,7 +382,7 @@ to §9's record. A concurrent claimant renumbers the later writer. **The next fr
   `main.rs` (Decision 2: `limits_body`, `refusal_body`, `context_refusal`,
   `prompt_bytes_refusal`, `misaka.decode`; two new tests and the model-list test extended, the
   corpus unchanged at `5cdf9288…`), `docs/palw-freeprompt-gateway.md` (the limits and the refusal), and
-  `docs/palw-model-fit-testnet11-2026-09-10.md` (the generator's RC output, as a dated record and
+  `docs/history/palw-model-fit-testnet11-2026-09-10.md` (the generator's RC output, as a dated record and
   not as a source). **Corrected the same day, by the Studio half (§6 item 3):** the first
   `refusal_body` served `{"error": "<sentence>"}` — a string where the gateway's own `error_body`,
   every OpenAI SDK and the Studio's `Lane::send` read an object — and its test compared the

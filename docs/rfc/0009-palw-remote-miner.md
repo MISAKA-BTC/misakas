@@ -40,7 +40,7 @@ miner は chain の必要情報を取得・検証し、計算と署名が終わ�
 
 ## 1. 現行実装と解くべき結合
 
-`main` の公開ネットワークは `testnet-12`。旧 `testnet-11` の [free-prompt 運用文書](../testnet11-free-prompt-mining.md)は、障害の具体例として有用だが、現在のパラメータ表として使わない。
+`main` の公開ネットワークは `testnet-12`。旧 `testnet-11` の [free-prompt 運用文書](../history/testnet11-free-prompt-mining.md)は、障害の具体例として有用だが、現在のパラメータ表として使わない。
 
 | 現行経路 | node-less 化に必要な変更 |
 | --- | --- |

@@ -388,7 +388,7 @@ pub fn a16_graph_v7_row_v1(n_ctx: u32, model_id: &'static str) -> Option<Canonic
 }
 
 /// **The graph-v5 dense row at the artifact's own width** (ADR-0082 Decisions 1 and 4;
-/// `docs/testnet11-relaunch-5f-genesis-card.md` §2).
+/// `docs/history/testnet11-relaunch-5f-genesis-card.md` §2).
 ///
 /// [`a16_artifact_row_v1`]'s doc says the obvious repair — a fourth fixed-width row — is the one
 /// thing that must not be done, and that argument is about a DIFFERENT question: which class a

@@ -53,7 +53,7 @@ consensus object for construction-side references puts the shape beyond doubt:
 | **`BondRetireRequested`** | **1 — a log label** |
 | **`ClassFrozen`** | **1 — a log label** |
 
-Meanwhile `docs/testnet11-join-mining.md` §6 tells an operator:
+Meanwhile `docs/history/testnet11-join-mining.md` §6 tells an operator:
 
 > The collateral is locked in the output the registration names and **is reclaimable at your pay
 > address once the bond is retired** (an owner ML-DSA-87 signature over the bond key releases it).

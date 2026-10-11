@@ -81,6 +81,6 @@ Ports, appdirs and launchers are unchanged from 5c/5d, and so are the producer c
 
 ## After the swap
 
-Public pages carry the new identity: `docs/testnet11-node-operator.md` and
-`docs/testnet11-join-mining.md`. Every earlier fingerprint — `e2b91c16…` (5d), `d38abe44…` (5c),
+Public pages carry the new identity: `docs/history/testnet11-node-operator.md` and
+`docs/history/testnet11-join-mining.md`. Every earlier fingerprint — `e2b91c16…` (5d), `d38abe44…` (5c),
 `accaadce…`, `f0e50f83…`, `5ccdd684…` — names an archived ruleset and is refused at the handshake.

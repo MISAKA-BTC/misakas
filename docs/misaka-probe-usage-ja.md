@@ -155,7 +155,7 @@ dig @<その IP> seeder1.misakascan.com A +short              # → 委任先が
 **seeder2 / seeder4 は 2026-09-06 時点で SERVFAIL。** 委任 (`ns-seeder2` → `217.76.57.217`、
 `ns-seeder4` → `217.178.101.111`) は生きているが、どちらのホストも :53 に応答しない。
 どちらも当プロジェクトが管理していないホストで、既知の状態
-(`docs/testnet11-relaunch5-runbook.md` 項目 2)。**答えるのは seeder1 / seeder3 の 2 本**で、
+(`docs/history/testnet11-relaunch5-runbook.md` 項目 2)。**答えるのは seeder1 / seeder3 の 2 本**で、
 新規ノードの discovery はその 2 本で足りる。
 
 `misaka-probe` の中でも同じ系統の確認をしています。

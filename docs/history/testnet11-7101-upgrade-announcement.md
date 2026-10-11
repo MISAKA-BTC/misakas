@@ -1,6 +1,6 @@
 # Testnet-11: the DAA 7,101 PALW upgrade, and Verification V2 at 7,200
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **The heights moved a FOURTH time on 2026-09-19, to 7,100.** The release drill's own devnet runs
 > its clock on heartbeats past its anchor-clock fence, so the DAA-denominated challenge window its
@@ -24,8 +24,8 @@
 > that was fixed took the tip past the old 6,000 boundary, so every height was re-pinned above it.
 > The rule that closed it is ADR-0138 §3c: the heartbeat lane now yields only to a parent that
 > actually advances the clock, so a chain with no priced lane keeps its DAA at the target block time.
-> [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
-> [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
+> [The clock audit §2](../palw-daa-clock-audit-2026-09-18.md) has the measurement and
+> [the release report](../palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
 **Fingerprint of current `main`: `400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8`.** It replaced
 `137b9c50aac6c8aabb…` on 2026-09-20, when the execution lane's schedule span shortened 5 DAA → 1 DAA
@@ -75,7 +75,7 @@ block replaces — so a chain producing faster than the interval suppressed the 
 registry drill reproduced it: the clock frozen at its own flag day with the miner running and
 nothing minted.
 
-The rule that fixes it is [ADR-0142](adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md),
+The rule that fixes it is [ADR-0142](../adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md),
 which is built and drilled but not armed anywhere. These two follow it on a later day, with their own
 fence. Nothing else in the upgrade depends on them: the work target arrives on schedule, because the
 dependency runs one way — the lottery needs the work target, never the reverse.
@@ -121,15 +121,15 @@ seed → permit is two spans (~4 min) instead of ~20. The two-span seed delay it
 
 This bundle was audited twice against the code, not the design, and both reports ship with it:
 
-* [The pre-arming security audit](palw-audit-2026-09-18-6001.md) — two Critical and six High
+* [The pre-arming security audit](../palw-audit-2026-09-18-6001.md) — two Critical and six High
   findings, every one fixed before arming. The two Criticals: a rooted consensus decision that read
   a node's own storage (two honest nodes could have folded different state roots), and a `pwu` rule
   that still priced off a value the flag day retires (which both blocked every honest model block
   and let a registrant buy fork-choice weight cheaply).
-* [The release report](palw-release-6001-verdict-2026-09-18.md) — the gates checked on the frozen
+* [The release report](../palw-release-6001-verdict-2026-09-18.md) — the gates checked on the frozen
   candidate, the three holes this bundle's own fixes opened and how each was found, what a chain
   block at the 390,000,000 gas ceiling actually costs, and the drill that armed the verdict.
-* [The DAA-clock audit](palw-daa-clock-audit-2026-09-18.md) — why ADR-0138 exists, what it closes,
+* [The DAA-clock audit](../palw-daa-clock-audit-2026-09-18.md) — why ADR-0138 exists, what it closes,
   and what it does not: finality, merge depth, pruning and the DNS attestation epoch are counted in
   blue score, which the model lane still paces, so their wall-clock length is about half what the
   120-second cadence alone would give. None of them is a chain-split risk and finality moves in the

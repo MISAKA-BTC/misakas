@@ -213,7 +213,7 @@ from the lane's funding selector on a node with `--utxoindex`), and does not sta
 until the previous carrier has become a claim — saying so, by name, when the chain dropped the
 commitment instead. State lives in `<outbox>/rail-watch-state.json`; `--once` runs one pass. The
 identity file it signs under can be written from the node with `--print-identity --class-id <id>`.
-The end-to-end page for operators is [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md).
+The end-to-end page for operators is [testnet11-free-prompt-mining.md](history/testnet11-free-prompt-mining.md).
 
 **One handoff (ADR-0077 Decision 4).** Add `--submit --rpc <host:port>` and the same command
 finishes the job — it hands the signed transaction to `misaka-palw-fp-submit`, the library
@@ -481,7 +481,7 @@ a `response_format: json_object` request returned `{"capital":"Paris"}` in 7 s w
   This bullet used to say "single-batch prefill caps the prompt at 512 tokens", which was true of
   a bundle cap and never of a registered class — an optimistic number is as stale as a pessimistic
   one. Longer rows are a NEW class identity (`n_ctx` is inside the shape profile id), which is the
-  ladder ADR-0077 Decision 13 exists for; [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md)
+  ladder ADR-0077 Decision 13 exists for; [testnet11-ask-for-a-file.md](history/testnet11-ask-for-a-file.md)
   §0 states what today's width means for a person typing a prompt.
 - **The display stop is not the execution stop.** On a model whose control tokens the manifest
   declares, the `chat-segments/v1` template elicits EOG and the shown answer ends there. On one it

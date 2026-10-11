@@ -197,7 +197,7 @@ mod tests {
             .current("one more needs 740 BILI")
             .required("740 BILI of room")
             .fix("wait: room returns as claims turn final")
-            .docs("docs/testnet11-join-mining.md#exposure")
+            .docs("docs/history/testnet11-join-mining.md#exposure")
     }
 
     /// The five fields render in their fixed order, each labelled once, continuation lines under
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(lines[3], "            one more needs 740 BILI");
         assert_eq!(lines[4], "  Required  740 BILI of room");
         assert_eq!(lines[5], "  Fix       wait: room returns as claims turn final");
-        assert_eq!(lines[6], "  Docs      docs/testnet11-join-mining.md#exposure");
+        assert_eq!(lines[6], "  Docs      docs/history/testnet11-join-mining.md#exposure");
         assert_eq!(lines.len(), 7);
     }
 

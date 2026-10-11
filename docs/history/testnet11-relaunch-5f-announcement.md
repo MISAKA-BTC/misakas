@@ -1,7 +1,7 @@
 # MISAKA testnet-11 — Relaunch 5f (2026-09-03)
 
 *Draft for the operator to publish. Every sentence below is tied to a reading recorded in
-`docs/testnet11-relaunch-5f-genesis-card.md`; the two lines marked `[PENDING]` are published only once their reading exists.*
+`docs/history/testnet11-relaunch-5f-genesis-card.md`; the two lines marked `[PENDING]` are published only once their reading exists.*
 
 ## What happened
 

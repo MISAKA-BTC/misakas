@@ -14,16 +14,16 @@
   `docs/palw-algo4-forgery-audit-2026-08-16.md` (gate 1),
   `docs/palw-algo4-crosshost-determinism-2026-08-16.md` (gate 2),
   `docs/palw-algo4-difficulty-economics-2026-08-16.md` (gate 3),
-  `docs/palw-testnet11-soak-2026-08-16.md` (gate 4, running).
+  `docs/history/palw-testnet11-soak-2026-08-16.md` (gate 4, running).
 
 > **Superseded in part (index reconciliation, 2026-09-02).** Decision 1 — "the chain the fleet is
 > soaking IS the public chain; no fresh re-genesis at announce" — held for Relaunch 1 only.
 > [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) (§"The two-network split") made testnet-11
 > the PALW-RC and ruled that a public RC that changes any consensus rule is re-genesised as
 > RC(n+1), never continued; testnet-11 has since been re-minted as Relaunch 2 through 5e
-> (`docs/testnet11-relaunch2-genesis.md`, `docs/testnet11-remint-2026-08-29.md`,
-> `docs/testnet11-regenesis-2026-08-30.md`, `docs/testnet11-relaunch5-runbook.md`,
-> `docs/testnet11-relaunch5e-runbook.md`). The algo-4 `LegacyTn11` lane this ADR launched is not
+> (`docs/history/testnet11-relaunch2-genesis.md`, `docs/history/testnet11-remint-2026-08-29.md`,
+> `docs/history/testnet11-regenesis-2026-08-30.md`, `docs/history/testnet11-relaunch5-runbook.md`,
+> `docs/history/testnet11-relaunch5e-runbook.md`). The algo-4 `LegacyTn11` lane this ADR launched is not
 > running anywhere: `--netsuffix=11` resolves to `palw_rc_shipped_params` (`ConsensusV2`), and the
 > old `TESTNET11_PARAMS` is kept only so a node asked for it by name gets a coherent answer.
 > Decision 2 (class admission pinned in code, checkable by machine) stands and is the ancestor of
@@ -34,7 +34,7 @@
 Two competing deployment plans have coexisted since the PALW work began:
 
 - **Plan A (superseded by this ADR): t10 PALW re-genesis** —
-  `docs/testnet10-palw-rollout-runbook.md`, the "-palw" re-genesis of the live
+  `docs/history/testnet10-palw-rollout-runbook.md`, the "-palw" re-genesis of the live
   testnet-10. Written before the Ollama (algo 5) forgery was found and before t10
   grew its present roles.
 - **Plan B: a separate PALW net.** `TESTNET11_PARAMS` (staging preset, commit
@@ -73,7 +73,7 @@ announce.
   Relaunch 1). A "clean" re-genesis would only re-run the launch window we already
   measured, and discard the measurement.
 - **t10 is untouched** and keeps its own lane (its wedge is its own workstream).
-  `docs/testnet10-palw-rollout-runbook.md` is superseded as a deployment plan;
+  `docs/history/testnet10-palw-rollout-runbook.md` is superseded as a deployment plan;
   its operational content (fingerprint methodology, fleet mechanics) remains valid
   reference.
 
@@ -168,7 +168,7 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
 | ≥ 48 h clean soak | 44.7 h, 0 panics — met on schedule, nothing to do |
 | a fresh node's from-genesis IBD join | **IBD half PASSED: 7 h 45 m** for a ~1,300-block chain. The *participation* half failed — see below |
 | calibration-gated binary deployed fleet-wide | **NOT met.** The fleet kaspad is from 2026-08-16 13:05 and predates both the remote-panic fix and the switch-counter fix |
-| node-operator doc | **published:** `docs/testnet11-node-operator.md` |
+| node-operator doc | **published:** `docs/history/testnet11-node-operator.md` |
 | discovery (item 1) | **NOT met.** `n11-seed*.misakascan.com` do not resolve |
 
 **The join measured a cost this ADR did not carry, and an announcement must.** 7 h 45 m for 1.5 days

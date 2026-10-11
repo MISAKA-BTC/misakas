@@ -22,7 +22,7 @@
 * Builds on: the `misaka palw claim` reader (its `state`/`meaning`/`next` rows are §3's chain half),
   `getPalwProducerFacts` (ADR-0042 D6, and its `not_ready_reason`), the retention janitor
   (`kaspad/src/palw_retention.rs`), the fleet's roll procedure (readiness gates and the stop grace,
-  §6), and the free-prompt lane's documented onboarding (`docs/testnet11-free-prompt-mining.md`).
+  §6), and the free-prompt lane's documented onboarding (`docs/history/testnet11-free-prompt-mining.md`).
 * Amends nothing. Supersedes the stale `misaka setup` web flow for mining (testnet-10, `misaminer`)
   as the documented path. That flow stays in the tree for testnet-10's DNS validator hosts.
 
@@ -39,7 +39,7 @@ These counts come from the documents and code as they stand on `main` (`480705e5
 
 | Goal | Steps | Processes | What goes wrong in practice |
 |---|---|---|---|
-| Floor-class mining (`docs/testnet11-join-mining.md` §1–§4) | 8 | `kaspad`, started twice | The bond outpoint is copied by hand from one log line. The §4 code block leaves out `--palw-fee-outpoint`, and without it the node panics. The fingerprint and the fence schedule are checked by eye. |
+| Floor-class mining (`docs/history/testnet11-join-mining.md` §1–§4) | 8 | `kaspad`, started twice | The bond outpoint is copied by hand from one log line. The §4 code block leaves out `--palw-fee-outpoint`, and without it the node panics. The fingerprint and the fence schedule are checked by eye. |
 | LLM class on the block lane | +4 | same | Artifact conversion, a root check, and a class id from `--palw-dump-classes`, which prints nothing on a fresh appdir for about 45 s. The funding needed (2,290 / 3,868 BILI) is far above the faucet's 12. |
 | Prompt lane (free-prompt) | +7 | `kaspad`, gateway (spawns the worker), `misaka-palw-fp-rail --watch` | "`v3 executed` is not mining". The worker path must be absolute. The unbound artifact is refused. 33 carriers produced 5 claims because of the exposure ceiling. |
 | Panel seat (verifier) | none written | `kaspad --palw-panel` | No guide exists. Capability is declared with `misaka bond capability`. Seats are never paid, and no document says so. |
@@ -267,7 +267,7 @@ Every refusal, hold and failed check prints the same shape:
   Required  740 MSK of room — b7d20e11 frees 740 MSK when it turns final at DAA 8,610 (≈ 3 d 10 h)
   Fix       wait: room returns as claims turn final (misaka work list)
             more room needs a bond with more collateral — collateral is fixed at registration
-  Docs      docs/testnet11-join-mining.md#exposure
+  Docs      docs/history/testnet11-join-mining.md#exposure
 ```
 
 * **The five fields are fixed.**
@@ -629,7 +629,7 @@ MISAKA mining · testnet-11                                          misaka 0.x 
   Current   0 peers · outbound to the resolved testnet-11 bootstrap peer refused 40 s ago
   Required  at least 1 connected peer
   Fix       misaka doctor node      (checks the P2P port, --addpeer and the fork fingerprint)
-  Docs      docs/testnet11-join-mining.md#peers
+  Docs      docs/history/testnet11-join-mining.md#peers
 ```
 
 **`misaka mining start`:**
@@ -656,7 +656,7 @@ It then becomes `● mining` with `status`, the dashboard URL, and "Ctrl-C stops
   Fix       misaka mining stop --drain   stop drawing now, keep serving, exit when the last one ends
             misaka mining stop --force   stop now: b7d20e11 voids receipt_timeout; 3f9a1c2e cannot
                                          answer an accusation (producer_withholding slashes 740 MSK)
-  Docs      docs/testnet11-join-mining.md#stopping
+  Docs      docs/history/testnet11-join-mining.md#stopping
 ```
 
 **`misaka work show 3f9a`:**

@@ -3179,7 +3179,7 @@ async function pageAdd(arg) {
         <div class="step-h"><span class="n">1</span><b>Register the class</b> ${stepTag(...s.reg)}</div>
         <div class="step-b">
           <p class="small">A class is a registered model graph: its artifact's shape profile and canonical job ride in a <code>ClassRegistered</code> carrier signed by an <b>active bond</b> (ML-DSA-87), with a fee. <b>This step cannot be done from a browser</b>: the node that holds the artifact builds and submits it. The commands, from the runbooks in <code>docs/</code>:</p>
-          <pre class="cmd"># 0. a bonded key with funds (docs/testnet11-join-mining.md, section 3); keep the outpoint the node prints
+          <pre class="cmd"># 0. a bonded key with funds (docs/history/testnet11-join-mining.md, section 3); keep the outpoint the node prints
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 --palw-register-bond --palw-producer-key=~/.misaka/miner.seed
 
 # 1. pair the artifact with a class and run the admission gate: no node, no key, no coin (docs/palw-model-onboarding-sdk.md)

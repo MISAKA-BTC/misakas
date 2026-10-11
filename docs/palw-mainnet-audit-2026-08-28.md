@@ -912,7 +912,7 @@ the producer's full `claim.reserved`, and the winning challenger loses nothing �
 `write_court(session_id, None)` hands the stake back (`:2805-2812`); only challenger-side exits reach
 `slash_seat(challenger_bond, ...)` (`:3426`). The producer's only defence, `CourtDisclosed`, is built
 at `kaspad/src/palw_panel.rs:1498-1520` but **every submission path in that service is inside
-`if self.config.fee_outpoint.is_some() {`** (`:1714`) — and `docs/testnet11-join-mining.md:180-203`
+`if self.config.fee_outpoint.is_some() {`** (`:1714`) — and `docs/history/testnet11-join-mining.md:180-203`
 gives the producer command with no `--palw-fee-outpoint` and says "that IS a choice: a panel seat
 without one runs receipts-only … It will answer and file, but it will not carry anything to the
 chain." A producer following the documentation builds the disclosure into `court_pending` and never
@@ -924,7 +924,7 @@ claim in `ReceiptLicensed` inside its 1,200-DAA challenge window. 60 DAA later t
 silent producer of `CourtFraud`; the attacker's stake is returned in the same block. The capital is
 never at risk, so the only cost is transaction fees.
 
-Related documentation defect: `docs/testnet11-join-mining.md:249` tells operators "mine only while
+Related documentation defect: `docs/history/testnet11-join-mining.md:249` tells operators "mine only while
 you can leave the node up for the day". The real exposure after the last block is
 `window_bind + window_receipt + window_challenge + window_court` = 600 + 600 + 1,200 + 2,400 =
 **2,400 DAA past the last licensing**, i.e. up to 80 hours at the frozen 120,000 ms cadence

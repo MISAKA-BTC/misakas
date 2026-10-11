@@ -256,7 +256,7 @@ install.
   A signed manifest is a later schema, not a quiet field in this one.
 * It does not say a component is compatible with a chain. `network` names the release line;
   the fingerprint a node prints at start (`Consensus params fingerprint: …`) is the only thing
-  that says which chain a binary follows, and `docs/testnet11-join-mining.md` is where that is
+  that says which chain a binary follows, and `docs/history/testnet11-join-mining.md` is where that is
   read.
 * It does not carry the artifact bytes or say who may download them. `hf://` rows point at the
   public repositories the Studio's table already named, and the license lives with the weights.
