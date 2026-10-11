@@ -135,6 +135,9 @@ impl PalwOwnedPrefixCourtV1 {
     pub fn key(&self) -> (Hash64, PalwBondKeyV2, u64) {
         (self.claim, self.reserver, self.reserved_daa)
     }
+    pub fn court_v1(&self) -> &PalwPrefixFamilyCourtV1 {
+        &self.court
+    }
     pub fn execution_root_v1(&self) -> Hash64 {
         self.execution_root
     }
@@ -391,10 +394,36 @@ mod tests {
                     }
                     actions.extend(next);
                 }
-                assert!(actions.len() > 1 && actions.len() <= 64);
-                let signed_length = borsh::to_vec(&actions).unwrap().len() as u64 + 8000;
+                assert!(actions.len() > 64, "the fixture exercises multiple bounded signed packets");
+                // Retain the last complete old leaf as the final packet so its late bad EOF
+                // exercises rollback after the earlier packets have genuinely committed.
+                let last_opening =
+                    actions.iter().rposition(|action| matches!(action, PalwPrefixCourtActionV1::BeginTile { .. })).unwrap();
+                let mut builder =
+                    crate::palw_prefix_family_court_v1::PalwPrefixPacketBuilderV1::new(resources.maximum_packet_body_bytes).unwrap();
+                let mut packets = Vec::new();
+                for action in actions[..last_opening].iter().cloned() {
+                    if let Some(packet) = builder.push(action).unwrap() {
+                        packets.push(packet);
+                    }
+                }
+                if let Some(packet) = builder.finish() {
+                    packets.push(packet);
+                }
+                let final_packet = actions[last_opening..].to_vec();
+                assert!(final_packet.len() > 1 && final_packet.len() <= 64);
+                let mut total_signed = 8000u64;
+                for packet in &packets {
+                    assert!(packet.len() <= 64 && borsh::object_length(packet).unwrap() as u64 <= resources.maximum_packet_body_bytes);
+                    let signed_length = borsh::object_length(packet).unwrap() as u64 + 8000;
+                    row.movement_batch_v1(101, target.claim_id, owner, 100, seed, packet, signed_length).unwrap();
+                    total_signed += signed_length;
+                    row = borsh::from_slice(&borsh::to_vec(&row).unwrap()).unwrap();
+                    assert!(row.certificate().is_err(), "the full prefix has not authenticated yet");
+                }
+                let signed_length = borsh::object_length(&final_packet).unwrap() as u64 + 8000;
                 let baseline = borsh::to_vec(&row).unwrap();
-                let mut corrupt = actions.clone();
+                let mut corrupt = final_packet.clone();
                 let bytes = corrupt
                     .iter_mut()
                     .rev()
@@ -407,11 +436,14 @@ mod tests {
                 assert!(row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &corrupt, signed_length).is_err());
                 assert_eq!(borsh::to_vec(&row).unwrap(), baseline, "a late bad original EOF commits neither state nor counters");
                 assert!(row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &[], signed_length).is_err());
-                assert!(row.movement_batch_v1(101, target.claim_id, owner, 100, Hash64::default(), &actions, signed_length).is_err());
-                row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &actions, signed_length).unwrap();
+                assert!(
+                    row.movement_batch_v1(101, target.claim_id, owner, 100, Hash64::default(), &final_packet, signed_length).is_err()
+                );
+                row.movement_batch_v1(101, target.claim_id, owner, 100, seed, &final_packet, signed_length).unwrap();
+                total_signed += signed_length;
                 assert_eq!(row.moves_used, 1 + actions.len() as u64);
-                assert_eq!(row.physical_carriers_used, 2);
-                assert_eq!(row.carrier_bytes_used, 8000 + signed_length);
+                assert_eq!(row.physical_carriers_used, 2 + packets.len() as u64);
+                assert_eq!(row.carrier_bytes_used, total_signed);
                 row = borsh::from_slice(&borsh::to_vec(&row).unwrap()).unwrap();
                 assert_eq!(row.certificate().unwrap().is_some(), fault);
             }
