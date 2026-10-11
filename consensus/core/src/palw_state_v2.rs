@@ -73805,7 +73805,14 @@ pub(crate) mod tests {
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
-        let posted = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts).max(p.min_collateral_sompi() as u128) as u64;
+        let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        let posted = required.max(p.min_collateral_sompi() as u128)
+            .max(if p.rcore_plus_active_at(100) {
+                // A real R-core panel seat must qualify at its panel floor and have its
+                // work half fund the lock. Additional ordinary collateral, not a gate bypass.
+                u128::from(crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(p.min_collateral_sompi()))
+                    .max(required.checked_mul(2).unwrap())
+            } else {0}) as u64;
         let (s0, _) = apply_armed(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
         let mut env = attempt(40, 1);
         env.attempt.execution_root = binding.committed_execution_root;
