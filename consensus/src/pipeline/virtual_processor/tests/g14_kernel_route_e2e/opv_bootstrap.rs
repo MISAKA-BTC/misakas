@@ -104,11 +104,12 @@ struct Spec {
     complete: bool,
     sealed: bool,
     opt_in: bool,
+    paid_opt_in: bool,
 }
 
 impl Spec {
     fn honest(seed: u64, card: usize, complete: bool) -> Spec {
-        Spec { v2: onb_fixture(seed), kernel: onb_fixture(seed), card, complete, sealed: false, opt_in: false }
+        Spec { v2: onb_fixture(seed), kernel: onb_fixture(seed), card, complete, sealed: false, opt_in: false, paid_opt_in: false }
     }
 
     /// A candidate bound under the network's sealed-source (v3) policy.
@@ -206,6 +207,8 @@ async fn onboard_all(net: &mut Net, specs: Vec<Spec>) -> Vec<Onb> {
         assert!(net.ledger().classes.contains_key(&legacy), "the legacy kernel class registered over the matured binding");
         let policy = Hash64::from_bytes(if s.complete {
             complete
+        } else if s.paid_opt_in {
+            kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5().id()
         } else if s.opt_in {
             kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id()
         } else if s.sealed {
@@ -857,7 +860,15 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     // A false binding: the V2 artifact is seed 37's weights, the kernel class runs seed 38's (the same program).
     let c = onboard_all(
         &mut net,
-        vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false, sealed: false, opt_in: false }],
+        vec![Spec {
+            v2: onb_fixture(37),
+            kernel: onb_fixture(38),
+            card: CAND,
+            complete: false,
+            sealed: false,
+            opt_in: false,
+            paid_opt_in: false,
+        }],
     )
     .await
     .pop()
@@ -1372,7 +1383,10 @@ fn opt_in_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 async fn opt_in_world(net: Net, seed: u64) -> (Net, Onb, Onb) {
     opt_in_world_with_binding(net, seed, false).await
 }
-async fn opt_in_world_with_binding(mut net: Net, seed: u64, false_binding: bool) -> (Net, Onb, Onb) {
+async fn opt_in_world_with_binding(net: Net, seed: u64, false_binding: bool) -> (Net, Onb, Onb) {
+    opt_in_world_with_policy(net, seed, false_binding, false).await
+}
+async fn opt_in_world_with_policy(mut net: Net, seed: u64, false_binding: bool, paid_opt_in: bool) -> (Net, Onb, Onb) {
     net.beat_to(1).await;
     let mut onbs = onboard_all(
         &mut net,
@@ -1380,6 +1394,7 @@ async fn opt_in_world_with_binding(mut net: Net, seed: u64, false_binding: bool)
             Spec::honest(seed, BOOT, true),
             Spec {
                 opt_in: true,
+                paid_opt_in,
                 kernel: onb_fixture(if false_binding { seed + 2 } else { seed + 1 }),
                 ..Spec::honest(seed + 1, CAND, false)
             },
@@ -1540,6 +1555,104 @@ async fn g14_opv_bootstrap_v4_opted_in_withholding_vetoes_and_burns_its_own_rese
 }
 
 // ---- Prepaid fees: independent dormant monetary fence, actual bond debits and coinbase payouts -----------------------------
+#[tokio::test]
+async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_verifies_the_complete_inventory() {
+    use misaka_palw_sdk::onboarding_chain::{
+        PublicConformanceReadsV1, fresh_verify_from_reads_v1, fresh_verify_from_reads_v5, opt_in_sources_from_kernel_rows_v4,
+        paid_opt_in_sources_from_kernel_rows_v5,
+    };
+    let (mut net, b, c) = opt_in_world_with_policy(Net::over_cfg(source_fee_config(), TestConsensus::new), 81, false, true).await;
+    let a = net.attempt(c.v2);
+    assert!(a.is_paid_opt_in_source());
+    assert_ne!(a.policy().id(), kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id());
+    let terms = fee_terms(&net, &c, 2);
+    let context = terms.source.context;
+    let expected = net.api().unwrap().beacon_source_fee_target_v5(&context).unwrap();
+    assert_eq!((expected.sponsor, expected.minimum_fee), (net.kid(CAND), 50));
+    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Waiting { have: 0, .. }));
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0xC0).await;
+    net.beat_to(terms.source.seal_start).await;
+    let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
+    let producer = net.kid(PRODUCERS[0]);
+    let unpaid = K::OptInBeaconSource {
+        producer,
+        job: jobs[0].id(),
+        seal: net.ledger().seals[&(jobs[0].id(), producer)].seal,
+        context,
+        terms: terms.source.id(),
+    };
+    let reserved = net.kernel_reserved(PRODUCERS[0]);
+    let object = net.route(PRODUCERS[0], &unpaid);
+    net.send(vec![(PRODUCERS[0], object)]).await;
+    assert!(net.ledger().beacon_sources.is_empty(), "tag 21 cannot join mandatory paid v5");
+    assert_eq!(net.kernel_reserved(PRODUCERS[0]), reserved);
+    let paid = K::OptInPaidBeaconSource {
+        producer,
+        job: jobs[0].id(),
+        seal: net.ledger().seals[&(jobs[0].id(), producer)].seal,
+        context,
+        source_terms: terms.source.id(),
+        fee_terms: terms.id(),
+    };
+    let object = net.route(PRODUCERS[0], &paid);
+    net.send(vec![(PRODUCERS[0], object)]).await;
+    assert!(net.ledger().beacon_sources.is_empty(), "an unsigned/unfunded future income cannot admit a source");
+    let capital = net.collateral(CAND);
+    let under =
+        K::FundBeaconSourceFee { terms: misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 { max_sources: 1, ..terms } };
+    let object = net.route(CAND, &under);
+    net.send(vec![(CAND, object)]).await;
+    assert_eq!(net.collateral(CAND), capital, "funding less than a complete source quorum is refused");
+    let object = net.route(CAND, &K::FundBeaconSourceFee { terms });
+    net.send(vec![(CAND, object)]).await;
+    assert_eq!(net.collateral(CAND), capital - 100);
+    let object = net.route(PRODUCERS[0], &unpaid);
+    net.send(vec![(PRODUCERS[0], object)]).await;
+    assert!(net.ledger().beacon_sources.is_empty(), "funding never retroactively awards an unsigned source promise");
+    paid_sources(&mut net, terms, &jobs, &PRODUCERS[..2]).await;
+    net.beat_to(terms.source.seal_end).await;
+    reveal_now(&mut net, &reveals).await;
+    net.beat_to(terms.source.final_by + a.policy().settlement_depth_d).await;
+    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Locked(_)));
+    let post = sampled_post(&net, &c);
+    let object = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
+    net.send(vec![(CAND, object)]).await;
+    let end = net.attempt(c.v2).evidence.unwrap().window_end_daa;
+    net.beat_to(end + 1).await;
+    let route = net.api().unwrap();
+    let header = borsh::to_vec(&route.header).unwrap();
+    let rows = route.rows_page_v1(None, usize::MAX).rows;
+    let sources =
+        paid_opt_in_sources_from_kernel_rows_v5(&header, rows.clone(), &route.ledger_root(), &route.aux_root(), &context).unwrap();
+    assert!(opt_in_sources_from_kernel_rows_v4(&header, rows.clone(), &route.ledger_root(), &route.aux_root(), &context).is_err());
+    assert_eq!(sources.fee_contract().unwrap().paid, 0, "lock and conformance decision are before signed H");
+    let read = net.chain.ctx.consensus.palw_conformance_evidence_v1(c.v2).unwrap();
+    let reads = PublicConformanceReadsV1 {
+        attempt_row: read.attempt_row.unwrap(),
+        evidence_row: read.evidence_row,
+        events: vec![],
+        sealed_sources: vec![],
+        tip_daa: net.daa(),
+        program: read.program.unwrap(),
+    };
+    assert!(fresh_verify_from_reads_v1(&reads, None).is_err());
+    let verified = fresh_verify_from_reads_v5(&reads, &sources, None).unwrap();
+    assert!(verified.chain_says_passed && verified.agrees);
+    assert_eq!(attempt_effective_bits_v1(&route, &c.v2, &net.attempt(c.v2)), misaka_palw_challenge::EffectiveBitsV1::Bits(0));
+    for table in [
+        kaspa_consensus_core::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
+        misaka_palw_kernel::rows::TABLE_BEACON_SOURCE_FEE_PROMISES_V1,
+    ] {
+        let mut forged = rows.clone();
+        forged.iter_mut().find(|r| r.0 == table).unwrap().2.push(0);
+        assert!(paid_opt_in_sources_from_kernel_rows_v5(&header, forged, &route.ledger_root(), &route.aux_root(), &context).is_err());
+    }
+    net.beat_to(terms.source.hold_until + 1).await;
+    assert_eq!(net.ledger().beacon_source_fees[&context].paid, 100);
+    let replay = net.replay().await;
+    net.assert_same(&replay, "mandatory paid v5 full fee/beacon replay");
+}
+
 fn source_fee_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (cfg, bundle, premine, floats) = opt_in_config();
     let mut params = cfg.params.clone();

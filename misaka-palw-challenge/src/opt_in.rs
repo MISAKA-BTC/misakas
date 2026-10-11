@@ -34,9 +34,20 @@ pub fn collect_opt_in_work_beacon_v4(
     tip: u64,
 ) -> Result<SealedBeaconStateV3, PolicyRefusalV1> {
     ctx.policy.validate()?;
-    if !ctx.policy.is_opt_in_source() {
+    if !ctx.policy.is_opt_in_source() || ctx.policy.is_paid_opt_in_source() {
         return Err(PolicyRefusalV1::WrongCollector("opt-in v4 requires its own policy"));
     }
+    let facts = opt_in_source_facts(ctx, contract, sources, tip)?;
+    let initial = object_id(INITIAL, &(ctx.id(), contract));
+    collect_sealed_inner(ctx, &facts, tip, ITEM, MIX, initial)
+}
+
+pub(crate) fn opt_in_source_facts(
+    ctx: &BeaconContextV1,
+    contract: &OptInContractV4,
+    sources: &[OptInSourceV4],
+    tip: u64,
+) -> Result<Vec<SealedSourceV3>, PolicyRefusalV1> {
     let start = ctx
         .commitment_position
         .checked_add(ctx.policy.anchor_delay_slots)
@@ -83,8 +94,7 @@ pub fn collect_opt_in_work_beacon_v4(
         }
         facts.push(fact);
     }
-    let initial = object_id(INITIAL, &(ctx.id(), contract));
-    collect_sealed_inner(ctx, &facts, tip, ITEM, MIX, initial)
+    Ok(facts)
 }
 
 pub fn verify_opt_in_work_beacon_v4(

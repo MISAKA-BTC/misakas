@@ -297,7 +297,18 @@ pub fn fresh_verify_from_reads_v4(
     sources: &VerifiedOptInSourcesV4,
     artifact: Option<&Path>,
 ) -> Result<FreshReportV1, Refusal> {
+    if sources.target.context.policy.is_paid_opt_in_source() {
+        return Err(Refusal::new("POLICY_SUBSTITUTED", "mandatory paid v5 needs its verified fee inventory"));
+    }
     fresh_verify_reads_inner(reads, artifact, Some(sources))
+}
+
+pub fn fresh_verify_from_reads_v5(
+    reads: &PublicConformanceReadsV1,
+    sources: &VerifiedPaidOptInSourcesV5,
+    artifact: Option<&Path>,
+) -> Result<FreshReportV1, Refusal> {
+    fresh_verify_reads_inner(reads, artifact, Some(&sources.sources))
 }
 
 fn fresh_verify_reads_inner(
@@ -383,6 +394,13 @@ fn fresh_verify_reads_inner(
         leaf_source: if artifact.is_some() { Some(&leaf_source) } else { None },
     };
     let verdict = match opt_in {
+        Some(sources) if sources.target.context.policy.is_paid_opt_in_source() => {
+            let (contract, facts, promises) = sources
+                .paid_material
+                .as_ref()
+                .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?;
+            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5(&input, contract, facts, promises)
+        }
         Some(sources) => kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4(
             &input,
             &misaka_palw_challenge::OptInContractV4 {
@@ -437,6 +455,26 @@ pub struct VerifiedOptInSourcesV4 {
     fee_contract: Option<misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1>,
     fee_receipts:
         std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1>,
+    paid_material: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PaidBeaconMaterialV5>,
+}
+
+/// The v5 API can only obtain mandatory money facts from the same root-verified
+/// route as its immutable source and attempt. V4 cannot supply these facts.
+pub struct VerifiedPaidOptInSourcesV5 {
+    sources: VerifiedOptInSourcesV4,
+}
+/// Public monetary row type, so CLI consumers do not need the internal kernel crate.
+pub type SourceFeeFundingV1 = misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1;
+impl VerifiedPaidOptInSourcesV5 {
+    pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
+        self.sources.fee_contract()
+    }
+    pub fn fee_receipt(
+        &self,
+        producer: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1> {
+        self.sources.fee_receipt(producer)
+    }
 }
 
 impl VerifiedOptInSourcesV4 {
@@ -460,6 +498,29 @@ pub fn opt_in_sources_from_kernel_rows_v4(
     aux_root: &Hash64,
     context: &misaka_palw_challenge::hash::Digest,
 ) -> Result<VerifiedOptInSourcesV4, Refusal> {
+    opt_in_sources_from_kernel_rows_inner(header, rows, ledger_root, aux_root, context, false)
+}
+
+pub fn paid_opt_in_sources_from_kernel_rows_v5(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+) -> Result<VerifiedPaidOptInSourcesV5, Refusal> {
+    Ok(VerifiedPaidOptInSourcesV5 {
+        sources: opt_in_sources_from_kernel_rows_inner(header, rows, ledger_root, aux_root, context, true)?,
+    })
+}
+
+fn opt_in_sources_from_kernel_rows_inner(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+    paid: bool,
+) -> Result<VerifiedOptInSourcesV4, Refusal> {
     let route =
         kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
             .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
@@ -480,7 +541,10 @@ pub fn opt_in_sources_from_kernel_rows_v4(
         .ok_or_else(|| Refusal::new("TARGET_MALFORMED", "source target has no rooted attempt"))?;
     let attempt =
         route.conformance_attempt_v1(&class).ok_or_else(|| Refusal::new("ROW_MALFORMED", "rooted attempt does not decode"))?;
-    if !attempt.is_opt_in_source() || target.context != attempt.beacon_context(&attempt.policy()) {
+    if !attempt.is_opt_in_source()
+        || attempt.is_paid_opt_in_source() != paid
+        || target.context != attempt.beacon_context(&attempt.policy())
+    {
         return Err(Refusal::new("TARGET_SUBSTITUTED", "source target is not the current rooted attempt"));
     }
     let evidence_row = route.aux.get(&(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, key)).cloned();
@@ -500,7 +564,17 @@ pub fn opt_in_sources_from_kernel_rows_v4(
         .range((*context, [0; 64])..=(*context, [255; 64]))
         .map(|((_, producer), p)| (*producer, p.clone()))
         .collect();
-    Ok(VerifiedOptInSourcesV4 { target, facts, attempt_row, evidence_row, program, fee_contract, fee_receipts })
+    let paid_material = if paid {
+        Some(
+            route
+                .paid_beacon_material_v5(context)
+                .map_err(|e| Refusal::new("SOURCE_FEE_MALFORMED", e))?
+                .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?,
+        )
+    } else {
+        None
+    };
+    Ok(VerifiedOptInSourcesV4 { target, facts, attempt_row, evidence_row, program, fee_contract, fee_receipts, paid_material })
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, String> {

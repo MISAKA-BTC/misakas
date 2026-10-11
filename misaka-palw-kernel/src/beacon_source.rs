@@ -138,6 +138,22 @@ impl KernelLedgerV1 {
         terms_id: Digest,
         out: &mut Vec<LedgerEventV1>,
     ) -> Result<(), String> {
+        if self.beacon_source_inputs.targets.get(&context).is_some_and(|t| t.context.policy.is_paid_opt_in_source()) {
+            return Err("this source policy requires a signed prepaid fee promise".into());
+        }
+        self.admit_beacon_source(producer, job, seal, context, terms_id, out)
+    }
+
+    /// Internal shared admission; only the prepaid route may call this for v5.
+    pub(crate) fn admit_beacon_source(
+        &mut self,
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+        context: Digest,
+        terms_id: Digest,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> Result<(), String> {
         let inputs = &self.beacon_source_inputs;
         if inputs.activation_daa.is_none_or(|at| self.daa < at) || !self.optimistic_allowed() {
             return Err("the dedicated beacon source fence is not reached".into());

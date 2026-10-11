@@ -185,15 +185,25 @@ pub(crate) async fn status(ctx: &Ctx, class: &str) -> CliResult {
     Ok(())
 }
 
-/// A v3 attempt's seals or v4 opt-ins from op 211, rebuilt by the SDK against the served roots.
+enum VerifiedBeaconSources {
+    OptIn(misaka_palw_sdk::onboarding_chain::VerifiedOptInSourcesV4),
+    Paid(misaka_palw_sdk::onboarding_chain::VerifiedPaidOptInSourcesV5),
+}
+impl VerifiedBeaconSources {
+    fn fee_contract(&self) -> Option<&misaka_palw_sdk::onboarding_chain::SourceFeeFundingV1> {
+        match self {
+            Self::OptIn(s) => s.fee_contract(),
+            Self::Paid(s) => s.fee_contract(),
+        }
+    }
+}
+
+/// V3 seals, v4 opt-ins or v5 paid sources from op 211, rebuilt against the served roots.
 /// The roots and header must be the same on every page (a route that moved between pages is refused: read again).
 async fn kernel_beacon_sources(
     nv: &crate::wallet::NodeView,
-    opt_in_context: Option<[u8; 64]>,
-) -> Result<
-    (Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, Option<misaka_palw_sdk::onboarding_chain::VerifiedOptInSourcesV4>),
-    CliError,
-> {
+    opt_in_context: Option<([u8; 64], bool)>,
+) -> Result<(Vec<misaka_palw_sdk::onboarding_chain::SealedSourceV3>, Option<VerifiedBeaconSources>), CliError> {
     use kaspa_rpc_core::GetPalwKernelRowsRequest;
     let mut rows = Vec::new();
     let mut request = GetPalwKernelRowsRequest::default();
@@ -231,11 +241,21 @@ async fn kernel_beacon_sources(
     let header = unhex(&header)?;
     let ledger_root = root(&ledger_root)?;
     let aux_root = root(&aux_root)?;
-    if let Some(context) = opt_in_context {
+    if let Some((context, true)) = opt_in_context {
+        let sources = misaka_palw_sdk::onboarding_chain::paid_opt_in_sources_from_kernel_rows_v5(
+            &header,
+            rows,
+            &ledger_root,
+            &aux_root,
+            &context,
+        )
+        .map_err(refusal)?;
+        Ok((Vec::new(), Some(VerifiedBeaconSources::Paid(sources))))
+    } else if let Some((context, false)) = opt_in_context {
         let sources =
             misaka_palw_sdk::onboarding_chain::opt_in_sources_from_kernel_rows_v4(&header, rows, &ledger_root, &aux_root, &context)
                 .map_err(refusal)?;
-        Ok((Vec::new(), Some(sources)))
+        Ok((Vec::new(), Some(VerifiedBeaconSources::OptIn(sources))))
     } else {
         let sources = misaka_palw_sdk::onboarding_chain::sealed_sources_from_kernel_rows_v1(&header, rows, &ledger_root, &aux_root)
             .map_err(refusal)?;
@@ -277,7 +297,8 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
     // v4 rebuilds its exact rooted target/reservations/fee book; ordinary sealed sources cannot substitute.
     let attempt = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&attempt_row)
         .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
-    let context = attempt.is_opt_in_source().then(|| attempt.beacon_context(&attempt.policy()).id());
+    let context =
+        attempt.is_opt_in_source().then(|| (attempt.beacon_context(&attempt.policy()).id(), attempt.is_paid_opt_in_source()));
     let (sealed_sources, opt_in_sources) =
         if context.is_some() || attempt.is_sealed_source() { kernel_beacon_sources(&nv, context).await? } else { (Vec::new(), None) };
     let reads = PublicConformanceReadsV1 {
@@ -289,7 +310,12 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
         program: unhex(&r.program)?,
     };
     let report = match opt_in_sources.as_ref() {
-        Some(sources) => misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v4(&reads, sources, artifact),
+        Some(VerifiedBeaconSources::OptIn(sources)) => {
+            misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v4(&reads, sources, artifact)
+        }
+        Some(VerifiedBeaconSources::Paid(sources)) => {
+            misaka_palw_sdk::onboarding_chain::fresh_verify_from_reads_v5(&reads, sources, artifact)
+        }
         None => fresh_verify_from_reads_v1(&reads, artifact),
     }
     .map_err(refusal)?;

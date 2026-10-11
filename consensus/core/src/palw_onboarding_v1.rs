@@ -327,12 +327,19 @@ impl ConformanceAttemptRowV1 {
 
     pub fn is_opt_in_source(&self) -> bool {
         self.commitment.challenge_policy_id == crate::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id()
+            || self.is_paid_opt_in_source()
+    }
+
+    pub fn is_paid_opt_in_source(&self) -> bool {
+        self.commitment.challenge_policy_id == crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5().id()
     }
 
     /// The exact implemented network policy committed by the attempt: complete-check, sampled v2, sealed v3 or opt-in v4.
     pub fn policy(&self) -> misaka_palw_challenge::PostCommitChallengePolicyV1 {
         if self.is_complete_check() {
             crate::palw_opv_bootstrap_v1::palw_onboarding_complete_check_policy_v1()
+        } else if self.is_paid_opt_in_source() {
+            crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5()
         } else if self.is_opt_in_source() {
             crate::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4()
         } else if self.is_sealed_source() {
@@ -706,7 +713,17 @@ impl PalwKernelRouteStateV1 {
         let ctx = attempt.beacon_context(&policy);
         if attempt.is_sealed_source() || attempt.is_opt_in_source() {
             use misaka_palw_challenge::SealedBeaconStateV3 as B;
-            let collected = if attempt.is_opt_in_source() {
+            let collected = if attempt.is_paid_opt_in_source() {
+                let Some((contract, sources, promises)) = self.paid_beacon_material_v5(&ctx.id())? else {
+                    let target = self.beacon_source_fee_target_v5(&ctx.id())?;
+                    return Ok(if daa < target.target.terms.seal_end {
+                        AttemptBeaconV1::Waiting { state: "SEALING", have: 0, lock_position: None }
+                    } else {
+                        AttemptBeaconV1::Unavailable { have: 0, need: policy.work_count_k }
+                    });
+                };
+                misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, daa)
+            } else if attempt.is_opt_in_source() {
                 let target = self.beacon_source_target_v4(&ctx.id())?;
                 let contract = misaka_palw_challenge::OptInContractV4 {
                     context_id: ctx.id(),

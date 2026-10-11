@@ -25,6 +25,7 @@ pub mod lifecycle;
 pub mod policy;
 pub mod sealed;
 pub mod opt_in;
+pub mod paid_opt_in;
 pub mod seed;
 pub mod soundness;
 pub mod subject;
@@ -54,3 +55,5 @@ pub use subject::{ChallengeSubjectV1, RootV1, SubjectKindV1};
 
 pub use opt_in::{OptInContractV4, OptInSourceV4, collect_opt_in_work_beacon_v4, verify_opt_in_work_beacon_v4};
 pub use policy::opt_in_source_policy_v4;
+pub use paid_opt_in::{PaidOptInContractV5, PaidSourcePromiseV5, collect_paid_opt_in_work_beacon_v5, verify_paid_opt_in_work_beacon_v5};
+pub use policy::paid_opt_in_source_policy_v5;

@@ -69,17 +69,102 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             {
                 return Err("fee sponsor is not the authenticated attempt signer".into());
             }
-            inputs.targets.insert(
-                *context,
-                BeaconSourceFeeTargetV1 {
-                    target: target.clone(),
-                    sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&commitment.signer),
-                    minimum_fee: fence.policy.minimum_fee_sompi,
-                    max_sources: fence.policy.max_funded_sources.min(target.terms.max_total),
-                },
-            );
+            let derived = BeaconSourceFeeTargetV1 {
+                target: target.clone(),
+                sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&commitment.signer),
+                minimum_fee: fence.policy.minimum_fee_sompi,
+                max_sources: fence.policy.max_funded_sources.min(target.terms.max_total),
+            };
+            if target.context.policy.is_paid_opt_in_source() && self.beacon_source_fee_target_v5(context)? != derived {
+                return Err("fee floor/sponsor/cap differ from the frozen paid target".into());
+            }
+            inputs.targets.insert(*context, derived);
         }
         Ok(inputs)
+    }
+}
+
+/// Separate immutable monetary terms for v5; v4 historical targets keep their schema.
+pub const PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5: u8 = 47;
+pub type PaidBeaconMaterialV5 = (
+    misaka_palw_challenge::PaidOptInContractV5,
+    Vec<misaka_palw_challenge::OptInSourceV4>,
+    Vec<misaka_palw_challenge::PaidSourcePromiseV5>,
+);
+impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    pub fn beacon_source_fee_target_v5(
+        &self,
+        context: &misaka_palw_kernel::hash::Digest,
+    ) -> Result<misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTargetV1, String> {
+        let target: misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTargetV1 = self
+            .aux_row(PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5, &borsh::to_vec(context).expect("context serializes"))
+            .ok_or("frozen paid source target missing")?;
+        target.target.validate()?;
+        if target.target != self.beacon_source_target_v4(context)?
+            || !target.target.context.policy.is_paid_opt_in_source()
+            || target.minimum_fee == 0
+            || target.max_sources < target.target.context.policy.work_count_k
+            || target.max_sources > target.target.terms.max_total
+        {
+            return Err("frozen mandatory fee target mismatch/floor/cap".into());
+        }
+        Ok(target)
+    }
+
+    /// Derive the whole source/fee inventory from the same rooted route, including
+    /// failed promises. No filtering of unpaid or forfeited mixed sources is allowed.
+    pub fn paid_beacon_material_v5(&self, context: &misaka_palw_kernel::hash::Digest) -> Result<Option<PaidBeaconMaterialV5>, String> {
+        use misaka_palw_challenge::{OptInContractV4, PaidOptInContractV5, PaidSourcePromiseV5};
+        let expected = self.beacon_source_fee_target_v5(context)?;
+        let ledger = self.ledger()?;
+        let sources = self.beacon_opt_in_sources_v4(context)?;
+        let promises: Vec<_> = ledger
+            .beacon_source_fee_promises
+            .range((*context, [0; 64])..=(*context, [255; 64]))
+            .map(|((ctx, producer), p)| PaidSourcePromiseV5 {
+                context_id: *ctx,
+                producer: *producer,
+                fee_terms_id: p.terms_id,
+                accepted_position: p.accepted_daa,
+                fee: p.fee,
+            })
+            .collect();
+        let Some(funded) = ledger.beacon_source_fees.get(context) else {
+            if !sources.is_empty() || !promises.is_empty() {
+                return Err("mandatory paid sources have no prepaid backing".into());
+            }
+            return Ok(None);
+        };
+        if funded.target != expected.target
+            || funded.terms.sponsor != expected.sponsor
+            || funded.terms.fee_per_source < expected.minimum_fee
+            || funded.terms.max_sources < expected.target.context.policy.work_count_k
+            || funded.terms.max_sources > expected.max_sources
+        {
+            return Err("prepaid funding does not meet the frozen monetary target".into());
+        }
+        let contract = PaidOptInContractV5 {
+            source: OptInContractV4 {
+                context_id: *context,
+                terms_id: funded.terms.source.id(),
+                source_final_by: funded.terms.source.final_by,
+            },
+            fee_terms_id: funded.terms.id(),
+            minimum_fee: expected.minimum_fee,
+            fee_per_source: funded.terms.fee_per_source,
+            max_sources: funded.terms.max_sources,
+            funded_position: funded.funded_daa,
+        };
+        // Reject incomplete money bindings even if a caller only wants public facts.
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(
+            &expected.target.context,
+            &contract,
+            &sources,
+            &promises,
+            ledger.daa,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Some((contract, sources, promises)))
     }
 }
 

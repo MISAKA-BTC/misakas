@@ -631,6 +631,14 @@ pub fn palw_onboarding_opt_in_policy_v4() -> PostCommitChallengePolicyV1 {
     }
 }
 
+/// Mandatory prepaid sources use their own unapproved policy and seed domains.
+pub fn palw_onboarding_paid_opt_in_policy_v5() -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        randomness_source_policy_id: misaka_palw_challenge::policy::ImplementedV1::randomness_paid_opt_in_source(),
+        ..palw_onboarding_opt_in_policy_v4()
+    }
+}
+
 pub fn palw_onboarding_sealed_policy_v1() -> PostCommitChallengePolicyV1 {
     PostCommitChallengePolicyV1 {
         security_bits: PALW_ONBOARDING_POLICY_SECURITY_BITS_V1,
@@ -989,6 +997,22 @@ pub fn fresh_verify_v4(
         Ok(state) => Err(format!("{state:?}")),
         Err(e) => Err(format!("POLICY_INVALID {e}")),
     };
+    fresh_verify_inner(input, Some(derived))
+}
+
+pub fn fresh_verify_v5(
+    input: &FreshInputV1<'_>,
+    contract: &misaka_palw_challenge::PaidOptInContractV5,
+    sources: &[misaka_palw_challenge::OptInSourceV4],
+    promises: &[misaka_palw_challenge::PaidSourcePromiseV5],
+) -> FreshVerdictV1 {
+    use misaka_palw_challenge::SealedBeaconStateV3 as S;
+    let derived =
+        match misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(input.ctx, contract, sources, promises, input.tip_daa) {
+            Ok(S::Locked(b)) => Ok(b),
+            Ok(state) => Err(format!("{state:?}")),
+            Err(e) => Err(format!("POLICY_INVALID {e}")),
+        };
     fresh_verify_inner(input, Some(derived))
 }
 

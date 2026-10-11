@@ -31,7 +31,7 @@ impl BeaconSourceFeeTermsV1 {
         Ok(())
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BeaconSourceFeeTargetV1 {
     pub target: BeaconSourceTargetV1,
     pub sponsor: Digest,
@@ -114,6 +114,8 @@ impl KernelLedgerV1 {
             || terms.sponsor != expected.sponsor
             || terms.fee_per_source < expected.minimum_fee
             || terms.max_sources > expected.max_sources
+            || (expected.target.context.policy.is_paid_opt_in_source()
+                && terms.max_sources < expected.target.context.policy.work_count_k)
         {
             return Err("fee terms differ from the authenticated sponsor/minimum/cap/target".into());
         }
@@ -181,7 +183,7 @@ impl KernelLedgerV1 {
         if pending > funding.held {
             return Err("source fee escrow does not back the minimum receipt".into());
         }
-        self.opt_in_beacon_source(producer, job, seal, context, source_terms, out)?;
+        self.admit_beacon_source(producer, job, seal, context, source_terms, out)?;
         self.beacon_source_fees.get_mut(&context).expect("checked").allocated += 1;
         self.beacon_source_fee_promises
             .insert((context, producer), BeaconSourceFeePromiseV1 { terms_id: fee_terms, accepted_daa: self.daa, fee, outcome: None });
@@ -232,6 +234,14 @@ impl KernelLedgerV1 {
         for (context, f) in &self.beacon_source_fees {
             f.target.validate()?;
             f.terms.validate()?;
+            if f.target.context.policy.is_paid_opt_in_source()
+                && self
+                    .beacon_sources
+                    .range((*context, [0; 64])..=(*context, [255; 64]))
+                    .any(|(key, _)| !self.beacon_source_fee_promises.contains_key(key))
+            {
+                return Err("mandatory source fee promise missing".into());
+            }
             if *context != f.terms.source.context
                 || f.terms.source != f.target.terms
                 || f.funded_daa < f.target.context.commitment_position

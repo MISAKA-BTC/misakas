@@ -101,6 +101,10 @@ impl ImplementedV1 {
     pub fn randomness_opt_in_source() -> Digest {
         named_id("palw-work-beacon/opt-in-source/v4")
     }
+    /// Source opt-ins with mandatory signed prepaid fee backing. Independent of v4.
+    pub fn randomness_paid_opt_in_source() -> Digest {
+        named_id("palw-work-beacon/paid-opt-in-source/v5")
+    }
     /// **No randomness: a complete check.** Every input of the subject's (small, finite) domain and every artifact leaf is checked,
     /// so nothing is sampled and no beacon exists (the OPV bootstrap, `docs/design/palw/opv-beacon-bootstrap.md` §4).
     pub fn randomness_none_complete() -> Digest {
@@ -228,7 +232,11 @@ impl PostCommitChallengePolicyV1 {
     }
 
     pub fn is_opt_in_source(&self) -> bool {
-        self.randomness_source_policy_id == ImplementedV1::randomness_opt_in_source()
+        self.randomness_source_policy_id == ImplementedV1::randomness_opt_in_source() || self.is_paid_opt_in_source()
+    }
+
+    pub fn is_paid_opt_in_source(&self) -> bool {
+        self.randomness_source_policy_id == ImplementedV1::randomness_paid_opt_in_source()
     }
 
     /// Whether this is a complete-check policy (no randomness, the whole domain enumerated).
@@ -259,7 +267,9 @@ impl PostCommitChallengePolicyV1 {
         if (self.is_sealed_source() || self.is_opt_in_source()) && self.source_rule() != Some(SourceRuleV1::Distinct) {
             return Err(R::UnknownId("source_eligibility_policy_id"));
         }
-        let randomness = if self.is_opt_in_source() {
+        let randomness = if self.is_paid_opt_in_source() {
+            ImplementedV1::randomness_paid_opt_in_source()
+        } else if self.is_opt_in_source() {
             ImplementedV1::randomness_opt_in_source()
         } else if self.is_sealed_source() {
             ImplementedV1::randomness_sealed_source()
@@ -509,5 +519,14 @@ pub fn opt_in_source_policy_v4(k: u32, delay: u64, window: u64, depth: u64, repe
     PostCommitChallengePolicyV1 {
         randomness_source_policy_id: ImplementedV1::randomness_opt_in_source(),
         ..sealed_source_policy_v3(k, delay, window, depth, repetitions)
+    }
+}
+
+/// A distinct policy: every mixed source must have its own signed prepaid fee promise.
+/// Implementation does not approve its fee floor, source assumptions or soundness.
+pub fn paid_opt_in_source_policy_v5(k: u32, delay: u64, window: u64, depth: u64, repetitions: u32) -> PostCommitChallengePolicyV1 {
+    PostCommitChallengePolicyV1 {
+        randomness_source_policy_id: ImplementedV1::randomness_paid_opt_in_source(),
+        ..opt_in_source_policy_v4(k, delay, window, depth, repetitions)
     }
 }
