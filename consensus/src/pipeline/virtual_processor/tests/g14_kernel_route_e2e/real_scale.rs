@@ -1775,3 +1775,7 @@ async fn g14b_the_worst_case_pursuit_completes_on_the_node_inside_the_class_hori
 // Lane G14-R: the segmented pursuit resumes across a restart between `Respond` parts, a pruned import after a partial answer set, a
 // reorg that removes the demand and a full IBD mid-search: `real_scale/g14r_seg.rs`.
 mod g14r_seg;
+
+// Lane G14-K: kaspad's kernel-route verifier's segmented pipeline (the same `pursuit` functions the service calls), driven on the
+// canonical harness — a v4 class cannot be registered on kaspad's test network (derived OPV eligibility is codex's).
+mod g14k_service_core;

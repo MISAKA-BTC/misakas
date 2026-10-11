@@ -516,6 +516,92 @@ evidence; a drill pursuit needs (1)+(2) decided first.
 (reacquisition) remain codex's. The verifier's synced collateral is read from its own bond (the tests read the node's tip; a remote
 verifier reads op 202's bond row).
 
+## 2g. G14-K: the kernel route's public verifier inside kaspad's service (2026-10-11, lane G14-K, branch `g14/k-kernel-service`)
+
+Base: integration `3076077f9` (G14-R merged). Overall G14 stays **FAIL / incomplete**. Nothing is armed or armable: the kernel route
+sits behind `palw_probabilistic_constraints_v1` (refused by validation at every height, asserted in the tests); no consensus code
+(only two new test modules under `consensus/src/pipeline/virtual_processor/tests/`), wire type, tag, table, RPC op or registry
+number changed; no testnet-12 id moves. The court-lane round `u32::MAX − 13` is node-local bookkeeping, not a registry number. Levels as in §2e: **V-node(svc)** = kaspad's
+actual `PalwPanelService` on a node whose database was created after the claims and validated every public block, its own replay of
+the registered model, its carriers through the PQ mempool, the production template and the real block fold, outcomes read back from
+consensus; **V-node(harness)** = the canonical consensus harness (mempool → template → fold), driven here through EXACTLY the
+library functions the service calls.
+
+**What was built (implemented).**
+- `kaspad/src/palw_kernel_verifier.rs` (new, a `PalwPanelService` lane after the LG14-A filer): once a DAA it reads the route through
+  the node's read API (`ConsensusApi::palw_kernel_route_v1`, op 211's source), rebuilds the ledger as the fold will see it
+  (`pursuit::kernel_consumer_ledger_v1`: G14-S's court scope past `palw_provider_court_v1` and the verifier-pay terms injected, so the
+  16-unit / clear-budget / 4-dismissal limits are in every dry run), selects every open claim (live, or Final inside liability) not
+  produced by its own bond whose class's REGISTERED commitments one of its models opens to, re-executes, and drives
+  `misaka_palw_remote::pursuit` (plan → sends). Carriers are signed deterministically (the service's signer is FIPS 204 `rnd = 0^32`
+  = `PURSUIT_DETERMINISTIC_RND_V1`) and queued on the court lane, which funds each from the virtual UTXO set at the object's own
+  minimum (`ensure_carrier_funding_v2`: mature, unlocked, free, chained through its change) and submits it to the mempool. Items are
+  dated by the planner's `by_daa` (pre-Final deadline, else the liability horizon), so the lane's EDF carries the pursuit nearest its
+  horizon first. Nothing persists: an object on chain is never re-planned, one in this node's mempool (a restart) is never queued twice,
+  one queued is re-offered only after 6 DAA.
+- The model: `--palw-kernel-model=<file>` (repeatable; `PalwPanelConfig::kernel_models`), a `PALWKM01` file (Borsh tensors). ADR-0177
+  D7: the verifier holds the registered model; it is used for a class only when it opens to the class's registered
+  `ParamCommitmentsV1` root (v1/v2 `of`, v4/v5 `of_v3`; a memory class's rule program). A model that does not, or a class it cannot
+  check, is logged once and never filed against.
+- `misaka-palw-remote::pursuit` (extended, nothing rewritten): `plan_kernel_pursuit_on_v1` (the planner over a caller-rebuilt ledger;
+  `plan_kernel_pursuit_v1` now delegates), `kernel_consumer_ledger_v1`, `kernel_check_program_v1` (v1/v2 and pipelines:
+  `OutsiderV1::check_computation`, no producer value read, nothing demanded of an honest producer), `kernel_check_segmented_v1` (own
+  replay + adaptive search against block-served positions), `kernel_check_typed_v1` (typed memory, `SpecOutsiderV1::check_computation`),
+  `kernel_class_model_root_v1`, `kernel_reassemble_objects_v1` (generic `ObjectChunk` and tag-113 lanes, any order, once),
+  `kernel_tiled_prompt_v1` (prompt tiles authenticated against the job's root), `kernel_segmented_tokens_v1`, `KernelBlockMaterialV1`
+  (`Respond` parts → assembled, authenticated positions + hiding leaves), `kernel_step_sends_v1`, `KERNEL_SERVICE_CHUNK_CAP_V1`.
+
+**How the kaspad test registers a kernel class without a test hook.** kaspad's tests cannot reach consensus's `cfg(test)` seams
+(attestation, OPV eligibility), and none was added. The F1 class goes through the PRODUCTION onboarding path: the V2 IR class
+(`ClassRegisteredTirV1`, the SDK builder over `palw_v2_registration_terms`), `ArtifactBoundV1` (bonded), maturity (40 DAA), then
+`RegisterClass` on the kernel route over the root the matured binding attests (`onboarding_attested_roots_v1`). That works for a
+Panel-licensed K2-TIR v1/v2 class. A v4/v5 or typed class needs OPV, whose eligibility is DERIVED (conformance passed under a
+Panel-independent beacon — codex's lane); that is why those families are V-node(harness) below.
+
+**Per family × case (this branch).**
+
+| Family | Case | Level | Outcome | Test |
+|---|---|---|---|---|
+| F1 K2-TIR-v2 (`wide128`, Panel-licensed, every interim seat signing a passing receipt) | embedding gather element, wide I128 MatMul accumulator element, clamp result — **pre-Final** | **V-node(svc)** | convicted before Final by the service (one seal, one whole filing each); producer's real bond slashed `claim_collateral`; no seat charged | `kernel::g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_the_honest_twin_finalizes` |
+| 〃 | the same three lies **post-Final** (node and service started after Final) | **V-node(svc)** | convicted inside the liability horizon | 〃 |
+| 〃 | honest twin (same class, same Panel collusion) | **V-node(svc)** | nothing filed against it; reaches Final (its reward paid from the poster's escrow) | 〃 |
+| 〃 | service restarted mid-pursuit (after its seal is on chain; ten blocks with no service; same state dir) | **V-node(svc)** | the new process re-derives: no second seal (the seal kept its DAA), one filing, conviction before Final | `kernel::g14k_the_kernel_service_resumes_after_a_restart_without_a_second_seal` |
+| 〃 | quantization, decode, garbage | V-node(harness) (G14C/G14-V; the service runs the same `check_computation`) | — | §2a, §2e |
+| 〃 OPV mode | gather / MatMul / clamp | V-node(harness) only (§2e) | — | an OPV class cannot be registered on kaspad's test network without the derived eligibility |
+| F1 K2-TIR-v1 descriptor | — | **open**: no v1-descriptor class was run (the canonical class is v2) | | |
+| F3 K2-TIR-v4 segmented (`wide128` @8,192, OPV) | lie at position 1,200: the service core rebuilds the prompt from the chain's tiles, demands (adaptive search), reads the producer's `Respond` parts back from the blocks, localizes, seals, files | **V-node(harness)** | convicted; an honest twin of the same shape: nothing sent | `real_scale::g14k_service_core::g14k_the_service_core_convicts_a_segmented_lie_via_demands_and_respond_chunks_and_ignores_the_honest_twin` |
+| 〃 | withheld `Respond` (producer silent) | **V-node(harness)** | `Done(Defaulted)` at the counted deadline: `Unavailable { producer_defaulted }`, producer charged, demand bonds returned, never a conviction | `real_scale::g14k_service_core::g14k_the_service_core_takes_a_withheld_segmented_answer_to_the_da_default` |
+| 〃 | the service's own block walk (`walk_accepted_lifecycle_objects_v1` → reassembly) | implemented; **not executed** at V-node(svc) (no v4 class on kaspad's network) | | |
+| F4 v5 encoders / heads | — | same code path as F3 (`kernel_check_segmented_v1`); **not run** here | | |
+| F6 typed roots — memory | step lie pre-Final (pre-state from the chain's carried post-state) and post-Final (line rolls back); honest claim left alone | **V-node(harness)** | see the test result below | `r4x_typed_roots_e2e::g14k::g14k_the_service_core_convicts_memory_step_lies_pre_and_post_final_and_leaves_an_honest_claim_alone` |
+| F6 retrieval / composite, F2 pipelines | — | **not checked by the service** (more than one model, or a snapshot copy); reported once per claim, never filed | | |
+
+**Tests and results (2026-10-11; `buildslot.sh cargo … --offline`, line-tables profile; test binaries run directly).**
+- `misaka-palw-remote --lib pursuit`: **4 PASS** (2 G14-R + 2 new: both chunk lanes reassemble in any order once; each step sends
+  exactly its objects).
+- `kaspad --lib g14k_` (the actual service): **2 PASS** (283 s single-threaded; the main test: class through onboarding at DAA 44,
+  six convictions between DAA 122 and 134 — the three pre-Final ones first, by EDF — honest twin Final at DAA 170; the restart test:
+  seal at DAA 50, conviction at 56 after the restart). An earlier run of the same code FAILED one assertion of the test itself (it
+  counted the poster's escrow payment of the honest twin's Final reward as a seat charge); the assertion was corrected, not the service.
+- `kaspa-consensus --lib g14k_ g14r_ t12_a2u --skip socket`: **17 PASS** (g14k service core 2, G14-R 12 — the planner now delegates —,
+  A2U 3). 
+- `kaspad --lib` without the two service-e2e modules (`palw_service_public_e2e`, `palw_service_violations_e2e`, slow and untouched): **601 PASS, 3 FAIL**, the three in files this lane did not touch (pre-existing at the base, not re-run there): `palw_backends::…class_resolution_is_not_reachable_from_the_block_processing_path` (consensus/Cargo.toml already names `misaka-palw-sdk`), `palw_operator_da::…the_tick_wires_the_lane_before_the_carriers_and_behind_no_flag` (its source-text needle no longer matches the formatted line), `workspace_default_members::…` (`misaka-palw-panel` not in the default members).
+
+**Open (honest).**
+1. **V-node(svc) only for F1 Panel-licensed v2.** v4/v5, OPV-mode v1/v2 and typed classes cannot be registered on kaspad's test
+   network until a class can be made OPV-eligible there through the derived rule (codex's registration/eligibility lane). Their
+   service path is the same library code, verified at V-node(harness); the service's own accepted-block walk is not executed.
+2. **Not wired:** pipelines (F2), composites and retrieval snapshots (more than one model / a snapshot copy), a filing that needs the
+   tag-113 chunk lane at V-node(svc) (the canonical filing fits one carrier; chunking is V-unit + G14-R's V-node harness).
+3. **The synced collateral is approximate**: the service reads its bond's collateral (op 202's row) less its route chunk deposits,
+   not every non-kernel reservation the fold nets out; a bond also holding legacy reservations can see a dry run pass that the fold
+   refuses (the carrier fee is lost, nothing else).
+4. **Throughput:** the court lane carries one carrier in flight per bond (`MAX_INFLIGHT_CARRIERS = 1`); six pursuits took 12 DAA here.
+   Under a coalition that fills blocks there is still no reserved byte lane (G14-B's UNKNOWN stands).
+5. **Socket RPC**: the service reads through the in-process API (op 211's source), not a socket; G14-R's socket evidence is for the
+   harness verifier.
+6. **Live drill**: not run, for G14-R's reasons (no drill arming for the kernel route; no seat-collusion knob).
+
 ## 3. Family matrices (milestone baseline)
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
@@ -1050,3 +1136,4 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   (load average 10–15; reached DAA ~2,036 of the 2,231 default) and PASSED (objective DA default at 2,236) with the deadline raised
   locally to 1,500 s — the raise is not committed; the test's wall-clock bound is load-sensitive.
 * 2026-10-11 — G14-R (§2d): recovery and the external path. `misaka-palw-remote::pursuit` (kernel pursuit planner rebuilt from public rows, dry-run filings, resume bound, deterministic carriers); kernel ledger: identical proof re-seal is a no-op (dormant route); V-node recovery cases for K2-TIR v2 (Panel/OPV), K2-TIR-v4 and the legacy public filer (restart, reorg + DAG merge, full IBD, pruned import, deadline); a real gRPC/wRPC socket in front of a test node (ops 202, 204–206, 210–212, 231, submitTransaction) with disconnect/reconnect and node swap; the actual service resumes after a restart and on a fresh database. Consensus 14 + 60 regression PASS, kernel 286 PASS, kaspad service 1 PASS (+16 unit); codex's fresh-service test times out at 360 s on this host (UNKNOWN). Live drill not run (infeasible: no drill arming for the public filer / kernel route, no seat-collusion knob).
+* 2026-10-11 — G14-K (§2g): the kernel route's public verifier inside kaspad's `PalwPanelService` (`palw_kernel_verifier`, `--palw-kernel-model`), driving `misaka-palw-remote::pursuit` (extended: consumer ledger, program / segmented / typed checks, block material, step sends). V-node(svc) for K2-TIR-v2 Panel-licensed with every seat colluding: gather / MatMul / clamp convicted pre- and post-Final, honest twin Final, restart mid-pursuit without a second seal (kaspad 2 PASS); the class registered through the production onboarding path (no test hook). v4 segmented (demand + Respond → conviction; withheld → DA default) and typed memory at V-node(harness) through the same library functions. No consensus change, nothing armed.
