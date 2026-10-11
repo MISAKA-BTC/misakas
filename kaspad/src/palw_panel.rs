@@ -92,9 +92,6 @@ mod palw_operator_da;
 #[path = "palw_fraud_filer.rs"]
 mod palw_fraud_filer;
 
-#[path = "palw_filer_tokenizer.rs"]
-mod palw_filer_tokenizer;
-
 /// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
 /// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
 /// reads the replay runner and the court queue's seams).

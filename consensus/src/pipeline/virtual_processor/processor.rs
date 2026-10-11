@@ -15732,6 +15732,9 @@ impl VirtualStateProcessor {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_immutable_active: self.palw_model_immutable_v1_at(daa_score),
             class_semantics_active: self.palw_class_semantics_v1.is_some_and(|f| f.is_active(daa_score)),
+            staged_public_court: self.palw_staged_public_court_v1
+                .filter(|f| f.is_active(daa_score))
+                .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
             model_classes_registered_in_block: Default::default(),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
