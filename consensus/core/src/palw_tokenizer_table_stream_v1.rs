@@ -160,6 +160,16 @@ impl PalwTokenizerTableStreamV1 {
     pub fn tokenizer_offset(&self) -> u64 {
         self.parser.offset()
     }
+    pub fn pending_key(&self) -> Option<(u64, Hash64)> {
+        self.parser.pending_key()
+    }
+    pub fn key_set_root(&self) -> Hash64 {
+        self.parser.key_set_root()
+    }
+    pub fn key_events(&self) -> u64 {
+        self.parser.key_events()
+    }
+
     pub fn rendering_offset(&self) -> u32 {
         self.table.offset()
     }
@@ -254,6 +264,81 @@ mod tests {
             &opening.opening,
         )
         .unwrap()
+    }
+    fn derive(raw: &[u8], table_bytes: Option<&[u8]>, bound: u64) -> bool {
+        use crate::palw_tokenizer_json_stream_v1::tests::Book;
+        let context = Hash64::from_u64_word(18);
+        let mut court = PalwTokenizerTableStreamV1 {
+            context,
+            signed_key_bound: bound,
+            parser: PalwTokenizerJsonStreamV1::new(
+                context,
+                crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),
+                raw.len() as u64,
+                0,
+            ),
+            table: digest_stream(table_bytes),
+        };
+        let mut book = Book::new();
+        while court.tokenizer_offset() < raw.len() as u64 || court.pending_key().is_some() {
+            if let Some((namespace, key)) = court.pending_key() {
+                let proof = book.proof(namespace, key);
+                let compact = PalwJsonKeyCompactProofV1::compress(&proof).unwrap();
+                let mut corrupt = compact.clone();
+                corrupt.siblings.push(Hash64::default());
+                let before = court.clone();
+                assert!(
+                    court
+                        .packet(
+                            context,
+                            &PalwTokenizerStreamPacketV1 { offset: court.tokenizer_offset(), bytes: vec![], proofs: vec![corrupt] }
+                        )
+                        .is_err()
+                );
+                assert_eq!(court, before);
+                court
+                    .packet(
+                        context,
+                        &PalwTokenizerStreamPacketV1 { offset: court.tokenizer_offset(), bytes: vec![], proofs: vec![compact] },
+                    )
+                    .unwrap();
+                book.insert(namespace, key);
+            } else {
+                let offset = court.tokenizer_offset();
+                court
+                    .packet(
+                        context,
+                        &PalwTokenizerStreamPacketV1 {
+                            offset,
+                            bytes: raw[offset as usize..(offset as usize + 1).min(raw.len())].to_vec(),
+                            proofs: vec![],
+                        },
+                    )
+                    .unwrap();
+            }
+            let wire = borsh::to_vec(&court).unwrap();
+            assert!(wire.len() < 70_000);
+            court = borsh::from_slice(&wire).unwrap();
+            assert!(court.finish().is_err());
+        }
+        court.seal_tokenizer(context).unwrap();
+        if let Some(bytes) = table_bytes {
+            for part in bytes.chunks(65536) {
+                court.rendering_part(context, court.rendering_offset(), part).unwrap();
+            }
+        }
+        court.finish().unwrap()
+    }
+    #[test]
+    fn raw_json_and_original_table_authenticate_before_honest_mismatch_duplicate_or_overrun() {
+        let raw = br#"{"model":{"vocab":{"A":0,"B":1}},"added_tokens":[]}"#;
+        assert!(!derive(raw, Some(b"A"), 512));
+        assert!(derive(raw, Some(b"X"), 512));
+        assert!(derive(br#"{"model":{"vocab":{"A":0,"A":1}}}"#, Some(b"A"), 512));
+        // B=0 cannot skip the file hash: this actual first key event violates the signed contract,
+        // then the same full original raw hash must still complete before objective overrun.
+        assert!(derive(raw, Some(b"A"), 0));
+        assert!(!derive(b"{}", Some(b""), 0));
     }
     #[test]
     fn original_table_leaf_and_rendering_digest_match_at_restart_boundaries() {
