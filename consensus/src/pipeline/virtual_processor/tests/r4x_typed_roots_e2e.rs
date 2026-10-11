@@ -811,3 +811,6 @@ impl DebugName for ClaimStateV1 {
 mod da16_scope;
 // Lane G14C (GAP-50/51): typed classes eligible only through their components; node recovery of the typed rows and the line.
 mod g14c;
+// Lane G14-K: the kernel service's typed pipeline (the same `pursuit` functions kaspad's verifier calls) — memory step lies pre- and
+// post-Final, an honest claim left alone.
+mod g14k;

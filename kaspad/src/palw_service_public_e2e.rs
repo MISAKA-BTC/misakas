@@ -493,6 +493,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         improve_tamper: None,
         retention_dir: dir.join("empty-retention"),
         evidence_provider_dirs: vec![],
+        kernel_models: vec![],
         register_class: None,
         chain_classes: false,
         register_bond: false,
@@ -2001,3 +2002,8 @@ async fn fresh_public_service(case: PublicCase) {
 // Lane G14-R: the actual service resumes after a restart and on a fresh database, without a second reservation or a duplicate demand.
 #[path = "palw_service_resume_e2e.rs"]
 mod resume;
+
+// Lane G14-K: the kernel route's public verifier as the actual service — covered lies convicted pre- and post-Final, an honest twin
+// Final, and a restart mid-pursuit resumed without a second seal.
+#[path = "palw_service_kernel_e2e.rs"]
+mod kernel;

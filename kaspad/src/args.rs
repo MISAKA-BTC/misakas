@@ -243,6 +243,9 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// **Lane G14-K: registered kernel models** (`--palw-kernel-model`, repeatable): `PALWKM01` files the node's kernel-route public
+    /// verifier re-executes claims with (ADR-0177 D7). Each is used only for a class whose REGISTERED parameter commitments it opens to.
+    pub palw_kernel_model: Vec<String>,
     /// **Token tables for constrained claims** (ADR-0096 Decision 8; repeatable): files a class's worker wrote with
     /// `--emit-token-table`. A seat can judge a decode-constrained claim only through the table the claim names (by Merkle root),
     /// and abstains (`Unverifiable`) for one whose table it does not hold. Each file is decoded, bounded and its root derived on
@@ -871,6 +874,7 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_kernel_model: Vec::new(),
             palw_token_table: Vec::new(),
             palw_class_cache_bytes: 0,
             palw_class_resident_bytes: None,
@@ -2859,6 +2863,19 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-kernel-model")
+                .long("palw-kernel-model")
+                .env("KASPAD_PALW_KERNEL_MODEL")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW (G14-K): a registered kernel model file (PALWKM01, repeatable) the kernel-route public verifier \
+                     re-executes claims with. Used only for a class whose registered parameter commitments it opens to; \
+                     needs --palw-fee-outpoint and a bond. Inert unless the kernel route's fence is in force.",
+                ),
+        )
+        .arg(
             Arg::new("palw-class-artifact")
                 .long("palw-class-artifact")
                 .env("KASPAD_PALW_CLASS_ARTIFACT")
@@ -3619,6 +3636,10 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_kernel_model: m
+                .get_many::<String>("palw-kernel-model")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_kernel_model),
             palw_token_table: m
                 .get_many::<String>("palw-token-table")
                 .map(|v| v.cloned().collect())
