@@ -22624,20 +22624,63 @@ impl VirtualStateProcessor {
             snapshot.window.len(),
             snapshot.reserve_balance
         );
-        let mut batch = WriteBatch::default();
-        {
-            let mut bonds_write = self.stake_bonds_store.write();
-            for rec in &snapshot.bonds {
-                bonds_write.insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec.clone())).unwrap();
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("legacy overlay {where_}: {e}"))
+        };
+        let mismatch = |what: String| PruningImportError::ImportedOverlayExistingStateMismatch(pruning_point, what);
+        let anchor_daa = self.headers_store.get_daa_score(pruning_point)
+            .map_err(|e| unavailable("anchor header", e))?;
+        let mut canonical = snapshot;
+        canonical.canonicalize();
+        let mut bonds_write = self.stake_bonds_store.write();
+        let mut overlay_write = self.pruning_overlay_snapshot_store.write();
+        // Verify ALL existing monetary rows before staging any write. A retry is
+        // reusable state, not an overwrite of an owner's exit/slashing history.
+        let mut new_bonds = Vec::new();
+        let mut seen_bonds = std::collections::BTreeSet::new();
+        for rec in &canonical.bonds {
+            if !seen_bonds.insert(rec.bond_outpoint) {
+                return Err(mismatch(format!("duplicate bond {}", rec.bond_outpoint)));
+            }
+            match bonds_write.get(&rec.bond_outpoint).optional()
+                .map_err(|e| unavailable("bond row", e))? {
+                None => new_bonds.push(rec.clone()),
+                Some(existing) => {
+                    // A historic snapshot omits later canonical mutations; keep
+                    // those mutations when the as-of-anchor facts agree.
+                    let mut at_anchor = (*existing).clone();
+                    if at_anchor.slashed_at_daa_score.is_some_and(|d| d > anchor_daa) {
+                        at_anchor.slashed_at_daa_score = None;
+                    }
+                    if at_anchor.unbond_request_daa_score.is_some_and(|d| d > anchor_daa) {
+                        at_anchor.unbond_request_daa_score = None;
+                    }
+                    at_anchor.status = effective_bond_status(&at_anchor, anchor_daa);
+                    if at_anchor != *rec {
+                        return Err(mismatch(format!("bond {}", rec.bond_outpoint)));
+                    }
+                }
             }
         }
-        if snapshot.reserve_balance > 0 {
-            self.reserve_balance_store.insert_batch(&mut batch, pruning_point, snapshot.reserve_balance).unwrap();
+        let insert_reserve = match self.reserve_balance_store.get(pruning_point).optional()
+            .map_err(|e| unavailable("reserve row", e))? {
+            None => canonical.reserve_balance > 0,
+            Some(existing) if existing == canonical.reserve_balance => false,
+            Some(_) => return Err(mismatch("reserve balance".into())),
+        };
+        if let Some(existing) = overlay_write.get().optional().map_err(|e| unavailable("snapshot", e))?
+            && existing.pruning_point == pruning_point
+            && existing.snapshot.commitment_preimage() != canonical.commitment_preimage() {
+            return Err(mismatch("snapshot".into()));
         }
-        self.pruning_overlay_snapshot_store
-            .write()
-            .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
-            .unwrap();
+        let mut batch = WriteBatch::default();
+        for rec in new_bonds {
+            bonds_write.insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec)).unwrap();
+        }
+        if insert_reserve {
+            self.reserve_balance_store.insert_batch(&mut batch, pruning_point, canonical.reserve_balance).unwrap();
+        }
+        overlay_write.set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
         // Legacy monetary/bond rights are another sidecar of the same import.
         // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
         let mut pruning_meta_write = self.pruning_meta_stores.write();

@@ -129,6 +129,9 @@ pub enum PruningImportError {
     #[error("imported overlay snapshot for pruning point {0} has commitment {1} but the L1 header commits {2}")]
     ImportedOverlayCommitmentMismatch(BlockHash, Hash64, Hash64),
 
+    #[error("existing legacy overlay {1} for pruning point {0} disagrees with the verified imported state")]
+    ImportedOverlayExistingStateMismatch(BlockHash, String),
+
     /// The PALW state a peer served for a pruning point does not rebuild to the root the pruning
     /// point's own header commits. Refused BEFORE the write: forged bonds are block-production
     /// rights and forged claims are `safe_weight`, so detecting this after a durable write would

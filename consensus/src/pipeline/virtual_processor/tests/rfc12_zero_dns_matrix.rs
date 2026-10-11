@@ -1960,8 +1960,13 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     let bond_block = rig.take(e, "the attempt carrying the stake bond").await;
     assert!(!rig.config.params.palw_dns_retired_at(bond_block.header.daa_score), "the bond is created below the fence");
     let b1 = rig.beat();
-    rig.take(b1, "b1").await;
+    let overlay_anchor = rig.take(b1, "b1").await;
     assert!(rig.api().get_stake_bond(bond_outpoint).is_some(), "the bond is on record");
+    let historic_overlay = {
+        let vp = rig.vp();
+        vp.compute_overlay_snapshot(overlay_anchor.header.hash, &vp.initial_active_bond_view())
+    };
+    assert!(historic_overlay.bonds.iter().any(|r| r.bond_outpoint == bond_outpoint), "the historical snapshot retains the bond");
 
     let rest = TransactionOutpoint::new(split.id(), 1);
     let unbond = dns_harness::funded_signed_unbond_tx(
@@ -1988,6 +1993,37 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
         "Unbonding, not slashed or confiscated: {:?}",
         record.status
     );
+
+    // The owner's later legal exit must survive an authenticated historic overlay
+    // retry. The selected child commits the real snapshot; no peer-supplied root
+    // or synthetic money is treated as authoritative here.
+    let vp = rig.vp();
+    vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).expect("verified historic import");
+    assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record), "historic import cannot erase the later exit");
+    vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).expect("same verified import is idempotent");
+    assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record));
+    assert_eq!(
+        vp.reserve_balance_store.get(overlay_anchor.header.hash).unwrap_or(0),
+        historic_overlay.reserve_balance,
+        "a retry reuses the append-once reserve row without duplication"
+    );
+    // This fixture retains its existing verified UTXOs/PALW/EVM. Restoring the
+    // completion marker is a trusted test seam, not evidence of a P2P join.
+    rig.api().set_pruning_utxoset_stable_flag(true);
+    let mut bad_bond = record.clone();
+    bad_bond.amount = bad_bond.amount.checked_add(1).unwrap();
+    let mut corrupt = rocksdb::WriteBatch::default();
+    vp.stake_bonds_store.write().insert_batch(&mut corrupt, bond_outpoint, std::sync::Arc::new(bad_bond.clone())).unwrap();
+    vp.db.write(corrupt).unwrap();
+    let before_snapshot = vp.pruning_point_overlay_snapshot().unwrap();
+    let err = vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).unwrap_err();
+    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedOverlayExistingStateMismatch(_, _)), "conflicting money is refused by name: {err}");
+    assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&bad_bond), "refusal writes no bond row");
+    assert_eq!(vp.pruning_point_overlay_snapshot().unwrap().snapshot, before_snapshot.snapshot, "refusal writes no snapshot");
+    assert!(rig.api().is_pruning_utxoset_stable(), "a refused import cannot modify the completion marker");
+    let mut restore = rocksdb::WriteBatch::default();
+    vp.stake_bonds_store.write().insert_batch(&mut restore, bond_outpoint, std::sync::Arc::new(record.clone())).unwrap();
+    vp.db.write(restore).unwrap();
 
     // A NEW bond cannot be created: funded from another card's float.
     let (spare_out, spare_entry) = rig.wallets.remove(&spare).expect("a spare float");
