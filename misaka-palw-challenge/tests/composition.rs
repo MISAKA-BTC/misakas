@@ -41,6 +41,24 @@ fn rows_a_b_reproduce_the_kernels_derived_bounds_for_9b_8k() {
 }
 
 #[test]
+fn enormous_instance_and_grinding_budgets_cannot_wrap_into_security() {
+    let calculate = |families: &[CheckFamilyV1], adversary: &AdversaryBudgetV1| {
+        composed_false_accept_bits_v1(families, InstanceCompositionV1::UnionBound, Some(256), CoverageV1::Complete, adversary)
+    };
+    let enormous_instances = [CheckFamilyV1 { per_repetition_bits: 200, repetitions: 1, instances: u128::MAX }; 2];
+    assert_eq!(calculate(&enormous_instances, &AdversaryBudgetV1::NONE), Err(CompositionRefusalV1::Unrepresentable));
+    let enormous_grinding =
+        AdversaryBudgetV1 { beacons_per_attempt: u32::MAX, grinding_bits_per_beacon: u32::MAX, ..AdversaryBudgetV1::NONE };
+    assert_eq!(calculate(&fam(200, 1, 1), &enormous_grinding), Err(CompositionRefusalV1::Unrepresentable));
+    let enormous_repetitions = fam(u32::MAX, u32::MAX, 1);
+    assert_eq!(calculate(&enormous_repetitions, &AdversaryBudgetV1::NONE), Err(CompositionRefusalV1::Unrepresentable));
+    // A representable but immense budget must remain a loss, including at the
+    // signed boundary; it must never become a positive security contribution.
+    let boundary = AdversaryBudgetV1 { beacons_per_attempt: 1 << 31, grinding_bits_per_beacon: u32::MAX, ..AdversaryBudgetV1::NONE };
+    assert!(calculate(&fam(200, 1, 1), &boundary).unwrap().effective_bits.unwrap() < 0);
+}
+
+#[test]
 fn rows_c_to_f_charge_retries_grinding_and_statements() {
     // C: the OPV-BOOT interim adversary (2 + 10 bits).
     let c = whole_claim(&fam(B_M89, 2, R_9B_8K), opv_boot_interim());
