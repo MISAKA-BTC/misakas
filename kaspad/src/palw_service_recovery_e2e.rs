@@ -182,7 +182,8 @@ impl RecoveryRun {
         let notification_root = chain.tc.notification_root();
         let producer = launch(producer_config.clone(), manager.clone(), flow.clone(), config.clone(), notification_root.clone()).await;
         assert_eq!(producer.service.bond, Some(chain.bonds[0].0));
-        let verifier_bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(verifier_config.bond.parse().unwrap());
+        let verifier_bond =
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(crate::palw_producer::parse_outpoint(&verifier_config.bond).unwrap());
         Self {
             _directory: directory,
             producer,
