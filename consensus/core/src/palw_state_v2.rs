@@ -79115,7 +79115,7 @@ mod staged_court_state_tests_v1 {
             .claim_terms(100, 4, 4099).unwrap();
         let key = PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(107));
         let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms, producer: PALW_BOND_KEY_V2_MIN, panel: BTreeSet::new() })) };
-        assert_eq!(borsh::to_vec(&entry).unwrap()[0], 207);
+        assert_eq!(borsh::to_vec(&entry).unwrap()[0], 210);
         apply_delta_entry(&mut state, &entry, false).unwrap();
         assert_ne!(state.state_root(), empty_root);
         let wire = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
