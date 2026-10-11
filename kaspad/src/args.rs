@@ -4024,7 +4024,7 @@ fn arg_match_named_flag(m: &clap::ArgMatches, arg_id: &str) -> Option<bool> {
 /// folded; an unparsable string or two different blocks at one DAA score is an error.
 /// Parse local public-verifier targets before starting its service. Never truncate a request.
 pub fn parse_palw_public_claims_v1(values: &[String]) -> Result<Vec<kaspa_hashes::Hash64>, String> {
-    let limit = kaspa_consensus_core::palw_legacy_public_filer_fold_v1::PALW_FILER_EXPLICIT_TARGETS_V1;
+    let limit = kaspa_consensus_core::palw_state_v2::PALW_FILER_EXPLICIT_TARGETS_V1;
     if values.len() > limit {
         return Err(format!("at most {limit} exact public claim identifiers are allowed"));
     }

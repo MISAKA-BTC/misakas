@@ -105,7 +105,7 @@ fn held_raw_file_checks_all_renderings_and_preserves_a_normal_objective_proof() 
                 .unwrap();
                 assert!(matches!(
                     built.object,
-                    kaspa_consensus_core::palw_v2::PalwConsensusObjectV2::ObjectiveOffence {
+                    kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
                         kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted,
                         ..
                     }

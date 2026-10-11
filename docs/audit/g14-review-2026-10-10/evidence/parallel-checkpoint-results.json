@@ -39,7 +39,37 @@
       "source": "9036fd6c3",
       "result": "build FAIL: one staged shape error conversion",
       "sha256": "c29da66a14070960d9eef1ab9031f6995e7663744bdf47df32e25c1ff17e1a9e"
+    },
+    {
+      "name": "node-build-00dda",
+      "source": "00dda3e80",
+      "result": "build FAIL: three missing processor fence accessor calls",
+      "sha256": "f060a2137d697d730dbdb455ef9b28089ca0037c6bae9d192f1475545f2e1ef7"
+    },
+    {
+      "name": "node-build-8d355",
+      "source": "8d3556295",
+      "result": "build FAIL: seven integration path/type/fixture errors",
+      "sha256": "472bb8e6c0871fdc5222f19138803686a6ec5c9a8095f027d6012bc3d21f820f"
+    },
+    {
+      "name": "node-build-eb6a",
+      "source": "eb6a99662",
+      "result": "build FAIL: one private explicit target constant module path",
+      "sha256": "4d6dc8567cd0212daa852071030784a846f3decaa27e418ab686100bdc8362d4"
+    },
+    {
+      "name": "node-build-rendering-wire",
+      "source": "39f79c807",
+      "result": "build FAIL: one unqualified Hash64 type",
+      "sha256": "57aa8f4ecd737521f8a5ad38bda2e5ce75f2ed77d412bc96239d28b1e4d9efee"
+    },
+    {
+      "name": "node-build-72ce",
+      "source": "72ce1c4aaf411110ee9f44e4f1d17acdedffb723",
+      "result": "build FAIL: two public module path errors in CLI/tokenizer tests",
+      "sha256": "a7d51a974650a3958014e1b6e5e367c56e8d03d2f6303ccd8bd024fc7b7bdf84"
     }
   ],
-  "qualification": "Core prefix synthetic courts and exact162/163 pins passed on 1d32cfa5b; four core failures remain rerun-pending after source repairs. New staged court build failed on9036fd6c3; conversion repair74463ac32 is not compiled yet. Actual registered tiled service round2 has0PASS/4FAIL; fairness repairs are not runtime verified. Latest native prefix/resource/tokenizer integration and full G14 activation remain pending/refused."
+  "qualification": "Latest node build on 72ce1c4aaf411110ee9f44e4f1d17acdedffb723 failed on two public module paths; source repairs await compilation. Earlier core/kernel PASS results apply only to their recorded sources. Four repaired core failures require rerun. Actual registered tiled service round2 remains 0 PASS / 4 FAIL; fairness fixes and new native/tokenizer/recovery/staged integration await execution. Full G14 guarantee and activation remain pending/refused."
 }
