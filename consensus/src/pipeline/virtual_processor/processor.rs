@@ -16144,6 +16144,8 @@ impl VirtualStateProcessor {
                     .palw_provider_court_at(daa_score)
                     .then(|| self.palw_provider_court_v1.map(|f| f.daa_score()))
                     .flatten(),
+                commitment_scope: self.palw_court_commitment_scope_v1_fence()
+                    .filter(|at| at.is_active(daa_score)).map(|at| at.daa_score()),
                 // G14R round 3: M*-49 / O2's dormant fence (refused when armed; a test arms it through the Config seam).
                 verifier_pay: self
                     .palw_verifier_pay_v1

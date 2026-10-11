@@ -70,6 +70,10 @@ pub const PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1: u8 = 34;
 /// The block's adjudication budget already spent by earlier objects of the SAME chain block: `[] → (blue score, adjudications, court work)`.
 /// Rewritten by each charged object so the budget bounds the block however the fold is split into single-object rehearsals.
 pub const PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1: u8 = 35;
+/// `[] -> u64`: the independently versioned commitment-only court-scope activation.
+/// Kept in the authenticated auxiliary root so public reads, snapshots and reorgs use
+/// the same response contract as the block fold. Absent below the fence.
+pub const PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1: u8 = 46;
 
 /// **C4 F-C4R3-03: the route's OWN chunk lane** — `borsh((opener bond, group)) → PalwKernelChunkGroupV1` (the lead's allocation of
 /// 2026-10-08: aux tables 41–42, riding the route's `KernelRouteRow` deltas, tail `0xEC` and root block). A prosecution object larger
@@ -162,6 +166,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,
+    /// Independently activated model-dependent response omission for new program/pipeline
+    /// claims. Historical claims keep their original response contract.
+    pub commitment_scope: Option<u64>,
     /// **G14R round 3: `Params::palw_verifier_pay_v1`'s activation DAA** (`None` on every network): the kernel ledger's M\*-49 and O2
     /// terms (`crate::palw_verifier_pay_v1::palw_verifier_pay_interim_policy_v1`), injected at every load — not in the header or root.
     pub verifier_pay: Option<u64>,
@@ -439,15 +446,22 @@ impl PalwKernelRouteStateV1 {
     /// row decoded, no program decoded, no gate recomputed), else rebuilt from the rows. In a debug build the cache is checked against
     /// the rows every time, so a write path that forgot to clear it fails the tests instead of a node.
     pub fn ledger(&self) -> Result<KernelLedgerV1, String> {
+        let scoped = |mut ledger: KernelLedgerV1| -> Result<KernelLedgerV1, String> {
+            ledger.commitment_scope_from_daa = match self.aux.get(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new())) {
+                Some(bytes) => Some(borsh::from_slice(bytes).map_err(|_| "malformed court-scope activation")?),
+                None => None,
+            };
+            Ok(ledger)
+        };
         if let Some(cached) = self.ledger_cache.get() {
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             debug_assert!(
                 cached.scalars() == self.header.scalars && cached.to_rows() == self.rows,
                 "the cached kernel ledger is not the ledger of the rows (a write did not clear the cache)"
             );
-            return Ok(cached);
+            return scoped(cached);
         }
-        KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)
+        scoped(KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)?)
     }
 
     /// A decoded aux row.
@@ -1105,6 +1119,28 @@ mod tests {
         assert_ne!(palw_kernel_bond_id_v1(&b(0)), palw_kernel_bond_id_v1(&b(1)));
         let state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty state roots like an empty ledger");
+    }
+
+    #[test]
+    fn authenticated_scope_policy_survives_public_snapshot_cache_and_reverts_with_its_aux_row() {
+        let policy = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let mut state = PalwKernelRouteStateV1::new(policy, None, LedgerScalarsV1::default());
+        let historical_root = state.aux_root();
+        let ledger_root = state.ledger_root();
+        let cached = state.ledger().unwrap().as_rebuilt_from_v1(&state.rows);
+        state.ledger_cache.set(cached);
+        state.aux.insert((PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()), borsh::to_vec(&77u64).unwrap());
+        assert_ne!(state.aux_root(), historical_root, "the response contract is authenticated by the route root");
+        assert_eq!(state.ledger_root(), ledger_root, "consumer policy is not silently added to the historical ledger root");
+        assert_eq!(state.ledger().unwrap().commitment_scope_from_daa, Some(77), "cached reads re-inject the authenticated policy");
+        let restored: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.ledger().unwrap().commitment_scope_from_daa, Some(77));
+        assert_eq!(restored.aux_root(), state.aux_root());
+        state.aux.remove(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()));
+        assert_eq!(state.ledger().unwrap().commitment_scope_from_daa, None, "a reverted scope row cannot survive in the cache");
+        assert_eq!(state.aux_root(), historical_root);
+        state.aux.insert((PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()), vec![1]);
+        assert!(state.ledger().is_err(), "a malformed policy never falls back to historical disclosure");
     }
 
     #[test]
