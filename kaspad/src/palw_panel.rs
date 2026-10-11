@@ -23332,6 +23332,7 @@ mod p2_7_disclosure_policy {
 
     #[test]
     fn constraint_job_only_recovery_restores_the_mask_and_never_answers_from_missing_tables_or_wrong_roots() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
         use kaspa_consensus_core::palw_decode_constraint_v1::*;
         use kaspa_consensus_core::palw_fp_constraint_job_v1::*;
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, palw_fp_capture_encode_v1, palw_fp_material_encode_v1};
