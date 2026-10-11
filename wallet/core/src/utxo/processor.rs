@@ -66,6 +66,9 @@ pub struct Inner {
     /// only moves at attestation-epoch cadence, so polling it on every virtual DAA tick would
     /// be pure chatter; this throttles the refresh to ~once per epoch worth of DAA.
     dns_anchor_polled_at_daa: AtomicU64,
+    /// Bind an asynchronous DNS observation to the RPC/network connection that
+    /// began it; reset and publication share this mutex, never an await.
+    dns_anchor_connection_generation: Mutex<u64>,
 }
 
 impl Inner {
@@ -99,6 +102,7 @@ impl Inner {
             fee_rate_task_ctl: DuplexChannel::oneshot(),
             fee_rate_task_is_running: AtomicBool::new(false),
             dns_anchor_polled_at_daa: AtomicU64::new(0),
+            dns_anchor_connection_generation: Mutex::new(0),
         }
     }
 }
@@ -144,7 +148,12 @@ impl UtxoProcessor {
     }
 
     pub async fn bind_rpc(&self, rpc: Option<Rpc>) -> Result<()> {
-        self.inner.rpc.lock().unwrap().clone_from(&rpc);
+        {
+            let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            self.inner.rpc.lock().unwrap().clone_from(&rpc);
+            self.inner.is_connected.store(false, Ordering::SeqCst);
+            self.invalidate_dns_anchor_connection(&mut generation);
+        }
         let rpc_api = rpc.as_ref().map(|rpc| rpc.rpc_api().clone());
         self.metrics().bind_rpc(rpc_api);
         self.sync_proc().bind_rpc(rpc).await?;
@@ -180,7 +189,27 @@ impl UtxoProcessor {
     }
 
     pub fn set_network_id(&self, network_id: &NetworkId) {
+        let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+        self.invalidate_dns_anchor_connection(&mut generation);
         self.inner.network_id.lock().unwrap().replace(*network_id);
+        if let Ok(params) = self.network_params() {
+            params.set_dns_confirmed_anchor_daa(0);
+        }
+    }
+
+    fn invalidate_dns_anchor_connection(&self, generation: &mut u64) {
+        *generation = generation.wrapping_add(1);
+        self.inner.dns_anchor_polled_at_daa.store(0, Ordering::Relaxed);
+        if let Ok(params) = self.network_params() {
+            params.set_dns_confirmed_anchor_daa(0);
+        }
+    }
+
+    fn publish_dns_anchor_observation(&self, params: &NetworkParams, started: u64, observation: Option<(bool, u64)>) {
+        let generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+        if *generation == started && self.is_connected() {
+            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(observation));
+        }
     }
 
     pub fn network_id(&self) -> Result<NetworkId> {
@@ -282,27 +311,35 @@ impl UtxoProcessor {
     /// carry no settlement. A failed or disconnected poll clears the DNS shortcut:
     /// only the long DAA maturity remains when the node no longer vouches for an anchor.
     async fn refresh_dns_anchor(&self, current_daa_score: u64) {
-        let Ok(params) = self.network_params() else { return };
-        if params.coinbase_settlement_long_maturity_daa() == 0 {
-            return;
-        }
-        let Some(rpc) = self.try_rpc_api() else {
-            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(None));
-            return;
+        let (params, started, rpc) = {
+            let generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            let Ok(params) = self.network_params() else { return };
+            if params.coinbase_settlement_long_maturity_daa() == 0 {
+                return;
+            }
+            if !self.is_connected() {
+                params.set_dns_confirmed_anchor_daa(0);
+                return;
+            }
+            let Some(rpc) = self.try_rpc_api() else {
+                params.set_dns_confirmed_anchor_daa(0);
+                return;
+            };
+            let last = self.inner.dns_anchor_polled_at_daa.load(Ordering::Relaxed);
+            if current_daa_score < last.saturating_add(100) && last != 0 {
+                return;
+            }
+            self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
+            (params, *generation, rpc)
         };
-        let last = self.inner.dns_anchor_polled_at_daa.load(Ordering::Relaxed);
-        if current_daa_score < last.saturating_add(100) && last != 0 {
-            return;
-        }
-        self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
         let observation = rpc
             .get_dns_confirmation()
             .await
             .ok()
             .map(|confirmation| (confirmation.available, confirmation.last_dns_confirmed_anchor_daa_score));
-        // Retirement, disconnected transport and failed polls revoke the cached
-        // shortcut together. They never revoke the ordinary long DAA maturity.
-        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(observation));
+        // A delayed success from the previous connection cannot restore an anchor
+        // that disconnect/rebind/retirement has revoked. Never hold a mutex across RPC.
+        self.publish_dns_anchor_observation(params, started, observation);
     }
 
     #[allow(clippy::mutable_key_type)]
@@ -572,6 +609,11 @@ impl UtxoProcessor {
     }
 
     pub async fn handle_connect_impl(&self) -> Result<()> {
+        {
+            let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            self.inner.is_connected.store(false, Ordering::SeqCst);
+            self.invalidate_dns_anchor_connection(&mut generation);
+        }
         let is_synced = self.init_state_from_server().await?;
         self.inner.is_connected.store(true, Ordering::SeqCst);
         self.register_notification_listener().await?;
@@ -631,11 +673,11 @@ impl UtxoProcessor {
     pub async fn handle_disconnect(&self) -> Result<()> {
         let _ = self.inner.connect_disconnect_guard.lock().await;
 
-        self.inner.is_connected.store(false, Ordering::SeqCst);
-        if let Ok(params) = self.network_params() {
-            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(None));
+        {
+            let mut generation = self.inner.dns_anchor_connection_generation.lock().unwrap();
+            self.inner.is_connected.store(false, Ordering::SeqCst);
+            self.invalidate_dns_anchor_connection(&mut generation);
         }
-        self.inner.dns_anchor_polled_at_daa.store(0, Ordering::Relaxed);
         // self.stop_metrics();
 
         self.inner.metrics.unregister_sink();
@@ -896,5 +938,50 @@ pub(crate) fn dns_shortcut_after_poll(observation: Option<(bool, u64)>) -> u64 {
     match observation {
         Some((true, last_confirmed_anchor_daa)) => last_confirmed_anchor_daa,
         Some((false, _)) | None => 0,
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod dns_observation_generation_tests {
+    use super::*;
+    use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
+
+    #[tokio::test]
+    async fn rfc0012_a_delayed_success_from_a_previous_rpc_cannot_restore_dns_spendability() {
+        // Local settings keep this ordered interleaving independent of global
+        // wallet network settings. These are connection mechanics, not real wRPC.
+        let params = NetworkParams {
+            coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
+            coinbase_transaction_stasis_period_daa: 500,
+            user_transaction_maturity_period_daa: AtomicU64::new(100),
+            additional_compound_transaction_mass: 100,
+            coinbase_settlement_long_maturity_daa: 600,
+            dns_confirmed_anchor_daa: AtomicU64::new(0),
+        };
+        let processor = UtxoProcessor::new(None, None, None, None);
+        processor.mock_set_connected(true);
+        let old = *processor.inner.dns_anchor_connection_generation.lock().unwrap();
+        processor.publish_dns_anchor_observation(&params, old, Some((true, 1_050)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 1_050);
+        // The old poll was started above, but its reply arrives after a rebind
+        // and the new connection's unavailable/retired observation.
+        processor.bind_rpc(None).await.unwrap();
+        assert!(!processor.is_connected());
+        processor.mock_set_connected(true);
+        let current = *processor.inner.dns_anchor_connection_generation.lock().unwrap();
+        processor.publish_dns_anchor_observation(&params, current, Some((false, 1_050)));
+        processor.publish_dns_anchor_observation(&params, old, Some((true, 2_000)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 0, "the old successful reply cannot revive its shortcut");
+        let settled = |pov| coinbase_spend_settled(1_000, pov, 0, Some(&DnsCoinbaseSettlement {
+            long_maturity_daa: 600,
+            confirmed_anchor_daa: (params.dns_confirmed_anchor_daa() > 0).then_some(params.dns_confirmed_anchor_daa()),
+        }));
+        assert!(!settled(1_100), "the young coinbase remains held");
+        assert!(settled(1_600), "ordinary long maturity remains lawful");
+        processor.publish_dns_anchor_observation(&params, current, Some((true, 1_060)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 1_060, "a current fresh observation still works");
+        processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
+        processor.publish_dns_anchor_observation(&params, current, Some((true, 3_000)));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 1_060, "a previous network cannot overwrite the current observation");
     }
 }
