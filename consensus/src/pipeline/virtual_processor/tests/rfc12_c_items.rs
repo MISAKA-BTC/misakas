@@ -367,7 +367,8 @@ async fn rfc12_c2_a_pruned_join_with_evm_state_installs_the_sidecars_and_follows
     assert!(joiner.api().get_evm_canonical_heads().is_err());
     // This existing fixture retained its verified P UTXOs throughout. Model the
     // whole-import completion only after PALW and EVM sidecars both landed.
-    joiner.api().set_pruning_utxoset_stable_flag(true);
+    assert_eq!(joiner.api().pruning_import_session().unwrap().epoch, 0, "legacy sidecar fixture predates session issuance");
+    joiner.api().set_pruning_utxoset_stable_flag(true).expect("epoch-zero fixture retains verified P UTXOs throughout");
     assert_eq!(joiner.api().get_evm_header_of(pp).unwrap(), Some(evm_header.clone()), "P's EVM header is installed byte for byte");
     assert_eq!(
         joiner.api().get_native_settlement_snapshot().unwrap(),

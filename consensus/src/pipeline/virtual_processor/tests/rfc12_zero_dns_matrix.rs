@@ -781,7 +781,8 @@ fn finish_existing_ledger_fixture_import(rig: &Rig) {
     assert!(!rig.api().is_pruning_utxoset_stable());
     assert!(rig.api().get_evm_canonical_heads().is_err());
     assert!(rig.api().get_native_settlement_snapshot().is_err());
-    rig.api().set_pruning_utxoset_stable_flag(true);
+    assert_eq!(rig.api().pruning_import_session().unwrap().epoch, 0, "legacy verified-ledger seam must precede durable sessions");
+    rig.api().set_pruning_utxoset_stable_flag(true).expect("epoch-zero fixture retains already verified ledgers");
 }
 
 fn plant_dns(rig: &Rig, anchor: BlockHash, anchor_daa: u64, at_sink: BlockHash, sink_daa: u64) {
@@ -2027,7 +2028,8 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     );
     // This fixture retains its existing verified UTXOs/PALW/EVM. Restoring the
     // completion marker is a trusted test seam, not evidence of a P2P join.
-    rig.api().set_pruning_utxoset_stable_flag(true);
+    assert_eq!(rig.api().pruning_import_session().unwrap().epoch, 0, "historic overlay fixture has no import session");
+    rig.api().set_pruning_utxoset_stable_flag(true).expect("epoch-zero fixture retained its verified UTXO/PALW/EVM ledgers");
     let mut bad_bond = record.clone();
     bad_bond.amount = bad_bond.amount.checked_add(1).unwrap();
     let mut corrupt = rocksdb::WriteBatch::default();
@@ -3143,7 +3145,7 @@ async fn rfc12_partial_import_invalidates_same_sink_memo_until_completion() {
     let before = readiness_of(&a); // warm a positive/evidence-derived memo at this exact sink
     let sink = a.chain.sink();
     let pruning = a.api().pruning_point();
-    a.api().set_pruning_utxoset_stable_flag(false);
+    a.api().set_pruning_utxoset_stable_flag(false).expect("epoch-zero marker-only memo control");
     assert!(a.api().get_evm_canonical_heads().is_err());
     assert!(a.api().get_native_settlement_snapshot().is_err());
     let partial = readiness_of(&a);
@@ -3152,7 +3154,7 @@ async fn rfc12_partial_import_invalidates_same_sink_memo_until_completion() {
     }));
     assert_eq!(a.chain.sink(), sink);
     // This test edits no ledger: its marker-only seam isolates memo invalidation.
-    a.api().set_pruning_utxoset_stable_flag(true);
+    a.api().set_pruning_utxoset_stable_flag(true).expect("epoch-zero control changed no ledger");
     assert_eq!(readiness_of(&a), before, "the negative memo cannot survive completion at the same sink and pruning point");
     assert!(a.api().get_evm_canonical_heads().is_ok());
 }
@@ -3177,10 +3179,14 @@ async fn rfc12_utxo_import_verifies_the_actual_staged_table_before_replacing_vir
     let mut check = legitimate_stream.clone();
     assert_eq!(check.finalize(), rig.api().get_header(point).unwrap().utxo_commitment, "the original stream really matches the pinned header");
     let before_virtual: Vec<_> = vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect();
+    let token = rig.api().begin_pruning_point_import(point).unwrap();
+    rig.api().clear_pruning_utxo_set_for_session(token).unwrap();
+    let original_rows: Vec<_> = staged.iter().map(|(outpoint, entry)| (*outpoint, (**entry).clone())).collect();
+    rig.api().append_imported_pruning_point_utxos_for_session(token, &original_rows, &mut MuHash::new()).unwrap();
     let mut changed = (*staged[0].1).clone();
     changed.amount = changed.amount.checked_add(1).unwrap();
-    rig.api().append_imported_pruning_point_utxos(&[(staged[0].0, changed)], &mut MuHash::new());
-    let err = rig.api().import_pruning_point_utxo_set(point, legitimate_stream).unwrap_err();
+    rig.api().append_imported_pruning_point_utxos_for_session(token, &[(staged[0].0, changed)], &mut MuHash::new()).unwrap();
+    let err = rig.api().import_pruning_point_utxo_set_for_session(token, legitimate_stream).unwrap_err();
     assert!(matches!(err, PruningImportError::ImportedMultisetHashMismatch(expected, got) if expected != got), "the actual table root is refused by name: {err}");
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_virtual,
         "the authentic argument cannot authorize copying a different staged balance");
