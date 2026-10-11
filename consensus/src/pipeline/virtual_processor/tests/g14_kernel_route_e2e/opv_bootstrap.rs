@@ -1611,9 +1611,8 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
     net.send(vec![(PRODUCERS[0], object)]).await;
     assert!(net.ledger().beacon_sources.is_empty(), "funding never retroactively awards an unsigned source promise");
     paid_sources(&mut net, terms, &jobs, &PRODUCERS[..2]).await;
-    let fee_rows: Vec<_> = net
-        .chain
-        .state
+    let admitted_state = net.chain.tip_state().1;
+    let fee_rows: Vec<_> = admitted_state
         .bond_budget()
         .unwrap()
         .claims
@@ -1677,7 +1676,12 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
     {
         assert_eq!(row.consumed.reward_sompi, 50, "source escrow payout consumes its recipient's held R once");
         assert!(!row.open && !row.live && row.in_window);
-        assert!(row.reuse_not_before >= net.daa() + 280);
+        let producer = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&row.bond);
+        let ledger = net.ledger();
+        let Some(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1::Paid { daa, .. }) =
+            ledger.beacon_source_fee_promises[&(context, producer)].outcome
+        else { panic!("each source fee has an actual once-only payout receipt") };
+        assert!(row.reuse_not_before >= daa + 280);
     }
     let replay = net.replay().await;
     net.assert_same(&replay, "mandatory paid v5 full fee/beacon replay");
