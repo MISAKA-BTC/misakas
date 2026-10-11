@@ -22,6 +22,7 @@ pub mod palw_duties;
 pub mod palw_economics;
 /// ADR-0152 v3.1 N10 / §7.3 P2-8c: the automatic `PanelFalseValidV2` filer. See the module's own header.
 pub mod palw_filer_false_valid;
+mod palw_tokenizer_witness;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
