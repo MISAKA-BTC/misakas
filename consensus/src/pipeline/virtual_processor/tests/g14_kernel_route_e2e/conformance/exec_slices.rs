@@ -50,8 +50,8 @@ use kaspa_consensus_core::palw_exec_v2::{
     PALW_EXEC_V2_WIRE_VERSION, PalwExecSubtypeV2, PalwExecV2Envelope, PalwWorkSliceV1, palw_work_slice_payload_root_v2,
 };
 use kaspa_consensus_core::palw_exec_v2_verify::{
-    palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1, palw_exec_v2_slice_job_nonce_v1,
-    palw_exec_v2_slice_job_nonce_v2, palw_exec_v2_token_state_root_v1,
+    palw_exec_v2_kernel_key_v1, palw_exec_v2_prefix_job_nonce_v1, palw_exec_v2_real_job_v1, palw_exec_v2_retention_terms_v1,
+    palw_exec_v2_slice_job_nonce_v1, palw_exec_v2_slice_job_nonce_v2, palw_exec_v2_token_state_root_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwVoidReasonV2};
 use kaspa_consensus_core::palw_work_slice_v2::{
@@ -91,6 +91,10 @@ async fn active_world() -> Cw {
 }
 
 async fn active_world_with_kernel_mode(kernel_mode: VerificationModeV1) -> Cw {
+    active_world_over(kernel_mode, TestConsensus::new).await
+}
+
+async fn active_world_over(kernel_mode: VerificationModeV1, make: impl FnOnce(&Config) -> TestConsensus) -> Cw {
     kaspa_core::log::try_init_logger("warn");
     let mut cw = Cw::over_with_floor_and_kernel_mode(
         SEED,
@@ -99,7 +103,7 @@ async fn active_world_with_kernel_mode(kernel_mode: VerificationModeV1) -> Cw {
             params.sync_palw_exec_payload_v2();
             assert!(params.validate_palw_exec_payload_v2().is_err(), "validation refuses the payload fence: the harness arms past it");
         },
-        TestConsensus::new,
+        make,
         0,
         kernel_mode,
     )
@@ -1355,6 +1359,181 @@ async fn x8_g14_honest_slices_verify_through_kernel_finals_and_the_root_is_ready
     assert_eq!(cw.net.collateral(REGISTRANT), poster_collateral, "duplicate reveals spend no escrow");
     let z = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&z, "replay");
+}
+
+/// Kernel Finals and EXEC credit/escrow survive a real consensus restart. A
+/// shallow fork convicts a deliberately false prefix after its computation
+/// Final; returning to the unrefuted branch must undo the cancellation and
+/// restore its exact funded holds without extra credit. Strict-win stays active.
+/// Native root Final and OS-crash/pruned joins remain separate requirements.
+#[tokio::test]
+async fn x8_g14_kernel_finals_holds_and_credit_survive_restart_and_two_actual_reorgs() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut cw =
+        active_world_over(VerificationModeV1::OptimisticPublicVerification, |c| TestConsensus::with_db(db.clone(), c, sender)).await;
+    cw.net._keep.push(Box::new(receiver));
+    let s = session(&mut cw, true, |_| false).await;
+    let claim = s.real.claim;
+    let api = cw.net.api().unwrap();
+    let floor = s
+        .slices
+        .iter()
+        .chain(std::iter::once(&s.prefix))
+        .map(|k| api.claim_read_v1(&k.claim.id).unwrap().unwrap().opv.unwrap().final_floor_daa)
+        .max()
+        .unwrap();
+    let poster = cw.net.collateral(REGISTRANT);
+    cw.net.beat_to(floor + 1).await;
+    let unrefuted = cw.net.chain.tip_state().1;
+    assert!(unrefuted.exec_v2_root_v1(&claim).unwrap().ready_for_final());
+    assert!(!unrefuted.claim(&claim).unwrap().phase.is_terminal());
+    let unrefuted_route = cw.net.api();
+    let unrefuted_sink = cw.net.chain.sink();
+    let unrefuted_root = unrefuted.state_root();
+    let unrefuted_finals = cw.net.api().unwrap().finals_read_v1().unwrap();
+    let unrefuted_ledger = cw.net.ledger();
+    let unrefuted_utxos = Net::utxos_of(&cw.net.chain);
+    let root_money = (cw.net.collateral(ROOT_CARD), cw.net.slashed(ROOT_CARD), cw.net.owed(ACCUSER));
+    let deltas: Vec<_> = chain_blocks(&cw.net.chain, unrefuted_sink).iter().map(|b| root_at(&cw.net.chain, b.header.hash)).collect();
+
+    // Stop Consensus, reopen the same physical database, and read its stored
+    // rows before any new block can recompute the answers.
+    cw.net = cw.net.restart(db.clone());
+    assert_eq!(cw.net.chain.sink(), unrefuted_sink);
+    assert_eq!(cw.net.chain.tip_state().1.state_root(), unrefuted_root);
+    assert_eq!(cw.net.api(), unrefuted_route);
+    assert_eq!(cw.net.api().unwrap().finals_read_v1().unwrap(), unrefuted_finals);
+    assert_eq!(cw.net.collateral(REGISTRANT), poster);
+    assert_eq!(Net::utxos_of(&cw.net.chain), unrefuted_utxos, "the complete UTXO set loads from the same database");
+    for (b, expected) in chain_blocks(&cw.net.chain, unrefuted_sink).iter().zip(&deltas) {
+        assert_eq!(root_at(&cw.net.chain, b.header.hash), *expected);
+    }
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert_eq!(cw.net.ledger().claims[&k.claim.id], unrefuted_ledger.claims[&k.claim.id]);
+        assert_eq!(cw.net.ledger().job_escrows[&k.job.id()], unrefuted_ledger.job_escrows[&k.job.id()]);
+        assert_eq!(cw.net.ledger().exec_reward_holds[&k.claim.id], unrefuted_ledger.exec_reward_holds[&k.claim.id]);
+    }
+
+    // Both sides fork from the actual kernel Finals. A has one quiet block; B
+    // has the proof carrier and its closing block. The incumbent side's depth
+    // fits the existing two-DAA shallow tie rule; extra heartbeats cannot buy a
+    // deep reorg under strict economic win.
+    let fork = unrefuted_sink;
+    let fork_daa = cw.net.chain.daa_of(fork);
+    let quiet = cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+    assert!(cw.net.daa() - fork_daa <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1);
+    let b = t12_genesis_chain(&cw.net.config, &cw.net.bundle, &cw.net.premine, &cw.net.floats);
+    let up_to_fork = chain_blocks(&cw.net.chain, fork);
+    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+    for block in up_to_fork {
+        let hash = block.header.hash;
+        arrive(&b, block, "the shared prefix through kernel Final").await;
+        for (_, lane) in s.lane.iter().filter(|(under, _)| *under == hash) {
+            arrive(&b, lane.clone(), "the shared anchored EXEC lane").await;
+        }
+    }
+    assert_eq!(b.tip_state().1.state_root(), unrefuted_root);
+    let mut bn = cw.net.on_chain(b);
+    bn.chain.ctx.simulated_time = fork_timestamp;
+    let api = bn.api().unwrap();
+    let fresh = Fresh::from_api(&api, api.ledger_root(), 0x7E);
+    let OutsiderFindingV1::Prosecute(proof) =
+        fresh.check(s.prefix.claim.id, &s.prefix.claim.published(&cw.cand, &[]), &cw.cand.params)
+    else {
+        panic!("the fresh outsider proves the deliberately false prefix after computation Final")
+    };
+    let object = bn.route(ACCUSER, &K::FileProof { accuser: bn.kid(ACCUSER), claim: s.prefix.claim.id, proof });
+    bn.send(vec![(ACCUSER, object)]).await;
+    let prefix_key = palw_exec_v2_kernel_key_v1(&Hash64::from_bytes(s.prefix.claim.id));
+    let mut final_rewrite = false;
+    for block in chain_blocks(&bn.chain, bn.chain.sink()).into_iter().skip(chain_blocks(&bn.chain, fork).len()) {
+        let (_, delta) = bn.chain.vp().palw_state_v2_store.read().delta_of(block.header.hash).unwrap();
+        for entry in &delta.entries {
+            if let kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table, key, old: Some(old), new: Some(new) } =
+                entry
+                && *table == misaka_palw_kernel::rows::TABLE_CLAIMS_V1
+                && *key == prefix_key
+            {
+                let old: misaka_palw_kernel::ledger::ClaimRowV1 = borsh::from_slice(old).unwrap();
+                let new: misaka_palw_kernel::ledger::ClaimRowV1 = borsh::from_slice(new).unwrap();
+                assert!(matches!(old.life.state, ClaimStateV1::Final { .. }));
+                assert_eq!(new.life.state, old.life.state, "a real public proof rewrites the same computation Final");
+                assert!(!old.convicted && new.convicted);
+                assert!(old.reserved > 0 && new.reserved == 0);
+                assert!(!new.rewarded, "the repeated Final status cannot credit a convicted computation");
+                final_rewrite = true;
+            }
+        }
+    }
+    assert!(final_rewrite, "observe the actual block journal; no synthetic Final-row injection");
+    assert!(bn.ledger().claims[&s.prefix.claim.id].convicted);
+    assert!(bn.collateral(ROOT_CARD) < cw.net.collateral(ROOT_CARD));
+    assert!(bn.owed(ACCUSER) > 0, "the public conviction queues its funded bounty");
+    assert!(bn.daa() - fork_daa <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1);
+    assert!(matches!(bn.chain.tip_state().1.exec_v2_root_v1(&claim).unwrap().phase, PalwWorkRootPhaseV2::Voided { .. }));
+    assert_eq!(bn.collateral(REGISTRANT), poster);
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert!(!bn.ledger().job_escrows.contains_key(&k.job.id()));
+        assert!(!bn.ledger().exec_reward_holds.contains_key(&k.claim.id));
+        assert!(!bn.ledger().claims[&k.claim.id].rewarded);
+    }
+    for block in chain_blocks(&bn.chain, bn.chain.sink()).into_iter().skip(chain_blocks(&bn.chain, fork).len()) {
+        arrive(&cw.net.chain, block, "the shallow public-conviction branch").await;
+    }
+    assert_eq!(cw.net.chain.sink(), bn.chain.sink(), "the reopened node really reorgs to the conviction branch");
+    arrive(&bn.chain, quiet.clone(), "A's quiet sibling tip for a complete virtual UTXO comparison").await;
+    assert_eq!(cw.net.chain.ctx.consensus.get_virtual_parents(), bn.chain.ctx.consensus.get_virtual_parents());
+    assert_eq!(Net::utxos_of(&cw.net.chain), Net::utxos_of(&bn.chain));
+    cw.net.assert_same(&bn.chain, "restarted node after cancellation reorg");
+
+    // A fresh replay of A grows past B. Observe the redo on the restarted node,
+    // rather than rebuilding its state or directly applying a synthetic delta.
+    let a = t12_genesis_chain(&cw.net.config, &cw.net.bundle, &cw.net.premine, &cw.net.floats);
+    for block in chain_blocks(&cw.net.chain, unrefuted_sink) {
+        let hash = block.header.hash;
+        arrive(&a, block, "the unrefuted branch before restart").await;
+        for (_, lane) in s.lane.iter().filter(|(under, _)| *under == hash) {
+            arrive(&a, lane.clone(), "the unrefuted branch's anchored lane").await;
+        }
+    }
+    let mut an = cw.net.on_chain(a);
+    an.chain.ctx.simulated_time = chain_blocks(&an.chain, unrefuted_sink).last().unwrap().header.timestamp;
+    let target = chain_blocks(&bn.chain, bn.chain.sink()).len();
+    while chain_blocks(&an.chain, an.chain.sink()).len() <= target {
+        an.chain.heartbeat(an.ttpb(), Vec::new()).await;
+    }
+    for block in chain_blocks(&an.chain, an.chain.sink()).into_iter().skip(chain_blocks(&an.chain, unrefuted_sink).len()) {
+        arrive(&cw.net.chain, block, "the unrefuted branch returning after cancellation").await;
+    }
+    assert_eq!(cw.net.chain.sink(), an.chain.sink(), "a second actual reorg returns to the unrefuted branch");
+    for block in chain_blocks(&bn.chain, bn.chain.sink()).into_iter().skip(chain_blocks(&bn.chain, fork).len()) {
+        arrive(&an.chain, block, "the conviction branch retained as competing DAG knowledge").await;
+    }
+    arrive(&an.chain, quiet, "the original quiet sibling retained as DAG knowledge").await;
+    assert_eq!(cw.net.chain.ctx.consensus.get_virtual_parents(), an.chain.ctx.consensus.get_virtual_parents());
+    assert_eq!(Net::utxos_of(&cw.net.chain), Net::utxos_of(&an.chain));
+    cw.net.assert_same(&an.chain, "redo of unrefuted kernel Finals and EXEC funding");
+    let restored = cw.net.chain.tip_state().1;
+    assert_eq!(restored.exec_v2_root_v1(&claim), unrefuted.exec_v2_root_v1(&claim));
+    assert_eq!(restored.exec_v2_counts_v1(), unrefuted.exec_v2_counts_v1());
+    assert_eq!(cw.net.api().unwrap().finals_read_v1().unwrap(), unrefuted_finals);
+    assert_eq!(cw.net.collateral(REGISTRANT), poster);
+    assert_eq!(
+        (cw.net.collateral(ROOT_CARD), cw.net.slashed(ROOT_CARD), cw.net.owed(ACCUSER)),
+        root_money,
+        "rollback returns the slash and removes the funded conviction bounty exactly once"
+    );
+    for index in 0..3 {
+        assert_eq!(restored.exec_v2_slice_v1(&claim, index), unrefuted.exec_v2_slice_v1(&claim, index));
+    }
+    let ledger = cw.net.ledger();
+    for k in s.slices.iter().chain(std::iter::once(&s.prefix)) {
+        assert_eq!(ledger.claims[&k.claim.id], unrefuted_ledger.claims[&k.claim.id]);
+        assert_eq!(ledger.job_escrows[&k.job.id()], unrefuted_ledger.job_escrows[&k.job.id()]);
+        assert_eq!(ledger.exec_reward_holds[&k.claim.id], unrefuted_ledger.exec_reward_holds[&k.claim.id]);
+    }
 }
 
 /// A job escrow held by EXEC cannot pay another producer's claim before root

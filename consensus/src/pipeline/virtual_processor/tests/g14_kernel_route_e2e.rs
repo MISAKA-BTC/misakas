@@ -383,12 +383,23 @@ impl Net {
         z
     }
 
-    /// Everything two nodes at one tip must agree on: the sink, the PALW root, the kernel route's rows (as served), every block's delta
-    /// root, and the chain's own UTXO commitment (the payout queue is paid through the coinbase).
+    /// The full virtual UTXO set of this small harness. Refuse a truncated read:
+    /// payout/reorg comparisons must not silently check only a prefix of it.
+    fn utxos_of(chain: &T12Chain) -> std::collections::HashMap<TransactionOutpoint, UtxoEntry> {
+        let pairs = chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false);
+        assert!(pairs.len() < 1_000_000, "the harness UTXO read must be complete");
+        pairs.into_iter().collect()
+    }
+
+    /// Compare the selected-chain state and delta roots. A common sink does not imply identical knowledge of competing DAG tips;
+    /// compare the full virtual UTXO set when virtual parents also agree. Recovery callers explicitly synchronize those tips.
     fn assert_same(&self, other: &T12Chain, what: &str) {
         assert_eq!(other.sink(), self.chain.sink(), "{what}: same sink");
         assert_eq!(other.tip_state().1.state_root(), self.chain.tip_state().1.state_root(), "{what}: same PALW state root");
         assert_eq!(other.ctx.consensus.palw_kernel_route_v1(), self.api(), "{what}: same kernel route rows");
+        if other.ctx.consensus.get_virtual_parents() == self.chain.ctx.consensus.get_virtual_parents() {
+            assert_eq!(Self::utxos_of(other), Self::utxos_of(&self.chain), "{what}: same complete virtual UTXO set");
+        }
         for b in chain_blocks(&self.chain, self.chain.sink()) {
             assert_eq!(root_at(other, b.header.hash), root_at(&self.chain, b.header.hash), "{what}: delta root of {}", b.header.hash);
         }

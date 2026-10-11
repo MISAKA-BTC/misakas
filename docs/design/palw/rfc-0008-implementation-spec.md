@@ -1337,3 +1337,33 @@ On 2026-10-11 the final EVM-enabled consensus run of the two named node controls
 0 ignored**, build 2m08s, runtime 100.69s. The separate consensus-core prefix-reuse and repeated-Final-row controls
 passed: **2 passed, 0 failed, 0 ignored**, cached build 0.31s, runtime 0.09s. Commands and intermediate fixture
 failure are recorded in the four-RFC design audit. Earlier candidate runs are not additional independent coverage.
+
+### 15.9 Computation-Final recovery and public conviction
+
+`x8_g14_kernel_finals_holds_and_credit_survive_restart_and_two_actual_reorgs` uses an on-disk consensus database.
+Its prefix deliberately commits a false matrix value; the slices execute truthfully. All four OPV computations reach
+Final unrefuted, so the bound root is ready but the native REAL claim remains live. This is an optimistic fraud case,
+not an honest native Final control. Capture the root/slice credit and caps, four claim/escrow/hold rows, Final facts,
+each selected block's delta root, collateral, slash/bounty state and the complete virtual UTXO set.
+
+Drop Consensus and reopen the same database. Compare the stored state before a new block can regenerate it.
+Then exercise two actual selected-chain reorgs: a public cold-checker proof convicts the prefix after computation
+Final and cancels the root; the unrefuted branch returns and restores its original credit and funded holds. Inspect
+the actual conviction journal: the same claim keeps its Final lifecycle state while its conviction flag and remaining
+reservation change. The consumer must treat that write as a failure, never as additional verified credit. Returning
+to the unrefuted branch must undo the slash and queued bounty, restore every escrow/hold and leave credit unchanged.
+
+Keep the existing strict economic reorg rule. The incumbent depth must fit its two-DAA shallow tie exception on each
+reorg; extra heartbeat blue work cannot authorize a deeper all-economic tie. Exchange the competing DAG tips before
+requiring full virtual-parent/UTXO agreement: common selected sink alone does not establish equal virtual state.
+The UTXO read must reject truncation. Selected-chain PALW/delta comparisons retain their separate scope.
+
+This control does not inject a duplicate identical Final row; the public proof changes its verdict/reservation fields.
+The node admission/Panel and synthetic native trace-commitment seams from the module still apply. Native root Final
+and capped settlement, their subsequent public-court/recovery paths, OS-crash atomicity, deep economic reorgs and
+pruned/P2P joins remain acceptance requirements. No public fence or legacy Round rule changes.
+
+On 2026-10-11 the final EVM-enabled node command containing this control, honest slices and the two existing standalone
+kernel restart/reorg controls passed: **4 passed, 0 failed, 0 ignored**, build 2m02s, runtime 38.52s. The four-RFC audit
+records the rejected deep-heartbeat fixture, intermediate compile repairs and candidate run separately. None substitutes
+for the native-root Final and settlement requirements above.
