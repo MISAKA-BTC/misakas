@@ -37,3 +37,21 @@ The actual EVM-enabled node Final/reorg, Round collectible fee, durable import s
 ## Required continuation
 
 Connect and verify every recipient income/export path, actual source queue drain/payment-plus-W, paid Panel/claim adapters, restart/reorg/pruned provenance and multiprocess drills. Close whole-model constraint/boundary/memory/routing coverage, measured worst public court/DA/carrier/capital costs, 100k population/resource/retention and genuine pruned P2P. Source independence/participation/censorship, cumulative retry soundness, 128-bit justification and external review remain open. Dormant fences are not evidence that these requirements passed.
+
+## Subsequent integrated checkpoint: 38c524090
+
+Source fee logical vesting now transfers the same recipient R reservation into the exact native payout queue; only actual queue drainage starts payment-plus-W. The native V5 fixture asserts both the real coinbase UTXO and W boundaries. Market owner/contributor fees now use the same physical payment clock, retaining the full owner income exactly once when part of it is directed to the improvement pool. These new source and market cases are not yet terminal PASS.
+
+Wallet scan responses carry the observation generation through their actual insertion. UTXO contexts also retain their original monetary network across connection changes, preserving the money while refusing balances and selection under another network. The updated context tests still need execution; ordered API tests alone do not establish concurrent network-switch serialization.
+
+The partial shard court's occurrence-to-layer partition conversion is corrected in both its restart consumer and corpus fixture. The sparse authenticated tree and requested cell-run acquisition now connect to actual seat, public watcher and public court consumers with bounded request lengths, capture binding authentication, shared memory reservations and retention through court deadlines. Formal peak RSS, on-chain catchup and real network demand budgets remain open.
+
+The finite private three-process driver is committed. It explicitly distinguishes construction/ordinary transport from genuine useful-work, pruned IBD, 100k and security gates; all of those gates stay unapproved. Its helper build and actual process run are still pending.
+
+| Run / exact head | Status at this checkpoint | Evidence boundary |
+| --- | --- | --- |
+| Native v4, `ec312e67f`; `/tmp/rfc06-rfc07-rfc08-rfc12-native-final-round-v4.log` | Compilation succeeded in 8m16s; runtime in progress. Both root Final/reorg cases and both V5 cases have reported failures; remaining outcomes and panic details are pending. | No PASS is inferred from a successfully built suite. This executable predates the later market queue, fixed wallet network, import fixture assertions and shard acquisition changes. |
+| SDK node v2, `6dc6d5e7b`; `/tmp/rfc06-partial-shard-court-node-v2.log` | Cell: 11 passed, 1 failed. `a_seat_duty_verifies_its_shards_cells_over_a_backends_capture` is rejected by the new class/prompt/token/trace binding check. The shard-court binary did not run after that failure. | The fixture must supply the actual authenticated capture; the production check is retained. Sparse library cases are not yet run. |
+| Panel/private guard v1, `38c524090`; `/tmp/rfc06-rfc12-panel-private-guard-v1.log` | Compilation in progress. | No runtime or genuine process result yet. |
+
+These commits are progress checkpoints, not completion claims. The failure logs are retained so a pushed revision does not conceal unresolved validation.
