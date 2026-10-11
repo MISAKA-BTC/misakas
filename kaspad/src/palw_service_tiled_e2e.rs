@@ -130,10 +130,19 @@ impl TiledFixture {
             chain.config.params.palw_prompt_ids_form_v1(),
             chain.config.params.net.to_string().into_bytes(),
         )
-        .with_chain_classes_v1()
-        .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&chain.config.params));
+        .with_chain_classes_v1();
         let holding = sdk.load_artifact(&self.path).unwrap();
-        sdk.resolve_chain_registered(self.profile.shape_profile_id(), self.root, &[holding], &self.profile, &self.canonical).unwrap()
+        let registry = crate::palw_backends::PalwBackendRegistry::for_node_v1(
+            &chain.config.params,
+            chain.bundle.court.clone(),
+            chain.config.params.palw_prompt_ids_form_v1(),
+            vec![holding],
+            chain.config.params.net.to_string().into_bytes(),
+            true,
+        );
+        registry.resolve_or_chain(self.profile.shape_profile_id(), self.root, |id| {
+            chain.tc.palw_registered_class_carriage_v1(id)
+        }).unwrap()
     }
 
     pub async fn register(&self, chain: &mut Chain, floats: &mut [Funding]) {
