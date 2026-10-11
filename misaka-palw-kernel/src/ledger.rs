@@ -1171,6 +1171,13 @@ impl KernelLedgerV1 {
                     return Err(KernelRefusalV1::rule(NAME, "the claim is already convicted"));
                 }
                 self.proof_open(row).map_err(|why| KernelRefusalV1::rule(NAME, why))?;
+                // **G14-R: an IDENTICAL re-seal is a no-op** — the earlier row, its DAA and its bounty precedence stand. A pursuit that
+                // restarted while its seal was in flight cannot know whether the seal landed, and re-sends the same bytes; without
+                // this, the second copy restarted the seal's clock (delaying its own filing past what the restart cost) and gave a
+                // copyist who sealed the same bytes in between the earlier seal.
+                if self.proof_seals.get(&(*claim, *accuser)).is_some_and(|row| row.seal == *seal) {
+                    return Ok(out);
+                }
                 // One seal per (claim, accuser): a re-seal (another proof) replaces the earlier one and its clock restarts.
                 if !self.proof_seals.contains_key(&(*claim, *accuser))
                     && self.proof_seals.range((*claim, [0; 64])..=(*claim, [u8::MAX; 64])).count()

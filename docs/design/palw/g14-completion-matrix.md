@@ -426,6 +426,96 @@ from the RPC op builders — there is **no kaspad kernel-route verifier service*
 * Restart / reorg / IBD resume of a mid-descent case: the descent state is a cache rebuilt from chain answers (reset on a branch
   change like LG14-B's); not exercised [G14-R].
 
+## 2f. G14-R: recovery and the external path (2026-10-11, lane G14-R, branch `g14/r-recovery-resume`)
+
+The bar's operational half: a public prosecution must **resume** and reach the same objective outcome when its verifier restarts,
+its node reorgs / IBDs / imports a pruning snapshot, or its RPC connection drops. Base: integration `1ad909f76` (contains the
+virtual-stall fix `9fbdb3f83` and G14-B). Overall G14 stays **FAIL / incomplete**; nothing is armed or armable by this lane.
+
+**Design: rebuild, never persist.** Neither route keeps pursuit state a restart can lose or double:
+- **Kernel route** — new `misaka-palw-remote::pursuit` (node policy, consensus-inert): `plan_kernel_pursuit_v1(route rows, pursuit,
+  signed filing)` returns the step the chain still needs (`Seal`, `AwaitSeal`, `FileWhole`, `FileChunks{missing}`, `Demand`,
+  `AwaitAnswer`, `Recheck`, `Done(Convicted|Defaulted)`, `TooLate`, `WouldBeDismissed`, `Refused`, `Stranded`, `NoClaim`) from op 211's
+  rows alone (the ledger, the proof seals, the demand rows, the tag-113 chunk groups of aux table 41). Before it returns `File` or
+  `Demand` it applies the object to a clone of the rebuilt ledger at the next DAA (after the signer's collateral sync the fold
+  performs), so a filing the court would dismiss or refuse is reported, never sent. Nothing is cached across tips, so a reorg has
+  nothing to invalidate. `kernel_pursuit_resume_bound_v1` is G14-B's tolerated downtime: the claim's horizon (pre-Final: window end;
+  else `liability_until`; live claims count the policy liability, a class extension only lengthens it) less the remaining carriage
+  (one chunk a DAA) and one fold.
+- **Carriers must be deterministic.** A chunked filing's group id hashes the SIGNED object: a verifier that re-signs with fresh
+  randomness after a restart strands its half-built group (deposit forfeited at TTL) and opens a second (a second deposit, one of two
+  per-bond slots). Pursuit carriers are signed with FIPS 204 deterministic ML-DSA (`PURSUIT_DETERMINISTIC_RND_V1 = 0^32`); a foreign
+  group of the opener's is reported `Stranded`, never duplicated.
+- **Kernel ledger fix (dormant route, `misaka-palw-kernel::ledger`):** an IDENTICAL proof re-seal is now a no-op. Before, the second
+  copy of the same `SealProof` (a restart with the seal in flight, or the losing branch's carrier merged back after a reorg) replaced
+  the row and restarted its clock — delaying the verifier's own filing and handing bounty precedence to a copyist who sealed the same
+  bytes in between. A re-seal of OTHER bytes still replaces and restarts (unchanged). No wire, tag, table or registry change; root
+  changes only on the dormant kernel route in that case.
+- **Legacy V2 route** — the common filer's book (`kaspad::palw_fraud_filer`) is already a cache rebuilt from the tip and the accepted
+  blocks, with codex's branch invalidation (walk reset clears answers, frontiers, CKW, binding, localizer, `sent`, input bootstrap,
+  and the filer's court-queue items; job/acceptance changes restart the case; stale blocking replays are drained, never applied). The
+  reporter door is persisted and replans from rows on reorg. G14-R found no cache in the pursuit path left without invalidation and
+  changed none of that logic; it adds the service-level and node-level evidence below.
+
+**DAG reorg semantics (observed, recorded).** Under the shipped `palw_reorg_strict_economic_win` an all-economic tie reorgs only when
+the incumbent side spans ≤ 2 DAA, so the reorgable step is the last carrier (carrying + folding block). And in a DAG the losing
+branch is not discarded: the next block merges it, so its non-conflicting pursuit carrier is re-accepted. Measured on the kernel route:
+right after the reorg the tip lacks chunk 0 and the plan re-derives `[0, 1, 2]`; one block later the merge has re-added it and the
+plan re-derives `[1, 2]`. Funding must come from the virtual UTXO set (the losing branch's carrier sits in the virtual's merge set),
+and a re-sent duplicate (identical seal: no-op; demand: free join; reservation: one per reserver; chunk part: dropped) costs no
+deposit.
+
+**Recovery point × route** (V-node = canonical real-node harness: mempool → template → block fold → persisted tip → read ops; V-svc =
+the actual `PalwPanelService`; socket = real gRPC server + wRPC proxy on 127.0.0.1 driven by `KaspaRpcClient` / `GrpcClient`):
+
+| Recovery point | K2-TIR v1/v2 (Panel / OPV) | K2-TIR-v4 segmented (OPV) | Legacy V2 public filer |
+|---|---|---|---|
+| Verifier restart | **V-node PASS** — restarted after the seal and after each chunk of a 3-chunk filing: no re-seal (an in-flight duplicate seal keeps its DAA), each chunk once, one group, conviction before Final, inside the resume bound | (covered by the node restart, below: a new process recomputes its own replay) | **V-svc PASS** — the actual service stopped after its reservation and restarted (same state dir): no second reservation, demand once |
+| Node restart (same DB) | **V-node PASS** — between chunk 0 and 1; the half-built group off disk | **V-node PASS** — between the producer's `Respond` parts (partial answer set): open demands off disk, none re-filed | V-node (existing `lg14a_the_pursuit_survives_a_node_restart`) |
+| Reorg | **V-node PASS** — last chunk reorged out → plan `[0,1,2]`; merge re-adds → `[1,2]`; one conviction, no deposit held; a DAG-IBD node agrees | **V-node PASS** — the first demand reorged out → re-derived (same position); the search continues | **V-node PASS** — post-Final reservation reorged out; a NEW verifier re-derives from the tip and convicts; ≤ 1 reservation of ours in Z's chain blocks; deposit refunded, collateral net zero; no unit demanded twice |
+| Full IBD | **V-node PASS** — node started after the seal and a partial filing finishes the same group; also after a SERVED demand (re-check reads the served position off the rows, convicts; one demand) | **V-node PASS** — a DAG-IBD node (merged blocks included) started mid-search finishes it | **V-node PASS** — node started mid-descent (reservation, binding, ranges): new verifier re-learns binding/localizer from authenticated answers, convicts; one reservation, no unit twice. **V-svc PASS** — after the demand the node is replaced by an empty DB that re-validates every block; a third service reaches the DA default |
+| Pruned import | **V-node PASS** (OPV) — after the demand: `AwaitAnswer` with the demand's own deadline, demanded once, the chain defaults it | **V-node PASS** — after a partial answer set: the search resumes on the importer and convicts | **V-node PASS** — after reservation + binding: the dispute record rides the carriage, conviction on the importer (harness keeps bodies ≤ P; answers needed are > P; bodies lost to real pruning = codex's reacquisition) |
+| Real socket RPC, disconnect/reconnect | **socket PASS** — every read (op 211 paged, 210, 212, 231, 202) and every carrier (`submitTransaction` → the node's mempool check → template) over borsh wRPC; the proxy restarted twice (connection dropped) and the node behind it swapped for an IBD node mid-filing; JSON wRPC and gRPC serve the same op 210 document | (same transport; not separately driven) | **socket PASS** — ops 204/205/206 and 202 over borsh wRPC follow the pursuit across a proxy restart and a node swap (IBD node; a new verifier convicts); JSON frames the same op 204 document |
+| Deadline (G14-B) | **V-node PASS** — down until the pre-Final resume bound: convicts before Final; down past Final: convicts in liability; down past liability: `TooLate`, nothing sent, nothing charged | bound function shared; not separately driven | legacy: the producer's session deadline is the chain's (a default needs no verifier action); the 34-session / hard-deadline limits are G14-B's FAIL rows, unchanged |
+
+**What "socket" is and is not.** `consensus/src/pipeline/virtual_processor/tests/g14r_socket_rpc.rs` fronts a test node with an
+`RpcApi` whose PALW ops run exactly the handlers' builders (`kaspa_rpc_core::convert::{palw_kernel, palw_legacy}`,
+`palw_state_proof_v1`); the shipping `kaspa_grpc_server::Adaptor`, the `kaspa_wrpc_server` proxy (`grpc_proxy_address` mode, borsh /
+JSON) and the real clients carry them. It is not `RpcCoreService` (that needs a p2p flow context, mining manager and index processor,
+and a network passing `validate_palw_v2`, which refuses these fences), and it is not a separate process.
+
+**Tests and results (2026-10-11, this branch; `buildslot.sh … --offline`, line-tables profile):**
+- `misaka-palw-kernel --test g14r_reseal`: 1 PASS (identical re-seal keeps the first DAA; other bytes replace; files and convicts).
+- `misaka-palw-remote --lib pursuit`: 2 PASS (V-unit).
+- `kaspa-consensus --lib g14r_` (skip socket): **12 PASS** — `g14_kernel_route_e2e::recovery` 7, `real_scale::g14r_seg` 2,
+  `lg14a_legacy_filer_e2e::g14r_resume` 3. Socket: **2 PASS** (`socket_rpc::g14r_kernel_v2_…`, `g14r_resume::g14r_lg14a_the_dispute_reads_…`).
+- Regression `kaspa-consensus --lib -- g14_canonical lg14a_ g14_k2s_ t12_a2u g14_kernel_route_replay g14_kernel_route_survives g14b_`:
+  **60 PASS**, 0 FAIL (A2U green).
+- `kaspad --lib` (actual service): **`resume::g14r_the_actual_public_filer_service_resumes_after_a_restart_and_on_a_fresh_database_without_duplicates`
+  PASS** (single-threaded run; service 1 reserved and stopped at DAA 1037; ten blocks with no service; service 2 rebuilt its case and
+  demanded with no second reservation; the node was replaced at DAA 1054 by an empty database that re-validated every block; service 3
+  reached the objective DA default — one reservation, no unit demanded twice, the default collected, the reservation released).
+  `palw_fraud_filer::tests` 16 PASS. The pre-existing `fresh_public_bond_service_carries_reserved_da_to_objective_default` (codex) **FAILED
+  on this host twice** (with 4 test threads and alone) at its own 360-second wall-clock limit, the reservation and demand on chain and the
+  session deadline (≈1,200 DAA away) not yet reached: a host-speed limit of that test's loop (20 heartbeats an iteration), not a logic
+  failure seen here — UNKNOWN until re-run on a quieter host; this lane did not change it.
+- `misaka-palw-kernel` (all targets): **286 PASS**, 0 FAIL after the re-seal change.
+
+**Live drill: not run — infeasible as specified, for these exact reasons.** (1) No drill flag arms `palw_legacy_public_filer_v1`
+(nor `palw_legacy_held_da_v2`), and the kernel route's `palw_probabilistic_constraints_v1` is refused by every drill flag by design
+(canonical harness doc) — a drill-only arming flag would be new arming code; (2) a pursuit needs a false claim that every seat signs
+`Valid`: the drill has producer tamper flags but no seat-collusion knob, so honest drill seats refute the lie through their own duty
+and the public filer has nothing left to carry (or races the seat court); (3) a non-genesis public bond needs the preset 1,000-DAA
+maturity on the live cadence (genesis cards are exempt, but then every outsider is a drill card); (4) the kernel route
+needs a registered K2 class on the drill, which is codex's onboarding path. The socket test above is this lane's external-path
+evidence; a drill pursuit needs (1)+(2) decided first.
+
+**Open (G14-R).** Kernel route has no node service yet — the planner is the library a remote/in-node verifier runs; wiring it into
+`PalwPanelService` (tick, funding from the virtual UTXO set, deterministic signer) is not done. Legacy service-level reorg is V-unit
+(codex) + V-node (engine), not V-svc. v4 deadline resume and v4 over the socket are not separately driven. Permanently pruned bodies
+(reacquisition) remain codex's. The verifier's synced collateral is read from its own bond (the tests read the node's tip; a remote
+verifier reads op 202's bond row).
+
 ## 3. Family matrices (milestone baseline)
 
 ### 3.1 F1 — K2-TIR v1/v2 single-program classes (Panel-licensed with every interim seat colluding, and OPV)
@@ -959,3 +1049,4 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   `fresh_public_bond_service_carries_reserved_da_to_objective_default` FAILED twice on its 360 s wall-clock deadline under host load
   (load average 10–15; reached DAA ~2,036 of the 2,231 default) and PASSED (objective DA default at 2,236) with the deadline raised
   locally to 1,500 s — the raise is not committed; the test's wall-clock bound is load-sensitive.
+* 2026-10-11 — G14-R (§2d): recovery and the external path. `misaka-palw-remote::pursuit` (kernel pursuit planner rebuilt from public rows, dry-run filings, resume bound, deterministic carriers); kernel ledger: identical proof re-seal is a no-op (dormant route); V-node recovery cases for K2-TIR v2 (Panel/OPV), K2-TIR-v4 and the legacy public filer (restart, reorg + DAG merge, full IBD, pruned import, deadline); a real gRPC/wRPC socket in front of a test node (ops 202, 204–206, 210–212, 231, submitTransaction) with disconnect/reconnect and node swap; the actual service resumes after a restart and on a fresh database. Consensus 14 + 60 regression PASS, kernel 286 PASS, kaspad service 1 PASS (+16 unit); codex's fresh-service test times out at 360 s on this host (UNKNOWN). Live drill not run (infeasible: no drill arming for the public filer / kernel route, no seat-collusion knob).

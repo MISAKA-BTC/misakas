@@ -16842,6 +16842,9 @@ mod g14_kernel_route_e2e;
 // Lane LG14-A: the legacy V2 route under G14 -- a bond registered after genesis reserves, localizes and convicts a lie every seat
 // signed Valid (before and after Final), defaults a withheld unit, is dismissed on an honest claim, survives restart / reorg / replay.
 mod lg14a_legacy_filer_e2e;
+// Lane G14-R: the PALW read ops (202, 204-206, 210-212, 231) and submitTransaction over a REAL socket — gRPC server and wRPC proxy
+// on 127.0.0.1 in front of a test node, driven by the real clients (used by the kernel and legacy resume cases).
+mod g14r_socket_rpc;
 // RFC-0004 Part II: computation specifications with typed roots on the real node -- Weights byte for byte, Memory, Retrieval,
 // Composite, each lie convicted by an outsider and each withholding a default.
 mod r4x_typed_roots_e2e;

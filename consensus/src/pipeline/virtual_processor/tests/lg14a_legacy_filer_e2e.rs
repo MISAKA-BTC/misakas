@@ -1151,3 +1151,7 @@ async fn lg14a_unarmed_the_reservation_is_dropped_by_name_and_the_bystander_is_o
     lg.beat_to(licensed + lg.bundle.state.window_challenge_at(licensed) + 2).await;
     assert!(matches!(lg.view(id).phase, PalwClaimPhaseV2::Final { .. }), "outrun: Final under an open non-seat session");
 }
+
+// Lane G14-R: the pursuit resumes across a reorg that removes the reservation, a full IBD node mid-descent and a pruned import:
+// `lg14a_legacy_filer_e2e/g14r_resume.rs`.
+mod g14r_resume;

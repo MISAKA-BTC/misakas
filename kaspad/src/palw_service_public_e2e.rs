@@ -663,3 +663,7 @@ async fn fresh_public_bond_service_carries_reserved_da_to_objective_default() {
     drop(retained_flow);
     eprintln!("[service-public] actual service start/exit joined, callback owner released");
 }
+
+// Lane G14-R: the actual service resumes after a restart and on a fresh database, without a second reservation or a duplicate demand.
+#[path = "palw_service_resume_e2e.rs"]
+mod resume;

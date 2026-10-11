@@ -139,7 +139,7 @@ pub(super) async fn ibd_node(main: &Net) -> Net {
 /// through `P`, discards its own PALW tip and deltas through `P`, installs the PALW state `main` serves for `P` against `T`'s
 /// committed root (tail `0xEC` carries the route), and then takes the blocks after `P` (the parent's `..._survives_a_pruned_import`,
 /// here a node that then prosecutes).
-async fn pruned_import_node(main: &mut Net) -> Net {
+pub(super) async fn pruned_import_node(main: &mut Net) -> Net {
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     let p = main.chain.sink();
     let ttpb = main.ttpb();
@@ -189,7 +189,7 @@ async fn start_node(main: &mut Net, how: Start) -> Net {
 }
 
 /// `from`'s blocks that `to` lacks arrive at `to` (a peer relaying its chain); `to`'s clock continues from the later of the two.
-async fn sync(from: &Net, to: &mut Net) {
+pub(super) async fn sync(from: &Net, to: &mut Net) {
     for b in chain_blocks(&from.chain, from.chain.sink()) {
         if to.chain.ctx.consensus.get_block(b.header.hash).is_err() {
             arrive(&to.chain, b, "a peer's block").await;
@@ -201,7 +201,7 @@ async fn sync(from: &Net, to: &mut Net) {
 
 /// **Two nodes at one tip agree**: the sink, the PALW state root, the kernel route's rows (as served), and the delta root of every
 /// chain block both hold a delta for (a pruned-import node has none at or below its pruning point, by construction).
-fn agree(main: &Net, node: &Net, what: &str) {
+pub(super) fn agree(main: &Net, node: &Net, what: &str) {
     assert_eq!(node.chain.sink(), main.chain.sink(), "{what}: same sink");
     assert_eq!(node.chain.tip_state().1.state_root(), main.chain.tip_state().1.state_root(), "{what}: same PALW state root");
     assert_eq!(node.chain.ctx.consensus.palw_kernel_route_v1(), main.api(), "{what}: same kernel route rows");
