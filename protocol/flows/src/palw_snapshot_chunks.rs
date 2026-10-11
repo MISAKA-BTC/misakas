@@ -3,7 +3,7 @@
 //! verifies the consensus state root. No decoded snapshot is installed by this module.
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
-use kaspa_hashes::{Hash64, hashers::MerkleBranchHash64};
+use kaspa_hashes::{Hash64, MerkleBranchHash64};
 use std::{
     collections::BTreeSet,
     fs::{File, OpenOptions},
