@@ -18899,7 +18899,7 @@ mod accepted_objects_walk_tests {
             kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
         answer_history_unavailable: bool,
         flip_sink_on_block: Option<(BlockHash, BlockHash)>,
-        observed_sink: std::cell::Cell<Option<BlockHash>>,
+        observed_sink: std::sync::Mutex<Option<BlockHash>>,
     }
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
@@ -18922,7 +18922,7 @@ mod accepted_objects_walk_tests {
             self.targets.get(&claim).cloned()
         }
         fn get_sink(&self) -> BlockHash {
-            self.observed_sink.get().unwrap_or(self.sink)
+            self.observed_sink.lock().unwrap().unwrap_or(self.sink)
         }
         fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
             self.headers.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
@@ -18943,7 +18943,7 @@ mod accepted_objects_walk_tests {
         }
         fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
             if let Some((at, sink)) = self.flip_sink_on_block && at == hash {
-                self.observed_sink.set(Some(sink));
+                *self.observed_sink.lock().unwrap() = Some(sink);
             }
             self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
