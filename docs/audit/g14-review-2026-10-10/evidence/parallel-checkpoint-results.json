@@ -201,7 +201,67 @@
       "source": "14c3c6f9",
       "result": "30 PASS / 0 FAIL: prefixes4, tokenizer11, class2, resources5, rooted courts4, terminal2, wire2",
       "sha256": "40e01ab273eecae468618afd2256ab52f8fae372aa09b01acb3ca3fdb0519317"
+    },
+    {
+      "name": "integrated-node-public-courts-build",
+      "source": "ce6e64ce3",
+      "result": "build FAIL: six integration module/type/fixture errors, later repaired805 and152",
+      "sha256": "a79284f3f863dd7aedce8887bcb63a5f4827834e9bdd995f1e853edcd8f6ef23"
+    },
+    {
+      "name": "integrated-node-public-courts-build-repair",
+      "source": "15257fca9",
+      "result": "Rust compiled; node link FAIL ENOSPC, base0 executable completed",
+      "sha256": "5af075bca17d0796ed346d24017541c1003166dc8840c9d56bcfc16218ca8151"
+    },
+    {
+      "name": "public-family-native-goldens-152",
+      "source": "15257fca9",
+      "result": "0 PASS / 2 FAIL: honest public/native prefix checks passed before incorrect cross-job output commitment equality; fixture repair15b/320 pending execution",
+      "sha256": "526554022f04e6c9230838281989aa461486f1a3f786b02d4359b648437182bf"
+    },
+    {
+      "name": "native-owned-history-build-605",
+      "source": "605f83ed4",
+      "result": "build FAIL: helper payload module path and parent-test visibility; repair11255b427 pending execution",
+      "sha256": "05790f9e46c196148cdfe5c35147748b01cec6f4c0cd4c3b6d19dd2dcd8b27a9"
+    },
+    {
+      "name": "native-owned-history-build-helper-repair",
+      "source": "11255b427",
+      "result": "node build PASS; core opt0/debug0 and kaspad debug0",
+      "sha256": "cb86c3dd007f83a532dcfc401336577b126ff85867c6d055c7e866806130ee62"
+    },
+    {
+      "name": "native-owned-history-focused-112",
+      "source": "11255b427",
+      "result": "38 PASS / 0 FAIL: filer33, compressed/raw held witness2, prune-hole adapter1, ordinary registered class+jury services2; branch-name filter matched0 and separately rerun",
+      "sha256": "b9d1a135a39c0c05703301ce749b6307787a36b02389367e9475b76e79971974"
+    },
+    {
+      "name": "native-pruned-round-112",
+      "source": "11255b427",
+      "result": "2 PASS adapters (branch switch, same-length held-file mutation); real pruned service ABORT stack overflow before endpoint. Retry uses64MiB debug threads; not production RAM qualification",
+      "sha256": "51c0fdb46bd9d8618de310321ea69cb83f46c68a31607bff1bf36a14fa9ac351"
+    },
+    {
+      "name": "paid-prefix-native-build-aafa",
+      "source": "aafa9b234",
+      "result": "joint core/base0 build PASS",
+      "sha256": "7c750556b81e7d8d59329cba60e37720ad0df33fcbc4ab21ad86940350344321"
+    },
+    {
+      "name": "paid-prefix-core-tests-aafa",
+      "source": "aafa9b234",
+      "result": "30 PASS / 1 FAIL: prefix8, tokenizer12, rooted6, frozenEXEC3, fence1 PASS; planned165/167 wire pins FAIL",
+      "sha256": "b9bc949565c45e49458e35037edfc52227ab92bcd5daeeb55861129e188ae222"
+    },
+    {
+      "name": "public-family-native-goldens-aafa",
+      "source": "aafa9b234",
+      "result": "2 PASS / 0 FAIL: real BASE0/Q36 producer, initial/inherited and honest/false named prefix in each; exact public old leaves and own job-bound execution roots",
+      "sha256": "2de282d7943d4f7f83609ef98201ea4925f82d0d4549e9001cb039978f5e746a"
     }
   ],
-  "qualification": "Integrated kernel sourcef01699022 passes7 scope tests and integrated core source14c3c6f9 passes30 focused tests. Primary ce6e64ce merges integration105e with public family/state, paid tokenizer owner, retained round tickets and signed reacquisition. Actual-length operand and newer recovery fixtures are subsequent source changes: next node/core/native builds and runtimes must qualify them. Q36 native run d6 failed a folded-material fixture assumption, repaired780 but unexecuted. Registered tiled/recovery service failures remain unsuperseded. Large raw-length misstatement financing, prefix max geometry, maximal-profile reacquisition, actual P2P/prune and full G14 remain pending. Activation remains refused."
+  "qualification": "Node11255b427 buildPASS and40 focused PASS (38 first log plus2 branch/mutation adapters). Real pruning service initial debug harness stack overflow;64MiB retry pending and is not production RAM qualification. Core/base0aafa9b234 joint buildPASS, core30PASS1FAIL only changed165/167 wire pins, host nativeBASE0/Q362PASS with own-context public false-prefix conviction. New source99c802af1 adds rooted prefix journal/cert tests, exact sealed progress, Q36 bounded68-byte contract and an unconnected node scheduler: compilation/actual execution pending. Previous failures and source-qualified logs retained. Max Q36 typed paging/input-leaf streaming, compact immutable profile seed, grouped reacquisition, full service/P2P/reorg/resource obligations remain open. No full G14 or activation PASS."
 }
