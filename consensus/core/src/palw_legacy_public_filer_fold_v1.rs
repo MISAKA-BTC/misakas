@@ -36,6 +36,44 @@ pub(super) fn palw_legacy_dispute_indexes_of_v1(
 // ---- reads ------------------------------------------------------------------------------------------------------------------------
 
 impl PalwChainStateV2 {
+    pub(super) fn check_public_fp_job_v1(
+        &self,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    ) -> Result<(), PalwStateV2Error> {
+        if !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+            || crate::palw_freeprompt_v3::fp_claim_id_v3(job) != *claim_id
+            || job.job.class_id != claim.class_id
+            || job.job.executor_bond != claim.bond.0
+            || job.execution_root != claim.execution_root
+            || job.trace_root != claim.trace_root
+            || job.output_root != claim.output_root
+            || job.work_leaves != claim.work_leaves
+            || claim.job_identity == ZERO_HASH64
+            || crate::palw_fp_execution_v3::palw_fp_job_pin_v1(job) != claim.job_identity
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("public FP job differs from its accepted claim".into()));
+        }
+        Ok(())
+    }
+
+    pub(super) fn assert_public_fp_jobs_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        for (claim_id, wire) in &self.fp_public_jobs {
+            let claim = self
+                .claims
+                .get(claim_id)
+                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("public FP job without a retained claim".into()))?;
+            if !params.legacy_public_filer_active_at(claim.accepted_daa) {
+                return Err(PalwStateV2Error::CarriageInconsistent("public FP job below its fence".into()));
+            }
+            let job = borsh::from_slice::<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(wire)
+                .map_err(|_| PalwStateV2Error::CarriageInconsistent("public FP job encoding".into()))?;
+            self.check_public_fp_job_v1(claim_id, claim, &job)?;
+        }
+        Ok(())
+    }
+
     /// Historical answers remain replay guards. An explicit reacquisition is not satisfied until an authenticated copy
     /// appears again on chain. This single read is shared by answer admission, responder duties, close and timeout.
     pub fn palw_da_unit_available_v1(
@@ -164,6 +202,35 @@ impl PalwChainStateV2 {
 // ---- the writer and the outcomes ----------------------------------------------------------------------------------------------
 
 impl TransitionBuilder<'_> {
+    /// Both ordinary and evaluation FP folds validate the original extracted commitment before their first write.
+    pub(super) fn public_fp_job_wire_v1(
+        &self,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+        public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+    ) -> Result<Option<Vec<u8>>, PalwStateV2Error> {
+        if !self.params.legacy_public_filer_active_at(claim.accepted_daa) {
+            return Ok(None);
+        }
+        public_job
+            .map(|job| {
+                self.state.check_public_fp_job_v1(claim_id, claim, job)?;
+                borsh::to_vec(job).map_err(|_| PalwStateV2Error::CarriageInconsistent("FP job encoding".into()))
+            })
+            .transpose()
+    }
+
+    /// The original accepted commitment, journaled for the claim's entire retained lifetime (delta 201).
+    pub(super) fn write_public_fp_job_v1(&mut self, key: Hash64, new: Option<Vec<u8>>) {
+        let old = match &new {
+            Some(wire) => self.state.fp_public_jobs.insert(key, wire.clone()),
+            None => self.state.fp_public_jobs.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::PublicFpJob { key, old, new });
+        }
+    }
+
     /// **The one writer of `legacy_disputes`** (delta 200): the record, its two indexes, journaled.
     pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) {
         let old = match &new {
@@ -453,6 +520,15 @@ pub(super) fn apply_dispute_reacquired_v1(
             if let Some(why) = builder.da_binding_answers_another_job_v1(now, &claim_id, binding) {
                 return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
             }
+            if matches!(unit, crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
+                | crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob)
+            {
+                crate::palw_legacy_answer_chunks_v2::palw_legacy_input_answer_transport_check_v2(
+                    binding, unit, builder.extras.prompt_ids_form_v1(),
+                    crate::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
+                    palw_da_disclose_window_daa_v1(builder.params),
+                ).map_err(refused)?;
+            }
             None
         }
         _ => return Err(refused("this unit has no reacquisition route, or its binding form is wrong")),
@@ -522,6 +598,7 @@ impl PalwChainStateV2 {
             accepted_daa: claim.accepted_daa,
             trace_retention_daa: claim.trace_retention_daa,
             job_identity: claim.job_identity,
+            public_fp_job: self.fp_public_jobs.get(claim_id).cloned(),
             work_leaves: claim.work_leaves,
             deadline_daa: self.deadline_of(claim_id),
             hard_deadline_daa: palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)),
@@ -566,6 +643,8 @@ pub struct PalwLegacyDisputeViewV1 {
     pub trace_retention_daa: u64,
     /// The job the claim recorded (an attempt's carrying-header anchor; a free prompt's pin): what a verifier replays.
     pub job_identity: Hash64,
+    /// Borsh of the original accepted FP commitment, from rooted state. No prompt IDs or capture.
+    pub public_fp_job: Option<Vec<u8>>,
     pub work_leaves: u64,
     /// DL-1's deadline (`None` while a reservation, a seat-like session or a court holds the claim).
     pub deadline_daa: Option<u64>,
@@ -669,6 +748,9 @@ pub struct PalwLegacyDisputeObservationV1 {
     pub accepted_daa: u64,
     pub trace_retention_daa: u64,
     pub job_identity: Hash64,
+    /// Canonical Borsh commitment bytes as hex, authenticated by the claim id and tip state root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_fp_job: Option<String>,
     pub work_leaves: u64,
     pub deadline_daa: Option<u64>,
     pub hard_deadline_daa: u64,
@@ -706,6 +788,7 @@ impl PalwLegacyDisputeObservationV1 {
             accepted_daa: view.accepted_daa,
             trace_retention_daa: view.trace_retention_daa,
             job_identity: view.job_identity,
+            public_fp_job: view.public_fp_job.as_ref().map(|wire| faster_hex::hex_string(wire)),
             work_leaves: view.work_leaves,
             deadline_daa: view.deadline_daa,
             hard_deadline_daa: view.hard_deadline_daa,

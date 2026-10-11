@@ -543,7 +543,7 @@ impl PalwDecodeConstraintCourtV1<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_decode_select_v2::{
         PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY, PalwDecodeSamplingV2, decode_token_select_v2,
@@ -1696,6 +1696,72 @@ mod tests {
             eog: table.eog_opening().expect("the list"),
             witness,
         }
+    }
+
+    /// Public-proof fixture: a self-consistent binding under the constrained FP descriptor,
+    /// with public row/table openings. No producer execution or secret state is supplied.
+    pub(crate) fn public_constrained_case_for_tests_v1(fault: bool) -> (crate::palw_step_leg::PalwStepBindingV2, PalwConstrainedDecodeAccusationV1) {
+        let constraint = bracket_digit();
+        let table = token_table();
+        let rows = constrained_rows(6);
+        let mut ids = honest_run(&constraint, &rows, PalwDecodeSamplingV2::GREEDY);
+        if fault { ids[1] = b'x' as u32; }
+        let mut binding = constrained_binding(&rows, &ids);
+        let mut job = constrained_job(&constraint, &table);
+        job.class_id = binding.shape_profile.shape_profile_id();
+        job.prompt_tokens = binding.job_context.declared_prefill_tokens;
+        job.prompt_token_ids_hash = binding.job_context.prompt_token_ids_hash;
+        job.max_context_tokens = binding.job_context.max_context_tokens;
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job, &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, ids.len() as u32),
+            &binding.job_context.network_id,
+        ).unwrap();
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows[..ids.len()], &ids).unwrap();
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        crate::palw_step_leg::verify_binding_v1(&binding).unwrap();
+        let proof = accusation(&job, &table, &binding, &rows, &ids, 1, &[], None);
+        (binding, proof)
+    }
+
+    pub(crate) fn public_flat_constrained_case_for_tests_v1(fault: bool) -> (
+        crate::palw_step_leg::PalwStepBindingV2,
+        crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1,
+    ) {
+        let (mut binding, proof) = public_constrained_case_for_tests_v1(fault);
+        let mut job = proof.job;
+        binding.shape_profile.logits_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1();
+        job.class_id = binding.shape_profile.shape_profile_id();
+        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: binding.job_context.model_profile_id,
+            runtime_manifest_hash: binding.job_context.runtime_manifest_hash,
+            runtime_class_id: binding.job_context.runtime_class_id,
+            shape_profile_id: job.class_id,
+            cu_ruleset_id: binding.job_context.cu_ruleset_id,
+        };
+        // Keep this synthetic 10,000-lane flat proof within the unchanged direct evidence
+        // ceiling. A complete four-row pin is over that ceiling and needs multipart carriage.
+        let ids = proof.pin.generated_token_ids[..2].to_vec();
+        let rows = constrained_rows(6)[..ids.len()].to_vec();
+        binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
+            &job, &class,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, ids.len() as u32),
+            &binding.job_context.network_id,
+        ).unwrap();
+        binding.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, &rows, &ids);
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        crate::palw_step_leg::verify_binding_v1(&binding).unwrap();
+        (binding, crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1 {
+            pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: ids },
+            position: 1, job, renderings: proof.renderings, eog: proof.eog, witness: None, beat_lane: None,
+        })
     }
 
     /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with

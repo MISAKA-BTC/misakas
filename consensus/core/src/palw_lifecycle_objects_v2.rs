@@ -396,6 +396,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // build cannot decode them); the fence, the signature, the bonds, the claim's roots and the units are the gate's and the fold's.
         PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. }
         | PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. }
+        | PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }
         | PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => Ok(()),
         // Lane BUDGET (tag 140): a capital assignment rides at every height with NO shape check here — not even its signature's presence
         // (A2U finding #1: an isolation-time refusal of bytes an older build tolerates is a split). The fence, the signature and ADR-0177
@@ -1334,7 +1336,8 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
             PalwLifecycleKindOwnerV1::Fence(F::ProviderCourtV1)
         }
         // Lane LG14-B: the legacy held DA — demand, answer, leaf recompute (157–159).
-        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. } => {
+        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. }
+            | O::LegacyHeldAnswerDeclaredV2 { .. } | O::LegacyHeldAnswerChunkV2 { .. } => {
             PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
         }
         // Lane BUDGET: a bond's capital assignment (140).
@@ -1477,6 +1480,8 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (157, "LegacyHeldDemandedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (158, "LegacyHeldAnsweredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (160, "LegacyHeldAnswerDeclaredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (161, "LegacyHeldAnswerChunkV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1762,6 +1767,10 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
     ),
+    (
+        "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
+    ),
     // LG14-B: `LegacyHeldV2` appended; every int-12 kind carrying it is owned by `palw_legacy_held_da_v2` (guarded arms).
     (
         "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
@@ -1781,13 +1790,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_task_heads_v1", digest: 0x12222f873f5f85a5 },
     ),
-    // codex LG14-A follow-up (canonical FP input, 2026-10-11): `PalwPromptProofV1::FpCanonicalWhole` (tag 2) appended inside the
-    // opaque `evidence` bytes of an ObjectiveOffence (tag 51). The live build decodes the object and refuses the evidence it cannot
-    // decode; below `palw_legacy_public_filer_v1` this build decodes it and refuses it by `palw_prompt_proof_fence_v1`
-    // (ContradictionNotAdmitted) — a refusal either way (re-read). Stage equality is to be confirmed by its lane (codex).
+    // codex G14 (constrained-token direct proofs, 2026-10-11): `PalwPanelContradictionV1` 14 `ConstrainedDecode` and 15
+    // `ConstrainedDecodeFlat` appended inside an ObjectiveOffence's opaque evidence bytes (tag 51), as `PalwPromptProofV1` above:
+    // isolation stays int-12; acceptance / fold refuse both below the public-filer (and constraint) fences (ContradictionNotAdmitted).
     (
-        "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
-        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
+        "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf6c76ea7f70d9f96 },
     ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
@@ -1940,7 +1948,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // LG14-B: the legacy V2 route's descent demand, its answer and the leaf recompute (RFC-0014 §4–§5).
     // LG14-A: reservation, release and nonce-bound public DA reacquisition (RFC-0014 §6–§7).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 154, hi: 156 }, "palw_legacy_public_filer_v1", "LG14-A dispute reservation", true),
-    a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 159 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 157, hi: 161 }, "palw_legacy_held_da_v2", "LG14-B legacy held DA", true),
     // ---- kernel-route inner kinds (inside tag 110) ----
     a2_row(PalwA2SlotV1::KernelInner { lo: 1, hi: 12 }, "palw_probabilistic_constraints_v1", "G14 lane D (tag 110's own)", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 13, hi: 14 }, "palw_panel_free_v1", "RFC-0015 OPV registrations", true),
@@ -1992,6 +2000,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
     a2_row(
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1" },
+        "palw_legacy_public_filer_v1",
+        "LG14-A: canonical FP whole prompt proof inside opaque tag-51 evidence; isolation remains int-12, palw_prompt_proof_fence_v1 / canonical_fp_prompt_proof_authenticates_job_convicts_count_and_root_and_keeps_the_fence hold interpretation at acceptance/fold",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1" },
         "palw_legacy_held_da_v2",
         "LG14-B: PalwDaUnitV1::LegacyHeldV2 appended (carried by tags 55, 67, 83; written into da_sessions / da_claims only past the fence)",
@@ -2004,9 +2018,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
-        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1" },
+        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
         "palw_legacy_public_filer_v1",
-        "codex LG14-A: PalwPromptProofV1::FpCanonicalWhole (2) inside an ObjectiveOffence's evidence bytes (tag 51), refused below the fence (re-read)",
+        "codex G14: PalwPanelContradictionV1 14/15 (constrained decode, flat) inside opaque tag-51 evidence; isolation remains int-12, refused below the public-filer and constraint fences at acceptance/fold (re-read)",
         true,
     ),
     a2_row(
@@ -2092,6 +2106,18 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14-A",
         true,
     ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "accepted public FP job metadata (delta 201, tail 0xF0, root block public_fp_jobs/v1)" },
+        "palw_legacy_public_filer_v1",
+        "LG14-A (Codex public bootstrap)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "session-owned legacy answer assembly (delta 202, tail 0xF1, root block legacy_answers/v2)" },
+        "palw_legacy_held_da_v2",
+        "LG14-B multipart answers",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2128,7 +2154,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (140, 149, "BUDGET (ADR-0176/0177)", &["palw_bond_budget_v1", "palw_model_bond_allocation_v1"]),
     (150, 153, "DA16 provider court", &["palw_provider_court_v1"]),
     (154, 156, "LG14-A dispute reservation", &["palw_legacy_public_filer_v1"]),
-    (157, 159, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
+    (157, 161, "LG14-B legacy held DA", &["palw_legacy_held_da_v2"]),
 ];
 
 #[cfg(test)]
@@ -2505,6 +2531,7 @@ pub(crate) mod tests {
         };
         let fp = PalwConsensusObjectV2::FreePromptCommitted {
             job_pin: kaspa_hashes::Hash64::default(),
+            public_job: None,
             eval: None,
             claim: h64(0xF1),
             class_id: h64(1),
@@ -3543,6 +3570,45 @@ pub(crate) mod tests {
             eprintln!("[a2u] rows awaiting their lane's merge:\n  {}", pending.join("\n  "));
         }
 
+        fn canonical_fp_prompt_objects() -> Vec<PalwConsensusObjectV2> {
+            let mut samples = Vec::new();
+            let contradiction = crate::palw_offence_v1::PalwPanelContradictionV1::PromptNotAnchored {
+                binding: zeros(),
+                proof: crate::palw_offence_v1::PalwPromptProofV1::FpCanonicalWhole { job: Box::new(zeros()) },
+            };
+            let mut v1: crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 = zeros();
+            v1.contradiction = contradiction.clone();
+            let mut v2: crate::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 = zeros();
+            v2.contradiction = contradiction.clone();
+            use crate::palw_offence_v1::PalwOffenceKindV1 as K;
+            for (kind, evidence) in [(K::PanelFalseValid, borsh::to_vec(&v1).unwrap()),
+                (K::PanelFalseValidV2, borsh::to_vec(&v2).unwrap())] {
+                samples.push(PalwConsensusObjectV2::ObjectiveOffence { kind, accused: bond(), evidence_id: Hash64::default(), evidence });
+            }
+            samples.push(crate::palw_offence_attribution_v1::palw_executor_refuted_object_v1(
+                    bond(), Hash64::default(), contradiction, None));
+            samples
+        }
+
+        /// The old envelope already decodes opaque evidence, including an unknown prompt proof.
+        /// Its isolation rule asks only for non-empty evidence. Keep that rule on every ruleset;
+        /// the canonical proof's interpretation is fenced later by palw_prompt_proof_fence_v1.
+        #[test]
+        fn canonical_fp_evidence_keeps_the_old_opaque_carrier_isolation_rule() {
+            for object in canonical_fp_prompt_objects() {
+                assert_eq!(palw_lifecycle_kind_owner_v1(&object), PalwLifecycleKindOwnerV1::Int12);
+                let payload = payload_of(&object);
+                for tolerate in [false, true] {
+                    assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), Ok(()));
+                }
+                let unarmed = PalwLifecycleKindFencesV1::default();
+                let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)));
+                for at in [999, 1_000] {
+                    assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                }
+            }
+        }
+
         /// **An appended form inside a live-build kind is owned at the top level**: for every `CarriedAppended` change, a sample object
         /// carrying the new form (listed here by the lane that appends it) is owned by its fence — the guarded arm of
         /// [`palw_lifecycle_kind_owner_v1`] — so every site reads it as the live build does, undecodable, below the fence.
@@ -4250,10 +4316,12 @@ pub(crate) mod tests {
             (153, 0x74bac59d2cf50cd4),
             (154, 0x047359d4d8ba0a7b),
             (155, 0x6d9c4e7671a9cac7),
-            (156, 0x7e5d332147511ca1),
-            (157, 0xc7acaf87a3fefb35),
-            (158, 0x380636cbf4ee26ab),
+            (156, 0xfd9ad539eab02a3c),
+            (157, 0xa5ca85bb4a3be200),
+            (158, 0x1bbcf34fe919b8c4),
             (159, 0x0395636b651f74fa),
+            (160, 0x730c4ce9aa0ff75e),
+            (161, 0xec0447b18452362b),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline
@@ -4262,6 +4330,28 @@ pub(crate) mod tests {
         /// `every_landed_kind_is_pinned_to_its_wire_form` and is an `Int12Inner` change to classify, never a re-pin. Checked against
         /// `0b1c11b87`'s source on 2026-10-10 (every variant equal on this branch, `g14/r4-fixes` and `adv/c4r4`).
         const PALW_A2_INT12_VARIANTS_WIRE_V1: u64 = 0xd1982421da455cca;
+
+        /// The explicitly approved native-only field is excluded from the historical source
+        /// fingerprint only with its exact skipped declaration. Existing frozen declarations
+        /// stay pinned, and removing `borsh(skip)` or changing its type fails this check.
+        fn native_fp_metadata_wire_equivalent(decl: &str) -> Result<String, &'static str> {
+            const FIELD: &str = "#[borsh(skip)]public_job:Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,";
+            if decl.matches("public_job:").count() != 1 || decl.matches(FIELD).count() != 1 {
+                return Err("public_job must be the single approved native-only skipped field");
+            }
+            Ok(decl.replacen(FIELD, "", 1))
+        }
+
+        #[test]
+        fn native_fp_metadata_equivalence_requires_the_exact_skipped_field() {
+            let field = "#[borsh(skip)]public_job:Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,";
+            assert_eq!(native_fp_metadata_wire_equivalent(&format!("FreePromptCommitted{{{field}claim:Hash64}}")),
+                Ok("FreePromptCommitted{claim:Hash64}".into()));
+            for wrong in [field.replace("#[borsh(skip)]", ""), field.replace("Option<Box", "Vec<Box"),
+                format!("{field}{field}"), "claim:Hash64".into()] {
+                assert!(native_fp_metadata_wire_equivalent(&wrong).is_err());
+            }
+        }
 
         /// `PalwConsensusObjectV2`'s variants, squashed as the manifest reader reads them, by name.
         fn object_variant_decls(
@@ -4286,7 +4376,10 @@ pub(crate) mod tests {
                     }
                     let name: String = segment.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
                     if !name.is_empty() {
-                        out.insert(name, segment.to_string());
+                        let declared = if name == "FreePromptCommitted" {
+                            native_fp_metadata_wire_equivalent(segment).expect("LG14-A native field changes no int-12 carrier bytes")
+                        } else { segment.to_string() };
+                        out.insert(name, declared);
                     }
                     start = i + 1;
                 }

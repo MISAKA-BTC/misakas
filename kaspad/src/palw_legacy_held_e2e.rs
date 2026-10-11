@@ -477,6 +477,122 @@ fn producer_answers(d: &Produced, binding: &PalwStepBindingV2, claim: Hash64, un
         .expect("built")
 }
 
+#[test]
+fn lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partial_restart_or_default() {
+    use kaspa_consensus_core::palw_legacy_answer_chunks_v2::*;
+    use kaspa_consensus_core::palw_legacy_public_filer_v1::{palw_dispute_reserved_object_v1, palw_fraud_filer_reservation_v1};
+    use kaspa_consensus_core::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_COUNT, PALW_OBJECT_CHUNK_MAX_GROUPS};
+    let f = Fixture::new(false);
+    let d = produce_at(&f.artifact, &f.profile, Some(&|_| 0));
+    let binding = d.backend.disclose_trace_event(&d.material, u32::MAX, 0).unwrap().binding().clone();
+    let unit = PalwLegacyHeldUnitV2::StepNode {
+        level: kaspa_consensus_core::palw_tir_court_v1::palw_tir_step_tree_height_v1(binding.step_leaf_count),
+        index: 0,
+    };
+    for completion in 0..3 {
+        let (s, claim) = rc_licensed(&d, &f.canonical, &f.profile, f.root);
+        let mut w = World { s, daa: 104, chain: vec![] };
+        // Occupy every shared certification slot through real partial ObjectChunk writes.
+        for group in 0..PALW_OBJECT_CHUNK_MAX_GROUPS {
+            w.block(vec![PalwConsensusObjectV2::ObjectChunk {
+                group: h64(50_000 + group as u64),
+                index: 0,
+                count: PALW_OBJECT_CHUNK_MAX_COUNT,
+                bytes: vec![1; 10],
+            }])
+            .unwrap();
+        }
+        let view = w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap();
+        w.block(vec![palw_dispute_reserved_object_v1(h64(999), palw_fraud_filer_reservation_v1(&view, bond_key(OUTSIDER)), |_| {
+            SIG.to_vec()
+        })])
+        .unwrap();
+        w.block(vec![
+            palw_legacy_held_demand_object_v2(&h64(999), claim, unit, bond_key(OUTSIDER), binding.clone(), |_, _| Some(SIG.to_vec()))
+                .unwrap(),
+        ])
+        .unwrap();
+        let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = producer_answers(&d, &binding, claim, unit) else {
+            unreachable!()
+        };
+        let (too_many, _) = palw_legacy_answer_split_v2(&answer, 4_096, 200_000, |_| Ok(SIG.to_vec())).unwrap();
+        assert!(
+            matches!(
+                w.block(vec![PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration: Box::new(too_many) }]),
+                Err(PalwStateV2Error::LegacyHeldDaRefused { why, .. }) if why.contains("existing DA window")
+            ),
+            "a manifest cannot extend the short fixture window to accommodate excessive fragmentation"
+        );
+        let part_bytes = u32::try_from(borsh::object_length(&answer).unwrap().div_ceil(2)).unwrap();
+        assert!(part_bytes <= PALW_LEGACY_ANSWER_CHUNK_BYTES_V2);
+        let (declaration, chunks) = palw_legacy_answer_split_v2(&answer, part_bytes, 200_000, |_| Ok(SIG.to_vec())).unwrap();
+        assert_eq!(chunks.len(), 2);
+        let key = declaration.key();
+        let declared = PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration: Box::new(declaration) };
+        w.block(vec![declared.clone()]).unwrap();
+        assert!(w.block(vec![declared]).is_err(), "an owned row cannot be replaced to extend its clock");
+        let deadline = w.s.legacy_answer_pending_v2(&key).unwrap().deadline_daa;
+        let mut corrupt = chunks[0].clone();
+        corrupt.bytes[0] ^= 1;
+        assert!(w.block(vec![PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(corrupt) }]).is_err());
+        let first = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunks[0].clone()) };
+        w.block(vec![first.clone()]).unwrap();
+        assert!(w.block(vec![first]).is_err(), "a duplicate part cannot overwrite authenticated bytes");
+        assert!(
+            !w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap().unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit))
+        );
+        let carriage = PalwStateCarriageV2::from_state(&w.s);
+        let encoded = borsh::to_vec(&carriage).unwrap();
+        let decoded: PalwStateCarriageV2 = borsh::from_slice(&encoded).unwrap();
+        for fault in 0..3 {
+            let mut invalid = decoded.clone();
+            let row = invalid.legacy_answers.get_mut(&key).unwrap();
+            match fault {
+                0 => row.deadline_daa = deadline + 1,
+                1 => row.parts.get_mut(&chunks[0].index).unwrap()[0] ^= 1,
+                _ => {
+                    for c in &chunks {
+                        row.parts.insert(c.index, c.bytes.clone());
+                    }
+                }
+            }
+            assert!(invalid.into_state(&rc_params(), None).is_err(), "a malformed assembly cannot survive carriage load: {fault}");
+        }
+        w.s = decoded.into_state(&rc_params(), Some(w.s.state_root())).unwrap();
+        assert_eq!(w.s.legacy_answer_pending_v2(&key).unwrap().deadline_daa, deadline);
+        if completion == 1 {
+            let before = bonds_collateral(&w.s).0;
+            for _ in 0..2_000 {
+                if matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { .. }) {
+                    break;
+                }
+                w.quiet();
+            }
+            assert!(matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+            assert!(bonds_collateral(&w.s).0 < before);
+            assert!(w.s.legacy_answer_pending_v2(&key).is_none(), "an expired partial assembly is journaled away");
+        } else if completion == 2 {
+            w.block(vec![PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }]).unwrap();
+            assert!(w.s.legacy_answer_pending_v2(&key).is_none(), "a direct answer removes the partial assembly too");
+        } else {
+            for c in chunks.iter().skip(1).rev() {
+                let progress = w.s.legacy_answer_pending_v2(&key).unwrap().progress();
+                let object = crate::palw_panel::da_answer_chunks::next_answer_object_v2(
+                    PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: answer.clone() },
+                    Some(&progress), w.daa, deadline, 200_000, &h64(999), |_, _| Some(SIG.to_vec()),
+                ).unwrap();
+                assert_eq!(object, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(c.clone()) });
+                w.block(vec![object]).unwrap();
+            }
+            assert!(w.s.legacy_answer_pending_v2(&key).is_none());
+            assert!(
+                w.s.palw_legacy_dispute_view_v1(&rc_params(), &claim).unwrap().unit_was_answered_v1(&PalwDaUnitV1::LegacyHeldV2(unit))
+            );
+            assert!(!matches!(phase_of(&w.s, &claim), PalwClaimPhaseV2::Voided { .. }));
+        }
+    }
+}
+
 /// The checkpoint leaf hashes a fold's binding commits, from the leaves it retains.
 fn checkpoint_leaf_hashes(material: &[u8]) -> Vec<Hash64> {
     let m = misaka_palw_base0::produce::base0_fp_material_decode_v2(material).expect("a fold");
@@ -628,6 +744,8 @@ fn service_filer_case(
         trace_root: o.roots.trace_root,
         output_root: o.roots.output_root.unwrap_or_default(),
         legacy: Some(replica),
+        fp_job: None,
+        _job_reservation: None,
         own_range: Box::new(|_, _| panic!("the LG14-B controller does not use the linear range fallback")),
         own: Some(Arc::new(crate::palw_panel::palw_fraud_filer::PalwFraudFilerOwnRunV1::new(
             Arc::new(f.seat()),
@@ -1292,8 +1410,8 @@ async fn lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_collu
 #[tokio::test]
 async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_state() {
     use crate::palw_panel::palw_fraud_filer::{
-        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerVerdictV1, palw_fraud_filer_execute_v1,
-        palw_fraud_filer_fp_input_v1,
+        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerFpDescriptorV1,
+        PalwFraudFilerVerdictV1, palw_fraud_filer_execute_v1, palw_fraud_filer_fp_input_v1,
     };
     use kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3;
     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PalwFpCommitmentTxPayloadV3};
@@ -1370,8 +1488,13 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
         let own = f.seat();
         let form = own.prompt_ids_form();
         assert!(palw_fraud_filer_fp_input_v1(&own, &payload, form, &[]).is_err(), "no public input yet");
-        case.fp_bootstrap =
-            Some(PalwFraudFilerFpBootstrapV1 { payload: Arc::new(payload.clone()), form, ids: vec![], chunk: 0, _reservation: None });
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(PalwFraudFilerFpDescriptorV1::Accepted(payload.clone())),
+            form,
+            ids: vec![],
+            chunk: 0,
+            _reservation: None,
+        });
         assert!(case.pursued());
         assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Pending));
         let before = bonds_collateral(&w.s);
@@ -1396,7 +1519,7 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
             w.chain.clear();
             case = PalwFraudFilerCaseV1::new(case.candidate.clone());
             case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
-                payload: Arc::new(payload.clone()),
+                payload: Arc::new(PalwFraudFilerFpDescriptorV1::Accepted(payload.clone())),
                 form,
                 ids: vec![],
                 chunk: 0,
@@ -1411,7 +1534,7 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
         assert_eq!(input.ids, d.ids, "only the public input answers were learned");
         assert!(w.chain.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } if answer.unit == PalwLegacyHeldUnitV2::PromptIds { chunk: 0 })));
         let ids = input.ids.clone();
-        let job = input.payload.commitment.job.clone();
+        let job = input.payload.job().clone();
         let ceiling = own.fp_job_context_v1(&job).unwrap();
         let replay =
             tokio::task::spawn_blocking(move || palw_fraud_filer_execute_v1(Box::new(own), ceiling, ids, form, None, Some(job), None))
@@ -1426,7 +1549,16 @@ async fn lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_sta
         assert!(case.fp_bootstrap.is_none());
         if !lie {
             assert!(matches!(case.verdict, PalwFraudFilerVerdictV1::Honest));
-            assert!(!case.pursued());
+            assert!(case.pursued(), "keep observing the claim until that release lands");
+            assert!(w.s.legacy_dispute_v1(&claim).unwrap().live.contains_key(&bond_key(OUTSIDER)));
+            w.block(vec![kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_released_object_v1(
+                h64(999),
+                claim,
+                bond_key(OUTSIDER),
+                |_| SIG.to_vec(),
+            )])
+            .expect("an honest replay releases its input-acquisition reservation");
+            assert!(!w.s.legacy_dispute_v1(&claim).unwrap().live.contains_key(&bond_key(OUTSIDER)));
             assert_eq!(bonds_collateral(&w.s), before);
             continue;
         }
@@ -1808,8 +1940,8 @@ fn public_prompt_binding(
 #[tokio::test]
 async fn lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_and_after_final() {
     use crate::palw_panel::palw_fraud_filer::{
-        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerStepV1, PalwFraudFilerVerdictV1,
-        palw_fraud_filer_fp_input_v1, palw_fraud_filer_public_filing_with_fp_v2,
+        PalwFraudFilerBookV1, PalwFraudFilerCaseV1, PalwFraudFilerFpBootstrapV1, PalwFraudFilerFpDescriptorV1, PalwFraudFilerStepV1,
+        PalwFraudFilerVerdictV1, palw_fraud_filer_fp_input_v1, palw_fraud_filer_public_filing_with_fp_v2,
     };
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
     use kaspa_consensus_core::palw_freeprompt_v3::{
@@ -1924,8 +2056,13 @@ async fn lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_an
                 .find(|c| c.claim_id == claim)
                 .unwrap();
         let mut case = PalwFraudFilerCaseV1::new(candidate);
-        case.fp_bootstrap =
-            Some(PalwFraudFilerFpBootstrapV1 { payload: Arc::new(payload), form, ids: vec![], chunk: 0, _reservation: None });
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(PalwFraudFilerFpDescriptorV1::Accepted(payload)),
+            form,
+            ids: vec![],
+            chunk: 0,
+            _reservation: None,
+        });
         assert!(case.pursued());
         let mut retry = PalwFraudFilerBookV1::default();
         retry.cases.insert(claim, case);

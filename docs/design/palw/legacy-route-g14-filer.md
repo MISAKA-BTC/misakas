@@ -11,7 +11,8 @@ E2E and attack tests passed on a recorded run of this branch), **armable** (also
 activation conditions). Nothing here is armable.
 
 Allocations (Lead): fence `palw_legacy_public_filer_v1`; object tags 154–156; deltas 200–204; carriage tail `0xE2`; RPC ops
-204–206. Used: tags 154–155, delta 200, tail `0xE2`, RPC 204–206. Tag 156 and deltas 201–204 stay reserved (§9).
+204–206. Used: tags 154–156, deltas 200–201, tails `0xE2` / `0xF0`, RPC 204–206. Deltas 202–204 stay reserved.
+Tag 156 is the numbered reacquisition follow-up; delta 201 and tail `0xF0` retain accepted public FP job metadata (Codex, 2026-10-11).
 
 ## 0. The bar, and why the legacy route fails it today
 
@@ -280,12 +281,27 @@ descends. The operator module's producer/signer filter is a discovery preference
 
 ## 8. Wire, state, A-2 and byte identity
 
-- **Objects**: tags 154 and 155 (§3.1). Tag 156 reserved.
+- **Objects**: tags 154–156 (§3.1 and the numbered reacquisition follow-up).
 - **State**: `legacy_disputes: BTreeMap<claim, PalwDisputeClaimV1 { opened_daa, hard_deadline_daa, live: BTreeMap<bond,
   PalwDisputeReservationRowV1>, closed: BTreeSet<bond>, dismissed_held: Vec<(bond, u128)> }>`, written through one journaled writer
-  (delta 200 `LegacyDispute`, deltas 201–204 reserved), carried in tail `0xE2` and rooted in a Some-only block
+  (delta 200 `LegacyDispute`, deltas 202–204 reserved), carried in tail `0xE2` and rooted in a Some-only block
   (`legacy_disputes/v1`) — both only when non-empty, which nothing below the fence can make it. Two derived indexes are rebuilt at
   load and checked against the map: `(hard_deadline, claim)` for the sweep and `(reserver, claim)` for the exposure ledger.
+- **Accepted FP job metadata (2026-10-11).** `fp_public_jobs: BTreeMap<claim, Vec<u8>>` retains canonical Borsh of the original
+  accepted FP commitment, without prompt ids, transaction signature or execution capture. Both ordinary and improvement-evaluation
+  extractors attach this original body in a native-only `#[borsh(skip)]` field; a lifecycle carrier cannot supply the native FP
+  commitment object. Both folds check the full claim hash, class, producer, execution/trace/output roots, work leaves and job pin
+  before the first write. The one writer journals delta **201**; a non-empty map adds root block `public_fp_jobs/v1` and carriage
+  tail **0xF0**. Claim deletion drops the metadata through the same writer; phase changes keep it for subsequent public proofs and
+  all-Valid prosecutions. Carriage consistency rejects foreign/malformed/orphan bodies and metadata below the fence; duplicate or
+  empty tails are refused. The existing op-204 view exposes `publicFpJob` as optional hex, omitted when absent.
+  The filer prefers the retained accepted transaction and falls back to this public state body when history is unavailable,
+  independently rechecking domain, hash and recorded target. An absent PublicDA prompt is acquired by the existing authenticated
+  LG14-B `PromptIds` units before independent model execution. No DA unit or answer wire form was added.
+  This writer runs only for commitments accepted at or past the never-armed public-filer fence. Pre-fence commitments are not
+  backfilled; their permanent-history-loss migration remains open. Snapshot body retention alone does not close network IBD,
+  restart/reorg of the live service, all FP extensions, initial-state bootstrap or maximum-context/population bounds. Metadata
+  storage increases with retained claim count and accepted job-body size; no maximum-profile resource result is claimed here.
 - **A-2.** Below the fence an object of tags 154–155 is the live int-12 build's undecodable payload:
   - isolation: its may-ride arm is unconditionally `Ok` (no stateless refusal at any height), so a block carrying one is valid
     here exactly where int-12 tolerates its bytes;
@@ -498,3 +514,16 @@ unchanged). Bound: binding + `h − 9` reads + terminal = `h − 7` sessions (33
 step tree under a mismatched execution now goes past the step tree (`LogitsNotStepOutput`, `ForgedOutput` from the binding read's
 event and the own run) instead of erroring. Real-service V-node results and the open items are in
 [g14-completion-matrix.md §2c](g14-completion-matrix.md).
+
+## Public identity evidence carriage and Valid signer handoff (Codex, 2026-10-11)
+
+An authenticated public binding's direct kind-4 proof now also enters the existing False Valid filer before the public case settles. Its scanner re-admits public licence receipts and asks the existing liability/adjudication gate for every relied-on signer, then uses the ordinary reporter commit/evidence/reveal door. Previously only seat replay handed its proof to this scanner; a public direct proof could settle the producer case without starting the signer prosecutions.
+
+The dormant public-filer H1 policy also permits carriage of a requested row-0/tile-0 Event when the DA fold refuses the answer but the same binding's IdentityMismatch kind-4 passes the actual acceptance/fold rehearsal. The original carrier must pass signature/size checks and the DA arm's live-demand/discloser checks. Carriage does not answer the DA unit or convict the claim; the outside verifier must file the proof. Bad signatures, unauthenticated bindings, unasked units and unliable disclosers retain H1 refusal. This is node relay/template policy within consensus source; block fold, state, wire, activation and pins are unchanged. It is restricted to authenticated identity fraud and does not claim a public carriage path for every fault family.
+
+The exact-conviction fixture executes a real registered floor model under another canonical anchor, commits those real roots and publicly signs its Event only after the outsider's DA demand. The outsider's own service reads no producer material and prosecutes producer and all assigned Valid signers. A first kind-3 identity conviction collects the live claim's producer forfeit/S2 leg as well as its signer leg; a later kind-4 correctly adds no duplicate debit/reward. Evidence and the final measured results are in the [audit record](../../audit/g14-review-2026-10-10/implementation.md). Full G14 remains incomplete; the registered-model possession premise and shipping activation refusal remain.
+
+Native sampling of a stopped service run also found DNS settlement reacquiring the virtual read behind a queued commit upgrade while mempool validation retained its outer read. The production UTXO policy now passes its existing DAA snapshot to settlement and retains the original UTXO guard. The old wrapper is test-only; a queued-writer regression uses it as a blocking negative control, then releases and joins all threads before asserting. This is an inclusion-liveness fix, not a new block maturity rule.
+
+
+Final validation of the identity/H1/DNS-lock changes is **77 unique PASS**, including both actual-service cases, the normal node binary check, and fresh shipping harvest/replay with **361 pins and no drift**. The exact job-identity case passes in 394.69 seconds; the withholding regression passes in 608.10 seconds. Full-family prosecution, cumulative scope, maximum-profile deadlines and node recovery remain required. See the [audit record](../../audit/g14-review-2026-10-10/implementation.md) and [ordered remaining work](../../audit/g14-review-2026-10-10/feedback.md#残りの実装順序2026-10-11).

@@ -2310,6 +2310,22 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_legacy_answer_progress_v2(
+        &self,
+        key: kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerProgressV2>, String> {
+        self.virtual_processor.palw_legacy_answer_progress_v2_impl(&key)
+    }
+
+    fn palw_legacy_answer_history_v2(
+        &self,
+        block: kaspa_consensus_core::BlockHash,
+        chunk: Box<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2>,
+        maximum: u64,
+    ) -> Result<Option<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2>, String> {
+        self.virtual_processor.palw_legacy_answer_history_v2_impl(block, &chunk, maximum)
+    }
+
     fn palw_legacy_dispute_v1(&self, claim: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
         self.virtual_processor.palw_legacy_dispute_v1_impl(claim)
     }

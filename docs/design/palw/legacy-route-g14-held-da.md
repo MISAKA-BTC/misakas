@@ -396,3 +396,54 @@ For Merkle input, each chunk contains up to 2,048 contiguous ids (64 existing 32
 The filer starts a Pending input acquisition case under a host memory reservation, reserves the ordinary public pursuit, obtains the row-0 binding, then requests contiguous input chunks. Only authenticated public answers enter the accumulator. It compares the binding's job pin to the accepted FP job and admits the fully assembled input again before replay. No replay attempt is spent while waiting. The existing DA session applies on silence; an answer refutes the session and makes the input public. The verifier subsequently executes its own model, compares all three roots and uses the existing objective terminal. Historical missing copies use the numbered tag-156 reacquisition protocol. Reorg discards the acquired ids and public binding; a changed acceptance/job resets the case. Successful replay or settlement releases the bootstrap ticket.
 
 This is bounded by the existing 34-session pursuit budget: an 8k input needs four input units, plus binding and localization. It does not establish enough budget for every admitted context, arbitrary repeated restarts, or all non-base0 localization routes. Missing accepted FP commitment bytes, prefix-state acquisition, largest-population response/inclusion bounds, maximum-profile memory/time, cumulative court scope and full fresh-node inclusion remain separate gaps. The registration/model possession premise remains ADR-0177 D7; no model distribution obligation is introduced. Activation remains refused by the existing validator.
+
+
+## FP job-preimage acquisition (Codex follow-up, 2026-10-11)
+
+The original FP commitment body and acceptance row can be permanently pruned before LG14-A's
+`public_fp_jobs` retention was activated. A correct public binding then authenticates the job id,
+but does not reveal its preimage. The node must acquire that preimage before it can derive a
+canonical input or run its own model. The binding-only direct identity/default route does not
+complete this acquisition.
+
+Append `PalwLegacyHeldUnitV2::FpJob` (unit ordinal 4) and
+`PalwLegacyHeldAnswerV2::FpJob(Box<PalwFreePromptJobV3>)` (answer ordinal 3) to dormant LG14-B.
+Existing ordinals, tags 157/158, signing contexts and fences remain unchanged. Below the LG14-B
+fence the existing A-2 object/unit guard applies; shipping validation continues to refuse arming.
+No new rooted job table or fabricated original commitment is introduced.
+
+A demand requires an FP claim, a nonzero recorded job pin, a binding authenticating against the
+claim's execution root and the existing binding identity check. An answer carries the job alone:
+no prompt ids, producer capture, execution state or model operands. Its complete canonical job
+hash must equal the binding's job id; its derived execution seed, tokenizer, input hash/count,
+context ceiling and decode ceiling must agree with the authenticated context. The fold additionally
+checks the claim's lane, class and producer; the node independently checks the recorded pin and
+current candidate roots. A signed wrong preimage does not satisfy the obligation. The existing
+DA-4 session, discloser checks and DA-7 objective default apply, as does tag 156 if the answered
+public carrier itself was pruned.
+
+The node keeps a court-authenticated job as a `Disclosed` descriptor, separate from an `Accepted`
+commitment payload. It never invents the commitment's manifest, retention, stop reason, claim hash
+or signature. A small bounded job ticket covers descriptor acquisition; the input accumulator gets
+its own ticket before copying ids. The acquired job flows into the existing public input bootstrap,
+independent local replay and reservation release/prosecution. The producer responder can obtain
+its job from its verified retained FP envelope and disclose only that descriptor. The verifier uses
+its own registered model throughout (ADR-0177 D7).
+
+This first descriptor court has a 64 KiB job bound. Demand/reacquisition gates require the maximum
+job answer plus the carried binding to fit the court and single carrier; answers are measured again.
+**It is not a full-size acquisition guarantee.** In particular, a maximum 64 KiB constraint tail plus
+its job header exceeds this bound, and a large shape binding may exceed the remaining carriage
+room. A multipart descriptor protocol, profile/admission fit and the extra session/deadline budget
+must close those cases before activation or any all-profile G14 claim. Initial/prefix state and
+non-prompt inputs still need their own authenticated acquisition. Verification evidence for this
+follow-up belongs in the audit log; implementation alone is not a PASS.
+
+The small-job path is now exercised through the actual node service: an unretained job and
+input are reacquired from signed public carriers, the verifier's own worker judges all three
+roots Honest and signs a release; withholding just the job after a correct binding reaches
+producer DA default. The audit records all initial failures and the source/binary hashes.
+This does not justify arming the unit for every admitted job. An admitted descriptor larger
+than this answer bound could create an impossible obligation against an honest producer.
+The wallet builder's 48 KiB payload check is not proof of a consensus-wide admission bound.
+Multipart transport and a proven admission/profile fit must resolve that before activation.

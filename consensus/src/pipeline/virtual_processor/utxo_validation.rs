@@ -1909,7 +1909,7 @@ impl VirtualStateProcessor {
             // POLICY path (mempool admission → relay → template inclusion): the settlement layer
             // where node-local anchor timing is safe — a policy disagreement keeps a tx out of a
             // mempool, never out of a block's acceptance.
-            self.dns_coinbase_settlement().as_ref(),
+            self.dns_coinbase_settlement_at(Some(pov_daa_score)).as_ref(),
         )?;
         mutable_tx.calculated_fee = Some(calculated_fee);
         Ok(())

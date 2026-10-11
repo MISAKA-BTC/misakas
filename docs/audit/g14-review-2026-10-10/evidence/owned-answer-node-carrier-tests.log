@@ -1,0 +1,21 @@
+FILTER a_court_move_is_replaced_only_once_its_lane_re_plans_it
+
+running 1 test
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_court_move_is_replaced_only_once_its_lane_re_plans_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 623 filtered out; finished in 0.00s
+
+FILTER a_proof_replaces_only_a_lane_carrier_and_pays_above_it
+
+running 1 test
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_proof_replaces_only_a_lane_carrier_and_pays_above_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 623 filtered out; finished in 0.00s
+
+FILTER the_tick_replaces_our_own_late_carrier_with_the_proof
+
+running 1 test
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_tick_replaces_our_own_late_carrier_with_the_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 623 filtered out; finished in 0.00s
+

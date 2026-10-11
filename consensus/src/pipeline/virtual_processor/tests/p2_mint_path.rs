@@ -325,6 +325,44 @@ pub(super) struct Minting {
     nonce: u64,
 }
 
+/// DNS settlement must not reacquire a virtual read while mempool validation holds one.
+/// A queued writer makes even a second shared read wait; the control is released before asserting.
+#[tokio::test]
+async fn p2_dns_settlement_uses_the_held_virtual_snapshot_with_a_writer_queued() {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    let m = mined().await;
+    let vp = m.chain.vp();
+    let expected = vp.dns_coinbase_settlement().unwrap();
+    let held = vp.virtual_stores.read();
+    let daa = held.state.get().unwrap().daa_score;
+    let stores = vp.virtual_stores.clone();
+    let writer = std::thread::spawn(move || { let _write = stores.write(); });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while vp.virtual_stores.try_read().is_some() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let queued = vp.virtual_stores.try_read().is_none();
+    let (old_tx, old_rx) = mpsc::channel();
+    let old_vp = vp.clone();
+    let control = std::thread::spawn(move || { old_tx.send(old_vp.dns_coinbase_settlement()).unwrap(); });
+    let control_waited = old_rx.recv_timeout(Duration::from_millis(50)).is_err();
+    let (tx, rx) = mpsc::channel();
+    let worker_vp = vp.clone();
+    let worker = std::thread::spawn(move || { tx.send(worker_vp.dns_coinbase_settlement_at(Some(daa))).unwrap(); });
+    let result = rx.recv_timeout(Duration::from_secs(2));
+    // Release and join before asserting, so the negative control cannot strand a DB-owning thread.
+    drop(held);
+    writer.join().unwrap();
+    control.join().unwrap();
+    worker.join().unwrap();
+    assert!(queued, "the commit writer reached the virtual lock");
+    assert!(control_waited, "a nested read waits behind the writer");
+    let actual = result.expect("settlement completes under the already-held snapshot").unwrap();
+    assert_eq!((actual.long_maturity_daa, actual.confirmed_anchor_daa), (expected.long_maturity_daa, expected.confirmed_anchor_daa));
+}
+
 /// **testnet-12 as shipped (harness cards), one heartbeat in, nothing planted.**
 pub(super) async fn mined() -> Minting {
     kaspa_core::log::try_init_logger("warn");

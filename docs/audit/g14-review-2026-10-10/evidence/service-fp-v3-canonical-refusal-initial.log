@@ -1,0 +1,27 @@
+
+running 1 test
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job has been running for over 60 seconds
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job' (3116062) panicked at kaspad/src/palw_service_public_e2e.rs:743:14:
+the ordinary registry admits and prices this FP job: FreePromptPromptNotAccountable { claim: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, carried: 0 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 607 filtered out; finished in 139.24s
+

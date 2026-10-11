@@ -1,0 +1,109 @@
+
+running 2 tests
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_defaults_on_a_withheld_large_constraint_job has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_replays_an_admitted_large_constraint_job_from_public_multipart_history has been running for over 60 seconds
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] large constraint job bytes 112291, ordinary transaction transient mass 499184 / 500000
+[service-public] ordinary FP Job V6 admission: claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46, 3 quanta, 9110079 pwu, fee 1693825
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] large constraint job bytes 112291, ordinary transaction transient mass 499184 / 500000
+[service-public] ordinary FP Job V6 admission: claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46, 3 quanta, 9110079 pwu, fee 1693825
+[service-public] fresh database validated 2065 public blocks at DAA 1032
+[service-public] fresh database validated 2065 public blocks at DAA 1032
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+2026-10-11 10:48:12.088+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 10:48:12.088+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 10:48:14.105+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:14.105+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:14.107+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+2026-10-11 10:48:14.124+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967285 in tx 114fd7051e5e4d8059dce26351ba89938c068079b879656f881f1c6feca84437438221a3157d9dc88df20d1dfe7d5997c247589c9d936841082203a9c198bd09
+2026-10-11 10:48:14.124+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967285 in tx 114fd7051e5e4d8059dce26351ba89938c068079b879656f881f1c6feca84437438221a3157d9dc88df20d1dfe7d5997c247589c9d936841082203a9c198bd09
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+[service-public] real mempool carrier Discriminant(154), 4896 bytes
+2026-10-11 10:48:16.128+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967285) was carried at DAA 1065 (LG14-A)
+2026-10-11 10:48:16.129+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967285) was carried at DAA 1065 (LG14-A)
+2026-10-11 10:48:16.240+09:00 [INFO ] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 10:48:16.241+09:00 [INFO ] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 10:48:16.251+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:16.252+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Demand(Binding { row: 0, tile: 0 }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:16.278+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967284 in tx 765e260150764339f0bbb2f8d8278a2ed40c48c087fdf8287df7d4bfeb6c583137225ca3a4bac978fa91f06d1cb1b9fc1b61cdbb3296741be2423cf175847414
+2026-10-11 10:48:16.278+09:00 [INFO ] [palw-panel] submitted DefaultAccused for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967284 in tx 765e260150764339f0bbb2f8d8278a2ed40c48c087fdf8287df7d4bfeb6c583137225ca3a4bac978fa91f06d1cb1b9fc1b61cdbb3296741be2423cf175847414
+[service-public] H1 refuses bad signature/binding, unasked unit and unliable discloser
+[service-public] foreign-job authenticated event submitted through the real PQ mempool
+[service-public] H1 refuses bad signature/binding, unasked unit and unliable discloser
+[service-public] foreign-job authenticated event submitted through the real PQ mempool
+[service-public] authenticated binding carried; answered = true
+[service-public] authenticated binding carried; answered = true
+2026-10-11 10:48:18.281+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967284) was carried at DAA 1076 (LG14-A)
+2026-10-11 10:48:18.283+09:00 [ERROR] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: this node's replay of the claim's job does NOT reproduce its execution root (replayed d2c9e3970a48fae3eadfde5df462014dee16c98ce28cd43b9fe14e4129e1ba8edc7646f02c4d470c46f38d24a2cb4bf4ced805d4c36d9988fdd6eace26cc5dc3) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 10:48:18.286+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967284) was carried at DAA 1076 (LG14-A)
+2026-10-11 10:48:18.288+09:00 [ERROR] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: this node's replay of the claim's job does NOT reproduce its execution root (replayed d2c9e3970a48fae3eadfde5df462014dee16c98ce28cd43b9fe14e4129e1ba8edc7646f02c4d470c46f38d24a2cb4bf4ced805d4c36d9988fdd6eace26cc5dc3) — every seat of its panel let it pass or none looked; pursuing it as a public bond (LG14-A, RFC-0014 §6)
+2026-10-11 10:48:18.296+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Demand(HeldNode { unit: FpJob }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:18.301+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Demand(HeldNode { unit: FpJob }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:18.327+09:00 [INFO ] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:18.332+09:00 [INFO ] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: the fraud filer queues Reserve (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:18.356+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a round 4294967285 in tx 9fbe3bc92f121107650e8e6ab9872da80c0c42178563e47c7b1ce6619eb4a4407319ebde86619c17b47ef1f409a4a637c4defc9e232ef7495bd198032513bb77
+2026-10-11 10:48:18.356+09:00 [INFO ] [palw-panel] submitted DisputeReservedV1 for court session c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a round 4294967285 in tx 9fbe3bc92f121107650e8e6ab9872da80c0c42178563e47c7b1ce6619eb4a4407319ebde86619c17b47ef1f409a4a637c4defc9e232ef7495bd198032513bb77
+2026-10-11 10:48:20.359+09:00 [INFO ] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: the fraud filer's item (round 4294967285) was carried at DAA 1086 (LG14-A)
+2026-10-11 10:48:20.359+09:00 [INFO ] [palw-panel] claim c20ebce74590e50015e237adf73285ec23b6f300b54266427d3169fcb47c886b8e9ef2b68b32fa3832e257afbacb678008fb61934eb94abf03406d83d78c7d1a: the fraud filer's item (round 4294967285) was carried at DAA 1086 (LG14-A)
+2026-10-11 10:48:20.384+09:00 [INFO ] [palw-panel] submitted LegacyHeldDemandedV2 for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967284 in tx 5a1f82405ff9c4430f89f4eeeb0b4699438e33df0156f8a4daba8d2289898b95f2b961971649b27c7c1270ac6408df1199355ace4ec77233715bc6733ad7966e
+2026-10-11 10:48:20.390+09:00 [INFO ] [palw-panel] submitted LegacyHeldDemandedV2 for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967284 in tx 5a1f82405ff9c4430f89f4eeeb0b4699438e33df0156f8a4daba8d2289898b95f2b961971649b27c7c1270ac6408df1199355ace4ec77233715bc6733ad7966e
+2026-10-11 10:48:22.388+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967284) was carried at DAA 1098 (LG14-A)
+2026-10-11 10:48:22.402+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967284) was carried at DAA 1098 (LG14-A)
+[service-public] wrong job refused, authenticated job preimage acquired through signed public carriers
+2026-10-11 10:48:26.483+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Demand(HeldNode { unit: PromptIds { chunk: 0 } }) (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:26.521+09:00 [INFO ] [palw-panel] submitted LegacyHeldDemandedV2 for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967284 in tx 9e68565fab1e7c74fceaf0dea6d1789ef652839bba84d2839e7b5648f1e2b2f8945d92040f2d7a10af6d33591b64b2daaaa7e9a67cfcdc0d2fbbb01b658cb106
+[service-public] authenticated public FP input chunk 0 mined; the verifier receives no private capture
+2026-10-11 10:48:28.524+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer's item (round 4294967284) was carried at DAA 1130 (LG14-A)
+2026-10-11 10:48:30.663+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer replays the claim's job off the loop (LG14-A, RFC-0014 §6.1)
+2026-10-11 10:48:32.681+09:00 [INFO ] [palw-panel] claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46: the fraud filer queues Release (LG14-A, RFC-0014 §6–§7)
+2026-10-11 10:48:32.707+09:00 [INFO ] [palw-panel] submitted DisputeReleasedV1 for court session e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46 round 4294967282 in tx 2d3099769d1afedd57f2ad6b2d35304917e1b563af384067e33c11edbb50db5cd8fb7a7388c78d1ea4898f1ddeb5bd01f17f9156c77033be215acee9d7f404e9
+[service-public] DA advance 1163, deadlines []
+[service-public] honest pruned FP input reacquired, independently replayed and reservation released at DAA 1163
+2026-10-11 10:48:33.435+09:00 [INFO ] [palw-panel] stopping
+[service-public] actual service start/exit joined, callback owner released
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_replays_an_admitted_large_constraint_job_from_public_multipart_history ... ok
+[service-public] DA advance 1182, deadlines [2299]
+[service-public] DA advance 1282, deadlines [2299]
+2026-10-11 10:49:14.695+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1382, deadlines [2299]
+[service-public] DA advance 1482, deadlines [2299]
+2026-10-11 10:50:15.196+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1582, deadlines [2299]
+[service-public] DA advance 1682, deadlines [2299]
+[service-public] DA advance 1782, deadlines [2299]
+2026-10-11 10:51:15.867+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 1882, deadlines [2299]
+[service-public] DA advance 1982, deadlines [2299]
+2026-10-11 10:52:16.834+09:00 [WARN ] [palw-panel] no possession proofs this tick — the seat is not near the tip (ibd=false, synced=false)
+[service-public] DA advance 2082, deadlines [2299]
+[service-public] DA advance 2182, deadlines [2299]
+[service-public] DA advance 2282, deadlines [2299]
+[service-public] objective DA default at 2307 after 5 mined service batches, required producer material withheld
+2026-10-11 10:53:17.664+09:00 [INFO ] [palw-panel] stopping
+[service-public] actual service start/exit joined, callback owner released
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_defaults_on_a_withheld_large_constraint_job ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 628 filtered out; finished in 625.71s
+

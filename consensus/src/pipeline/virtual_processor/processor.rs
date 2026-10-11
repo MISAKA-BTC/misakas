@@ -1757,7 +1757,9 @@ impl VirtualStateProcessor {
 
     /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
     /// acceptance layer first (cheap refusals — an unknown bond, a signature that does not verify —
-    /// before any state is cloned), then the fold's own arm. `None` when both take it.
+    /// before any state is cloned), then the fold's own arm. A dormant public-filer exception
+    /// relays an authenticated binding which the objective court convicts, while the DA fold
+    /// still refuses it as an answer. No unauthenticated binding gets this exception.
     pub(super) fn palw_h1_carrier_refusal_on(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -1768,7 +1770,7 @@ impl VirtualStateProcessor {
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return Some(why);
         }
-        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+        let refusal = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
             state,
             state_params,
             point,
@@ -1779,8 +1781,36 @@ impl VirtualStateProcessor {
             self.palw_da_court_at(point.daa_score),
             &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
         )
-        .err()
-        .map(|why| why.to_string())
+        .err()?;
+        if matches!(refusal, kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DaOpeningRefused { .. })
+            && self.palw_legacy_public_filer_at(point.daa_score)
+            && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::MaterialDisclosedV2 {
+                claim,
+                unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 },
+                answer: kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(event),
+                ..
+            } = object
+            && let Some(target) = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(state, claim)
+            && let Ok(proof) = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
+                *claim,
+                target.executor_bond,
+                kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::IdentityMismatch {
+                    binding: event.binding().clone(),
+                },
+                None,
+            )
+            && matches!(
+                self.palw_object_rehearsal_v1_on(state, state_params, point, &proof.object),
+                kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::Accepted
+            )
+        {
+            // The DA arm already checked the live demand and discloser's liability; the
+            // acceptance layer checked its signature/size. The second rehearsal proves the
+            // claim's authenticated identity fault. Carriage changes no DA answered bit and
+            // applies no conviction: the outside verifier still files its own proof.
+            return None;
+        }
+        Some(refusal.to_string())
     }
 
     /// **The 2026-09-25 sweep, V01: [`Self::palw_mempool_h1_carrier_refusal`] on each of `txs`, at
@@ -4946,6 +4976,34 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
         state.palw_legacy_dispute_view_v1(state_params, &claim)
+    }
+
+    pub fn palw_legacy_answer_progress_v2_impl(
+        &self,
+        key: &kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerProgressV2>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?
+            .ok_or("PALW V2 tip unavailable")?;
+        Ok(state.legacy_answer_pending_v2(key).map(|row| row.progress()))
+    }
+
+    pub fn palw_legacy_answer_history_v2_impl(
+        &self,
+        block: kaspa_consensus_core::BlockHash,
+        chunk: &kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2,
+        maximum: u64,
+    ) -> Result<Option<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2>, String> {
+        use kaspa_consensus_core::palw_legacy_answer_chunks_v2::*;
+        if chunk.index >= PALW_LEGACY_ANSWER_MAX_CHUNKS_V2 || chunk.bytes.len() > PALW_LEGACY_ANSWER_CHUNK_BYTES_V2 as usize {
+            return Ok(None);
+        }
+        let row = self.palw_state_v2_store.read().legacy_answer_history_row_v2(block, chunk, maximum)
+            .map_err(|e| e.to_string())?;
+        let Some(row) = row else { return Ok(None) };
+        // Bad carrier bytes are not a broken reader. Independently authenticated material may
+        // still be useful even when the court refused a carrier after its deadline.
+        Ok(row.preview(chunk).ok().flatten())
     }
 
     /// **Lane LG14-A (RPC 205): the claims a live reservation holds at the tip.**
@@ -13732,19 +13790,16 @@ impl VirtualStateProcessor {
                     if payload.len() as u64 > court.max_close_bytes() {
                         return Err("public reacquisition exceeds the ruleset's close carriage ceiling".into());
                     }
-                    if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(
-                        kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { chunk },
-                    ) = request.unit
+                    if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = request.unit
+                        && matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
+                            | kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob)
                     {
-                        let binding = request.binding.as_ref().ok_or("input reacquisition needs its binding")?;
-                        let bound = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_prompt_answer_bound_v2(
-                            binding, chunk, self.palw_prompt_ids_form_at(point.daa_score),
-                        ).map_err(|e| e.to_string())?;
-                        let binding_bytes = borsh::to_vec(binding).map_err(|e| e.to_string())?.len() as u64;
-                        let limit = court.max_close_bytes().min(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
-                        if bound.saturating_add(binding_bytes) > limit {
-                            return Err("the reacquired input response cannot fit the court/carrier ceiling".into());
-                        }
+                        let binding = request.binding.as_ref().ok_or("input/job reacquisition needs its binding")?;
+                        let params = self.palw_state_params_v2.as_ref().ok_or("input/job reacquisition needs V2 state parameters")?;
+                        kaspa_consensus_core::palw_legacy_answer_chunks_v2::palw_legacy_input_answer_transport_check_v2(
+                            binding, &unit, self.palw_prompt_ids_form_at(point.daa_score), court.max_close_bytes(),
+                            kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(params),
+                        )?;
                     }
                     self.palw_legacy_dispute_signature_ok(
                         state, point.daa_score,
@@ -13770,15 +13825,13 @@ impl VirtualStateProcessor {
                     let domain = self.palw_network_domain_v2();
                     let message = l::palw_legacy_held_demand_message_v2(domain.as_byte_slice(), demand);
                     let bytes = borsh::to_vec(&demand.binding).map(|b| b.len() as u64).unwrap_or(u64::MAX);
-                    if let l::PalwLegacyHeldUnitV2::PromptIds { chunk } = demand.unit {
-                        let bound = l::palw_legacy_prompt_answer_bound_v2(
-                            &demand.binding, chunk, self.palw_prompt_ids_form_at(point.daa_score),
-                        ).map_err(|e| e.to_string())?;
-                        let court = self.palw_court_params_v2.as_ref().ok_or("input disclosure needs V2 court parameters")?;
-                        let limit = court.max_close_bytes().min(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
-                        if bound.saturating_add(bytes) > limit {
-                            return Err("the input response and binding cannot fit the court/carrier ceiling".into());
-                        }
+                    if matches!(demand.unit, l::PalwLegacyHeldUnitV2::PromptIds { .. } | l::PalwLegacyHeldUnitV2::FpJob) {
+                        let court = self.palw_court_params_v2.as_ref().ok_or("input/job disclosure needs V2 court parameters")?;
+                        let params = self.palw_state_params_v2.as_ref().ok_or("input/job disclosure needs V2 state parameters")?;
+                        kaspa_consensus_core::palw_legacy_answer_chunks_v2::palw_legacy_input_answer_transport_check_v2(
+                            &demand.binding, &demand.unit, self.palw_prompt_ids_form_at(point.daa_score), court.max_close_bytes(),
+                            kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(params),
+                        )?;
                     }
                     self.palw_legacy_held_signature_ok(
                         state,
@@ -13796,7 +13849,7 @@ impl VirtualStateProcessor {
                     let domain = self.palw_network_domain_v2();
                     let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), answer);
                     let mut bytes = l::palw_legacy_held_answer_bytes_v2(&answer.answer);
-                    if matches!(answer.unit, l::PalwLegacyHeldUnitV2::PromptIds { .. }) {
+                    if matches!(answer.unit, l::PalwLegacyHeldUnitV2::PromptIds { .. } | l::PalwLegacyHeldUnitV2::FpJob) {
                         bytes = bytes.saturating_add(borsh::to_vec(&answer.binding).map_err(|e| e.to_string())?.len() as u64);
                         if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
                             return Err("the input answer cannot fit a single carrier".into());
@@ -13812,6 +13865,36 @@ impl VirtualStateProcessor {
                         l::PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2,
                         bytes,
                     )?;
+                }
+                Obj::LegacyHeldAnswerDeclaredV2 { declaration } => {
+                    use kaspa_consensus_core::palw_legacy_answer_chunks_v2 as chunks;
+                    let court = self.palw_court_params_v2.as_ref().ok_or("multipart DA answer needs V2 court parameters")?;
+                    declaration.check(court.max_close_bytes())?;
+                    let domain = self.palw_network_domain_v2();
+                    let message = chunks::palw_legacy_answer_declaration_message_v2(domain.as_byte_slice(), declaration);
+                    self.palw_legacy_held_signature_ok(
+                        state, point.daa_score, &declaration.claim, &declaration.discloser,
+                        &message, &declaration.signature, chunks::PALW_LEGACY_ANSWER_DECLARE_CONTEXT_V2,
+                        borsh::to_vec(declaration).map_err(|e| e.to_string())?.len() as u64,
+                    )?;
+                }
+                Obj::LegacyHeldAnswerChunkV2 { chunk } => {
+                    use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
+                    if !self.palw_legacy_held_da_v2_at(point.daa_score) {
+                        return Err("multipart DA answer is below palw_legacy_held_da_v2".into());
+                    }
+                    let row = state.legacy_answer_pending_v2(&chunk.key()).ok_or("no signed multipart DA declaration")?;
+                    let court = self.palw_court_params_v2.as_ref().ok_or("multipart DA answer needs V2 court parameters")?;
+                    row.declaration.check(court.max_close_bytes())?;
+                    if let Some(answer) = row.preview(chunk)? {
+                        let domain = self.palw_network_domain_v2();
+                        let message = l::palw_legacy_held_answer_message_v2(domain.as_byte_slice(), &answer);
+                        self.palw_legacy_held_signature_ok(
+                            state, point.daa_score, &answer.claim, &answer.discloser,
+                            &message, &answer.signature, l::PALW_LEGACY_HELD_ANSWER_MLDSA87_CONTEXT_V2,
+                            row.declaration.total_bytes,
+                        )?;
+                    }
                 }
                 Obj::LegacyLeafRecomputedV2 { accusation } => {
                     use kaspa_consensus_core::palw_legacy_held_da_v2 as l;
@@ -19684,7 +19767,16 @@ impl VirtualStateProcessor {
     /// differs across nodes by their resolve batching — safe for admission (a policy disagreement
     /// keeps a tx out of a mempool, never out of a block's acceptance), disqualifying for
     /// validity. The consensus call site passes `None` and says why.
+    #[cfg(test)]
     pub(super) fn dns_coinbase_settlement(&self) -> Option<DnsCoinbaseSettlement> {
+        // VSTALL (2026-10-10): never `virtual_stores.read()` here — a caller may already hold it, and a second read queues behind a
+        // pending commit upgrade forever. The LKG virtual state is the last committed virtual and takes no lock.
+        self.dns_coinbase_settlement_at(Some(self.lkg_virtual_state.load().daa_score))
+    }
+
+    /// Use the caller's virtual snapshot. Mempool validation already holds its read guard;
+    /// acquiring it again behind a queued commit upgrade deadlocks both validation and commit.
+    pub(super) fn dns_coinbase_settlement_at(&self, virtual_daa: Option<u64>) -> Option<DnsCoinbaseSettlement> {
         let dns_params = self.dns_params.as_ref()?;
         let long_maturity_daa = dns_params.coinbase_settlement_long_maturity_daa;
         if long_maturity_daa == 0 {
@@ -19693,17 +19785,7 @@ impl VirtualStateProcessor {
         // RFC-0012: once the virtual is past the retirement the DNS row is a frozen historical fact (nothing writes it any more),
         // and an anchor frozen below the fence must not keep releasing coinbases early in the mempool while the wallet — which
         // clears the shortcut when the node reports none — shows them pending. The long fallback still releases them by the DAA alone.
-        //
-        // **The virtual's DAA comes from `lkg_virtual_state`, never from `virtual_stores` (VSTALL, 2026-10-10).** Every caller of
-        // this function is the mempool path (`validate_mempool_transaction{,s_in_parallel}`), which already HOLDS a
-        // `virtual_stores.read()` guard for the whole validation. A second read of that parking_lot lock queues behind a
-        // pending writer: once the virtual processor's `commit_virtual_state` has started `RwLockUpgradableReadGuard::upgrade`
-        // (WRITER_BIT set, waiting for the readers to leave), this inner read parks forever, the outer guard is never
-        // released, and the upgrade never completes — the virtual processor stops after a block's UTXO validation while
-        // headers, bodies, P2P and RPC keep running (the 0b73fd33f drill's three stalls). The same shape as D6's, closed for
-        // the PALW readers in `palw_v2_reader_state`. The LKG state is the last committed virtual, which is what this policy
-        // read has always meant ("state as of this node's last virtual commit"), and it takes no lock.
-        let retired = self.dns_retired_at(self.lkg_virtual_state.load().daa_score);
+        let retired = virtual_daa.is_some_and(|daa| self.dns_retired_at(daa));
         let confirmed_anchor_daa = if retired {
             None
         } else {
@@ -23033,6 +23115,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::DisputeReacquiredV1 { .. } => "DisputeReacquiredV1",
         O::LegacyHeldDemandedV2 { .. } => "LegacyHeldDemandedV2",
         O::LegacyHeldAnsweredV2 { .. } => "LegacyHeldAnsweredV2",
+        O::LegacyHeldAnswerDeclaredV2 { .. } => "LegacyHeldAnswerDeclaredV2",
+        O::LegacyHeldAnswerChunkV2 { .. } => "LegacyHeldAnswerChunkV2",
         O::LegacyLeafRecomputedV2 { .. } => "LegacyLeafRecomputedV2",
         O::BondCapitalAssignedV1 { .. } => "BondCapitalAssignedV1",
         O::GenTensorCommitted { .. } => "GenTensorCommitted",
