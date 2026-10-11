@@ -206,6 +206,7 @@ pub struct TirEvidenceV1<'a> {
     cache_budget: usize,
     max_replay_positions: u32,
     replay_positions_used: Cell<u64>,
+    replay_cost: Option<super::cost::TirReplayCostBudgetV1>,
 }
 
 impl<'a> TirEvidenceV1<'a> {
@@ -218,6 +219,7 @@ impl<'a> TirEvidenceV1<'a> {
         prompt_form: PalwPromptIdsFormV1,
         cap: u64,
     ) -> Result<Self, String> {
+        let replay_cost = super::cost::TirReplayCostBudgetV1::new(runner.space, 4096)?;
         let tree_memory = Self::reserve_tree(runner, &job.binding, cap)?;
         let tree = Self::check(runner, &job.binding, &job.leaf_hashes)?;
         Ok(Self {
@@ -236,6 +238,7 @@ impl<'a> TirEvidenceV1<'a> {
             cache_budget: 1 << 30,
             max_replay_positions: 4096,
             replay_positions_used: Cell::new(0),
+            replay_cost: Some(replay_cost),
         })
     }
 
@@ -276,6 +279,7 @@ impl<'a> TirEvidenceV1<'a> {
             cache_budget: 0,
             max_replay_positions: 0,
             replay_positions_used: Cell::new(0),
+            replay_cost: None,
         })
     }
 
@@ -296,7 +300,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner, binding: &capture.binding, prompt: &capture.prompt,
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
             tree: Box::new(tree), _tree_memory: None, leaves: Leaves::Sparse(inputs.preimages_v1()), params,
-            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_memory: RefCell::new(None), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0),
+            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_memory: RefCell::new(None), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0), replay_cost: None,
         })
     }
 
@@ -344,6 +348,7 @@ impl<'a> TirEvidenceV1<'a> {
         if step_tile_leaf_hash_v1(&ctx_hash, &runner.class_id, &disputed_preimage) != disputed_opening.leaf_hash {
             return Err("the disputed preimage is not the opened leaf".into());
         }
+        let replay_cost = super::cost::TirReplayCostBudgetV1::new(runner.space, 4096)?;
         let tree_memory = Self::reserve_tree(runner, accused, cap)?;
         let tree = TirStepTreeV1::prefix_with_opening(&own.leaf_hashes, accused.step_leaf_count, disputed_opening)?;
         if tree.root() != Some(accused.step_merkle_root) {
@@ -366,6 +371,7 @@ impl<'a> TirEvidenceV1<'a> {
             cache_budget: 1 << 30,
             max_replay_positions: 4096,
             replay_positions_used: Cell::new(0),
+            replay_cost: Some(replay_cost),
         })
     }
 
@@ -458,6 +464,7 @@ impl<'a> TirEvidenceV1<'a> {
     /// default to at most 4096 positions and 1 GiB of requested replay buffers.
     pub fn with_replay_limits_v1(mut self, positions: u32, requested_bytes: usize) -> Self {
         self.max_replay_positions = positions;
+        if let Some(cost) = self.replay_cost.as_mut() { cost.set_positions(positions); }
         self.cache_budget = requested_bytes;
         self.replay_positions_used.set(0);
         self.cache.borrow_mut().clear();
@@ -466,6 +473,31 @@ impl<'a> TirEvidenceV1<'a> {
     }
 
     pub fn replay_positions_used_v1(&self) -> u64 { self.replay_positions_used.get() }
+
+    /// Tool override of the shared symbolic §8 cost vector; no public fee or
+    /// consensus class limit changes. Clearing the cache prevents policy bypass.
+    pub fn with_replay_cost_limits_v1(mut self, limits: misaka_palw_tir::admit::CostV1) -> Self {
+        if let Some(cost) = self.replay_cost.as_mut() { cost.set_limit(limits); }
+        self.replay_positions_used.set(0);
+        self.cache.borrow_mut().clear();
+        self.cache_memory.borrow_mut().take();
+        self
+    }
+
+    pub fn replay_cost_used_v1(&self) -> misaka_palw_tir::admit::CostV1 {
+        self.replay_cost.as_ref().map_or_else(Default::default, |cost| cost.used())
+    }
+
+    /// Conservative requested replay cost, using every occurrence at H=window.
+    /// Excludes restore/checkpoint serialization, physical instructions and time.
+    pub fn replay_requested_cost_v1(&self, a: u32) -> Option<misaka_palw_tir::admit::CostV1> {
+        let Leaves::Replay { points, .. } = &self.leaves else { return None };
+        if a >= self.runner.space.job_shape(&self.binding.job_context).ok()?.positions { return None; }
+        let first = points.iter().rev().find(|p| p.position < a).map_or(Some(0), |p| p.position.checked_add(1))?;
+        let span = u64::from(a.checked_add(1)?.checked_sub(first)?);
+        if span > u64::from(self.max_replay_positions) { return None; }
+        self.replay_cost.as_ref()?.requested(span)
+    }
 
     /// Requested native buffer storage for one replay: range hashes, selecting logits
     /// rows, generated ids and the target position's leaf headers/lanes. Executor
@@ -513,6 +545,7 @@ impl<'a> TirEvidenceV1<'a> {
         if total > u64::from(self.max_replay_positions) { return None; }
         // Failed work consumes the move's budget too; cache misses cannot multiply
         // 4096 positions by an unbounded number of logical source reads.
+        self.replay_cost.as_ref()?.admit(span)?;
         self.replay_positions_used.set(total);
         let ctx = &self.binding.job_context;
         let job = self.runner.space.job_shape(ctx).ok()?;
@@ -548,7 +581,10 @@ impl<'a> TirEvidenceV1<'a> {
 }
 
 impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
-    fn begin_builder_move_v1(&self) { self.replay_positions_used.set(0); }
+    fn begin_builder_move_v1(&self) {
+        self.replay_positions_used.set(0);
+        if let Some(cost) = self.replay_cost.as_ref() { cost.reset(); }
+    }
 
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
         match &self.leaves {

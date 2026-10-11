@@ -12,6 +12,7 @@ pub mod cell;
 pub mod conformance;
 pub mod shardrows;
 pub mod drill;
+pub mod cost;
 pub mod evidence;
 pub mod inventory;
 pub mod mapped;
@@ -64,5 +65,6 @@ pub use run::{TirBoundaryLieV1, TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, Tir
 pub use tree::TirStepTreeV1;
 
 pub use sparse_tree::{TirProofTreeV1, TirSparseStepTreeV1};
+pub use cost::tir_replay_position_cost_v1;
 
 pub use memory::{TirMemoryLeaseV1, TirMemoryReserverV1, TirRetainedJobLeaseV1, set_tir_memory_reserver_v1, tir_full_tree_storage_need_v1, tir_retained_storage_need_v1, tir_executor_storage_need_v1, tir_fold_hash_storage_need_v1};

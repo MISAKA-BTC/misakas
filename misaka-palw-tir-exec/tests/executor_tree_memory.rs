@@ -15,7 +15,7 @@ use misaka_palw_tir_exec::{
     TirParams, TirPlan,
     node::{
         TirClassRunnerV1, TirEvidenceV1, TirHeldInventoryV1, TirParamsSourceV1, TirRetainedJobV1, set_tir_memory_reserver_v1,
-        tir_executor_storage_need_v1, tir_full_tree_storage_need_v1, tir_retained_storage_need_v1,
+        tir_executor_storage_need_v1, tir_full_tree_storage_need_v1, tir_replay_position_cost_v1, tir_retained_storage_need_v1,
     },
 };
 use std::{
@@ -136,8 +136,46 @@ fn actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models(
                 let calls = request_log.lock().unwrap().len();
                 assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_some());
                 assert_eq!(request_log.lock().unwrap().len(), calls, "cache hits preserve the same lease");
+                let symbolic = store.replay_requested_cost_v1(last).unwrap();
+                assert_eq!(store.replay_cost_used_v1(), symbolic);
+                store.begin_builder_move_v1();
+                assert_eq!(store.replay_cost_used_v1(), Default::default());
+                assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_some());
+                assert_eq!(store.replay_cost_used_v1(), Default::default(), "cache hits do not replay or reset a running meter");
             }
             assert_eq!(held(), 0, "dropping the evidence store releases its tree");
+            {
+                let _position_cost = tir_replay_position_cost_v1(&space).unwrap();
+                let store = TirEvidenceV1::own(&runner, &own, &inventory, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+                let shape = space.job_shape(&ctx).unwrap();
+                let first = space.leaf_at(&ctx, 0).unwrap().position;
+                let next_position = (first + 1..shape.positions).find(|a| space.leaves_at_position(&shape, *a) > 0).unwrap();
+                let next = space.running_total(&shape, next_position) as u64;
+                let first_cost = store.replay_requested_cost_v1(first).unwrap();
+                let next_cost = store.replay_requested_cost_v1(next_position).unwrap();
+                let limit = misaka_palw_tir::admit::CostV1 {
+                    macs: first_cost.macs.max(next_cost.macs),
+                    elementwise: first_cost.elementwise.max(next_cost.elementwise),
+                    transcendentals: first_cost.transcendentals.max(next_cost.transcendentals),
+                    bytes_read: first_cost.bytes_read.max(next_cost.bytes_read),
+                    bytes_written: first_cost.bytes_written.max(next_cost.bytes_written),
+                };
+                let store = store.with_replay_cost_limits_v1(limit);
+                assert!(store.step_leaf(0).is_some());
+                assert_eq!(store.replay_cost_used_v1(), first_cost);
+                assert!(store.step_leaf(next).is_none(), "each source replay must fit the shared whole-move symbolic budget");
+                assert_eq!(store.replay_cost_used_v1(), first_cost);
+                store.begin_builder_move_v1();
+                assert!(store.step_leaf(next).is_some(), "reset starts a new bounded move");
+                assert_eq!(store.replay_cost_used_v1(), next_cost);
+                let mut one_less = first_cost;
+                assert!(one_less.bytes_written > 0);
+                one_less.bytes_written -= 1;
+                let store = store.with_replay_cost_limits_v1(one_less);
+                assert!(store.step_leaf(0).is_none(), "one-less symbolic written-byte budget refuses before replay");
+                assert_eq!(store.replay_cost_used_v1(), Default::default());
+            }
+            assert_eq!(held(), 0);
             let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = runner.run(&ctx, &prompt, 1 << 26, false, &mut |_| panic!("lease unwind probe"));
             }));

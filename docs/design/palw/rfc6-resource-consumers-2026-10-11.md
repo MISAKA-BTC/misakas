@@ -542,3 +542,28 @@ releases it. The corpus lease test covers refusal, cache-hit reuse and release. 
 guards the store's cache lifetime; owned leaf copies handed to proof builders still
 require their consumer's proof construction admission and do not become an exact
 whole-process RSS certificate.
+
+### Checked model-specific symbolic replay work (candidate; central run pending)
+
+Replay stores derive the existing TIR §8 cost vector once at construction by summing
+every scheduled occurrence at its worst legal `H = window`, conservatively including
+post at every position. Repeated layer blocks are charged per occurrence. A legacy
+node-cost component saturated at `u64::MAX`, an overflowing occurrence sum, or an
+overflowing whole-move multiplication refuses construction before replay. Default
+node limits are the checked per-position vector multiplied by the same 4,096-position
+move cap, without introducing a consensus class rule or an economic price.
+
+Every cache miss charges its requested replay span to shared checked MAC, elementwise,
+transcendental, specification-byte-read and byte-write counters before allocation or
+execution. Failed host admission/replay consumes admitted symbolic work. Cache hits
+neither replay nor reset the meter; only a new bounded move resets it. Tool overrides
+clear the cache before applying a tighter cost vector. New corpus controls compare the
+exact requested/used vectors, accept each isolated replay, refuse their aggregate under
+a shared limit, reset, and refuse a one-less written-byte limit. Arithmetic controls
+cover every dimension and overflow. Runtime remains pending the central batch.
+
+This is the specification's symbolic cost, **not** a physical instruction/time upper
+bound or measured fee. It excludes checkpoint restore/export copies, artifact retrieval,
+class analysis and serialization, compiler/runtime primitive implementation overhead,
+and allocator/OS RSS. Those costs still require model-specific measurement and reviewed
+economics, and no soundness, fee, 100k or pruning gate is promoted.
