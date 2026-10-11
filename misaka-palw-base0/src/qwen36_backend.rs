@@ -3045,11 +3045,32 @@ mod tests {
 
     #[test]
     fn registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order() {
+        run_registered_hybrid_public_prefix_fixture(false);
+    }
+
+    #[test]
+    fn registered_hybrid_public_prefix_streams_large_original_leaf_across_restart_and_rejects_mutation() {
+        run_registered_hybrid_public_prefix_fixture(true);
+    }
+
+    fn run_registered_hybrid_public_prefix_fixture(large_original_leaf: bool) {
         use kaspa_consensus_core::palw_prefix_family_state_v1::{PalwPrefixCacheUnitV1, PalwQwen36PrefixCacheDigestV1};
-        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
-        let profile =
-            kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4))
-                .unwrap();
+        let artifact = std::sync::Arc::new(if large_original_leaf {
+            // This is a real registered runtime/artifact geometry, not a forged source tree.
+            // Its K-cache Rope source is32768 Int32 lanes in one original131072-byte leaf.
+            let mut shape = crate::qwen36::test_fixture(4, 8).shape.clone();
+            shape.n_heads = 2;
+            shape.n_kv_heads = 2;
+            shape.head_dim = 16_384;
+            crate::qwen36::test_fixture_for_shape(shape)
+        } else {
+            crate::qwen36::test_fixture(4, 8)
+        });
+        let mut geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        if large_original_leaf {
+            geometry.tile_len = 65_536;
+        }
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).unwrap();
         let backend =
             Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (4, 2)).unwrap();
         let ids = [1, 2, 3];
@@ -3105,9 +3126,9 @@ mod tests {
                 PalwPrefixCacheUnitV1::Convolution { layer, age } => &cache.conv[layer as usize][age as usize],
             };
             assert_eq!(row.len() as u64 * 4, length);
-            for (index, word) in row.iter().enumerate() {
-                let bytes = word.to_le_bytes();
-                let at = index as u64 * 4;
+            for (index, words) in row.chunks(16_384).enumerate() {
+                let bytes: Vec<_> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+                let at = index as u64 * 65_536;
                 let before = borsh::to_vec(&staged).unwrap();
                 assert!(staged.push(unit, at + 4, &bytes).is_err());
                 assert_eq!(borsh::to_vec(&staged).unwrap(), before);
@@ -3363,7 +3384,11 @@ mod tests {
                         }
                         _ => {
                             let plan = kaspa_consensus_core::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1::new(
-                                binding, k, unit, offset, length,
+                                binding,
+                                k,
+                                unit,
+                                offset,
+                                (length - offset).min(65_536),
                             )
                             .unwrap();
                             let inputs: Vec<_> = plan
@@ -3384,14 +3409,123 @@ mod tests {
                             let before = borsh::to_vec(&court).unwrap();
                             assert!(
                                 court
-                                    .movement(Hash64::default(), &Action::PublicRow { length: length as u32, inputs: inputs.clone() })
+                                    .movement(
+                                        Hash64::default(),
+                                        &Action::PublicRow { length: (length - offset).min(65_536) as u32, inputs: inputs.clone() }
+                                    )
                                     .is_err()
                             );
                             assert_eq!(borsh::to_vec(&court).unwrap(), before);
-                            court.movement(context, &Action::PublicRow { length: length as u32, inputs }).unwrap();
+                            court
+                                .movement(context, &Action::PublicRow { length: (length - offset).min(65_536) as u32, inputs })
+                                .unwrap();
                         }
                     }
                 }
+                // A separate outsider continuation consumes only published original leaves,
+                // using its deterministic cursor. No runtime cache enters any action below.
+                use kaspa_consensus_core::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1 as Cursor;
+                let mut streamed = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
+                let mut large_leaf_seen = false;
+                let mut mutation_checked = false;
+                let mut public_sources = 0u64;
+                let mut gdn_sources = 0u64;
+                loop {
+                    let cursor = streamed.cursor_v1().unwrap();
+                    let actions = match cursor {
+                        Cursor::Complete => break,
+                        Cursor::HeadParameters { layer, head } => {
+                            let parameters = operands
+                                .iter()
+                                .filter(|opening| {
+                                    opening.operand.tensor_name == gdn.weight_name
+                                        && opening.operand.layer == Some(layer)
+                                        && opening.operand.row_start == head * 68
+                                        && opening.operand.bytes.len() == 68
+                                })
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            assert_eq!(parameters.len(), 1);
+                            vec![Action::BeginHead { parameters }]
+                        }
+                        Cursor::HeadDigest { length, offset, .. } => {
+                            vec![Action::HeadDigest { length: (length - offset).min(65_536) as u32 }]
+                        }
+                        Cursor::PublicRow { length, offset, .. } => {
+                            vec![Action::BeginPublicRow { length: (length - offset).min(65_536) as u32 }]
+                        }
+                        Cursor::HeadInputs { .. } | Cursor::HeadInputOpening { .. } | Cursor::PublicInputOpening { .. } => {
+                            let source = streamed.next_public_source_v1().unwrap().unwrap();
+                            assert!(source.needs_opening && source.offset == 0);
+                            assert_eq!(source.execution_root, binding.committed_execution_root);
+                            assert_eq!(source.step_root, binding.step_merkle_root);
+                            let preimage = *by_index.get(&source.leaf_index).unwrap();
+                            assert_eq!(preimage.coord, source.coordinate);
+                            assert_eq!(preimage.value_count, source.value_count);
+                            assert_eq!(preimage.values_le.len(), source.length as usize);
+                            let opening = PalwStepOpeningV1 {
+                                leaf_index: source.leaf_index,
+                                leaf_hash: hashes[source.leaf_index as usize],
+                                siblings: tree.path_v1(source.leaf_index as usize).unwrap(),
+                            };
+                            let baseline = borsh::to_vec(&streamed).unwrap();
+                            let actions =
+                                streamed.authenticated_public_source_actions_v1(context, &opening, &preimage.values_le).unwrap();
+                            assert_eq!(borsh::to_vec(&streamed).unwrap(), baseline, "adapter only validates a copied baseline");
+                            if matches!(cursor, Cursor::PublicInputOpening { .. }) {
+                                public_sources += 1;
+                            } else {
+                                gdn_sources += 1;
+                            }
+                            large_leaf_seen |= source.length > 90_000;
+                            if !mutation_checked && (!large_original_leaf || source.length > 90_000) {
+                                let mut corrupt = preimage.values_le.clone();
+                                let middle = corrupt.len() / 2;
+                                corrupt[middle] ^= 1;
+                                assert!(streamed.authenticated_public_source_actions_v1(context, &opening, &corrupt).is_err());
+                                assert_eq!(borsh::to_vec(&streamed).unwrap(), baseline);
+                                let mut bad = streamed.clone();
+                                let mut bad_actions = actions.clone();
+                                let part = bad_actions
+                                    .iter_mut()
+                                    .find_map(|action| match action {
+                                        Action::HeadInputPart { bytes, .. } | Action::PublicInputPart { bytes, .. } => Some(bytes),
+                                        _ => None,
+                                    })
+                                    .unwrap();
+                                let at = part.len() / 2;
+                                part[at] ^= 1;
+                                for action in &bad_actions[..bad_actions.len() - 1] {
+                                    bad.movement(context, action).unwrap();
+                                    bad = borsh::from_slice(&borsh::to_vec(&bad).unwrap()).unwrap();
+                                }
+                                assert!(bad.finish().is_err(), "unauthenticated partial bytes cannot convict");
+                                assert!(
+                                    bad.movement(context, bad_actions.last().unwrap()).is_err(),
+                                    "full original leaf EOF rejects mutation"
+                                );
+                                assert!(bad.finish().is_err());
+                                mutation_checked = true;
+                            }
+                            actions
+                        }
+                        other => panic!("unexpected public stream cursor {other:?}"),
+                    };
+                    for action in actions {
+                        assert!(borsh::to_vec(&action).unwrap().len() < 90_000, "each literal move fits the signed carrier budget");
+                        streamed.movement(context, &action).unwrap();
+                        // Restore after every opening, part and finish, including a midleaf stop.
+                        streamed = borsh::from_slice(&borsh::to_vec(&streamed).unwrap()).unwrap();
+                    }
+                }
+                assert!(public_sources > 0 && gdn_sources > 0, "KV/conv and recurrence sources both traverse original-leaf streams");
+                assert!(mutation_checked);
+                assert_eq!(large_leaf_seen, large_original_leaf, "the large fixture must actually expose an original leaf over90k");
+                assert_eq!(
+                    streamed.finish(),
+                    Ok(false_named),
+                    "initial/inherited own-context original public streams convict only a false named root"
+                );
                 assert_eq!(
                     public_digest.finish().unwrap(),
                     named.state_root,
