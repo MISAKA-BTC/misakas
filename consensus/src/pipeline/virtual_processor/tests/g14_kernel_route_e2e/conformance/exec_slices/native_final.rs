@@ -267,3 +267,99 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     let replay = replay_with_lane(&cw.net, &s.lane).await;
     cw.net.assert_same(&replay, "post-native-Final public conviction replay");
 }
+
+/// Actual Final money is journaled through a real shallow selected-chain
+/// rollback, not by calling revert_delta directly. Public proof reapplication
+/// after that rollback must burn the restored funds once, with no second fee.
+#[tokio::test]
+async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_reapplies_once() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut cw = active_world_over(VerificationModeV1::OptimisticPublicVerification, |config| {
+        TestConsensus::with_db(db.clone(), config, sender)
+    })
+    .await;
+    cw.net._keep.push(Box::new(receiver));
+    let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    for (index, slice) in s.slices.iter().enumerate() {
+        s.lane.push(carry_slice(&mut cw, s.real.claim, index as u32, &slice.claim).await);
+    }
+    finalize_native_root(&mut cw, &s).await;
+    let funded = cw.net.chain.tip_state().1;
+    let native = funded.vesting_row(&s.real.claim).unwrap().clone();
+    let receipt = funded.exec_v2_reward_vesting_v1(&s.real.claim).unwrap().clone();
+    assert!(receipt.legs.values().any(|leg| leg.amount > 0), "the reorg must carry actual money");
+    let counters = funded.vesting_counters();
+    let funded_ledger = cw.net.ledger().to_rows();
+    let poster = cw.net.collateral(REGISTRANT);
+    let root_money = (cw.net.collateral(ROOT_CARD), cw.net.slashed(ROOT_CARD));
+    let fork = cw.net.chain.sink();
+    let fork_daa = cw.net.daa();
+    let prefix_len = chain_blocks(&cw.net.chain, fork).len();
+    let healthy = replay_with_lane(&cw.net, &s.lane).await;
+    let mut healthy = cw.net.on_chain(healthy);
+    healthy.chain.ctx.simulated_time = chain_blocks(&healthy.chain, fork).last().unwrap().header.timestamp;
+    let api = cw.net.api().unwrap();
+    let fresh = Fresh::from_api(&api, api.ledger_root(), 0x95);
+    let OutsiderFindingV1::Prosecute(proof) =
+        fresh.check(s.prefix.claim.id, &s.prefix.claim.published(&cw.cand, &[]), &cw.cand.params)
+    else {
+        panic!("real post-Final prefix proof")
+    };
+    let objection = cw.net.route(ACCUSER, &K::FileProof { accuser: cw.net.kid(ACCUSER), claim: s.prefix.claim.id, proof });
+    cw.net.send(vec![(ACCUSER, objection.clone())]).await;
+    let convicted_tip = cw.net.chain.sink();
+    let convicted_blocks: Vec<_> = chain_blocks(&cw.net.chain, convicted_tip).into_iter().skip(prefix_len).collect();
+    assert!(
+        cw.net.daa() - fork_daa <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1,
+        "the actual incumbent proof branch must be shallow enough to undo"
+    );
+    assert!(cw.net.ledger().claims[&s.prefix.claim.id].convicted);
+    assert!(cw.net.chain.tip_state().1.vesting_row(&s.real.claim).is_none());
+    let failed_root = cw.net.chain.tip_state().1.state_root();
+    cw.net = cw.net.restart(db.clone());
+    assert_eq!(cw.net.chain.tip_state().1.state_root(), failed_root, "reopen the actual failed incumbent");
+    let target_len = chain_blocks(&cw.net.chain, convicted_tip).len();
+    while chain_blocks(&healthy.chain, healthy.chain.sink()).len() <= target_len {
+        healthy.chain.heartbeat(healthy.ttpb(), Vec::new()).await;
+    }
+    for block in chain_blocks(&healthy.chain, healthy.chain.sink()).into_iter().skip(prefix_len) {
+        arrive(&cw.net.chain, block, "the actual funded Final branch returning after public conviction").await;
+    }
+    assert_eq!(cw.net.chain.sink(), healthy.chain.sink(), "the physical-db node really changes selected chain");
+    for block in convicted_blocks {
+        arrive(&healthy.chain, block, "retain the competing proof tip before virtual UTXO comparison").await;
+    }
+    assert_eq!(cw.net.chain.ctx.consensus.get_virtual_parents(), healthy.chain.ctx.consensus.get_virtual_parents());
+    assert_eq!(Net::utxos_of(&cw.net.chain), Net::utxos_of(&healthy.chain));
+    cw.net.assert_same(&healthy.chain, "actual native Final financial recovery");
+    let restored = cw.net.chain.tip_state().1;
+    assert_eq!(restored.vesting_row(&s.real.claim), Some(&native));
+    assert_eq!(restored.exec_v2_reward_vesting_v1(&s.real.claim), Some(&receipt));
+    assert_eq!(restored.vesting_counters(), counters, "the old burn is undone; no new allocation is created");
+    assert_eq!(cw.net.collateral(REGISTRANT), poster, "the once-paid poster fee is neither refunded nor charged again");
+    assert_eq!((cw.net.collateral(ROOT_CARD), cw.net.slashed(ROOT_CARD)), root_money);
+    for claim in std::iter::once(&s.prefix).chain(s.slices.iter()) {
+        let key = (misaka_palw_kernel::rows::TABLE_CLAIMS_V1, borsh::to_vec(&claim.claim.id).unwrap());
+        assert_eq!(cw.net.ledger().to_rows().get(&key), funded_ledger.get(&key), "actual kernel Final/fee right restores exactly");
+    }
+    let recovered_root = restored.state_root();
+    let recovered_sink = cw.net.chain.sink();
+    let recovered_utxos = Net::utxos_of(&cw.net.chain);
+    cw.net = cw.net.restart(db);
+    assert_eq!(cw.net.chain.sink(), recovered_sink);
+    assert_eq!(cw.net.chain.tip_state().1.state_root(), recovered_root);
+    assert_eq!(Net::utxos_of(&cw.net.chain), recovered_utxos);
+    // Actor change chains follow the winning branch, exactly as an external
+    // wallet observes its unspent funding after rollback.
+    cw.net.funding = healthy.funding;
+    cw.net.send(vec![(ACCUSER, objection)]).await;
+    let failed_again = cw.net.chain.tip_state().1;
+    assert!(cw.net.ledger().claims[&s.prefix.claim.id].convicted);
+    assert!(failed_again.vesting_row(&s.real.claim).is_none());
+    assert!(failed_again.exec_v2_reward_vesting_v1(&s.real.claim).is_none());
+    assert_eq!(failed_again.vesting_counters().created, counters.created);
+    assert_eq!(failed_again.vesting_counters().moved, counters.moved);
+    assert_eq!(cw.net.collateral(REGISTRANT), poster);
+}
