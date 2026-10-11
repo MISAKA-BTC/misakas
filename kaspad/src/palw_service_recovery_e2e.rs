@@ -61,6 +61,7 @@ pub(super) struct RecoveryRun {
     verifier_restarted: bool,
     paused_input: bool,
     pruned_round: Option<(usize, u8)>,
+    pruned_numbered_before: Option<(u8, u64)>,
     honest: bool,
     job_only_recovery: Option<(std::path::PathBuf, Vec<u8>)>,
     mode: RecoveryMode,
@@ -198,6 +199,7 @@ impl RecoveryRun {
             verifier_restarted: false,
             paused_input: false,
             pruned_round: None,
+            pruned_numbered_before: None,
             honest,
             job_only_recovery,
             mode,
@@ -241,6 +243,56 @@ impl RecoveryRun {
             self.paused_input = true;
             eprintln!("[service-recovery] outsider paused before exact template input carrier inclusion");
         }
+    }
+
+    /// Pin the same reservation's actual counter before the exact immutable template,
+    /// rather than assuming no ordinary round sessions opened since its body was pruned.
+    pub(super) fn observe_numbered_template(&mut self, chain: &Chain, claim: Hash64, objects: &[PalwConsensusObjectV2]) {
+        if self.pruned_round.is_none() {
+            return;
+        }
+        let unit = PalwDaUnitV1::LegacyHeldV2(PalwLegacyHeldUnitV2::PromptIds { chunk: 0 });
+        let requests: Vec<_> = objects
+            .iter()
+            .filter_map(|object| match object {
+                PalwConsensusObjectV2::DisputeReacquiredV1 { request, signature }
+                    if request.claim == claim && request.reserver == self.verifier_bond && request.unit == unit =>
+                {
+                    assert!(!signature.is_empty());
+                    Some(request)
+                }
+                _ => None,
+            })
+            .collect();
+        if requests.is_empty() {
+            return;
+        }
+        assert_eq!(requests.len(), 1, "one template must not carry duplicate numbered input requests");
+        assert!(self.pruned_numbered_before.is_none(), "the numbered input request gets exactly one immutable template");
+        // No other owner operation in this SAME template may open/join a session before the
+        // numbered request. Other owners do not affect this reservation's counter.
+        assert!(!objects.iter().any(|object| matches!(object,
+            PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand }
+                if demand.claim == claim && demand.accuser == self.verifier_bond)));
+        assert!(!objects.iter().any(|object| matches!(object,
+            PalwConsensusObjectV2::DefaultAccused { claim: id, accuser, .. }
+                if *id == claim && *accuser == self.verifier_bond)));
+        assert_eq!(
+            objects
+                .iter()
+                .filter(|object| matches!(object,
+            PalwConsensusObjectV2::DisputeReacquiredV1 { request, .. }
+                if request.claim == claim && request.reserver == self.verifier_bond))
+                .count(),
+            1,
+            "the exact input template contains no other numbered owner request"
+        );
+        let view = chain.view(claim);
+        assert!(view.unit_was_answered_v1(&unit));
+        assert!(!view.sessions.iter().any(|(owner, _)| *owner == self.verifier_bond));
+        let reservation = view.record.as_ref().unwrap().live.get(&self.verifier_bond).unwrap();
+        assert_eq!(requests[0].session_number, reservation.sessions_opened.checked_add(1).unwrap());
+        self.pruned_numbered_before = Some((reservation.sessions_opened, reservation.reserved_daa));
     }
 
     pub(super) fn verifier_paused(&self) -> bool {
@@ -514,7 +566,50 @@ impl RecoveryRun {
                     })
                     .collect();
                 assert_eq!(requests.len(), 1, "exactly one signed numbered reacquisition must be accepted");
-                assert_eq!(requests[0].session_number, opened + 1);
+                let (before, reserved_daa) =
+                    self.pruned_numbered_before.expect("the exact numbered template must pin the accepted counter");
+                assert_eq!(requests[0].session_number, before.checked_add(1).unwrap());
+                assert_eq!(requests[0].reserved_daa, reserved_daa);
+                // The fresh book first drains the original bounded StepNode round. Its
+                // ordinary tag157 sessions share the SAME global counter; their starts are
+                // distinct from a numbered reacquisition of historically answered input.
+                let ordinary: Vec<_> = objects
+                    .iter()
+                    .filter_map(|object| match object {
+                        PalwConsensusObjectV2::LegacyHeldDemandedV2 { demand } if demand.claim == claim && demand.accuser == me => {
+                            Some(demand.unit)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(ordinary.len(), 16, "only the existing sixteen-lane round is drained before input retry");
+                assert_eq!(ordinary.iter().copied().collect::<BTreeSet<_>>().len(), 16);
+                assert!(ordinary.iter().all(|unit| matches!(unit, PalwLegacyHeldUnitV2::StepNode { .. })));
+                assert!(
+                    before >= opened && usize::from(before - opened) <= ordinary.len(),
+                    "every additional ordinary session is accounted by its accepted round demand"
+                );
+                assert_eq!(
+                    objects
+                        .iter()
+                        .filter(|object| matches!(object,
+                    PalwConsensusObjectV2::DisputeReacquiredV1 { request, .. }
+                        if request.claim == claim && request.reserver == me))
+                        .count(),
+                    1,
+                    "no second numbered reacquisition of any other unit may hide in the global counter"
+                );
+                assert!(
+                    !objects.iter().any(|object| matches!(object,
+                    PalwConsensusObjectV2::DisputeReservedV1 { reservation, .. }
+                        if reservation.claim == claim && reservation.reserver == me)),
+                    "the fresh book must retain its original ordinary reservation"
+                );
+                eprintln!(
+                    "[service-recovery] input retry accounting: prune counter {opened}, pre-request counter {before}, exact accepted session {}, ordinary round demands {}",
+                    requests[0].session_number,
+                    ordinary.len()
+                );
                 assert!(
                     objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer }
                     if answer.claim == claim && answer.unit == PalwLegacyHeldUnitV2::PromptIds { chunk: 0 }

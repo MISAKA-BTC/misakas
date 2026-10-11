@@ -540,17 +540,14 @@ async fn pool_heartbeat_observed(
     chain.stamp(&mut template.block);
     let (template, _) = chain.tc.heartbeat_adapt_block_template(template).unwrap();
     if let Some(recovery) = recovery.as_mut() {
-        recovery
-            .before_carriers(
-                claim,
-                template
-                    .block
-                    .transactions
-                    .iter()
-                    .filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.payload).ok().map(|p| p.object)),
-                verifier,
-            )
-            .await;
+        let objects: Vec<_> = template
+            .block
+            .transactions
+            .iter()
+            .filter_map(|t| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&t.payload).ok().map(|p| p.object))
+            .collect();
+        recovery.observe_numbered_template(chain, claim, &objects);
+        recovery.before_carriers(claim, objects.into_iter(), verifier).await;
     }
     chain.time = chain.time.max(template.block.header.timestamp);
     let block = chain.insert(template.block).await;
