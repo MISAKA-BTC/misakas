@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn rfc12_an_incomplete_import_overrides_old_draw_evidence_and_unsynced_mining() {
         let log = drawing_log();
-        let mut runtime = kaspa_rpc_core::GetPalwNodeStatusResponse {
+        let runtime = kaspa_rpc_core::GetPalwNodeStatusResponse {
             producer_state: "drawing".into(), last_draw_unix: (NOW - 10) as u64,
             import_session_available: true, import_session_epoch: 9,
             import_session_phase: "utxo-stream".into(), pruning_import_stable: false,
@@ -999,8 +999,10 @@ mod tests {
         let observed = miner_state(&input);
         assert_eq!(observed.state, MinerState::Syncing);
         assert!(observed.headline.contains("utxo-stream") && observed.headline.contains("epoch 9"));
-        runtime.import_session_available = false; // a v5 sender supplies no marker evidence
-        input.runtime = Some(&runtime);
+        // A v5 sender supplies no marker evidence. A separate response keeps
+        // the first status snapshot immutable while the input still borrows it.
+        let old_runtime = kaspa_rpc_core::GetPalwNodeStatusResponse { import_session_available: false, ..runtime.clone() };
+        input.runtime = Some(&old_runtime);
         assert_eq!(miner_state(&input).state, MinerState::Drawing, "older status is unknown, not a fabricated incomplete import");
     }
 

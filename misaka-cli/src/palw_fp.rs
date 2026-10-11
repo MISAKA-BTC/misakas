@@ -501,7 +501,7 @@ pub async fn submit_objects_v2_capped(
     }
 
     let total_fee_sompi = carriers.iter().try_fold(0u64, |sum, (_, _, _, _, fee)| sum.checked_add(*fee))
-        .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast".into()))?;
+        .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast"))?;
     if let Some(maximum) = maximum_total_fee_sompi {
         if total_fee_sompi > maximum {
             return Err(CliError::new(exit::GENERIC,
