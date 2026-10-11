@@ -447,6 +447,31 @@ impl PalwPrefixFamilyCourtV1 {
         }
         Ok(actions)
     }
+    /// The exact original leaf prefix for the derived next public source. Kept crate-local:
+    /// the custodian wrapper can continue its bounded hash without another binding/profile
+    /// copy, while wire callers cannot nominate a replacement context or class.
+    pub(crate) fn next_public_source_hash_header_v1(
+        &self,
+    ) -> Result<Option<(PalwPrefixPublicSourceV1, LeafHashContinuationV1)>, String> {
+        let Some(source) = self.next_public_source_v1()? else {
+            return Ok(None);
+        };
+        if !source.needs_opening || source.offset != 0 {
+            return Err("original leaf header requires the untouched derived source".into());
+        }
+        let c = source.coordinate;
+        let mut hash = LeafHashContinuationV1::new(crate::palw_step_leg::PALW_STEP_LEG_DOMAIN_TILE_LEAF);
+        hash.update(&crate::palw_step::PALW_STEP_OBJECT_VERSION_V1.to_le_bytes());
+        hash.update(self.binding.job_context.leaf_context_hash_v1(c.call_index, c.position).as_byte_slice());
+        hash.update(self.semantic.class_id.as_byte_slice());
+        for n in [c.call_index, c.node_slot, c.position, c.tile_index, source.value_count, source.length] {
+            hash.update(&n.to_le_bytes());
+        }
+        if hash.byte_count() != Some(282) {
+            return Err("original public source hash header length changed".into());
+        }
+        Ok(Some((source, hash)))
+    }
     pub fn next_public_source_v1(&self) -> Result<Option<PalwPrefixPublicSourceV1>, String> {
         self.check()?;
         let cursor = self.cursor_v1()?;

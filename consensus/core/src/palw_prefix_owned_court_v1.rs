@@ -142,6 +142,18 @@ impl PalwOwnedPrefixCourtV1 {
         self.check()?;
         self.court.cursor_v1()
     }
+    pub(crate) fn next_public_source_hash_header_v1(
+        &self,
+    ) -> Result<
+        Option<(
+            crate::palw_prefix_family_court_v1::PalwPrefixPublicSourceV1,
+            crate::palw_rendering_stream_v1::LeafHashContinuationV1,
+        )>,
+        String,
+    > {
+        self.check()?;
+        self.court.next_public_source_hash_header_v1()
+    }
     pub fn next_public_source_v1(&self) -> Result<Option<crate::palw_prefix_family_court_v1::PalwPrefixPublicSourceV1>, String> {
         self.check()?;
         self.court.next_public_source_v1()
@@ -214,7 +226,7 @@ impl PalwOwnedPrefixCourtV1 {
         {
             return Err("prefix packet changes literal owner/seed, clock or bounded carrier".into());
         }
-        let body = borsh::to_vec(&actions).map_err(|e| e.to_string())?.len() as u64;
+        let body = borsh::object_length(&actions).map_err(|e| e.to_string())? as u64;
         if body > self.maximum_packet_body_bytes || body > whole_signed_len {
             return Err("prefix packet exceeds its measured flat body or whole signed envelope".into());
         }
