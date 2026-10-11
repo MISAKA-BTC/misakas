@@ -83,6 +83,7 @@ fn independent_event(profile: [u8; 64], work: u8, accepted: u64, settled: u64) -
 struct V3 {
     c: Chain,
     inputs: PalwPanelV3InputsV1,
+    source_route: Option<kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1>,
 }
 
 impl V3 {
@@ -108,12 +109,13 @@ impl V3 {
                 sealed: Vec::new(),
             },
         };
-        Self { c, inputs }
+        Self { c, inputs, source_route: None }
     }
 
     fn extras(&self, daa: u64) -> PalwTransitionExtrasV1 {
         let mut e = self.c.extras_at(daa);
         e.panel_v3 = Some(self.inputs.clone());
+        if let Some(route) = &self.source_route { e.kernel_route = Some(route.clone()); }
         e
     }
 
@@ -1141,4 +1143,57 @@ fn retired_population_compacts_after_actual_native_retirement_and_op220_keeps_ty
     archive.authority.native_parent_root = Hash64::from_u64_word(0xBAD);
     engine.put_claim_row(id, Some(row));
     assert!(corrupt.into_state(&w.c.sp, Some(w.c.s.state_root())).is_err(), "carriage cannot rewrite rooted compaction authority");
+}
+
+#[test]
+fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_survives_non_fraud_end() {
+    use kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1;
+    use kaspa_consensus_core::palw_kernel_route_v1::{PalwKernelOpvExtrasV1, PalwKernelRouteExtrasV1};
+    use kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1;
+    use kaspa_consensus_core::palw_panel_source_snapshot_v1::PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1;
+    // Explicitly unapproved mechanics: no paid source target, funding or security
+    // gate is admitted by this test. The source population is honestly empty.
+    let policy = misaka_palw_challenge::paid_opt_in_source_policy_v5(2, 2, 20, 2, 1);
+    let mut panel = engine_policy();
+    panel.beacon_scheme = panel_beacon_scheme_of_v1(&policy);
+    panel.beacon_wait_daa = 200;
+    let mut v = V3::with(panel, FENCE);
+    v.inputs.approved_beacons = vec![policy.clone()];
+    v.inputs.beacon_source = PalwPanelV3BeaconSourceV1::Chain;
+    let mirror = *v.c.sp.panel_v3().unwrap();
+    let opv = PalwPanelFreeFenceV1::at(ForkActivation::new(FENCE));
+    v.source_route = Some(PalwKernelRouteExtrasV1 {
+        network_domain: mirror.network, ruleset_digest: mirror.ruleset, chain_genesis: v.c.p.genesis.hash,
+        opv: Some(PalwKernelOpvExtrasV1 { policy: opv.opv_policy(), denied_classes: Vec::new(), min_effective_bits: 128,
+            sampled_conformance_gates_reward: false, test_eligible: Vec::new(), reward_gate: None }),
+        beacon_source: Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(FENCE))),
+        ..Default::default()
+    });
+    let id = v.floor_claim(0x7A);
+    v.step();
+    v.step();
+    let record = v.record(&id);
+    assert_eq!(record.phase, ClaimPhaseV3::Sealed);
+    let seal = record.seal.unwrap();
+    let release = seal.anchor_slot;
+    let source_checkpoint = v.engine().tip();
+    let request = BeaconRequestV1 { network: mirror.network, ruleset: mirror.ruleset, scheme: panel.beacon_scheme,
+        epoch: seal.beacon_epoch, release_daa: release, deadline_daa: release + 200 };
+    let delta = v.step_at(release + 3, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(delta.entries.iter().any(|entry| matches!(entry,
+        PalwDeltaEntryV2::KernelRouteRow { table, old: None, new: Some(_), .. } if *table == PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1)));
+    let frozen = v.c.s.kernel_route().unwrap().panel_source_snapshot_v1(seal.beacon_epoch).unwrap();
+    frozen.validate_for(&request, &policy).unwrap();
+    assert_eq!(frozen.committed_daa, release + 3);
+    assert_eq!(frozen.checkpoint, source_checkpoint);
+    assert!(frozen.eligible_profiles.is_empty());
+    assert_eq!(frozen.assigned_work_ids, BTreeSet::from([record.claim.work_id.as_bytes()]));
+    assert!(frozen.excluded_profiles.contains(&record.claim.class_id.as_bytes()));
+    assert_ne!(frozen.context(&request, &policy).unwrap().commitment_position, release);
+    // A new verifier sees the same authenticated row after the actual fixture's
+    // delta replay and cold carriage reload, both checked by every step_at.
+    v.step_at(release + 201, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(v.record(&id).phase.terminal());
+    assert_eq!(v.c.s.kernel_route().unwrap().panel_source_snapshot_v1(seal.beacon_epoch).unwrap(), frozen,
+        "a candidate leaving the pending phase never releases its source exclusion");
 }
