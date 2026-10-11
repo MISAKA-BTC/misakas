@@ -153,7 +153,7 @@ impl TransitionBuilder<'_> {
                     j,
                 )?;
             }
-            Ok(())
+            Ok::<(), PalwBudgetRefusalV1>(())
         })
         .expect("created budget")
         .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
