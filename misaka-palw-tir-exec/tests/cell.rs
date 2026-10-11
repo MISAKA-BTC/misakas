@@ -552,6 +552,25 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
             TirBackendV1::new(name.clone(), artifact, root, canonical, form, 1 << 26).unwrap_or_else(|e| panic!("{name}: {e}"));
         let (job, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C ^ k as u8; 64])).unwrap();
         let outcome = backend.execute(&job, &prompt).unwrap();
+        let metadata_rules = backend.court_rules(&kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 10, 2).unwrap());
+        let metadata = TirCaptureV1::decode(&outcome.material).unwrap();
+        misaka_palw_tir_exec::node::tir_authenticate_capture_metadata_v1(&metadata, backend.class_id(), metadata_rules.prompt_form, 1 << 26)
+            .unwrap_or_else(|e| panic!("{name}: exact producer metadata must authenticate: {e}"));
+        if name == "h-window-sum" {
+            assert_eq!((program.token_bound, metadata.logits_rows[0].len()), (16, 4), "input bound is not output vocabulary shape");
+            let mut wrong = metadata.clone(); wrong.logits_rows[0].push(0);
+            wrong.binding.full_logits_trace_root = kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&job, &wrong.logits_rows, &wrong.generated);
+            wrong.binding.committed_execution_root = kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
+                &job.context_hash(), &wrong.binding.full_logits_trace_root, &backend.class_id(), wrong.binding.step_leaf_count, &wrong.binding.step_merkle_root);
+            assert!(misaka_palw_tir_exec::node::tir_authenticate_capture_metadata_v1(&wrong, backend.class_id(), metadata_rules.prompt_form, 1 << 26).is_err(),
+                "a self-consistent trace commitment cannot change its declared logits width");
+            let mut wrong = metadata.clone(); wrong.generated[0] = 4;
+            wrong.binding.full_logits_trace_root = kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&job, &wrong.logits_rows, &wrong.generated);
+            wrong.binding.committed_execution_root = kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
+                &job.context_hash(), &wrong.binding.full_logits_trace_root, &backend.class_id(), wrong.binding.step_leaf_count, &wrong.binding.step_merkle_root);
+            assert!(misaka_palw_tir_exec::node::tir_authenticate_capture_metadata_v1(&wrong, backend.class_id(), metadata_rules.prompt_form, 1 << 26).is_err(),
+                "an input-valid id must still be in the declared output vocabulary");
+        }
         let positions = backend.space().job_shape(&job).unwrap().positions;
         let layers = program.schedule.layers.len();
         for (s_l, s_p) in [(2u16, 1u16), (2, 2)] {

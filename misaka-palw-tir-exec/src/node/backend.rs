@@ -157,13 +157,20 @@ pub fn tir_authenticate_capture_metadata_v1(
     let binding = &capture.binding;
     let verified = verify_tir_binding_v1(binding, cap).map_err(|e| e.to_string())?;
     let ctx = &binding.job_context;
+    // token_bound bounds INPUT token ids. A legal program can declare a different
+    // number of OUTPUT logits lanes (for example the H-window corpus is 16 -> 4).
+    // Match the core court's exact post/logits tensor shape, not the input bound.
+    let program = &verified.space.program;
+    let logits_lanes = program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1);
     if binding.class.class_id(&binding.artifact_root) != class_id
         || !prompt_token_ids_match_v1(prompt_form, &capture.prompt, &ctx.prompt_token_ids_hash)
         || capture.prompt.len() as u64 != u64::from(ctx.declared_prefill_tokens)
         || capture.generated.len() as u64 != u64::from(ctx.exact_decode_tokens)
         || capture.logits_rows.len() != capture.generated.len()
-        || capture.prompt.iter().chain(&capture.generated).any(|t| *t >= verified.space.program.token_bound)
-        || capture.logits_rows.iter().any(|row| row.len() as u64 != u64::from(verified.space.program.token_bound))
+        || capture.prompt.iter().any(|t| *t >= program.token_bound)
+        || capture.generated.iter().any(|t| u64::from(*t) >= logits_lanes)
+        || capture.generated.iter().take(capture.generated.len().saturating_sub(1)).any(|t| *t >= program.token_bound)
+        || capture.logits_rows.iter().any(|row| row.len() as u64 != logits_lanes)
     {
         return Err("the public capture's class, prompt, token or trace shape is not its binding".into());
     }
