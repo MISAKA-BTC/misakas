@@ -1224,7 +1224,10 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
             policy.final_weight_per_unit = 1_000_000;
             policy.max_open_claims_per_bond = 1_000_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
-            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(200), policy });
+            // The fixture's real seed anchor is accepted at 263; its target
+            // draw is at 264. Both existing reward-bearing attempts keep their
+            // pre-fence admission, while the fee-only ticket uses the new cap.
+            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(264), policy });
             params.sync_palw_bond_budget_v1();
         })
         .await;
