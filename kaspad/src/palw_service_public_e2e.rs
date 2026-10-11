@@ -176,6 +176,7 @@ struct Chain {
     time: u64,
     nonce: u64,
     history: Vec<Block>,
+    _pruned_db: Option<kaspa_database::utils::DbLifetime>,
 }
 impl Drop for Chain {
     fn drop(&mut self) {
@@ -199,7 +200,7 @@ impl Chain {
             Some(config.params.genesis.hash),
         );
         let time = config.params.genesis.timestamp;
-        Self { tc, handles, config, bundle, bonds, network_domain, time, nonce: 0, history: vec![] }
+        Self { tc, handles, config, bundle, bonds, network_domain, time, nonce: 0, history: vec![], _pruned_db: None }
     }
     fn daa(&self) -> u64 {
         self.tc.get_virtual_daa_score()
@@ -1350,6 +1351,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                 !case.unretained_fp()
             );
         }
+    }
+    if recovery_mode == Some(recovery::RecoveryMode::Pruned) {
+        recovery::pruned::import_public_carriage(&mut chain, &premine, claim).await;
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
     let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));

@@ -4,6 +4,8 @@
 use super::*;
 #[path = "palw_service_network_e2e.rs"]
 mod network;
+#[path = "palw_service_pruned_e2e.rs"]
+pub(super) mod pruned;
 use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
 use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
 
@@ -33,6 +35,7 @@ pub(super) enum RecoveryMode {
     Restart,
     Reorg,
     Network,
+    Pruned,
 }
 
 pub(super) struct RecoveryRun {

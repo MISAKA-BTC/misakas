@@ -13,11 +13,13 @@ async fn automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_
 
 pub(super) struct NetworkRun {
     receiver: Chain,
-    _metadata: kaspa_database::utils::DbLifetime,
     _flow: Arc<FlowContext>,
     primary: Arc<Adaptor>,
     client: Arc<Adaptor>,
     relayed: usize,
+    // The adaptors and FlowContext own the address-manager DB. Drop its lifetime only after
+    // those references have been released, including on test failure.
+    _metadata: kaspa_database::utils::DbLifetime,
 }
 
 impl NetworkRun {
