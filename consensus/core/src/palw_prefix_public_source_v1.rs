@@ -122,6 +122,86 @@ pub struct PalwPrefixPublicAttemptPlanV1 {
     pub maximum_hash_bytes: u64,
     pub maximum_journal_bytes: u64,
 }
+/// Complete additional acquisition work over a trusted family-derived source bound. This
+/// does not enlarge any legacy CKW/session scope: it prices the separately fenced owned
+/// original-source route. Every field is checked before clock/capital mutation.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPrefixPublicAcquisitionPlanV1 {
+    pub envelope: crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1,
+    pub maximum_sources: u64,
+    pub maximum_public_moves: u64,
+    pub maximum_public_carrier_bytes: u64,
+    pub maximum_response_daa: u64,
+}
+impl PalwPrefixPublicAcquisitionPlanV1 {
+    pub fn derive(
+        base: crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1,
+        slots: usize,
+        prices: crate::palw_rendering_resources_v1::PalwRenderingResourcePricesV1,
+        original_profile_bytes: u64,
+    ) -> Result<Self, String> {
+        let u = |n: u128| {
+            u64::try_from(n).map_err(|_| "public prefix complete resource plan exceeds exact u64 platform envelope".to_string())
+        };
+        let n = u128::from(base.envelope.maximum_stream_leaves);
+        let bytes = u128::from(base.envelope.maximum_stream_bytes);
+        let slots = u128::from(u64::try_from(slots).map_err(|_| "public prefix slots exceed u64")?);
+        if n == 0 || slots == 0 || prices.inclusion_margin_daa == 0 {
+            return Err("public prefix plan needs actual sources/slots and positive inclusion margin".into());
+        }
+        let chunk = PALW_PREFIX_PUBLIC_PART_BYTES_V1 as u128;
+        let leaf = crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES as u128;
+        // Every source has a demand; each fixed signer slot has begin, rounded parts and
+        // finish. No invalid slot can consume the honest semantic continuation budget.
+        let rounded_source_moves = u(bytes.div_ceil(chunk) + n * 3)?;
+        let moves = u(slots
+            .checked_mul(u128::from(rounded_source_moves))
+            .and_then(|x| x.checked_add(n))
+            .and_then(|x| x.checked_add(u128::from(prices.reorg_replay_moves)))
+            .ok_or("public prefix complete moves overflow")?)?;
+        let carriers = u(u128::from(moves) * 90_000)?;
+        let pending = u((slots * 2 + 4) * leaf + slots * 8_192 + 8_192)?;
+        let checkpoint = u(u128::from(pending) + u128::from(base.envelope.row_bytes))?;
+        let journal_copy = u(u128::from(moves) * u128::from(checkpoint))?;
+        let journals = u(u128::from(journal_copy) * 2)?;
+        let validation_bytes = u(u128::from(original_profile_bytes) + 125_000)?;
+        let validation_pass = u(u128::from(moves) * u128::from(validation_bytes))?;
+        let repeated = u(u128::from(validation_pass) * 32)?;
+        // Four checks (admission, apply, serialize/restart and finite replay) cover all
+        // candidate hashes and original64-depth paths, plus baseline semantic validation.
+        let checked_bytes = u(u128::from(pending) + slots * (282 + 64 * 193) + 90_000)?;
+        let check_pass = u(u128::from(moves) * u128::from(checked_bytes))?;
+        let hash_work = u(u128::from(check_pass) * 4)?;
+        let work = u(u128::from(hash_work) + u128::from(repeated))?;
+        let charged_bytes = u(slots * bytes + u128::from(carriers) + u128::from(journals))?;
+        let byte_rent = u128::from(charged_bytes) * u128::from(prices.rent_per_stream_byte);
+        let work_rent = u128::from(work) * u128::from(prices.rent_per_parser_step);
+        let row_rent = u128::from(pending) * u128::from(prices.rent_per_row_byte);
+        let extra_rent =
+            u(byte_rent.checked_add(work_rent).and_then(|r| r.checked_add(row_rent)).ok_or("public prefix rent overflows u128")?)?;
+        let extra_deposit = u(u128::from(moves) * u128::from(prices.deposit_per_move))?;
+        let mut envelope = base.envelope;
+        envelope.maximum_stream_bytes = u(u128::from(envelope.maximum_stream_bytes) + u128::from(charged_bytes))?;
+        envelope.maximum_stream_leaves = u(u128::from(envelope.maximum_stream_leaves) + slots * n)?;
+        envelope.maximum_moves = u(u128::from(envelope.maximum_moves) + u128::from(moves))?;
+        envelope.maximum_parser_steps = u(u128::from(envelope.maximum_parser_steps) + u128::from(work))?;
+        envelope.maximum_blake_blocks = u(u128::from(envelope.maximum_blake_blocks) + u128::from(work).div_ceil(128))?;
+        envelope.inclusion_daa = u(u128::from(envelope.maximum_moves) * u128::from(prices.inclusion_margin_daa))?;
+        envelope.rent_sompi = u(u128::from(envelope.rent_sompi) + u128::from(extra_rent))?;
+        envelope.deposit_sompi = u(u128::from(envelope.deposit_sompi) + u128::from(extra_deposit))?;
+        envelope.row_bytes = u(u128::from(envelope.row_bytes) + u128::from(pending))?;
+        envelope.resident_ram_bytes = u(u128::from(envelope.resident_ram_bytes) * 4 + u128::from(pending) * 4 + 90_000)?;
+        let response_moves = u(slots * (leaf.div_ceil(chunk) + 2))?;
+        let response = u(u128::from(response_moves) * u128::from(prices.inclusion_margin_daa))?;
+        Ok(Self {
+            envelope,
+            maximum_sources: u(n)?,
+            maximum_public_moves: moves,
+            maximum_public_carrier_bytes: carriers,
+            maximum_response_daa: response,
+        })
+    }
+}
 impl PalwPrefixPublicAttemptPlanV1 {
     pub fn derive(source: &PalwPrefixPublicSourceV1, slots: usize, carrier_maximum: u64) -> Result<Self, String> {
         let slots = u64::try_from(slots).map_err(|_| "public prefix attempt slot count overflow")?;
@@ -427,5 +507,49 @@ mod tests {
         pending = seed.clone();
         assert_eq!(pending, seed);
         pending.check().unwrap();
+    }
+    #[test]
+    fn complete_acquisition_prices_all_slots_without_spending_honest_prefix_allowance() {
+        let (target, binding, _, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(true, false);
+        let relation = target.registered_semantics.as_ref().unwrap().prefix_state_relation.unwrap();
+        let prices = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let base = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+            &binding.shape_profile,
+            relation,
+            2,
+            binding.step_leaf_count,
+            90_000,
+            prices,
+        )
+        .unwrap();
+        let profile_bytes = borsh::to_vec(&binding.shape_profile).unwrap().len() as u64;
+        let plan = PalwPrefixPublicAcquisitionPlanV1::derive(base, 7, prices, profile_bytes).unwrap();
+        assert_eq!(plan.maximum_sources, base.envelope.maximum_stream_leaves);
+        assert_eq!(plan.envelope.maximum_moves, base.envelope.maximum_moves + plan.maximum_public_moves);
+        assert!(plan.envelope.rent_sompi > base.envelope.rent_sompi);
+        assert!(plan.envelope.deposit_sompi > base.envelope.deposit_sompi);
+        assert!(plan.envelope.row_bytes > base.envelope.row_bytes);
+        assert!(plan.envelope.inclusion_daa > base.envelope.inclusion_daa);
+        eprintln!(
+            "public-prefix complete source_bound={} moves={} bytes={} rent={} deposit={} inclusionDAA={} RAM={}",
+            plan.maximum_sources,
+            plan.envelope.maximum_moves,
+            plan.envelope.maximum_stream_bytes,
+            plan.envelope.rent_sompi,
+            plan.envelope.deposit_sompi,
+            plan.envelope.inclusion_daa,
+            plan.envelope.resident_ram_bytes
+        );
+        assert!(PalwPrefixPublicAcquisitionPlanV1::derive(base, usize::MAX, prices, u64::MAX).is_err());
+        assert!(
+            PalwPrefixPublicAcquisitionPlanV1::derive(
+                base,
+                7,
+                crate::palw_rendering_resources_v1::PalwRenderingResourcePricesV1 { rent_per_parser_step: u64::MAX, ..prices },
+                profile_bytes
+            )
+            .is_err()
+        );
+        assert!(PalwPrefixPublicAcquisitionPlanV1::derive(base, 0, prices, profile_bytes).is_err());
     }
 }
