@@ -249,3 +249,41 @@ the run with diagnostics; the driver does not weaken those conditions. Its
 three Python controls verify refusal on another factory, actual OS child timeout
 cleanup, and preservation of failed-command diagnostics. They are not native
 registration or P2P evidence.
+
+# Optional exhaustive bootstrap phases (candidate; actual runtime pending)
+
+The same private driver accepts `--complete-check` with explicit
+`--maximum-binding-reservation-sompi` and
+`--maximum-complete-check-fee-sompi`. It checks these limits before starting any
+node. The existing carrier cap now applies cumulatively to every submitted
+batch, and `--timeout` is one total workflow deadline, including process boots,
+maturity waits and the cold reopen. Factory export has its separate fixed
+deadline. No long run or additional resource budget is authorized by this code.
+
+The optional path waits for the native binding's actual `maturesDaa` and public
+Matured/Final state. It uses the three exact owned factory processes' matching
+sink, roots and DAA as caller pins to the authenticated SDK preparation. These
+pins are explicitly scoped to this known private experiment; agreement of three
+arbitrary remote nodes is not a chain authentication rule. It then carries real
+kernel registration, kernel binding, conformance commitment and PostComplete
+objects through the ordinary CLI and Borsh wRPC path. After the actual in-fold
+exhaustive verdict, it kills/reopens the owned producer and independently runs
+the public file verifier through each of the three processes. Pagination has
+finite row/byte/page limits and rejects a moving or incomplete inventory.
+
+The private export includes a bounded Borsh code-fixture commitment and readable
+provenance. The source root hashes actual compiled fixture/exporter text and the
+exact exported file digest. Implementation roots hash the actual interpreter,
+consensus complete-check code and SDK adapter, explicitly declaring that the
+same exhaustive interpreter fills all three result roles. Scope covers every
+finite input/leaf; the resource profile records consensus bounds and claims no
+measured host performance. Native semantic roots are derived from that exact
+file. The metadata claims no independent implementation, trained model, prior
+inclusion or useful-work outcome.
+
+Only a completed real run may set `completeCheckMeasured=true` and
+`COMPLETE_CHECK_TRANSPORT_PASS`. Useful-work maturity, pruned IBD, market fills,
+100k and security approval remain false. Six Python driver controls pass,
+including the existing actual child-timeout/diagnostic checks and the new
+explicit cost, cumulative fee, moving-pin and total-deadline refusals. They do
+not establish real conformance or P2P acceptance.

@@ -22,8 +22,8 @@ use kaspa_consensus_core::palw_opv_bootstrap_v1::{
 };
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_hashes::Hash64;
-pub use misaka_palw_challenge::ConformanceCommitmentV1;
-use misaka_palw_challenge::{OnboardingStateV1, OnboardingStepV1, SubjectKindV1};
+pub use misaka_palw_challenge::{ConformanceCommitmentV1, RootV1, SubjectKindV1};
+use misaka_palw_challenge::{OnboardingStateV1, OnboardingStepV1};
 use misaka_palw_kernel::descriptor::k2_tir_v2_descriptor;
 use misaka_palw_kernel::gate::class_prosecution_bounds_v1;
 use misaka_palw_kernel::ledger::{carrier_fit_v1, single_class_id_v1};
@@ -190,6 +190,21 @@ impl CompleteBootstrapArtifactV1 {
     }
     pub fn kernel_param_root(&self) -> Hash64 {
         self.kernel_param_root
+    }
+
+    /// Exact file-derived semantic roots for a caller's local conformance
+    /// statement. These are not receipts for inclusion, maturity or provenance.
+    pub fn program_root(&self) -> [u8; 64] {
+        program_root_v1(&self.program.encode())
+    }
+    pub fn verification_plan_root(&self) -> [u8; 64] {
+        self.plan.root()
+    }
+    pub fn layout_root(&self) -> [u8; 64] {
+        self.layout_root.as_bytes()
+    }
+    pub fn kernel_descriptor_id(&self) -> [u8; 64] {
+        k2_tir_v2_descriptor().digest()
     }
 
     pub fn registrant(&self) -> PalwBondKeyV2 {

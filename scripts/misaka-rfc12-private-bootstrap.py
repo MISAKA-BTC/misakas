@@ -18,12 +18,22 @@ import tempfile
 import time
 
 from rfc12_owned_resources import OwnedResourceSampler, check_completed_limits, read_limits
+import rfc12_complete_bootstrap as complete
 
 SPEC = importlib.util.spec_from_file_location('rfc12_construction_smoke',
     Path(__file__).with_name('misaka-rfc12-private-smoke.py'))
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
 transport = smoke.transport
+
+
+class FiniteBootstrapDrill(smoke.ResourceDrill):
+    def wait(self, predicate, label):
+        def bounded():
+            if time.monotonic() >= self.workflow_deadline:
+                raise transport.Blocked('the total predeclared workflow deadline expired: ' + label)
+            return predicate()
+        return super().wait(bounded, label)
 
 
 def plan_for(binary, salt, fixture, bootstrap, timeout):
@@ -89,6 +99,8 @@ def onboarding(drill, role, bootstrap):
     after = rpc_read(drill, role, 'getBlockDagInfo')
     if first['sink'] != after['sink'] or first['virtualDaaScore'] != after['virtualDaaScore']:
         return None
+    if row['tipDaa'] != after['virtualDaaScore']:
+        return None
     if not row['available'] or not row['found']:
         return None
     assert row['artifactRoot'] == bootstrap['artifactRoot'], 'native artifact root substitution'
@@ -111,6 +123,10 @@ def agreement(drill, bootstrap):
 
 
 def command(drill, sampler, label, argv, timeout):
+    remaining = getattr(drill, 'workflow_deadline', float('inf')) - time.monotonic()
+    if remaining <= 0:
+        raise transport.Blocked('the total predeclared workflow deadline expired before ' + label)
+    timeout = min(timeout, remaining)
     child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     sampler.register(label, child)
     try:
@@ -127,7 +143,8 @@ def command(drill, sampler, label, argv, timeout):
             child.communicate(timeout=5)
 
 
-def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee):
+def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_check=False,
+        maximum_binding=None, maximum_check=None):
     for role in ('A', 'B', 'JOIN'):
         drill.start(role)
         drill.wait(lambda role=role: ready(drill, role, bootstrap), role + ' exact private process identity')
@@ -144,15 +161,24 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee):
     # first peer, so no earlier floor production can retarget the live price.
     sent = command(drill, sampler, 'CARRIER_SUBMIT', argv + ['--yes'], 60)
     assert sent['ok'] is True and sent['submitted'] is True and len(sent['carriers']) == 2
+    budget = dict(maximum=maximum_fee, spent=0)
+    complete.cap_and_charge(sent, budget)
     for role in ('B', 'JOIN'):
         drill.join_link(role, 'A')
     included = drill.wait(lambda: agreement(drill, bootstrap), 'actual native registration/binding across ordinary P2P')
+    complete_evidence = None
+    if complete_check:
+        complete_evidence = complete.run(drill, sampler, cli, salt, fixture, bootstrap, budget,
+            maximum_binding, maximum_check, agreement, rpc_read, command)
     # Freeze production by terminating only our actual producer child; reopen
     # its same DB as an observer with the identical consensus factory.
     drill.kill('A')
     drill.plan['nodes']['A']['argv'].remove('--palw-produce')
     drill.start('A')
     reopened = drill.wait(lambda: agreement(drill, bootstrap), 'actual cold reopen native registration/binding agreement')
+    if complete_check:
+        complete_evidence['cold'] = complete.verify_after_cold_reopen(drill, sampler, cli, salt, fixture,
+            bootstrap, agreement, rpc_read, command)
     before = included['A']['onboarding']
     after = reopened['A']['onboarding']
     for field in ('classId', 'artifactRoot', 'registrant', 'artifactBindings'):
@@ -163,7 +189,8 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee):
                 [tuple(row[k] for k in columns) for row in after[field]], 'cold persistence changed binding terms'
         else:
             assert before[field] == after[field], 'cold persistence changed ' + field
-    return dict(preview=preview, submission=sent, included=included, reopened=reopened)
+    return dict(preview=preview, submission=sent, included=included, reopened=reopened,
+        cumulativeCarrierFeeSompi=budget['spent'], completeCheck=complete_evidence)
 
 
 def main():
@@ -176,6 +203,9 @@ def main():
     parser.add_argument('--out', required=True)
     parser.add_argument('--timeout', type=int, default=240)
     parser.add_argument('--factory-timeout', type=int, default=60)
+    parser.add_argument('--complete-check', action='store_true', help='also wait actual binding maturity and carry/verify the exhaustive code-fixture check')
+    parser.add_argument('--maximum-binding-reservation-sompi', type=int, help='required with --complete-check; fixed before node launch')
+    parser.add_argument('--maximum-complete-check-fee-sompi', type=int, help='required with --complete-check; fixed before node launch')
     args = parser.parse_args()
     binary, cli = Path(args.binary).resolve(strict=True), Path(args.cli).resolve(strict=True)
     assert all(path.is_file() and os.access(path, os.X_OK) for path in (binary, cli)), 'supply actual helper and CLI executables'
@@ -187,6 +217,8 @@ def main():
     drill = None
     result = dict(status='FAIL', artifactDirectory=str(root), resourceLimits=limits, resourceLimitsMet=False,
         maximumCarrierFeeSompi=args.maximum_carrier_fee_sompi, nativeRegistrationBindingMeasured=False,
+        completeCheckRequested=args.complete_check, maximumBindingReservationSompi=args.maximum_binding_reservation_sompi,
+        maximumCompleteCheckFeeSompi=args.maximum_complete_check_fee_sompi, totalWorkflowTimeoutSeconds=args.timeout,
         completeCheckMeasured=False, matureUsefulWorkMeasured=False, prunedIbdMeasured=False,
         marketFillsMeasured=False, release100kMeasured=False, fullRfc12SecurityApproval=False)
     try:
@@ -198,12 +230,20 @@ def main():
         bootstrap = command(type('FactoryLog', (), {'root': root})(), sampler, 'MANIFEST', factory, args.factory_timeout)
         result['factorySeconds'] = time.monotonic() - began
         assert bootstrap['skipProofOfWork'] is False and bootstrap['releaseApproval'] is False
+        if args.complete_check:
+            complete.costs_before_nodes(bootstrap, args.maximum_binding_reservation_sompi, args.maximum_complete_check_fee_sompi)
+        elif args.maximum_binding_reservation_sompi is not None or args.maximum_complete_check_fee_sompi is not None:
+            raise ValueError('separate complete-check bond caps require --complete-check')
         plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout)
         (root / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
-        drill = smoke.ResourceDrill(plan, root, sampler, {})
+        drill = FiniteBootstrapDrill(plan, root, sampler, {})
+        drill.workflow_deadline = time.monotonic() + args.timeout
         result['bootstrap'] = bootstrap
-        result['evidence'] = run(drill, sampler, cli, args.salt, fixture, bootstrap, args.maximum_carrier_fee_sompi)
+        result['evidence'] = run(drill, sampler, cli, args.salt, fixture, bootstrap, args.maximum_carrier_fee_sompi,
+            args.complete_check, args.maximum_binding_reservation_sompi, args.maximum_complete_check_fee_sompi)
         result.update(status='REGISTRATION_BINDING_TRANSPORT_PASS', nativeRegistrationBindingMeasured=True)
+        if args.complete_check:
+            result.update(status='COMPLETE_CHECK_TRANSPORT_PASS', completeCheckMeasured=True)
     except Exception as error:
         result['reason'] = str(error)
         if drill:
@@ -220,7 +260,7 @@ def main():
         result['ownedDatabaseLogicalBytes'] = {role: sum(file.stat().st_size for file in (root / role).rglob('*') if file.is_file())
             for role in ('A', 'B', 'JOIN')}
         result['probeLatenciesMs'] = drill.latencies if drill else []
-        if result['status'] == 'REGISTRATION_BINDING_TRANSPORT_PASS':
+        if result['status'] in ('REGISTRATION_BINDING_TRANSPORT_PASS', 'COMPLETE_CHECK_TRANSPORT_PASS'):
             try:
                 check_completed_limits(limits, result)
                 result['resourceLimitsMet'] = True
@@ -228,7 +268,7 @@ def main():
                 result.update(status='FAIL', reason=str(error))
         Path(args.out).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps({key: value for key, value in result.items() if key not in ('evidence', 'bootstrap')}, indent=2))
-    return 0 if result['status'] == 'REGISTRATION_BINDING_TRANSPORT_PASS' else 1
+    return 0 if result['status'] in ('REGISTRATION_BINDING_TRANSPORT_PASS', 'COMPLETE_CHECK_TRANSPORT_PASS') else 1
 
 
 if __name__ == '__main__':

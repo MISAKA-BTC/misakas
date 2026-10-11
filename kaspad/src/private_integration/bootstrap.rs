@@ -3,6 +3,7 @@
 //! real funded transactions, included by a validating producer, and replayed.
 
 use super::private_complete_check_params_v1;
+mod statement;
 use kaspa_consensus_core::{
     config::{
         Config,
@@ -180,6 +181,9 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
     let request = SignedRegistrationRequestV1::for_network(registration.clone(), bond, 1, 32, &expected).map_err(|e| e.to_string())?;
     let envelope = request.sign(&signer).map_err(|e| e.to_string())?;
     let binding = artifact.signed_artifact_binding(domain, bond, &signer).map_err(|e| e.to_string())?;
+    let statement = statement::for_code_fixture(&expected, &artifact, file_digest);
+    write_new(&output.join("code-fixture-commitment.borsh"), &borsh::to_vec(&statement).map_err(|e| e.to_string())?)?;
+    write_new(&output.join("code-fixture-provenance.json"), &serde_json::to_vec_pretty(&statement::scope()).map_err(|e| e.to_string())?)?;
     for (name, object) in
         [("native-registration.borsh", registration), ("signed-registration.borsh", envelope), ("artifact-binding.borsh", binding)]
     {
@@ -209,8 +213,11 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
         "artifact": "wide128-code-fixture.palwtir", "artifactFileDigest": faster_hex::hex_string(&file_digest),
         "class": artifact.class().to_string(), "artifactRoot": artifact.artifact_root().to_string(),
         "kernelClass": artifact.kernel_class().to_string(), "kernelParamRoot": artifact.kernel_param_root().to_string(),
+        "verificationPlanRoot": faster_hex::hex_string(&artifact.verification_plan_root()),
         "nativeRegistration": "native-registration.borsh", "signedRegistration": "signed-registration.borsh",
         "artifactBinding": "artifact-binding.borsh", "bondKeyFile": "bond.seed", "fundingKeyFile": "funding.seed",
+        "commitment": "code-fixture-commitment.borsh", "commitmentScope": "code-fixture-provenance.json",
+        "statementRoot": faster_hex::hex_string(&statement.statement_root()),
         "bond": format!("{}:{}", bond.0.transaction_id, bond.0.index),
         "producerPayAddress": card.bond.address(kaspa_addresses::Prefix::Testnet).to_string(),
         "producerFeeOutpoint": format!("{}:{}", palw_t12_drill_fee_float_outpoint_v1(salt, 0).transaction_id,
@@ -250,6 +257,14 @@ mod tests {
         assert_eq!(manifest["consensusParamsId"], config.params.consensus_params_id().to_string());
         assert_eq!(manifest["nativeRegistrationIncluded"], false);
         assert_eq!(manifest["skipProofOfWork"], false);
+        let statement: misaka_palw_sdk::bootstrap_check::ConformanceCommitmentV1 =
+            borsh::from_slice(&fs::read(output.join("code-fixture-commitment.borsh")).unwrap()).unwrap();
+        assert_eq!(manifest["statementRoot"], faster_hex::hex_string(&statement.statement_root()));
+        assert_eq!(statement.candidate_id, manifest["class"].as_str().unwrap().parse::<Hash64>().unwrap().as_bytes());
+        assert_eq!(statement.commitment_object_id, None, "the local statement claims no prior inclusion");
+        let scope: serde_json::Value = serde_json::from_slice(&fs::read(output.join("code-fixture-provenance.json")).unwrap()).unwrap();
+        assert_eq!(scope["independentImplementationClaim"], false);
+        assert_eq!(scope["trainedModelVerified"], false);
         let envelope: PalwConsensusObjectV2 = borsh::from_slice(&fs::read(output.join("signed-registration.borsh")).unwrap()).unwrap();
         let card = palw_t12_drill_cards_v1(config.palw_drill_genesis_salt.as_ref().unwrap()).remove(0);
         misaka_palw_sdk::onboarding_chain::verify_signed_registration_v1(

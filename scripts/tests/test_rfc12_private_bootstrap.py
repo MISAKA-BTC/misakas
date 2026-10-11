@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import time
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -17,6 +18,42 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverControls(unittest.TestCase):
+    def test_complete_cost_cap_and_moving_private_pins_refuse_before_submission(self):
+        bootstrap = dict(bindingReservationSompi='100', completeCheckFeeSompi='1',
+            commitment='fixture.borsh', statementRoot='root', commitmentScope='scope.json')
+        with self.assertRaisesRegex(ValueError, 'explicit'):
+            driver.complete.costs_before_nodes(bootstrap, None, 1)
+        with self.assertRaisesRegex(ValueError, 'no node was started'):
+            driver.complete.costs_before_nodes(bootstrap, 99, 1)
+        driver.complete.costs_before_nodes(bootstrap, 100, 1)
+        rows = {role: dict(sink='known-block', virtualDaaScore=45,
+            onboarding=dict(ledgerRoot='ledger', auxRoot='aux')) for role in ('A', 'B', 'JOIN')}
+        self.assertEqual(driver.complete.pins_from_owned_agreement(rows)['daa'], 45)
+        rows['JOIN']['virtualDaaScore'] = 46
+        with self.assertRaisesRegex(AssertionError, 'DAA disagree'):
+            driver.complete.pins_from_owned_agreement(rows)
+
+    def test_cumulative_carrier_cap_refuses_second_batch_and_overflow(self):
+        budget = dict(maximum=100, spent=0)
+        driver.complete.cap_and_charge(dict(carriers=[dict(fee_sompi=40), dict(fee_sompi=20)]), budget)
+        self.assertEqual(budget['spent'], 60)
+        with self.assertRaisesRegex(AssertionError, 'remaining total workflow cap'):
+            driver.complete.cap_and_charge(dict(carriers=[dict(fee_sompi=41)]), budget)
+        self.assertEqual(budget['spent'], 60)
+        with self.assertRaisesRegex(AssertionError, 'remaining total workflow cap'):
+            driver.complete.cap_and_charge(dict(carriers=[dict(fee_sompi=2**63), dict(fee_sompi=2**63)]), dict(maximum=2**64-1, spent=0))
+
+    def test_expired_total_deadline_starts_no_actual_child(self):
+        sampler = driver.OwnedResourceSampler({}, None)
+        try:
+            log = type('Log', (), {'workflow_deadline': time.monotonic() - 1})()
+            with patch.object(driver.subprocess, 'Popen') as popen:
+                with self.assertRaisesRegex(driver.transport.Blocked, 'deadline expired before'):
+                    driver.command(log, sampler, 'NEVER_START', [sys.executable, '-c', 'raise RuntimeError()'], 5)
+                popen.assert_not_called()
+        finally:
+            sampler.stop()
+
     def test_wrong_private_factory_is_refused_before_onboarding_read(self):
         calls = []
 
