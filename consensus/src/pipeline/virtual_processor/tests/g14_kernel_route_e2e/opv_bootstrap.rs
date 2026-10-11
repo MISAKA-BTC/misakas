@@ -1633,8 +1633,23 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
     }
     net.beat_to(terms.source.seal_end).await;
     reveal_now(&mut net, &reveals).await;
-    net.beat_to(terms.source.final_by + a.policy().settlement_depth_d).await;
-    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Locked(_)));
+    let lock_deadline = terms.source.final_by + a.policy().settlement_depth_d;
+    loop {
+        match beacon_of(&net, &c) {
+            AttemptBeaconV1::Locked(_) => break,
+            AttemptBeaconV1::Waiting { .. } => {
+                assert!(net.daa() < lock_deadline, "timely source Finals must reach their lock");
+                net.beat_to(net.daa() + 1).await;
+            }
+            other => panic!("paid timely sources must lock: {other:?}"),
+        }
+    }
+    assert!(net.attempt(c.v2).open(), "post at the actual lock, within its evidence deadline");
+    let post = sampled_post(&net, &c);
+    let object = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
+    net.send(vec![(CAND, object)]).await;
+    let end = net.attempt(c.v2).evidence.unwrap().window_end_daa;
+    net.beat_to(end + 1).await;
     net.beat_to(budget_activation).await;
     let admitted_state = net.chain.tip_state().1;
     let fee_rows: Vec<_> = admitted_state
@@ -1655,11 +1670,6 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
         assert_eq!((row.reserved.reward_sompi, row.consumed.reward_sompi), (50, 0));
         assert!(row.reuse_not_before >= terms.source.hold_until + 280);
     }
-    let post = sampled_post(&net, &c);
-    let object = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
-    net.send(vec![(CAND, object)]).await;
-    let end = net.attempt(c.v2).evidence.unwrap().window_end_daa;
-    net.beat_to(end + 1).await;
     let route = net.api().unwrap();
     let header = borsh::to_vec(&route.header).unwrap();
     let rows = route.rows_page_v1(None, usize::MAX).rows;
