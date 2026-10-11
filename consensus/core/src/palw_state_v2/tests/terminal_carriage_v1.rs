@@ -15,17 +15,18 @@ fn fixture() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, PalwConsensusObjec
             claim,
             execution_root: row.execution_root,
             trace_root: row.trace_root,
-            reserver: bond_key(5),
+            reserver: bond_key(7),
         }),
         signature: vec![1],
     };
-    let (s, _) = f2_apply(&licensed, &p, &ctx(4, 104, 104), &[reserve], &x).expect("ordinary reservation");
+    let (s, _) = f2_apply(&licensed, &p, &ctx(4, 104, 104), &[seat_bond_reg(7, 1_000), reserve], &x)
+        .expect("ordinary independently collateralized reservation");
     let evidence = borsh::to_vec(&f2_payload(claim, 2, c)).unwrap();
     let (d, parts) = palw_terminal_split_v1(
         PalwTerminalDeclarationV1 {
             version: 1,
             claim,
-            reserver: bond_key(5),
+            reserver: bond_key(7),
             reserved_daa: 104,
             kind: PalwOffenceKindV1::PanelFalseValidV2,
             accused: bond_key(2),
@@ -62,7 +63,7 @@ fn owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts()
         assert_eq!(restarted.state_root(), next.state_root());
         current = restarted;
     }
-    assert!(current.terminal_pending_v1(&(claim, bond_key(5))).is_none());
+    assert!(current.terminal_pending_v1(&(claim, bond_key(7))).is_none());
     let key = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&bond_key(2).0, &claim);
     assert!(current.consumed_offence(&key).is_some());
     assert!(current.bond(&bond_key(2)).unwrap().collateral < base.bond(&bond_key(2)).unwrap().collateral);
@@ -82,9 +83,9 @@ fn owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reserva
     assert!(
         f2_apply(&s1, &p, &ctx(6, 106, 106), &[PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part: Box::new(bad) }], &x).is_err()
     );
-    let released = PalwConsensusObjectV2::DisputeReleasedV1 { claim, reserver: bond_key(5), signature: vec![1] };
+    let released = PalwConsensusObjectV2::DisputeReleasedV1 { claim, reserver: bond_key(7), signature: vec![1] };
     let (s2, _) = f2_apply(&s1, &p, &ctx(6, 106, 106), &[released], &x).unwrap();
-    assert!(s2.terminal_pending_v1(&(claim, bond_key(5))).is_none());
+    assert!(s2.terminal_pending_v1(&(claim, bond_key(7))).is_none());
     assert!(
         f2_apply(
             &s2,
