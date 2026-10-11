@@ -450,3 +450,68 @@ fn bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary()
     assert_eq!(kinds.len(), 3, "commit, Fixed checkpoint and Hist tile all exercise bounds");
     println!("RFC06 bounded cones: {moves} model/kind moves; maximum logical source reads {maximum_reads}");
 }
+
+#[test]
+fn replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_model_leaf() {
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let (mut positions, mut maximum_requested) = (0, 0);
+    for case in cases() {
+        let f = fixture(&case);
+        let tparams = TirParams::from_map(&f.plan, &case.params).unwrap();
+        let inventory = TirHeldInventoryV1::build(&case.program, &TirParamsSourceV1(&tparams)).unwrap();
+        let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
+        let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
+        let mut dense = BTreeMap::<u32, Vec<(u64, PalwStepTileLeafV1)>>::new();
+        runner.run(&f.ctx, &f.prompt, CAP, true, &mut |leaf| {
+            dense.entry(leaf.position).or_default().push((leaf.index, leaf.preimage.clone()));
+        }).unwrap();
+        let own = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap();
+        let job = f.space.job_shape(&f.ctx).unwrap();
+        for (position, leaves) in &dense {
+            assert_eq!(f.space.lane_count_at_position_v1(&job, *position),
+                leaves.iter().map(|(_, leaf)| u128::from(leaf.value_count)).sum::<u128>(),
+                "{}: nonallocating lane accounting matches every actual emitted commit/checkpoint/history", case.name);
+            let requested = own.replay_requested_storage_v1(*position).unwrap();
+            maximum_requested = maximum_requested.max(requested);
+            let tight = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
+                .with_replay_limits_v1(4096, requested);
+            for (index, expected) in leaves {
+                assert_eq!(tight.step_leaf(*index).as_ref(), Some(expected), "{}: exact budget position {position}", case.name);
+            }
+            let below = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
+                .with_replay_limits_v1(4096, requested - 1);
+            assert_eq!(below.step_leaf(leaves[0].0), None, "one-less requested storage refuses even a single cached position");
+            let no_positions = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
+                .with_replay_limits_v1(0, usize::MAX);
+            assert_eq!(no_positions.step_leaf(leaves[0].0), None, "replay span cap refuses before source materialization");
+            positions += 1;
+        }
+    }
+    println!("RFC06 replay probes: {positions} model positions; maximum requested replay buffers {maximum_requested} bytes");
+}
+
+#[test]
+fn one_position_replay_does_not_allocate_for_a_100k_position_job() {
+    let case = cases().remove(0);
+    let mut f = fixture(&case);
+    f.class.layout.max_context = 100_004;
+    let class_id = f.class.class_id(&f.artifact_root);
+    f.space = PalwTirStepSpaceV1::new(&f.class).unwrap();
+    f.ctx = job(&case.program, PREFILL, 100_001, class_id, &f.prompt, case.form);
+    f.ctx.max_context_tokens = 100_004;
+    let params = TirParams::from_map(&f.plan, &case.params).unwrap();
+    let runner = TirClassRunnerV1::new(&f.space, &f.plan, &params, class_id).unwrap();
+    let shape = f.space.job_shape(&f.ctx).unwrap();
+    assert_eq!(shape.positions, 100_004);
+    let mut emitted = 0;
+    let range = runner.replay(&f.ctx, &f.prompt, CAP, None, Some(1), &mut |_| emitted += 1).unwrap();
+    assert_eq!(range.leaf_hashes.len(), emitted);
+    assert_eq!(emitted as u64, f.space.leaves_at_position(&shape, 0));
+    assert!(range.logits_rows.is_empty());
+    assert!(range.generated.is_empty());
+    let requested_buffers = range.leaf_hashes.capacity() * std::mem::size_of::<Hash64>()
+        + range.logits_rows.capacity() * std::mem::size_of::<Vec<i32>>()
+        + range.generated.capacity() * std::mem::size_of::<u32>();
+    assert!(requested_buffers <= 64 << 10, "a one-position replay requests {requested_buffers} output-buffer bytes");
+    println!("RFC06 100k-context one-position replay requested output buffers: {requested_buffers} bytes; full run unmeasured");
+}

@@ -439,6 +439,32 @@ impl PalwTirStepSpaceV1 {
         n
     }
 
+    /// Canonical four-byte lanes emitted at one position, without constructing its leaf
+    /// metadata. Node replay admission pairs this with `leaves_at_position` to account
+    /// preimage buffers before enumeration/allocation. Saturation refuses on conversion
+    /// under a finite node storage budget; it changes no commitment or layout rule.
+    pub fn lane_count_at_position_v1(&self, job: &PalwTirJobShapeV1, a: u32) -> u128 {
+        if a >= job.positions { return 0; }
+        let post = self.occurrences.len() - 1;
+        let mut lanes = 0u128;
+        for (i, (block, _)) in self.occurrences.iter().enumerate() {
+            if i == post && !job.runs_post(a) { continue; }
+            let h = self.h_of(*block, a);
+            for commit in &self.blocks[*block as usize].commits {
+                lanes = lanes.saturating_add(u128::from(commit.elements(h)));
+            }
+        }
+        if (a + 1).is_multiple_of(self.layout.checkpoint_interval) {
+            for instance in &self.fixed { lanes = lanes.saturating_add(u128::from(instance.elements)); }
+        }
+        if (a + 1).is_multiple_of(self.layout.h_tile) {
+            for instance in &self.hist {
+                lanes = lanes.saturating_add(u128::from(instance.elements).saturating_mul(u128::from(self.layout.h_tile)));
+            }
+        }
+        lanes
+    }
+
     /// `Σ_{p ∈ [lo, hi)} ⌈f · min(p + 1, W) / t⌉` for one committed node, in closed form.
     fn node_leaves_over(c: &CommitNodeV1, window: Option<u32>, lo: u64, hi: u64) -> u128 {
         if hi <= lo {

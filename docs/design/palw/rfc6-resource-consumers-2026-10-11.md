@@ -459,3 +459,25 @@ cone API and validators remain unchanged; actual full, shard and sparse public n
 enter through the bounded evidence-store method. The focused all-model court corpus selects the
 last commit/checkpoint/history leaf of each applicable model and compares legacy canonical wire,
 exact-budget acceptance and one-less refusal. Runtime evidence is pending the central batch.
+
+### Replay buffer admission (candidate; central run pending)
+
+The actual evidence store now refuses replay spans over 4096 positions and requested replay
+buffers over 1 GiB before starting a replay. It derives target leaf headers/lanes without a leaf
+metadata vector; charges range hashes, selecting logits row headers/data, the temporary i128
+row conversion, generated ids, a bounded canonical emitter buffer and a 16 KiB map allowance.
+It releases old cached positions before allocating transient storage, clones only the target
+position, and refuses even a single target that exceeds its budget. A refusal yields unavailable
+input and no verdict. The 4096-position ceiling is node policy, not class admission or an approved
+latency/cost envelope: models needing a wider interval remain a capacity acceptance condition.
+
+The runner sizes partial replay hash/row/token reservations to its actual endpoint. The executable
+corpus compares nonallocating lane counts with every emitted commit/Fixed checkpoint/Hist tile,
+replays all model positions at the exact requested-buffer limit, and tests one-less byte/zero-span
+refusal. A separate genuine class/job descriptor with a 100,004-position context replays one
+position with bounded output-buffer capacity; this is a narrow-allocation regression, **not** a
+100k full-job, registry, process RSS or throughput PASS.
+
+This requested-buffer metric excludes executor tensors/working state, immutable full proof trees,
+retained checkpoint/memo lifetime and allocator/process RSS overhead. Full fold construction still
+has those separately unresolved liabilities; no whole-process memory/cost gate is promoted.

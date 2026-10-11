@@ -198,9 +198,11 @@ pub struct TirEvidenceV1<'a> {
     params: &'a dyn TirParamOpenerV1,
     prompt_form: PalwPromptIdsFormV1,
     cap: u64,
-    /// Replayed positions' leaves, by position (bounded by `cache_budget` bytes of lanes).
+    /// One target position's replayed leaves. The admission budget also includes the
+    /// transient range hashes, logits rows, generated ids and native Vec headers.
     cache: RefCell<BTreeMap<u32, Vec<PalwStepTileLeafV1>>>,
     cache_budget: usize,
+    max_replay_positions: u32,
 }
 
 impl<'a> TirEvidenceV1<'a> {
@@ -226,6 +228,7 @@ impl<'a> TirEvidenceV1<'a> {
             cap,
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 1 << 30,
+            max_replay_positions: 4096,
         })
     }
 
@@ -258,6 +261,7 @@ impl<'a> TirEvidenceV1<'a> {
             cap,
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 0,
+            max_replay_positions: 0,
         })
     }
 
@@ -278,7 +282,7 @@ impl<'a> TirEvidenceV1<'a> {
             runner, binding: &capture.binding, prompt: &capture.prompt,
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
             tree: Box::new(tree), leaves: Leaves::Sparse(inputs.preimages_v1()), params,
-            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0,
+            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0, max_replay_positions: 0,
         })
     }
 
@@ -343,6 +347,7 @@ impl<'a> TirEvidenceV1<'a> {
             cap,
             cache: RefCell::new(BTreeMap::new()),
             cache_budget: 1 << 30,
+            max_replay_positions: 4096,
         })
     }
 
@@ -422,39 +427,82 @@ impl<'a> TirEvidenceV1<'a> {
         self.trace.pin(&self.binding.job_context, row, beat_lane)
     }
 
-    /// Replay the positions from the latest point before `a` through `a`, caching their leaves.
+    /// Override local replay admission for a tool/resource probe. Actual node stores
+    /// default to at most 4096 positions and 1 GiB of requested replay buffers.
+    pub fn with_replay_limits_v1(mut self, positions: u32, requested_bytes: usize) -> Self {
+        self.max_replay_positions = positions;
+        self.cache_budget = requested_bytes;
+        self.cache.borrow_mut().clear();
+        self
+    }
+
+    /// Requested native buffer storage for one replay: range hashes, selecting logits
+    /// rows, generated ids and the target position's leaf headers/lanes. Executor
+    /// tensors, retained resume points, the immutable proof tree and allocator/RSS
+    /// overhead are separate; the fixed 16 KiB allowance covers the single-entry map.
+    pub fn replay_requested_storage_v1(&self, a: u32) -> Option<usize> {
+        let Leaves::Replay { points, .. } = &self.leaves else { return None };
+        let ctx = &self.binding.job_context;
+        let space = self.runner.space;
+        let job = space.job_shape(ctx).ok()?;
+        if a >= job.positions { return None; }
+        let first = points.iter().rev().find(|p| p.position < a)
+            .map_or(Some(0), |p| p.position.checked_add(1))?;
+        let end = a.checked_add(1)?;
+        if end.checked_sub(first)? > self.max_replay_positions { return None; }
+        let hashes = space.running_total(&job, end).checked_sub(space.running_total(&job, first))?;
+        let selected = end.saturating_sub(job.prefill - 1) as u128;
+        let rows = selected.checked_sub(first.saturating_sub(job.prefill - 1) as u128)?;
+        let post = space.program.schedule.post as usize;
+        let width = space.program.blocks.get(post)?.nodes.get(space.program.logits as usize)?.out.elements_at(1)? as u128;
+        let leaf_headers = u128::from(space.leaves_at_position(&job, a))
+            .checked_mul(std::mem::size_of::<PalwStepTileLeafV1>() as u128)?;
+        let leaf_lanes = space.lane_count_at_position_v1(&job, a).checked_mul(4)?;
+        let trace = rows.checked_mul(width.checked_mul(4)?.checked_add(std::mem::size_of::<Vec<i32>>() as u128)?)?;
+        // drive converts one selecting row through i128 before retaining i32, and
+        // reuses an emitter buffer whose canonical leaf has at most 65,536 lanes.
+        let row_conversion = if rows == 0 { 0 } else { width.checked_mul(16)? };
+        let emitter = (kaspa_consensus_core::palw_step::PALW_STEP_MAX_TILE_LEN as u128).checked_mul(8)?;
+        let bytes = hashes.checked_mul(std::mem::size_of::<Hash64>() as u128)?
+            .checked_add(trace)?.checked_add(row_conversion)?.checked_add(emitter)?
+            .checked_add(selected.checked_mul(4)?)?
+            .checked_add(leaf_headers)?.checked_add(leaf_lanes)?.checked_add(16 << 10)?;
+        usize::try_from(bytes).ok()
+    }
+
+    /// Replay only after bounded admission, keeping the target position's preimages.
+    /// Earlier replayed positions are consumed by the executor and never cloned here.
     fn replay_through(&self, a: u32, points: &[TirResumePointV1], disputed: Option<&(u64, PalwStepTileLeafV1)>) -> Option<()> {
+        let requested = self.replay_requested_storage_v1(a)?;
+        if requested > self.cache_budget { return None; }
         let point = points.iter().rev().find(|p| p.position < a);
         let ctx = &self.binding.job_context;
-        let mut fresh: BTreeMap<u32, Vec<PalwStepTileLeafV1>> = BTreeMap::new();
+        let job = self.runner.space.job_shape(ctx).ok()?;
+        let count = usize::try_from(self.runner.space.leaves_at_position(&job, a)).ok()?;
+        let lane_bytes = usize::try_from(self.runner.space.lane_count_at_position_v1(&job, a).checked_mul(4)?).ok()?;
+        // Drop all prior positions before transient buffers are allocated: even one
+        // oversized position is refused, rather than retained beyond the cache cap.
+        self.cache.borrow_mut().clear();
+        let mut fresh = Vec::new();
+        fresh.try_reserve_exact(count).ok()?;
+        let (mut copied_bytes, mut malformed) = (0usize, false);
         self.runner
-            .replay(ctx, self.prompt, self.cap, point, Some(a + 1), &mut |leaf| {
-                let mut p = leaf.preimage.clone();
-                if let Some((i, accused)) = disputed
-                    && *i == leaf.index
-                {
-                    p = accused.clone();
-                }
-                fresh.entry(leaf.position).or_default().push(p);
-            })
-            .ok()?;
-        let mut cache = self.cache.borrow_mut();
-        let mut bytes: usize = cache.values().flatten().map(|l| l.values_le.len()).sum();
-        for (pos, leaves) in fresh {
-            bytes += leaves.iter().map(|l| l.values_le.len()).sum::<usize>();
-            cache.insert(pos, leaves);
-        }
-        // Evict the positions furthest before `a` first (the evaluation reads backwards from it).
-        while bytes > self.cache_budget && cache.len() > 1 {
-            let (&first, _) = cache.iter().next().expect("non-empty");
-            if first == a {
-                break;
-            }
-            let gone = cache.remove(&first).expect("present");
-            bytes -= gone.iter().map(|l| l.values_le.len()).sum::<usize>();
-        }
+            .replay(ctx, self.prompt, self.cap, point, Some(a.checked_add(1)?), &mut |leaf| {
+                if leaf.position != a || malformed { return; }
+                let preimage = match disputed {
+                    Some((index, accused)) if *index == leaf.index => accused,
+                    _ => leaf.preimage,
+                };
+                let Some(next) = copied_bytes.checked_add(preimage.values_le.len()) else { malformed = true; return; };
+                if fresh.len() == count || next > lane_bytes { malformed = true; return; }
+                copied_bytes = next;
+                fresh.push(preimage.clone());
+            }).ok()?;
+        if malformed || fresh.len() != count || copied_bytes != lane_bytes { return None; }
+        self.cache.borrow_mut().insert(a, fresh);
         Some(())
     }
+
 }
 
 impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
