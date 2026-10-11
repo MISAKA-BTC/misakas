@@ -3676,3 +3676,59 @@ and their combined work. Generic lane exhaustion MUST NOT take an own protected
 slot. Bound and charge decode, scope/PC work, hashes and retries before work;
 an invalid paid filing MUST NOT poison the stored honest statement. Shipping
 fences and mode-A external source acquisition remain unchanged.
+
+### §18.10 — Explicit complete mixed graph scope/court and replay, v9
+
+Use a distinct ordinary-point court ID and mixed court-set/root domains. Keep
+frozen TIR25, v3 parameters and flat-v5 internal commitments unchanged. For
+ordinary relations authenticate one exact output element and the scalar
+evaluator's complete dependency leaves. A MatMul second registered parameter
+MUST use PC-v3 column openings; other parameters and internal legacy nodes use
+their registered row layout. Committed TopK MUST use point7; public/initial
+TopK, malformed and decode MUST use their admitted v5 relation. Old decoders
+MUST NOT accept the v9 envelope implicitly.
+
+Independently derive all scheduled relation prices before accepting a declared
+scope. Bound metadata visits at2^20 before allocating the relation receipts.
+Cover p=0, initialization p=1, both sides of every input/output 63/64-element
+history grammar boundary, and the maximum H. Price flat tails at127 values.
+Bind full program, profile, court set, extent and optional encoder namespace.
+Recheck the full scope for the complete court API, and add its derived metadata
+work plus8 MiB+512 bytes per relation to the terminal scratch. The combined API
+MUST remain within1 MiB proof,2^30 work,32 MiB scratch and1,024 leaves. The pure
+complete-scope bound helper alone MUST NOT authenticate a submitted scope.
+
+Mixed wire version9/tag0 ordinary, tag1 TopK and tag2 legacy MUST have bounded
+nested codecs, exact counts and no trailing bytes. Typed replies bind version,
+scope and exact committed node; values support all six dtypes with one leaf
+bounded at16 KiB, headers are bounded at512 bytes and rank4. Authenticate dtype,
+shape, requested element/leaf and node/segment namespace. Missing or borrowed
+material MUST NOT become a conviction. Independent full replay MUST use own
+acquired registered parameters and actual bound job inputs. Reserve the local
+scope/reference/hash/read/selection/reply/attempt envelope before callbacks;
+failed reads and retries MUST consume allowance. These local contracts grant
+no native execution eligibility or Final right.
+
+### §18.11 — Reference resource vector and settlement corrections, v10
+
+Bind program/complete scope9/PC/exact positions/encoder and every primitive
+resource row in the resource-vector-v10 root. Independently derive the21
+dimensions listed in ResourceAxisV10; canonical PWU and reward weight are
+separate. A local streaming reservation MUST bind actor/job/vector/exact tokens
+and fixed policy ceilings. Atomically compare accumulated plan/block/bond/
+network allowances before invoking providers; no retry may increase ceilings,
+change the subject or restore spent work. Borrowed parameter dtype/shape/byte
+extent MUST match declarations before allocating i128 values, and each returned
+parameter MUST authenticate to its exact PC namespace. Parameter-provider
+external work and process RSS are not certified by these payload bounds.
+
+All reference settlement accumulated slashed/routed/burned/paid/escrow-spent/
+FinalReward amounts MUST use checked arithmetic before mutation. Payouts and
+burns MUST NOT exceed prior debited original collateral; FinalReward MUST also
+be bounded by spent escrow. Apply receipt batches atomically and require debit/
+route balance before committing the cloned result. A failed instruction or
+unbalanced batch MUST preserve the original book. An externally slashed existing
+reservation may use the remaining collected collateral and release the rest;
+new allocation MUST reject an existing reservation above collateral. Aggregate
+reference settlement is not job-specific native reward provenance. Persistent
+native policy/retention/quota/escrow integration remains a separate contract.

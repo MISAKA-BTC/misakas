@@ -2497,3 +2497,79 @@ for a different teacher-forced test. This free-running failure cannot be
 substituted for A6/A8, relabeled as a90% cohort pass or removed from later
 acceptance records. Actual task/maximum-context/native Final and complete
 RFC02 acceptance remain open; the goal stays active.
+
+## Verified components — complete ordinary point graph and resources, v9/v10
+
+Ordinary scalar9 dependency courts, full scope9, mixed court9 and independent
+locator/replay9 preserve frozen TIR/PC-v3/flat-v5 commitments. Registered MatMul
+second parameters use their exact column layout. The scope samples every
+scheduled occurrence and the history initialization/63-64 grammar boundaries,
+prices flat tails at127, and bounds metadata visits before receipts. The mixed
+API independently rechecks the complete scope and adds metadata work/storage
+to the terminal, retaining1 MiB/2^30/32 MiB/1,024-leaf ceilings. Typed ordinary
+DA supports all six dtypes, with16-KiB values/512-byte headers. The locator uses
+own replay to find first faults without a producer-supplied corrupted coordinate;
+missing/borrowed evidence creates demands or refusals. Local sessions prepay
+reference/TopK/hash/read/reply/retry costs. Seven point and four graph tests pass.
+
+Resource10 independently derives21 axes from the exact program/PC/positions and
+full scope9, using the same complete-court bound helper. Its borrowed raw-image
+consumer checks width/dtype/shape before i128 expansion, authenticates each
+parameter and atomically reserves fixed plan/block/bond/network allowances before
+callbacks. Eight tests pass, including all25 primitives,84 per-axis/per-scope
+precallback refusals, subject/root tampering, atomicity and failed/retried source
+reads. Actual Qwen32 metadata reports4,343,239,673B owned peak payload and
+1,835,516,100B raw parameter storage; this is a derived reference envelope,
+not measured RSS, executed native quota or model admission.
+
+Checked settlement now rejects total overflow and unfunded payout/burn/Final
+before mutation, applies a receipt batch atomically and checks balance before
+commit. Existing externally slashed reservations still support clamped original
+debit and release. Seven new conservation tests +22 route +28 OPV +6 verifier
++2 pipeline tests pass (65 total). One obsolete codec test had expected all
+64-byte tag payloads malformed; known digest-only tags30/35/47 correctly refuse
+as rule/authorization failures. The repaired fixture changes no runtime codec.
+An initial blanket reservation-overhang guard was corrected after its legacy
+failure; those trials remain retained.
+
+Twenty-six tests are new across point7+graph4+resource8+settlement7, bringing
+the protected component pool from276 to302. Existing regressions are not counted
+again. The earlier native7 full155 kernel run predates these changes; an
+interrupted later broad run is not credited as a complete pass. Exact final
+source/binary pins, selected commands and limitations are recorded in
+[the resource/settlement verdict](evidence/rfc02-reference-resources10-and-settlement-verdict.json)
+and the separate point/graph/checkpoint observations. None of these local
+components creates native quota persistence, retention/transport service,
+execution-class rewards or Final. Native9/job11, full typed H/media continuity,
+actual task/context/fidelity acceptance and A6/A8 remain open; the goal is active.
+
+## Verified actual checkpoint components — ordinary court and PC source, v9
+
+Two independently opened mapped executors each evaluate all7,658 nodes of the
+pinned Qwen2.5-1.5B integer artifact for token4498. The finder independently
+locates the first divergent node after35 agreeing roots, without receiving the
+producer's mutated node coordinates. A fixed first-leaf reply provides the
+authenticated divergent element; arbitrary-leaf hash descent/public service is
+not established by this trial. Selected matrix instance(7,layer0) independently
+authenticates to the registered PC; the17,944-byte point proof convicts and a
+missing-input proof dismisses. Its whole mixed API is23,284 filing bytes,
+151,708,672 work and21,316,001 scratch. Whole-process16.30s/RSS3,995,418,624B is
+observed locally, separately from the32-MiB terminal court bound. A prior
+quadratic scan passed76.06s and retains its reconstructed, SHA-verified source.
+
+The independent raw-width streamed all-PC check compares all1,636 actual
+integer-artifact instances to their registered v3 roots. It reads1,835,516,100B
+payload, bounds helper workspace at27,275,264B under32 MiB, and observes81.07s/
+RSS1,853,112,320B. There is no full i128 weight expansion in that check. Both
+trials preserve artifact SHA before/after. This verifies integer artifact/PC
+continuity; original BF16 float fidelity and complete task quality remain
+separate measurements. No native binding/eligibility/Final or cohort pass is
+inferred from offline source continuity.
+
+Actual model metadata scope has7,658 admitted relations at32 positions and a
+complete-API worst141,228 bytes/228,106,240 work/24,346,393 scratch, within the
+unchanged terminal caps. The actual point trial runs one position only. Frozen
+source, immutable executables/test binaries, commands, proof and all limits are
+in [the checkpoint observation](evidence/qwen25-real-courts9-observation.json).
+Native9/job11 integration, actual honest Final/redemption, complete tasks and
+long contexts, H/media continuity and A6/A8 remain open. The full goal is active.

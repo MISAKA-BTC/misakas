@@ -353,12 +353,18 @@ fn malformed_and_oversized_objects_are_refused_transactionally_through_the_stric
     let ev = w.l.apply_encoded(&good, &a).unwrap();
     assert!(ev.iter().any(|e| matches!(e, E::ClaimCommitted { .. })));
     assert_ne!(w.l.root(), before);
-    // PanelCovered is not an object: no declared tag decodes to it, and its old shape is not a route object.
-    for tag in 0u8..=40 {
+    // PanelCovered is not an object. The old 64-byte body is truncated for
+    // every other tested carrier except the three declared digest-only demand
+    // settlements. Those name unknown demands in this state and refuse by
+    // rule; neither a valid settlement tag nor an unknown tag grants coverage.
+    let after_good = w.l.root();
+    for tag in 0u8..=48 {
         if !(1..=11).contains(&tag) {
             let mut b = vec![KERNEL_ROUTE_VERSION_V1, tag];
             b.extend([0u8; 64]);
-            assert_eq!(w.l.apply_encoded(&b, &a).unwrap_err().kind, RefusalKindV1::Malformed, "tag {tag}");
+            let expected = if matches!(tag, 30 | 35 | 47) { RefusalKindV1::Rule } else { RefusalKindV1::Malformed };
+            assert_eq!(w.l.apply_encoded(&b, &a).unwrap_err().kind, expected, "tag {tag}");
+            assert_eq!(w.l.root(), after_good, "tag {tag}: a refused carrier changed the state");
         }
     }
     assert_eq!(TAG_FILE_DEMAND_V1, 8);

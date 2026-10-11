@@ -3825,3 +3825,75 @@ limitations are recorded in
 The earlier 123-position teacher-forced logit diagnostic remains a distinct
 passing result. Neither result establishes complete task benchmarks, maximum
 context, native execution Final or A6/A8 coverage.
+
+### §14.42 — Complete ordinary point graph and resource components, v9/v10
+
+An explicit v9 graph contract now uses authenticated scalar output and exact
+dependency openings for all 24 ordinary frozen primitives. Registered MatMul
+second operands use the existing PC-v3 column layout; internal nodes retain
+flat-v5 or small legacy commitments. Committed TopK uses point7 and public/
+initial TopK, malformed headers and decode use their separately checked v5
+relations. The complete scope covers all scheduled occurrences, history
+initialization, both sides of the 63/64-element grammar boundary and maximum
+H, with conservative 127-element flat tails. No frozen v5/v7 scope or resource
+ceiling is changed.
+
+The mixed court independently rederives that full scope and prices both its
+metadata preparation and the terminal. Its locator replays from acquired
+registered parameters and authenticated job input, then requests bounded
+typed output/header/hash evidence for the first mismatch; it needs no supplied
+fault coordinate. Typed value replies support all six dtypes. Missing evidence
+creates a demand, not a fabricated conviction. Retry/hash/read/TopK work is
+prepaid by the local replay session. These are versioned components; native9
+and execution-class/job11 integration are separate acceptance steps.
+
+Resource10 independently binds that complete scope and derives 21 dimensions
+for primitive operations, validation/copy/index traffic, hashes, provider calls,
+reference payload/container allowance, evidence storage, delivery/reply/retry,
+complete court/metadata work, raw parameter storage/tree scratch and owned
+peak payload. Its streaming reference consumer checks borrowed raw byte width,
+dtype and shape before i128 expansion, authenticates parameters, and atomically
+reserves plan/block/bond/network allowances before callbacks. Failed callbacks
+and retries retain the debit. This local component neither installs persistent
+native quotas nor measures process RSS, transport retention or coin fees.
+
+Checked reference settlement preflights every accumulated u64 total, funds
+payouts/burns from prior original collateral debits and FinalReward from spent
+escrow, and rolls back a rejected or unbalanced receipt batch atomically.
+Existing reservations remain releasable after another lane slashes collateral;
+only new allocation rejects a collateral overhang. Seven new conservation
+tests and 58 existing route/OPV/verifier/pipeline tests pass, alongside eight
+resource tests and seven point/four mixed-graph tests. Exact build scopes and
+retained failures are recorded separately; the earlier native7 full-library
+run does not include these later changes. Actual measured point/parameter
+checkpoint evidence follows in its own observation. Complete native resource/
+escrow enforcement, typed H/media jobs, honest Final and A6/A8 remain open.
+
+### §14.43 — Actual checkpoint point court and parameter continuity, v9
+
+The pinned Qwen2.5-1.5B integer artifact is executed twice through independently
+opened mapped executors for one fed token (4498), with all 7,658 nodes. A finder
+without the producer's mutation coordinates locates the first divergent node
+after 35 agreeing prior roots. A fixed first-leaf typed reply supplies the
+divergent element; this trial does not establish arbitrary-leaf public hash
+descent or live transport. It independently authenticates the selected real
+matrix parameter against PC-v3, convicts the ordinary point and dismisses
+missing source. The proof is17,944 bytes, with combined court work151,708,672
+and scratch21,316,001 bytes. Whole-process time/RSS is16.30s/3,995,418,624B.
+The earlier quadratic node-directory localization trial also passed at76.06s;
+its source and result are retained rather than rewritten as the linear trial.
+
+A separate streamed check authenticates every one of the1,636 registered
+parameter instances against the exact mapped integer artifact:1,835,516,100
+raw payload bytes read,27,275,264-byte maximum derived helper workspace below
+32 MiB,81.07s whole-process time and1,853,112,320B maximum RSS. Artifact SHA is
+checked before and after both trials. This is complete integer-artifact-to-PC
+continuity, separately from empirical original BF16 fidelity; it is neither
+original arithmetic bit equality nor a native source-binding substitution.
+
+[The checkpoint observation](../design/palw/tir/evidence/qwen25-real-courts9-observation.json)
+records immutable executable/source hashes, commands, actual/max positions,
+the exact proof and limitations. Scope metadata covers32 positions, whereas
+this prosecution executes one position. No model admission, real native
+execution Final, maximum-context or cohort/A6/A8 credit follows from these
+component results. Those acceptance steps remain open.

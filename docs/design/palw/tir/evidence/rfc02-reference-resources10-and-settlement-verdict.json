@@ -1,0 +1,176 @@
+{
+  "schema": "misaka.rfc02.reference-resource10-settlement-component-verdict.v1",
+  "scope": "Isolated reference resource reservation/producer and reference settlement correctness. No native resource policy, reward, execution Final, model availability or RFC02 completion.",
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+    "misaka-palw-kernel/src/settle.rs": "57783f8393d97c570ea3758ed54a884cb619a24fbb45cb728807e6ee35004123",
+    "misaka-palw-kernel/tests/settlement_conservation.rs": "10ceba40848035a8bd6fe2fc04594d923ab8c1d7e7e7f3043382c033443d6ff2",
+    "misaka-palw-kernel/tests/k2_ledger_route.rs": "055b73643291716ee5c3348d53a7ff15e5443dc088041f7bfbd9317004dd9861",
+    "misaka-palw-kernel/src/flat_court9.rs": "4110374c30d7f2156e4cc7c8009258384d34bbef86c829c6ff1d3763301bc802",
+    "misaka-palw-kernel/src/flat_scope9.rs": "d73a57113ed6112d6f51d3f5c9f2d392305436203ff427f15f5d85e7747663f0",
+    "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd"
+  },
+  "binary_sha256": {
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227": "89383175658716a56f78d7cbd57a395ca10a1d080a1842325a8b695398984f3c",
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/settlement_conservation-01780cfa2bf01bbd": "8093b8051670beb0cf1b841b1070583c327ac89c47c2449e96139065996fe4a8",
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_ledger_route-2c94b50c1beae975": "d4d12eb0c8e980d40c9c19e9eb5b8e56075575d991015068d5f5e10bae87623f",
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv-d08510595c8aa839": "f76f7b75abe287413211727ac3633ef0a30bf1bfcb47d9867844e16244dc9a32",
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/verifier_pay-c19ea34d5a12ecd1": "691f50b7a9ad0054c1c3cd13ea49228251a0c40e9ff7e0e05c03664d6a700b38",
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv_pipeline-810444658188a947": "672dcfba71a188286c01021866013f6f79131b03538ddc5b73cd18726310dacb"
+  },
+  "logs": {
+    "rfc02-resource10-settlement-build.log": "686f9e53b184a243b5a72cfd9daa441cd74ad23009f7af9dcdb7cba5d29d6a86",
+    "rfc02-resource10-tests-final.log": "2c8d77b579ffd77f5ba3e7745da73023f8f61875a7cd511611c14962fa723162",
+    "rfc02-resource10-settlement-current-library.log": "7b073f10ffaa6629624af40a23b9fb324d8a7f5879fb630099f372bd54c66723",
+    "rfc02-resource10-current-selected-tests.log": "a77b02bfd2ebea5c3b469678b2ed258ae4d9f11d4b5c1b0e8930fec2558c181d",
+    "rfc02-settlement6-regressions.log": "cf0c5e186cd7bb362bc1bb448719052946aaa5b66323afdfc2a5982e543778fe",
+    "rfc02-settlement-legacy-remainder.log": "640931165edaaa91738b745130b4ea53c95619bab87ed7de90faf110c29e7cf1",
+    "rfc02-settlement-final-build.log": "1472974da2c335bbcb522d18924f332b241a6f057f872297cbd532f8ebcb9ee0",
+    "rfc02-settlement-route-codec-build.log": "39648c94b5c7d1b2d6074a4aa006c116cae7d7e4435a6f66fc69baf00740848c",
+    "rfc02-settlement-final-regressions.log": "6b6e9f144e681b688c0498596a20a86a3427d2725e14d09440775121ea574ed6",
+    "rfc02-settlement-final-route.log": "783707b00f8ce2a8af84a8bf4d41a1ba470a070a8826d58cab8dbdf4b1288337"
+  },
+  "build_environment": {
+    "rust": "1.93.0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target",
+    "profile": "ordinary debug + debuginfo",
+    "budget_stack_arithmetic_cap_overrides": false
+  },
+  "verified": {
+    "resource10_selected_unit": {
+      "passed": 8,
+      "failed": 0,
+      "duration_seconds": 0.15,
+      "filter": "flat_resources10::tests",
+      "test_threads": 1,
+      "log": "rfc02-resource10-current-selected-tests.log",
+      "all_25_primitives_matches_existing_reference_roots": true,
+      "all_21_axes_by_4_quota_scopes_refused_before_source_callback": 84,
+      "immutable_caps_and_actor_job_tokens_vector_root_across_retries": true,
+      "failed_missing_bad_shape_bad_dtype_bad_width_bad_commitment_attempts_spent": true,
+      "shared_independently_derived_complete_scope9_api_bounds": true
+    },
+    "settlement": {
+      "new_tests_passed": 7,
+      "existing_route_passed": 22,
+      "existing_opv_passed": 28,
+      "existing_verifier_pay_passed": 6,
+      "existing_pipeline_passed": 2,
+      "total_passed": 65,
+      "checked_accumulated_totals": true,
+      "instruction_error_atomic": true,
+      "batch_error_atomic": true,
+      "prior_real_debits_fund_payouts_and_burns": true,
+      "funded_final_escrow_only": true,
+      "external_collateral_loss_clamped_debit_and_release": true,
+      "known_digest_only_route_tags_rule_refusals": [
+        30,
+        35,
+        47
+      ],
+      "truncated_or_unknown_other_tags_malformed_through": 48
+    }
+  },
+  "trial_history": [
+    {
+      "logs": [
+        "rfc02-settlement6-regressions.log"
+      ],
+      "finding": "Six new tests passed; legacy route21 pass1 stale PanelCovered assertion failed on known digest-only tag30. Fixed explicit structural expected tags30/35/47; no codec change."
+    },
+    {
+      "logs": [
+        "rfc02-settlement-legacy-remainder.log"
+      ],
+      "finding": "Legacy OPV27 pass1 exposed blanket reservation<=collateral guard blocking a legitimate externally slashed existing reservation. Guard now applies only to new allocation; checked clamped debit+release recovery test added."
+    },
+    {
+      "logs": [
+        "rfc02-resource10-settlement-current-library.log"
+      ],
+      "finding": "Broad library run intentionally interrupted by SIGINT during existing >60s Merkle inventory test after source rebuild; not counted as a complete library pass. Required selected resource8 and settlement65 then completed. Captured native7 full155 evidence predates these resource/settlement changes."
+    }
+  ],
+  "actual_qwen_metadata_only": {
+    "program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+    "pc_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+    "scheduled_nodes": 7658,
+    "pc_instances": 1636,
+    "positions": 32,
+    "vector_root": "c7349230d87d16ed202eb25722c8268deff9635453d0d633c74edd46695c1d6066e20016a07b692e2c3411bd290a50c0798776ece1f9da5176961cb9a587090a",
+    "quantities": {
+      "macs": 49812602880,
+      "scalar_steps": 804390110720,
+      "index_steps": 6406748539392,
+      "validated_elements": 173477813728,
+      "copied_reference_bytes": 936635996672,
+      "parameter_hash_bytes": 190116278528,
+      "trace_hash_bytes": 17821988416,
+      "parameter_calls": 55840,
+      "reference_tensor_payload": 4249892000,
+      "container_allocator_allowance": 11204800,
+      "stored_evidence_bytes": 15816704,
+      "delivery_bytes": 7789480224,
+      "reply_calls": 245056,
+      "attempts": 1,
+      "court_work": 228106240,
+      "court_bytes": 141228,
+      "court_scratch_bytes": 24346393,
+      "metadata_work": 245199872,
+      "raw_parameter_storage": 1835516100,
+      "parameter_tree_scratch": 40509440,
+      "owned_peak_bytes": 4343239673
+    },
+    "source_weights_loaded": false,
+    "reference_executed": false,
+    "native_admission": false,
+    "final": false,
+    "full_rfc02": false
+  },
+  "limitations": [
+    "Reference vector quantities are payload/operation/container allowances, not measured CPU time or process RSS.",
+    "Opaque raw-image providers may perform unrelated external work; own decoder checks exact width/shape/dtype before i128 allocation and authenticates each parameter callback.",
+    "Metadata derivation is bounded preparation; native staged predebits, block identity resets, network horizons and persisted quota consumption are not installed by this component.",
+    "Producer returns root commitments and does not retain/serve selected values or enforce a native retention/network transport lease.",
+    "No original native coin/bond or reward credit is created or altered by vector quantities or canonical PWU. Native class/job11 integration and exact per-job reward provenance remain open.",
+    "Reference settlement public fields and aggregate escrow funding are not job-specific native provenance; existing ledger/consumer enforce their separate subject contracts."
+  ],
+  "commands": {
+    "initial_no_run": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --lib --test settlement_conservation --test k2_ledger_route --test k2_opv --test verifier_pay --test k2_opv_pipeline --no-run",
+    "resource_final_cargo": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --lib flat_resources10::tests -- --nocapture",
+    "settlement_final_no_run": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test settlement_conservation --test k2_ledger_route --test k2_opv --test verifier_pay --test k2_opv_pipeline --no-run",
+    "codec_fixture_no_run": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test k2_ledger_route --no-run",
+    "interrupted_current_library": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --lib",
+    "resource_current_selected": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227 flat_resources10::tests --nocapture --test-threads=1",
+    "settlement_final_executables": "Each exact source build binary listed in binary_sha256 (except unit) --test-threads=1; see final-regressions and final-route logs. Retained copies are hash-identical.",
+    "retained_resource_replay": "/tmp/rfc02-resource10-settlement-final-resource-unit flat_resources10::tests --nocapture --test-threads=1"
+  },
+  "retained_binary_sha256": {
+    "/tmp/rfc02-resource10-settlement-final-resource-unit": {
+      "sha256": "89383175658716a56f78d7cbd57a395ca10a1d080a1842325a8b695398984f3c",
+      "source_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227"
+    },
+    "/tmp/rfc02-resource10-settlement-final-settlement-conservation": {
+      "sha256": "8093b8051670beb0cf1b841b1070583c327ac89c47c2449e96139065996fe4a8",
+      "source_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/settlement_conservation-01780cfa2bf01bbd"
+    },
+    "/tmp/rfc02-resource10-settlement-final-k2-ledger-route": {
+      "sha256": "d4d12eb0c8e980d40c9c19e9eb5b8e56075575d991015068d5f5e10bae87623f",
+      "source_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_ledger_route-2c94b50c1beae975"
+    },
+    "/tmp/rfc02-resource10-settlement-final-k2-opv": {
+      "sha256": "f76f7b75abe287413211727ac3633ef0a30bf1bfcb47d9867844e16244dc9a32",
+      "source_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv-d08510595c8aa839"
+    },
+    "/tmp/rfc02-resource10-settlement-final-verifier-pay": {
+      "sha256": "691f50b7a9ad0054c1c3cd13ea49228251a0c40e9ff7e0e05c03664d6a700b38",
+      "source_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/verifier_pay-c19ea34d5a12ecd1"
+    },
+    "/tmp/rfc02-resource10-settlement-final-k2-opv-pipeline": {
+      "sha256": "672dcfba71a188286c01021866013f6f79131b03538ddc5b73cd18726310dacb",
+      "source_build_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv_pipeline-810444658188a947"
+    }
+  },
+  "retention_note": "Shared CARGO_TARGET_DIR paths are build provenance only and may be overwritten. Six exact hash-verified executable copies are retained at the listed /tmp paths."
+}
