@@ -12,7 +12,7 @@ use crate::palw_prefix_gdn_contract_v1::PalwPrefixGdnContractV1;
 use crate::palw_prefix_gdn_paged_v1::{PALW_GDN_PAGE_WORDS_V1, PalwGdnOwnedPageOpeningV1, PalwGdnPagedStateV1};
 use crate::palw_prefix_gdn_replay_v1::PalwPrefixGdnHeadReplayV1;
 use crate::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1;
-use crate::palw_prefix_source_stream_v1::PalwPrefixSourceStreamV1;
+use crate::palw_prefix_source_stream_v1::{PalwPrefixSourceRangeV1, PalwPrefixSourceStreamV1};
 use crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1;
 use crate::palw_prefix_state_stream_v1::PalwPrefixStateStreamV1;
 use crate::palw_rendering_stream_v1::LeafHashContinuationV1;
@@ -66,6 +66,17 @@ pub enum PalwPrefixCourtActionV1 {
         bytes: Vec<u8>,
     },
     HeadInputFinish,
+    BeginPublicRow {
+        length: u32,
+    },
+    PublicInputOpening {
+        opening: PalwStepOpeningV1,
+    },
+    PublicInputPart {
+        offset: u32,
+        bytes: Vec<u8>,
+    },
+    PublicInputFinish,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwPrefixFamilyCursorV1 {
@@ -82,6 +93,33 @@ pub enum PalwPrefixFamilyCursorV1 {
     HeadInputOpening { layer: u16, head: u32, position: u32, input: u8, coordinate: PalwStepCoordinateV1 },
     HeadInputBytes { layer: u16, head: u32, position: u32, input: u8, coordinate: PalwStepCoordinateV1, length: u32, offset: u32 },
     HeadInputFinish { layer: u16, head: u32, position: u32, input: u8, coordinate: PalwStepCoordinateV1 },
+    PublicInputOpening { unit: PalwPrefixCacheUnitV1, source: u32, coordinate: PalwStepCoordinateV1 },
+    PublicInputBytes { unit: PalwPrefixCacheUnitV1, source: u32, coordinate: PalwStepCoordinateV1, length: u32, offset: u32 },
+    PublicInputFinish { unit: PalwPrefixCacheUnitV1, source: u32, coordinate: PalwStepCoordinateV1 },
+}
+/// A mandatory custodian may answer only this canonical ORIGINAL public step source.
+/// Challenger-owned recurrence pages are never a producer/Panel DA obligation.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPrefixPublicSourceV1 {
+    pub coordinate: PalwStepCoordinateV1,
+    pub leaf_index: u64,
+    pub value_count: u32,
+    pub length: u32,
+    pub offset: u32,
+    pub needs_opening: bool,
+    pub execution_root: Hash64,
+    pub step_root: Hash64,
+    pub step_leaf_count: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct PublicInputsV1 {
+    unit: PalwPrefixCacheUnitV1,
+    offset: u64,
+    length: u64,
+    sources: Vec<PalwPrefixSourceRangeV1>,
+    source: u32,
+    bytes: Vec<u8>,
+    stream: PalwPrefixSourceStreamV1,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Base0PendingTileV1 {
@@ -105,7 +143,7 @@ enum Q36HeadV1 {
 enum FamilyV1 {
     Dense(Box<PalwPrefixStateStreamV1>),
     Base0 { digest: PalwBase0PrefixDigestV1, pending: Option<Base0PendingTileV1> },
-    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<Q36HeadV1>> },
+    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<Q36HeadV1>>, public: Option<Box<PublicInputsV1>> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixFamilyCourtV1 {
@@ -126,7 +164,7 @@ pub struct PalwPrefixFamilyCourtV1 {
 enum CheckpointFamilyV1 {
     Dense(crate::palw_prefix_state_stream_v1::PalwPrefixStreamCheckpointV1),
     Base0 { digest: PalwBase0PrefixDigestV1, pending: Option<Base0PendingTileV1> },
-    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<Q36HeadV1>> },
+    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<Q36HeadV1>>, public: Option<Box<PublicInputsV1>> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwPrefixFamilyCheckpointV1 {
@@ -173,9 +211,11 @@ impl PalwPrefixFamilyCourtV1 {
             PalwPrefixStateRelationV1::Base0Int8KvV1 => {
                 FamilyV1::Base0 { digest: PalwBase0PrefixDigestV1::new(&binding.shape_profile, named.prefix_tokens)?, pending: None }
             }
-            PalwPrefixStateRelationV1::Qwen36HybridCacheV1 => {
-                FamilyV1::Q36 { digest: PalwQwen36PrefixCacheDigestV1::new(&binding.shape_profile, named.prefix_tokens)?, head: None }
-            }
+            PalwPrefixStateRelationV1::Qwen36HybridCacheV1 => FamilyV1::Q36 {
+                digest: PalwQwen36PrefixCacheDigestV1::new(&binding.shape_profile, named.prefix_tokens)?,
+                head: None,
+                public: None,
+            },
         };
         Ok(Self {
             context,
@@ -246,71 +286,145 @@ impl PalwPrefixFamilyCourtV1 {
                     Ok(PalwPrefixFamilyCursorV1::Complete)
                 }
             }
-            FamilyV1::Q36 { digest, head } => match digest.next_unit() {
-                None => Ok(PalwPrefixFamilyCursorV1::Complete),
-                Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, length, offset)) => Ok(match head {
-                    None => PalwPrefixFamilyCursorV1::HeadParameters { layer, head: h },
-                    Some(r) => match r.as_ref() {
-                        Q36HeadV1::Whole(r) if r.next_position() < self.prefix_tokens => {
-                            PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: r.next_position() }
+            FamilyV1::Q36 { digest, head, public } => {
+                if let Some(p) = public {
+                    let (coordinate, pending) = p.stream.cursor_v1().ok_or("public source complete without transition")?;
+                    Ok(match pending {
+                        None => PalwPrefixFamilyCursorV1::PublicInputOpening { unit: p.unit, source: p.source, coordinate },
+                        Some((length, offset)) if length == offset => {
+                            PalwPrefixFamilyCursorV1::PublicInputFinish { unit: p.unit, source: p.source, coordinate }
                         }
-                        Q36HeadV1::Whole(_) => PalwPrefixFamilyCursorV1::HeadDigest { layer, head: h, length, offset },
-                        Q36HeadV1::Paged { state, input, .. } => {
-                            if let Some(input) = input {
-                                let (coordinate, pending) =
-                                    input.stream.cursor_v1().ok_or("input stream complete without transition")?;
-                                match pending {
-                                    None => PalwPrefixFamilyCursorV1::HeadInputOpening {
-                                        layer,
-                                        head: h,
-                                        position: state.position(),
-                                        input: input.rows.len() as u8,
-                                        coordinate,
-                                    },
-                                    Some((length, offset)) if length == offset => PalwPrefixFamilyCursorV1::HeadInputFinish {
-                                        layer,
-                                        head: h,
-                                        position: state.position(),
-                                        input: input.rows.len() as u8,
-                                        coordinate,
-                                    },
-                                    Some((length, offset)) => PalwPrefixFamilyCursorV1::HeadInputBytes {
-                                        layer,
-                                        head: h,
-                                        position: state.position(),
-                                        input: input.rows.len() as u8,
-                                        coordinate,
-                                        length,
-                                        offset,
-                                    },
-                                }
-                            } else if let Some((index, write)) = state.next_page() {
-                                PalwPrefixFamilyCursorV1::HeadPage {
-                                    layer,
-                                    head: h,
-                                    position: state.position(),
-                                    index,
-                                    write,
-                                    root: state.root(),
-                                }
-                            } else if !state.complete() {
-                                PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: state.position() }
-                            } else {
-                                PalwPrefixFamilyCursorV1::HeadPageDigest {
-                                    layer,
-                                    head: h,
-                                    index: self.completed_page_index_v1(offset)?,
-                                    length,
-                                    offset,
-                                    root: state.root(),
-                                }
-                            }
+                        Some((length, offset)) => {
+                            PalwPrefixFamilyCursorV1::PublicInputBytes { unit: p.unit, source: p.source, coordinate, length, offset }
                         }
-                    },
-                }),
-                Some((unit, length, offset)) => Ok(PalwPrefixFamilyCursorV1::PublicRow { unit, length, offset }),
-            },
+                    })
+                } else {
+                    match digest.next_unit() {
+                        None => Ok(PalwPrefixFamilyCursorV1::Complete),
+                        Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, length, offset)) => Ok(match head {
+                            None => PalwPrefixFamilyCursorV1::HeadParameters { layer, head: h },
+                            Some(r) => match r.as_ref() {
+                                Q36HeadV1::Whole(r) if r.next_position() < self.prefix_tokens => {
+                                    PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: r.next_position() }
+                                }
+                                Q36HeadV1::Whole(_) => PalwPrefixFamilyCursorV1::HeadDigest { layer, head: h, length, offset },
+                                Q36HeadV1::Paged { state, input, .. } => {
+                                    if let Some(input) = input {
+                                        let (coordinate, pending) =
+                                            input.stream.cursor_v1().ok_or("input stream complete without transition")?;
+                                        match pending {
+                                            None => PalwPrefixFamilyCursorV1::HeadInputOpening {
+                                                layer,
+                                                head: h,
+                                                position: state.position(),
+                                                input: input.rows.len() as u8,
+                                                coordinate,
+                                            },
+                                            Some((length, offset)) if length == offset => PalwPrefixFamilyCursorV1::HeadInputFinish {
+                                                layer,
+                                                head: h,
+                                                position: state.position(),
+                                                input: input.rows.len() as u8,
+                                                coordinate,
+                                            },
+                                            Some((length, offset)) => PalwPrefixFamilyCursorV1::HeadInputBytes {
+                                                layer,
+                                                head: h,
+                                                position: state.position(),
+                                                input: input.rows.len() as u8,
+                                                coordinate,
+                                                length,
+                                                offset,
+                                            },
+                                        }
+                                    } else if let Some((index, write)) = state.next_page() {
+                                        PalwPrefixFamilyCursorV1::HeadPage {
+                                            layer,
+                                            head: h,
+                                            position: state.position(),
+                                            index,
+                                            write,
+                                            root: state.root(),
+                                        }
+                                    } else if !state.complete() {
+                                        PalwPrefixFamilyCursorV1::HeadInputs { layer, head: h, position: state.position() }
+                                    } else {
+                                        PalwPrefixFamilyCursorV1::HeadPageDigest {
+                                            layer,
+                                            head: h,
+                                            index: self.completed_page_index_v1(offset)?,
+                                            length,
+                                            offset,
+                                            root: state.root(),
+                                        }
+                                    }
+                                }
+                            },
+                        }),
+                        Some((unit, length, offset)) => Ok(PalwPrefixFamilyCursorV1::PublicRow { unit, length, offset }),
+                    }
+                }
+            }
         }
+    }
+    pub fn next_public_source_v1(&self) -> Result<Option<PalwPrefixPublicSourceV1>, String> {
+        self.check()?;
+        let cursor = self.cursor_v1()?;
+        let (coordinate, count, offset, needs_opening) = match cursor {
+            PalwPrefixFamilyCursorV1::TileOpening { ordinal } | PalwPrefixFamilyCursorV1::TileBytes { ordinal, .. } => {
+                let plan = crate::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(
+                    &self.binding.shape_profile,
+                    self.prefix_tokens,
+                )?;
+                let (coord, count) =
+                    plan.coordinate(&self.binding.shape_profile, ordinal).ok_or("public KV source coordinate missing")?;
+                let (offset, opening) = match cursor {
+                    PalwPrefixFamilyCursorV1::TileBytes { offset, .. } => (offset, false),
+                    _ => (0, true),
+                };
+                (coord, count, offset, opening)
+            }
+            PalwPrefixFamilyCursorV1::HeadInputOpening { coordinate, .. }
+            | PalwPrefixFamilyCursorV1::HeadInputBytes { coordinate, .. }
+            | PalwPrefixFamilyCursorV1::PublicInputOpening { coordinate, .. }
+            | PalwPrefixFamilyCursorV1::PublicInputBytes { coordinate, .. } => {
+                let source = match &self.family {
+                    FamilyV1::Q36 { public: Some(p), .. } => p.stream.source_v1(),
+                    FamilyV1::Q36 { head: Some(h), .. } => match h.as_ref() {
+                        Q36HeadV1::Paged { input: Some(i), .. } => i.stream.source_v1(),
+                        _ => return Err("public source has no owned stream".into()),
+                    },
+                    _ => return Err("public source has no owned stream".into()),
+                };
+                let count = u32::try_from(
+                    u64::from(source.tile_len).min(source.width - u64::from(coordinate.tile_index) * u64::from(source.tile_len)),
+                )
+                .map_err(|_| "public source count overflow")?;
+                let (offset, opening) = match cursor {
+                    PalwPrefixFamilyCursorV1::HeadInputBytes { offset, .. }
+                    | PalwPrefixFamilyCursorV1::PublicInputBytes { offset, .. } => (offset, false),
+                    _ => (0, true),
+                };
+                (coordinate, count, offset, opening)
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(PalwPrefixPublicSourceV1 {
+            coordinate,
+            leaf_index: crate::palw_step::canonical_step_leaf_index(
+                &self.binding.shape_profile,
+                &self.binding.job_context,
+                &coordinate,
+            )
+            .ok_or("public source is not canonical")?,
+            value_count: count,
+            length: count.checked_mul(4).ok_or("public source length overflow")?,
+            offset,
+            needs_opening,
+            execution_root: self.execution_root(),
+            step_root: self.binding.step_merkle_root,
+            step_leaf_count: self.binding.step_leaf_count,
+        }))
     }
     fn completed_page_index_v1(&self, offset: u64) -> Result<u64, String> {
         let dk = u64::from(self.binding.shape_profile.gdn_head_k_dim);
@@ -360,7 +474,37 @@ impl PalwPrefixFamilyCourtV1 {
                 }
                 Ok(())
             }
-            FamilyV1::Q36 { digest, head } => {
+            FamilyV1::Q36 { digest, head, public } => {
+                if let Some(p) = public {
+                    if head.is_some()
+                        || digest
+                            .next_unit()
+                            .is_none_or(|(unit, total, offset)| unit != p.unit || offset != p.offset || p.length > total - offset)
+                        || p.source as usize >= p.sources.len()
+                    {
+                        return Err("public cache source changes owned canonical interval/phase".into());
+                    }
+                    let plan = PalwQ36PrefixPublicRowV1::new(&self.binding, self.prefix_tokens, p.unit, p.offset, p.length)?;
+                    let sources: Vec<_> = plan
+                        .sources
+                        .iter()
+                        .map(|s| PalwPrefixSourceRangeV1 {
+                            node_slot: s.node_slot,
+                            position: s.position,
+                            tile_len: s.tile_len,
+                            width: s.row_values,
+                            start: s.start,
+                            end: s.end,
+                        })
+                        .collect();
+                    if p.sources != sources
+                        || !p.stream.matches_v1(self.context, self.execution_root(), p.sources[p.source as usize])
+                        || p.bytes.len() as u64 != p.sources[..p.source as usize].iter().map(|s| (s.end - s.start) * 4).sum::<u64>()
+                    {
+                        return Err("public cache source changes registered provenance/retained prefix".into());
+                    }
+                    p.stream.check()?;
+                }
                 if let Some(h) = head {
                     let Some((PalwPrefixCacheUnitV1::GdnHead { layer, head }, _, _)) = digest.next_unit() else {
                         return Err("prefix recurrence is not the owned canonical unit".into());
@@ -483,21 +627,21 @@ impl PalwPrefixFamilyCourtV1 {
                 }
                 *pending = None;
             }
-            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::PublicRow { length, inputs }) => {
-                if head.is_some() {
-                    return Err("Q36 recurrence must complete before another public row".into());
+            (FamilyV1::Q36 { digest, head, public }, PalwPrefixCourtActionV1::PublicRow { length, inputs }) => {
+                if head.is_some() || public.is_some() {
+                    return Err("Q36 owned source must complete before another public row".into());
                 }
                 let (unit, _, offset) = digest.next_unit().ok_or("Q36 cache complete")?;
                 let row = PalwQ36PrefixPublicRowV1::new(&self.binding, self.prefix_tokens, unit, offset, u64::from(*length))?;
                 let bytes = row.authenticate(&self.binding, self.prefix_tokens, inputs, self.maximum_leaves)?;
                 digest.push(unit, offset, &bytes)?;
             }
-            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::BeginHead { parameters }) => {
+            (FamilyV1::Q36 { digest, head, public }, PalwPrefixCourtActionV1::BeginHead { parameters }) => {
                 let Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, _, 0)) = digest.next_unit() else {
                     return Err("Q36 owned recurrence is not the next untouched canonical cache unit".into());
                 };
-                if head.is_some() {
-                    return Err("Q36 recurrence already owned".into());
+                if head.is_some() || public.is_some() {
+                    return Err("Q36 source already owned".into());
                 }
                 *head = Some(Box::new(Q36HeadV1::Whole(Box::new(PalwPrefixGdnHeadReplayV1::new(
                     &target,
@@ -515,7 +659,7 @@ impl PalwPrefixFamilyCourtV1 {
                     Q36HeadV1::Paged { .. } => return Err("paged recurrence requires streamed original input leaves".into()),
                 }
             }
-            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::HeadDigest { length }) => {
+            (FamilyV1::Q36 { digest, head, .. }, PalwPrefixCourtActionV1::HeadDigest { length }) => {
                 let Q36HeadV1::Whole(h) = head.as_ref().ok_or("Q36 owned recurrence not initialized")?.as_ref() else {
                     return Err("paged recurrence digest requires its authenticated completed page".into());
                 };
@@ -535,12 +679,12 @@ impl PalwPrefixFamilyCourtV1 {
                     *head = None;
                 }
             }
-            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::BeginPagedHead { parameters }) => {
+            (FamilyV1::Q36 { digest, head, public }, PalwPrefixCourtActionV1::BeginPagedHead { parameters }) => {
                 let Some((PalwPrefixCacheUnitV1::GdnHead { layer, head: h }, _, 0)) = digest.next_unit() else {
                     return Err("paged head is not the next untouched canonical unit".into());
                 };
-                if head.is_some() {
-                    return Err("head already owned".into());
+                if head.is_some() || public.is_some() {
+                    return Err("source already owned".into());
                 }
                 let contract = PalwPrefixGdnContractV1::new(&target, &self.binding, &self.job, layer, h, parameters)?;
                 let state =
@@ -574,7 +718,7 @@ impl PalwPrefixFamilyCourtV1 {
                     });
                 }
             }
-            (FamilyV1::Q36 { digest, head }, PalwPrefixCourtActionV1::HeadPageDigest { opening }) => {
+            (FamilyV1::Q36 { digest, head, .. }, PalwPrefixCourtActionV1::HeadPageDigest { opening }) => {
                 let Q36HeadV1::Paged { contract, state, .. } = head.as_ref().ok_or("head not owned")?.as_ref() else {
                     return Err("head is not paged".into());
                 };
@@ -635,7 +779,70 @@ impl PalwPrefixFamilyCourtV1 {
                     }
                 }
             }
+            (FamilyV1::Q36 { digest, head, public }, PalwPrefixCourtActionV1::BeginPublicRow { length }) => {
+                if head.is_some() || public.is_some() {
+                    return Err("Q36 source already owned".into());
+                }
+                let (unit, _, offset) = digest.next_unit().ok_or("cache complete")?;
+                let row = PalwQ36PrefixPublicRowV1::new(&self.binding, self.prefix_tokens, unit, offset, u64::from(*length))?;
+                if row.sources.is_empty() {
+                    digest.push(unit, offset, &vec![0; *length as usize])?;
+                } else {
+                    let sources: Vec<_> = row
+                        .sources
+                        .iter()
+                        .map(|s| PalwPrefixSourceRangeV1 {
+                            node_slot: s.node_slot,
+                            position: s.position,
+                            tile_len: s.tile_len,
+                            width: s.row_values,
+                            start: s.start,
+                            end: s.end,
+                        })
+                        .collect();
+                    let stream = PalwPrefixSourceStreamV1::new(context, self.binding.committed_execution_root, sources[0])?;
+                    *public = Some(Box::new(PublicInputsV1 {
+                        unit,
+                        offset,
+                        length: u64::from(*length),
+                        sources,
+                        source: 0,
+                        bytes: vec![],
+                        stream,
+                    }));
+                }
+            }
+            (FamilyV1::Q36 { public: Some(p), .. }, PalwPrefixCourtActionV1::PublicInputOpening { opening }) => {
+                p.stream.begin_tile(context, &self.binding, opening, self.maximum_leaves)?
+            }
+            (FamilyV1::Q36 { public: Some(p), .. }, PalwPrefixCourtActionV1::PublicInputPart { offset, bytes }) => {
+                p.stream.push_part(context, *offset, bytes)?
+            }
+            (FamilyV1::Q36 { digest, public: Some(p), .. }, PalwPrefixCourtActionV1::PublicInputFinish) => {
+                p.stream.finish_tile(context)?;
+                if p.stream.complete() {
+                    p.bytes.extend(p.stream.authenticated_values_v1()?.iter().flat_map(|v| v.to_le_bytes()));
+                    p.source += 1;
+                    if p.source as usize == p.sources.len() {
+                        if p.bytes.len() as u64 != p.length {
+                            return Err("streamed public cache sources do not exactly cover interval".into());
+                        }
+                        digest.push(p.unit, p.offset, &p.bytes)?;
+                    } else {
+                        p.stream = PalwPrefixSourceStreamV1::new(
+                            context,
+                            self.binding.committed_execution_root,
+                            p.sources[p.source as usize],
+                        )?;
+                    }
+                }
+            }
             _ => return Err("prefix move is for another immutable family/phase".into()),
+        }
+        if let FamilyV1::Q36 { public, .. } = &mut self.family {
+            if public.as_ref().is_some_and(|p| p.source as usize == p.sources.len()) {
+                *public = None;
+            }
         }
         self.check()
     }
@@ -643,7 +850,9 @@ impl PalwPrefixFamilyCourtV1 {
         let family = match &self.family {
             FamilyV1::Dense(c) => CheckpointFamilyV1::Dense(c.checkpoint_v1()),
             FamilyV1::Base0 { digest, pending } => CheckpointFamilyV1::Base0 { digest: digest.clone(), pending: pending.clone() },
-            FamilyV1::Q36 { digest, head } => CheckpointFamilyV1::Q36 { digest: digest.clone(), head: head.clone() },
+            FamilyV1::Q36 { digest, head, public } => {
+                CheckpointFamilyV1::Q36 { digest: digest.clone(), head: head.clone(), public: public.clone() }
+            }
         };
         PalwPrefixFamilyCheckpointV1 { context: self.context, claim: self.claim, execution_root: self.execution_root(), family }
     }
@@ -660,9 +869,10 @@ impl PalwPrefixFamilyCourtV1 {
                 *digest = d.clone();
                 *pending = p.clone();
             }
-            (FamilyV1::Q36 { digest, head }, CheckpointFamilyV1::Q36 { digest: d, head: h }) => {
+            (FamilyV1::Q36 { digest, head, public }, CheckpointFamilyV1::Q36 { digest: d, head: h, public: p }) => {
                 *digest = d.clone();
                 *head = h.clone();
+                *public = p.clone();
             }
             _ => return Err("prefix continuation checkpoint changes immutable family".into()),
         }
@@ -675,7 +885,7 @@ impl PalwPrefixFamilyCourtV1 {
         let root = match &self.family {
             FamilyV1::Dense(c) => c.finish()?,
             FamilyV1::Base0 { digest, pending: None } => digest.finish(&self.binding.shape_profile)?,
-            FamilyV1::Q36 { digest, head: None } => digest.finish()?,
+            FamilyV1::Q36 { digest, head: None, public: None } => digest.finish()?,
             _ => return Err("prefix still has unauthenticated old bytes or incomplete recurrence".into()),
         };
         Ok(root != self.named_root)
@@ -771,6 +981,14 @@ pub(crate) mod tests {
                 let mut previous = c.checkpoint_v1();
                 for (ordinal, tile) in tiles.iter().enumerate() {
                     assert_eq!(c.cursor_v1().unwrap(), PalwPrefixFamilyCursorV1::TileOpening { ordinal: ordinal as u64 });
+                    let source = c.next_public_source_v1().unwrap().unwrap();
+                    assert_eq!(source.coordinate, tile.preimage.coord);
+                    assert_eq!(source.leaf_index, tile.opening.leaf_index);
+                    assert_eq!(source.length, tile.preimage.values_le.len() as u32);
+                    assert_eq!(source.value_count, tile.preimage.value_count);
+                    assert!(source.needs_opening);
+                    assert_eq!(source.offset, 0);
+                    assert_eq!(source.step_root, binding.step_merkle_root);
                     c.movement(context, &PalwPrefixCourtActionV1::BeginTile { opening: tile.opening.clone() }).unwrap();
                     let before = borsh::to_vec(&c).unwrap();
                     assert!(
@@ -785,6 +1003,7 @@ pub(crate) mod tests {
                         .unwrap();
                     assert_eq!(c.cursor_v1().unwrap(), PalwPrefixFamilyCursorV1::TileFinish { ordinal: ordinal as u64 });
                     assert!(c.finish().is_err());
+                    assert!(c.next_public_source_v1().unwrap().is_none());
                     c.movement(context, &PalwPrefixCourtActionV1::FinishTile).unwrap();
                     let cp = c.checkpoint_v1();
                     assert!(borsh::to_vec(&cp).unwrap().len() < 2048);

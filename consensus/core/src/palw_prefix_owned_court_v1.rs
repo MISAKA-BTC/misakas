@@ -134,6 +134,10 @@ impl PalwOwnedPrefixCourtV1 {
         self.check()?;
         self.court.cursor_v1()
     }
+    pub fn next_public_source_v1(&self) -> Result<Option<crate::palw_prefix_family_court_v1::PalwPrefixPublicSourceV1>, String> {
+        self.check()?;
+        self.court.next_public_source_v1()
+    }
     pub fn check(&self) -> Result<(), String> {
         if self.moves_used == 0
             || self.moves_used > self.terms.plan.maximum_moves
