@@ -198,6 +198,9 @@ pub(super) fn open(
             .checked_add(b.params.window_challenge_at(ctx.daa_score))
             .ok_or(PalwStateV2Error::Overflow("paid DA extension"))?
             .max(extended_terms.bond_exit_after_daa);
+        // EXECv2 retains its independently frozen horizon. A prospective stage cannot silently
+        // reinterpret that historical contract to buy a later native reward/DA window.
+        super::palw_exec_v2_rewards_v1::require_native_session_window(&b.state, b.params, &seed.claim, until)?;
         b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
         let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
@@ -229,7 +232,7 @@ pub(super) fn open(
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
                 b.write_legacy_dispute(seed.claim, Some(dispute));
             }
-            b.da_rekey_v1(seed.claim, until, ctx.daa_score);
+            b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
             if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned() {
                 if liability.voided_daa.is_none() && liability.void_reason.is_none() && liability.expiry_daa < until {
                     liability.expiry_daa = until;

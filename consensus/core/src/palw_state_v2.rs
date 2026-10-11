@@ -79490,7 +79490,7 @@ mod staged_court_state_tests_v1 {
             panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN])});
         apply_delta_entry(&mut state,&PalwDeltaEntryV2::StagedCourtSeed {key:PalwStagedCourtKeyV1::Claim(claim),old:None,new:Some(contract)},false).unwrap();
         let mut dispute=crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1 {opened_daa:100,hard_deadline_daa:row.terms.material_until_daa,..Default::default()};
-        dispute.live.insert(owner,crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1 {reserved_daa:100,deposit:1,sessions_opened:0});
+        dispute.live.insert(owner,crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1 {reserved_daa:100,deposit:1,sessions_opened:0,lanes_joined:0});
         apply_delta_entry(&mut state,&PalwDeltaEntryV2::LegacyDispute {key:claim,old:None,new:Some(dispute)},false).unwrap();
         let progress=palw_staged_owned_progress_v1(&state,(claim,owner)).unwrap().unwrap();
         assert_eq!((progress.now_daa,progress.snapshot_block),(100,BlockHash::from_u64_word(821)));
