@@ -450,3 +450,47 @@ mod tests {
         assert_eq!(ledger.reserved_bytes(), 0, "wrong own model material is refusal, never a conviction");
     }
 }
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+    #[test]
+    fn a_held_operand_changed_after_authentication_never_produces_an_eof_verdict() {
+        let raw = br#"{"model":{"vocab":{"a":0}}}"#;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tokenizer.json");
+        std::fs::write(&path, raw).unwrap();
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(2_000_000), || None);
+        let mut generator = TokenizerWitnessV1::open(
+            &path,
+            Hash64::from_u64_word(1),
+            kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw),
+            raw.len() as u64,
+            16,
+            0,
+            Hash64::default(),
+            Hash64::default(),
+            &ledger,
+        )
+        .unwrap();
+        let mut changed = raw.to_vec();
+        *changed.iter_mut().find(|b| **b == b'a').unwrap() = b'b';
+        std::fs::write(&path, changed).unwrap();
+        let mut failed = false;
+        for _ in 0..10 {
+            match generator.next() {
+                Ok(TokenizerWitnessMoveV1::Packet(_)) => {}
+                Ok(TokenizerWitnessMoveV1::Seal) => panic!("changed own file cannot open its original legacy tokenizer hash"),
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        assert!(failed);
+        assert!(generator.verdict().is_err());
+        drop(generator);
+        assert_eq!(ledger.reserved_bytes(), 0);
+    }
+}
