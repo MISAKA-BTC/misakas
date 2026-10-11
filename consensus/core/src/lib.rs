@@ -807,3 +807,5 @@ mod tests {
 }
 
 pub mod palw_rendering_stream_v1;
+
+pub mod palw_rendering_resources_v1;
