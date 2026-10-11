@@ -47,6 +47,7 @@ def identity_and_money(drill, role, manifest):
     rpc = drill.rpc(role)
     try:
         entries = rpc.call('getUtxosByAddresses', {'addresses': [probe['address']]})['entries']
+        supply = rpc.call('getCoinSupply') if manifest.get('population') else None
         after = rpc.call('getPalwNodeStatus')
     finally:
         rpc.close()
@@ -54,6 +55,11 @@ def identity_and_money(drill, role, manifest):
     actual = monetary_rows(entries)
     assert actual == probe['utxos'], 'real indexed monetary rows differ from the salted genesis'
     row['genesisMoneyRows'] = actual
+    if manifest.get('population'):
+        assert row['shadow'] and row['shadow']['available'], 'actual registry capacity read is unavailable'
+        assert row['shadow']['bondsTotal'] == manifest['population']['totalBonds'], 'native registry did not load the pinned funded population'
+        assert str(supply['circulatingSompi']) == manifest['population']['premineSupplySompi'], 'actual indexed supply differs from the conserved factory'
+        row['coinSupply'] = supply
     return row
 
 
@@ -74,7 +80,7 @@ def ready(drill, role, manifest):
         return None  # a starting wRPC service may close its first connection
 
 
-def plan_for(binary, salt, manifest, timeout):
+def plan_for(binary, salt, manifest, timeout, profile='native-v1', bonds=None):
     # Reserve all listeners before choosing the finite plan. Release them before
     # spawning; any port collision fails normally and never kills another process.
     reservations, endpoints = [], []
@@ -88,11 +94,13 @@ def plan_for(binary, salt, manifest, timeout):
         for index, role in enumerate(('A', 'B', 'JOIN')):
             p2p, grpc, wrpc, eth = endpoints[index * 4:index * 4 + 4]
             nodes[role] = dict(p2p=p2p, grpc=grpc, wrpc=wrpc, eth='http://' + eth,
-                argv=[str(binary), '--private-probe-profile=native-v1', '--private-probe-salt=' + salt,
+                argv=[str(binary), '--private-probe-profile=' + profile, '--private-probe-salt=' + salt,
                       '--testnet', '--netsuffix=12', '--nodnsseed', '--outpeers=0', '--disable-upnp',
                       '--listen=' + p2p, '--rpclisten=' + grpc, '--rpclisten-json=' + wrpc,
                       '--evm-rpc-listen=' + eth, '--appdir={' + role + '_APPDIR}',
                       '--ram-scale=0.1', '--utxoindex', '--unsaferpc', '--nologfiles', '--loglevel=warn'])
+            if bonds is not None:
+                nodes[role]['argv'].append('--private-probe-bonds=' + str(bonds))
         return dict(schemaVersion=1, kind='rfc12-construction-transport-only', nodes=nodes,
                     manifest=manifest, scenario_timeout_s=timeout, probe_timeout_s=15,
                     fullRfc12SecurityApproval=False, release100kMeasured=False)
@@ -133,18 +141,25 @@ def main():
     parser.add_argument('--salt', required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--timeout', type=int, default=120)
+    parser.add_argument('--profile', choices=('native-v1', 'population-v1'), default='native-v1')
+    parser.add_argument('--bonds', type=int)
+    parser.add_argument('--manifest-timeout', type=int, default=30)
     args = parser.parse_args()
     binary = Path(args.binary).resolve(strict=True)
     assert binary.is_file() and os.access(binary, os.X_OK), 'supply the compiled opt-in private helper'
     assert len(args.salt) == 64 and int(args.salt, 16) != 0, 'an explicit nonzero 32-byte private salt is required'
-    raw = subprocess.run([str(binary), '--private-probe-profile=native-v1', '--private-probe-salt=' + args.salt,
-                          '--testnet', '--netsuffix=12', '--print-private-probe-profile'],
-                         check=True, capture_output=True, text=True, timeout=30).stdout
+    assert (args.profile == 'population-v1') == (args.bonds is not None), 'population-v1 needs an explicit size; native-v1 uses its existing genesis'
+    manifest_argv = [str(binary), '--private-probe-profile=' + args.profile, '--private-probe-salt=' + args.salt,
+                     '--testnet', '--netsuffix=12', '--print-private-probe-profile']
+    if args.bonds is not None:
+        manifest_argv.append('--private-probe-bonds=' + str(args.bonds))
+    raw = subprocess.run(manifest_argv, check=True, capture_output=True, text=True,
+                         timeout=args.manifest_timeout).stdout
     manifest = json.loads(raw)
     assert manifest['kind'] == 'rfc12-private-integration-probe'
     assert manifest['skipProofOfWork'] is False and manifest['releaseApproval'] is False
     root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-construction-'))
-    plan = plan_for(binary, args.salt, manifest, args.timeout)
+    plan = plan_for(binary, args.salt, manifest, args.timeout, args.profile, args.bonds)
     plan_bytes = (json.dumps(plan, sort_keys=True, indent=2) + '\n').encode()
     (root / 'plan.json').write_bytes(plan_bytes)  # fixed before the first process starts
     drill = transport.Drill(plan, root)
@@ -159,7 +174,19 @@ def main():
     except Exception as error:
         result['reason'] = repr(error)
     finally:
+        # Snapshot only owned child RSS, before shutdown; KiB from the platform's
+        # ps RSS column. This is an observation, not a declared release threshold.
+        result['ownedProcessRssKiB'] = {}
+        for role, process in drill.processes.items():
+            try:
+                rss = subprocess.run(['ps', '-o', 'rss=', '-p', str(process.pid)], check=True,
+                                     capture_output=True, text=True, timeout=5).stdout.strip()
+                result['ownedProcessRssKiB'][role] = int(rss)
+            except (ValueError, OSError, subprocess.SubprocessError):
+                result['ownedProcessRssKiB'][role] = None
         drill.close()
+        result['ownedDatabaseLogicalBytes'] = {role: sum(file.stat().st_size for file in (root / role).rglob('*') if file.is_file())
+                                              for role in plan['nodes']}
         result.update(observations=drill.observations, probeLatenciesMs=drill.latencies)
         Path(args.out).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps({key: value for key, value in result.items() if key != 'observations'}, indent=2))

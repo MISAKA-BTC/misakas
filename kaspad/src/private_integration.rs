@@ -8,6 +8,7 @@ use crate::{
     args::Args,
     daemon::{Runtime, create_core_with_runtime_inner, validate_args},
 };
+use kaspa_consensus_core::config::private_population::derive_private_population_v1;
 use kaspa_consensus_core::config::{
     Config,
     drill::{
@@ -33,7 +34,11 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     let genesis_money = config.palw_drill_genesis_salt.as_ref().map(|salt| {
         let key = palw_t12_drill_main_key_v1(salt);
         let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&key.payload);
-        let mut utxos: Vec<_> = palw_t12_drill_genesis_utxos_v1(salt)
+        let initial_utxos = match config.private_population {
+            Some(profile) => derive_private_population_v1(salt, profile).expect("validated private population").utxos,
+            None => palw_t12_drill_genesis_utxos_v1(salt),
+        };
+        let mut utxos: Vec<_> = initial_utxos
             .into_iter()
             .filter(|(_, entry)| entry.script_public_key == script)
             .map(|(outpoint, entry)| {
@@ -66,6 +71,11 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
         "consensusParamsId": config.params.consensus_params_id().to_string(),
         "saltId": config.palw_drill_genesis_salt.as_ref().map(|salt| salt.id()),
         "genesisMoneyProbe": genesis_money,
+        "population": config.private_population.map(|profile| serde_json::json!({
+            "version": 1, "totalBonds": profile.total_bonds(),
+            "premineSupplySompi": kaspa_consensus_core::config::premine::MISAKA_PREMINE_CAP_SOMPI.to_string(),
+            "capabilitiesAdded": false, "participantIndependenceProven": false,
+        })),
         "retirement": retirement,
         "skipProofOfWork": config.params.skip_proof_of_work,
         "releaseApproval": false,
@@ -79,8 +89,29 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         return Err("the private probe requires its testnet-12 identity and matching Args".into());
     }
     let salt = config.palw_drill_genesis_salt.as_ref().ok_or("the private probe needs an explicit salted genesis")?;
-    if config.params.genesis.hash != palw_t12_drill_genesis_block_v1(salt).hash {
-        return Err("the private Config does not carry the salt's exact genesis".into());
+    let expected_genesis = match config.private_population {
+        Some(profile) => {
+            let expected = derive_private_population_v1(salt, profile)?;
+            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(actual) = &config.params.palw_consensus_mode else {
+                return Err("the private population needs its native registry".into());
+            };
+            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(fixed) = &expected.params.palw_consensus_mode
+            else {
+                unreachable!()
+            };
+            if actual.genesis_objects != fixed.genesis_objects {
+                return Err("private population registrations differ from the exact salt/size/funded factory".into());
+            }
+            expected.params.genesis.hash
+        }
+        None => palw_t12_drill_genesis_block_v1(salt).hash,
+    };
+    if config.params.genesis.hash != expected_genesis {
+        return Err("the private Config does not carry the salt/profile's exact genesis".into());
+    }
+    #[cfg(feature = "devnet-prealloc")]
+    if !config.initial_utxo_set.is_empty() {
+        return Err("private population refuses arbitrary initial monetary rows".into());
     }
     if config.params.skip_proof_of_work {
         return Err("the process/P2P probe must validate work; skip_proof_of_work is refused".into());
@@ -208,6 +239,50 @@ mod tests {
         let mut public = config.clone();
         public.palw_drill_genesis_salt = None;
         assert!(validate_private_probe(&args, &public).unwrap_err().contains("salted"));
+    }
+
+    #[test]
+    fn private_population_constructor_refuses_replaced_factory_rows_or_size() {
+        use kaspa_consensus_core::config::private_population::PrivatePopulationV1;
+        let salt = PalwDrillSaltV1::from_bytes([0x14; 32]).unwrap();
+        let profile = PrivatePopulationV1::new(17).unwrap();
+        let derived = derive_private_population_v1(&salt, profile).unwrap();
+        let mut config = Config::new(derived.params);
+        config.private_population = Some(profile);
+        config.palw_drill_genesis_salt = Some(salt);
+        let args = Args {
+            testnet: true,
+            testnet_suffix: 12,
+            disable_dns_seeding: true,
+            outbound_target: 0,
+            disable_upnp: true,
+            listen: Some("127.0.0.1:53001".parse().unwrap()),
+            rpclisten: Some("127.0.0.1:53002".parse().unwrap()),
+            appdir: Some(std::env::temp_dir().join("unopened-rfc12-population-probe").display().to_string()),
+            ..Args::default()
+        };
+        assert!(validate_private_probe(&args, &config).is_ok());
+        let mut wrong_size = config.clone();
+        wrong_size.private_population = Some(PrivatePopulationV1::new(18).unwrap());
+        assert!(validate_private_probe(&args, &wrong_size).unwrap_err().contains("exact salt/size/funded factory"));
+        let mut changed = config.clone();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut changed.params.palw_consensus_mode
+        else {
+            unreachable!()
+        };
+        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } =
+            bundle.genesis_objects.last_mut().unwrap()
+        else {
+            unreachable!()
+        };
+        *collateral += 1;
+        assert!(validate_private_probe(&args, &changed).unwrap_err().contains("exact salt/size/funded factory"));
+        let manifest = private_probe_manifest(&config);
+        assert_eq!(manifest["population"]["totalBonds"], 17);
+        assert_ne!(
+            manifest["genesis"],
+            private_probe_manifest(&Config::new(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt)).unwrap()))["genesis"]
+        );
     }
 
     #[test]

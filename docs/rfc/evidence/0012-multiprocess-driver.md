@@ -151,3 +151,19 @@ The private constructor also applies the production salt keyring checks directly
 to its injected Config: public producer/validator/pay keys and public genesis
 bond/fee/stake outpoints are refused even though it intentionally uses no public
 salt Args flag. These are shared checks, with production Args validation unchanged.
+
+## Factory-derived private population
+
+The same unpublished helper also accepts `--private-probe-profile=population-v1 --private-probe-bonds=N`, where N is greater than the existing registry and at most 100,000. These arguments belong exclusively to the feature-gated integration binary. Ordinary Args and public constructors have no population override.
+
+The factory derives every added valid ML-DSA-87 registration from the explicit salt and bounded index, creates its collateral output at the existing registry floor and carves that collateral from the salted main output. The total premine remains exactly the original cap. It pins total registration count into monetary outpoint derivation, genesis UTXO commitment, genesis hash, ruleset identity and the owned DB manifest. Initial UTXO loading derives the same complete factory and the existing M-07 hash/commitment comparison remains mandatory. A caller cannot supply arbitrary initial monetary rows. Added workers declare no model capability and supply no beacon or useful work.
+
+After the central feature build, a small construction check is:
+
+```
+python3 scripts/misaka-rfc12-private-smoke.py --binary /absolute/path/misaka-rfc12-private-node --salt <64-hex-nonzero> --profile population-v1 --bonds 17 --out /tmp/rfc12-private-population.json
+```
+
+A dedicated resource runner may select 100000 and longer explicit setup/probe deadlines, for example `--timeout 3600 --manifest-timeout 3600`. The driver fixes this count before launch, checks the real bounded public capacity read's total registry count, indexed coin supply, genesis money and roots across three owned processes, handshake/cut/heal and a cold SIGKILL/reopen. It preserves process RSS in KiB, owned DB logical bytes, factory timing logs and RPC latency observations. This result remains `CONSTRUCTION_TRANSPORT_PASS`; `release100kMeasured`, `prunedIbdMeasured`, `matureUsefulWorkMeasured`, `marketFillsMeasured` and full security approval stay false. No actual population process run is recorded yet.
+
+A 100k registry with distinct operator public keys may itself exceed the protocol's retained 384 MiB snapshot ceiling. The new profile permits this concrete resource boundary to be measured; it does not raise the bound or label a refusal as successful pruned transport. Complete populations, usable native beacon input, post-Final history compaction, genuine pruned joins and the approved resource/latency criteria retain their separate acceptance requirements.
