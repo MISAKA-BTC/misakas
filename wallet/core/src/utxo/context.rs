@@ -250,42 +250,44 @@ impl UtxoContext {
     /// keep the output and its money so a fresh confirmation or long maturity
     /// can promote it again. No mutex is held across an RPC or notification.
     pub(crate) fn refresh_mature_coinbases(&self) -> bool {
-        if !self.network_matches_processor() {
-            return false;
-        }
-        let params = self.processor().network_params().ok();
-        let daa = self.processor().current_daa_score();
-        let mut context = self.context();
-        let mut demoted = Vec::new();
-        context.mature.retain(|entry| {
-            if !entry.is_coinbase() {
-                return true;
+        self.processor().with_current_utxo_generation(|| {
+            if !self.network_matches_processor() {
+                return Ok(false);
             }
-            let maturity = match (&params, daa) {
-                (Some(params), Some(daa)) => entry.maturity(params, daa),
-                _ => Maturity::Pending,
-            };
-            match maturity {
-                Maturity::Confirmed => true,
-                other => { demoted.push((entry.clone(), other)); false }
-            }
-        });
-        let changed = !demoted.is_empty();
-        for (entry, maturity) in demoted {
-            let pending = PendingUtxoEntryReference::new(entry.clone(), self.clone());
-            match maturity {
-                Maturity::Stasis => {
-                    context.stasis.insert(entry.id(), entry.clone());
-                    self.processor().stasis().insert(entry.id(), pending);
+            let params = self.processor().network_params().ok();
+            let daa = self.processor().current_daa_score();
+            let mut context = self.context();
+            let mut demoted = Vec::new();
+            context.mature.retain(|entry| {
+                if !entry.is_coinbase() {
+                    return true;
                 }
-                Maturity::Pending => {
-                    context.pending.insert(entry.id(), entry.clone());
-                    self.processor().pending().insert(entry.id(), pending);
+                let maturity = match (&params, daa) {
+                    (Some(params), Some(daa)) => entry.maturity(params, daa),
+                    _ => Maturity::Pending,
+                };
+                match maturity {
+                    Maturity::Confirmed => true,
+                    other => { demoted.push((entry.clone(), other)); false }
                 }
-                Maturity::Confirmed => unreachable!(),
+            });
+            let changed = !demoted.is_empty();
+            for (entry, maturity) in demoted {
+                let pending = PendingUtxoEntryReference::new(entry.clone(), self.clone());
+                match maturity {
+                    Maturity::Stasis => {
+                        context.stasis.insert(entry.id(), entry.clone());
+                        self.processor().stasis().insert(entry.id(), pending);
+                    }
+                    Maturity::Pending => {
+                        context.pending.insert(entry.id(), entry.clone());
+                        self.processor().pending().insert(entry.id(), pending);
+                    }
+                    Maturity::Confirmed => unreachable!(),
+                }
             }
-        }
-        changed
+            Ok(changed)
+        }).unwrap_or(false)
     }
 
     pub fn mature_utxo_size(&self) -> usize {
@@ -344,15 +346,16 @@ impl UtxoContext {
             let context = self.context();
             self.require_context_network(&context)?;
         }
-        let balance = {
-            let previous_balance = self.context().balance.clone();
-            let mut balance = self.calculate_balance().await;
-            balance.delta(&previous_balance);
+        let generation = self.processor().utxo_observation_generation();
+        let previous_balance = self.context().balance.clone();
+        let mut balance = self.calculate_balance().await;
+        balance.delta(&previous_balance);
+        self.processor().with_utxo_observation_generation(generation, || {
             let mut context = self.context();
             self.require_context_network(&context)?;
             context.balance.replace(balance.clone());
-            balance
-        };
+            Ok(())
+        })?;
         self.processor().notify(Events::Balance { balance: Some(balance.clone()), id: self.id() }).await?;
 
         Ok(balance)
@@ -361,25 +364,27 @@ impl UtxoContext {
     /// Process pending transaction. Remove mature UTXO entries and add them to the consumed set.
     /// Produces a notification on the even multiplexer.
     pub(crate) async fn register_outgoing_transaction(&self, pending_tx: &PendingTransaction) -> Result<()> {
-        {
-            let current_daa_score =
-                self.processor().current_daa_score().ok_or(Error::MissingDaaScore("register_outgoing_transaction()"))?;
+        self.processor().with_current_utxo_generation(|| {
+            {
+                let current_daa_score =
+                    self.processor().current_daa_score().ok_or(Error::MissingDaaScore("register_outgoing_transaction()"))?;
 
-            let mut context = self.context();
-            self.require_context_network(&context)?;
-            let pending_utxo_entries = pending_tx.utxo_entries();
-            context.mature.retain(|entry| !pending_utxo_entries.contains_key(&entry.id()));
+                let mut context = self.context();
+                self.require_context_network(&context)?;
+                let pending_utxo_entries = pending_tx.utxo_entries();
+                context.mature.retain(|entry| !pending_utxo_entries.contains_key(&entry.id()));
 
-            let outgoing_transaction = OutgoingTransaction::new(current_daa_score, self.clone(), pending_tx.clone());
-            self.processor().register_outgoing_transaction(outgoing_transaction.clone());
-            context.outgoing.insert(outgoing_transaction.id(), outgoing_transaction);
-        }
+                let outgoing_transaction = OutgoingTransaction::new(current_daa_score, self.clone(), pending_tx.clone());
+                self.processor().register_outgoing_transaction(outgoing_transaction.clone());
+                context.outgoing.insert(outgoing_transaction.id(), outgoing_transaction);
+            }
 
-        Ok(())
+            Ok(())
+        })
     }
 
     pub(crate) async fn notify_outgoing_transaction(&self, pending_tx: &PendingTransaction) -> Result<()> {
-        let outgoing_tx = self.processor().outgoing().get(&pending_tx.id()).expect("outgoing transaction for notification");
+        let outgoing_tx = self.processor().outgoing().get(&pending_tx.id()).expect("outgoing transaction for notification").value().clone();
 
         if pending_tx.is_batch() {
             let record = TransactionRecord::new_batch(self, &outgoing_tx, None)?;
@@ -395,176 +400,191 @@ impl UtxoContext {
     /// Cancel outgoing transaction in case of a submission error. Removes [`OutgoingTransaction`] from the
     /// [`UtxoProcessor`] and returns UtxoEntries from the outgoing transaction back to the mature pool.
     pub(crate) async fn cancel_outgoing_transaction(&self, pending_tx: &PendingTransaction) -> Result<()> {
-        if !self.network_matches_processor() {
-            return Err(Error::UtxoContextNetworkMismatch);
-        }
-        self.processor().cancel_outgoing_transaction(pending_tx.id());
-
-        let mut context = self.context();
-
-        let outgoing_transaction = context.outgoing.remove(&pending_tx.id()).expect("outgoing transaction");
-        outgoing_transaction.utxo_entries().iter().for_each(|(_, entry)| {
-            context.mature.push(entry.clone());
-        });
-
-        Ok(())
+        self.processor().with_current_utxo_generation(|| {
+            let mut context = self.context();
+            self.require_context_network(&context)?;
+            self.processor().cancel_outgoing_transaction(pending_tx.id());
+            let outgoing_transaction = context.outgoing.remove(&pending_tx.id()).expect("outgoing transaction");
+            outgoing_transaction.utxo_entries().iter().for_each(|(_, entry)| {
+                context.mature.push(entry.clone());
+            });
+            Ok(())
+        })
     }
 
     /// Insert `utxo_entry` into the `UtxoSet`.
     /// NOTE: The insert will be ignored if already present in the inner map.
     pub async fn insert(&self, utxo_entry: UtxoEntryReference, current_daa_score: u64, force_maturity: bool) -> Result<()> {
-        let mut context = self.context();
-        self.require_context_network(&context)?;
-        if let std::collections::hash_map::Entry::Vacant(e) = context.map.entry(utxo_entry.id().clone()) {
-            e.insert(utxo_entry.clone());
-            if force_maturity {
-                context.mature.sorted_insert_binary_asc_by_key(utxo_entry.clone(), |entry| entry.amount_as_ref());
-            } else {
-                let params = self.processor().network_params()?;
-                match utxo_entry.maturity(&params, current_daa_score) {
-                    Maturity::Stasis => {
-                        context.stasis.insert(utxo_entry.id().clone(), utxo_entry.clone());
-                        self.processor()
-                            .stasis()
-                            .insert(utxo_entry.id().clone(), PendingUtxoEntryReference::new(utxo_entry, self.clone()));
-                    }
-                    Maturity::Pending => {
-                        context.pending.insert(utxo_entry.id().clone(), utxo_entry.clone());
-                        self.processor()
-                            .pending()
-                            .insert(utxo_entry.id().clone(), PendingUtxoEntryReference::new(utxo_entry, self.clone()));
-                    }
-                    Maturity::Confirmed => {
-                        context.mature.sorted_insert_binary_asc_by_key(utxo_entry.clone(), |entry| entry.amount_as_ref());
+        self.processor().with_current_utxo_generation(|| {
+            let mut context = self.context();
+            self.require_context_network(&context)?;
+            if let std::collections::hash_map::Entry::Vacant(e) = context.map.entry(utxo_entry.id().clone()) {
+                e.insert(utxo_entry.clone());
+                if force_maturity {
+                    context.mature.sorted_insert_binary_asc_by_key(utxo_entry.clone(), |entry| entry.amount_as_ref());
+                } else {
+                    let params = self.processor().network_params()?;
+                    match utxo_entry.maturity(&params, current_daa_score) {
+                        Maturity::Stasis => {
+                            context.stasis.insert(utxo_entry.id().clone(), utxo_entry.clone());
+                            self.processor()
+                                .stasis()
+                                .insert(utxo_entry.id().clone(), PendingUtxoEntryReference::new(utxo_entry, self.clone()));
+                        }
+                        Maturity::Pending => {
+                            context.pending.insert(utxo_entry.id().clone(), utxo_entry.clone());
+                            self.processor()
+                                .pending()
+                                .insert(utxo_entry.id().clone(), PendingUtxoEntryReference::new(utxo_entry, self.clone()));
+                        }
+                        Maturity::Confirmed => {
+                            context.mature.sorted_insert_binary_asc_by_key(utxo_entry.clone(), |entry| entry.amount_as_ref());
+                        }
                     }
                 }
+                Ok(())
+            } else {
+                // log_warn!("Warning: Ignoring duplicate UTXO entry");
+                Ok(())
             }
-            Ok(())
-        } else {
-            // log_warn!("Warning: Ignoring duplicate UTXO entry");
-            Ok(())
-        }
+
+        })
     }
 
     pub async fn update(&self, utxo_entry: UtxoEntryReference, _current_daa_score: u64, _force_maturity: bool) -> Result<bool> {
-        let mut context = self.context();
-        self.require_context_network(&context)?;
-        if context.map.get(&utxo_entry.id()).is_some() {
-            // if old_entry.block_daa_score() > utxo_entry.block_daa_score() {
-            //     return Ok(false);
-            // }
-            let id = utxo_entry.id();
-            let entry = PendingUtxoEntryReference::new(utxo_entry.clone(), self.clone());
+        self.processor().with_current_utxo_generation(|| {
+            let mut context = self.context();
+            self.require_context_network(&context)?;
+            if context.map.get(&utxo_entry.id()).is_some() {
+                // if old_entry.block_daa_score() > utxo_entry.block_daa_score() {
+                //     return Ok(false);
+                // }
+                let id = utxo_entry.id();
+                let entry = PendingUtxoEntryReference::new(utxo_entry.clone(), self.clone());
 
-            context.stasis.entry(id.clone()).and_modify(|e| *e = utxo_entry.clone());
-            self.processor().stasis().entry(id.clone()).and_modify(|e| *e = entry.clone());
+                context.stasis.entry(id.clone()).and_modify(|e| *e = utxo_entry.clone());
+                self.processor().stasis().entry(id.clone()).and_modify(|e| *e = entry.clone());
 
-            context.pending.entry(id.clone()).and_modify(|e| *e = utxo_entry.clone());
-            self.processor().pending().entry(id.clone()).and_modify(|e| *e = entry.clone());
+                context.pending.entry(id.clone()).and_modify(|e| *e = utxo_entry.clone());
+                self.processor().pending().entry(id.clone()).and_modify(|e| *e = entry.clone());
 
-            if let Some(entry) = context.mature.iter_mut().find(|entry| entry.id() == id) {
-                *entry = utxo_entry.clone();
+                if let Some(entry) = context.mature.iter_mut().find(|entry| entry.id() == id) {
+                    *entry = utxo_entry.clone();
+                }
+
+                context.map.entry(id.clone()).and_modify(|e| *e = utxo_entry);
+
+                return Ok(true);
             }
 
-            context.map.entry(id.clone()).and_modify(|e| *e = utxo_entry);
-
-            return Ok(true);
-        }
-
-        Ok(false)
+            Ok(false)
+        })
     }
 
     pub async fn remove(&self, utxos: Vec<UtxoEntryReference>) -> Result<Vec<UtxoEntryVariant>> {
-        let mut context = self.context();
-        self.require_context_network(&context)?;
-        let mut removed = vec![];
-        let mut remove_mature_ids = vec![];
+        self.processor().with_current_utxo_generation(|| {
+            let mut context = self.context();
+            self.require_context_network(&context)?;
+            let mut removed = vec![];
+            let mut remove_mature_ids = vec![];
 
-        for utxo in utxos.into_iter() {
-            let id = utxo.id();
-            // remove from local map
-            if context.map.remove(&id).is_some() {
-                if let Some(pending) = context.pending.remove(&id) {
-                    removed.push(UtxoEntryVariant::Pending(pending));
-                    if self.processor().pending().remove(&id).is_none() {
-                        log_error!("Error: unable to remove utxo entry from global pending (with context)");
+            for utxo in utxos.into_iter() {
+                let id = utxo.id();
+                // remove from local map
+                if context.map.remove(&id).is_some() {
+                    if let Some(pending) = context.pending.remove(&id) {
+                        removed.push(UtxoEntryVariant::Pending(pending));
+                        if self.processor().pending().remove(&id).is_none() {
+                            log_error!("Error: unable to remove utxo entry from global pending (with context)");
+                        }
+                    } else if let Some(stasis) = context.stasis.remove(&id) {
+                        removed.push(UtxoEntryVariant::Stasis(stasis));
+                        if self.processor().stasis().remove(&id).is_none() {
+                            log_error!("Error: unable to remove utxo entry from global pending (with context)");
+                        }
+                    } else {
+                        remove_mature_ids.push(id);
                     }
-                } else if let Some(stasis) = context.stasis.remove(&id) {
-                    removed.push(UtxoEntryVariant::Stasis(stasis));
-                    if self.processor().stasis().remove(&id).is_none() {
-                        log_error!("Error: unable to remove utxo entry from global pending (with context)");
-                    }
-                } else {
-                    remove_mature_ids.push(id);
+                } else if context.outgoing.get(&utxo.transaction_id()).is_none() {
+                    // log_warm!("Warning: UTXO not found in UtxoContext map!");
                 }
-            } else if context.outgoing.get(&utxo.transaction_id()).is_none() {
-                // log_warm!("Warning: UTXO not found in UtxoContext map!");
             }
-        }
 
-        context.mature.retain(|entry| {
-            if remove_mature_ids.contains(&entry.id()) {
-                removed.push(UtxoEntryVariant::Mature(entry.clone()));
-                false
-            } else {
-                true
-            }
-        });
+            context.mature.retain(|entry| {
+                if remove_mature_ids.contains(&entry.id()) {
+                    removed.push(UtxoEntryVariant::Mature(entry.clone()));
+                    false
+                } else {
+                    true
+                }
+            });
 
-        Ok(removed)
+            Ok(removed)
+        })
     }
 
-    /// This function handles `Pending` to `Mature` transformation.
+    /// This function handles `Pending` (or a direct long-DAA `Stasis`) to `Mature`.
     pub async fn promote(&self, utxos: Vec<UtxoEntryReference>) -> Result<()> {
-        if !self.network_matches_processor() {
-            return Err(Error::UtxoContextNetworkMismatch);
-        }
-        let transactions = HashMap::group_from(utxos.iter().map(|utxo| (utxo.transaction_id(), utxo.clone())));
+        self.promote_for_generation(utxos, self.processor().utxo_observation_generation()).await
+    }
 
+    pub(crate) async fn promote_for_generation(&self, utxos: Vec<UtxoEntryReference>, generation: u64) -> Result<()> {
+        let transactions = HashMap::group_from(utxos.into_iter().map(|utxo| (utxo.transaction_id(), utxo)));
         for (txid, utxos) in transactions.into_iter() {
-            for utxo_entry in utxos.iter() {
+            let promoted = self.processor().with_utxo_observation_generation(generation, || {
                 let mut context = self.context();
-                if context.pending.remove(utxo_entry.id_as_ref()).is_some() {
-                    context.mature.sorted_insert_binary_asc_by_key(utxo_entry.clone(), |entry| entry.amount_as_ref());
-                } else {
-                    log_error!("Error: non-pending utxo promotion!");
+                self.require_context_network(&context)?;
+                if context.outgoing.contains_key(&txid) {
+                    unreachable!("Error: promotion of the outgoing transaction!");
                 }
+                let mut promoted = Vec::new();
+                for entry in utxos {
+                    let removed_pending = context.pending.remove(entry.id_as_ref()).is_some();
+                    let removed_stasis = context.stasis.remove(entry.id_as_ref()).is_some();
+                    if removed_pending || removed_stasis {
+                        self.processor().pending().remove(entry.id_as_ref());
+                        self.processor().stasis().remove(entry.id_as_ref());
+                        context.mature.sorted_insert_binary_asc_by_key(entry.clone(), |entry| entry.amount_as_ref());
+                        promoted.push(entry);
+                    }
+                }
+                Ok(promoted)
+            })?;
+            if !promoted.is_empty() {
+                let record = TransactionRecord::new_incoming(self, txid, &promoted);
+                self.processor().notify(Events::Maturity { record }).await?;
             }
-
-            // sanity check
-            if self.context().outgoing.get(&txid).is_some() {
-                unreachable!("Error: promotion of the outgoing transaction!");
-            }
-
-            let record = TransactionRecord::new_incoming(self, txid, &utxos);
-            self.processor().notify(Events::Maturity { record }).await?;
         }
-
         Ok(())
     }
 
     /// This function handles `Stasis` to `Pending` transformation.
     pub async fn revive(&self, utxos: Vec<UtxoEntryReference>) -> Result<()> {
-        if !self.network_matches_processor() {
-            return Err(Error::UtxoContextNetworkMismatch);
-        }
+        self.revive_for_generation(utxos, self.processor().utxo_observation_generation()).await
+    }
+
+    pub(crate) async fn revive_for_generation(&self, utxos: Vec<UtxoEntryReference>, generation: u64) -> Result<()> {
         let transactions = HashMap::group_from(utxos.into_iter().map(|utxo| (utxo.transaction_id(), utxo)));
-
         for (txid, utxos) in transactions.into_iter() {
-            for utxo_entry in utxos.iter() {
+            let revived = self.processor().with_utxo_observation_generation(generation, || {
                 let mut context = self.context();
-                if context.stasis.remove(utxo_entry.id_as_ref()).is_some() {
-                    context.pending.insert(utxo_entry.id(), utxo_entry.clone());
-                } else {
-                    log_error!("Error: non-stasis utxo revival!");
-                    panic!("Error: non-stasis utxo revival!");
+                self.require_context_network(&context)?;
+                let mut revived = Vec::new();
+                for entry in utxos {
+                    if context.stasis.remove(entry.id_as_ref()).is_some() {
+                        self.processor().stasis().remove(entry.id_as_ref());
+                        context.pending.insert(entry.id(), entry.clone());
+                        self.processor().pending().insert(entry.id(), PendingUtxoEntryReference::new(entry.clone(), self.clone()));
+                        revived.push(entry);
+                    }
                 }
+                Ok(revived)
+            })?;
+            if !revived.is_empty() {
+                let record = TransactionRecord::new_incoming(self, txid, &revived);
+                self.processor().notify(Events::Pending { record }).await?;
             }
-
-            let record = TransactionRecord::new_incoming(self, txid, &utxos);
-            self.processor().notify(Events::Pending { record }).await?;
         }
-
         Ok(())
     }
 
@@ -628,7 +648,7 @@ impl UtxoContext {
         };
         let (pending, mature) = match generation {
             Some(started) => self.processor().with_utxo_observation_generation(started, classify)?,
-            None => classify()?,
+            None => self.processor().with_current_utxo_generation(classify)?,
         };
 
         // cascade discovery to the processor
@@ -711,7 +731,7 @@ impl UtxoContext {
         for (txid, utxos) in utxos.into_iter() {
             // get outgoing transaction from the processor in case the transaction
             // originates from a different [`Account`] represented by a different [`UtxoContext`].
-            let outgoing_transaction = self.processor().outgoing().get(&txid);
+            let outgoing_transaction = self.processor().outgoing().get(&txid).map(|row| row.value().clone());
             let force_maturity_if_outgoing = outgoing_transaction.is_some();
             let is_batch = outgoing_transaction.as_ref().map_or_else(|| false, |tx| tx.is_batch());
             if !is_batch {
@@ -742,7 +762,7 @@ impl UtxoContext {
         for (txid, utxos) in added.into_iter() {
             // get outgoing transaction from the processor in case the transaction
             // originates from a different [`Account`] represented by a different [`UtxoContext`].
-            let outgoing_transaction = self.processor().outgoing().get(&txid);
+            let outgoing_transaction = self.processor().outgoing().get(&txid).map(|row| row.value().clone());
 
             let force_maturity_if_outgoing = outgoing_transaction.is_some();
             let is_coinbase_stasis =
@@ -759,7 +779,7 @@ impl UtxoContext {
             }
 
             if let Some(outgoing_transaction) = outgoing_transaction {
-                accepted_outgoing_transactions.insert((*outgoing_transaction).clone());
+                accepted_outgoing_transactions.insert(outgoing_transaction.clone());
                 if outgoing_transaction.is_batch() {
                     let record = TransactionRecord::new_batch(self, &outgoing_transaction, Some(current_daa_score))?;
                     self.processor().notify(Events::Maturity { record }).await?;

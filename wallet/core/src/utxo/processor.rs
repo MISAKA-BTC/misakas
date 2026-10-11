@@ -230,6 +230,10 @@ impl UtxoProcessor {
         apply()
     }
 
+    pub(crate) fn with_current_utxo_generation<T>(&self, apply: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.with_utxo_observation_generation(self.utxo_observation_generation(), apply)
+    }
+
     pub fn network_id(&self) -> Result<NetworkId> {
         (*self.inner.network_id.lock().unwrap()).ok_or(Error::MissingNetworkId)
     }
@@ -369,51 +373,32 @@ impl UtxoProcessor {
 
     #[allow(clippy::mutable_key_type)]
     pub async fn handle_pending(&self, current_daa_score: u64) -> Result<()> {
-        let params = self.network_params()?;
         let registered: HashSet<UtxoContext> = self.inner.address_to_utxo_context_map.iter().map(|row| row.value().clone()).collect();
         let mut updated_contexts: HashSet<UtxoContext> = registered.into_iter().filter(|context| context.refresh_mature_coinbases()).collect();
-
-        let (mature_entries, revived_entries) = {
-            // scan and remove any pending entries that gained maturity
-            let mut mature_entries = vec![];
-            let pending_entries = &self.inner.pending;
-            pending_entries.retain(|_, pending_entry| {
-                if !pending_entry.utxo_context().network_matches_processor() {
-                    return true;
+        let generation = self.utxo_observation_generation();
+        // Selection keeps global rows until the matching context mutation commits.
+        // A switch while a notification is awaited cannot orphan the remaining rows.
+        let (mature_entries, revived_entries) = self.with_utxo_observation_generation(generation, || {
+            let params = self.network_params()?;
+            let mut mature_entries = Vec::new();
+            let mut revived_entries = Vec::new();
+            for entry in self.inner.pending.iter() {
+                if entry.utxo_context().network_matches_processor() && matches!(entry.maturity(&params, current_daa_score), Maturity::Confirmed) {
+                    mature_entries.push(entry.value().clone());
                 }
-                match pending_entry.maturity(&params, current_daa_score) {
-                    Maturity::Confirmed => {
-                        mature_entries.push(pending_entry.clone());
-                        false
-                    }
-                    _ => true,
+            }
+            for entry in self.inner.stasis.iter() {
+                if !entry.utxo_context().network_matches_processor() {
+                    continue;
                 }
-            });
-
-            // scan and remove any stasis entries that can now become pending
-            // or gained maturity
-            let mut revived_entries = vec![];
-            let stasis_entries = &self.inner.stasis;
-            stasis_entries.retain(|_, stasis_entry| {
-                if !stasis_entry.utxo_context().network_matches_processor() {
-                    return true;
+                match entry.maturity(&params, current_daa_score) {
+                    Maturity::Confirmed => mature_entries.push(entry.value().clone()),
+                    Maturity::Pending => revived_entries.push(entry.value().clone()),
+                    Maturity::Stasis => {},
                 }
-                match stasis_entry.maturity(&params, current_daa_score) {
-                    Maturity::Confirmed => {
-                        mature_entries.push(stasis_entry.clone());
-                        false
-                    }
-                    Maturity::Pending => {
-                        revived_entries.push(stasis_entry.clone());
-                        // relocate from stasis to pending ...
-                        pending_entries.insert(stasis_entry.id(), stasis_entry.clone());
-                        false
-                    }
-                    Maturity::Stasis => true,
-                }
-            });
-            (mature_entries, revived_entries)
-        };
+            }
+            Ok((mature_entries, revived_entries))
+        })?;
 
         // ------
 
@@ -422,7 +407,7 @@ impl UtxoProcessor {
         updated_contexts.extend(promotions.keys().cloned());
 
         for (context, utxos) in promotions.into_iter() {
-            context.promote(utxos).await?;
+            context.promote_for_generation(utxos, generation).await?;
         }
 
         // ------
@@ -432,7 +417,7 @@ impl UtxoProcessor {
         updated_contexts.extend(revivals.keys().cloned());
 
         for (context, utxos) in revivals.into_iter() {
-            context.revive(utxos).await?;
+            context.revive_for_generation(utxos, generation).await?;
         }
 
         for context in updated_contexts.into_iter() {
@@ -443,21 +428,21 @@ impl UtxoProcessor {
     }
 
     async fn handle_outgoing(&self, current_daa_score: u64) -> Result<()> {
-        let longevity = self.network_params()?.user_transaction_maturity_period_daa();
-
-        self.inner.outgoing.retain(|_, outgoing| {
-            if !outgoing.originating_context().network_matches_processor() {
-                return true;
-            }
-            if outgoing.acceptance_daa_score() != 0 && (outgoing.acceptance_daa_score() + longevity) < current_daa_score {
-                outgoing.originating_context().remove_outgoing_transaction(&outgoing.id());
-                false
-            } else {
-                true
-            }
-        });
-
-        Ok(())
+        self.with_current_utxo_generation(|| {
+            let longevity = self.network_params()?.user_transaction_maturity_period_daa();
+            self.inner.outgoing.retain(|_, outgoing| {
+                if !outgoing.originating_context().network_matches_processor() {
+                    return true;
+                }
+                if outgoing.acceptance_daa_score() != 0 && (outgoing.acceptance_daa_score() + longevity) < current_daa_score {
+                    outgoing.originating_context().remove_outgoing_transaction(&outgoing.id());
+                    false
+                } else {
+                    true
+                }
+            });
+            Ok(())
+        })
     }
 
     pub fn register_outgoing_transaction(&self, outgoing_transaction: OutgoingTransaction) {
@@ -983,6 +968,92 @@ pub(crate) fn dns_shortcut_after_poll(observation: Option<(bool, u64)>) -> u64 {
 mod dns_observation_generation_tests {
     use super::*;
     use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
+
+    #[tokio::test]
+    async fn rfc0012_actual_money_mutation_serializes_with_network_switch_and_stale_promotion_keeps_rows() {
+        use crate::utxo::{UtxoContextBinding, UtxoIterator};
+        use kaspa_consensus_client::UtxoEntry;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutpoint};
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
+        let processor = UtxoProcessor::new(None, Some(network), None, Some(Channel::unbounded()));
+        processor.mock_set_connected(true);
+        processor.inner.current_daa_score.store(1_550, Ordering::SeqCst);
+        processor.network_params().unwrap().set_coinbase_transaction_maturity_period_daa(550);
+        let context = UtxoContext::new(&processor, UtxoContextBinding::default());
+        let make_entry = |seed, coinbase, daa| -> crate::utxo::UtxoEntryReference {
+            UtxoEntry {
+                address: None,
+                outpoint: TransactionOutpoint::new(TransactionId::from_bytes([seed; 64]), 0).into(),
+                amount: 2_000_000,
+                script_public_key: ScriptPublicKey::new(0, Default::default()),
+                block_daa_score: daa,
+                is_coinbase: coinbase,
+            }.into()
+        };
+        let entry = make_entry(27, false, 1_000);
+        // Stall the actual insert on the context lock after it takes the authority
+        // gate. A simultaneous public network switch must wait for the monetary
+        // map/classification commit, rather than replace its params mid-operation.
+        let context_guard = context.context();
+        let writer_context = context.clone();
+        let writer_entry = entry.clone();
+        let writer = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread().build().unwrap()
+                .block_on(writer_context.insert(writer_entry, 1_550, false)).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match processor.inner.dns_anchor_connection_generation.try_lock() {
+                Err(std::sync::TryLockError::WouldBlock) => break,
+                Err(error) => panic!("generation mutex: {error}"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(Instant::now() < deadline, "actual insert did not reach its authority gate");
+            std::thread::yield_now();
+        }
+        let switching = processor.clone();
+        let (started_send, started_recv) = mpsc::channel();
+        let (done_send, done_recv) = mpsc::channel();
+        let switcher = std::thread::spawn(move || {
+            started_send.send(()).unwrap();
+            switching.set_network_id(&NetworkId::new(NetworkType::Devnet));
+            done_send.send(()).unwrap();
+        });
+        started_recv.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(done_recv.recv_timeout(Duration::from_millis(30)), Err(mpsc::RecvTimeoutError::Timeout)));
+        drop(context_guard);
+        writer.join().unwrap();
+        done_recv.recv_timeout(Duration::from_secs(2)).unwrap();
+        switcher.join().unwrap();
+        assert_eq!(context.context().map.len(), 1);
+        assert!(UtxoIterator::new(&context).next().is_none());
+        assert!(matches!(context.remove(vec![entry.clone()]).await, Err(Error::UtxoContextNetworkMismatch)));
+        processor.set_network_id(&network);
+        assert!(UtxoIterator::new(&context).next().is_some());
+
+        let pending = make_entry(28, false, 1_500);
+        let stasis = make_entry(29, true, 1_000);
+        context.insert(pending.clone(), 1_550, false).await.unwrap();
+        context.insert(stasis.clone(), 1_010, false).await.unwrap();
+        let old_generation = processor.utxo_observation_generation();
+        processor.set_network_id(&network);
+        assert!(matches!(context.promote_for_generation(vec![pending.clone()], old_generation).await, Err(Error::StaleUtxoObservation)));
+        assert!(matches!(context.revive_for_generation(vec![stasis.clone()], old_generation).await, Err(Error::StaleUtxoObservation)));
+        assert!(processor.pending().contains_key(&pending.id()));
+        assert!(processor.stasis().contains_key(&stasis.id()));
+        assert!(context.context().pending.contains_key(&pending.id()));
+        assert!(context.context().stasis.contains_key(&stasis.id()));
+        processor.inner.current_daa_score.store(1_600, Ordering::SeqCst);
+        processor.handle_pending(1_600).await.unwrap();
+        assert!(!processor.pending().contains_key(&pending.id()));
+        assert!(!processor.stasis().contains_key(&stasis.id()));
+        assert_eq!(context.context().mature.len(), 3, "long-DAA jump may promote directly from stasis");
+        assert!(context.context().pending.is_empty() && context.context().stasis.is_empty());
+        assert_eq!(context.balance().unwrap().mature, 6_000_000);
+    }
 
     #[tokio::test]
     async fn rfc0012_scan_reply_and_saved_selection_cannot_cross_rpc_or_network_generation() {
