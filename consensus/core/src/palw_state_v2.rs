@@ -71844,9 +71844,10 @@ pub(crate) mod tests {
             assert!(builder.registered_pubkey_v1(&original.pubkey));
             assert!(!builder.registered_pubkey_v1(&absent));
             let duplicate = bond_registration_with_collateral(65, 1, 99, 1_000_000);
-            assert!(matches!(apply_palw_transition_v2_with_extras(
-                &state, &p, &ctx(2, 101, 1), &[duplicate], None, false, false, false, false, &extras,
-            ), Err(PalwStateV2Error::DuplicateBondKey(key)) if key == bond_key(65)));
+            let refusal = apply_palw_transition_v2_with_extras(
+                &state, &p, &ctx(2, 101, 2), &[duplicate], None, false, false, false, false, &extras,
+            ).expect_err("the new block advances both clocks and reaches the duplicate-key gate");
+            assert!(matches!(refusal, PalwStateV2Error::DuplicateBondKey(key) if key == bond_key(65)), "{refusal}");
         }
 
         #[test]
