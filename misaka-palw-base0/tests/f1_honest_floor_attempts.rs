@@ -53,6 +53,7 @@ fn honest_floor_attempts_have_no_identity_or_output_fault() {
                 job_identity: anchor,
                 trace_root: out.trace_root,
                 output_root: out.output_root,
+                registered_semantics: None,
             };
             assert_eq!(palw_binding_identity_fault_v1(&target, &binding, rules, true), Ok(None), "{form:?} anchor {n}");
             let pin = PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: toks });

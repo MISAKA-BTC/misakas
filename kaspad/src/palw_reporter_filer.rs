@@ -1105,6 +1105,7 @@ pub(crate) fn palw_tir_identity_fault_v1(
         job_identity: duty.job_identity,
         trace_root: duty.trace_root,
         output_root: duty.output_root,
+        registered_semantics: None,
     };
     palw_tir_binding_identity_fault_v1(&target, binding, rules, true, PALW_FALSE_VALID_NETWORK_LADDER_V1).ok().flatten()
 }

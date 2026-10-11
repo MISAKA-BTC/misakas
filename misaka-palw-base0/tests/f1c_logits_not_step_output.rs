@@ -215,6 +215,7 @@ fn target_of(binding: &PalwStepBindingV2, anchor: Hash64) -> PalwOffenceTargetV1
         job_identity: anchor,
         trace_root: binding.full_logits_trace_root,
         output_root: Hash64::default(),
+        registered_semantics: None,
     }
 }
 
@@ -535,6 +536,7 @@ fn every_drill_fault_is_convicted_by_its_contradiction() {
                 execution_root: out.execution_root,
                 trace_root: out.trace_root,
                 output_root: out.output_root,
+                registered_semantics: None,
                 ..target_of(&binding, anchor)
             };
             let identity = palw_binding_identity_fault_v1(&target, &binding, rules, true);

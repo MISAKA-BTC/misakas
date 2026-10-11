@@ -370,6 +370,7 @@ mod tests {
                 job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
                 trace_root: binding.full_logits_trace_root,
                 output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(
+                registered_semantics: None,
                     &binding.job_context,
                     &pin.generated_token_ids,
                 ),
@@ -549,6 +550,7 @@ mod tests {
                         job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&stopped_binding.job_context),
                         trace_root: stopped_binding.full_logits_trace_root,
                         output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&stopped_binding.job_context, &stopped_ids),
+                        registered_semantics: None,
                     };
                     let stopped_event = logits_event_disclosure_v1(&stopped_binding, stopped_rows, &stopped_ids, 0, 0).unwrap();
                     let planned = tiled_plan_v1(&stopped_target, &stopped_job, &stopped_event, &[], table.clone()).unwrap();
@@ -580,6 +582,7 @@ mod tests {
                 job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
                 trace_root: binding.full_logits_trace_root,
                 output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &ids),
+                registered_semantics: None,
             };
             let initial = logits_event_disclosure_v1(&binding, &rows, &ids, 0, 0).unwrap();
             if fault == 5 {

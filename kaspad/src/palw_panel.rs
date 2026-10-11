@@ -18981,6 +18981,7 @@ mod accepted_objects_walk_tests {
             job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(c),
             trace_root: c.trace_root,
             output_root: c.output_root,
+            registered_semantics: None,
         };
         let mut candidate = kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
             claim_id: claim,

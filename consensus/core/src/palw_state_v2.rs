@@ -12046,6 +12046,8 @@ pub struct PalwChainStateV2 {
     /// Accepted public FP commitment metadata, without prompt IDs or capture. Kept with the claim
     /// past the never-armed public-filer fence, rooted and carried through pruning snapshots.
     fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
+    class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
     terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
 
@@ -12280,6 +12282,8 @@ impl PalwChainStateV2 {
             panel_v3: None,
             legacy_disputes: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
+            class_semantics: BTreeMap::new(),
+            claim_semantics: BTreeMap::new(),
             legacy_answers: BTreeMap::new(),
             terminal_evidence: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
@@ -14497,11 +14501,20 @@ impl PalwChainStateV2 {
     /// generative class's row's — or `None` for a class whose row lists none (a dense legacy class: its tokenizer
     /// commitment is inside an artifact digest the chain cannot read). The one read `palw_fp_tokenizer_match` compares a
     /// job against.
+    pub fn claim_semantics_v1(&self, claim_id: &Hash64) -> Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1> {
+        self.claim_semantics.get(claim_id)
+    }
+
+    pub fn class_semantics_v1(&self, class_id: &Hash64) -> Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1> {
+        self.class_semantics.get(class_id)
+    }
+
     pub fn class_tokenizer_listing_v1(&self, class_id: &Hash64) -> Option<Hash64> {
         self.tir_classes
             .get(class_id)
             .map(|record| record.tokenizer_id)
             .or_else(|| self.gen_classes.get(class_id).map(|record| record.tokenizer_id))
+            .or_else(|| self.class_semantics.get(class_id).map(|row| row.tokenizer_id))
     }
 
     /// **RFC-0003 §II.2.1: a V5 claim's class, resolved against the generative registry** — the row
@@ -14744,6 +14757,11 @@ impl PalwChainStateV2 {
         if !self.fp_public_jobs.is_empty() {
             state.update(b"public_fp_jobs/v1");
             state.update(collection_root(b"public_fp_jobs", &self.fp_public_jobs).as_byte_slice());
+        }
+        if !self.class_semantics.is_empty() {
+            state.update(b"class_semantics/v1");
+            state.update(collection_root(b"class_semantics", &self.class_semantics).as_byte_slice());
+            state.update(collection_root(b"claim_semantics", &self.claim_semantics).as_byte_slice());
         }
         if !self.legacy_disputes.is_empty() {
             state.update(b"legacy_disputes/v1");
@@ -17017,6 +17035,10 @@ pub enum PalwDeltaEntryV2 {
     } = 161,
     /// Lane LG14-A (delta 201): original accepted public FP commitment, retained until claim retirement.
     PublicFpJob { key: Hash64, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 201,
+    /// Immutable canonical semantic identities, one row per registered class.
+    ClassSemantics { key: Hash64, old: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1> } = 204,
+    /// Immutable registered semantics snapshotted when a new claim is accepted.
+    ClaimSemantics { key: Hash64, old: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1> } = 206,
     LegacyAnswer { key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, old: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>, new: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2> } = 202,
     TerminalEvidence { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, old: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, new: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1> } = 203,
     TerminalPart { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, index: u8, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 205,
@@ -20457,6 +20479,22 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::EpochBudgets { old, new });
     }
 
+    fn write_claim_semantics_v1(&mut self, key: Hash64, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>) {
+        let old = match &new {
+            Some(record) => self.state.claim_semantics.insert(key, record.clone()),
+            None => self.state.claim_semantics.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::ClaimSemantics { key, old, new });
+    }
+
+    fn write_class_semantics_v1(&mut self, key: Hash64, new: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>) {
+        let old = match &new {
+            Some(row) => self.state.class_semantics.insert(key, row.clone()),
+            None => self.state.class_semantics.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::ClassSemantics { key, old, new });
+    }
+
     fn write_receipt_target(&mut self, key: Hash64, new: Option<PalwClassTargetV2>) {
         let old = match &new {
             Some(record) => self.state.receipt_targets.insert(key, record.clone()),
@@ -20466,6 +20504,18 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) {
+        // Stamp once, at creation. A later prospective descriptor never changes an old claim.
+        if self.extras.class_semantics_active && !self.state.claims.contains_key(&key)
+            && let Some(claim) = &new
+            && let Some(row) = self.state.class_semantics.get(&claim.class_id).cloned()
+            && claim.accepted_daa >= row.bound_from_daa
+        {
+            self.write_claim_semantics_v1(key, Some(row));
+        }
+        if new.is_none() && !self.state.panel_liabilities.contains_key(&key)
+            && !self.state.vesting.contains_key(&key) && self.state.claim_semantics.contains_key(&key) {
+            self.write_claim_semantics_v1(key, None);
+        }
         if new.is_none() && self.state.fp_public_jobs.contains_key(&key) {
             self.write_public_fp_job_v1(key, None);
         }
@@ -21181,6 +21231,10 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_panel_liability(&mut self, key: Hash64, new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>) {
+        if new.is_none() && !self.state.claims.contains_key(&key)
+            && !self.state.vesting.contains_key(&key) && self.state.claim_semantics.contains_key(&key) {
+            self.write_claim_semantics_v1(key, None);
+        }
         let old = self.state.panel_liabilities.get(&key).cloned();
         if old == new {
             return;
@@ -29279,6 +29333,10 @@ impl<'a> TransitionBuilder<'a> {
     /// about the indexes. M3's DA-5 re-key (a session moves its row's `expiry_daa`) writes through
     /// this too — rewriting a row is remove-old-then-insert-new in every index.
     fn write_vesting(&mut self, key: Hash64, new: Option<crate::palw_vesting_v1::PalwVestingRowV1>) {
+        if new.is_none() && !self.state.claims.contains_key(&key)
+            && !self.state.panel_liabilities.contains_key(&key) && self.state.claim_semantics.contains_key(&key) {
+            self.write_claim_semantics_v1(key, None);
+        }
         let old = self.state.vesting.remove(&key);
         if let Some(previous) = &old {
             self.state.vesting_index_remove(previous);
@@ -35307,6 +35365,25 @@ fn apply_class_registration_v1(
             fused_attention,
         }),
     );
+    // The canonical registration is signed, but pruning previously discarded its semantic
+    // identities. Persist one immutable row at the independent semantic fence; no local model
+    // or tokenizer file participates in the fold. Dormant re-registration cannot relabel it.
+    if builder.extras.class_semantics_active
+        && let PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } = object
+    {
+        let next = crate::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+            *class_id, *artifact_root, &carriage.canonical, ctx.daa_score);
+        if let Some(previous) = builder.state.class_semantics.get(class_id) {
+            let mut registered = next.clone();
+            registered.token_table_root = previous.token_table_root;
+            registered.bound_from_daa = previous.bound_from_daa;
+            if *previous != registered {
+                return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
+            }
+        } else {
+            builder.write_class_semantics_v1(*class_id, Some(next));
+        }
+    }
     // **ADR-0119 Decision 2: a class under the held map records its ladder, now.** The
     // carriage is the one place the fold ever holds the class's profile; every later reader
     // of a claim's ladder holds this state instead. Written only for a held class — which
@@ -39502,6 +39579,8 @@ pub struct PalwTransitionExtrasV1 {
     pub model_lines_active: bool,
     /// ADR-0175: resolved independently at the accepting block, false for historical replay.
     pub model_immutable_active: bool,
+    /// The independent registered-semantic rule at the accepting block.
+    pub class_semantics_active: bool,
     /// Accepted NEW classes earlier in this block, supplied only for a one-object rehearsal.
     /// The full block fold proves creation from its own Class delta. DAA alone is insufficient:
     /// different blocks may have equal DAA scores.
@@ -42002,6 +42081,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::SeatAvailability { key, old, new } => swap_write!(state.seat_availability, key, old, new),
         PalwDeltaEntryV2::SeatRootReadiness { key, old, new } => swap_write!(state.seat_root_readiness, key, old, new),
         PalwDeltaEntryV2::PublicFpJob { key, old, new } => swap_write!(state.fp_public_jobs, key, old, new),
+        PalwDeltaEntryV2::ClassSemantics { key, old, new } => swap_write!(state.class_semantics, key, old, new),
+        PalwDeltaEntryV2::ClaimSemantics { key, old, new } => swap_write!(state.claim_semantics, key, old, new),
         PalwDeltaEntryV2::LegacyAnswer { key, old, new } => swap_write!(state.legacy_answers, key, old, new),
         PalwDeltaEntryV2::TerminalEvidence { key, old, new } => swap_write!(state.terminal_evidence, key, old, new),
         PalwDeltaEntryV2::TerminalPart { key, index, old, new } => {
@@ -42450,6 +42531,9 @@ pub struct PalwStateCarriageV2 {
     pub legacy_disputes: BTreeMap<Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>,
     /// Original accepted FP metadata, appended tail 0xF0; omitted when empty below the public-filer fence.
     pub fp_public_jobs: BTreeMap<Hash64, Vec<u8>>,
+    /// Immutable signed registration semantics, optional tail 0xF3.
+    pub class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    pub claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
     pub terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
     /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
@@ -43167,6 +43251,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1.serialize(writer)?;
             self.fp_public_jobs.serialize(writer)?;
         }
+        if !self.class_semantics.is_empty() {
+            crate::palw_class_semantics_v1::PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1.serialize(writer)?;
+            self.class_semantics.serialize(writer)?;
+            self.claim_semantics.serialize(writer)?;
+        }
         if !self.legacy_disputes.is_empty() {
             crate::palw_legacy_public_filer_v1::PALW_CARRIAGE_LEGACY_DISPUTES_TAIL_V1.serialize(writer)?;
             self.legacy_disputes.serialize(writer)?;
@@ -43376,6 +43465,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_legacy_answers = false;
         let mut fp_public_jobs = BTreeMap::new();
         let mut seen_fp_public_jobs = false;
+        let mut class_semantics = BTreeMap::new();
+        let mut claim_semantics = BTreeMap::new();
+        let mut seen_class_semantics = false;
         let mut seen_legacy_disputes = false;
         let mut bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1> = None;
         let mut seen_bond_budget = false;
@@ -43664,6 +43756,14 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty legacy answer assembly tail"));
                     }
                 }
+                crate::palw_class_semantics_v1::PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1 if !seen_class_semantics => {
+                    seen_class_semantics = true;
+                    class_semantics = BTreeMap::deserialize_reader(reader)?;
+                    claim_semantics = BTreeMap::deserialize_reader(reader)?;
+                    if class_semantics.is_empty() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty class semantics tail"));
+                    }
+                }
                 PALW_CARRIAGE_PUBLIC_FP_JOBS_TAIL_V1 if !seen_fp_public_jobs => {
                     seen_fp_public_jobs = true;
                     fp_public_jobs = BTreeMap::deserialize_reader(reader)?;
@@ -43827,6 +43927,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             kernel_route,
             legacy_disputes,
             fp_public_jobs,
+            class_semantics,
+            claim_semantics,
             legacy_answers,
             terminal_evidence,
             bond_budget,
@@ -43950,6 +44052,8 @@ impl PalwStateCarriageV2 {
             kernel_route: state.kernel_route.clone(),
             legacy_disputes: state.legacy_disputes.clone(),
             fp_public_jobs: state.fp_public_jobs.clone(),
+            class_semantics: state.class_semantics.clone(),
+            claim_semantics: state.claim_semantics.clone(),
             legacy_answers: state.legacy_answers.clone(),
             terminal_evidence: state.terminal_evidence.clone(),
             bond_budget: state.bond_budget.clone(),
@@ -44028,6 +44132,36 @@ impl PalwStateCarriageV2 {
                 "carriage version {} is not {}",
                 self.version, PALW_STATE_V2_VERSION
             )));
+        }
+        for (class_id, row) in &self.class_semantics {
+            let Some(class) = self.classes.get(class_id) else {
+                return Err(PalwStateV2Error::CarriageInconsistent("class semantics names an unregistered class".into()));
+            };
+            if !row.well_formed_for(class_id, &class.artifact_root) {
+                return Err(PalwStateV2Error::CarriageInconsistent("malformed registered class semantics".into()));
+            }
+        }
+        for (claim_id, row) in &self.claim_semantics {
+            let claim = self.claims.get(claim_id);
+            let class_id = claim.map(|claim| claim.class_id)
+                .or_else(|| self.panel_liabilities.get(claim_id).map(|row| row.class_id))
+                .or_else(|| self.vesting.get(claim_id).map(|row| row.class_id))
+                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("claim semantics has no claim or surviving liability".into()))?;
+            let Some(class_row) = self.class_semantics.get(&class_id) else {
+                return Err(PalwStateV2Error::CarriageInconsistent("claim semantics has no registered class semantics".into()));
+            };
+            if !row.well_formed_for(&class_id, &class_row.artifact_root)
+                || claim.is_some_and(|claim| claim.accepted_daa < row.bound_from_daa)
+                || row.model_profile_id != class_row.model_profile_id
+                || row.runtime_manifest_hash != class_row.runtime_manifest_hash
+                || row.runtime_class_id != class_row.runtime_class_id
+                || row.tokenizer_id != class_row.tokenizer_id
+                || row.cu_ruleset_id != class_row.cu_ruleset_id
+                || row.bound_from_daa != class_row.bound_from_daa
+                || row.token_table_root.is_some_and(|root| Some(root) != class_row.token_table_root)
+            {
+                return Err(PalwStateV2Error::CarriageInconsistent("malformed immutable claim semantics".into()));
+            }
         }
         // RFC-0002 Phase F: the root commits an IR class's program through its `graph_ir_root`, so a
         // carriage is refused unless every program hashes to its row's root (and is its row's length).
@@ -44175,6 +44309,8 @@ impl PalwStateCarriageV2 {
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
             fp_public_jobs: self.fp_public_jobs,
+            class_semantics: self.class_semantics,
+            claim_semantics: self.claim_semantics,
             legacy_answers: self.legacy_answers,
             terminal_evidence: self.terminal_evidence,
             kernel_route: self.kernel_route,
@@ -57044,6 +57180,66 @@ pub(crate) mod tests {
         }
     }
 
+    /// Fold/storage evidence only: admission signatures are checked by the service layer.
+    #[test]
+    fn registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_retention() {
+        let p = params().with_legacy_public_filer_from_daa(Some(1_000));
+        let mut objects = register_class_and_bond();
+        let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
+        let mut canonical = crate::palw_base0_profile::rc_job_context(&profile, 2, 2);
+        canonical.tokenizer_id = h64(77);
+        let object = objects.iter_mut().find(|object| matches!(object, PalwConsensusObjectV2::ClassRegistered { class_id, .. } if *class_id == h64(1))).unwrap();
+        let PalwConsensusObjectV2::ClassRegistered { admission, .. } = object else { unreachable!() };
+        *admission = Some(Box::new(PalwClassAdmissionCarriageV2 {
+            registrant_bond: bond_key(1), profile, canonical: canonical.clone(), signature: vec![],
+        }));
+        let on = PalwTransitionExtrasV1 { class_semantics_active: true, ..Default::default() };
+        let genesis = PalwChainStateV2::genesis();
+        let (parent, registration_delta) = apply_palw_transition_v2_with_extras(
+            &genesis, &p, &ctx(1, 100, 1), &objects, None, false, false, false, false, &on).unwrap();
+        let row = parent.class_semantics_v1(&h64(1)).unwrap();
+        assert_eq!(row.tokenizer_id, h64(77));
+        assert_eq!(row.bound_from_daa, 100);
+        assert!(parent.fp_public_jobs.is_empty());
+        let (historical, _) = apply_palw_transition_v2_with_extras(
+            &genesis, &p, &ctx(1, 100, 1), &objects, None, false, false, false, false, &Default::default()).unwrap();
+        assert!(historical.class_semantics.is_empty());
+        assert_ne!(historical.state_root(), parent.state_root());
+        assert_eq!(apply_delta_v2(&genesis, &registration_delta, &p).unwrap(), parent);
+        assert_eq!(revert_delta_v2(&parent, &registration_delta, &p).unwrap(), genesis);
+        let (state, claim_delta) = apply_palw_transition_v2_with_extras(
+            &parent, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None, false, false, false, false, &on).unwrap();
+        assert_eq!(state.claim_semantics_v1(&h64(0xFC)), Some(row));
+        assert!(state.fp_public_jobs.is_empty());
+        assert_eq!(apply_delta_v2(&parent, &claim_delta, &p).unwrap(), state);
+        assert_eq!(revert_delta_v2(&state, &claim_delta, &p).unwrap(), parent);
+        let carriage = PalwStateCarriageV2::from_state(&state);
+        let bytes = borsh::to_vec(&carriage).unwrap();
+        let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.into_state(&p, Some(state.state_root())).unwrap(), state);
+        let mut malformed = carriage;
+        malformed.claim_semantics.get_mut(&h64(0xFC)).unwrap().tokenizer_id = h64(999);
+        assert!(malformed.into_state(&p, None).is_err());
+        let mut duplicate = bytes.clone();
+        duplicate.push(crate::palw_class_semantics_v1::PALW_CARRIAGE_CLASS_SEMANTICS_TAIL_V1);
+        duplicate.extend(borsh::to_vec(&state.class_semantics).unwrap());
+        duplicate.extend(borsh::to_vec(&state.claim_semantics).unwrap());
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&duplicate).is_err());
+        let mut writer = TransitionBuilder::new(&state, &p, false, false, false, false, &on);
+        let mut descriptor = row.clone();
+        descriptor.token_table_root = Some(h64(888));
+        writer.write_class_semantics_v1(h64(1), Some(descriptor));
+        assert_eq!(writer.state.claim_semantics_v1(&h64(0xFC)).unwrap().token_table_root, None,
+            "prospective first-fill cannot retroactively change a claim's table rule");
+        let old_claim = writer.state.claim(&h64(0xFC)).unwrap().clone();
+        writer.write_claim(h64(0xFC), Some(old_claim.clone()));
+        assert_eq!(writer.state.claim_semantics_v1(&h64(0xFC)), Some(row));
+        writer.write_claim(h64(0xFD), Some(old_claim));
+        assert_eq!(writer.state.claim_semantics_v1(&h64(0xFD)).unwrap().token_table_root, Some(h64(888)));
+        writer.write_claim(h64(0xFD), None);
+        assert!(writer.state.claim_semantics_v1(&h64(0xFD)).is_none());
+    }
+
     /// V-fold storage evidence: native accepted-job facts survive rooted carriage, reorg and retirement.
     /// Ordinary signatures, pricing, service prosecution and pruned body reads are covered by the node fixture.
     #[test]
@@ -61454,6 +61650,8 @@ pub(crate) mod tests {
                     // Lane LG14-A: its round trip is the dispute suite's.
                     PalwDeltaEntryV2::LegacyDispute { .. } => "legacy_dispute",
                     PalwDeltaEntryV2::PublicFpJob { .. } => "public_fp_job",
+                    PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
+                    PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
                     PalwDeltaEntryV2::LegacyAnswer { .. } => "legacy_answer",
                     PalwDeltaEntryV2::TerminalEvidence { .. } => "terminal_evidence",
                     PalwDeltaEntryV2::TerminalPart { .. } => "terminal_part",
@@ -62551,6 +62749,8 @@ pub(crate) mod tests {
             // Lane LG14-A: one Some-only block, empty here.
             legacy_disputes: _,
             fp_public_jobs: _,
+            class_semantics: _,
+            claim_semantics: _,
             legacy_answers: _,
             terminal_evidence: _,
             // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.

@@ -497,6 +497,8 @@ pub enum PalwIdentityFaultV1 {
     /// J7 (both lanes): the checkpoint profile is not the class's canonical one
     /// (`palw_canonical_checkpoint_profile_v1`) — the interval the filer would otherwise choose.
     CheckpointProfileNotCanonical,
+    /// J8: the authenticated context violates the immutable registered semantics stamped at claim acceptance.
+    RegisteredSemanticsNotTheClaims,
 }
 
 impl PalwIdentityFaultV1 {
@@ -511,6 +513,7 @@ impl PalwIdentityFaultV1 {
             Self::TraceNotTheClaims => "J4",
             Self::ActivationLegNotCanonical => "J6",
             Self::CheckpointProfileNotCanonical => "J7",
+            Self::RegisteredSemanticsNotTheClaims => "J8",
         }
     }
 }
@@ -555,6 +558,8 @@ pub struct PalwOffenceTargetV1 {
     /// The claim's committed output root (`OutputMismatch`); 0 where only a vesting row is left,
     /// which records none.
     pub output_root: Hash64,
+    /// None for a claim accepted before the independent semantic fence or before prospective migration.
+    pub registered_semantics: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
 }
 
 /// **Where in the execution a proven fault sits, and what the verdict read to find it.** A seat is
@@ -688,6 +693,7 @@ pub fn palw_offence_target_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Op
             job_identity: claim.job_identity,
             trace_root: claim.trace_root,
             output_root: claim.output_root,
+            registered_semantics: state.claim_semantics_v1(claim_id).cloned(),
         });
     }
     // A retired claim's row records its lane and its segment cut only where it recorded its
@@ -713,6 +719,7 @@ pub fn palw_offence_target_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Op
             job_identity: row.job_identity,
             trace_root: row.trace_root,
             output_root: row.output_root,
+            registered_semantics: state.claim_semantics_v1(claim_id).cloned(),
         });
     }
     // ADR-0152 v3.1 J-2 (R-core): the vesting row is the third source. Liability rows are not pruned
@@ -731,6 +738,7 @@ pub fn palw_offence_target_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Op
         job_identity: row.job_identity,
         trace_root: row.trace_root,
         output_root: Hash64::default(),
+        registered_semantics: state.claim_semantics_v1(claim_id).cloned(),
     })
 }
 
@@ -957,6 +965,7 @@ pub fn palw_claim_proving_site_v1(
             J::ClassNotTheClaims | J::JobNotTheClaims | J::SeedNotTheJobs | J::ContextNotCanonical | J::PromptNotTheAnchors => {
                 Some(PalwFaultSiteV1::AnyValid)
             }
+            J::RegisteredSemanticsNotTheClaims => Some(PalwFaultSiteV1::AnyValid),
             J::TraceNotTheClaims | J::ActivationLegNotCanonical | J::CheckpointProfileNotCanonical => None,
         },
         _ => None,
@@ -1107,6 +1116,9 @@ pub fn palw_binding_identity_fault_v1(
     // J2 — the class. Every check below reads the profile, so it must be the claim's first.
     if profile.shape_profile_id() != target.class_id {
         return Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims));
+    }
+    if target.registered_semantics.as_ref().is_some_and(|row| !row.matches_context(ctx)) {
+        return Ok(Some(PalwIdentityFaultV1::RegisteredSemanticsNotTheClaims));
     }
     match lane {
         PalwClaimSourceKindV1::FreePrompt => {
@@ -3503,6 +3515,7 @@ mod tests {
             job_identity: anchor,
             trace_root: binding.full_logits_trace_root,
             output_root: h64(0x72),
+            registered_semantics: None,
         }
     }
 
@@ -4220,6 +4233,7 @@ mod f1c_tests {
             job_identity: anchor,
             trace_root: binding.full_logits_trace_root,
             output_root: h64(0x72),
+            registered_semantics: None,
         }
     }
 
@@ -4344,6 +4358,41 @@ mod f1c_tests {
             palw_prompt_not_anchored_fault_v1(&not_its, &relabel, &PalwPromptProofV1::Whole, rules),
             Err(E::PanelFalseValidWorkMismatch)
         );
+    }
+
+    #[test]
+    fn immutable_registered_semantics_refute_only_authenticated_claim_contexts() {
+        let honest = floor_binding_for_tests_v1(&h64(0xD08), Form::Flat);
+        let row = crate::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+            honest.shape_profile.shape_profile_id(), h64(0xA08), &honest.job_context, 31);
+        for field in 0..5 {
+            let mut binding = moved(&honest, |b| {
+                match field {
+                    0 => b.job_context.model_profile_id = h64(0xBAD),
+                    1 => b.job_context.runtime_manifest_hash = h64(0xBAD),
+                    2 => b.job_context.runtime_class_id = h64(0xBAD),
+                    3 => b.job_context.tokenizer_id = h64(0xBAD),
+                    _ => b.job_context.cu_ruleset_id = h64(0xBAD),
+                }
+                b.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&b.job_context);
+            });
+            let mut target = attempt_target(&binding, h64(1));
+            target.lane = Some(PalwClaimSourceKindV1::FreePrompt);
+            target.job_identity = crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context);
+            target.registered_semantics = Some(row.clone());
+            assert_eq!(palw_binding_identity_fault_v1(&target, &binding, rules(), true),
+                Ok(Some(PalwIdentityFaultV1::RegisteredSemanticsNotTheClaims)), "identity field {field}");
+            let contradiction = PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() };
+            assert_eq!(palw_claim_proving_site_v1(&contradiction, Some(PalwIdentityFaultV1::RegisteredSemanticsNotTheClaims)),
+                Some(PalwFaultSiteV1::AnyValid));
+            target.registered_semantics = None;
+            assert_eq!(palw_binding_identity_fault_v1(&target, &binding, rules(), true), Ok(None),
+                "an unqualified historical claim is never convicted by a later descriptor");
+            target.registered_semantics = Some(row.clone());
+            binding.job_context.tokenizer_id = h64(0xBAD08);
+            assert!(palw_binding_identity_fault_v1(&target, &binding, rules(), true).is_err(),
+                "an unverified material modification never convicts");
+        }
     }
 
     /// An invalid committed ID is a decode-domain fault even when sampling or a constraint
@@ -4615,6 +4664,7 @@ mod f1c_tests {
             (J::SeedNotTheJobs, true),
             (J::ContextNotCanonical, true),
             (J::PromptNotTheAnchors, true),
+            (J::RegisteredSemanticsNotTheClaims, true),
             (J::TraceNotTheClaims, false),
             (J::ActivationLegNotCanonical, false),
             (J::CheckpointProfileNotCanonical, false),

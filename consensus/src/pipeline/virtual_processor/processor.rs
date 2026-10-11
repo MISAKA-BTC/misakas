@@ -505,6 +505,7 @@ pub struct VirtualStateProcessor {
     /// Resolved at the BLOCK's DAA.
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_model_immutable_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_class_semantics_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
@@ -1299,6 +1300,7 @@ impl VirtualStateProcessor {
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_immutable_v1: params.palw_model_immutable_v1_fence(),
+            palw_class_semantics_v1: params.palw_class_semantics_v1_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
@@ -15629,6 +15631,7 @@ impl VirtualStateProcessor {
             audit_1004_draw_seed_source: None,
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_immutable_active: self.palw_model_immutable_v1_at(daa_score),
+            class_semantics_active: self.palw_class_semantics_v1.is_some_and(|f| f.is_active(daa_score)),
             model_classes_registered_in_block: Default::default(),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
