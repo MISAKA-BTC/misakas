@@ -474,6 +474,7 @@ fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondKeyV2, fundi
         class_residency: misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
         telemetry: Default::default(),
         challenge: false,
+        public_claims: Vec::new(),
         canonical_claims: false,
         canonical_class: None,
         canonical_interval_daa: 100,

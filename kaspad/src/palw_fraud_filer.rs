@@ -717,6 +717,9 @@ struct PalwFraudFilerReplayV1 {
 pub(super) struct PalwFraudFilerBookV1 {
     pub(super) cases: BTreeMap<Hash64, PalwFraudFilerCaseV1>,
     replay_turn: u64,
+    target_claims: BTreeSet<Hash64>,
+    discovery_after: Option<(u64, Hash64)>,
+    deferred_candidates: usize,
     read_at: Option<u64>,
     running: Option<PalwFraudFilerReplayV1>,
     /// `(claim, unit) → authenticated answer`, only the binding and consecutive ranges this localizer reads.
@@ -753,8 +756,8 @@ impl PalwFraudFilerBookV1 {
             }
             keep
         });
+        let mut incoming = Vec::new();
         for candidate in candidates {
-            let room = self.cases.len() < PALW_FRAUD_FILER_MAX_CASES_V1;
             match self.cases.get_mut(&candidate.claim_id) {
                 Some(case) if case.candidate != candidate => {
                     changed = true;
@@ -762,12 +765,38 @@ impl PalwFraudFilerBookV1 {
                     *case = PalwFraudFilerCaseV1::new(candidate);
                 }
                 Some(_) => {}
-                None if room => {
-                    self.cases.insert(candidate.claim_id, PalwFraudFilerCaseV1::new(candidate));
-                }
-                None => {}
+                None => incoming.push(candidate),
             }
         }
+        incoming.sort_by_key(|candidate| (candidate.accepted_daa, candidate.claim_id));
+        let after = self.discovery_after;
+        let turn = PALW_FRAUD_FILER_MAX_CASES_V1.saturating_sub(self.cases.len()).max(16);
+        let mut admitted = 0;
+        let total = incoming.len();
+        let later = incoming.iter().filter(|candidate| after.is_none_or(|after| (candidate.accepted_daa, candidate.claim_id) > after));
+        let earlier =
+            incoming.iter().filter(|candidate| after.is_some_and(|after| (candidate.accepted_daa, candidate.claim_id) <= after));
+        for candidate in later.chain(earlier).take(turn) {
+            if self.cases.len() >= PALW_FRAUD_FILER_MAX_CASES_V1 {
+                let victim = self
+                    .cases
+                    .values()
+                    .filter(|case| {
+                        !case.pursued()
+                            && !self.target_claims.contains(&case.candidate.claim_id)
+                            && self.running.as_ref().is_none_or(|running| running.candidate != case.candidate)
+                    })
+                    .min_by_key(|case| (case.replay_turn, case.candidate.accepted_daa, case.candidate.claim_id))
+                    .map(|case| case.candidate.claim_id);
+                let Some(victim) = victim else { break };
+                self.cases.remove(&victim);
+                invalidated.insert(victim);
+            }
+            self.cases.insert(candidate.claim_id, PalwFraudFilerCaseV1::new(candidate.clone()));
+            self.discovery_after = Some((candidate.accepted_daa, candidate.claim_id));
+            admitted += 1;
+        }
+        self.deferred_candidates = total.saturating_sub(admitted);
         if !invalidated.is_empty() {
             self.answers.retain(|(claim, _), _| !invalidated.contains(claim));
         }
@@ -818,7 +847,14 @@ impl PalwFraudFilerBookV1 {
                     && !case.candidate.seat
                     && current_daa >= case.input_retry_at
             })
-            .min_by_key(|case| (case.replay_turn, case.candidate.accepted_daa, case.candidate.claim_id))
+            .min_by_key(|case| {
+                (
+                    !self.target_claims.contains(&case.candidate.claim_id),
+                    case.replay_turn,
+                    case.candidate.accepted_daa,
+                    case.candidate.claim_id,
+                )
+            })
             .map(|case| case.candidate.claim_id)
     }
 
@@ -1665,8 +1701,27 @@ impl PalwPanelService {
         }
         book.network_form = Some(params.palw_prompt_ids_form_at(current_daa));
         if book.stale(current_daa) {
-            let candidates = session.clone().spawn_blocking(move |c| c.palw_fraud_filer_candidates_v1(bond_key)).await;
+            let targets = self.config.public_claims.clone();
+            book.target_claims = targets.iter().copied().collect();
+            let candidates = session
+                .clone()
+                .spawn_blocking(move |c| {
+                    if targets.is_empty() {
+                        c.palw_fraud_filer_candidates_v1(bond_key)
+                    } else {
+                        c.palw_fraud_filer_candidates_for_claims_v1(bond_key, targets)
+                    }
+                })
+                .await;
             let invalidated = book.refresh(candidates, current_daa);
+            if book.deferred_candidates != 0 {
+                crate::palw_backends::note_throttled_v1("public-filer-discovery-cap", || {
+                    format!(
+                        "[{PALW_PANEL}] {} public candidates deferred by this host's bounded discovery; select exact claims with --palw-public-claim",
+                        book.deferred_candidates
+                    )
+                });
+            }
             court_pending.retain(|(claim, round, responder, _)| {
                 !invalidated.contains(claim) || !palw_fraud_filer_queued_v1(*round, *responder)
             });
@@ -2846,6 +2901,53 @@ pub(super) mod tests {
             court_convicted: false,
             da_defaulted: false,
         }
+    }
+
+    #[test]
+    fn full_discovery_cache_admits_later_claims_without_abandoning_live_pursuits() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let mut candidates: Vec<_> = (1..=PALW_FRAUD_FILER_MAX_CASES_V1 as u64).map(|id| candidate(id, 100, false)).collect();
+        book.refresh(candidates.clone(), 200);
+        let first = candidates[0].claim_id;
+        book.started_replay(first);
+        book.judge(first, Ok(run(Hash64::default(), Hash64::default())));
+        let late = candidate(9000, 201, false);
+        candidates.push(late.clone());
+        book.refresh(candidates.clone(), 201);
+        assert_eq!(book.cases.len(), PALW_FRAUD_FILER_MAX_CASES_V1);
+        assert!(book.cases.contains_key(&late.claim_id), "a full local discovery cache cannot silently discard a later public claim");
+        assert!(
+            matches!(book.cases[&first].verdict, PalwFraudFilerVerdictV1::Mismatch(_)),
+            "an admitted pursuit is never evicted to admit discovery"
+        );
+        book.target_claims.insert(late.claim_id);
+        assert_eq!(book.next_probe_at(201, true), Some(late.claim_id), "the operator's finite target precedes unrelated waiting jobs");
+        book.refresh(candidates, 202);
+        assert!(book.cases.contains_key(&late.claim_id));
+        assert!(book.cases.contains_key(&first));
+    }
+
+    #[tokio::test]
+    async fn discovery_rotation_preserves_a_running_acceptance_and_exposes_full_live_pressure() {
+        let mut book = PalwFraudFilerBookV1::default();
+        let mut candidates: Vec<_> = (1..=PALW_FRAUD_FILER_MAX_CASES_V1 as u64).map(|id| candidate(id, 100, false)).collect();
+        book.refresh(candidates.clone(), 200);
+        let running = candidates[0].clone();
+        book.running =
+            Some(PalwFraudFilerReplayV1 { candidate: running.clone(), handle: tokio::spawn(async { Err("unused".into()) }) });
+        candidates.push(candidate(9000, 201, false));
+        book.refresh(candidates.clone(), 201);
+        assert!(book.cases.contains_key(&running.claim_id));
+        for case in book.cases.values_mut() {
+            case.fp_job_pending = true;
+        }
+        let later = candidate(9001, 202, false);
+        candidates.push(later.clone());
+        book.refresh(candidates, 202);
+        assert_eq!(book.cases.len(), PALW_FRAUD_FILER_MAX_CASES_V1);
+        assert!(!book.cases.contains_key(&later.claim_id));
+        assert!(book.deferred_candidates > 0, "all-live pressure is explicit rather than an invisible discarded target");
+        assert!(book.running.take().unwrap().handle.await.unwrap().is_err());
     }
 
     #[test]

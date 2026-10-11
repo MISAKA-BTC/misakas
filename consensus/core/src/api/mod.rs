@@ -1137,6 +1137,28 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// Local explicit claim discovery. Production performs direct state-key lookup; the
+    /// fallback keeps test consensus implementations compatible and retains admitted records.
+    fn palw_fraud_filer_candidates_for_claims_v1(
+        &self,
+        me: crate::palw_state_v2::PalwBondKeyV2,
+        claims: Vec<Hash64>,
+    ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
+        if claims.len() > crate::palw_legacy_public_filer_fold_v1::PALW_FILER_EXPLICIT_TARGETS_V1 {
+            return Vec::new();
+        }
+        let wanted: std::collections::BTreeSet<_> = claims.into_iter().collect();
+        self.palw_fraud_filer_candidates_v1(me)
+            .into_iter()
+            .filter(|candidate| {
+                self.palw_legacy_dispute_v1(candidate.claim_id).is_some_and(|view| {
+                    view.record.as_ref().is_some_and(|record| record.knows(&me))
+                        || (wanted.contains(&candidate.claim_id) && self.get_virtual_daa_score() <= view.hard_deadline_daa)
+                })
+            })
+            .collect()
+    }
+
     /// **Lane LG14-A (RPC 206): one bond's standing as a public filer at the tip** — `None` for a bond the state does not hold.
     fn palw_fraud_filer_status_v1(
         &self,

@@ -18,7 +18,11 @@ async fn fresh_pruning_carriage_verifier_defaults_when_the_automatic_producer_wi
     fresh_public_service_with_recovery(PublicCase::UnretainedWithheldFpV3Binding, Some(RecoveryMode::Pruned)).await;
 }
 
-pub(super) async fn import_public_carriage(chain: &mut Chain, premine: &[Funding], claim: Hash64) {
+pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carriage(
+    chain: &mut Chain,
+    premine: &[Funding],
+    claim: Hash64,
+) {
     let point = chain.tc.get_sink();
     chain.tc.virtual_processor().capture_pruning_point_palw_state(point);
     let wire =

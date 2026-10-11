@@ -5054,6 +5054,17 @@ impl VirtualStateProcessor {
         state.palw_fraud_filer_candidates_v1(state_params, me, now_daa)
     }
 
+    pub fn palw_fraud_filer_candidates_for_claims_v1_impl(
+        &self,
+        me: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        claims: &[Hash64],
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_v2_reader_state(params).ok().flatten() else { return Vec::new() };
+        let Some(now_daa) = self.virtual_stores.read().state.get().ok().map(|state| state.daa_score) else { return Vec::new() };
+        state.palw_fraud_filer_candidates_for_claims_v1(params, me, now_daa, claims)
+    }
+
     /// **Lane LG14-A (RPC 206): one bond's standing as a public filer at the tip.**
     pub fn palw_fraud_filer_status_v1_impl(
         &self,

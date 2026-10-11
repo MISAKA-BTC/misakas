@@ -854,6 +854,9 @@ impl PalwFraudFilerStatusV1 {
     }
 }
 
+/// A local verifier selects a finite set of exact public claim identifiers.
+pub const PALW_FILER_EXPLICIT_TARGETS_V1: usize = 16;
+
 impl PalwChainStateV2 {
     /// **The claims `me`'s filer may pursue at `now_daa`**, oldest acceptance first: past the fence, every claim at a reservable stage
     /// (`palw_dispute_phase_reservable_v1`: unlicensed, licensed, or an open public post-Final stage) that is not `me`'s own,
@@ -879,6 +882,49 @@ impl PalwChainStateV2 {
                 let facts = crate::palw_operator_da_v1::palw_operator_da_claim_facts_v1(self, claim_id)?;
                 Some(PalwFraudFilerCandidateV1 {
                     claim_id: *claim_id,
+                    producer: claim.bond,
+                    accepted_daa: claim.accepted_daa,
+                    seat: facts.seats.contains(me),
+                    job: facts.job,
+                })
+            })
+            .collect();
+        out.sort_by_key(|candidate| (candidate.accepted_daa, candidate.claim_id));
+        out
+    }
+
+    /// Exact public claim lookup avoids allocating the network's whole candidate set. Keep
+    /// this bond's admitted records too, so a restart cannot abandon an existing reservation.
+    pub fn palw_fraud_filer_candidates_for_claims_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        me: &PalwBondKeyV2,
+        now_daa: u64,
+        claims: &[Hash64],
+    ) -> Vec<PalwFraudFilerCandidateV1> {
+        if !params.legacy_public_filer_active_at(now_daa) || claims.len() > PALW_FILER_EXPLICIT_TARGETS_V1 {
+            return Vec::new();
+        }
+        let mut wanted: std::collections::BTreeSet<_> = claims.iter().copied().collect();
+        wanted.extend(self.legacy_disputes_of_v1(me));
+        let mut out: Vec<_> = wanted
+            .into_iter()
+            .filter_map(|claim_id| {
+                let claim = self.claims.get(&claim_id)?;
+                if claim.bond == *me {
+                    return None;
+                }
+                let known = self.legacy_disputes.get(&claim_id).is_some_and(|record| record.knows(me));
+                let final_open = palw_final_public_dispute_open_v1(self, params, &claim_id, claim, now_daa);
+                if !known
+                    && (!palw_dispute_phase_reservable_v1(&claim.phase, final_open)
+                        || now_daa > palw_dispute_hard_deadline_v1(claim, palw_da_disclose_window_daa_v1(params)))
+                {
+                    return None;
+                }
+                let facts = crate::palw_operator_da_v1::palw_operator_da_claim_facts_v1(self, &claim_id)?;
+                Some(PalwFraudFilerCandidateV1 {
+                    claim_id,
                     producer: claim.bond,
                     accepted_daa: claim.accepted_daa,
                     seat: facts.seats.contains(me),

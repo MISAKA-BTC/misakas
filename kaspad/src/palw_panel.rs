@@ -3974,6 +3974,8 @@ pub struct PalwPanelConfig {
     /// opening a court stakes this bond the claim's own reserved amount. A network wants some
     /// nodes doing it, not all of them — which is the same shape as any other watchdog.
     pub challenge: bool,
+    /// Exact public claims this outside verifier pursues (empty: automatic discovery).
+    pub public_claims: Vec<Hash64>,
     /// **ADR-0074 Decision 1: the work queue.** When nobody is asking, run the network's own job
     /// on `canonical_class` and commit it as a canonical free-prompt claim — drawn by the chain's
     /// beacon, priced in leaves, verified and tried exactly as a user's. Funded like every other
