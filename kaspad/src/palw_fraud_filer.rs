@@ -55,6 +55,8 @@ pub(super) mod input;
 mod prefix;
 #[path = "palw_filer_tokenizer.rs"]
 mod tokenizer;
+#[path = "palw_tokenizer_scheduler.rs"]
+mod tokenizer_scheduler;
 pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{

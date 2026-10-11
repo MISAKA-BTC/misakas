@@ -74,4 +74,4 @@ pub(super) fn check_held_tokenizer_v1(
 
 #[cfg(test)]
 #[path = "palw_filer_tokenizer_tests.rs"]
-mod tests;
+pub(in crate::palw_panel) mod tests;
