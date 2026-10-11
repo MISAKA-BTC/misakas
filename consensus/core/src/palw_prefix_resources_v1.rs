@@ -67,7 +67,11 @@ impl PalwPrefixResourcePlanV1 {
             }
         };
         let moves = moves + u128::from(prices.reorg_replay_moves);
-        let blake = bytes.div_ceil(128) + leaves * 4;
+        // Complete signed carrier budget includes all old-tree openings, headers,
+        // signatures and the seed, not just cache/raw bytes.
+        let carrier_bytes = exact(moves * u128::from(carrier_maximum))?;
+        let blake = bytes.div_ceil(128) + leaves * (4 + 64 * 3) + u128::from(carrier_bytes).div_ceil(128);
+        let work = work + leaves * 64 * 384 + u128::from(carrier_bytes);
         let profile_bytes = borsh::to_vec(profile).map_err(|e| e.to_string())?.len() as u128;
         let row = head_working + profile_bytes + 262_144 + 65_536 + 32_768 + 16_384;
         let resident = head_working + profile_bytes * 4 + 1_048_576;
@@ -80,7 +84,9 @@ impl PalwPrefixResourcePlanV1 {
         let blake = exact(blake)?;
         let row = exact(row)?;
         let resident = exact(resident)?;
-        let rent = u128::from(bytes) * u128::from(prices.rent_per_stream_byte);
+        let charged_bytes = u128::from(bytes) + u128::from(carrier_bytes);
+        let rent =
+            charged_bytes.checked_mul(u128::from(prices.rent_per_stream_byte)).ok_or("prefix exact byte rent overflows u128")?;
         let rent = rent
             .checked_add(u128::from(work) * u128::from(prices.rent_per_parser_step))
             .and_then(|n| n.checked_add(u128::from(row) * u128::from(prices.rent_per_row_byte)))
@@ -100,11 +106,7 @@ impl PalwPrefixResourcePlanV1 {
             row_bytes: row,
             resident_ram_bytes: resident,
         };
-        Ok(Self {
-            envelope,
-            maximum_head_working_set_bytes: exact(head_working)?,
-            maximum_carrier_bytes: exact(u128::from(moves) * u128::from(carrier_maximum))?,
-        })
+        Ok(Self { envelope, maximum_head_working_set_bytes: exact(head_working)?, maximum_carrier_bytes: carrier_bytes })
     }
 }
 
