@@ -23,6 +23,7 @@
 
 use super::*;
 use crate::palw_bond_budget_v1::*;
+#[path = "palw_bond_budget_fold_v1/material.rs"]
 mod material;
 
 impl PalwChainStateV2 {
