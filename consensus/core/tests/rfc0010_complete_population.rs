@@ -6,7 +6,7 @@ use kaspa_consensus_core::{
         ForkActivation, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
         palw_t12_shipped_params,
     },
-    palw_permissionless_panel_complete_v1::*,
+    palw_permissionless_panel_v1::*,
 };
 
 fn h(i: u64) -> Hash64 {
