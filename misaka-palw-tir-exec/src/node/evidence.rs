@@ -461,7 +461,7 @@ impl<'a> TirEvidenceV1<'a> {
         let selected = end.saturating_sub(job.prefill - 1) as u128;
         let rows = selected.checked_sub(first.saturating_sub(job.prefill - 1) as u128)?;
         let post = space.program.schedule.post as usize;
-        let width = space.program.blocks.get(post)?.nodes.get(space.program.logits as usize)?.out.elements_at(1)? as u128;
+        let width = space.program.blocks.get(post)?.nodes.get(space.program.logits as usize)?.out.elements_at(1) as u128;
         let leaf_headers = u128::from(space.leaves_at_position(&job, a))
             .checked_mul(std::mem::size_of::<PalwStepTileLeafV1>() as u128)?;
         let leaf_lanes = space.lane_count_at_position_v1(&job, a).checked_mul(4)?;
