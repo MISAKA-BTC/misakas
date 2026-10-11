@@ -392,10 +392,10 @@ mod tests {
                 job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
                 trace_root: binding.full_logits_trace_root,
                 output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(
-                registered_semantics: None,
                     &binding.job_context,
                     &pin.generated_token_ids,
                 ),
+                registered_semantics: None,
             };
             let proof = if case == 4 { None } else { flat_contradiction_v1(&target, &binding, &job, &pin, table.clone()).unwrap() };
             let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(

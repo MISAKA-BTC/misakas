@@ -136,6 +136,8 @@ pub(super) enum PalwFraudFilerVerdictV1 {
     Pending,
     /// The replay reproduced the claim's execution root: nothing to file.
     Honest,
+    /// Arithmetic matched; immutable registered semantics still require authenticated public court material.
+    SemanticPending,
     /// Its replica was evicted from the bounded cache; the public pursuit remains live.
     DeferredMismatch,
     /// The replay did not: the engine pursues it.
@@ -384,6 +386,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     constraint_plan: Option<constraint::TiledPlanV1>,
     constraint_done: bool,
     pub(super) runs: u8,
+    registered_preflight: bool,
     replay_failures: u8,
     replay_turn: u64,
     deferred_public: Option<Arc<PalwFraudFilerDeferredPublicV1>>,
@@ -418,6 +421,7 @@ impl PalwFraudFilerCaseV1 {
             constraint_plan: None,
             constraint_done: false,
             runs: 0,
+            registered_preflight: false,
             replay_failures: 0,
             replay_turn: 0,
             deferred_public: None,
@@ -438,7 +442,12 @@ impl PalwFraudFilerCaseV1 {
 
     pub(super) fn pursued(&self) -> bool {
         self.release_pending
-            || matches!(self.verdict, PalwFraudFilerVerdictV1::Mismatch(_) | PalwFraudFilerVerdictV1::DeferredMismatch)
+            || matches!(
+                self.verdict,
+                PalwFraudFilerVerdictV1::Mismatch(_)
+                    | PalwFraudFilerVerdictV1::DeferredMismatch
+                    | PalwFraudFilerVerdictV1::SemanticPending
+            )
             || (matches!(self.verdict, PalwFraudFilerVerdictV1::Pending) && (self.fp_bootstrap.is_some() || self.fp_job_pending))
     }
 
@@ -878,6 +887,15 @@ impl PalwFraudFilerBookV1 {
             {
                 PalwFraudFilerVerdictV1::Mismatch(Arc::new(run))
             }
+            Ok(mut run) if case.registered_preflight => {
+                case.deferred_public = run
+                    .fp_job
+                    .take()
+                    .map(|job| Arc::new(PalwFraudFilerDeferredPublicV1 { job, _reservation: run._job_reservation.take() }));
+                // Keep the row-zero obligation live without retaining an unnecessary matching replica.
+                case.fp_job_pending = true;
+                PalwFraudFilerVerdictV1::SemanticPending
+            }
             Ok(_) => PalwFraudFilerVerdictV1::Honest,
             Err(_) if case.replay_failures < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
             Err(why) => PalwFraudFilerVerdictV1::Unjudged(format!("the replay failed twice: {why}")),
@@ -1036,6 +1054,52 @@ impl PalwFraudFilerBookV1 {
     }
 }
 
+/// Matching arithmetic cannot erase the claim-stamped model/tokenizer/table statement. A
+/// refused or missing public binding/job remains pending; a prefix checkpoint needs its KV court.
+fn palw_fraud_filer_registered_preflight_v1(
+    target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
+    answer: &PalwDaBuiltAnswerV1,
+    fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+) -> Result<bool, String> {
+    if target.registered_semantics.is_none() {
+        return Ok(true);
+    }
+    let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event)) = answer else { return Ok(false) };
+    if !kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
+        &PalwDaUnitV1::Event { row: 0, tile: 0 },
+        &PalwDaAnswerV1::Event(event.clone()),
+        &target.execution_root,
+    ) {
+        return Err("the semantic binding does not authenticate to this claim".into());
+    }
+    let binding = event.binding();
+    kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding).map_err(|e| e.to_string())?;
+    if kaspa_consensus_core::palw_offence_attribution_v1::palw_binding_identity_fault_v1(target, binding, rules, true)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    if target.lane == Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt) {
+        let Some(job) = fp_job else { return Ok(false) };
+        if kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context) != target.job_identity {
+            return Err("the semantic job pin differs from the recorded claim".into());
+        }
+        kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_fp_job_check_v2(binding, job).map_err(|e| e.to_string())?;
+        if job.is_constraint()
+            && kaspa_consensus_core::palw_offence_attribution_v1::palw_registered_table_fault_v1(target, binding, job)
+                .map_err(|e| e.to_string())?
+        {
+            return Ok(false);
+        }
+        if job.is_prefix_state() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// **The engine's step for one case**, decided off what the chain says and what this node already read (pure, so the tests drive it):
 /// the engine's own action, except that a demand the chain already answered is READ (shared progress, §7.4) — `Learn` — and one it
 /// has not answered while this node holds no answer read for it yet is demanded.
@@ -1081,7 +1145,7 @@ pub(super) fn palw_fraud_filer_bootstrap_step_v1(
         PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::PromptIds { chunk: input.chunk } }
     } else if case.fp_job_pending
         && case.fp_job_disclosure_enabled
-        && case.fp_descriptor.is_none()
+        && case.public_fp_job_v1().is_none()
         && case.fp_expected_pin.is_some_and(|pin| pin != Hash64::default())
     {
         PalwLegacyProbeV1::HeldNode { unit: PalwLegacyHeldUnitV2::FpJob }
@@ -1292,7 +1356,8 @@ pub(super) fn palw_fraud_filer_public_filing_with_budget_v3(
     let contradiction = if palw_binding_identity_fault_v1(target, binding, rules, true).map_err(|e| e.to_string())?.is_some() {
         PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() }
     } else if let Some(job) = fp_job
-        && kaspa_consensus_core::palw_offence_attribution_v1::palw_registered_table_fault_v1(target, binding, job).is_ok_and(|fault| fault)
+        && kaspa_consensus_core::palw_offence_attribution_v1::palw_registered_table_fault_v1(target, binding, job)
+            .is_ok_and(|fault| fault)
     {
         PalwPanelContradictionV1::RegisteredTableMismatch { binding: binding.clone(), job: Box::new(job.clone()) }
     } else if kaspa_consensus_core::palw_step_leg::check_step_refutation_capped_v1(&structural, binding.step_leaf_count).is_ok() {
@@ -1838,51 +1903,58 @@ impl PalwPanelService {
                 let answer = answer.clone();
                 let proof = tokio::task::spawn_blocking(move || {
                     let _reserved = reserved;
-                    let direct =
-                        palw_fraud_filer_public_filing_with_budget_v3(&target, rules, &answer, file_by, fp_job.as_ref(), maximum)?;
-                    if direct.is_some() || constraint_done {
-                        return Ok((direct, previous_plan, constraint_done));
-                    }
-                    let Some(job) = fp_job.filter(|job| job.is_constraint()) else { return Ok((None, None, false)) };
-                    let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer else { return Ok((None, None, false)) };
-                    if !matches!(initial, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { .. }) {
-                        return Ok((None, None, false));
-                    }
-                    let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
-                        .ok_or("the public verifier does not hold the job's tokenizer table")?;
-                    let plan = match previous_plan {
-                        Some(plan) => Some(plan),
-                        None => constraint::tiled_plan_v1(&target, &job, initial, &own_ids, table.clone())?,
+                    let semantic_ready =
+                        palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, fp_job.as_ref()).unwrap_or(false);
+                    let evaluate = || {
+                        let direct =
+                            palw_fraud_filer_public_filing_with_budget_v3(&target, rules, &answer, file_by, fp_job.as_ref(), maximum)?;
+                        if direct.is_some() || constraint_done {
+                            return Ok((direct, previous_plan, constraint_done));
+                        }
+                        let Some(job) = fp_job.filter(|job| job.is_constraint()) else { return Ok((None, None, false)) };
+                        let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(initial)) = &answer else {
+                            return Ok((None, None, false));
+                        };
+                        if !matches!(initial, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Tiled { .. }) {
+                            return Ok((None, None, false));
+                        }
+                        let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
+                            .ok_or("the public verifier does not hold the job's tokenizer table")?;
+                        let plan = match previous_plan {
+                            Some(plan) => Some(plan),
+                            None => constraint::tiled_plan_v1(&target, &job, initial, &own_ids, table.clone())?,
+                        };
+                        let Some(plan) = plan else { return Ok((None, None, false)) };
+                        let selected: Option<Vec<_>> = plan.units().iter().map(|unit| events.get(unit).cloned()).collect();
+                        let Some(selected) = selected else { return Ok((None, Some(plan), false)) };
+                        let contradiction =
+                            constraint::tiled_contradiction_with_budget_v2(&target, &job, plan, &selected, table, maximum)?;
+                        let filing = contradiction
+                            .map(|contradiction| {
+                                let built =
+                                    kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                                        target.claim_id,
+                                        target.executor_bond,
+                                        contradiction,
+                                        None,
+                                        maximum,
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                                PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
+                                    .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
+                                    .ok_or_else(|| "the reporter key differs from the public proof builder".to_string())
+                            })
+                            .transpose()?;
+                        // An own-replay nominee whose PUBLIC row does not prove a selector lie
+                        // yields to arithmetic localization, never to an unproved conviction.
+                        Ok((filing, Some(plan), true))
                     };
-                    let Some(plan) = plan else { return Ok((None, None, false)) };
-                    let selected: Option<Vec<_>> = plan.units().iter().map(|unit| events.get(unit).cloned()).collect();
-                    let Some(selected) = selected else { return Ok((None, Some(plan), false)) };
-                    let contradiction =
-                        constraint::tiled_contradiction_with_budget_v2(&target, &job, plan, &selected, table, maximum)?;
-                    let filing = contradiction
-                        .map(|contradiction| {
-                            let built =
-                                kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
-                                    target.claim_id,
-                                    target.executor_bond,
-                                    contradiction,
-                                    None,
-                                    maximum,
-                                )
-                                .map_err(|e| e.to_string())?;
-                            PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
-                                .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
-                                .ok_or_else(|| "the reporter key differs from the public proof builder".to_string())
-                        })
-                        .transpose()?;
-                    // An own-replay nominee whose PUBLIC row does not prove a selector lie
-                    // yields to arithmetic localization, never to an unproved conviction.
-                    Ok((filing, Some(plan), true))
+                    evaluate().map(|result| (result, semantic_ready))
                 })
                 .await
                 .unwrap_or_else(|e| Err(format!("the public proof worker failed: {e}")));
                 match proof {
-                    Ok((Some(filing), _, _)) => {
+                    Ok(((Some(filing), _, _), _)) => {
                         // The public proof refutes the liable Valid signers as well as the
                         // executor. Keep it before settlement removes this case from pursuit;
                         // the existing false-Valid scanner independently checks every receipt.
@@ -1916,7 +1988,23 @@ impl PalwPanelService {
                         }
                         continue;
                     }
-                    Ok((None, plan, complete)) => {
+                    Ok(((None, plan, complete), semantic_ready)) => {
+                        if semantic_ready
+                            && book
+                                .cases
+                                .get(&claim)
+                                .is_some_and(|case| matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending))
+                        {
+                            let case = book.cases.get_mut(&claim).expect("pursued above");
+                            case.verdict = PalwFraudFilerVerdictV1::Honest;
+                            case.deferred_public = None;
+                            case.fp_job_pending = false;
+                            case.release_pending = true;
+                            #[cfg(test)]
+                            self.fraud_filer_honest_replays.lock().unwrap().insert(claim);
+                            // The next tick relinquishes the on-chain reservation before dropping pursuit.
+                            continue;
+                        }
                         let case = book.cases.get_mut(&claim).expect("pursued above");
                         if case.constraint_plan != plan {
                             // Selected tiles may already be in older authenticated history.
@@ -2355,6 +2443,11 @@ impl PalwPanelService {
         } else {
             None
         };
+        let preflight = session
+            .clone()
+            .spawn_blocking(move |c| c.palw_fraud_filer_target_v1(claim).is_none_or(|target| target.registered_semantics.is_some()))
+            .await;
+        book.cases.get_mut(&claim).expect("selected case").registered_preflight = preflight;
         // A probe selected while a replay/capture occupies the lane must not instantiate a
         // backend or reserve/start an extra replay. Missing-body binding pursuits were held above.
         if metadata_only {
@@ -2707,6 +2800,101 @@ pub(super) mod tests {
         tail.table_root = Hash64::from_u64_word(0xBAD_C014);
         assert!(replay(job).is_err(), "an unavailable table is a refusal, never a judgement");
         assert!(palw_fp_constraint_scope_v1().is_none());
+    }
+
+    #[test]
+    fn matching_roots_hold_registered_semantics_for_authenticated_binding_and_job() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        use kaspa_consensus_core::palw_offence_attribution_v1::{PalwClaimSourceKindV1, PalwIdentityRulesV1, PalwOffenceTargetV1};
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        let payload = input::tests::payload();
+        let job = payload.commitment.job;
+        let prompt: Vec<_> = payload.prompt_token_ids.iter().map(|id| *id as usize).collect();
+        let executed = backend.execute_free_prompt(&job, &prompt).unwrap();
+        let event = backend.disclose_trace_event(&executed.outcome.material, 0, 0).unwrap();
+        let binding = event.binding();
+        let mut c = candidate(0xC018, 300, false);
+        c.job.free_prompt = true;
+        c.job.execution_root = executed.outcome.execution_root;
+        c.job.trace_root = executed.outcome.trace_root;
+        c.job.output_root = executed.outcome.output_root;
+        let target = PalwOffenceTargetV1 {
+            claim_id: c.claim_id,
+            class_id: binding.shape_profile.shape_profile_id(),
+            artifact_root: Hash64::from_u64_word(8),
+            executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+            execution_root: executed.outcome.execution_root,
+            trace_root: executed.outcome.trace_root,
+            output_root: executed.outcome.output_root,
+            lane: Some(PalwClaimSourceKindV1::FreePrompt),
+            segment_count: Some(1),
+            phase: None,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+            registered_semantics: Some(kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+                binding.shape_profile.shape_profile_id(),
+                Hash64::from_u64_word(8),
+                &binding.job_context,
+                300,
+            )),
+        };
+        let rules = PalwIdentityRulesV1 {
+            prompt_ids_form: backend.prompt_ids_form(),
+            base_class_id: target.class_id,
+            da_signer_liability: true,
+        };
+        let answer = PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event.clone()));
+        assert!(palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, Some(&job)).unwrap());
+        assert!(
+            !palw_fraud_filer_registered_preflight_v1(&target, rules, &answer, None).unwrap(),
+            "a matching replay cannot erase its job obligation"
+        );
+        let mut wrong = target.clone();
+        wrong.registered_semantics.as_mut().unwrap().tokenizer_id = Hash64::from_u64_word(0xBAD);
+        assert!(
+            !palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job)).unwrap(),
+            "matching arithmetic does not clear J8"
+        );
+        wrong = target.clone();
+        wrong.execution_root = Hash64::from_u64_word(0xBAD);
+        assert!(
+            palw_fraud_filer_registered_preflight_v1(&wrong, rules, &answer, Some(&job)).is_err(),
+            "a foreign row cannot clear the semantic obligation"
+        );
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(8192), || None);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        book.cases.get_mut(&c.claim_id).unwrap().registered_preflight = true;
+        let mut replica = run(c.job.execution_root, c.job.trace_root);
+        replica.output_root = c.job.output_root;
+        replica.fp_job = Some(Box::new(job.clone()));
+        replica._job_reservation = Some(
+            ledger
+                .reserve(PalwMemoryReservationKeyV1 { role: "matching-public", class_id: c.job.class_id, job: c.claim_id }, 1024)
+                .unwrap(),
+        );
+        replica._reservation = Some(
+            ledger
+                .reserve(PalwMemoryReservationKeyV1 { role: "matching-capture", class_id: c.job.class_id, job: c.claim_id }, 4096)
+                .unwrap(),
+        );
+        assert!(matches!(book.judge(c.claim_id, Ok(replica)), Some(PalwFraudFilerVerdictV1::SemanticPending)));
+        assert_eq!(ledger.reserved_bytes(), 1024, "only the authenticated public job survives a matching replay");
+        assert_eq!(book.held_runs(), 0);
+        assert!(book.cases[&c.claim_id].pursued());
+        assert!(!book.cases[&c.claim_id].release_pending);
+        assert_eq!(book.cases[&c.claim_id].public_fp_job_v1(), Some(&job));
+        assert!(book.next_replay_at(300).is_none(), "the semantic court requires a binding, not another arithmetic run");
+        assert!(matches!(
+            palw_fraud_filer_bootstrap_step_v1(
+                PalwFilerRoleV1::PublicBond,
+                Some(&view(0xC018, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 300 })),
+                &bond(1),
+                true,
+                &book.cases[&c.claim_id],
+                |_| false
+            ),
+            PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve)
+        ));
     }
 
     #[test]
