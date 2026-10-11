@@ -9,7 +9,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -190,7 +190,7 @@ fn decode_snapshot(reader: &mut impl Read, total: u64) -> io::Result<Snapshot> {
             let mut data = vec![0; bytes as usize];
             reader.read_exact(&mut data)?;
             declarations.push((class, data));
-        } else if io::copy(&mut reader.take(bytes), &mut io::sink())? != bytes {
+        } else if io::copy(&mut (&mut *reader).take(bytes), &mut io::sink())? != bytes {
             return Err(invalid("snapshot declaration truncated"));
         }
         remaining -= bytes;
@@ -238,6 +238,16 @@ impl SnapshotSender {
     }
     pub(crate) fn next_index(&self) -> u32 {
         self.next
+    }
+    /// A new peer may resume only an independently reconstructed identical stream.
+    /// The server has already prepaid its full reconstruction/traversal; the root
+    /// pins every byte and no resumed session may rewind after this initialization.
+    pub(crate) fn resume(&mut self, point: Hash64, root: Hash64, index: u32) -> io::Result<()> {
+        if self.expired() || self.next != 0 || point != self.point || root != self.root || index == 0 || index >= self.count {
+            return Err(invalid("snapshot resume point/root/index differs"));
+        }
+        self.next = index;
+        Ok(())
     }
     pub(crate) fn chunk(&mut self, point: Hash64, root: Option<Hash64>, index: u32) -> io::Result<Vec<u8>> {
         if self.expired()
@@ -305,6 +315,18 @@ impl SnapshotReceiver {
         self.next += 1;
         Ok(())
     }
+    pub(crate) fn point(&self) -> Hash64 {
+        self.point
+    }
+    pub(crate) fn root(&self) -> Hash64 {
+        self.root
+    }
+    pub(crate) fn next_index(&self) -> u32 {
+        self.next
+    }
+    fn remaining_ttl(&self) -> Duration {
+        SESSION_TTL.saturating_sub(self.spill.created.elapsed())
+    }
     pub(crate) fn complete(&self) -> bool {
         self.next == self.count && self.received == self.total
     }
@@ -312,7 +334,7 @@ impl SnapshotReceiver {
         self.decode_with(|reader, _| T::deserialize_reader(reader))
     }
     pub(crate) fn decode_snapshot(self) -> io::Result<Snapshot> {
-        self.decode_with(decode_snapshot)
+        self.decode_with(|reader, total| decode_snapshot(reader, total))
     }
     fn decode_with<T>(mut self, decode: impl FnOnce(&mut BufReader<&mut File>, u64) -> io::Result<T>) -> io::Result<T> {
         if !self.complete() || self.hash.clone().finalize() != self.root {
@@ -327,6 +349,56 @@ impl SnapshotReceiver {
             return Err(invalid("snapshot has trailing bytes"));
         }
         Ok(value)
+    }
+}
+
+/// Only one interrupted receiver is retained across peer changes, inside the same
+/// two-session node budget. No bytes become native state here. Explicit cancellation,
+/// invalid chunks, changed points and expired generations drop their spill immediately.
+struct ResumeCache {
+    slot: Mutex<Option<(u64, SnapshotReceiver)>>,
+    generation: std::sync::atomic::AtomicU64,
+}
+impl ResumeCache {
+    fn new() -> Self {
+        Self { slot: Mutex::new(None), generation: std::sync::atomic::AtomicU64::new(0) }
+    }
+    fn take(&self, point: Hash64) -> Option<SnapshotReceiver> {
+        self.slot.lock().unwrap().take().and_then(|(_, receiver)| {
+            (receiver.point() == point && !receiver.spill.expired() && !receiver.complete()).then_some(receiver)
+        })
+    }
+    fn put(&self, receiver: SnapshotReceiver) -> Option<(u64, Duration)> {
+        if receiver.spill.expired() || receiver.complete() || receiver.next == 0 {
+            return None;
+        }
+        let ttl = receiver.remaining_ttl();
+        let generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.slot.lock().unwrap() = Some((generation, receiver));
+        Some((generation, ttl))
+    }
+    fn expire(&self, generation: u64) {
+        let mut slot = self.slot.lock().unwrap();
+        if slot.as_ref().is_some_and(|(id, _)| *id == generation) {
+            *slot = None;
+        }
+    }
+}
+fn resume_cache() -> &'static ResumeCache {
+    static CACHE: OnceLock<ResumeCache> = OnceLock::new();
+    CACHE.get_or_init(ResumeCache::new)
+}
+pub(crate) fn take_interrupted_snapshot(point: Hash64) -> Option<SnapshotReceiver> {
+    resume_cache().take(point)
+}
+pub(crate) fn park_interrupted_snapshot(receiver: SnapshotReceiver) {
+    if let Some((generation, ttl)) = resume_cache().put(receiver) {
+        // Timer owns no spill and never extends its original lifetime. A replaced or
+        // already-resumed generation cannot accidentally be deleted by an older timer.
+        tokio::spawn(async move {
+            tokio::time::sleep(ttl).await;
+            resume_cache().expire(generation);
+        });
     }
 }
 
@@ -418,6 +490,79 @@ mod tests {
             .accept(h(1), root, sender.total, sender.count, 0, chunk_hash(h(1), root, sender.total, sender.count, 0, &bytes), &bytes)
             .unwrap();
         assert!(receiver.decode::<u8>().is_err(), "a valid stream still cannot add trailing unparsed bytes");
+    }
+
+    #[test]
+    fn an_interrupted_stream_resumes_on_an_identical_new_peer_without_rewind_or_new_state() {
+        let budget = Arc::new(Semaphore::new(2));
+        let cache = ResumeCache::new();
+        let value = vec![6u8; CHUNK_BYTES + 63];
+        let mut sender = SnapshotSender::encode(lease(&budget), h(1), &value).unwrap();
+        let mut receiver = SnapshotReceiver::new(lease(&budget), h(1), sender.root, sender.total, sender.count).unwrap();
+        let root = sender.root;
+        let total = sender.total;
+        let count = sender.count;
+        let first = sender.chunk(h(1), None, 0).unwrap();
+        receiver.accept(h(1), root, total, count, 0, chunk_hash(h(1), root, total, count, 0, &first), &first).unwrap();
+        drop(sender); // The original connection and server spill are gone.
+        let (generation, _) = cache.put(receiver).unwrap();
+        assert_eq!(budget.available_permits(), 1, "parked receiver spends the original global lease");
+        let mut rebuilt = SnapshotSender::encode(lease(&budget), h(1), &value).unwrap();
+        let mut receiver = cache.take(h(1)).unwrap();
+        assert_eq!(receiver.point(), h(1));
+        assert_eq!(receiver.root(), root);
+        assert_eq!(receiver.next_index(), 1);
+        cache.expire(generation); // Old timer cannot delete a taken/resuming generation.
+        assert!(rebuilt.resume(h(2), root, 1).is_err());
+        assert!(rebuilt.resume(h(1), h(99), 1).is_err());
+        rebuilt.resume(h(1), root, receiver.next_index()).unwrap();
+        assert!(rebuilt.resume(h(1), root, 1).is_err(), "initial resume cannot be repeated");
+        assert!(rebuilt.chunk(h(1), None, 0).is_err(), "resume may never rewind a prepaid traversal");
+        let second = rebuilt.chunk(h(1), Some(root), 1).unwrap();
+        receiver.accept(h(1), root, total, count, 1, chunk_hash(h(1), root, total, count, 1, &second), &second).unwrap();
+        assert_eq!(receiver.decode::<Vec<u8>>().unwrap(), value);
+        drop(rebuilt);
+        assert_eq!(budget.available_permits(), 2);
+    }
+    #[test]
+    fn parked_receiver_point_change_replacement_and_expiry_release_only_owned_generations() {
+        let budget = Arc::new(Semaphore::new(3));
+        let cache = ResumeCache::new();
+        let partial = || {
+            let mut sender = SnapshotSender::encode(lease(&budget), h(1), &vec![8u8; CHUNK_BYTES + 1]).unwrap();
+            let mut receiver = SnapshotReceiver::new(lease(&budget), h(1), sender.root, sender.total, sender.count).unwrap();
+            let bytes = sender.chunk(h(1), None, 0).unwrap();
+            receiver
+                .accept(
+                    h(1),
+                    sender.root,
+                    sender.total,
+                    sender.count,
+                    0,
+                    chunk_hash(h(1), sender.root, sender.total, sender.count, 0, &bytes),
+                    &bytes,
+                )
+                .unwrap();
+            receiver
+        };
+        let (older, _) = cache.put(partial()).unwrap();
+        let (newer, _) = cache.put(partial()).unwrap();
+        assert_ne!(older, newer);
+        assert_eq!(budget.available_permits(), 2, "only one receiver is retained after replacement");
+        cache.expire(older);
+        assert_eq!(budget.available_permits(), 2, "older expiry must not delete a replacement");
+        assert!(cache.take(h(2)).is_none(), "changing pruning point drops the incomplete old stream");
+        assert_eq!(budget.available_permits(), 3);
+        let (expired, _) = cache.put(partial()).unwrap();
+        cache.expire(expired);
+        assert_eq!(budget.available_permits(), 3);
+        let mut receiver = partial();
+        receiver.spill.created = Instant::now() - SESSION_TTL;
+        assert!(cache.put(receiver).is_none(), "an expired stream cannot extend its lifetime by parking");
+        assert_eq!(budget.available_permits(), 3);
+        let receiver = partial();
+        drop(receiver); // Explicit cancellation does not park or retain a permit.
+        assert_eq!(budget.available_permits(), 3);
     }
 
     fn receive_raw(budget: &Arc<Semaphore>, point: Hash64, raw: &[u8]) -> SnapshotReceiver {

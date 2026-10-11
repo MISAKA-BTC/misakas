@@ -1,7 +1,7 @@
 //! Protocol-106 requester. Builds a bounded private spill before any local consensus
 //! mutation; native import verifies the completed carriage under the pruning header.
 use super::IbdFlow;
-use crate::palw_snapshot_chunks::{Snapshot, SnapshotReceiver, SnapshotSpill};
+use crate::palw_snapshot_chunks::{Snapshot, SnapshotReceiver, SnapshotSpill, park_interrupted_snapshot, take_interrupted_snapshot};
 use kaspa_consensus_core::{BlockHash, Hash64};
 use kaspa_p2p_lib::{
     common::ProtocolError,
@@ -19,16 +19,36 @@ impl IbdFlow {
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return Err(ProtocolError::Other("PALW snapshot chunks were not negotiated"));
         }
-        // The permit is acquired BEFORE requesting bytes. Cancellation or any refusal drops
-        // the file and returns the shared session slot; no stale file is trusted on a retry.
-        let mut spill = Some(
-            SnapshotSpill::new()
-                .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", point.to_string()))?,
-        );
-        let mut receiver: Option<SnapshotReceiver> = None;
-        let mut root = None;
+        let mut receiver = take_interrupted_snapshot(point);
+        // A parked receiver already owns its permit. Otherwise reserve before wire
+        // work; cancellation and malformed replies immediately release this local lease.
+        let mut spill = if receiver.is_none() {
+            Some(
+                SnapshotSpill::new()
+                    .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", point.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let result = self.receive_pruning_point_palw_chunks(point, &mut receiver, &mut spill).await;
+        if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed)) {
+            if let Some(receiver) = receiver.take() {
+                park_interrupted_snapshot(receiver);
+            }
+        }
+        result
+    }
+
+    async fn receive_pruning_point_palw_chunks(
+        &mut self,
+        point: BlockHash,
+        receiver: &mut Option<SnapshotReceiver>,
+        spill: &mut Option<SnapshotSpill>,
+    ) -> Result<Option<Snapshot>, ProtocolError> {
+        let mut root = receiver.as_ref().map(SnapshotReceiver::root);
+        let start_index = receiver.as_ref().map_or(0, SnapshotReceiver::next_index);
         let max_chunks = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES.div_ceil(crate::palw_snapshot_chunks::CHUNK_BYTES);
-        for index in 0..max_chunks as u32 {
+        for index in start_index..max_chunks as u32 {
             self.router
                 .enqueue(make_message!(
                     Payload::RequestPruningPointPalwState,
@@ -40,7 +60,10 @@ impl IbdFlow {
                     }
                 ))
                 .await?;
-            let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, Duration::from_secs(600))?;
+            // A stalled continuation may be retried on another peer while the original
+            // immutable receiver is still within its total 600-second lease.
+            let timeout = Duration::from_secs(if index == 0 { 600 } else { 30 });
+            let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, timeout)?;
             if !msg.found {
                 return Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state", point.to_string()));
             }
@@ -58,7 +81,7 @@ impl IbdFlow {
             if root.is_none() {
                 let state = SnapshotReceiver::new(spill.take().unwrap(), point, reply_root, msg.total_bytes, msg.chunk_count)
                     .map_err(|_| ProtocolError::Other("PALW snapshot total/count exceeds existing policy"))?;
-                receiver = Some(state);
+                *receiver = Some(state);
                 root = Some(reply_root);
             }
             let state = receiver.as_mut().unwrap();
@@ -69,7 +92,7 @@ impl IbdFlow {
                 break;
             }
         }
-        let receiver = receiver.ok_or(ProtocolError::Other("empty PALW chunked snapshot"))?;
+        let receiver = receiver.take().ok_or(ProtocolError::Other("empty PALW chunked snapshot"))?;
         if !receiver.complete() {
             return Err(ProtocolError::Other("PALW chunked snapshot ended early"));
         }

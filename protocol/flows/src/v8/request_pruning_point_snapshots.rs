@@ -288,8 +288,8 @@ impl RequestPruningPointPalwStateFlow {
             self.chunks = None;
         }
         if self.chunks.is_none() {
-            if root.is_some() || msg.chunk_index != 0 {
-                return Err(ProtocolError::Other("PALW snapshot continuation has no live session"));
+            if (msg.chunk_index == 0) != root.is_none() {
+                return Err(ProtocolError::Other("PALW snapshot start/resume root and index disagree"));
             }
             let peer = self.router.key();
             let refused = PruningPointPalwStateMessage { chunked: true, ..Default::default() };
@@ -311,13 +311,19 @@ impl RequestPruningPointPalwStateFlow {
                     })
                 })
                 .await;
-            let Some(Ok(sender)) = sender else {
+            let Some(Ok(mut sender)) = sender else {
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
                 return Ok(());
             };
             // Reserve/charge this ONE traversal exactly like the old whole-message response.
             // Continuations may spend that traversal, but cannot rewind or duplicate a chunk.
             self.ctx.palw_gossip().charge_sidecar_serve(peer, sender.total);
+            if let Some(root) = root {
+                if sender.resume(pp, root, msg.chunk_index).is_err() {
+                    self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                    return Ok(());
+                }
+            }
             self.chunks = Some(sender);
         }
         let sender = self.chunks.as_mut().unwrap();
