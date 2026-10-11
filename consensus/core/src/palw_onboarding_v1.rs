@@ -641,8 +641,8 @@ impl PalwKernelRouteStateV1 {
     /// **The v3 beacon's facts**: every claim seal the kernel ledger holds — live, revealed with its salt, or forfeited (G14-R4's
     /// tables 25–26, `claim_beacon_seals_v1`) — as `SealedSourceV3`: the profile is the sealed job's class (job rows are permanent),
     /// the producer the sealing bond, and a reveal's fate is its claim's (Final, with its op-212 facts; failed when convicted, timed
-    /// out or unavailable; live otherwise). The consumer is `Absent` until the ledger keeps the job's poster (F-C4R4-08, G14-R4's
-    /// table 18). `Err` only if the stored rows do not rebuild.
+    /// out or unavailable; live otherwise). The consumer is the retained job poster (table 18), including after payment, expiry
+    /// and re-seal; only historical jobs without a poster row use `Absent`. `Err` only if the stored rows do not rebuild.
     pub fn beacon_sealed_sources_v1(&self) -> Result<Vec<misaka_palw_challenge::SealedSourceV3>, String> {
         use misaka_palw_challenge::{RootV1, SealRevealV3, SealedSourceV3, SourceAttributionV1, SourceFateV3};
         let ledger = self.ledger()?;
@@ -679,7 +679,10 @@ impl PalwKernelRouteStateV1 {
             });
             out.push(SealedSourceV3 {
                 source_profile_id: profile,
-                attribution: SourceAttributionV1 { producer_id: s.producer, consumer_id: RootV1::Absent },
+                attribution: SourceAttributionV1 {
+                    producer_id: s.producer,
+                    consumer_id: s.poster.map_or(RootV1::Absent, RootV1::Present),
+                },
                 seal: s.seal,
                 seal_position: s.sealed_daa,
                 reveal,
