@@ -36,7 +36,7 @@ use kaspa_core::{
     task::tick::TickService,
 };
 use kaspa_core::{time::unix_now, warn};
-use kaspa_hashes::EvmH256;
+use kaspa_hashes::{EvmH256, Hash as Hash256};
 use kaspa_mining::evm_mempool::EvmMempoolError;
 use kaspa_mining::mempool::tx::{Orphan, Priority};
 use kaspa_mining::{manager::MiningManagerProxy, mempool::tx::RbfPolicy};
@@ -577,9 +577,9 @@ pub struct ResyncReport {
 pub type ResyncReporter = Arc<dyn Fn(&ResyncReport) + Send + Sync>;
 
 struct BootConsensusIdsV1 {
-    params: BlockHash,
-    identity: BlockHash,
-    schedule: BlockHash,
+    params: Hash256,
+    identity: Hash256,
+    schedule: Hash256,
 }
 
 pub struct FlowContextInner {
@@ -1044,7 +1044,7 @@ impl FlowContext {
         })
     }
 
-    pub(crate) fn boot_consensus_params_id(&self) -> BlockHash {
+    pub(crate) fn boot_consensus_params_id(&self) -> Hash256 {
         self.boot_consensus_ids().params
     }
 
@@ -2661,8 +2661,8 @@ fn handshake_rules_verdict_v1(
 fn handshake_rule_ids_verdict_v1(
     network_name: &str,
     local_genesis: BlockHash,
-    local_params_id: BlockHash,
-    local_identity: BlockHash,
+    local_params_id: Hash256,
+    local_identity: Hash256,
     peer_version: &Version,
 ) -> Result<bool, ProtocolError> {
     if peer_version.genesis_hash != local_genesis.as_bytes().to_vec() {
