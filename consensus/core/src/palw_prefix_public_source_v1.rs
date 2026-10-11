@@ -320,12 +320,7 @@ mod tests {
     fn fixture() -> (PalwPrefixPublicPendingV1, crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1) {
         let (target, binding, _, tiles) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(true, false);
         let tile = tiles[0].clone();
-        let coordinate = PalwStepCoordinateV1 {
-            call_index: tile.preimage.call_index,
-            node_slot: tile.preimage.node_slot,
-            position: tile.preimage.position,
-            tile_index: tile.preimage.tile_index,
-        };
+        let coordinate = tile.preimage.coord;
         let source = PalwPrefixPublicSourceV1::derive(&binding, coordinate, 1 << 32).unwrap();
         let custodians = (1..=6).map(bond).collect();
         let pending = PalwPrefixPublicPendingV1::new(
