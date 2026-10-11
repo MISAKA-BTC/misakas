@@ -2748,15 +2748,24 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !palw_active {
             return Ok(None);
         }
+        if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
+            return self.request_pruning_point_palw_chunks(pruning_point).await;
+        }
+        let _snapshot_lease = crate::palw_snapshot_chunks::SnapshotSpill::new()
+            .map_err(|_| ProtocolError::PruningSidecarUnavailable("PALW snapshot session budget", pruning_point.to_string()))?;
         self.router
             .enqueue(make_message!(
                 Payload::RequestPruningPointPalwState,
-                RequestPruningPointPalwStateMessage { pruning_point_hash: Some(pruning_point.into()) }
+                RequestPruningPointPalwStateMessage { pruning_point_hash: Some(pruning_point.into()), ..Default::default() }
             ))
             .await?;
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, Duration::from_secs(600))?;
         if !msg.found {
             return Err(ProtocolError::PruningSidecarUnavailable("PALW state", pruning_point.to_string()));
+        }
+        if msg.chunked || !msg.snapshot_root.is_empty() || msg.chunk_count != 0 || msg.total_bytes != 0
+            || msg.chunk_index != 0 || !msg.chunk_hash.is_empty() || msg.pruning_point_hash.is_some() {
+            return Err(ProtocolError::Other("legacy PALW snapshot reply carries unnegotiated chunk metadata"));
         }
         // Bounded before deserializing, like the overlay beside it: the carriage is bonds, classes
         // and claims, far smaller than the EVM state.
