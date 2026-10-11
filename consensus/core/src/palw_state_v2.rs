@@ -9635,8 +9635,20 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
-        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
-            .claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX),
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => {
+            let config=crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+            match &seed.auxiliary {
+                Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+                    raw_tokenizer_bytes,tokenizer_key_events,..}) => {
+                    crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+                        *raw_tokenizer_bytes,*tokenizer_key_events,config.prices)
+                        .and_then(|p|p.court_envelope(seed.binding.shape_profile.vocab_size,config.prices))
+                        .map(|p|p.rent_sompi).unwrap_or(u64::MAX)
+                }
+                None=>config.claim_terms(0,4095,seed.binding.shape_profile.vocab_size)
+                    .map(|t|t.plan.rent_sompi).unwrap_or(u64::MAX),
+            }
+        },
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => palw_court_close_min_fee_v1(declaration.part_digests.len() as u64)
             .saturating_add(if declaration.heavy_prompt_ids>0 { palw_relay_fee_for_mass_v1(u64::from(declaration.heavy_prompt_ids).saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)) } else { 0 }),
         // RFC-0003 decision 22: a held leaf challenge IS a declaration (it writes the group `CourtCloseDeclared`

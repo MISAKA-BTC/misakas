@@ -157,6 +157,10 @@ impl PalwTokenizerTableStreamV1 {
             )?,
         })
     }
+    pub fn check(&self) -> Result<(), String> {
+        self.parser.check()?;
+        self.table.check()
+    }
     pub fn tokenizer_offset(&self) -> u64 {
         self.parser.offset()
     }

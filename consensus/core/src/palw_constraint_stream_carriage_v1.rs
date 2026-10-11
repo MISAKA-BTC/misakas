@@ -14,7 +14,8 @@ pub const PALW_CONSTRAINT_STREAM_TAIL_V1: u8 = 0xF8;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwAuxiliaryPublicCourtSeedV1 {
     /// The original registered table leaf; its complete bytes authenticate only at EOF.
-    Tokenizer { id: u32, present: bool, length: u32, opening: PalwStepOpeningV1 },
+    Tokenizer { id: u32, present: bool, length: u32, opening: PalwStepOpeningV1,
+        raw_tokenizer_bytes: u64, tokenizer_key_events: u64 },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamSeedV1 {
