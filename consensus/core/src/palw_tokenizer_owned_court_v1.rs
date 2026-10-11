@@ -54,6 +54,9 @@ impl PalwOwnedTokenizerCourtV1 {
         panel_exit_after: &[u64],
     ) -> Result<Self, String> {
         seed.check(carrier_maximum)?;
+        if seed.job.as_deref().is_some_and(|j|j!=actual_job) {
+            return Err("tokenizer seed changes literal retained public job".into());
+        }
         if seed.claim != target.claim_id
             || now < claim_terms.accepted_daa
             || now > claim_terms.open_until_daa

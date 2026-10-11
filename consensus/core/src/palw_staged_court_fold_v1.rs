@@ -132,7 +132,7 @@ pub(super) fn open(
         .ok_or_else(|| stage_refused(seed.claim, "staged selection seed requires accepted original public FP job"))?;
     let original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 =
         borsh::from_slice(original).map_err(|_| stage_refused(seed.claim, "accepted public FP job encoding invalid"))?;
-    if original.job != seed.job {
+    if seed.job.as_deref().is_some_and(|j| *j!=original.job) {
         return Err(stage_refused(seed.claim, "staged seed changes accepted original FP job"));
     }
     if contract.panel.is_empty() {
@@ -161,8 +161,9 @@ pub(super) fn open(
         .checked_add(contract.terms.plan.deposit_sompi)
         .ok_or(PalwStateV2Error::Overflow("staged funding"))?;
     let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
-    let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit(
+    let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit_with_rooted_job(
         seed,
+        &original.job,
         target.execution_root,
         terms,
         ctx.daa_score,

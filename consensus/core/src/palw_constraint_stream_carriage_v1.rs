@@ -24,7 +24,8 @@ pub struct PalwConstraintStreamSeedV1 {
     pub reserver: PalwBondKeyV2,
     pub reserved_daa: u64,
     pub binding: PalwStepBindingV2,
-    pub job: PalwFreePromptJobV3,
+    /// None reads the literal retained claim-rooted job; Some must equal that exact job.
+    pub job: Option<Box<PalwFreePromptJobV3>>,
     pub pin: PalwTiledDecodePinV1,
     pub witness: Option<u32>,
     pub eog_count: u32,
@@ -127,6 +128,14 @@ impl PalwConstraintStreamSeedV1 {
         Ok(())
     }
     pub fn court(&self, expected_claim_root: Hash64, ladder: u64) -> Result<PalwConstraintStreamCourtV1, String> {
+        let job=self.job.as_deref().ok_or("unrooted seed cannot resolve its public job reference")?;
+        self.court_with_rooted_job(expected_claim_root,ladder,job)
+    }
+    pub fn court_with_rooted_job(&self,expected_claim_root:Hash64,ladder:u64,
+        actual_job:&PalwFreePromptJobV3)->Result<PalwConstraintStreamCourtV1,String> {
+        if self.job.as_deref().is_some_and(|j|j!=actual_job) {
+            return Err("stream seed changes literal retained job".into());
+        }
         if self.auxiliary.is_some() { return Err("auxiliary seed is not a constrained-selection court".into()); }
         PalwConstraintStreamCourtV1::new(
             self.claim,
@@ -134,7 +143,7 @@ impl PalwConstraintStreamSeedV1 {
             self.reserved_daa,
             expected_claim_root,
             &self.binding,
-            &self.job,
+            actual_job,
             &self.pin,
             self.witness,
             self.eog_count,
