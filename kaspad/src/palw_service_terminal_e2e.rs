@@ -8,7 +8,7 @@ async fn registered_tiled_large_job_convicts_producer_and_entire_panel_via_termi
 }
 
 pub(super) fn enlarge_selection_job_v1(job: &mut kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3) {
-    use kaspa_consensus_core::{palw_decode_constraint_v1::*, palw_fp_constraint_v2::palw_constraint_of_bytes_v1};
+    use kaspa_consensus_core::{palw_decode_constraint_v1::*, palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1};
     let Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = job.tail.as_mut() else {
         panic!("constrained job")
     };
