@@ -72224,7 +72224,7 @@ pub(crate) mod tests {
             let before = b.state.clone();
             let entries = b.entries.clone();
             let err = model_buy_v1(&mut b, &ctx(3, 251, 3), &class, &h64(88), GROSS, 0).unwrap_err();
-            assert!(matches!(err, PalwStateV2Error::BondBudgetRefused(_)), "the second recipient has no R headroom: {err}");
+            assert!(matches!(err, PalwStateV2Error::BondBudgetExhausted { bond, .. } if bond == bond_key(2)), "the second recipient has no R headroom: {err}");
             assert_eq!(b.state, before, "owner reservation, first migration, payouts, pool, reserve and position all roll back");
             assert_eq!(b.entries, entries, "a refused EVM action must leave no leaked fee journal");
         }
