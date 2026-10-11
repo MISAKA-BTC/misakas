@@ -1066,6 +1066,15 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// Accepted session-owned answer progress at the local tip. An unavailable reader is an
+    /// error, distinct from a successfully read tip with no assembly. No retained part bytes are copied.
+    fn palw_legacy_answer_progress_v2(
+        &self,
+        _key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
+    ) -> Result<Option<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerProgressV2>, String> {
+        Err("session-owned answer progress reader unavailable".into())
+    }
+
     /// **Lane LG14-A (RFC-0014 §6.3, RPC 204): one claim's dispute view at the tip** — its roots, retention, DL-1's deadline, the hard
     /// deadline, the dispute record, the open DA sessions, the answered units, the open courts and its recorded convictions. What any
     /// node serves to any verifier. `None` off `ConsensusV2` or for a claim the tip does not hold.

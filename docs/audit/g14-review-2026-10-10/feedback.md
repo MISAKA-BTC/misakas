@@ -150,6 +150,10 @@ manifestはnetwork、claim、unit、discloser、全体bytes、partサイズ、�
 
 履歴readerの接続には追加の条件がある。`walk_accepted_lifecycle_page_v1`はtransaction acceptanceを走査し、PALW foldが拒否したobjectも返し得る。従って「historyにあるmanifest/chunk」をそのまま認証済み回答として扱わず、元の回答の署名・claim/unit・root/job pinを確認する必要がある。逆向きpageではchunkがmanifestより先に現れるため、任意のdigest groupを無制限に保持したり、共有先着cacheを埋められて必要な回答を捨てたりしない取得方式とRAM予約を実装する。producerの`sign`はML-DSA-87のdeterministic signingなので、同じmaterial/key/domainからの回答再構築は同じdigestとなるが、再起動時はchain側manifestと受理済みpartを照合して再開する。
 
+### producer側の分割継続（2026-10-11、checkpoint検証済み）
+
+上記checkpointに続けて、producer/covering signerのworkerがchainのmanifest・受理済みbitmapから次の1 carrierを選び、再起動時は元の署名付き回答とmanifestを再現して未受理partだけを送る経路を接続した。reader障害を「manifestなし」と扱わず、回答の全envelopeの上限を署名前に検査する。署名・分割処理はblocking taskに置き、replay予約をその間も保持し、分割の一時メモリを追加予約する。新規plannerと既存V-fold/DA policy/held builderの28 uniqueテストはPASS。小さいjobの実outsider service回帰も公開job/input認証→独立replay→予約解放までPASS（303.37 s、今回29 unique）。producer回答はfixtureから供給しているため、新workerの実service試験とは区別する。新しいworkerの最大profileでの実service試験、demand/reacquisitionの単一carrier前提の置換、公開履歴からのbounded復元は未達。native progress readerはRPC/P2P state proofではない。[検証と残項目](owned-answer-status.md#producer-continuation--2026-10-11-verified-checkpoint)。
+
 ## G14完成のために残る設計・受入条件
 
 ### 許可scopeからterminalへ到達する証明

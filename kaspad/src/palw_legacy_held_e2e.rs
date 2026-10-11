@@ -576,7 +576,13 @@ fn lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partia
             assert!(w.s.legacy_answer_pending_v2(&key).is_none(), "a direct answer removes the partial assembly too");
         } else {
             for c in chunks.iter().skip(1).rev() {
-                w.block(vec![PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(c.clone()) }]).unwrap();
+                let progress = w.s.legacy_answer_pending_v2(&key).unwrap().progress();
+                let object = crate::palw_panel::da_answer_chunks::next_answer_object_v2(
+                    PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: answer.clone() },
+                    Some(&progress), w.daa, deadline, 200_000, &h64(999), |_, _| Some(SIG.to_vec()),
+                ).unwrap();
+                assert_eq!(object, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(c.clone()) });
+                w.block(vec![object]).unwrap();
             }
             assert!(w.s.legacy_answer_pending_v2(&key).is_none());
             assert!(

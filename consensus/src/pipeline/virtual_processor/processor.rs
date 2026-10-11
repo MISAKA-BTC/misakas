@@ -4957,6 +4957,16 @@ impl VirtualStateProcessor {
         state.palw_legacy_dispute_view_v1(state_params, &claim)
     }
 
+    pub fn palw_legacy_answer_progress_v2_impl(
+        &self,
+        key: &kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerProgressV2>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?
+            .ok_or("PALW V2 tip unavailable")?;
+        Ok(state.legacy_answer_pending_v2(key).map(|row| row.progress()))
+    }
+
     /// **Lane LG14-A (RPC 205): the claims a live reservation holds at the tip.**
     pub fn palw_legacy_disputes_v1_impl(
         &self,

@@ -189,6 +189,7 @@ mod tir_court;
 mod gen_court;
 /// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
 mod held_chunks;
+mod da_answer_chunks;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
 #[cfg(test)]
 mod held_court_e2e;
@@ -2576,6 +2577,23 @@ pub(crate) fn palw_da_built_answer_object_v1(
     max_close_bytes: u64,
     sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
 ) -> Result<PalwConsensusObjectV2, String> {
+    palw_da_built_answer_carriage_v1(network_domain, claim, unit, answer, discloser, form, max_close_bytes, true, sign)
+}
+
+/// Build the same signed answer for direct or session-owned multipart transport. Only the latter
+/// may defer the single-carrier ride check; its complete envelope remains bounded by the court.
+#[allow(clippy::too_many_arguments)]
+fn palw_da_built_answer_carriage_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+    answer: PalwDaBuiltAnswerV1,
+    discloser: PalwBondKeyV2,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    max_close_bytes: u64,
+    direct: bool,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<PalwConsensusObjectV2, String> {
     match answer {
         PalwDaBuiltAnswerV1::Rcore(answer) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
             network_domain,
@@ -2604,12 +2622,26 @@ pub(crate) fn palw_da_built_answer_object_v1(
             let mut bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
             if matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. } | kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob) {
                 bytes = bytes.saturating_add(borsh::to_vec(&binding).map_err(|e| e.to_string())?.len() as u64);
-                if bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
+                if direct && bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
                     return Err("the input answer cannot fit a single carrier".into());
                 }
             }
             if bytes > max_close_bytes {
                 return Err(format!("legacy held answer has {bytes} bytes, above close ceiling {max_close_bytes}"));
+            }
+            if !direct {
+                // Borsh struct fields have the same sequential encoding as this borrowed tuple.
+                // Count the original fixed-size MLDSA envelope before its signing message can clone
+                // or serialize the material; oversized answers do not consume unreserved scratch.
+                let envelope = borsh::object_length(&(2u16, claim, unit, &binding, &answer, discloser, Vec::<u8>::new()))
+                    .map_err(|e| e.to_string())?.saturating_add(kaspa_txscript::MLDSA87_SIG_LEN);
+                let maximum = max_close_bytes.min(
+                    u64::from(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_CHUNKS_V2)
+                        * u64::from(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_CHUNK_BYTES_V2),
+                );
+                if envelope as u64 > maximum {
+                    return Err("legacy held signed envelope exceeds the bounded answer transport".into());
+                }
             }
             let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
                 network_domain,
@@ -2620,7 +2652,9 @@ pub(crate) fn palw_da_built_answer_object_v1(
                 discloser,
                 sign,
             )?;
-            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(|e| e.to_string())?;
+            if direct {
+                kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(|e| e.to_string())?;
+            }
             Ok(object)
         }
     }
@@ -4085,7 +4119,7 @@ pub struct PalwPanelService {
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
-    keypair: Option<Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
+    keypair: Option<Arc<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
     bond: Option<TransactionOutpoint>,
     /// When `retention/foreign/` was last swept. The sweep is a full directory walk, so it runs on
     /// a cadence rather than inside every write (audit M2-2).
@@ -4443,7 +4477,7 @@ impl PalwPanelService {
         consensus_config: Arc<Config>,
     ) -> Self {
         let keypair = match kaspa_pq_validator_core::load_validator_seed(&config.key_path) {
-            Ok(seed) => Some(Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed))),
+            Ok(seed) => Some(Arc::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed))),
             Err(err) => {
                 warn!("[{PALW_PANEL}] {err} — panel service disabled");
                 None
@@ -10466,9 +10500,19 @@ impl PalwPanelService {
                 PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } => {
                     owed.contains(&(answer.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(answer.unit)))
                 }
+                PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration } => {
+                    owed.contains(&(declaration.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(declaration.unit)))
+                        && session.palw_legacy_answer_progress_v2(declaration.key()).map(|p| p.is_none()).unwrap_or(true)
+                }
+                PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk } => {
+                    owed.contains(&(chunk.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(chunk.unit)))
+                        && session.palw_legacy_answer_progress_v2(chunk.key())
+                            .map(|p| da_answer_chunks::chunk_is_pending_v2(chunk, p.as_ref())).unwrap_or(true)
+                }
                 _ => true,
             });
             if da_armed && !disclosure.duties.is_empty() {
+                let mut disclosure_keys = BTreeMap::new();
                 // A `Flat` queued (possibly waiting for the fee UTXO) or just sent answers the claim's run.
                 let mut flat_queued: HashSet<Hash64> = court_pending
                     .iter()
@@ -10498,7 +10542,15 @@ impl PalwPanelService {
                     {
                         continue;
                     }
-                    let key = palw_disclosure_queue_key_v1(duty);
+                    let key = if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
+                        match session.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser)) {
+                            Ok(progress) => da_answer_chunks::queue_key_v2(duty, progress.as_ref()),
+                            Err(_) => continue, // An unavailable reader is never treated as an empty assembly.
+                        }
+                    } else {
+                        palw_disclosure_queue_key_v1(duty)
+                    };
+                    disclosure_keys.insert((duty.claim_id, duty.unit), key);
                     if let Some(sent_daa) = court_moved.get(&key)
                         && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
                     {
@@ -10517,11 +10569,12 @@ impl PalwPanelService {
                     match self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await {
                         Ok(built) => {
                             for (duty, built) in duties.iter().zip(built) {
-                                let key = palw_disclosure_queue_key_v1(duty);
+                                let key = disclosure_keys[&(duty.claim_id, duty.unit)];
                                 match built {
                                     // A `Flat` built for an earlier unit answers this one.
                                     Ok(None) => {}
                                     Ok(Some(object)) => {
+                                        let key = da_answer_chunks::object_queue_key_v2(duty, &object);
                                         info!(
                                             "[{PALW_PANEL}] claim {claim}: answering {:?} of an open data-availability session as {role:?} \
                                              — deadline DAA {} (ADR-0152 DA-4, X7)",
@@ -10574,7 +10627,7 @@ impl PalwPanelService {
                                 duties.len()
                             );
                             for duty in &duties {
-                                court_moved.insert(palw_disclosure_queue_key_v1(duty), current_daa);
+                                court_moved.insert(disclosure_keys[&(duty.claim_id, duty.unit)], current_daa);
                             }
                             *court_stalls
                                 .entry("a data-availability unit cannot be answered from what this node holds")
@@ -16680,6 +16733,23 @@ impl PalwPanelService {
             |id| self.chain_carriage_v1(session, id),
         );
         let reserved = self.reserve_replay_v1("da-answer", &need, class_id, claim).map_err(PalwDaClaimHoldV1::Ledger)?;
+        // Multipart serialization adds two complete encodings (the split buffer and its parts),
+        // plus signature-message scratch and one bounded outgoing carrier per duty. Keep this
+        // temporary reservation through signing/planning, alongside the replay reservation.
+        let transport_max = self.config.court.max_close_bytes().min(
+            u64::from(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_CHUNKS_V2)
+                * u64::from(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_CHUNK_BYTES_V2),
+        );
+        let transport_bytes = transport_max.saturating_mul(3).saturating_add(
+            (duties.len() as u64).saturating_mul(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64),
+        );
+        let _transport_reservation = if duties.iter().any(|d| matches!(d.unit,
+            kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_))) {
+            Some(crate::palw_memory_ledger::host_ledger_v1().reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "da-answer-transport", class_id, job: claim },
+            transport_bytes,
+        ).map_err(|e| PalwDaClaimHoldV1::Ledger(format!("DA transport needs {transport_bytes} bytes: {e}")))?)
+        } else { None };
         // Every copy this node may hold, own retention first; a free-prompt claim's `.answer`
         // envelopes too, which carry its job.
         let dir = &self.config.retention_dir;
@@ -16704,9 +16774,8 @@ impl PalwPanelService {
             None
         };
         let answer_form = facts.form;
-        let built = offload_shared(backend, move |b| {
-            let _held_for_the_answers = reserved;
-            palw_da_claim_answers_v1(
+        let (built, _held_for_the_answers) = offload_shared(backend, move |b| {
+            let built = palw_da_claim_answers_v1(
                 b,
                 &facts,
                 paths.iter().filter_map(|path| std::fs::read(path).ok()),
@@ -16715,7 +16784,8 @@ impl PalwPanelService {
                 in_run_rows,
                 flat_queued,
                 tir.as_ref(),
-            )
+            )?;
+            Ok::<_, String>((built, reserved))
         })
         .await
         .map_err(PalwDaClaimHoldV1::Material)?
@@ -16727,25 +16797,40 @@ impl PalwPanelService {
                 first.role
             );
         }
-        Ok(duties
+        let duties: Vec<_> = duties.iter().map(|d| (*d).clone()).collect();
+        let session = session.clone();
+        let keypair = self.keypair.clone();
+        let maximum = self.config.court.max_close_bytes();
+        tokio::task::spawn_blocking(move || {
+            let _replay_guard = _held_for_the_answers;
+            let _transport_guard = _transport_reservation;
+            let sign = |message: &[u8], context: &[u8]| keypair.as_ref().and_then(|kp| {
+                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32])
+                    .ok().map(|sig| sig.as_ref().to_vec())
+            });
+            duties
             .iter()
             .zip(built.answers)
             .map(|(duty, answer)| match answer {
                 None => Ok(None),
                 Some(Err(why)) => Err(why),
-                Some(Ok(answer)) => palw_da_built_answer_object_v1(
-                    &network_domain,
-                    duty.claim_id,
-                    duty.unit,
-                    answer,
-                    duty.discloser,
-                    answer_form,
-                    self.config.court.max_close_bytes(),
-                    |message, context| self.sign(message, context),
-                )
-                .map(Some),
+                Some(Ok(answer)) => {
+                    let progress = if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
+                        session.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser))?
+                    } else { None };
+                    let object = palw_da_built_answer_carriage_v1(
+                        &network_domain, duty.claim_id, duty.unit, answer, duty.discloser, answer_form,
+                        maximum, false, |message, context| sign(message, context),
+                    )?;
+                    da_answer_chunks::next_answer_object_v2(
+                        object, progress.as_ref(), session.get_virtual_daa_score(), duty.deadline_daa,
+                        maximum, &network_domain,
+                        |message, context| sign(message, context),
+                    ).map(Some)
+                },
             })
-            .collect())
+            .collect()
+        }).await.map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -19916,7 +20001,7 @@ mod court_responder_coverage_pin {
             "which builds through the core's held builder"
         );
         let rcore = body("async fn rcore_da_answers_v1(");
-        for reached in ["palw_da_claim_answers_v1(", "palw_da_built_answer_object_v1("] {
+        for reached in ["palw_da_claim_answers_v1(", "palw_da_built_answer_carriage_v1(", "next_answer_object_v2("] {
             assert!(rcore.contains(reached), "R-core's answer reaches {reached}");
         }
         let unit = top("pub(crate) fn palw_da_unit_answer_v1(");

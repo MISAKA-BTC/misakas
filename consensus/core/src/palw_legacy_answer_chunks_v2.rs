@@ -48,6 +48,23 @@ pub struct PalwPendingLegacyAnswerV2 {
     pub parts: BTreeMap<u8, Vec<u8>>,
 }
 
+/// Native reader result: a bounded manifest and bitmap, never copies of the retained answer parts.
+/// This is not a carried consensus object or a remote state proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwLegacyAnswerProgressV2 {
+    pub declaration: PalwLegacyAnswerDeclarationV2,
+    pub deadline_daa: u64,
+    pub received: u32,
+}
+
+impl PalwLegacyAnswerProgressV2 {
+    pub fn next_index(&self) -> Option<u8> {
+        (0..self.declaration.chunk_digests.len().min(PALW_LEGACY_ANSWER_MAX_CHUNKS_V2 as usize))
+            .map(|i| i as u8)
+            .find(|i| self.received & (1u32 << i) == 0)
+    }
+}
+
 impl PalwLegacyAnswerDeclarationV2 {
     pub fn key(&self) -> PalwLegacyAnswerKeyV2 {
         (self.claim, self.unit, self.discloser)
@@ -148,6 +165,13 @@ pub fn palw_legacy_answer_split_v2(
 }
 
 impl PalwPendingLegacyAnswerV2 {
+    pub fn progress(&self) -> PalwLegacyAnswerProgressV2 {
+        PalwLegacyAnswerProgressV2 {
+            declaration: self.declaration.clone(),
+            deadline_daa: self.deadline_daa,
+            received: self.parts.keys().fold(0, |bits, &i| bits | 1u32.checked_shl(u32::from(i)).unwrap_or(0)),
+        }
+    }
     pub fn check_chunk(&self, chunk: &PalwLegacyAnswerChunkV2) -> Result<(), String> {
         let d = &self.declaration;
         d.check(u64::from(PALW_LEGACY_ANSWER_MAX_CHUNKS_V2) * u64::from(PALW_LEGACY_ANSWER_CHUNK_BYTES_V2))?;
