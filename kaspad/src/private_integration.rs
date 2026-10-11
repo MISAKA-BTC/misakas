@@ -113,6 +113,10 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     if !config.initial_utxo_set.is_empty() {
         return Err("private population refuses arbitrary initial monetary rows".into());
     }
+    #[cfg(feature = "devnet-prealloc")]
+    if args.num_prealloc_utxos.is_some() || args.prealloc_address.is_some() {
+        return Err("private construction refuses arbitrary Args preallocation".into());
+    }
     if config.params.skip_proof_of_work {
         return Err("the process/P2P probe must validate work; skip_proof_of_work is refused".into());
     }
@@ -262,6 +266,14 @@ mod tests {
             ..Args::default()
         };
         assert!(validate_private_probe(&args, &config).is_ok());
+        #[cfg(feature = "devnet-prealloc")]
+        {
+            let mut preallocation = args.clone();
+            preallocation.num_prealloc_utxos = Some(1);
+            preallocation.prealloc_address =
+                Some(palw_t12_drill_main_key_v1(&salt).address(kaspa_addresses::Prefix::Testnet).to_string());
+            assert!(validate_private_probe(&preallocation, &config).is_err());
+        }
         let mut wrong_size = config.clone();
         wrong_size.private_population = Some(PrivatePopulationV1::new(18).unwrap());
         assert!(validate_private_probe(&args, &wrong_size).unwrap_err().contains("exact salt/size/funded factory"));

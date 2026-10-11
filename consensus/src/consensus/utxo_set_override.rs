@@ -115,6 +115,14 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
     }
     #[cfg(feature = "devnet-prealloc")]
     {
+        // Cargo may unify both test features. The population remains a strict
+        // factory even in that binary; devnet's arbitrary preallocation exception
+        // is not its construction contract.
+        #[cfg(feature = "private-integration-config")]
+        if config.private_population.is_some() {
+            assert_eq!(config.params.genesis.utxo_commitment, hardcoded_commitment, "private population must preserve M-07 commitment pinning");
+            assert_eq!(config.params.genesis.hash, hardcoded_hash, "private population must preserve M-07 genesis pinning");
+        }
         let _ = (hardcoded_commitment, hardcoded_hash);
     }
 }
