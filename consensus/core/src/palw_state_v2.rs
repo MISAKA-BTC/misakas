@@ -19463,10 +19463,43 @@ pub fn palw_da_lock_live_v1(
 // Transition internals: a builder that records every write it makes
 // ---------------------------------------------------------------------------------------------
 
+/// A transient registration lookup, never state/root/carriage/delta data. A key hash
+/// narrows an equality search; even a hash collision still compares the full public key.
+/// Operator holders retain bond order so the refusal names the same first holder as a walk.
+#[derive(Default)]
+struct PalwBondRegistrationIndexV1 {
+    keys: BTreeMap<Hash64, BTreeSet<PalwBondKeyV2>>,
+    operators: BTreeMap<Hash64, BTreeSet<PalwBondKeyV2>>,
+}
+
+fn registration_key_bucket_v1(pubkey: &[u8]) -> Hash64 {
+    let mut state = keyed(b"misaka-palw/transient-bond-key-index/v1");
+    state.update(&(pubkey.len() as u64).to_le_bytes());
+    state.update(pubkey);
+    finish(state)
+}
+
+impl PalwBondRegistrationIndexV1 {
+    fn note(&mut self, key: PalwBondKeyV2, record: &PalwBondStateV2, add: bool) {
+        for (map, bucket) in [(&mut self.keys, registration_key_bucket_v1(&record.pubkey)),
+                              (&mut self.operators, record.operator_id)] {
+            if add {
+                map.entry(bucket).or_default().insert(key);
+            } else if let std::collections::btree_map::Entry::Occupied(mut row) = map.entry(bucket) {
+                row.get_mut().remove(&key);
+                if row.get().is_empty() { row.remove(); }
+            }
+        }
+    }
+}
+
 struct TransitionBuilder<'a> {
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
+    /// RFC06 complete-population preparation: lazily built once per fold, updated only by
+    /// `write_bond`, invalidated on restore. Same-block registration no longer scans N² keys.
+    registration_index: Option<PalwBondRegistrationIndexV1>,
     /// ADR-0065 D4, resolved by the caller from `Params::palw_unavailable_abstains` at this
     /// block's DAA. It rides the builder rather than each arm's signature because it is a fact
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
@@ -20005,6 +20038,7 @@ impl<'a> TransitionBuilder<'a> {
             params,
             state: parent.clone(),
             entries: Vec::new(),
+            registration_index: None,
             unavailable_abstains,
             model_moves: 0,
             exec_origin_budget: Default::default(),
@@ -20027,6 +20061,27 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn registration_index_v1(&mut self) -> &PalwBondRegistrationIndexV1 {
+        if self.registration_index.is_none() {
+            let mut index = PalwBondRegistrationIndexV1::default();
+            for (key, record) in &self.state.bonds { index.note(*key, record, true); }
+            self.registration_index = Some(index);
+        }
+        self.registration_index.as_ref().unwrap()
+    }
+
+    fn registered_pubkey_v1(&mut self, pubkey: &[u8]) -> bool {
+        let bucket = registration_key_bucket_v1(pubkey);
+        self.registration_index_v1();
+        self.registration_index.as_ref().unwrap().keys.get(&bucket).is_some_and(|keys| {
+            keys.iter().any(|key| self.state.bonds.get(key).is_some_and(|record| record.pubkey == pubkey))
+        })
+    }
+
+    fn registered_operator_v1(&mut self, operator: Hash64) -> Option<PalwBondKeyV2> {
+        self.registration_index_v1().operators.get(&operator).and_then(|holders| holders.first().copied())
+    }
+
     // Every write goes through one of these, so the delta cannot miss a change.
 
     fn write_bond(&mut self, key: PalwBondKeyV2, new: Option<PalwBondStateV2>) {
@@ -20038,6 +20093,15 @@ impl<'a> TransitionBuilder<'a> {
             Some(record) => self.state.bonds.insert(key, record.clone()),
             None => self.state.bonds.remove(&key),
         };
+        if let Some(index) = &mut self.registration_index {
+            // Collateral/status-only writes do not change either lookup.
+            let same_identity = old.as_ref().zip(new.as_ref()).is_some_and(|(old, new)|
+                old.pubkey == new.pubkey && old.operator_id == new.operator_id);
+            if !same_identity {
+                if let Some(record) = &old { index.note(key, record, false); }
+                if let Some(record) = &new { index.note(key, record, true); }
+            }
+        }
         self.weight_cap_retotal(before, self.weight_cap_term(&key));
         self.entries.push(PalwDeltaEntryV2::Bond { key, old, new });
     }
@@ -27665,6 +27729,7 @@ impl<'a> TransitionBuilder<'a> {
         // The caches describe the state just replaced; the next reader rebuilds them from the
         // restored one (audit #13b).
         *self.inflight_index.get_mut() = None;
+        self.registration_index = None;
         self.panel_horizon.set(None);
     }
 
@@ -35423,7 +35488,7 @@ fn apply_object(
             // no uniqueness check, splitting collateral across N registrations of the SAME key
             // manufactured N independent seat tickets, and a 3-of-5 panel is a permanent quorum for
             // whoever holds three of them.
-            if builder.state.bonds.values().any(|existing| existing.pubkey == *pubkey) {
+            if builder.registered_pubkey_v1(pubkey) {
                 return Err(PalwStateV2Error::DuplicateBondKey(*bond));
             }
             // **One identity, one bond** (audit 2026-09-19). The line above makes a second bond
@@ -35440,8 +35505,8 @@ fn apply_object(
             // already on the chain cannot be claimed a second time.
             if builder.extras.operator_id_unique_active {
                 let operator = palw_operator_id_v2(operator_pubkey);
-                if let Some((holder, _)) = builder.state.bonds.iter().find(|(_, existing)| existing.operator_id == operator) {
-                    return Err(PalwStateV2Error::DuplicateOperator { operator, holder: *holder });
+                if let Some(holder) = builder.registered_operator_v1(operator) {
+                    return Err(PalwStateV2Error::DuplicateOperator { operator, holder });
                 }
             }
             if *payout_payload == Hash64::default() {
@@ -71738,6 +71803,52 @@ pub(crate) mod tests {
         /// Uniqueness is not possession — that needs a signature under the operator key, which
         /// changes the object's bytes — but it turns a free primitive into a race against a
         /// registration that is already on the chain.
+        #[test]
+        fn registration_index_matches_walk_through_writes_collision_restore_and_journal() {
+            let p = economy_params();
+            let extras = PalwTransitionExtrasV1::default();
+            let objects: Vec<_> = (1..=64).map(|i| bond_registration_with_collateral(i, i as u8, i % 3, 1_000_000)).collect();
+            let (state, delta) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None,
+                false, false, false, false, &extras,
+            ).unwrap();
+            assert_eq!(apply_delta_v2(&PalwChainStateV2::genesis(), &delta, &p).unwrap(), state);
+            assert_eq!(revert_delta_v2(&state, &delta, &p).unwrap(), PalwChainStateV2::genesis());
+            let loaded = PalwStateCarriageV2::from_state(&state).into_state(&p, Some(state.state_root())).unwrap();
+            let mut builder = TransitionBuilder::new(&loaded, &p, false, false, false, false, &extras);
+            for i in 1..=65u8 {
+                let key = vec![i; 4];
+                assert_eq!(builder.registered_pubkey_v1(&key), builder.state.bonds.values().any(|record| record.pubkey == key));
+            }
+            for i in 0..3 {
+                let op = palw_operator_id_v2(&op_key(i));
+                assert_eq!(builder.registered_operator_v1(op), builder.state.bonds.iter().find(|(_, r)| r.operator_id == op).map(|(key, _)| *key));
+            }
+            // A deliberately colliding transient bucket cannot manufacture a duplicate key.
+            let absent = vec![99; 4];
+            builder.registration_index.as_mut().unwrap().keys.entry(registration_key_bucket_v1(&absent)).or_default().insert(bond_key(1));
+            assert!(!builder.registered_pubkey_v1(&absent));
+            let checkpoint = builder.checkpoint();
+            let original = builder.state.bonds[&bond_key(1)].clone();
+            builder.write_bond(bond_key(1), None);
+            assert!(!builder.registered_pubkey_v1(&original.pubkey));
+            let mut changed = original.clone();
+            changed.pubkey = absent.clone();
+            changed.operator_id = palw_operator_id_v2(&op_key(99));
+            builder.write_bond(bond_key(1), Some(changed.clone()));
+            assert!(builder.registered_pubkey_v1(&absent));
+            assert_eq!(builder.registered_operator_v1(changed.operator_id), Some(bond_key(1)));
+            builder.restore(checkpoint);
+            assert!(builder.registration_index.is_none(), "restore must invalidate both transient lookups");
+            assert_eq!(builder.state, state);
+            assert!(builder.registered_pubkey_v1(&original.pubkey));
+            assert!(!builder.registered_pubkey_v1(&absent));
+            let duplicate = bond_registration_with_collateral(65, 1, 99, 1_000_000);
+            assert!(matches!(apply_palw_transition_v2_with_extras(
+                &state, &p, &ctx(2, 101, 1), &[duplicate], None, false, false, false, false, &extras,
+            ), Err(PalwStateV2Error::DuplicateBondKey(key)) if key == bond_key(65)));
+        }
+
         #[test]
         fn an_operator_identity_already_on_the_chain_cannot_be_registered_again() {
             let p = economy_params();
