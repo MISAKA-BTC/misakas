@@ -431,7 +431,7 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
         let id = source_income_id_v1(context, source, &bond);
-        if budget.claim(&id).is_none() && accepted_daa < budget.header.created_daa {
+        if budget.claim_row(&id).is_none() && accepted_daa < budget.header.created_daa {
             return Ok(());
         }
         self.bond_budget_op(|budget, _, j| budget.settle_source_income_v1(&mirror.policy, &id, liability_until, ctx.daa_score, fee, j))
@@ -456,7 +456,7 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
         let id = source_income_id_v1(context, source, &bond);
-        if budget.claim(&id).is_none() && accepted_daa < budget.header.created_daa {
+        if budget.claim_row(&id).is_none() && accepted_daa < budget.header.created_daa {
             return Ok(());
         }
         self.bond_budget_op(|budget, _, j| budget.cancel_source_income_v1(&id, j))
