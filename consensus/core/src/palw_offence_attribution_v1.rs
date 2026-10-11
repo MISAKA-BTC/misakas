@@ -1410,6 +1410,16 @@ pub fn palw_prefix_state_fault_v1(
     tiles: &[crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1],
 ) -> Result<bool, PalwOffenceVerifyError> {
     palw_constrained_job_target_v1(target, binding, job)?;
+    use crate::palw_class_semantics_v1::PalwPrefixStateRelationV1;
+    if target.registered_semantics.as_ref().and_then(|r|r.prefix_state_relation)
+        .is_some_and(|r|r!=PalwPrefixStateRelationV1::DenseInt32KvV1) {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("this claim names a different immutable family state relation"));
+    }
+    if target.registered_semantics.as_ref().and_then(|r|r.prefix_state_relation)
+        == Some(PalwPrefixStateRelationV1::DenseInt32KvV1) {
+        PalwPrefixStateRelationV1::DenseInt32KvV1.check_profile(&binding.shape_profile)
+            .map_err(PalwOffenceVerifyError::ContradictionNotAdmitted)?;
+    }
     let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job)
         .map_err(|_| PalwOffenceVerifyError::ContradictionNotAdmitted("the job is not a well-formed prefix-state receipt"))?;
     if job.is_prefix_inherit()

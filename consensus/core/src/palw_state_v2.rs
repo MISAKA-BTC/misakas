@@ -36906,6 +36906,12 @@ fn apply_object(
             if class.artifact_root != declaration.artifact_root || class.registrant_bond.is_none() {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("semantic declaration must name the originally registered artifact and registrant"));
             }
+            if let Some(relation) = declaration.prefix_state_relation {
+                let profile = builder.state.fp_work_profile_of(&declaration.class_id)
+                    .filter(|p|p.shape_profile_id()==declaration.class_id)
+                    .ok_or(PalwStateV2Error::ImmutableModelUpdate("a family state relation needs the publicly certified canonical class graph"))?;
+                relation.check_profile(profile).map_err(PalwStateV2Error::ImmutableModelUpdate)?;
+            }
             let mut next = declaration.as_bound_row(ctx.daa_score);
             if let Some(previous) = builder.state.class_semantics.get(&declaration.class_id) {
                 next.bound_from_daa = previous.bound_from_daa;
@@ -57381,7 +57387,7 @@ pub(crate) mod tests {
             rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
             raw_tokenizer_bytes: 16,
             tokenizer_key_events: 8,
-            prefix_state_relation: Some(crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::DenseInt32KvV1),
+            prefix_state_relation: None,
         };
         let declare = |d: crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
             declaration: Box::new(d), signature: vec![],
