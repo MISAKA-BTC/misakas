@@ -34,7 +34,7 @@ pub struct PalwPrefixCourtFaultV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwOwnedPrefixCheckpointV1 {
-    court: PalwPrefixFamilyCourtV1,
+    court: crate::palw_prefix_family_court_v1::PalwPrefixFamilyCheckpointV1,
     moves_used: u64,
     carrier_bytes_used: u64,
 }
@@ -191,22 +191,17 @@ impl PalwOwnedPrefixCourtV1 {
     }
     pub(crate) fn checkpoint_v1(&self) -> PalwOwnedPrefixCheckpointV1 {
         PalwOwnedPrefixCheckpointV1 {
-            court: self.court.clone(),
+            court: self.court.checkpoint_v1(),
             moves_used: self.moves_used,
             carrier_bytes_used: self.carrier_bytes_used,
         }
     }
     pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwOwnedPrefixCheckpointV1) -> Result<(), String> {
         // Checkpoints are generated and paired by the rooted journal, never accepted as wire credentials.
-        if !self.court.same_contract_v1(&cp.court)
-            || cp.moves_used == 0
-            || cp.moves_used > self.terms.plan.maximum_moves
-            || cp.carrier_bytes_used > self.maximum_carrier_bytes
-        {
+        if cp.moves_used == 0 || cp.moves_used > self.terms.plan.maximum_moves || cp.carrier_bytes_used > self.maximum_carrier_bytes {
             return Err("prefix checkpoint changes immutable seed or budget".into());
         }
-        cp.court.check()?;
-        self.court = cp.court.clone();
+        self.court.restore_checkpoint_v1(&cp.court)?;
         self.moves_used = cp.moves_used;
         self.carrier_bytes_used = cp.carrier_bytes_used;
         self.check()

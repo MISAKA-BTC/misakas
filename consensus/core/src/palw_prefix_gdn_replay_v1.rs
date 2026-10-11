@@ -110,6 +110,13 @@ impl PalwPrefixGdnHeadReplayV1 {
             state: vec![0; words],
         })
     }
+    pub(crate) fn matches_contract_v1(&self, claim: Hash64, binding: &PalwStepBindingV2,
+        layer:u16, head:u32, prefix_tokens:u32) -> bool {
+        self.claim == claim && self.execution_root == binding.committed_execution_root && self.job_id == binding.job_context.job_id
+            && self.layer == layer && self.head == head && self.prefix_tokens == prefix_tokens
+            && self.d_k == binding.shape_profile.gdn_head_k_dim && self.d_v == binding.shape_profile.gdn_head_v_dim
+            && u64::from(self.d_k) * u64::from(self.d_v) == self.state.len() as u64
+    }
     pub fn next_position(&self) -> u32 {
         self.next_position
     }

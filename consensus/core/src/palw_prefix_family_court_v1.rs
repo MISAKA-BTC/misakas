@@ -70,6 +70,21 @@ pub struct PalwPrefixFamilyCourtV1 {
     maximum_working_set_bytes: u64,
     family: FamilyV1,
 }
+/// Mutable continuation only; the immutable binding, job and semantic statement remain in
+/// their original rooted row instead of being copied into every journal delta.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+enum CheckpointFamilyV1 {
+    Dense(crate::palw_prefix_state_stream_v1::PalwPrefixStreamCheckpointV1),
+    Base0 { digest: PalwBase0PrefixDigestV1, pending: Option<Base0PendingTileV1> },
+    Q36 { digest: PalwQwen36PrefixCacheDigestV1, head: Option<Box<PalwPrefixGdnHeadReplayV1>> },
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPrefixFamilyCheckpointV1 {
+    context: Hash64,
+    claim: Hash64,
+    execution_root: Hash64,
+    family: CheckpointFamilyV1,
+}
 impl PalwPrefixFamilyCourtV1 {
     pub fn new(
         context: Hash64,
@@ -178,7 +193,10 @@ impl PalwPrefixFamilyCourtV1 {
             }
             FamilyV1::Q36 { digest, head } => {
                 if let Some(h) = head {
-                    if !matches!(digest.next_unit(), Some((PalwPrefixCacheUnitV1::GdnHead { .. }, _, _)))
+                    let Some((PalwPrefixCacheUnitV1::GdnHead { layer, head }, _, _)) = digest.next_unit() else {
+                        return Err("prefix recurrence is not the owned canonical unit".into());
+                    };
+                    if !h.matches_contract_v1(self.claim, &self.binding, layer, head, self.prefix_tokens)
                         || h.next_position() > self.prefix_tokens
                         || h.resident_state_bytes() > self.maximum_working_set_bytes
                     {
@@ -307,6 +325,37 @@ impl PalwPrefixFamilyCourtV1 {
             _ => return Err("prefix move is for another immutable family/phase".into()),
         }
         self.check()
+    }
+    pub(crate) fn checkpoint_v1(&self) -> PalwPrefixFamilyCheckpointV1 {
+        let family = match &self.family {
+            FamilyV1::Dense(c) => CheckpointFamilyV1::Dense(c.checkpoint_v1()),
+            FamilyV1::Base0 { digest, pending } => CheckpointFamilyV1::Base0 { digest: digest.clone(), pending: pending.clone() },
+            FamilyV1::Q36 { digest, head } => CheckpointFamilyV1::Q36 { digest: digest.clone(), head: head.clone() },
+        };
+        PalwPrefixFamilyCheckpointV1 { context: self.context, claim: self.claim, execution_root: self.execution_root(), family }
+    }
+    pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwPrefixFamilyCheckpointV1) -> Result<(), String> {
+        if cp.context != self.context || cp.claim != self.claim || cp.execution_root != self.execution_root() {
+            return Err("prefix continuation checkpoint changes immutable seed/claim/root".into());
+        }
+        // Check a temporary continuation before changing the rooted row. Dense and BASE0
+        // are bounded; a Q36 whole-head CP currently requires the declared head budget.
+        let mut candidate = self.clone();
+        match (&mut candidate.family, &cp.family) {
+            (FamilyV1::Dense(c), CheckpointFamilyV1::Dense(p)) => c.restore_checkpoint_v1(p)?,
+            (FamilyV1::Base0 { digest, pending }, CheckpointFamilyV1::Base0 { digest: d, pending: p }) => {
+                *digest = d.clone();
+                *pending = p.clone();
+            }
+            (FamilyV1::Q36 { digest, head }, CheckpointFamilyV1::Q36 { digest: d, head: h }) => {
+                *digest = d.clone();
+                *head = h.clone();
+            }
+            _ => return Err("prefix continuation checkpoint changes immutable family".into()),
+        }
+        candidate.check()?;
+        self.family = candidate.family;
+        Ok(())
     }
     pub fn finish(&self) -> Result<bool, String> {
         self.check()?;
