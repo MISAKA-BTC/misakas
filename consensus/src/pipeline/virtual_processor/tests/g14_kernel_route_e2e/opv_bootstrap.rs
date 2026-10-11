@@ -1614,6 +1614,13 @@ async fn run_paid_v5_source_budget(budget_activation: u64) {
     let object = net.route(CAND, &under);
     net.send(vec![(CAND, object)]).await;
     assert_eq!(net.collateral(CAND), capital, "funding less than a complete source quorum is refused");
+    let low_fee = K::FundBeaconSourceFee {
+        terms: misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 { fee_per_source: 49, ..terms },
+    };
+    let object = net.route(CAND, &low_fee);
+    net.send(vec![(CAND, object)]).await;
+    assert!(net.ledger().beacon_source_fees.is_empty(), "the scoped net cost floor refuses funding before escrow creation");
+    assert_eq!(net.collateral(CAND), capital, "below-net-floor funding debits no collateral");
     let object = net.route(CAND, &K::FundBeaconSourceFee { terms });
     net.send(vec![(CAND, object)]).await;
     assert_eq!(net.collateral(CAND), capital - 100);
@@ -1734,6 +1741,11 @@ fn source_fee_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
 fn source_fee_budget_config_at(activation: u64) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwRoundRightsPolicyV1};
     let (mut cfg, _, premine, floats) = source_fee_config();
+    // Make the cost sum, rather than the legacy scalar, the binding floor.
+    // These are proposed arithmetic terms, not measured costs or profitability.
+    let fee_policy = &mut cfg.params.palw_beacon_source_fee_v1.as_mut().unwrap().policy;
+    fee_policy.minimum_fee_sompi = 1;
+    fee_policy.cost_bounds.as_mut().unwrap().execution_sompi = 45;
     // Ample mechanics-fixture rates, with the user-selected separate ticket cap.
     // No rate here is an approved economic policy.
     cfg.params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 {
