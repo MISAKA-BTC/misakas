@@ -1,4 +1,4 @@
-//! **The id the drill harness derives for a line before the chain exists** (`audit-improve/dmdrive.py`, `model_line_id`): a drill's
+//! **The id the drill harness derives for a line before the chain exists** (`tools/drills/improve/dmdrive.py`, `model_line_id`): a drill's
 //! lying executor is told which line to spoil by a prefix of the line's id, and the id is a keyed hash of the class, the founding bond and
 //! the name (`model_line_id_v1`) — all known before the first block. This pins the derivation the harness mirrors, against values the
 //! harness's own implementation produced.

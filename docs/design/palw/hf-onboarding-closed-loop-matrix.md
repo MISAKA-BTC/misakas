@@ -37,7 +37,7 @@ conformance and never L5.
 ## 2. Devnet
 
 Salted testnet-12 drill (ADR-0152 §8.2), loopback only, its own genesis and keyring written by the binary under test. The shipped
-release's flag days compressed exactly like the combined drill (`audit-combined/dc.sh`): `--palw-drill-fence-at 6 --fence2-at 10
+release's flag days compressed exactly like the combined drill (`tools/drills/combined/dc.sh`): `--palw-drill-fence-at 6 --fence2-at 10
 --fence3-at 14 --tir-at 16 --tir2-at 24 --int11-at 26` — kaspad's own log lists every fence as MOVED from its shipped height
 (750/1000/1300/1700/2000/3600/5300/5395/5490/5585), none ARMED from dormant. `palw_bond_maturity` (1,000) has no drill flag and stays at
 1,000 (the devnet runs below it). Nodes: A (seat 0, floor producer + heartbeat clock), B (seat 1, heartbeat, U's RPC), C (keyless

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit-improve/modeltool.py — the drills' model side, OUTSIDE consensus (RFC-0004 A13).
+"""tools/drills/improve/modeltool.py — the drills' model side, OUTSIDE consensus (RFC-0004 A13).
 
 The chain never trains anything: a candidate is a LoRA adapter somebody trained elsewhere and registered as the
 head's composite. This script is that somebody for the drills. It needs torch and transformers (the tir-venv:
@@ -26,7 +26,7 @@ head's composite. This script is that somebody for the drills. It needs torch an
         the adapter merged into the weights (W + s·B·A, F32): a FULL-WEIGHT candidate's checkpoint, which
         palw-tir-fidelity lowers as a model of its own (RFC-0004 §6.4: a candidate that cannot reuse its
         parent's scales is full weights). The drills use it while a composite class cannot yet prove
-        readiness (see audit-improve/README in dm.sh plan).
+        readiness (see tools/drills/improve/README in dm.sh plan).
 """
 import argparse
 import json

@@ -14,7 +14,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.environ.get("H1_WT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."), "audit-tir"))
+sys.path.insert(0, os.path.join(os.environ.get("H1_WT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."), "tools/drills/tir"))
 import rpc  # noqa: E402
 
 # Registry-row fields that move with the tip or with node-local measurement — not compared.

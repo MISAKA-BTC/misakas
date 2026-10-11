@@ -11,7 +11,7 @@ params `2e56764257fe24888a7aab4f109b6ef83fa6ac5000dc47d1369398e5959cbc1f`, sched
 `5f5df8177e77fdf4e690222a690a0b5875f66d4e722d81159273435d754a8c5f`; identity (`5de80e64…`), genesis (`a27f8f44…`), premine txid (`5e0d5f1b…`) and the rule
 manifest digest (`9def81a1…`) do not move.
 
-Related: [`int-11-drill-flags.md`](int-11-drill-flags.md) (the frozen drill flag set, rows 1–19), `audit-combined/dc.sh` (the combined drill
+Related: [`int-11-drill-flags.md`](int-11-drill-flags.md) (the frozen drill flag set, rows 1–19), `tools/drills/combined/dc.sh` (the combined drill
 harness of the DAA-5,300 candidate, which this plan extends), `contrib/t12-deploy-kit/DAA750-ROLLOUT.md` (the rollout runbook this plan
 follows), `consensus/src/pipeline/virtual_processor/tests/t12_int13_flag_day_crossing.rs` (the same crossing at the processor).
 
@@ -232,7 +232,7 @@ refused at the handshake by every upgraded node, exactly as DAA 750 did).
    with two providers; seats fetch from the providers only; Final at DAA 147; another bond redeems at slot 547 in builder mode; payout
    to the executor's registered address, builder fee exactly 500 bps of the worker reward; a V3 counterfactual twin matches every other
    output, safe weight and claim row; sibling PFS4 and a later V3 re-spend paid nothing; reorg reverts and the quantum is re-spent once;
-   replay from genesis reaches the same root. The leg is scripted: `audit-combined/rfc9-v4-leg.sh`. **Timing:** the 400-DAA receipt
+   replay from genesis reaches the same root. The leg is scripted: `tools/drills/combined/rfc9-v4-leg.sh`. **Timing:** the 400-DAA receipt
    maturity puts the leg at ≈19.5 h of drill chain (≈125 s/DAA), longer than the ~12 h budget of §2 — start the leg's claim in the
    first DAA of the run. **Public t12:** V4 is reachable only after someone files `FamilyCertified` + `ClassLaneCertified` (FreePrompt)
    on chain (genesis certifies only in params); the observation in §4 step 7 waits for that.

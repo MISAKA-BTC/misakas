@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# audit-vertex/dv.sh — RFC-0007 Part I's drill, ONE salted testnet-12 drill chain on this Mac (loopback only), on the binary this branch
-# would ship. It runs audit-tir/df.sh's chain (the D-F kit's eight nodes, DF1=0: the tiny class, no 1.5B artifact) with ONE more fence:
+# tools/drills/vertex/dv.sh — RFC-0007 Part I's drill, ONE salted testnet-12 drill chain on this Mac (loopback only), on the binary this branch
+# would ship. It runs tools/drills/tir/df.sh's chain (the D-F kit's eight nodes, DF1=0: the tiny class, no 1.5B artifact) with ONE more fence:
 # `palw_verification_vertex_v1` at VERTEX_AT (`--palw-drill-vertex-at`), and reads the chain through RPC and the nodes' logs.
 #
 # What it shows (RFC-0007's activation table, row 1):
@@ -11,7 +11,7 @@
 #              the evidence; the fold slashes 100 per mille, forfeits the locks, ejects the bond (`bond` before and after)
 #   carriage   the bytes the chain carries per licence, below the fence (receipts) and above it (vertices) — `carriage`
 #
-#   BIN_DIR=<dir with kaspad misaka> bash audit-vertex/dv.sh <command>
+#   BIN_DIR=<dir with kaspad misaka> bash tools/drills/vertex/dv.sh <command>
 #   [WORK_DIR=~/.misaka-palw-vertex-drill] [VERTEX_AT=120]
 #
 # RFC-0007 PARTS II AND IV (rows 2 to 4 of the activation table; the same chain, the same binary): set any of
@@ -29,9 +29,9 @@
 #   evidence copies the run's proofs (census, carriage, the nodes' vertex / equivocation / slash log lines, the fence banners) into
 #   ~/Downloads/MISAKA-wt-b/lanes/evidence/rfc7-vertex/drill/.
 set -euo pipefail
-V=$(cd "$(dirname "$0")" && pwd)           # audit-vertex/
-WT=$(cd "$V/.." && pwd)
-A=$WT/audit-tir
+V=$(cd "$(dirname "$0")" && pwd)           # tools/drills/vertex/
+WT=$(cd "$V/../../.." && pwd)
+A=$WT/tools/drills/tir
 export WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-vertex-drill}
 export DF1=0 VERTEX_AT=${VERTEX_AT:-120}
 if [ "${MESH:-0}" = 1 ]; then WITNESS_AT=${WITNESS_AT:-130}; AUDIT_AT=${AUDIT_AT:-140}; CAPPED_AT=${CAPPED_AT:-150}; fi

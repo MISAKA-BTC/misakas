@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# audit-gen/dg.sh — the generative drill's scenarios (RFC-0003 activation step 8), written as functions over lane C's
-# drill harness (audit-tir/lib-df.sh's conventions: `cli <node> …`, `jport`, `manifest`, `salt`, `say`/`die`, $WORK_DIR,
+# tools/drills/gen/dg.sh — the generative drill's scenarios (RFC-0003 activation step 8), written as functions over lane C's
+# drill harness (tools/drills/tir/lib-df.sh's conventions: `cli <node> …`, `jport`, `manifest`, `salt`, `say`/`die`, $WORK_DIR,
 # $KR, $UHOME, nodes.sh start|stop). Source it from the combined harness, or run it standalone on a chain brought up
-# by audit-tir/df.sh: DG_LIB=<that harness's lib> bash audit-gen/dg.sh <command>.
+# by tools/drills/tir/df.sh: DG_LIB=<that harness's lib> bash tools/drills/gen/dg.sh <command>.
 #
 #   classes   verify the Plan B artifacts in $GEN_DIR (written by `PALW_GEN_DRILL_OUT=$GEN_DIR cargo test -p
 #             misaka-palw-sdk --test gen_drill_classes -- --ignored`) and print their ids
@@ -26,10 +26,10 @@
 # Plan A: IMAGE_CLASS=sd3-tiny DENOISE_STAGE=2 replaces the toy image class by the reduced SD3 pipeline (RFC-0003 step 6; its
 # artifact `sd3-tiny.class.palwtir2` and manifest entry `sd3-tiny.json` are written beside the Plan B classes by
 # `PALW_GEN_DRILL_OUT=$GEN_DIR cargo test -p misaka-palw-sdk --test gen_sd3_class -- --ignored write_the_sd3_class`;
-# merge its entry into drill-classes.json with `python3 audit-gen/merge-sd3-manifest.py $GEN_DIR`). Plan B is the default.
+# merge its entry into drill-classes.json with `python3 tools/drills/gen/merge-sd3-manifest.py $GEN_DIR`). Plan B is the default.
 set -euo pipefail
 G=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
-. "${DG_LIB:-$G/../audit-tir/lib-df.sh}"
+. "${DG_LIB:-$G/../tir/lib-df.sh}"
 GEN_DIR=${GEN_DIR:-$WORK_DIR/gen}
 IMAGE_CLASS=${IMAGE_CLASS:-toy-image}; DENOISE_STAGE=${DENOISE_STAGE:-1}
 GEN_AT=${GEN_AT:-28}; FPV5_AT=${FPV5_AT:-104}; HELD_AT=${HELD_AT:-140}; LATE_AT=${LATE_AT:-103}

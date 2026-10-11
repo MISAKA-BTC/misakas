@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# audit-improve/nodes.sh start|stop|kill|status|args <node…> — the D-M drills' nodes (lib-dm.sh NODES), after the D-F drill's
-# audit-tir/nodes.sh.
+# tools/drills/improve/nodes.sh start|stop|kill|status|args <node…> — the D-M drills' nodes (lib-dm.sh NODES), after the D-F drill's
+# tools/drills/tir/nodes.sh.
 #   start   nohup nice kaspad (KASPAD_BIN; the `old` relay OLD_KASPAD_BIN); waits for the salted genesis line in log bytes
 #           written after the start
 #   stop    SIGINT, wait <= 90 s (then report, never SIGKILL on its own)

@@ -1,6 +1,6 @@
-# audit-improve/lib-dm.sh — sourced by the D-M drills' runner (RFC-0004 A13: D-M1 the whole epoch, D-M2 a candidate that
+# tools/drills/improve/lib-dm.sh — sourced by the D-M drills' runner (RFC-0004 A13: D-M1 the whole epoch, D-M2 a candidate that
 # must not win, D-M3 the court battery on evaluation claims, D-M4 rollback, D-M5 the fence crossing, D-M6 copying,
-# leakage, grinding and fee DoS). After audit-tir/lib-df.sh (the D-F drills of RFC-0002).
+# leakage, grinding and fee DoS). After tools/drills/tir/lib-df.sh (the D-F drills of RFC-0002).
 #
 # ONE salted testnet-12 drill chain on this Mac, loopback only: its own salt ($WORK_DIR/SALT, 0600, never printed — or SALT
 # from the environment), its own keyring (written by the shipping kaspad itself), its own ports, its own app dirs under
@@ -8,10 +8,10 @@
 #
 # The model side (`dm.sh model`, offline) builds, from the tiny HF llama fixture, the head class H (byte-identical to D-F's
 # small class), a candidate that WINS a synthetic exact-match pool, one that LOSES (it breaks what the parent passes), and a
-# composite (LoRA adapter section) of the winner — see audit-improve/modeltool.py.
+# composite (LoRA adapter section) of the winner — see tools/drills/improve/modeltool.py.
 set -euo pipefail
-A=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)          # audit-improve/
-WT=$(cd "$A/.." && pwd)
+A=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)          # tools/drills/improve/
+WT=$(cd "$A/../../.." && pwd)
 WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-improve-drill}
 # BIN_DIR: the release under test (kaspad, misaka, palw-class, palw-tir-fidelity) — the one parameter a run points at a build;
 # each binary can still be named on its own.

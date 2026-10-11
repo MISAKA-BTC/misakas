@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-combined/dc-run.sh — the combined drill's scenario clock (run in the background by `dc.sh run`, after `dc.sh up`). Env comes from dc.sh. The order puts the fence-crossing gates
+# tools/drills/combined/dc-run.sh — the combined drill's scenario clock (run in the background by `dc.sh run`, after `dc.sh up`). Env comes from dc.sh. The order puts the fence-crossing gates
 # FIRST so they can be published early:
 #   H' - 6  FORK-c   new2 is PARTITIONED across the fence (restarted on a shifted P2P port, no peers: it mines its own branch past H'); it rejoins at H' + 6 and must reorganise onto the chain
 #   H'      D-M5 / FORK-a (the old relay, int-10.3: the new node drops it AT the crossing), DG-1 and DG-2 (the driver and `dm.sh gen`)
@@ -12,9 +12,9 @@
 #   G-A3 the panel bind wait of REAL claims, operator vs non-operator bond (new9 makes REAL from B1 on); leg O (report-only, O_DAA > 0): only non-operator REAL flows.
 # Everything it writes goes under $EVD.
 set -uo pipefail
-C=$(cd "$(dirname "$0")" && pwd); WT=$(cd "$C/.." && pwd)
+C=$(cd "$(dirname "$0")" && pwd); WT=$(cd "$C/../../.." && pwd)
 EVD=${EVD:-$HOME/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill}; mkdir -p "$EVD"
-cd "$WT/audit-improve"; . ./lib-dm.sh 2>/dev/null
+cd "$WT/tools/drills/improve"; . ./lib-dm.sh 2>/dev/null
 H=$INT11_AT; K_SLOTS=${K_SLOTS:-20}; PROBE_SLOTS=${PROBE_SLOTS:-6}; COOLDOWN=${COOLDOWN:-20}
 STALE_END_DAA=${STALE_END_DAA:-140}; STALE_DELAY_S=${STALE_DELAY_S:-1500}; REAL_DELAY_S=${REAL_SUBMIT_DELAY_S:-340}
 RECOVERY_AT=${RECOVERY_AT:-258}; STOP_DAA=${STOP_DAA:-$((K_SLOTS+8))}; POST_DAA=${POST_DAA:-$((K_SLOTS+8))}; X_DAA=${X_DAA:-0}
@@ -48,8 +48,8 @@ python3 "$C/dcwatch.py" execsample --port "$JSON_BASE_3" --out "$EVD/roundlane.t
 NODESPEC=$(for n in $(all_nodes); do printf '%s:%s,' "$n" "$(kof "$n")"; done)
 python3 "$C/dcwatch.py" sinkwatch --json-base "$JSON_BASE" --nodes "$NODESPEC" --out "$EVD/sinks.tsv" --interval 10 & SINKS=$!
 trap 'kill $SAMPLER $SINKS 2>/dev/null' EXIT
-( run dg1 bash "$WT/audit-improve/dm.sh" gen dg1 ) & P1=$!
-( run dg2 bash "$WT/audit-improve/dm.sh" gen dg2 ) & P2=$!
+( run dg1 bash "$WT/tools/drills/improve/dm.sh" gen dg1 ) & P1=$!
+( run dg2 bash "$WT/tools/drills/improve/dm.sh" gen dg2 ) & P2=$!
 ( d=$((H + 100)); while :; do at "$d"; snap; d=$((d + 30)); [ "$d" -gt $((RECOVERY_AT + STOP_DAA + POST_DAA + CAP_WINDOW_DAA + 80)) ] && break; done ) &
 
 # ---- FORK-c: a partition across the fence ------------------------------------------------------------------

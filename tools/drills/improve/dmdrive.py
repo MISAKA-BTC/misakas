@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit-improve/dmdrive.py — the D-M drills' sampler, actor and verdicts (RFC-0004 A13).
+"""tools/drills/improve/dmdrive.py — the D-M drills' sampler, actor and verdicts (RFC-0004 A13).
 
 ONE process per drill chain (started by `dm.sh up`, stopped by `dm.sh down`). Every TICK_S seconds it reads the chain
 through one of the drill's own loopback nodes (JSON wRPC: DAA, the model registry, a producer's claims) and the improvement

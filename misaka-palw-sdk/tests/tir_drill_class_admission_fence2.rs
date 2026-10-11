@@ -1,5 +1,5 @@
 //! **The int-10 drill's IR class files under the rules of the DAA-3,600 flag day** (an `#[ignore]`d check the drill kit's
-//! `audit-tir/README.md` names; it reads class files, so it runs only when they are named).
+//! `tools/drills/tir/README.md` names; it reads class files, so it runs only when they are named).
 //!
 //! `palw-class declare-layout` judges a layout at the IR fence's height, where the release's element twin and box demand
 //! rules are in force, not palw_tir_fence2's (R4 of `docs/design/palw/t12-int10-court-window-review.md`). The drill registers

@@ -5,7 +5,7 @@
 #
 #   misaka-palw-rfc1-drill-claims.sh constraint|constraint2|prefix|inherit|adapter
 #
-# `adapter` lists the RFC-0004 drill's composite candidate class (audit-improve/dm.sh `composites`: `winc` = the head class H + a PALWTIRS
+# `adapter` lists the RFC-0004 drill's composite candidate class (tools/drills/improve/dm.sh `composites`: `winc` = the head class H + a PALWTIRS
 # adapter section) as an adapter class (AdapterClassListed, tag 94) with `palw-class improve adapter-list`, and carries it with
 # `misaka palw submit-object`. The chain must already hold H and `winc` as registered IR classes (the improve drill's registrations).
 #   adapter ENV: MODEL_DIR (the improve drill's model dir; default $WORK_DIR/model), TOOLS_BIN (dir of palw-class; default BIN_DIR),
@@ -33,7 +33,7 @@ log() { printf '[rfc1-claim:%s] %s\n' "$KIND" "$*" >&2; }
 if [ "$KIND" = adapter ]; then
   TOOLS_BIN="${TOOLS_BIN:-$BIN_DIR}"; CLI_BIN="${CLI_BIN:-$BIN_DIR/misaka}"; MODEL_DIR="${MODEL_DIR:-$WORK_DIR/model}"; COMPOSITE="${COMPOSITE:-winc}"
   [ -x "$TOOLS_BIN/palw-class" ] && [ -x "$CLI_BIN" ] || { log "palw-class (TOOLS_BIN) or misaka (CLI_BIN) missing"; exit 3; }
-  [ -s "$MODEL_DIR/head.class.palwtir" ] && [ -s "$MODEL_DIR/$COMPOSITE.palwtirs" ] || { log "no composite $COMPOSITE under $MODEL_DIR (audit-improve/dm.sh composites)"; exit 3; }
+  [ -s "$MODEL_DIR/head.class.palwtir" ] && [ -s "$MODEL_DIR/$COMPOSITE.palwtirs" ] || { log "no composite $COMPOSITE under $MODEL_DIR (tools/drills/improve/dm.sh composites)"; exit 3; }
   [ -n "${BOND_KEY_SEED:-}" ] && [ -f "$BOND_KEY_SEED" ] && [ -n "${FUNDING_KEY_FILE:-}" ] || { log "BOND_KEY_SEED / FUNDING_KEY_FILE not set"; exit 3; }
   SALT="${SALT:-$(tr -d ' \n' < "$WORK_DIR/SALT" 2>/dev/null || true)}"
   if [ -z "${LISTER_BOND:-}" ]; then

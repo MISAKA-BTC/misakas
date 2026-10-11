@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""audit-gen/dgwatch.py — the generative drill's read-only RPC helper (RFC-0003 step 8). Stdlib only; one JSON-wRPC
-call per request through audit-tir/rpc.py to a drill node's loopback JSON port. Nothing here changes node state.
+"""tools/drills/gen/dgwatch.py — the generative drill's read-only RPC helper (RFC-0003 step 8). Stdlib only; one JSON-wRPC
+call per request through tools/drills/tir/rpc.py to a drill node's loopback JSON port. Nothing here changes node state.
 
   dgwatch.py --port P anchor                       print "<sink hash> <its DAA>": the anchor a gen-claim request names
   dgwatch.py --port P tip                          print the virtual DAA score
@@ -15,7 +15,7 @@ call per request through audit-tir/rpc.py to a drill node's loopback JSON port. 
 A claim a court convicted reads CourtFraud / CourtDefault / CourtHeldVerdict in its phase or void reason."""
 import argparse, json, os, sys, time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "audit-tir"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tir"))
 from rpc import call, pick  # noqa: E402
 
 CONVICTED = ("CourtFraud", "CourtDefault", "CourtHeldVerdict")

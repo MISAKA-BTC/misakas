@@ -5,7 +5,7 @@
 
 Appends one row per sample to DIR/lifecycle.tsv (time, tip DAA, registry state, ready seats now/required, probes passed/failed, class
 status, share, inflight, reason) and rewrites DIR/lifecycle.json (first time each state was seen, the last row, whether a state that
-admits weight-bearing claims was reached). Stops at --until, at the deadline, or never earlier. Stdlib + audit-tir/rpc.py.
+admits weight-bearing claims was reached). Stops at --until, at the deadline, or never earlier. Stdlib + tools/drills/tir/rpc.py.
 """
 import argparse
 import json
@@ -13,7 +13,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.environ.get("H1_WT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."), "audit-tir"))
+sys.path.insert(0, os.path.join(os.environ.get("H1_WT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."), "tools/drills/tir"))
 import rpc  # noqa: E402
 
 WEIGHT_BEARING = ("Probation", "ActiveLimited", "Active")

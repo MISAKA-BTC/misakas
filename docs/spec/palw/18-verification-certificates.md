@@ -398,7 +398,7 @@ the equivocating seat slashed, and the carriage per licence — `t12_capacity_ve
 (real blocks, in process; fence at DAA 70: one vertex dropped by name below it, four claims bound below it of which one licenses by receipts below and
 one licenses by receipts **after** the fence, six bound at or after it all licensed by eight vertices, a leaf naming a pre-fence claim counting for
 nothing, the receipt path refused by name for a post-fence claim and by the assemblers, and the seat that signed a round twice slashed 100 ‰ — 93,906,321,001,040 → 84,491,676,088,216
-sompi — and ejected), and the multi-node drill of §18.10 (`audit-vertex/dv.sh`).
+sompi — and ejected), and the multi-node drill of §18.10 (`tools/drills/vertex/dv.sh`).
 
 ## 18.14 Tests
 

@@ -2,7 +2,7 @@
 #
 # ONE private devnet on this Mac, loopback only: a salted testnet-12 drill chain (ADR-0152 §8.2 — its own genesis, its own keyring
 # written by the binary under test, its own app dirs and ports), running the shipped testnet-12 rules with the release's flag days
-# compressed to low heights (the combined drill's schedule, audit-combined/dc.sh: 6/10/14, IR 16, IR-2 24, int-11 26). It never
+# compressed to low heights (the combined drill's schedule, tools/drills/combined/dc.sh: 6/10/14, IR 16, IR-2 24, int-11 26). It never
 # touches a public node, a fleet host, a card key or a public app dir; kaspad itself refuses all of them on a salted chain.
 #
 # Roles (the H1 brief):
@@ -90,7 +90,7 @@ mem_free_pct() { memory_pressure 2>/dev/null | awk -F': ' '/System-wide memory f
 ucli() { HOME=$UHOME "$CLI_BIN" --network testnet-12 --rpc "127.0.0.1:$(borsh "${U_RPC_NODE:-B}")" --palw-drill-genesis-salt="$(salt)" "$@"; }
 ocli() { HOME=$OPHOME "$CLI_BIN" --network testnet-12 --rpc "127.0.0.1:$(borsh A)" --palw-drill-genesis-salt="$(salt)" "$@"; }
 ncli() { local n=$1; shift; HOME=$OPHOME "$CLI_BIN" --network testnet-12 --rpc "127.0.0.1:$(borsh "$n")" --palw-drill-genesis-salt="$(salt)" "$@"; }
-rpc() { python3 "$WT/audit-tir/rpc.py" call --port "$(jport "$1")" "$2" "${3:-{\}}"; }
+rpc() { python3 "$WT/tools/drills/tir/rpc.py" call --port "$(jport "$1")" "$2" "${3:-{\}}"; }
 tip() { rpc "${1:-C}" getBlockDagInfo '{}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("virtualDaaScore","?"))' 2>/dev/null || echo "?"; }
 
 # node_args <name> — the kaspad argv, one per line.

@@ -1,4 +1,4 @@
-# audit-tir/lib-df.sh — sourced by the D-F drill runner (RFC-0002 Phase F: D-F1 the Qwen2.5-A16 IR class
+# tools/drills/tir/lib-df.sh — sourced by the D-F drill runner (RFC-0002 Phase F: D-F1 the Qwen2.5-A16 IR class
 # end to end, D-F2 its court battery; D-F3/D-F4 are Phase F's step scripts, run on the same chain).
 #
 # **THE int-10 KIT (df-kit-int10, 2026-10-01): the DAA-3,600 flag day's drill** — `palw_tir_fence2` ALONE (the
@@ -18,8 +18,8 @@
 #   TIR_AT, FENCE_AT, FENCE2_AT, FENCE3_AT, NEW0_P2P/NEW0_RPC/NEW0_GRPC/NEW0_LOG, OLD_P2P/OLD_RPC/OLD_LOG,
 #   $WORK_DIR/ir-class.id, $WORK_DIR/ir-artifact.root, $WORK_DIR/ir-registration.obj.
 set -euo pipefail
-A=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)          # audit-tir/
-WT=$(cd "$A/.." && pwd)
+A=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)          # tools/drills/tir/
+WT=$(cd "$A/../../.." && pwd)
 WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-int10-drill}
 # BIN_DIR: the release under test (kaspad, misaka, palw-class, palw-a16-to-tir, palw-tir-equiv, redteam) —
 # the one parameter a run points at a build; each binary can still be named on its own.

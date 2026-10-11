@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# audit-combined/dc.sh — the COMBINED drill of the DAA-5,300 release candidate (rcore/int-12): ONE salted testnet-12 drill chain on this Mac that crosses the
+# tools/drills/combined/dc.sh — the COMBINED drill of the DAA-5,300 release candidate (rcore/int-12): ONE salted testnet-12 drill chain on this Mac that crosses the
 # whole extended fence list with `--palw-drill-int11-at=H'` (every fence of the release at H', rho 100 / 250 / 1000 at H' + 95 / + 190 / + 285) on the
 # binary the release ships, and measures the user's two headline verdicts under a sustained REAL-model claim load:
 #   PANEL  verification does not jam        dcwatch.py panel   (bind->licence p50/p95, panel-bound backlog trend, seat oldest wait, F3 producer-hold
 #                                                              events, PanelUnavailable expiries, receipts/h per seat; one row per rho window)
 #   SHARE  PALW blocks dominate             dcwatch.py share   (sliding windows past H': REAL + EXEC >= 90 % of non-RED blocks, heartbeats <= 10 %,
 #                                                              floor attempts only in idle windows; blockKind / laneClass from getBlock verboseData)
-# It is audit-improve/dm.sh (the D-M and DG drills, the capacity sampler, the post-genesis bonds, the just-in-time liars) with INT11=1 INT12=1 and the load
+# It is tools/drills/improve/dm.sh (the D-M and DG drills, the capacity sampler, the post-genesis bonds, the just-in-time liars) with INT11=1 INT12=1 and the load
 # of this file: see `dc.sh plan`. Commands: plan | dry | up | run | status | verdicts | fences | gates | panel | share | redblue | recovery | gen <dgN> | evidence | down.
-#   BIN_DIR=<dir with kaspad misaka palw-class> [OLD_KASPAD_BIN=<the fleet's release at the crossing>] bash audit-combined/dc.sh dry
+#   BIN_DIR=<dir with kaspad misaka palw-class> [OLD_KASPAD_BIN=<the fleet's release at the crossing>] bash tools/drills/combined/dc.sh dry
 set -euo pipefail
 C=$(cd "$(dirname "$0")" && pwd)
-WT=$(cd "$C/.." && pwd)
+WT=$(cd "$C/../../.." && pwd)
 export INT11=1 INT12=1
 # The combined drill is shaped by its wall clock: the candidate ~14:00 JST 10-04, the drill done by ~08:00 10-05 (~17 h = ~490 DAA at ~125 s). H' = 26 (above the IR-2
 # fence at 24; the head's Probation at ~92 is before the first measured window), three rho windows of 32 DAA (rho100 / 250 / 1000: rho25 has no REAL load yet and was
@@ -51,7 +51,7 @@ export EXT_FLOOR_FLAG=${EXT_FLOOR_FLAG:---palw-drill-floor-ignore-policy}
 export GEN_DIR=${GEN_DIR:-$HOME/Downloads/MISAKA-wt-b/gen-drill-classes}
 export OLD_KASPAD_BIN=${OLD_KASPAD_BIN:-$HOME/Downloads/MISAKA-wt-b/lifecycle-run/bin/2483c570cea4/kaspad}
 EVD=${EVD:-$HOME/Downloads/MISAKA-wt-b/lanes/evidence/combined-drill}
-DM="$WT/audit-improve/dm.sh"
+DM="$WT/tools/drills/improve/dm.sh"
 cmd=${1:-plan}; shift || true
 
 plan() {
@@ -106,7 +106,7 @@ cat <<EOF
   report    (never a gate) the user's metrics: REAL attempts BLUE rate, REAL share of the selected chain, REAL work reaching Final (claims >= 200 DAA old), recovery time; leg X (off unless X_DAA > 0): one policy-IGNORING floor producer
             ($EXT_FLOOR_FLAG, the extfloor node) — how many REAL attempts it turns RED
   goal      (supply-bound, reported, never a gate) SHARE: REAL + EXEC >= 90 % / heartbeat <= 10 % of the consensus blocks per eligible window, PASS / FAIL as measured; REAL vs heartbeat vs floor per window
-  dropped   D-M1..D-M4, D-M6 and DG-3..DG-7b need ~1,000 DAA: informational only; the lane harnesses (audit-vertex dv.sh MESH=1, rfc6 shard.sh, rfc1, rfc2r) cannot share this chain
+  dropped   D-M1..D-M4, D-M6 and DG-3..DG-7b need ~1,000 DAA: informational only; the lane harnesses (tools/drills/vertex dv.sh MESH=1, rfc6 shard.sh, rfc1, rfc2r) cannot share this chain
   needs RS  (given, ADR-0165 083a93e76: the three flags, the hold line, the [palw-floor-state] line); K = floor_idle_slots 20, probe 8, cooldown 20 in the binary ('dc.sh dry' compares the source tree's constants)
 EOF
 }

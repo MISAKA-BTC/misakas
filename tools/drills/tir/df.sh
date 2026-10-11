@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-tir/df.sh — the D-F drills' runner (RFC-0002 Phase F), ONE salted testnet-12 drill chain on this Mac.
+# tools/drills/tir/df.sh — the D-F drills' runner (RFC-0002 Phase F), ONE salted testnet-12 drill chain on this Mac.
 #
 # **THE int-10 KIT (df-kit-int10, 2026-10-01) — the DAA-3,600 flag day's drill, on the SHIPPING binary.**
 #   `palw_tir_fence2` ALONE crosses at TIR2_AT (default 50; `--palw-drill-tir2-at` on every new node; the model court
@@ -24,7 +24,7 @@
 #         (TirShardCourtAccused, the seat that refuted it or a challenger), and honest claims go Final;
 #   D-F3/D-F4 are Phase F's step scripts (scripts/misaka-palw-tir-drill-df{3,4}.sh), called with the layout.
 #
-#   bash audit-tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
+#   bash tools/drills/tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the fleet's release kaspad>  A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart>
 #     [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] [IR_CONTEXT=512] [IR_LOGITS_TILE=1024]
 #   commands: dry | class | small | up | restart-old | register-past | flagday [old|below|cross|classes] | stage1 | stage2 | df1 | df2 | df3 | df4 | bdc | status | down

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit-tir/classrows.py — one class's row on one drill node (read-only JSON-wRPC, getPalwClasses).
+"""tools/drills/tir/classrows.py — one class's row on one drill node (read-only JSON-wRPC, getPalwClasses).
 
   classrows.py <json port> <class id> <label>
 

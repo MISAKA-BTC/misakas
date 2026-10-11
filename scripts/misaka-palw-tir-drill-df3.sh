@@ -3,7 +3,7 @@
 # (eight attacks) against a drill node whose producer mines an IR class, past `palw_tir_v1`.
 #
 # One step of the ONE salted testnet-12 drill chain D-F1…D-F4 run on. The runner and the node layout are
-# the node lane's (audit-tir/df.sh on tir/node: `df.sh df3` calls `run` here with the layout exported);
+# the node lane's (tools/drills/tir/df.sh on tir/node: `df.sh df3` calls `run` here with the layout exported);
 # this script reads the layout from the environment only and starts nothing but the harness. The eight
 # attacks — raw_skeleton, nonce_grind, algo_downgrade_khh, forged_commitment, tamper_state_root,
 # fat_coinbase, inflate_position, insider_wellformed_envelope — take a real template from new0, tamper
@@ -20,7 +20,7 @@
 #   misaka-palw-tir-drill-df3.sh dry   check the binaries, the environment and the plan; start nothing
 #   misaka-palw-tir-drill-df3.sh run   the battery, then the evidence
 #
-# ENV (the drill layout, shared with D-F1/D-F2/D-F4; defaults are audit-tir/lib-df.sh's):
+# ENV (the drill layout, shared with D-F1/D-F2/D-F4; defaults are tools/drills/tir/lib-df.sh's):
 #   SALT            the drill's salt (64 hex); else $WORK_DIR/SALT
 #   WORK_DIR        ~/.misaka-palw-tir-drill; ir-class.id, ir-artifact.root, keyring/manifest.json live here
 #   KASPAD_BIN      the release under test (its directory holds the CLI and the harness by default)

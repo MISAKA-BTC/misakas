@@ -169,7 +169,7 @@ the fence the object is not applied and its block stands — never an isolation 
 * 2026-10-08 night — **C4 round 3 integrated** (`b2d43068f`): mandatory test 3 passes on the real node (Panel-licensed and OPV, node-less
   relay path); F-C4R3-01(a) fixed; 01(b) → OB-P0; 02/03/05 + GAP-R7 + GAP-5 + GAP-11 → G14-R4; 04 → int-13 list frozen at the cut.
   **C1r2 P1 integrated** (`7ddf22251`): `rfc9_v4_chain_e2e` (fence 4 end to end, miner offline, another builder redeems) and the drill's V4
-  leg (`audit-combined/rfc9-v4-leg.sh`, ≈19.5 h).
+  leg (`tools/drills/combined/rfc9-v4-leg.sh`, ≈19.5 h).
 
 * 2026-10-08 evening — integrated: lane D phases 2/2b/3 (kernel route + RFC-0015 OPV on the node, onboarding objects 104–108,
   `palw_panel_free_v1` as a struct fence with the OPV admission list/terms, `palw_signed_registration_v1` for G-EXPIRY/G-RULESET,

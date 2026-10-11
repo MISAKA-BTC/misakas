@@ -1,7 +1,7 @@
-# audit-tir — the D-F drill kit (RFC-0002 Phase F)
+# tools/drills/tir — the D-F drill kit (RFC-0002 Phase F)
 
 One salted testnet-12 drill chain on this Mac, loopback only. Usage, stages and every command are in the
-header of `df.sh` (`bash audit-tir/df.sh` with no argument prints it); the layout (nodes, ports, classes) is
+header of `df.sh` (`bash tools/drills/tir/df.sh` with no argument prints it); the layout (nodes, ports, classes) is
 `lib-df.sh`; the sampler is `dfwatch.py`.
 
 ## The DAA-3,600 flag day's drill (int-10)
@@ -42,7 +42,7 @@ small class, 2,199,114 for the A16 class on 2026-10-01 — which go to `$WORK_DI
   its "next" fences were 6: no refusal height was stored, so the connected-peer rejudge never fired at
   `TIR_AT`. The old node only saw UTXO-invalid blocks past the IR fence and stalled at DAA 20. Restarting
   `old` gave the handshake refusal (`WrongForkId`) and D-F4's cross passed. So restart `old`
-  (`bash audit-tir/nodes.sh stop old; bash audit-tir/nodes.sh start old`) once the chain is past
+  (`bash tools/drills/tir/nodes.sh stop old; bash tools/drills/tir/nodes.sh start old`) once the chain is past
   `FENCE3_AT` and before `TIR_AT`, and judge D-F4's cross on the handshake refusal. Production is not
   affected: every fleet node was restarted after DAA 1,700 by the int-8 upgrade.
 - **A registrant is restarted without `--palw-register-class` once its class is on the chain**
@@ -62,8 +62,8 @@ claim on chain (D). The piece drills all three live on the SMALL class, with its
 (`--palw-drill-answer-only`: it announces and serves its answer envelope, never its capture — a 1.5B class's
 condition, on a class that runs in minutes):
 
-    DF1=0 TIR2_AT=30 bash audit-tir/df.sh up --bin-dir <tir/node release>   # its own chain: fence2 is set at `up`
-    DF1=0 TIR2_AT=30 bash audit-tir/df.sh bdc                               # once the small class is Active
+    DF1=0 TIR2_AT=30 bash tools/drills/tir/df.sh up --bin-dir <tir/node release>   # its own chain: fence2 is set at `up`
+    DF1=0 TIR2_AT=30 bash tools/drills/tir/df.sh bdc                               # once the small class is Active
 
 - **B**: new4 lies at an undissected leaf; the seats find it through its served annexes and convict.
 - **D**: new4 lies at the dissected kind; the named leaf opens F7's dissection and the challengers build its

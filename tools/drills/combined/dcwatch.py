@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit-combined/dcwatch.py — the combined drill's PANEL / SHARE / RED-BLUE / RECOVERY verdicts (read-only JSON-wRPC to a drill node; stdlib only).
+"""tools/drills/combined/dcwatch.py — the combined drill's PANEL / SHARE / RED-BLUE / RECOVERY verdicts (read-only JSON-wRPC to a drill node; stdlib only).
 
   panel [--work DIR] [--p50-max 6 --p95-max 12 --wait-max 40]
         the PANEL verdict ("verification does not jam"), read from the driver's capacity sampler (drive-state.json: cap-summary per window, cap-claims,
@@ -38,7 +38,7 @@
   selftest   the window, anticone and recovery logic over a synthetic DAG.
 """
 import argparse, json, os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "audit-tir"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tir"))
 from rpc import call, pick  # noqa: E402
 
 FLOOR_KINDS = ("FALLBACK", "LEGACY_FLOOR")

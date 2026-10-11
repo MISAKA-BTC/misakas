@@ -122,7 +122,7 @@ Flags that make a node lie or withhold, to exercise the courts; they apply on a 
 
 * Lane D's generative drill (DG-1 … DG-7b): `docs/design/palw/rfc3-gen-drill-inputs.md` — the classes (`toy-image`, `toy-embed`,
   `wide-embed`, `sd3-tiny`), the flags it needs (`--palw-drill-tir-at`, `-gen-at` 28, `-decode-rules-at` 32, `-fp-v5-at` 104,
-  `-held-chunks-at` 140, in that order) and what each crossing checks; the harness is lane C's (`audit-tir/`, `audit-gen/dg.sh`).
+  `-held-chunks-at` 140, in that order) and what each crossing checks; the harness is lane C's (`tools/drills/tir/`, `tools/drills/gen/dg.sh`).
 * Lane C's improvement drills (the evaluation court, D-M3 with `--palw-drill-tamper-eval`) use rows 4–6 and 12–14 and 17.
 
 ## 7. A command line, end to end

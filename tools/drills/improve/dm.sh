@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-improve/dm.sh — the D-M drills' runner (RFC-0004 A13), ONE salted testnet-12 drill chain on this Mac:
+# tools/drills/improve/dm.sh — the D-M drills' runner (RFC-0004 A13), ONE salted testnet-12 drill chain on this Mac:
 #   D-M1  the whole epoch: the usage trigger → OPEN → material (a dataset, a hard case) → submission → the candidate → the
 #         evaluation claims → the keys' reveal → scoring → promotion over the sign test → the rewards, and their vesting;
 #   D-M2  a candidate that must not win (it breaks what the parent passes; and a winner held to one setter's half of the draw)
@@ -19,7 +19,7 @@
 #   D-M6  copying (a candidate already entered), a candidate past t_close, the keys revealed early, the hold-out pool flooded
 #         (fee DoS / grinding: the pool is bounded at 4n, a case never revealed is dropped from the draw).
 #
-#   bash audit-improve/dm.sh <command> --bin-dir <release dir>       (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
+#   bash tools/drills/improve/dm.sh <command> --bin-dir <release dir>       (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the release before the fence>  [WORK_DIR=~/.misaka-palw-improve-drill]
 #   commands: dry | plan | model | composites | keys | up | status | verdicts | once | selftest | down | gen <dgN…> | seat <script args…>
 #
@@ -37,7 +37,7 @@
 #   status    nodes, DAA, the verdicts so far
 #   verdicts  every drill's verdict file
 #   down      SIGINT every node (never SIGKILL), stop the driver
-#   gen       lane D's RFC-0003 scenarios on this chain (audit-gen/dg.sh, sourced over this harness's lib: `dm.sh gen dg1`…), run by hand or by the plan's clock
+#   gen       lane D's RFC-0003 scenarios on this chain (tools/drills/gen/dg.sh, sourced over this harness's lib: `dm.sh gen dg1`…), run by hand or by the plan's clock
 #   seat      lane F's seating scenarios (SEAT_SCRIPT, default audit-seat/ds.sh), likewise
 set -euo pipefail
 A=$(cd "$(dirname "$0")" && pwd)
@@ -125,7 +125,7 @@ print(f"  {open2:>9}  R's epoch 2 (the regression check; `Previous` = H vs the p
 print(f"  ~{dec2:>8}  it is decided  {H(dec2)}: the rollback by proof (D-M4) — the D-M part's end; R's grants vest in 3 units of L_e {r['le']} from ~{r['dec']} (first due ~{r['dec'] + r['le']}, {H(r['dec'] + r['le'])}), the unvested remainder is forfeited by the rollback")
 c2 = int(os.environ.get("CAP2_AT", "560")); c3 = int(os.environ.get("CAP3_AT", "655")); cs = int(p.get("capacity", {}).get("settle_daa", 10)); cw = int(p.get("capacity", {}).get("window_daa", 80))
 print(f"  capacity  rho 25 at {c2}, rho 100 at {c3} (INT11={os.environ.get('INT11', '1')}: the whole int-11 list at {c2}): the load line (accepted/DAA, licensed/DAA, licence latency p50/p95, backlog trend, seat occupancy) runs {c2 + cs}-{c2 + cs + cw} at rho 25 and {c3 + cs}-{c3 + cs + cw} at rho 100; R's epoch 2 claims from ~{open2 + 78}")
-print( "  lane D  RFC-0003 (dm.sh gen dg1..dg7b, audit-gen/dg.sh over this harness's lib; Plan B classes loaded on every IR holder from the start): DG-1 the crossings (gen 28, fp-v5 104, held chunks 140),")
+print( "  lane D  RFC-0003 (dm.sh gen dg1..dg7b, tools/drills/gen/dg.sh over this harness's lib; Plan B classes loaded on every IR holder from the start): DG-1 the crossings (gen 28, fp-v5 104, held chunks 140),")
 print( "          DG-2 the readiness gate (embedding class registered at 103), DG-3 honest claims to Final, DG-4 cone/output lies (bonds 10, 11), DG-5 the caps, DG-6/7a the held leaf challenge")
 print( "          (bond 12, with the kill/restart), DG-7b the lapse (bond 13): the liars' bonds are post-genesis, registered by the driver from DAA 44 (lane D's first, then the D-M3 liars' 8, 9)")
 print( "  lane F  class seating (dm.sh seat …, SEAT_SCRIPT): the fence at the seating height, its slots before the first evaluation claims; F's own script (not in this tree yet) registers its X2/X4 classes and packs from seat 7 early (DAA 40..60 in the layout agreed with F)")
@@ -207,7 +207,7 @@ preflight() {
         HOME=${TMPDIR:-/tmp} "$CLI_BIN" palw tir-registration --help 2>&1 | grep -q -- "--parent" && ok "misaka palw tir-registration --parent" || bad "tir-registration has no --parent"
     fi
     local hk
-    for hk in "$WT/audit-gen/dg.sh" "$WT/audit-gen/dgwatch.py"; do
+    for hk in "$WT/tools/drills/gen/dg.sh" "$WT/tools/drills/gen/dgwatch.py"; do
         if [ -s "$hk" ]; then
             case $hk in *.sh) bash -n "$hk" && ok "lane D's $(basename "$hk") parses" || bad "lane D's $(basename "$hk") does not parse" ;; *) python3 -m py_compile "$hk" 2>/dev/null && ok "lane D's $(basename "$hk") compiles" || bad "lane D's $(basename "$hk") does not compile" ;; esac
         else note "lane D's $(basename "$hk") is not in this tree yet (integration brings it): \`dm.sh gen\` refuses until it is"; fi
@@ -231,7 +231,7 @@ preflight() {
     if "${CLEAN[@]}" WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest >/dev/null 2>&1 \
        && "${CLEAN[@]}" WORK_DIR=${TMPDIR:-/tmp}/dm-selftest-$$ python3 "$A/dmdrive.py" selftest-drive >/dev/null 2>&1; then
         ok "the driver's self-tests pass (the verdict logic; the whole actor against a scripted chain: every step fires in its state)"
-    else bad "the driver's self-tests fail: python3 audit-improve/dmdrive.py selftest-drive"; fi
+    else bad "the driver's self-tests fail: python3 tools/drills/improve/dmdrive.py selftest-drive"; fi
     rm -rf "${TMPDIR:-/tmp}/dm-selftest-$$"
     [ -x "$VENV_PY" ] && "$VENV_PY" -c "import torch, transformers" 2>/dev/null && ok "torch + transformers in $VENV_PY" || note "no torch in $VENV_PY: \`dm.sh model\` cannot run (the model files may already exist)"
     [ -s "$FIXTURE/model.safetensors" ] && ok "the head's fixture: $FIXTURE" || bad "the HF fixture is missing: $FIXTURE (FIXTURE)"
@@ -620,9 +620,9 @@ case $cmd in
     selftest) python3 "$A/dmdrive.py" selftest && python3 "$A/dmdrive.py" selftest-drive | tail -8 ;;
     down) down ;;
     gen)
-        [ -s "$WT/audit-gen/dg.sh" ] || die "lane D's audit-gen/dg.sh is not in this tree (integration brings it)"
+        [ -s "$WT/tools/drills/gen/dg.sh" ] || die "lane D's tools/drills/gen/dg.sh is not in this tree (integration brings it)"
         export_env; SALT=$(salt); export SALT DG_LIB="$A/lib-dm.sh" GEN_AT FPV5_AT HELD_AT LATE_AT GEN_DIR SEAT_NODES="new0 new1 new2 new3 new4 new5 new6"
-        bash "$WT/audit-gen/dg.sh" "$@" ;;
+        bash "$WT/tools/drills/gen/dg.sh" "$@" ;;
     seat)
         S=${SEAT_SCRIPT:-$WT/audit-seat/ds.sh}
         [ -s "$S" ] || die "lane F's seating script ($S) is not in this tree (SEAT_SCRIPT; integration brings it)"

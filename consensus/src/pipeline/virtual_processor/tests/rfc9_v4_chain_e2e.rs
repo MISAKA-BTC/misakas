@@ -40,7 +40,7 @@
 //! **Not covered here (stated, not implied):** the provider court (miner-to-provider DA responsibility transfer, RFC-0009 Part B) is not
 //! folded, so the material's availability after the miner leaves is the providers' goodwill, not an obligation; kaspad's builder mode
 //! itself is not linked (this crate cannot depend on kaspad) — its decision procedure is reproduced line for line in
-//! [`builder_mode_pick`]; and nothing ran on a multi-node network (that is the drill's leg, `audit-combined/rfc9-v4-leg.sh`).
+//! [`builder_mode_pick`]; and nothing ran on a multi-node network (that is the drill's leg, `tools/drills/combined/rfc9-v4-leg.sh`).
 use super::OnetimeTxSelector;
 use super::t12_int13_flag_day_crossing::{H, t12_release};
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain};

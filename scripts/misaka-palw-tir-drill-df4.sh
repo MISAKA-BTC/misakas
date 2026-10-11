@@ -2,7 +2,7 @@
 # misaka-palw-tir-drill-df4.sh — RFC-0002 Phase F drill D-F4: `palw_tir_v1` crossed on the SHIPPING binary.
 #
 # One step of the ONE salted testnet-12 drill chain D-F1…D-F4 run on. The runner and the node layout are
-# the node lane's (audit-tir/df.sh on tir/node: `up` starts every node — the `old` relay last: the fleet's
+# the node lane's (tools/drills/tir/df.sh on tir/node: `up` starts every node — the `old` relay last: the fleet's
 # release before the IR flag day, keyless, the same salt and flag days, no --palw-drill-tir-at, peered to
 # new0 — and writes the signed below-the-fence IR registration; `df.sh df4` calls `run` here with the
 # layout exported). This script starts nothing; it submits one object and reads logs and RPC.
@@ -26,7 +26,7 @@
 #
 # Exit 0 PASS, 1 FAIL, 3 INCOMPLETE (not reachable yet: `below` past TIR_AT - 2, `court` before D-F2).
 #
-# ENV (the drill layout, shared with D-F1/D-F2/D-F3; defaults are audit-tir/lib-df.sh's):
+# ENV (the drill layout, shared with D-F1/D-F2/D-F3; defaults are tools/drills/tir/lib-df.sh's):
 #   SALT (else $WORK_DIR/SALT), WORK_DIR (~/.misaka-palw-tir-drill), KASPAD_BIN (the release under test),
 #   OLD_KASPAD_BIN (the fleet's release before the IR flag day, int-7 7aba8dd57 or later), CLI_BIN,
 #   TIR_AT (20), FENCE_AT / FENCE2_AT / FENCE3_AT (6 / 10 / 14: the post-launch lists' drill heights, below

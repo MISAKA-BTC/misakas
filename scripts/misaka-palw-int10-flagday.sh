@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # misaka-palw-int10-flagday.sh — the DAA-3,600 flag day (palw_tir_fence2 ALONE: the model court window stays dormant on
 # testnet-12, the coordinator's decision of 2026-10-01) crossed on the SHIPPING binary, in the ONE salted testnet-12
-# drill chain audit-tir/df.sh runs (the int-10 kit, 2026-10-01).
+# drill chain tools/drills/tir/df.sh runs (the int-10 kit, 2026-10-01).
 #
 # Derived from Phase F's D-F4 step script (misaka-palw-tir-drill-df4.sh), whose crossing is the IR fence's: here the
 # crossing is TIR2_AT (`--palw-drill-tir2-at`), and the old relay is the fleet's int-8 release — it HAS the IR fence
@@ -29,7 +29,7 @@
 # Exit 0 PASS, 1 FAIL, 3 INCOMPLETE (not reachable yet: `below` past TIR2_AT − 2; `classes` before the small class is
 # registered past the fence).
 #
-# ENV (the drill layout, audit-tir/lib-df.sh's): SALT (else $WORK_DIR/SALT), WORK_DIR, KASPAD_BIN, OLD_KASPAD_BIN, CLI_BIN,
+# ENV (the drill layout, tools/drills/tir/lib-df.sh's): SALT (else $WORK_DIR/SALT), WORK_DIR, KASPAD_BIN, OLD_KASPAD_BIN, CLI_BIN,
 #   TIR_AT, TIR2_AT, FENCE_AT/FENCE2_AT/FENCE3_AT, NEW0_P2P/NEW0_RPC/NEW0_LOG, OLD_P2P/OLD_RPC/OLD_LOG, JSON_BASE,
 #   PAST_CLASS (small|ir: which class registers past the fence; the other registers below it), STALL_WAIT (3600 s),
 #   STEP_WAIT (43200 s), CLASSES_WAIT (1800 s: how long `classes` waits for the registration to reach every node).
@@ -51,7 +51,7 @@ OLD_P2P="${OLD_P2P:-56108}"
 OLD_RPC="${OLD_RPC:-57108}"
 OLD_LOG="${OLD_LOG:-$WORK_DIR/old/kaspad.out}"
 JSON_BASE="${JSON_BASE:-58100}"
-RPC_PY="${RPC_PY:-$(cd "$(dirname "$0")/.." && pwd)/audit-tir/rpc.py}"
+RPC_PY="${RPC_PY:-$(cd "$(dirname "$0")/.." && pwd)/tools/drills/tir/rpc.py}"
 CLASSROWS_PY="${CLASSROWS_PY:-$(dirname "$RPC_PY")/classrows.py}"
 STALL_WAIT="${STALL_WAIT:-3600}"
 STEP_WAIT="${STEP_WAIT:-43200}"
@@ -229,7 +229,7 @@ step_cross() {
 milestone_daa() { awk -F'\t' -v m="$1" '$1==m {print $2; exit}' "$MILESTONES" 2>/dev/null || true; }
 
 # One class on every running new node: `class_rows <class id> <out file>` writes, per node that answers and lists the
-# class, `<node> <registeredDaa> <canonicalLeaves> <artifactRoot> <status>` (audit-tir/classrows.py), and sets
+# class, `<node> <registeredDaa> <canonicalLeaves> <artifactRoot> <status>` (tools/drills/tir/classrows.py), and sets
 # NODES_ANSWERING to the number of nodes whose JSON-RPC answered.
 class_rows() {
   local cid="$1" out="$2" k line

@@ -51,7 +51,7 @@ Upstream rusty-kaspa components keep their places (`consensus/`, `crypto/`, `rpc
 | `kaspa-pq-*`, `pq-miner/` | Post-quantum signer, validator and miner |
 | `kaspa-evm/`, `evm-indexer/`, `bridge/`, `contracts/` | EVM lane |
 | `misaka-cli/`, `misaminer/`, `misaka-dnsseeder/`, `misaka-endpoints/` | MISAKA applications |
-| `audit-*/` | Drill and audit harnesses |
+| `tools/drills/` | Drill harnesses (combined, gen, improve, tir, vertex) and `tools/` utilities |
 | `scripts/` | CI gates, verification, operations and release scripts |
 | `docs/` | Documentation |
 

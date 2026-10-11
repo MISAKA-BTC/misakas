@@ -1,6 +1,6 @@
 # RFC-0003 step 8 — the generative drill's inputs (for the int-11 combined drill)
 
-Owner: lane D. Lane A lists the flags below in `docs/design/palw/int-11-drill-flags.md`; lane C's harness (`audit-tir/`,
+Owner: lane D. Lane A lists the flags below in `docs/design/palw/int-11-drill-flags.md`; lane C's harness (`tools/drills/tir/`,
 `dm.sh`) runs the scenarios. Nothing here is armed on any shipped ruleset: every fence is the drill's own mover
 (`config::drill::*`), dormant elsewhere. t12 identity must not move (params `3db42ea638f3c427…`, schedule `9d6b83fe744b6374…`
 — `scripts/t12-repin.sh --drift-only` reported no drift on the tip this document ships with).
@@ -9,7 +9,7 @@ Owner: lane D. Lane A lists the flags below in `docs/design/palw/int-11-drill-fl
 
 Written by `cargo test -p misaka-palw-sdk --test gen_drill_classes -- --ignored write_the_drill_classes` (Plan B) and
 `… --test gen_sd3_class -- --ignored write_the_sd3_class` (Plan A), both with `PALW_GEN_DRILL_OUT=<dir>`; then
-`python3 audit-gen/merge-sd3-manifest.py <dir>` puts the SD3 entry into `drill-classes.json`. Current artifacts:
+`python3 tools/drills/gen/merge-sd3-manifest.py <dir>` puts the SD3 entry into `drill-classes.json`. Current artifacts:
 `/Users/wata/Downloads/MISAKA-wt-b/gen-drill-classes/`.
 
 | class | role | container | step leaves (canonical) | a claim's material (FPG1) | largest cone close |
@@ -19,7 +19,7 @@ Written by `cargo test -p misaka-palw-sdk --test gen_drill_classes -- --ignored 
 | `wide-embed` | held leaf challenge (DG-6/7a/7b) | 329,600 B | 4 | 8,736 B | 605,362 B (over one carrier: tag 90 only) |
 | `sd3-tiny` (Plan A) | the reduced SD3 pipeline replaces `toy-image` | 1,141,016 B | 20,922 | 1,420,712 B | 72,916 B priced, 72,832 B measured (every commit point under one carrier; class `6a88a17d003f…`) |
 
-Plan A is selected with `IMAGE_CLASS=sd3-tiny DENOISE_STAGE=2` (audit-gen/dg.sh). Plan B stays the default; Plan A replaces it
+Plan A is selected with `IMAGE_CLASS=sd3-tiny DENOISE_STAGE=2` (tools/drills/gen/dg.sh). Plan B stays the default; Plan A replaces it
 only on the coordinator's word. A `sd3-tiny` claim is ~1.4 MB of material and 13 stages (text rows, text pooled, denoise,
 ten VAE): a seat's replay and the capture fetch are the first things the drill exercises beyond the toy classes.
 
@@ -44,7 +44,7 @@ CLI used (all in `misaka-cli`, compiled): `palw gen-registration`, `palw gen-cla
 or `output:<lane>:<delta>`, `--list-leaves <file>`, `--retention-dir`), `palw submit-object`, `palw fp-submit`. A claim's
 retention dir is `<appdir>/<network>/palw-retention`.
 
-## 3. Scenarios (audit-gen/dg.sh, functions over lane C's lib; `dgwatch.py` reads the chain)
+## 3. Scenarios (tools/drills/gen/dg.sh, functions over lane C's lib; `dgwatch.py` reads the chain)
 
 | id | what | expected |
 | --- | --- | --- |

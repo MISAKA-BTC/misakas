@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Merge the reduced SD3 class's manifest entry (sd3-tiny.json, written by `write_the_sd3_class`) into drill-classes.json
-(written by `write_the_drill_classes`), so audit-gen/dg.sh's class_field/class_file find it. Idempotent."""
+(written by `write_the_drill_classes`), so tools/drills/gen/dg.sh's class_field/class_file find it. Idempotent."""
 import json, os, sys
 
 d = sys.argv[1]

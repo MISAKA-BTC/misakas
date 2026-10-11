@@ -376,7 +376,7 @@ fn main() {
         }
         pass_through.extend(["--anchor-ttl-daa".to_string(), anchor_ttl_daa.to_string()]);
         // RFC-0009: the one-shot run of a watched job also files the claim's evidence and its V4 redemption authorization (the drill's
-        // fence-4 leg, `audit-combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
+        // fence-4 leg, `tools/drills/combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
         if let Some(dir) = &evidence_out {
             pass_through.extend(["--evidence-out".to_string(), dir.display().to_string()]);
         }

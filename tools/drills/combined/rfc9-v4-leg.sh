@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# audit-combined/rfc9-v4-leg.sh — fence 4 of the int-13 flag day (`palw_receipt_spend_v4`, RFC-0009 stage C) on the combined drill chain:
+# tools/drills/combined/rfc9-v4-leg.sh — fence 4 of the int-13 flag day (`palw_receipt_spend_v4`, RFC-0009 stage C) on the combined drill chain:
 # t12-daa9000-drill-plan.md §3.4 and its §6 item 1 ("the V4 leg scripted: rail + builder + a Final free-prompt claim"). A sibling of dc.sh,
-# run beside it on the SAME salted chain, keyring and ports (it sources audit-improve/lib-dm.sh exactly as dm.sh does). Nothing here touches
+# run beside it on the SAME salted chain, keyring and ports (it sources tools/drills/improve/lib-dm.sh exactly as dm.sh does). Nothing here touches
 # a host other than this Mac; nothing is signed with a key outside the drill keyring.
 #
-#   bash audit-combined/rfc9-v4-leg.sh <command>      BIN_DIR=<the release dir: kaspad misaka misaka-palw-fp-rail misaka-palw-rfc1-drill-claim
+#   bash tools/drills/combined/rfc9-v4-leg.sh <command>      BIN_DIR=<the release dir: kaspad misaka misaka-palw-fp-rail misaka-palw-rfc1-drill-claim
 #                                                                palw-evidence>   (INT13_AT, as dc.sh's --palw-drill-int13-at; default 110)
 #   plan      the leg's timeline in DAA (claim, bind, licence, Final, draw slot, use window) against H' = INT13_AT
 #   dry       preflight: every binary and flag the leg uses, the keyring, the ports; nothing written, nothing started
@@ -31,12 +31,12 @@
 # consensus/src/pipeline/virtual_processor/tests/rfc9_v4_chain_e2e.rs; this drill is the multi-node evidence the plan asks for.
 set -euo pipefail
 C=$(cd "$(dirname "$0")" && pwd)
-WT=$(cd "$C/.." && pwd)
+WT=$(cd "$C/../../.." && pwd)
 cmd=${1:-plan}; shift || true
 export INT11=${INT11:-1} INT12=${INT12:-1}
 export WORK_DIR=${WORK_DIR:-$HOME/.misaka-palw-combined-drill}
 export P2P_BASE=${P2P_BASE:-51200} BORSH_BASE=${BORSH_BASE:-52200} JSON_BASE=${JSON_BASE:-53200} EVM_BASE=${EVM_BASE:-54200} GRPC_BASE=${GRPC_BASE:-50200}
-. "$WT/audit-improve/lib-dm.sh"
+. "$WT/tools/drills/improve/lib-dm.sh"
 INT13_AT=${INT13_AT:-110}
 LEG=${LEG_DIR:-$WORK_DIR/rfc9-v4}
 EXEC_SEAT=${EXEC_SEAT:-7}
@@ -48,7 +48,7 @@ PROMPT_FORM=${PROMPT_FORM:-merkle} # Params::palw_prompt_ids_form_v1: testnet-12
 RAIL_BIN=${RAIL_BIN:-$(dirname "$KASPAD_BIN")/misaka-palw-fp-rail}
 PRODUCER_BIN=${PRODUCER_BIN:-$(dirname "$KASPAD_BIN")/misaka-palw-rfc1-drill-claim}
 EVIDENCE_BIN=${EVIDENCE_BIN:-$(dirname "$KASPAD_BIN")/palw-evidence}
-RPCPY="$WT/audit-improve/rpc.py"
+RPCPY="$WT/tools/drills/improve/rpc.py"
 ok() { echo "  ok   $*"; }
 bad() { echo "  FAIL $*"; FAILED=1; }
 note() { echo "  note $*"; }

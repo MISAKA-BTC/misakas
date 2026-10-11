@@ -1783,7 +1783,7 @@ mod tests {
         assert!(why.contains("--palw-drill-tir2-at (recorded 130, now 140)"), "{why}");
         let why = palw_drill_datadir_guard_v3(&dir, Some(&a), "g", Some(40), Some(60), Some(80), Some(100)).unwrap_err();
         assert!(why.contains("recorded 130, now none"), "dropped over a stored chain: {why}");
-        // `apply_to_config` arms it after the first IR fence — the drill's own heights (audit-tir's
+        // `apply_to_config` arms it after the first IR fence — the drill's own heights (tools/drills/tir's
         // lib-df.sh: flag days 6/10/14, IR fence 20) — with the mirror the fold reads, and the keyring
         // names the fingerprint the node on the same command line announces.
         let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];

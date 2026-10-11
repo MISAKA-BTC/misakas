@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-tir/nodes.sh start|stop|kill|status|args <node…> — the D-F drill's nodes (lib-df.sh NODES), after
+# tools/drills/tir/nodes.sh start|stop|kill|status|args <node…> — the D-F drill's nodes (lib-df.sh NODES), after
 # drill D's audit-lifecycle/nodes.sh.
 #   start   nohup nice kaspad (KASPAD_BIN; the `old` relay OLD_KASPAD_BIN); waits for the salted genesis line
 #           in log bytes written after the start

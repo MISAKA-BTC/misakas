@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # misaka-palw-rfc1-drill.sh — RFC-0001 drill: the six dormant fences crossed on the SHIPPING binary of the branch.
 #
-# One salted drill chain (the runner and node layout are audit-tir/df.sh's, or the int-11 drill's: `up` starts every node —
+# One salted drill chain (the runner and node layout are tools/drills/tir/df.sh's, or the int-11 drill's: `up` starts every node —
 # the `old` relay last: the release before these fences, keyless, the same salt and flag days, none of the --palw-drill-*
 # flags below, peered to new0). This script starts nothing; it submits what the claim commands build and reads logs and RPC.
 #
@@ -42,7 +42,7 @@
 #   SUBMIT_CONSTRAINT_CMD and SUBMIT_PREFIX_CMD default to scripts/misaka-palw-rfc1-drill-claims.sh (the floor-class producer
 #   `misaka-palw-rfc1-drill-claim` + the executor rail; needs BOND_KEY_SEED and CLASS_ID, see that script; the nodes must hold the
 #   token table it writes). SUBMIT_INHERIT_CMD (stage 2b, FP job version 12) defaults to `claims.sh inherit`; SUBMIT_ADAPTER_CMD to
-#   `claims.sh adapter`, which lists the RFC-0004 drill's composite `winc` (audit-improve/dm.sh composites: H + a PALWTIRS adapter section)
+#   `claims.sh adapter`, which lists the RFC-0004 drill's composite `winc` (tools/drills/improve/dm.sh composites: H + a PALWTIRS adapter section)
 #   as an adapter class (needs MODEL_DIR, TOOLS_BIN, FUNDING_KEY_FILE and H/winc registered on the chain; see that script).
 #
 # ENV: SALT (else $WORK_DIR/SALT), WORK_DIR (~/.misaka-palw-rfc1-drill), KASPAD_BIN (the branch's shipping binary),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit-vertex/dvmeasure.py — RFC-0007 Part I drill measurements (read-only JSON-wRPC to the drill's own loopback nodes). Stdlib only.
+"""tools/drills/vertex/dvmeasure.py — RFC-0007 Part I drill measurements (read-only JSON-wRPC to the drill's own loopback nodes). Stdlib only.
 
   census   --port P --fence H     every executor bond's claims (getPalwClaims, terminal included) by the path they licensed on:
                                   panel bound BELOW the fence (the receipt path), AT/ABOVE it (licence by tally), and the CROSS claims
@@ -12,7 +12,7 @@
   bond     --port P --bond TXID:I the bond's collateral / slashed / status (rpc.py snap's row)
 """
 import argparse, json, os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "audit-tir"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tir"))
 from rpc import call, pick  # noqa: E402
 
 LICENCE_TAGS = {6: "ReceiptLicensed", 49: "ReceiptLicensedV2", 52: "OptimisticLicensed", 59: "ReceiptLicensedBatchV1"}

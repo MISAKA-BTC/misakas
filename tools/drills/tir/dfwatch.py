@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""audit-tir/dfwatch.py — the D-F drill's sampler (read-only RPC to the drill's own loopback nodes).
+"""tools/drills/tir/dfwatch.py — the D-F drill's sampler (read-only RPC to the drill's own loopback nodes).
 
 Every 30 s, through one node (DF_PORT, new3's JSON port by default), for each IR class of the drill — D-F1
 (ir-class.id: the Qwen2.5-A16 class, new0 its registrant and producer) and the small class (small-class.id:

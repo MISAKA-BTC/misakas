@@ -245,7 +245,7 @@ not "trusting what a node says". Statuses use the matrix vocabulary. **Nothing b
 | Commit | What |
 |---|---|
 | `e93fdff2d` | consensus test `rfc9_v4_chain_e2e` — mandatory test 4 at chain-block level (P1) |
-| `4c5fa5f93` | `audit-combined/rfc9-v4-leg.sh` (the drill's fence-4 leg) + `misaka-palw-rfc1-drill-claim --kind plain / fp-certification --prompt-form`, rail `--watch` pass-through of `--evidence-out` / `--redeem-auth-out` |
+| `4c5fa5f93` | `tools/drills/combined/rfc9-v4-leg.sh` (the drill's fence-4 leg) + `misaka-palw-rfc1-drill-claim --kind plain / fp-certification --prompt-form`, rail `--watch` pass-through of `--evidence-out` / `--redeem-auth-out` |
 | `e4655dfbe` | `palw submit-object`: DUPLICATE_CLASS / CLASS_CONFLICT / DUPLICATE_CHECK_UNAVAILABLE before any fee (`--allow-duplicate`) |
 | `da3964d30` | `misaka-palw-remote::verify` — L1 / L3 / L2 status, the four mode labels, the signing gate |
 | `404491f42` | `palw-remote-miner`: L1/L3 over wRPC (`--verify-headers`, `--checkpoint-trust own-node\|pinned`, `--own-node`, `--accept-unverified-state`), gate before inference and again before the signature |
@@ -271,7 +271,7 @@ template through `validate_and_insert_block`; every PALW object rides a funded c
 | second spend refused (V3 or V4, same or sibling block) | late sibling PFS4: one fee and one leg on the selected chain whichever branch the PALW order keeps; V3 re-spend: `StatusDisqualifiedFromChain`, paid nothing; same-mergeset race on the reorg branch: exactly one builder paid | IMPLEMENTED_AND_TESTED |
 | reorg reverts the spend, quantum spendable again | a LONGER spend-less branch is refused (PALW order, not blue work); a heavier branch (two other quanta) reverts A's spend and the quantum is spent again exactly once; a replaying node agrees | IMPLEMENTED_AND_TESTED |
 | PFS4 below the fence refused by name | `a V4 receipt spend is not valid below palw_receipt_spend_v4` at the header stage; a PFS3 header above 8,192 B still refused past the fence | IMPLEMENTED_AND_TESTED |
-| multi-node drill | `audit-combined/rfc9-v4-leg.sh` (plan/dry/prepare/certify/claim/sync/status/verdict) — `dry` smoke-run only | EXTERNAL_GATE_PENDING (lead schedules) |
+| multi-node drill | `tools/drills/combined/rfc9-v4-leg.sh` (plan/dry/prepare/certify/claim/sync/status/verdict) — `dry` smoke-run only | EXTERNAL_GATE_PENDING (lead schedules) |
 
 Findings for the go/no-go: (1) the leg needs **~19.5 h of chain** at ~125 s/DAA (claim DAA 5 → Final 147 → slot 547: the 400-DAA receipt
 maturity is not in the plan's ~12 h); (2) on public testnet-12 FP commitments on the floor are skipped until FamilyCertified +
