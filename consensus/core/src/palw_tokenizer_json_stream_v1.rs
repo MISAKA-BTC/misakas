@@ -918,7 +918,7 @@ mod tests {
         hash(b"misaka-palw/json/object-key-node/v1", &[&(height as u16).to_le_bytes(), left.as_byte_slice(), right.as_byte_slice()])
     }
     fn prefix(path: Hash64, height: usize) -> [u8; 64] {
-        let mut bytes: [u8; 64] = path.as_byte_slice().try_into().unwrap();
+        let mut bytes: [u8; 64] = *path.as_byte_slice();
         for bit in 512 - height..512 {
             bytes[bit / 8] &= !(1 << (7 - bit % 8));
         }
