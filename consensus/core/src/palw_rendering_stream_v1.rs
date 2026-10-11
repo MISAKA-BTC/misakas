@@ -22,7 +22,7 @@ const IV: [u64; 8] = [
 ];
 
 // Portable BLAKE2b compression ported from blake2b_simd1.0.2 src/portable.rs,
-// copyright Jack O'Connor, licensed MIT or Apache-2.0 (licenses in rendering-stream-upstream/).
+// copyright Jack O'Connor, licensed MIT (notice in rendering-stream-upstream/LICENSE-MIT).
 // Parameter initialization, counters and last-block handling are covered by the keyed V1-leaf
 // differential tests below against that same locked library's public API.
 const SIGMA: [[u8; 16]; 12] = [
