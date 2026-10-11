@@ -300,6 +300,7 @@ pub(crate) fn registration_identity_v1(
         O::ClassRegistered { class_id, artifact_root, .. } | O::ClassRegisteredTirV1 { class_id, artifact_root, .. } => {
             Some((*class_id, *artifact_root))
         }
+        O::SignedRegistrationV1 { registration, .. } => registration_identity_v1(registration),
         _ => None,
     }
 }
@@ -362,6 +363,38 @@ pub async fn submit_objects_v2(
     allow_duplicate: bool,
 ) -> Result<Vec<String>, CliError> {
     submit_objects_v2_capped(ctx, ks, paths, yes, allow_duplicate, None).await
+}
+
+type CarrierBatchEntryV1 = (std::path::PathBuf, String, Transaction, u64, u64);
+
+fn check_carrier_batch_fees_v1(fees: impl IntoIterator<Item = u64>, maximum: Option<u64>) -> Result<u64, CliError> {
+    let total = fees.into_iter().try_fold(0u64, |sum, fee| sum.checked_add(fee))
+        .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast"))?;
+    if let Some(maximum) = maximum {
+        if total > maximum {
+            return Err(CliError::new(exit::GENERIC,
+                format!("the actual batch carrier fee {total} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast")));
+        }
+    }
+    Ok(total)
+}
+
+/// The actual transport callback is unreachable until the WHOLE built batch
+/// passes its fee cap. A second recipient/carrier cannot fail this preflight
+/// after the first one has already broadcast.
+async fn broadcast_carrier_batch_v1<'a, F, Fut>(
+    carriers: &'a [CarrierBatchEntryV1], maximum: Option<u64>, mut broadcast: F,
+) -> Result<Vec<serde_json::Value>, CliError>
+where
+    F: FnMut(&'a CarrierBatchEntryV1) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value, CliError>>,
+{
+    check_carrier_batch_fees_v1(carriers.iter().map(|(_, _, _, _, fee)| *fee), maximum)?;
+    let mut submitted = Vec::with_capacity(carriers.len());
+    for carrier in carriers {
+        submitted.push(broadcast(carrier).await?);
+    }
+    Ok(submitted)
 }
 
 /// Build the entire batch and enforce the caller's total carrier fee cap before
@@ -500,14 +533,7 @@ pub async fn submit_objects_v2_capped(
         carriers.push((path.clone(), summary.clone(), tx, compute_mass, fee));
     }
 
-    let total_fee_sompi = carriers.iter().try_fold(0u64, |sum, (_, _, _, _, fee)| sum.checked_add(*fee))
-        .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast"))?;
-    if let Some(maximum) = maximum_total_fee_sompi {
-        if total_fee_sompi > maximum {
-            return Err(CliError::new(exit::GENERIC,
-                format!("the actual batch carrier fee {total_fee_sompi} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast")));
-        }
-    }
+    let total_fee_sompi = check_carrier_batch_fees_v1(carriers.iter().map(|(_, _, _, _, fee)| *fee), maximum_total_fee_sompi)?;
 
     if !yes {
         match ctx.output {
@@ -543,11 +569,12 @@ pub async fn submit_objects_v2_capped(
         }
         return Ok(Vec::new());
     }
-    let mut submitted = Vec::with_capacity(carriers.len());
-    for (path, summary, tx, _, fee) in &carriers {
+    let sender = &nv.client;
+    let output = ctx.output;
+    let submitted = broadcast_carrier_batch_v1(&carriers, maximum_total_fee_sompi, |(path, summary, tx, _, fee)| async move {
         // A funding UTXO the mempool already holds a spend of (an earlier burst's change not yet
         // in a block) is not a failure of the object: say what to do instead of a bare reject.
-        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|e| {
+        sender.submit_transaction(tx.as_ref().into(), false).await.map_err(|e| {
             let text = e.to_string();
             if text.contains("already spent") {
                 CliError::new(
@@ -562,12 +589,12 @@ pub async fn submit_objects_v2_capped(
                 CliError::new(exit::GENERIC, format!("submit the carrier for {}: {text}", path.display()))
             }
         })?;
-        match ctx.output {
+        match output {
             OutputFormat::Json => {}
             _ => println!("submitted {} — {summary} (fee {fee} sompi)", tx.id()),
         }
-        submitted.push(serde_json::json!({ "object": path.display().to_string(), "txid": tx.id().to_string(), "fee_sompi": fee }));
-    }
+        Ok(serde_json::json!({ "object": path.display().to_string(), "txid": tx.id().to_string(), "fee_sompi": fee }))
+    }).await?;
     match ctx.output {
         OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "submitted": true, "carriers": submitted })),
         _ => println!("the chain grades them when the carriers are accepted; a chunked object applies in the block that completes it"),
@@ -734,13 +761,23 @@ pub(crate) fn build_carrier_priced_v1(
     funding_outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
     funding_entry: &kaspa_consensus_core::tx::UtxoEntry,
 ) -> Result<(Transaction, u64, u64), String> {
+    build_carrier_priced_for_params_v1(key, &nv.params, object, funding_outpoint, funding_entry)
+}
+
+fn build_carrier_priced_for_params_v1(
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    params: &kaspa_consensus_core::config::params::Params,
+    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    funding_outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
+    funding_entry: &kaspa_consensus_core::tx::UtxoEntry,
+) -> Result<(Transaction, u64, u64), String> {
     use kaspa_consensus_core::mass::MassCalculator;
     let floor = kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI;
     let calc = MassCalculator::new(
-        nv.params.mass_per_tx_byte,
-        nv.params.mass_per_script_pub_key_byte,
-        nv.params.mass_per_sig_op,
-        nv.params.storage_mass_parameter,
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
     );
     let probe =
         key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, floor).map_err(|e| format!("build the carrier: {e}"))?;
@@ -859,6 +896,98 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
 }
 
 #[cfg(test)]
+mod carrier_batch_tests {
+    use super::*;
+    use kaspa_consensus_core::{
+        config::params::SIMNET_PARAMS,
+        palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2,
+        palw_state_v2::PalwConsensusObjectV2,
+        tx::{TransactionOutpoint, UtxoEntry},
+        Hash64,
+    };
+    use kaspa_pq_validator_core::ValidatorKey;
+    use std::{cell::Cell, path::PathBuf};
+
+    fn object(index: u8) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ObjectChunk {
+            group: Hash64::from_u64_word(200), index, count: 2, bytes: vec![index as u8; 128],
+        }
+    }
+
+    fn assert_built_carrier(tx: &Transaction, funding: &UtxoEntry, expected_fee: u64, object: &PalwConsensusObjectV2) {
+        assert_eq!(tx.inputs.len(), 1);
+        assert!(!tx.inputs[0].signature_script.is_empty(), "the production builder signed the funding spend");
+        assert_eq!(funding.amount.checked_sub(tx.outputs.iter().map(|o| o.value).sum()).unwrap(), expected_fee);
+        let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).unwrap();
+        assert_eq!(&payload.object, object);
+    }
+
+    #[tokio::test]
+    async fn carrier_batch_actual_priced_chain_exact_cap_and_one_sompi_excess() {
+        let key = ValidatorKey::from_seed([71; 32]);
+        let params = SIMNET_PARAMS;
+        let script = kaspa_txscript::pay_to_address_script(&key.funding_address(params.prefix()));
+        let mut funding = UtxoEntry::new(10_000_000_000, script, 0, false);
+        let mut outpoint = TransactionOutpoint::new(Hash64::from_u64_word(201), 0);
+        let mut carriers = Vec::new();
+        for index in 0..2 {
+            let object = object(index);
+            let (tx, mass, fee) = build_carrier_priced_for_params_v1(&key, &params, &object, outpoint, &funding).unwrap();
+            assert_built_carrier(&tx, &funding, fee, &object);
+            let change = &tx.outputs[0];
+            outpoint = TransactionOutpoint::new(tx.id(), 0);
+            funding = UtxoEntry::new(change.value, change.script_public_key.clone(), 0, false);
+            carriers.push((PathBuf::from(format!("chunk-{index}.borsh")), String::new(), tx, mass, fee));
+        }
+        assert_eq!(carriers[1].2.inputs[0].previous_outpoint, TransactionOutpoint::new(carriers[0].2.id(), 0));
+        let total = carriers.iter().map(|entry| entry.4).sum::<u64>();
+        assert!(total > 0);
+        let calls = Cell::new(0);
+        let counter = &calls;
+        let submitted = broadcast_carrier_batch_v1(&carriers, Some(total), |entry| async move {
+            counter.set(counter.get() + 1);
+            Ok(serde_json::json!({"txid": entry.2.id().to_string()}))
+        }).await.unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(submitted.len(), 2);
+
+        calls.set(0);
+        let error = broadcast_carrier_batch_v1(&carriers, Some(total - 1), |_| async move {
+            counter.set(counter.get() + 1);
+            Ok(serde_json::json!({"unexpected": true}))
+        }).await.unwrap_err();
+        assert!(error.msg.contains("exceeds --maximum-total-fee-sompi"));
+        assert_eq!(calls.get(), 0, "no actual transport callback may run on a one-sompi excess");
+    }
+
+    #[tokio::test]
+    async fn carrier_batch_actual_signed_deductions_overflow_before_any_broadcast() {
+        // These individually representable boundary funding values exercise the
+        // CLI side-effect boundary; they do not assert network supply/admission.
+        let key = ValidatorKey::from_seed([72; 32]);
+        let script = kaspa_txscript::pay_to_address_script(&key.funding_address(SIMNET_PARAMS.prefix()));
+        let funding = UtxoEntry::new(u64::MAX, script, 0, false);
+        let fee = u64::MAX / 2 + 1;
+        let mut carriers = Vec::new();
+        for index in 0..2 {
+            let object = object(index);
+            let outpoint = TransactionOutpoint::new(Hash64::from_u64_word(202 + index as u64), 0);
+            let tx = key.build_palw_lifecycle_tx(&object, outpoint, &funding, fee).unwrap();
+            assert_built_carrier(&tx, &funding, fee, &object);
+            carriers.push((PathBuf::from(format!("boundary-{index}.borsh")), String::new(), tx, 0, fee));
+        }
+        let calls = Cell::new(0);
+        let counter = &calls;
+        let error = broadcast_carrier_batch_v1(&carriers, Some(u64::MAX), |_| async move {
+            counter.set(counter.get() + 1);
+            Ok(serde_json::json!({"unexpected": true}))
+        }).await.unwrap_err();
+        assert!(error.msg.contains("overflowed before broadcast"));
+        assert_eq!(calls.get(), 0, "a checked-sum overflow must refuse before the first transport call");
+    }
+}
+
+#[cfg(test)]
 mod rent_tests {
     /// **The rent the chain charges is the relay rate this tool pays** (ADR-0075 SA-1/SA-2).
     ///
@@ -946,6 +1075,15 @@ mod duplicate_gate_tests {
             admission: None,
         };
         assert_eq!(registration_identity_v1(&reg), Some((Hash64::from_u64_word(1), Hash64::from_u64_word(2))));
+        let envelope = O::SignedRegistrationV1 {
+            registration: Box::new(reg), valid_from_daa: 1, valid_until_daa: 32, fork_digest: Default::default(),
+            signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
+                kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0)), signature: vec![],
+        };
+        let (class, root) = registration_identity_v1(&envelope).expect("signed registration is duplicate-gated before fees");
+        assert_eq!((class, root), (Hash64::from_u64_word(1), Hash64::from_u64_word(2)));
+        let rows = vec![row(1, 2, "registered")];
+        assert!(duplicate_registration_gate_v1(class, root, Some(&rows), false).unwrap_err().msg.starts_with("DUPLICATE_CLASS"));
         let chunk = O::ObjectChunk { group: Hash64::from_u64_word(3), index: 0, count: 1, bytes: vec![1, 2, 3] };
         assert_eq!(registration_identity_v1(&chunk), None);
     }

@@ -171,3 +171,21 @@ registration inclusion, and complete-check consensus validation remain in force.
 This export inserts no state, capability, claim, conformance outcome or Final.
 The manifest's inclusion, useful-work, trained-model, 100k and security flags
 remain false until separately supported by real process evidence.
+
+# Signed worker and carrier batch boundaries (candidate; central tests pending)
+
+Both automatic class-worker submission sites now wrap their retained raw
+declaration only when `palw_signed_registration_v1` is active. The envelope binds
+the actual network/genesis, fired fork digest, registrant bond and a checked
+200-DAA retry window. Raw retry/inclusion tracking is preserved. Signed
+registration carriers cannot be replaced by the proof-priority fee-spend path,
+and CLI duplicate checks inspect the wrapped class/root before constructing fees.
+Dormant presets continue submitting their original declarations.
+
+The capped CLI submission path checks the whole built batch immediately before
+its actual transport callback. New controls build real signed native carriers,
+check their payload and deducted fee, and exercise an exact total cap, a
+one-sompi excess, and overflow of two individually representable deductions.
+Both refusal cases require zero callback invocations. The extreme values are
+CLI arithmetic/side-effect controls, not evidence of network supply admission.
+These controls do not establish real carrier inclusion or mature useful work.

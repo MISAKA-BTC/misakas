@@ -2653,6 +2653,8 @@ fn fp_capture_view(
 /// and each rebuild spends a fee. Long enough that a retry means the object really was dropped.
 const CLASS_REGISTRATION_RETRY_DAA: u64 = 200;
 
+mod signed_registration;
+
 /// **How long a class-registration carrier that has LEFT this node's mempool gets before the panel
 /// concludes its object did not stand** (the D-F drill of 2026-09-29: two IR registrations rode one
 /// block, the second was dropped with the block standing, and its node waited out
@@ -2917,6 +2919,7 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
                 | PalwConsensusObjectV2::ClassRegistered { .. }
                 | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
                 | PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
+                | PalwConsensusObjectV2::SignedRegistrationV1 { .. }
                 | PalwConsensusObjectV2::FreePromptCommitted { .. }
                 // RFC-0004: a candidate, a dataset and a licence register something, and a pool
                 // deposit moves money.
@@ -8604,7 +8607,7 @@ impl PalwPanelService {
                     });
                 } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session).await {
                     if let Some(object) = class_registration.clone() {
-                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
                                 let txid = tx.id();
                                 let change = tx.outputs[0].clone();
@@ -13306,7 +13309,7 @@ impl PalwPanelService {
                     if let Some(object) = class_registration.clone()
                         && let Some((funding_outpoint, funding_entry)) = funding.clone()
                     {
-                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
                                 let txid = tx.id();
                                 let change = tx.outputs[0].clone();
@@ -23842,6 +23845,16 @@ mod readiness_memory_and_stuck_carrier_tests {
             signature: vec![],
         };
         assert!(!palw_carrier_replaceable_v1(&carrier(bond, 1)), "a registration is never replaced");
+        let envelope = PalwConsensusObjectV2::SignedRegistrationV1 {
+            registration: Box::new(PalwConsensusObjectV2::ObjectChunk {
+                group: Hash64::from_u64_word(12), index: 0, count: 1, bytes: vec![],
+            }),
+            valid_from_daa: 1, valid_until_daa: 32, fork_digest: Default::default(),
+            signer: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(13), 0)), signature: vec![],
+        };
+        // Even a malformed wrapper must not be swapped for another object by
+        // the money-moving replacement path; native inclusion judges its bytes.
+        assert!(!palw_carrier_replaceable_v1(&carrier(envelope, 1)), "signed registrations are never replaced");
         let mut garbage = carrier(proof.clone(), 1);
         garbage.payload = vec![0xFF; 3];
         assert!(!palw_carrier_replaceable_v1(&garbage), "an object this node cannot read");
