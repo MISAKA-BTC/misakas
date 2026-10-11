@@ -120,7 +120,7 @@ impl PalwConstraintStreamCourtV1 {
                 committed as usize,
             );
         }
-        let constraint = palw_fp_constraint_shape_v1(job)?;
+        let constraint = palw_fp_constraint_shape_v1(job).map_err(|e| e.to_string())?;
         let table_root = palw_fp_constraint_table_root_v1(job).ok_or("stream job names no legacy table root")?;
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/constraint-stream/seed/v1").to_state();
         for hash in [claim_id, expected_root] {
