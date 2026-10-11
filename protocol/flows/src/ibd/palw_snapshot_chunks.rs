@@ -1,16 +1,15 @@
 //! Protocol-106 requester. Builds a bounded private spill before any local consensus
 //! mutation; native import verifies the completed carriage under the pruning header.
 use super::IbdFlow;
-use crate::palw_snapshot_chunks::{SnapshotReceiver, SnapshotSpill};
-use kaspa_consensus_core::{BlockHash, Hash64, palw_state_v2::PalwStateCarriageV2};
+use crate::palw_snapshot_chunks::{Snapshot, SnapshotReceiver, SnapshotSpill};
+use kaspa_consensus_core::{BlockHash, Hash64};
 use kaspa_p2p_lib::{
     common::ProtocolError,
     dequeue_with_timeout, make_message,
     pb::{RequestPruningPointPalwStateMessage, kaspad_message::Payload},
 };
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
-type Snapshot = (PalwStateCarriageV2, Vec<(Hash64, Vec<u8>)>);
 fn hash(bytes: &[u8]) -> Result<Hash64, ProtocolError> {
     Ok(Hash64::from_bytes(bytes.try_into().map_err(|_| ProtocolError::Other("invalid PALW snapshot hash width"))?))
 }
@@ -74,15 +73,12 @@ impl IbdFlow {
         if !receiver.complete() {
             return Err(ProtocolError::Other("PALW chunked snapshot ended early"));
         }
-        let (carriage, offered): Snapshot = kaspa_consensusmanager::spawn_blocking(move || receiver.decode())
+        let snapshot: Snapshot = kaspa_consensusmanager::spawn_blocking(move || receiver.decode_snapshot())
             .await
             .map_err(|_| ProtocolError::Other("PALW snapshot decoding task failed"))?
             .map_err(|_| ProtocolError::Other("PALW snapshot stream hash/Borsh/EOF failed"))?;
-        // Same registered-class/one-declaration bound as the legacy requester. Class bytes are
-        // validated against the imported state by the existing adoption API, never by this hash.
-        let registered: BTreeSet<Hash64> = carriage.classes.keys().copied().collect();
-        let mut seen = BTreeSet::new();
-        let declarations = offered.into_iter().filter(|(id, _)| registered.contains(id) && seen.insert(*id)).collect();
-        Ok(Some((carriage, declarations)))
+        // Declarations were length checked and filtered during streaming decode. Native
+        // import/adoption still validates the consensus state and each declaration's profile.
+        Ok(Some(snapshot))
     }
 }

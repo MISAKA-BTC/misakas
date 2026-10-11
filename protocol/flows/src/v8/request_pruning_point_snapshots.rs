@@ -307,7 +307,7 @@ impl RequestPruningPointPalwStateFlow {
                 .spawn_blocking(move |c| {
                     c.pruning_point_palw_state(pp).map(|carriage| {
                         let declarations = c.palw_class_carriages_for_sync_v1();
-                        SnapshotSender::encode(spill, pp, &(carriage, declarations))
+                        SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations)
                     })
                 })
                 .await;

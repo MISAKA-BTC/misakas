@@ -485,7 +485,8 @@ message PruningPointPalwStateMessage{
   // bytes wastes only its own bandwidth. ADDITIVE: a peer that does not send this leaves the
   // field empty, and the client falls back to --palw-class-carriage.
   repeated PalwClassCarriageEntry classCarriages = 3;
-  // Protocol >= 106: palwState is one <=4 MiB chunk of borsh((carriage, declarations));
+  // Protocol >= 106: palwState is one <=4 MiB chunk of format:u16, stateLength:u64,
+  // borsh(carriage)[stateLength], borsh(declarations). Length isolates optional EOF tails;
   // classCarriages is empty. Native import still verifies the consensus state root.
   bool chunked = 4;
   Hash pruningPointHash = 5;
