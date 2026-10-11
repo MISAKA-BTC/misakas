@@ -594,7 +594,8 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
                     }
                     let mut fold = capture.clone();
                     fold.leaves.clear();
-                    assert_eq!(holding.verify_cells_from_runs(&fold, &runs, std::slice::from_ref(c), form,
+                    let effective_form = backend.court_rules(&kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 10, 2).unwrap()).prompt_form;
+                    assert_eq!(holding.verify_cells_from_runs(&fold, &runs, std::slice::from_ref(c), effective_form,
                         1 << 26, &mut CpuKernelBackendV1).unwrap(), v, "{name}: sparse DA inputs have the exact dense verdict");
                     let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
                         1 << 26, 10, 2, 2_250_000, 16_777_216, 8).unwrap();
