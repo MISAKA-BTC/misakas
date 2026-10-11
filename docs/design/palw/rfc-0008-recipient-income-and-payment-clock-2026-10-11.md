@@ -137,3 +137,44 @@ duplicate licence, each actual payment+W boundary, and full chain/lane replay.
 Its runtime result remains pending. Central integration f22a37d46 meanwhile
 passed 89 focused core tests and 5 wallet tests, including the partial FD/FE
 clock, collected market queue/phi and frozen Panel collector candidates.
+
+## Funded kernel reporter debt and exact tranches (candidate, 2026-10-11)
+
+The dormant budget's distinct origin 12 records the exact funded reporter award:
+`reserved.R` is its immutable total, `consumed.R` is irrevocably assigned native
+cash, and the remaining difference is debt. This row is outside the rolling R
+window and grants no Q/B/F/T. Objective `AccuserReward` and `DemanderShare`
+settlements first verify their amount against real `SlashFraud` / `SlashDefault`
+collateral debits in the same authenticated kernel batch. They preserve the full
+award without testing recipient R, so full R cannot suppress a conviction or
+burn a legitimate collected entitlement. The actual native bond comes from the
+kernel's authenticated bond mapping; a matching payout payload is never treated
+as ownership. The old ledger root, ordered settlement batch, DAA and event ordinal
+bind the immutable award identity.
+
+Pre-object budget ticks redeem up to the available recipient R into a unique
+`(award, consumed progress)` native payout row, provided the bounded native queue
+has room. Larger-than-R awards therefore require successive windows; partial
+tranches preserve total plus remaining debt exactly. Each tranche has its own
+native queue receipt and physical coinbase + W clock. Sparse ticks cannot expire
+an unpaid queued tranche. Actual payment changes neither the immutable award total
+nor past cash; reorg restores only the reverted tranche's exact rows. Completed
+award receipts remain rooted to prevent reclassification. Derived unpaid-award and
+per-bond debt indexes are rebuilt on Borsh/import and row delta application; they
+are absent from serialization and roots. Redemption scans unpaid debt rather than
+completed award history, and unpaid debt retains the actual recipient's withdrawal
+binding even when R is otherwise empty. No real preset or activation is enabled.
+
+Candidate verification comprises Rust parse acceptance and `git diff --check`.
+The new engine case tests a 125-unit award against R=50 with W=280 and W=436,
+full-R deferral, queue-constrained partial tranches, sparse physical clocks,
+Borsh restart, precise reorg/replay and exact final total. The common fold case
+uses real registered bond debits and both settlement consumer kinds, then actual
+production payout drain / carriage / delta APIs over three windows. Its emitted
+settlement batch is explicitly a mechanics seam; it is not cryptographic FileProof
+or native coinbase UTXO evidence. Central compilation/runtime are pending.
+
+Native named/reveal reporter maxima, authenticated legacy pending/awarded rights
+migration, whole material/producer liability retention and bounded completed-award
+history compaction still need closure. This candidate is not full RFC08 completion,
+all-model soundness, economic approval or production activation evidence.

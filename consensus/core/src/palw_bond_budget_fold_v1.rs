@@ -134,6 +134,17 @@ pub(super) fn native_queued_income_id_v1(queue: Hash64, bond: &PalwBondKeyV2) ->
     finish(hash)
 }
 
+/// A tranche is unique to the immutable award and its already-queued progress.
+/// It never coalesces with a different award's physical payment clock.
+pub(super) fn reporter_tranche_queue_v1(award: Hash64, progress: u64) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/bond-budget/reporter-tranche/v1");
+    hash.update(award.as_byte_slice());
+    hash.update(&progress.to_le_bytes());
+    let mut bytes = finish(hash).as_bytes();
+    bytes[0] = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_PAYOUT_KEY_PREFIX_V1;
+    Hash64::from_bytes(bytes)
+}
+
 // ---- delta application ------------------------------------------------------------------------------------------------------
 
 /// Delta 190, verify-then-install.
@@ -236,6 +247,19 @@ impl TransitionBuilder<'_> {
         })
         .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("native income admission has no budget engine".into()))?
         .map_err(|why| budget_refused(bond, why))
+    }
+
+    /// The settlement's authenticated bond and immutable funded receipt are
+    /// recorded even when the recipient has no R room. Conviction has already
+    /// collected this exact award from real collateral; no money is issued here.
+    pub(super) fn stage_reporter_recipient_v1(
+        &mut self, award: Hash64, bond: PalwBondKeyV2, now: u64, amount: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.bond_budget_mirror_at(now).is_none() { return Ok(()); }
+        if !self.state.bonds.contains_key(&bond) { return Err(PalwStateV2Error::MissingBond(bond)); }
+        self.bond_budget_op(|budget, _, j| budget.stage_reporter_income_v1(award, bond, now, amount, j))
+            .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("reporter award has no budget engine".into()))?
+            .map_err(|why| budget_refused(bond, why))
     }
 
     pub(super) fn pay_native_recipient_v1(
@@ -1440,6 +1464,30 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
     }
     builder.bond_budget_op(|budget, _, j| budget.release_due(now, j));
+    // Funded court debt is redeemed only after the real queue drain and its
+    // W release. Full R or a full native queue defers cash, never conviction.
+    // Each award/progress pair creates a separate exact physical payout row.
+    let book = builder.state.bond_budget.as_ref().expect("created");
+    let awards: Vec<_> = book.unpaid_reporter_awards_v1().map(|id| {
+        let row = book.claim_row(id).expect("derived unpaid award index");
+        (*id, row.bond, row.consumed.reward_sompi)
+    }).collect();
+    for (award, bond, progress) in awards {
+        if builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS { break; }
+        let Some(record) = builder.state.bonds.get(&bond) else {
+            return Err(PalwStateV2Error::MissingBond(bond));
+        };
+        let (capital, payload) = (record.collateral, record.payout_payload);
+        let queue = reporter_tranche_queue_v1(award, progress);
+        // A collision never replaces an existing native monetary obligation.
+        if builder.state.pending_payouts.contains_key(&queue) {
+            return Err(PalwStateV2Error::BondBudgetRefused("reporter tranche queue already exists".into()));
+        }
+        let amount = builder.bond_budget_op(|budget, _, j| budget.redeem_reporter_income_v1(
+            &mirror.policy, capital, &award, now, native_queued_income_id_v1(queue, &bond), u64::MAX, j,
+        )).expect("created").map_err(|why| budget_refused(bond, why))?;
+        if amount > 0 { builder.write_payout(queue, Some(PalwPayoutV2 { payload, amount })); }
+    }
     if let (Some(policy), Some(epoch)) = (mirror.allocation_at(now).cloned(), mirror.allocation_epoch_at(now)) {
         let rolled = builder.state.bond_budget.as_ref().and_then(|b| b.header.allocation).is_some_and(|a| a.index >= epoch);
         if !rolled {

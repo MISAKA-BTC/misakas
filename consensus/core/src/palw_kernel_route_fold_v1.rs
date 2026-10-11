@@ -571,8 +571,23 @@ fn apply_settlements_to_exec_vesting(
     };
     let mut fee_held: std::collections::BTreeMap<_, _> =
         fee_ledger.as_ref().map(|l| l.beacon_source_fees.iter().map(|(c, f)| (*c, f.held)).collect()).unwrap_or_default();
+    // The old ledger root and this exact ordered settlement batch identify
+    // objective court receipts independently of payout payloads or a retry.
+    // The event ordinal also separates several demanders/defaults in one tick.
+    let reporter_batch = if builder.bond_budget_mirror_at(now).is_some() {
+        let mut hash = keyed(b"misaka-palw/bond-budget/kernel-reporter-batch/v1");
+        let route = builder.state.kernel_route.as_ref().ok_or_else(|| refused("reporter route missing"))?;
+        hash.update(route.ledger_root().as_byte_slice());
+        hash.update(&now.to_le_bytes());
+        let settlements: Vec<_> = events.iter().filter_map(|event| {
+            if let LedgerEventV1::Settlement(s) = event { Some(*s) } else { None }
+        }).collect();
+        hash.update(&borsh::to_vec(&settlements).expect("settlements serialize"));
+        Some(finish(hash))
+    } else { None };
+    let mut reporter_funded: std::collections::BTreeMap<_, u64> = Default::default();
     let mut fee_paid = std::collections::BTreeSet::new();
-    for event in events {
+    for (ordinal, event) in events.iter().enumerate() {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
         match s.kind {
@@ -632,6 +647,10 @@ fn apply_settlements_to_exec_vesting(
                 if debit != s.amount && strict {
                     return Err(refused(format!("a slash of {} took {debit}: the synced collateral did not cover it", s.amount)));
                 }
+                if matches!(s.kind, SettlementKindV1::SlashFraud | SettlementKindV1::SlashDefault) {
+                    let funded = reporter_funded.entry(s.claim).or_default();
+                    *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("reporter collateral debit"))?;
+                }
                 if s.kind == SettlementKindV1::PayJobEscrow {
                     let funded = escrow_debited.entry(s.claim).or_default();
                     *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
@@ -651,6 +670,21 @@ fn apply_settlements_to_exec_vesting(
                 } else {
                     s.amount
                 };
+                if matches!(s.kind, SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare)
+                    && let Some(batch) = reporter_batch
+                {
+                    // No recipient cap refusal is allowed to erase an objective
+                    // conviction/default. Preserve the whole funded entitlement
+                    // and let pre-object ticks redeem exact R-limited tranches.
+                    let funded = reporter_funded.entry(s.claim).or_default();
+                    *funded = funded.checked_sub(amount).ok_or_else(|| refused("reporter award lacks collected collateral"))?;
+                    let bond = key.ok_or_else(|| refused("reporter award recipient has no native bond"))?;
+                    let mut hash = keyed(b"misaka-palw/bond-budget/kernel-reporter-award/v1");
+                    hash.update(batch.as_byte_slice());
+                    hash.update(&(ordinal as u64).to_le_bytes());
+                    builder.stage_reporter_recipient_v1(finish(hash), bond, now, amount)?;
+                    continue;
+                }
                 if s.kind == SettlementKindV1::FinalReward
                     && let Some(root) = exec_root
                 {

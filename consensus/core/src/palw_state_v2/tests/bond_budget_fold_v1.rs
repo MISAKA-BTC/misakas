@@ -190,6 +190,100 @@ fn unpaid_issuer_r_survives_sparse_daa_until_actual_payment_then_uses_payment_pl
     assert!(released.bond_budget().unwrap().bond_row(&bond_key(1)).is_none());
 }
 
+/// Production real-collateral settlement, queue/drain, carriage and delta APIs.
+/// The emitted settlement batch is a mechanics seam, not a FileProof verifier
+/// or a native cryptographic conviction. Both public reporter consumer kinds
+/// must preserve funded rights under full R and through several physical W's.
+#[test]
+fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranches() {
+    use super::super::palw_bond_budget_fold_v1::{native_queued_income_id_v1, reporter_tranche_queue_v1};
+    use super::super::palw_kernel_route_fold_v1::{apply_settlements, load_ledger};
+    use crate::palw_kernel_route_v1::{PalwKernelRouteExtrasV1, PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, palw_kernel_bond_id_v1};
+    use misaka_palw_kernel::ledger::LedgerEventV1;
+    use misaka_palw_kernel::settle::{SettlementInstructionV1, SettlementKindV1};
+    for kind in [SettlementKindV1::AccuserReward, SettlementKindV1::DemanderShare] {
+        let mut policy = test_policy(1);
+        policy.window_daa = 280;
+        policy.reward_per_unit_sompi = 50;
+        let p = armed_with(policy, None);
+        let mut objects = register_class_and_bond();
+        objects.push(bond_registration_with_collateral(2, 8, 22, 1_000));
+        let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(PalwKernelRouteExtrasV1 { network_domain: h64(0xE7), ruleset_digest: h64(0xE8), ..Default::default() }),
+            ..Default::default()
+        };
+        let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
+        load_ledger(&mut b, &ctx(2, 100, 2)).unwrap();
+        for bond in [bond_key(1), bond_key(2)] {
+            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, borsh::to_vec(&palw_kernel_bond_id_v1(&bond)).unwrap(),
+                Some(borsh::to_vec(&bond).unwrap()));
+        }
+        b.reserve_bond_income_v1(&ctx(2, 100, 2), bond_key(1), 50, 50, PalwBudgetOriginV1::MarketFee).unwrap();
+        let settlement = |bond, amount, kind| LedgerEventV1::Settlement(SettlementInstructionV1 {
+            bond: palw_kernel_bond_id_v1(&bond), amount, kind, claim: Some(h64(0xD00).as_bytes()),
+        });
+        let events = [settlement(bond_key(2), 300, SettlementKindV1::SlashFraud),
+            settlement(bond_key(1), 125, kind), settlement(bond_key(2), 175, SettlementKindV1::Burn)];
+        apply_settlements(&mut b, &events, true, 100).unwrap();
+        assert_eq!(b.state.bond(&bond_key(2)).unwrap().collateral, 700, "the immutable award is funded by a real collateral debit");
+        assert!(b.state.pending_payouts.is_empty(), "full recipient R never creates uncapped cash");
+        let (award, row) = b.state.bond_budget().unwrap().claims.iter().find(|(_, row)| row.origin == PalwBudgetOriginV1::DeferredReporterIncome).unwrap();
+        let award = *award;
+        assert_eq!((row.reserved.reward_sompi, row.consumed.reward_sompi), (125, 0));
+        let staged = b.state.clone();
+        let delta = PalwStateDeltaV2 { point: ctx(2, 100, 2), entries: b.entries };
+        assert_replayable(&p, &registered, &staged, &delta);
+        assert!(staged.bond_budget_window_holds(&bond_key(1), u64::MAX));
+        let (full, delta) = apply(&staged, &p, &ctx(3, 200, 3), &[], None);
+        assert_replayable(&p, &staged, &full, &delta);
+        assert!(full.pending_payouts.is_empty());
+        let (mut state, delta) = apply(&full, &p, &ctx(4, 380, 4), &[], None);
+        assert_replayable(&p, &full, &state, &delta);
+        let mut progress = 0;
+        let mut queued_at = 380;
+        for (n, expected) in [50, 50, 25].into_iter().enumerate() {
+            let queue = reporter_tranche_queue_v1(award, progress);
+            assert_eq!(state.pending_payout(&queue).unwrap().amount, expected);
+            assert_eq!(state.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window,
+                PalwBudgetVectorV1 { reward_sompi: expected, ..PalwBudgetVectorV1::ZERO });
+            let before_pay = state.clone();
+            let payment = queued_at + 1_000; // actual sparse drain, never logical queue+W
+            let (paid, delta) = apply(&before_pay, &p, &ctx(5 + n as u64 * 3, payment, 5 + n as u64 * 3), &[], None);
+            assert_replayable(&p, &before_pay, &paid, &delta);
+            assert!(paid.pending_payout(&queue).is_none());
+            let receipt = paid.bond_budget().unwrap().claim_row(&native_queued_income_id_v1(queue, &bond_key(1))).unwrap();
+            assert_eq!(receipt.reuse_not_before, payment + 280);
+            assert!(!receipt.live);
+            // Exact reorg/restart restores the same tranche and progress, not a
+            // second award or an additional payout for already completed tranches.
+            let reverted = revert_delta_v2(&paid, &delta, &p).unwrap();
+            assert_eq!(reverted, before_pay);
+            assert_eq!(apply_delta_v2(&reverted, &delta, &p).unwrap(), paid);
+            let (held, delta) = apply(&paid, &p, &ctx(6 + n as u64 * 3, payment + 279, 6 + n as u64 * 3), &[], None);
+            assert_replayable(&p, &paid, &held, &delta);
+            assert!(held.pending_payouts.is_empty());
+            progress += expected;
+            let (next, delta) = apply(&held, &p, &ctx(7 + n as u64 * 3, payment + 280, 7 + n as u64 * 3), &[], None);
+            assert_replayable(&p, &held, &next, &delta);
+            assert!(next.bond_budget().unwrap().claim_row(&native_queued_income_id_v1(queue, &bond_key(1))).is_none());
+            assert_eq!(next.bond_budget().unwrap().claim_row(&award).unwrap().consumed.reward_sompi,
+                if n == 0 { 100 } else { 125 });
+            queued_at = payment + 280;
+            state = next;
+        }
+        assert_eq!(progress, 125);
+        assert!(state.pending_payouts.is_empty());
+        assert!(state.bond_budget().unwrap().bond_row(&bond_key(1)).is_none());
+        assert!(!state.bond_budget_window_holds(&bond_key(1), queued_at));
+        assert_eq!(state.bond(&bond_key(2)).unwrap().collateral, 700);
+        let (idle, delta) = apply(&state, &p, &ctx(20, queued_at + 10_000, 20), &[], None);
+        assert_replayable(&p, &state, &idle, &delta);
+        assert!(idle.pending_payouts.is_empty());
+        assert_eq!(idle.bond_budget().unwrap().claim_row(&award).unwrap().reserved.reward_sompi, 125);
+    }
+}
+
 /// Exact production recipient/queue/drain APIs; the admitted bond and queued
 /// low-key backlog are private mechanics seams, not a native Final or court proof.
 #[test]
