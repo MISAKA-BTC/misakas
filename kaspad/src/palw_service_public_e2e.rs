@@ -1420,6 +1420,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
         palw_token_tables_v1().register(palw_token_table_file_decode_v1(&public_file).unwrap());
     }
     let mut verifier_config = panel_config(&chain, dir.path(), bond, &floats[OUTSIDER]);
+    if recovery_mode.is_some() {
+        verifier_config.public_claims = vec![claim];
+    }
     if let Some(fixture) = &tiled {
         verifier_config.class_artifacts.push(fixture.path.clone());
         verifier_config.chain_classes = true;

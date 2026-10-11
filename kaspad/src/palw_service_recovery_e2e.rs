@@ -196,6 +196,11 @@ impl RecoveryRun {
             *verifier = restarted;
             self.verifier_restarted = true;
             assert!(service.fraud_filer_honest_replays.lock().unwrap().is_empty(), "restart retains no private replay verdict");
+            assert_eq!(
+                service.config.public_claims,
+                vec![claim],
+                "the explicit operator target survives an empty-cache service restart"
+            );
             assert!(
                 std::fs::read_dir(&self.verifier_config.retention_dir).unwrap().next().is_none(),
                 "verifier starts with an empty retention directory and never receives producer capture"
@@ -273,6 +278,7 @@ impl RecoveryRun {
     }
 
     pub(super) async fn finish(&mut self, chain: &Chain, claim: Hash64, service_start: usize) {
+        assert_eq!(self.verifier_config.public_claims, vec![claim], "actual recovery uses the bounded native exact-target read");
         if self.mode == RecoveryMode::Restart {
             assert!(self.verifier_restarted, "the test must actually restart the public service while its case is live");
         } else if self.mode == RecoveryMode::Reorg {
