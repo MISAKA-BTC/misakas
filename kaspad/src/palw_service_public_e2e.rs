@@ -1111,18 +1111,24 @@ async fn carry_fp_commitment(
 }
 
 async fn fresh_public_service(case: PublicCase) {
-    fresh_public_service_with_recovery(case, false).await;
+    fresh_public_service_with_recovery(case, None).await;
 }
 
-async fn fresh_public_service_with_recovery(case: PublicCase, automatic_recovery: bool) {
+async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Option<recovery::RecoveryMode>) {
+    let automatic_recovery = recovery_mode.is_some();
     kaspa_core::log::try_init_logger("warn,kaspad_lib::palw_panel=info");
-    let (config, bundle, premine, mut floats) = fixture_config(
+    let (mut config, bundle, premine, mut floats) = fixture_config(
         case == PublicCase::ForeignFpJob,
         case.pruned_fp() || case == PublicCase::HonestFpV3Job,
         case.unretained_fp(),
         case.constraint(),
         case.tiled(),
     );
+    if recovery_mode == Some(recovery::RecoveryMode::Reorg) {
+        // Exercise the shipped shallow economic-tie rule, as the actual LG14-A reorg
+        // fixture does. The dormant public-filer activation guard remains closed.
+        config.params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
+    }
     let mut chain = Chain::new(config, bundle, &premine);
     chain.advance(2).await;
     let tiled = case.tiled().then(|| tiled::TiledFixture::new(&chain));
@@ -1422,6 +1428,8 @@ async fn fresh_public_service_with_recovery(case: PublicCase, automatic_recovery
                 manager.clone(),
                 retained_flow.clone(),
                 verifier_config,
+                recovery_mode.unwrap(),
+                &premine,
             )
             .await,
         )
@@ -1463,7 +1471,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, automatic_recovery
         if let Some(recovery) = recovery.as_mut() {
             recovery
                 .tick(
-                    &chain,
+                    &mut chain,
                     claim,
                     service_start,
                     &mut service,
@@ -1925,12 +1933,16 @@ async fn fresh_public_service_with_recovery(case: PublicCase, automatic_recovery
                     "release alone is insufficient: the real replay worker must have judged the three roots Honest"
                 );
                 assert!(honest.record.as_ref().unwrap().live.get(&bond).is_none());
-                let carriers: Vec<_> = chain.history[service_start..]
-                    .iter()
-                    .flat_map(|b| b.transactions.iter())
-                    .filter_map(|tx| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).ok())
-                    .map(|p| p.object)
-                    .collect();
+                let carriers: Vec<_> = if recovery_mode == Some(recovery::RecoveryMode::Reorg) {
+                    recovery::accepted_objects(&chain, service_start)
+                } else {
+                    chain.history[service_start..]
+                        .iter()
+                        .flat_map(|b| b.transactions.iter())
+                        .filter_map(|tx| borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).ok())
+                        .map(|p| p.object)
+                        .collect()
+                };
                 if matches!(case, PublicCase::UnretainedMultipartHonestFpV3Job | PublicCase::UnretainedLargeConstraintJob) {
                     use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
                     assert!(carriers.iter().any(|o| matches!(o, PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration }
