@@ -19,6 +19,36 @@ fn unhex(s: &str) -> Result<Vec<u8>, CliError> {
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|_| bad("the node served malformed hex"))).collect()
 }
 
+/// These pins come from the caller's trusted chain view, never from the node
+/// being verified. Rebuilding two mutually consistent RPC answers is insufficient.
+#[derive(Clone, Copy, Debug)]
+struct CallerSnapshot {
+    ledger: Hash64,
+    aux: Hash64,
+    tip_daa: u64,
+}
+impl CallerSnapshot {
+    fn required(ledger: Option<&str>, aux: Option<&str>, tip_daa: Option<u64>) -> Result<Self, CliError> {
+        let missing = || {
+            CliError::new(exit::CONFIG, "complete checks require --ledger-root, --aux-root and --tip-daa from a trusted chain view")
+        };
+        Ok(Self {
+            ledger: ledger.ok_or_else(missing)?.parse().map_err(|_| CliError::new(exit::CONFIG, "invalid --ledger-root"))?,
+            aux: aux.ok_or_else(missing)?.parse().map_err(|_| CliError::new(exit::CONFIG, "invalid --aux-root"))?,
+            tip_daa: tip_daa.ok_or_else(missing)?,
+        })
+    }
+
+    fn check(&self, ledger: Hash64, aux: Hash64, tip_daa: u64) -> CliResult {
+        if ledger != self.ledger || aux != self.aux || tip_daa != self.tip_daa {
+            return Err(bad(
+                "complete-check roots or DAA differ from the caller's trusted chain view; no artifact execution or signing is allowed",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Shared bounded op-211 capture for complete-check and source-contract tooling.
 /// Caller must authenticate the resulting roots against its trusted chain view.
 pub(super) async fn kernel_snapshot(nv: &crate::wallet::NodeView) -> Result<(KernelRowsSnapshotV1, Vec<KernelRowV1>), CliError> {
@@ -81,11 +111,19 @@ async fn read(
     ctx: &Ctx,
     nv: &crate::wallet::NodeView,
     r: &GetPalwConformanceEvidenceResponse,
+    pins: CallerSnapshot,
 ) -> Result<VerifiedCompleteCheckV1, CliError> {
     if r.attempt_row.len() > 2 << 20 || r.program.len() > misaka_palw_sdk::complete_check::COMPLETE_CHECK_MAX_PROGRAM_BYTES_V1 * 2 {
         return Err(bad("the complete-check convenience response exceeds its read limits"));
     }
+    // Refuse an untrusted convenience response before downloading its inventory.
+    pins.check(
+        r.ledger_root.parse().map_err(|_| bad("malformed ledger root"))?,
+        r.aux_root.parse().map_err(|_| bad("malformed aux root"))?,
+        r.tip_daa,
+    )?;
     let (snapshot, rows) = kernel_snapshot(nv).await?;
+    pins.check(snapshot.ledger_root, snapshot.aux_root, snapshot.tip_daa)?;
     if snapshot.tip_daa != r.tip_daa
         || snapshot.ledger_root.to_string() != r.ledger_root
         || snapshot.aux_root.to_string() != r.aux_root
@@ -101,6 +139,7 @@ async fn read(
         class,
         params.genesis.hash,
         misaka_palw_sdk::onboarding_chain::network_domain_v1(&params),
+        pins.tip_daa,
     )
     .map_err(|e| bad(e.to_string()))?;
     verified.check_rpc_reads(&unhex(&r.attempt_row)?, &unhex(&r.program)?).map_err(|e| bad(e.to_string()))?;
@@ -112,15 +151,20 @@ pub(crate) async fn verify(
     nv: &crate::wallet::NodeView,
     r: &GetPalwConformanceEvidenceResponse,
     artifact: Option<&Path>,
+    ledger_root: Option<&str>,
+    aux_root: Option<&str>,
+    tip_daa: Option<u64>,
 ) -> CliResult {
+    let pins = CallerSnapshot::required(ledger_root, aux_root, tip_daa)?;
     let path = artifact.ok_or_else(|| CliError::new(exit::CONFIG, "complete-check verification requires --artifact"))?;
-    let verified = read(ctx, nv, r).await?;
+    let verified = read(ctx, nv, r, pins).await?;
     let report = verified.verify_file(path).map_err(|e| bad(e.to_string()))?;
     if ctx.output == OutputFormat::Json {
         println!(
             "{}",
             serde_json::json!({
                 "schema":"misaka.palw.onboard.complete-verify.v1", "class":r.class_id,
+                "verification_scope":"caller-pinned-complete-snapshot",
                 "ledger_root":r.ledger_root,"aux_root":r.aux_root,"tip_daa":r.tip_daa,
                 "inputs_reexecuted":verified.domain.inputs,"leaves_rechecked":verified.domain.leaves,
                 "artifact_bytes":verified.domain.artifact_bytes,"work":verified.domain.work,
@@ -136,6 +180,7 @@ pub(crate) async fn verify(
             verified.domain.inputs, verified.domain.leaves, verified.domain.artifact_bytes
         );
         println!("chain agrees     {} — {}", report.agrees, report.why);
+        println!("trusted snapshot ledger={} aux={} daa={} (caller-pinned)", pins.ledger, pins.aux, pins.tip_daa);
     }
     if !report.agrees {
         return Err(bad("the public complete-check verdict disagrees with the exhaustive execution"));
@@ -155,7 +200,18 @@ impl EnvelopeSigner for Signer {
 
 /// Prepare the signed object locally. Submission remains the existing
 /// `palw submit-object` path, with its normal fee and inclusion checks.
-pub(crate) async fn post(ctx: &Ctx, class: &str, artifact: &Path, bond: &str, key: &crate::keys::KeySource, out: &Path) -> CliResult {
+pub(crate) async fn post(
+    ctx: &Ctx,
+    class: &str,
+    artifact: &Path,
+    bond: &str,
+    key: &crate::keys::KeySource,
+    out: &Path,
+    ledger_root: &str,
+    aux_root: &str,
+    tip_daa: u64,
+) -> CliResult {
+    let pins = CallerSnapshot::required(Some(ledger_root), Some(aux_root), Some(tip_daa))?;
     let nv = crate::wallet::connect(ctx).await?;
     let r = nv
         .client
@@ -165,7 +221,7 @@ pub(crate) async fn post(ctx: &Ctx, class: &str, artifact: &Path, bond: &str, ke
     if !r.found || r.class_id != class {
         return Err(CliError::new(exit::NOT_READY, "no conformance attempt for the requested class"));
     }
-    let verified = read(ctx, &nv, &r).await?;
+    let verified = read(ctx, &nv, &r, pins).await?;
     let (txid, index) = bond.split_once(':').ok_or_else(|| bad("bond must be <txid>:<index>"))?;
     let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
         txid.parse().map_err(|_| bad("invalid bond transaction id"))?,
@@ -180,10 +236,38 @@ pub(crate) async fn post(ctx: &Ctx, class: &str, artifact: &Path, bond: &str, ke
     if ctx.output == OutputFormat::Json {
         println!(
             "{}",
-            serde_json::json!({"schema":"misaka.palw.onboard.complete-post.v1","class":class,"out":out.display().to_string(),"bytes":bytes.len(),"submitted":false})
+            serde_json::json!({"schema":"misaka.palw.onboard.complete-post.v1","class":class,
+                "verification_scope":"caller-pinned-complete-snapshot","ledger_root":pins.ledger.to_string(),"aux_root":pins.aux.to_string(),"tip_daa":pins.tip_daa,
+                "out":out.display().to_string(),"bytes":bytes.len(),"submitted":false})
         );
     } else {
         println!("wrote {} ({} bytes); submit with misaka palw submit-object --object {}", out.display(), bytes.len(), out.display());
+        println!("trusted snapshot ledger={} aux={} daa={} (caller-pinned)", pins.ledger, pins.aux, pins.tip_daa);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_check_requires_both_caller_roots_and_rejects_untrusted_consistent_roots() {
+        let ledger = Hash64::from_u64_word(1);
+        let aux = Hash64::from_u64_word(2);
+        let ledger_text = ledger.to_string();
+        let aux_text = aux.to_string();
+        assert_eq!(CallerSnapshot::required(None, Some(&aux_text), Some(6)).unwrap_err().code, exit::CONFIG);
+        assert_eq!(CallerSnapshot::required(Some(&ledger_text), None, Some(6)).unwrap_err().code, exit::CONFIG);
+        assert_eq!(CallerSnapshot::required(Some("malformed"), Some(&aux_text), Some(6)).unwrap_err().code, exit::CONFIG);
+        let pins = CallerSnapshot::required(Some(&ledger_text), Some(&aux_text), Some(6)).unwrap();
+        assert_eq!(CallerSnapshot::required(Some(&ledger_text), Some(&aux_text), None).unwrap_err().code, exit::CONFIG);
+        pins.check(ledger, aux, 6).unwrap();
+        assert!(pins.check(ledger, aux, 5).is_err());
+        // A malicious node can advertise the same forged roots through op-231
+        // and op-211. Independent caller pins reject either changed commitment.
+        assert!(pins.check(Hash64::from_u64_word(3), aux, 6).is_err());
+        assert!(pins.check(ledger, Hash64::from_u64_word(4), 6).is_err());
+        assert!(pins.check(Hash64::from_u64_word(3), Hash64::from_u64_word(4), 6).is_err());
+    }
 }

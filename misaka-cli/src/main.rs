@@ -815,6 +815,15 @@ enum OnboardCmd {
     CompletePost {
         #[arg(long)]
         class: String,
+        /// Ledger root from the caller's trusted chain view, independently of this node's response.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: String,
+        /// Auxiliary root from the same trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        aux_root: String,
+        /// Current DAA from the same trusted chain view; it authenticates the post deadline.
+        #[arg(long, value_name = "DAA")]
+        tip_daa: u64,
         #[arg(long, value_name = "FILE")]
         artifact: std::path::PathBuf,
         #[arg(long)]
@@ -867,6 +876,15 @@ enum OnboardCmd {
         /// The class's artifact (PALWTIR1), from its public source; its inventory must root to the registered artifact root.
         #[arg(long, value_name = "FILE")]
         artifact: Option<std::path::PathBuf>,
+        /// Required for complete checks: the ledger root from the caller's trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: Option<String>,
+        /// Required for complete checks: the auxiliary root from the same trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        aux_root: Option<String>,
+        /// Required for complete checks: the current DAA from the same trusted chain view.
+        #[arg(long, value_name = "DAA")]
+        tip_daa: Option<u64>,
     },
 }
 
@@ -3195,10 +3213,12 @@ async fn run_cli() -> std::process::ExitCode {
                     operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
                 }
                 OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
-                OnboardCmd::CompletePost { class, artifact, bond, key, out } => {
-                    operator::model_complete::post(&ctx, &class, &artifact, &bond, &key.source(), &out).await
+                OnboardCmd::CompletePost { class, artifact, bond, key, out, ledger_root, aux_root, tip_daa } => {
+                    operator::model_complete::post(&ctx, &class, &artifact, &bond, &key.source(), &out, &ledger_root, &aux_root, tip_daa).await
                 }
-                OnboardCmd::Verify { class, artifact } => operator::model_onboard::verify(&ctx, &class, artifact.as_deref()).await,
+                OnboardCmd::Verify { class, artifact, ledger_root, aux_root, tip_daa } => {
+                    operator::model_onboard::verify(&ctx, &class, artifact.as_deref(), ledger_root.as_deref(), aux_root.as_deref(), tip_daa).await
+                },
             }
         }),
         Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => Box::pin(async move {

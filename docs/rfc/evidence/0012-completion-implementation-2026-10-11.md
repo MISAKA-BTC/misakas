@@ -100,3 +100,21 @@ hash while still checking current generation, policy, execution roots and canoni
 The capacity shadow's `limit=1` bounds the wire output, not computation: its existing full-network
 accounting remains O(claims + bonds + locks + rows) before truncation. The construction script
 records that actual read cost; no bounded-cost or 100k latency approval follows from the limit.
+
+The complete-check CLI requires independent caller pins from a trusted chain view:
+`model onboard complete-post --ledger-root HASH --aux-root HASH --tip-daa DAA ...` and the
+complete branch of `model onboard verify` both refuse absent or mismatched pins
+before artifact execution or key loading/signing. The current DAA must also be
+pinned from that same trusted chain view. The convenience response and complete
+op-211 inventory must match those roots and DAA as well as each other. Reports
+explicitly identify the caller-pinned snapshot scope; the CLI does not establish
+that the caller selected the right chain, operator independence, or sampled
+soundness. Ordinary sampled verification retains its existing argument contract.
+
+The SDK complete builder explicitly takes the authenticated current DAA and
+refuses a different advertised DAA or a rooted route/attempt from its future.
+It uses that authenticated DAA for the 60-DAA post deadline. The production kernel
+tick returns early when no claim, seal, demand or other busy ledger row exists;
+therefore the ledger-root-committed `header.scalars.daa` can lag and cannot
+substitute for an authenticated current chain clock. The new SDK control covers
+a stale advertised clock that would otherwise revive an expired open attempt.

@@ -284,7 +284,14 @@ fn or_dash(s: &str) -> &str {
 }
 
 /// **`verify`**: the fresh verifier over ops 231 and 212 (and the public artifact, when given).
-pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> CliResult {
+pub(crate) async fn verify(
+    ctx: &Ctx,
+    class: &str,
+    artifact: Option<&Path>,
+    ledger_root: Option<&str>,
+    aux_root: Option<&str>,
+    tip_daa: Option<u64>,
+) -> CliResult {
     let nv = crate::wallet::connect(ctx).await?;
     let r = nv
         .client
@@ -303,7 +310,7 @@ pub(crate) async fn verify(ctx: &Ctx, class: &str, artifact: Option<&Path>) -> C
     let check = borsh::from_slice::<kaspa_consensus_core::palw_onboarding_v1::ConformanceAttemptRowV1>(&unhex(&r.attempt_row)?)
         .map_err(|e| CliError::new(exit::GENERIC, format!("the attempt row does not decode: {e}")))?;
     if check.is_complete_check() {
-        return super::model_complete::verify(ctx, &nv, &r, artifact).await;
+        return super::model_complete::verify(ctx, &nv, &r, artifact, ledger_root, aux_root, tip_daa).await;
     }
     let finals = nv
         .client

@@ -69,7 +69,7 @@ impl Fixture {
             (Hash64::from_u64_word(10), Hash64::from_u64_word(11), Hash64::from_u64_word(12), Hash64::from_u64_word(13));
         let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(20), 0));
         let policy = palw_kernel_route_policy_v1(network, Hash64::from_u64_word(21));
-        let mut route = PalwKernelRouteStateV1::new(policy, None, LedgerScalarsV1::default());
+        let mut route = PalwKernelRouteStateV1::new(policy, None, LedgerScalarsV1 { daa: 5, burned: 0 });
         let c = ConformanceCommitmentV1 {
             version: 1,
             chain_genesis: genesis.as_bytes(),
@@ -166,7 +166,7 @@ impl Fixture {
     }
     fn verified(&self, daa: u64) -> VerifiedCompleteCheckV1 {
         let (s, r) = self.reads(daa);
-        VerifiedCompleteCheckV1::from_snapshot(&s, r, self.class, self.genesis, self.network).unwrap()
+        VerifiedCompleteCheckV1::from_snapshot(&s, r, self.class, self.genesis, self.network, daa).unwrap()
     }
 }
 
@@ -200,9 +200,9 @@ fn rfc12_complete_check_builds_signed_post_from_rooted_public_file_and_refuses_r
     assert!(verified.check_rpc_reads(&[], &f.program.encode()).is_err());
     let (snapshot, mut rows) = f.reads(6);
     rows[0].2[0] ^= 1;
-    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, f.genesis, f.network).is_err());
+    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, f.genesis, f.network, 6).is_err());
     let (snapshot, rows) = f.reads(6);
-    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, Hash64::default(), f.network).is_err());
+    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, Hash64::default(), f.network, 6).is_err());
     assert!(f.verified(66).build_post_file(&f.artifact).is_err(), "expired open row cannot produce a post");
     misaka_palw_tir_artifact::write_container_v1(&f.artifact, &f.program, vec![], [0; 64], "substitution".into(), &mut |j, l| {
         let mut b = f.params.tensors[&(j, l)].to_le_bytes();
@@ -221,7 +221,7 @@ fn rfc12_complete_check_refuses_rooted_plan_substitution_and_oversized_file() {
     binding.plan_root = Hash64::default();
     f.route.aux.insert(key, borsh::to_vec(&binding).unwrap());
     let (snapshot, rows) = f.reads(6);
-    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, f.genesis, f.network).is_err());
+    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, f.genesis, f.network, 6).is_err());
     let f = Fixture::new();
     let verified = f.verified(6);
     std::fs::OpenOptions::new()
@@ -231,4 +231,18 @@ fn rfc12_complete_check_refuses_rooted_plan_substitution_and_oversized_file() {
         .set_len(misaka_palw_sdk::complete_check::COMPLETE_CHECK_MAX_CONTAINER_BYTES_V1 + 1)
         .unwrap();
     assert!(verified.verify_file(&f.artifact).is_err());
+}
+
+#[test]
+fn rfc12_complete_check_authenticates_expiry_clock_independently_of_rpc_and_idle_route_clock() {
+    let f = Fixture::new();
+    // A valid idle route clock is behind the current chain DAA. It must not
+    // authenticate expiry, or a node can indefinitely reuse an old open row.
+    assert_eq!(f.route.header.scalars.daa, 5);
+    let (snapshot, rows) = f.reads(6);
+    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, f.genesis, f.network, 66).is_err());
+    let current = f.verified(66);
+    assert!(current.build_post_file(&f.artifact).is_err());
+    let (snapshot, rows) = f.reads(4);
+    assert!(VerifiedCompleteCheckV1::from_snapshot(&snapshot, rows, f.class, f.genesis, f.network, 4).is_err());
 }

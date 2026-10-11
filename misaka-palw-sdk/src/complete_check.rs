@@ -1,5 +1,6 @@
 //! Complete-check onboarding over one complete, rooted op-211 inventory.
-//! The caller must authenticate the served roots against its trusted chain view.
+//! The caller must authenticate the served roots and current DAA against the same
+//! trusted chain view. The route's committed clock can lag when it has no busy rows.
 //! This checks snapshot integrity and exhaustively executes a bounded stateless
 //! program; it does not establish operator independence or sampled soundness.
 
@@ -39,15 +40,21 @@ pub struct VerifiedCompleteCheckV1 {
 
 impl VerifiedCompleteCheckV1 {
     /// The inventory must have been finished by KernelRowsCollectorV1, and its
-    /// roots authenticated by the caller. All semantic reads below come from
-    /// the same root-checked inventory, rather than independent RPC answers.
+    /// roots authenticated by the caller. `authenticated_tip_daa` must come from
+    /// that same trusted chain view independently of the node being verified.
+    /// The route's root-committed clock is not necessarily current: an idle tick
+    /// may leave it unchanged. All semantic reads below come from one inventory.
     pub fn from_snapshot(
         snapshot: &KernelRowsSnapshotV1,
         rows: Vec<KernelRowV1>,
         class: Hash64,
         genesis: Hash64,
         network_domain: Hash64,
+        authenticated_tip_daa: u64,
     ) -> Result<Self, Refusal> {
+        if snapshot.tip_daa != authenticated_tip_daa {
+            return Err(Refusal::new("CLOCK_NOT_THE_CHAIN", "the served DAA differs from the caller's authenticated current DAA"));
+        }
         if rows.len() as u64 != snapshot.total_rows {
             return Err(Refusal::new("INCOMPLETE_ROWS", "the advertised kernel inventory is incomplete"));
         }
@@ -55,6 +62,12 @@ impl VerifiedCompleteCheckV1 {
             .map_err(|e| Refusal::new("READS_NOT_THE_CHAIN", e))?;
         let attempt =
             route.conformance_attempt_v1(&class).ok_or_else(|| Refusal::new("ATTEMPT_MISSING", "no rooted attempt for this class"))?;
+        if route.header.scalars.daa > authenticated_tip_daa || attempt.committed_daa > authenticated_tip_daa {
+            return Err(Refusal::new(
+                "CLOCK_NOT_THE_CHAIN",
+                "the rooted route or attempt is later than the authenticated current DAA",
+            ));
+        }
         if !attempt.is_complete_check() {
             return Err(Refusal::new("NOT_COMPLETE_CHECK", "this attempt uses a sampled policy"));
         }
@@ -102,7 +115,7 @@ impl VerifiedCompleteCheckV1 {
             network_domain,
             open: attempt.open()
                 && attempt.evidence.is_none()
-                && snapshot.tip_daa
+                && authenticated_tip_daa
                     <= attempt
                         .committed_daa
                         .saturating_add(kaspa_consensus_core::palw_opv_bootstrap_v1::PALW_COMPLETE_CHECK_DEADLINE_DAA_V1),
