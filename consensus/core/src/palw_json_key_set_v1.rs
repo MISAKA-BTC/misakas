@@ -12,6 +12,48 @@ pub struct PalwJsonKeyInsertProofV1 {
     /// Bottom-to-top, EXACTLY512 siblings. Full512-bit identities are never truncated.
     pub siblings: Vec<Hash64>,
 }
+/// Canonical transport compression omits known empty siblings without truncating512-bit paths.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwJsonKeyCompactProofV1 {
+    pub namespace: u64,
+    pub key_hash: Hash64,
+    pub non_default: [u8; 64],
+    pub siblings: Vec<Hash64>,
+}
+impl PalwJsonKeyCompactProofV1 {
+    pub fn compress(proof: &PalwJsonKeyInsertProofV1) -> Result<Self, String> {
+        if proof.siblings.len() != PALW_JSON_KEY_SET_DEPTH_V1 {
+            return Err("compact key proof needs exactly512 original siblings".into());
+        }
+        let mut p = Self { namespace: proof.namespace, key_hash: proof.key_hash, non_default: [0; 64], siblings: Vec::new() };
+        for (height, sibling) in proof.siblings.iter().enumerate() {
+            if *sibling != defaults()[height] {
+                p.non_default[height / 8] |= 1 << (height % 8);
+                p.siblings.push(*sibling);
+            }
+        }
+        Ok(p)
+    }
+    pub fn expand(&self) -> Result<PalwJsonKeyInsertProofV1, String> {
+        let count: usize = self.non_default.iter().map(|byte| byte.count_ones() as usize).sum();
+        if count != self.siblings.len() {
+            return Err("compact key proof count does not match bitmap".into());
+        }
+        let mut siblings = defaults()[..PALW_JSON_KEY_SET_DEPTH_V1].to_vec();
+        let mut cursor = 0;
+        for (height, sibling) in siblings.iter_mut().enumerate() {
+            if self.non_default[height / 8] & (1 << (height % 8)) != 0 {
+                let hash = self.siblings[cursor];
+                cursor += 1;
+                if hash == *sibling {
+                    return Err("compact key proof explicitly repeats a default sibling".into());
+                }
+                *sibling = hash;
+            }
+        }
+        Ok(PalwJsonKeyInsertProofV1 { namespace: self.namespace, key_hash: self.key_hash, siblings })
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwJsonKeySetV1 {
     root: Hash64,
@@ -140,6 +182,28 @@ mod tests {
         let restored: PalwJsonKeySetV1 = borsh::from_slice(&borsh::to_vec(&set).unwrap()).unwrap();
         assert_eq!(restored, set);
         assert!(borsh::to_vec(&set).unwrap().len() < 128);
+    }
+    #[test]
+    fn compact_proofs_are_full_width_canonical_and_differentially_identical() {
+        let empty = empty_proof(1, "model");
+        let compact = PalwJsonKeyCompactProofV1::compress(&empty).unwrap();
+        assert_eq!(compact.expand().unwrap(), empty);
+        assert!(borsh::to_vec(&compact).unwrap().len() < 256);
+        let mut set = PalwJsonKeySetV1::default();
+        set.insert(1, empty.key_hash, &compact.expand().unwrap()).unwrap();
+        let second = after_one(2, "added_tokens", 1, "model");
+        let compact = PalwJsonKeyCompactProofV1::compress(&second).unwrap();
+        assert_eq!(compact.siblings.len(), 1);
+        assert_eq!(compact.expand().unwrap(), second);
+        assert_eq!(set.contains(2, second.key_hash, &compact.expand().unwrap()), Ok(false));
+        set.insert(2, second.key_hash, &compact.expand().unwrap()).unwrap();
+        let mut forged = compact.clone();
+        forged.siblings.clear();
+        assert!(forged.expand().is_err());
+        let mut noncanonical = PalwJsonKeyCompactProofV1::compress(&empty).unwrap();
+        noncanonical.non_default[0] = 1;
+        noncanonical.siblings.push(defaults()[0]);
+        assert!(noncanonical.expand().is_err());
     }
     #[test]
     fn changed_key_path_depth_or_sibling_cannot_insert_and_full_width_is_used() {
