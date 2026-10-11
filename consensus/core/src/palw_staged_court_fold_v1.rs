@@ -43,6 +43,13 @@ impl TransitionBuilder<'_> {
         &self,
         claim: &mut PalwClaimStateV2,
     ) -> Result<Option<PalwStagedClaimContractV1>, PalwStateV2Error> {
+        self.prepare_staged_claim_with_job_v1(claim, None)
+    }
+    pub(super) fn prepare_staged_claim_with_job_v1(
+        &self,
+        claim: &mut PalwClaimStateV2,
+        public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+    ) -> Result<Option<PalwStagedClaimContractV1>, PalwStateV2Error> {
         let Some(config) = self.extras.staged_public_court else {
             return Ok(None);
         };
@@ -59,6 +66,49 @@ impl TransitionBuilder<'_> {
                 terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
                     claim.accepted_daa,
                     terms.plan.cover(tokenizer),
+                    config.acquisition_daa,
+                    config.collection_daa,
+                    config.reorg_retention_daa,
+                )
+                .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+        if let Some(public_job) = public_job.filter(|j| j.job.is_prefix_state()) {
+            let job = &public_job.job;
+            if let (Some(profile), Some(relation)) = (
+                self.state.fp_work_profiles.get(&claim.class_id),
+                self.state.class_semantics.get(&claim.class_id).and_then(|s| s.prefix_state_relation),
+            ) {
+                let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job)
+                    .map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))?;
+                let ladder = self.state.class_step_ladder_v1(
+                    &claim.class_id,
+                    self.extras
+                        .held_context_ladder
+                        .or(self.extras.shard_court_ladder)
+                        .ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+                );
+                // Authenticated class + accepted job counts establish the complete prefix
+                // envelope before any liability/material row can become spendable.
+                let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(
+                    profile,
+                    job.prompt_tokens,
+                    public_job.decode_tokens_executed,
+                    ladder,
+                )
+                .map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))?;
+                let prefix = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+                    profile,
+                    relation,
+                    named.prefix_tokens,
+                    leaves,
+                    90_000,
+                    config.prices,
+                )
+                .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
+                    claim.accepted_daa,
+                    terms.plan.cover(prefix.envelope),
                     config.acquisition_daa,
                     config.collection_daa,
                     config.reorg_retention_daa,
@@ -165,7 +215,101 @@ pub(super) fn open(
     if contract.panel.is_empty() {
         return Err(stage_refused(seed.claim, "staged contract has no actual bound Panel"));
     }
-    if seed.auxiliary.is_some() {
+    if let Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Prefix {
+        maximum_leaves,
+        prefix_tokens,
+        relation,
+    }) = &seed.auxiliary
+    {
+        let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
+        let ladder = b.state.class_step_ladder_v1(
+            &target.class_id,
+            b.extras.held_context_ladder.or(b.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+        );
+        let named =
+            crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
+        if *maximum_leaves != ladder
+            || *prefix_tokens != named.prefix_tokens
+            || target.registered_semantics.as_ref().and_then(|s| s.prefix_state_relation) != Some(*relation)
+        {
+            return Err(stage_refused(seed.claim, "prefix fee metadata changes actual job, immutable relation or rule ladder"));
+        }
+        let plan = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+            &seed.binding.shape_profile,
+            *relation,
+            *prefix_tokens,
+            seed.binding.step_leaf_count,
+            90_000,
+            config.prices,
+        )
+        .map_err(|e| stage_refused(seed.claim, e))?
+        .envelope;
+        let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
+        let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
+        extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
+        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
+            &extended_claim,
+            palw_da_disclose_window_daa_v1(b.params),
+        );
+        let until = hard
+            .checked_add(b.params.window_challenge_at(ctx.daa_score))
+            .ok_or(PalwStateV2Error::Overflow("paid prefix DA extension"))?
+            .max(extended_terms.bond_exit_after_daa);
+        super::palw_exec_v2_rewards_v1::require_native_session_window(&b.state, b.params, &seed.claim, until)?;
+        b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
+        let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
+        let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
+        let encoded = borsh::to_vec(seed).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
+        let message = seed.signing_message();
+        let seed_id = Hash64::from_bytes(message.try_into().map_err(|_| stage_refused(seed.claim, "prefix seed identity length"))?);
+        let row = crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1::admit(
+            seed_id,
+            seed.claim,
+            seed.reserver,
+            seed.reserved_daa,
+            &seed.binding,
+            &original.job,
+            &target,
+            extended_terms,
+            config.prices,
+            ctx.daa_score,
+            funded,
+            90_000,
+            ladder,
+            encoded.len() as u64,
+            extended_claim.trace_retention_daa,
+            extended_terms.bond_exit_after_daa,
+            &exits,
+        )
+        .map_err(|e| stage_refused(seed.claim, e))?;
+        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Prefix(Box::new(row))));
+        if extended_terms != contract.terms {
+            b.write_staged_row_v1(
+                PalwStagedCourtKeyV1::Claim(seed.claim),
+                Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
+            );
+            b.write_claim(seed.claim, Some(extended_claim));
+            if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
+                dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
+                b.write_legacy_dispute(seed.claim, Some(dispute));
+            }
+            b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
+            if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned() {
+                if liability.voided_daa.is_none() && liability.void_reason.is_none() && liability.expiry_daa < until {
+                    liability.expiry_daa = until;
+                    b.write_panel_liability(seed.claim, Some(liability));
+                }
+            }
+            for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
+                if lock.expiry_daa < until {
+                    lock.expiry_daa = until;
+                    b.write_slashable_lock(lock_key, Some(lock));
+                }
+            }
+        }
+        return Ok(());
+    }
+    if matches!(&seed.auxiliary, Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer { .. })) {
         let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
         let semantics = target
             .registered_semantics
@@ -334,6 +478,23 @@ pub(super) fn movement(
     let result = match row {
         PalwStagedCourtRowV1::Constraint(c) => c.movement(ctx.daa_score, movement),
         PalwStagedCourtRowV1::Tokenizer(c) => c.movement(ctx.daa_score, movement),
+        PalwStagedCourtRowV1::Prefix(c) => {
+            if movement.phase != crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt {
+                return Err(stage_refused(movement.claim, "prefix movement changes typed phase"));
+            }
+            let crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::Prefix(action) = &movement.action else {
+                return Err(stage_refused(movement.claim, "prefix movement changes owned court action"));
+            };
+            c.movement(
+                ctx.daa_score,
+                movement.claim,
+                movement.reserver,
+                movement.reserved_daa,
+                movement.seed_id,
+                action,
+                borsh::to_vec(movement).map_err(|e| stage_refused(movement.claim, e.to_string()))?.len() as u64,
+            )
+        }
         _ => Err("claim contract alone cannot accept an owned move".into()),
     };
     if let Err(error) = result {
@@ -360,6 +521,7 @@ fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Ve
         }
         PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::Tokenizer(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+        PalwStagedCourtRowV1::Prefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
     }
 }
 pub(super) fn update_indices(

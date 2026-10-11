@@ -21,12 +21,14 @@ pub enum PalwStagedCourtRowV1 {
     Claim(PalwStagedClaimContractV1),
     Constraint(Box<PalwOwnedConstraintStreamV1>),
     Tokenizer(Box<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1>),
+    Prefix(Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub(crate) fn owner_accounting_v1(&self) -> Option<(Hash64, PalwBondKeyV2, u64, u64)> {
         match self {
             Self::Constraint(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             Self::Tokenizer(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
+            Self::Prefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             _ => None,
         }
     }
@@ -34,6 +36,7 @@ impl PalwStagedCourtRowV1 {
         match self {
             Self::Constraint(c) => Ok(PalwStagedCheckpointV1::Constraint(c.checkpoint_v1())),
             Self::Tokenizer(c) => Ok(PalwStagedCheckpointV1::Tokenizer(Box::new(c.checkpoint_v1()))),
+            Self::Prefix(c) => Ok(PalwStagedCheckpointV1::Prefix(Box::new(c.checkpoint_v1()))),
             _ => Err("claim contract is not an owned mutable court".into()),
         }
     }
@@ -41,6 +44,7 @@ impl PalwStagedCourtRowV1 {
         match (self, cp) {
             (Self::Constraint(c), PalwStagedCheckpointV1::Constraint(cp)) => c.restore_checkpoint_v1(cp),
             (Self::Tokenizer(c), PalwStagedCheckpointV1::Tokenizer(cp)) => c.restore_checkpoint_v1(cp),
+            (Self::Prefix(c), PalwStagedCheckpointV1::Prefix(cp)) => c.restore_checkpoint_v1(cp),
             _ => Err("staged checkpoint changes immutable court type".into()),
         }
     }
@@ -57,6 +61,7 @@ impl PalwStagedCourtRowV1 {
             }
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Constraint(c)) if (*claim, *bond) == c.key() => c.check(),
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Tokenizer(c)) if (*claim, *bond) == c.key() => c.check(),
+            (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Prefix(c)) if (*claim, *bond) == (c.claim, c.reserver) => c.check(),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }
@@ -66,11 +71,13 @@ impl PalwStagedCourtRowV1 {
 pub enum PalwStagedCheckpointV1 {
     Constraint(crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1),
     Tokenizer(Box<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCheckpointV1>),
+    Prefix(Box<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCheckpointV1>),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwStagedFaultV1 {
     Constraint(crate::palw_constraint_stream_court_v1::PalwConstraintStreamFaultV1),
     Tokenizer(crate::palw_tokenizer_owned_court_v1::PalwTokenizerCourtFaultV1),
+    Prefix(crate::palw_prefix_owned_court_v1::PalwPrefixCourtFaultV1),
 }
 /// A reference to a completed ROOTED court, not a challenger-supplied parser checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -88,7 +95,9 @@ impl PalwStagedCertificateRefV1 {
     ) -> Result<crate::palw_constraint_stream_court_v1::PalwConstraintStreamFaultV1, String> {
         match self.resolve_fault_v1(state, expected_root)? {
             PalwStagedFaultV1::Constraint(fault) => Ok(fault),
-            PalwStagedFaultV1::Tokenizer(_) => Err("tokenizer claim fault is not a constrained execution fault".into()),
+            PalwStagedFaultV1::Tokenizer(_) | PalwStagedFaultV1::Prefix(_) => {
+                Err("claim fault is not a constrained execution fault".into())
+            }
         }
     }
     pub fn resolve_fault_v1(
@@ -121,6 +130,18 @@ impl PalwStagedCertificateRefV1 {
                     return Err("rooted tokenizer certificate does not convict target claim".into());
                 }
                 Ok(PalwStagedFaultV1::Tokenizer(fault))
+            }
+            PalwStagedCourtRowV1::Prefix(row) => {
+                if row.reserved_daa != self.reserved_daa || row.seed_id() != self.seed_id {
+                    return Err("prefix certificate changes immutable owner/seed/reservation".into());
+                }
+                let fault = row.certificate()?.ok_or("rooted prefix court completed honestly")?;
+                if (fault.claim, fault.reserver, fault.reserved_daa, fault.seed_id, fault.execution_root)
+                    != (self.claim, self.reserver, self.reserved_daa, self.seed_id, expected_root)
+                {
+                    return Err("rooted prefix certificate does not convict target claim".into());
+                }
+                Ok(PalwStagedFaultV1::Prefix(fault))
             }
             _ => Err("claim contract alone cannot convict".into()),
         }
@@ -171,6 +192,10 @@ pub struct PalwStagedOwnedProgressV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwStagedOwnedCursorV1 {
+    Prefix {
+        moves_used: u64,
+        completed: Option<bool>,
+    },
     Constraint {
         phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
     },
@@ -216,6 +241,19 @@ pub fn palw_staged_owned_progress_v1(
                 return Err("staged progress reservation differs from owned seed".into());
             }
             (Some(row.seed_id()), Some(PalwStagedOwnedCursorV1::Constraint { phase: row.court().phase() }))
+        }
+        Some(PalwStagedCourtRowV1::Prefix(row)) => {
+            row.check()?;
+            if row.reserved_daa != reservation.reserved_daa {
+                return Err("prefix progress reservation differs from owned seed".into());
+            }
+            (
+                Some(row.seed_id()),
+                Some(PalwStagedOwnedCursorV1::Prefix {
+                    moves_used: row.moves_used,
+                    completed: row.certificate().ok().map(|r| r.is_some()),
+                }),
+            )
         }
         Some(_) => return Err("staged owner key contains a claim contract".into()),
         None => (None, None),

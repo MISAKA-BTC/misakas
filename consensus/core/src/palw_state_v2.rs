@@ -9730,6 +9730,13 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
                         .and_then(|p|p.court_envelope(seed.binding.shape_profile.vocab_size,config.prices))
                         .map(|p|p.rent_sompi).unwrap_or(u64::MAX)
                 }
+                Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Prefix {
+                    prefix_tokens,relation,..}) => {
+                    crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+                        &seed.binding.shape_profile,*relation,*prefix_tokens,seed.binding.step_leaf_count,
+                        90_000,config.prices)
+                        .map(|p|p.envelope.rent_sompi).unwrap_or(u64::MAX)
+                }
                 None=>config.claim_terms(0,4095,seed.binding.shape_profile.vocab_size)
                     .map(|t|t.plan.rent_sompi).unwrap_or(u64::MAX),
             }
@@ -39300,8 +39307,8 @@ fn apply_object(
                 rcore: PalwClaimRcoreV1::default(),
             };
             let mut claim = claim;
-            let staged_contract = builder.prepare_staged_claim_v1(&mut claim)?;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
+            let staged_contract = builder.prepare_staged_claim_with_job_v1(&mut claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;

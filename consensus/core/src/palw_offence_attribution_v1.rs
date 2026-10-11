@@ -2033,7 +2033,7 @@ fn adjudicate_against_claim_v1(
                     }
                     if matches!(reference.resolve_fault_v1(state,target.execution_root)
                         .map_err(|_|PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?,
-                        crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)) {
+                        crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_) | crate::palw_staged_court_state_v1::PalwStagedFaultV1::Prefix(_)) {
                         return Ok((PalwForfeitScopeV1::ByClaim,None));
                     }
                 }
@@ -2271,7 +2271,7 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
     let staged_site=match &payload.contradiction {
         PalwPanelContradictionV1::StagedCourt {reference} => match reference.resolve_fault_v1(state,target.execution_root)
             .map_err(|_|PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)? {
-                crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)=>Some(PalwFaultSiteV1::AnyValid),
+                crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_) | crate::palw_staged_court_state_v1::PalwStagedFaultV1::Prefix(_)=>Some(PalwFaultSiteV1::AnyValid),
                 _=>None,
             },
         _=>None,

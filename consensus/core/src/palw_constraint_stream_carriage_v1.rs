@@ -24,6 +24,13 @@ pub enum PalwAuxiliaryPublicCourtSeedV1 {
         /// Verifier-held operand length; authenticated only by the original flat hash at EOF.
         operand_tokenizer_bytes: u64,
     },
+    /// Must equal the outer rule-owned class step ladder; no prover-selected weakening.
+    Prefix {
+        maximum_leaves: u64,
+        /// Fee metadata must equal the literal accepted prefix job and immutable relation.
+        prefix_tokens: u32,
+        relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamSeedV1 {
@@ -65,6 +72,7 @@ pub enum PalwConstraintStreamActionV1 {
     TokenizerPacket(crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1),
     TokenizerSeal,
     TokenizerRenderingPart { offset: u32, bytes: Vec<u8> },
+    Prefix(crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -229,6 +237,9 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::TokenizerRenderingPart { bytes, .. } if bytes.is_empty() || bytes.len() > 65536 => {
                 Err("tokenizer rendering part exceeds bounded work".into())
             }
+            PalwConstraintStreamActionV1::Prefix(action) if borsh::to_vec(action).map_err(|e| e.to_string())?.len() > 90000 => {
+                Err("prefix action exceeds bounded staged carrier".into())
+            }
             _ => Ok(()),
         }
     }
@@ -244,10 +255,11 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::RenderingPart { offset, bytes } => court.push_rendering(self.seed_id, *offset, bytes),
             PalwConstraintStreamActionV1::RenderingFinish => court.finish_rendering(),
             PalwConstraintStreamActionV1::EogTokenFinish => court.finish_eog_token(self.seed_id),
-            PalwConstraintStreamActionV1::TokenizerPacket(_)
+            PalwConstraintStreamActionV1::Prefix(_)
+            | PalwConstraintStreamActionV1::TokenizerPacket(_)
             | PalwConstraintStreamActionV1::TokenizerSeal
             | PalwConstraintStreamActionV1::TokenizerRenderingPart { .. } => {
-                Err("typed tokenizer move is not a constrained court action".into())
+                Err("typed auxiliary move is not a constrained court action".into())
             }
         }
     }
@@ -301,5 +313,28 @@ mod tests {
         wrong = m;
         wrong.action = PalwConstraintStreamActionV1::RenderingPart { offset: 0, bytes: vec![0; 65537] };
         assert!(wrong.check().is_err());
+    }
+    #[test]
+    fn prefix_typed_carrier_binds_family_transition_and_bounds_hostile_body() {
+        use crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1 as A;
+        let mut m = movement();
+        m.phase = PalwConstraintStreamPhaseV1::PrefixCourt;
+        m.action = PalwConstraintStreamActionV1::Prefix(A::TilePart { offset: 0, bytes: vec![1, 0, 0, 0] });
+        m.check().unwrap();
+        let message = m.signing_message();
+        let encoded = borsh::to_vec(&m).unwrap();
+        let decoded: PalwConstraintStreamMoveV1 = borsh::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, m);
+        let mut foreign = m.clone();
+        foreign.phase = PalwConstraintStreamPhaseV1::Tokenizer;
+        assert_ne!(message, foreign.signing_message());
+        foreign = m.clone();
+        foreign.action = PalwConstraintStreamActionV1::Prefix(A::FinishTile);
+        assert_ne!(message, foreign.signing_message());
+        foreign = m.clone();
+        foreign.action = PalwConstraintStreamActionV1::Prefix(A::TilePart { offset: 4, bytes: vec![1, 0, 0, 0] });
+        assert_ne!(message, foreign.signing_message());
+        m.action = PalwConstraintStreamActionV1::Prefix(A::TilePart { offset: 0, bytes: vec![0; 90_001] });
+        assert!(m.check().is_err());
     }
 }
