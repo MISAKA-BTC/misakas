@@ -176,3 +176,43 @@ python3 scripts/misaka-rfc12-private-smoke.py --binary /absolute/path/misaka-rfc
 A dedicated resource runner may select 100000 and longer explicit setup/probe deadlines, for example `--timeout 3600 --manifest-timeout 3600`. The driver fixes this count before launch, checks the public capacity read's total registry count, indexed coin supply, genesis money and roots across three owned processes, handshake/cut/heal and a cold SIGKILL/reopen. Capacity `limit=1` bounds returned rows; the underlying full-network calculation remains part of the measured cost. It preserves an owned-process RSS snapshot in KiB, owned DB logical bytes, factory timing logs and RPC latency observations. That snapshot is not peak-RSS evidence or a predeclared resource acceptance threshold. This result remains `CONSTRUCTION_TRANSPORT_PASS`; `release100kMeasured`, `prunedIbdMeasured`, `matureUsefulWorkMeasured`, `marketFillsMeasured` and full security approval stay false. No actual population process run is recorded yet.
 
 The native carriage retains one bond public key and an operator identity hash; registration objects' second public key is not a second full key in the state carriage. RFC06's central native fixture observed 72 bonds / 71 candidates at 251,751 full-carriage bytes. A 100k registry with no seals may fit the retained 384 MiB snapshot ceiling, while multiple complete populations add a separate retained-state cost. The new profile permits the registry cost to be measured; it does not raise the bound or label a refusal as successful pruned transport. Complete populations, usable native beacon input, post-Final history compaction, genuine pruned joins and the approved resource/latency criteria retain their separate acceptance requirements.
+
+## Predeclared construction resource observations
+
+The private smoke also observes only its owned manifest/A/B/JOIN children at a
+fixed sampling interval, retaining each role's maximum observed RSS and restart
+count. The optional `--resource-limits=/absolute/path/limits.json` input is read
+before any child starts and included in the pinned plan. No default release limits
+are guessed. Without a limits file, `resourceLimitsMet` is unavailable (`null`).
+
+The exact version-1 JSON schema has these fields:
+
+| Field | Required value or unit |
+| --- | --- |
+| `schemaVersion` | integer `1` |
+| `kind` | `rfc12-construction-resource-bounds` |
+| `maximumOwnedProcessRssKiB` | selected positive integer, per owned child |
+| `maximumOwnedDatabaseLogicalBytes` | selected positive integer, per role after shutdown |
+| `maximumProbeMs` | selected positive integer, complete public probe duration |
+| `maximumFactorySeconds` | selected positive integer, manifest factory elapsed limit |
+| `samplePeriodMs` | selected integer from 100 through 5000 |
+
+An observed excess, missing child/DB measurement or live-child RSS observation
+failure refuses resource success. Manifest timeout kills only that factory child;
+other owned children close through the existing driver cleanup. Manifest stdout/
+stderr, factory elapsed time and failure artifacts persist even if node launch is
+never reached. The chosen limits are immutable inside the sampler.
+
+These are monitored acceptance limits, not OS hard quotas. `sampledPeakRssKiB`
+does not capture an allocation entirely between samples, the RSS snapshot excludes
+shared host/build pressure, and DB bytes are a post-shutdown observation rather
+than a compaction peak. `completePeakRssMeasured` and `osHardQuotaApplied` remain
+false. Passing selected construction limits does not change any release100k,
+pruned IBD, mature-work, market or security flag.
+
+Four resource controls cover strict predeclared schema, actual owned OS-child
+replacement, an actual child refusing a bound fixed before launch, and missing/
+excessive cost measurements. Together with the six existing oracle/socket controls,
+`python3 -m unittest discover -s scripts/tests -p 'test_rfc12_*.py' -v` passes ten
+tests. These tests are resource instrumentation controls, not native node or 100k
+measurements.

@@ -14,6 +14,8 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import time
+from rfc12_owned_resources import OwnedResourceSampler, check_completed_limits, read_limits
 
 
 MODULE = Path(__file__).with_name('misaka-rfc12-multiprocess.py')
@@ -135,6 +137,25 @@ def run(drill, manifest):
     drill.wait(lambda: peer_count(drill, 'JOIN') > 0, 'cold-reopened process P2P handshake')
 
 
+class ResourceDrill(transport.Drill):
+    def __init__(self, plan, root, sampler, owned_children):
+        super().__init__(plan, root)
+        self.sampler, self.owned_children = sampler, owned_children
+
+    def start(self, role):
+        self.sampler.check()
+        super().start(role)
+        self.sampler.register(role, self.processes[role])
+
+    def wait(self, predicate, label):
+        def checked():
+            self.sampler.check()
+            value = predicate()
+            self.sampler.check()
+            return value
+        return super().wait(checked, label)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True)
@@ -144,50 +165,82 @@ def main():
     parser.add_argument('--profile', choices=('native-v1', 'population-v1'), default='native-v1')
     parser.add_argument('--bonds', type=int)
     parser.add_argument('--manifest-timeout', type=int, default=30)
+    parser.add_argument('--resource-limits', help='optional predeclared construction-only resource limits JSON')
     args = parser.parse_args()
     binary = Path(args.binary).resolve(strict=True)
     assert binary.is_file() and os.access(binary, os.X_OK), 'supply the compiled opt-in private helper'
     assert len(args.salt) == 64 and int(args.salt, 16) != 0, 'an explicit nonzero 32-byte private salt is required'
     assert (args.profile == 'population-v1') == (args.bonds is not None), 'population-v1 needs an explicit size; native-v1 uses its existing genesis'
+    limits = read_limits(args.resource_limits)  # fixed before the first factory child starts
     manifest_argv = [str(binary), '--private-probe-profile=' + args.profile, '--private-probe-salt=' + args.salt,
                      '--testnet', '--netsuffix=12', '--print-private-probe-profile']
     if args.bonds is not None:
         manifest_argv.append('--private-probe-bonds=' + str(args.bonds))
-    raw = subprocess.run(manifest_argv, check=True, capture_output=True, text=True,
-                         timeout=args.manifest_timeout).stdout
-    manifest = json.loads(raw)
-    assert manifest['kind'] == 'rfc12-private-integration-probe'
-    assert manifest['skipProofOfWork'] is False and manifest['releaseApproval'] is False
     root = Path(tempfile.mkdtemp(prefix='misaka-rfc12-construction-'))
-    plan = plan_for(binary, args.salt, manifest, args.timeout, args.profile, args.bonds)
-    plan_bytes = (json.dumps(plan, sort_keys=True, indent=2) + '\n').encode()
-    (root / 'plan.json').write_bytes(plan_bytes)  # fixed before the first process starts
-    drill = transport.Drill(plan, root)
-    result = dict(status='FAIL', artifactDirectory=str(root), planSha256=hashlib.sha256(plan_bytes).hexdigest(),
+    owned_children = {}
+    sampler = OwnedResourceSampler(owned_children, limits)
+    factory, drill, plan = None, None, None
+    factory_stdout, factory_stderr = '', ''
+    result = dict(status='FAIL', artifactDirectory=str(root), resourceLimits=limits, resourceLimitsMet=None,
                   fullRfc12SecurityApproval=False, release100kMeasured=False, prunedIbdMeasured=False,
                   matureUsefulWorkMeasured=False, marketFillsMeasured=False)
     try:
+        factory_began = time.monotonic()
+        factory = subprocess.Popen(manifest_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        sampler.register('MANIFEST', factory)
+        sampler.sample_now()
+        factory_timeout = min(args.manifest_timeout, (limits or {}).get('maximumFactorySeconds', args.manifest_timeout))
+        factory_stdout, factory_stderr = factory.communicate(timeout=factory_timeout)
+        result['factorySeconds'] = time.monotonic() - factory_began
+        assert factory.returncode == 0, 'private manifest factory exited %d; inspect its preserved stderr' % factory.returncode
+        sampler.check()
+        manifest = json.loads(factory_stdout)
+        assert manifest['kind'] == 'rfc12-private-integration-probe'
+        assert manifest['skipProofOfWork'] is False and manifest['releaseApproval'] is False
+        plan = plan_for(binary, args.salt, manifest, args.timeout, args.profile, args.bonds)
+        plan['resourceLimits'] = limits
+        plan_bytes = (json.dumps(plan, sort_keys=True, indent=2) + '\n').encode()
+        (root / 'plan.json').write_bytes(plan_bytes)  # fixed before the first node starts
+        result['planSha256'] = hashlib.sha256(plan_bytes).hexdigest()
+        drill = ResourceDrill(plan, root, sampler, owned_children)
         run(drill, manifest)
+        sampler.check()
         result['status'] = 'CONSTRUCTION_TRANSPORT_PASS'
     except transport.Blocked as error:
         result.update(status='BLOCKED', reason=str(error))
     except Exception as error:
         result['reason'] = repr(error)
     finally:
+        if factory is not None and factory.poll() is None:
+            factory.kill()  # only this driver's manifest child
+            factory_stdout, factory_stderr = factory.communicate(timeout=5)
+            result['factorySeconds'] = time.monotonic() - factory_began
+        (root / 'manifest.stdout').write_text(factory_stdout)
+        (root / 'manifest.stderr').write_text(factory_stderr)
+        result['sampledOwnedResources'] = sampler.stop()
         # Snapshot only owned child RSS, before shutdown; KiB from the platform's
         # ps RSS column. This is an observation, not a declared release threshold.
         result['ownedProcessRssKiB'] = {}
-        for role, process in drill.processes.items():
+        for role, process in (drill.processes if drill else {}).items():
             try:
                 rss = subprocess.run(['ps', '-o', 'rss=', '-p', str(process.pid)], check=True,
                                      capture_output=True, text=True, timeout=5).stdout.strip()
                 result['ownedProcessRssKiB'][role] = int(rss)
             except (ValueError, OSError, subprocess.SubprocessError):
                 result['ownedProcessRssKiB'][role] = None
-        drill.close()
+        if drill:
+            drill.close()
         result['ownedDatabaseLogicalBytes'] = {role: sum(file.stat().st_size for file in (root / role).rglob('*') if file.is_file())
-                                              for role in plan['nodes']}
-        result.update(observations=drill.observations, probeLatenciesMs=drill.latencies)
+                                              for role in (plan['nodes'] if plan else {})}
+        result.update(observations=drill.observations if drill else [], probeLatenciesMs=drill.latencies if drill else [])
+        if limits:
+            result['resourceLimitsMet'] = False
+            if result['status'] == 'CONSTRUCTION_TRANSPORT_PASS':
+                try:
+                    check_completed_limits(limits, result)
+                    result['resourceLimitsMet'] = True
+                except RuntimeError as error:
+                    result.update(status='FAIL', reason=str(error))
         Path(args.out).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps({key: value for key, value in result.items() if key != 'observations'}, indent=2))
     return 0 if result['status'] == 'CONSTRUCTION_TRANSPORT_PASS' else 1
