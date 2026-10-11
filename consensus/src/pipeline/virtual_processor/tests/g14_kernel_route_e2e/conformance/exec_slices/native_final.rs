@@ -406,12 +406,19 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             // legs in the toy class. All parameters precede genesis and work;
             // funding/collateral/admission/cryptographic gates are unchanged.
             params.palw_work_priced_reward = Some(ForkActivation::new(10_000));
+            // Acceptance's economic snapshot takes precedence over the older
+            // work-price gate at Final. Both must precede genesis in this fixed
+            // counterfactual whole-escrow fixture, or changing only the older
+            // fence still exercises the toy class's zero compute-priced leg.
+            params.palw_economic_payout.as_mut().expect("the private profile prices compute").activation = ForkActivation::new(10_000);
             params.palw_settled_anchor_depth = Some(1);
             assert!(params.validate_palw_bond_budget_v1().is_err(), "public activation remains refused");
         },
     ).await;
     cw.net._keep.push(Box::new(receiver));
     let mut first = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    assert!(cw.net.chain.tip_state().1.claim_economics_of(&first.real.claim).is_none(),
+        "whole-escrow pricing was fixed before acceptance; no snapshot may override it");
     for (index, slice) in first.slices.iter().enumerate() {
         first.lane.push(carry_slice(&mut cw, first.real.claim, index as u32, &slice.claim).await);
     }
