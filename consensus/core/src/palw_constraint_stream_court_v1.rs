@@ -126,6 +126,36 @@ impl PalwConstraintStreamCourtV1 {
         eog_opening: &PalwStepOpeningV1,
         ladder: u64,
     ) -> Result<Self, String> {
+        Self::new_with_seed_context_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            ladder,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_seed_context_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        pin: &PalwTiledDecodePinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        ladder: u64,
+        signed_context: Option<Hash64>,
+    ) -> Result<Self, String> {
         if binding.committed_execution_root != expected_root {
             return Err("stream binding is not the actual claim root".into());
         }
@@ -188,7 +218,7 @@ impl PalwConstraintStreamCourtV1 {
         }
         h.update(&eog_count.to_le_bytes());
         h.update(&borsh::to_vec(eog_opening).map_err(|e| e.to_string())?);
-        let context = Hash64::from_bytes(h.finalize().as_bytes().try_into().unwrap());
+        let context = signed_context.unwrap_or_else(|| Hash64::from_bytes(h.finalize().as_bytes().try_into().unwrap()));
         let mut relevant = pin.generated_token_ids.clone();
         relevant.extend(witness);
         relevant.extend(beat);

@@ -53,7 +53,43 @@ impl PalwOwnedTokenizerCourtV1 {
         producer_exit_after: u64,
         panel_exit_after: &[u64],
     ) -> Result<Self, String> {
+        if seed.retained_profile.is_some() {
+            return Err("rooted tokenizer admission must resolve retained profile first".into());
+        }
+        Self::admit_with_resolved_binding_v1(
+            seed,
+            actual_job,
+            target,
+            claim_terms,
+            prices,
+            now,
+            available_capital,
+            carrier_maximum,
+            material_until,
+            producer_exit_after,
+            panel_exit_after,
+            &seed.binding,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_with_resolved_binding_v1(
+        seed: &PalwConstraintStreamSeedV1,
+        actual_job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+        claim_terms: PalwRenderingClaimTermsV1,
+        prices: PalwRenderingResourcePricesV1,
+        now: u64,
+        available_capital: u64,
+        carrier_maximum: u64,
+        material_until: u64,
+        producer_exit_after: u64,
+        panel_exit_after: &[u64],
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Self, String> {
         seed.check(carrier_maximum)?;
+        if seed.resolved_binding_v1(target.class_id, Some(&binding.shape_profile))? != *binding {
+            return Err("tokenizer hydration changes signed non-profile binding fields".into());
+        }
         if seed.job.as_deref().is_some_and(|j| j != actual_job) {
             return Err("tokenizer seed changes literal retained public job".into());
         }
@@ -102,7 +138,7 @@ impl PalwOwnedTokenizerCourtV1 {
         let court = PalwTokenizerTableStreamV1::new_with_operand_length(
             seed_id,
             target,
-            &seed.binding,
+            binding,
             actual_job,
             *id,
             *present,
@@ -235,13 +271,22 @@ pub(crate) mod tests {
     use crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1;
     use crate::tx::{TransactionId, TransactionOutpoint};
     pub(crate) fn admitted_case(fault: bool, bound: u64) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
-        admitted_case_with_lengths(fault, bound, 0, 0)
+        admitted_case_with_profile(fault, bound, 0, 0, false)
     }
     fn admitted_case_with_lengths(
         fault: bool,
         bound: u64,
         signed_delta: i64,
         operand_delta: i64,
+    ) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
+        admitted_case_with_profile(fault, bound, signed_delta, operand_delta, false)
+    }
+    fn admitted_case_with_profile(
+        fault: bool,
+        bound: u64,
+        signed_delta: i64,
+        operand_delta: i64,
+        reference: bool,
     ) -> (PalwOwnedTokenizerCourtV1, Vec<u8>, Vec<u8>) {
         let raw = br#"{"model":{"vocab":{"a":0,"b":1},"merges":[]}}"#;
         let (mut target, binding, job, raw, opening) =
@@ -254,7 +299,7 @@ pub(crate) mod tests {
         // public fixture's pin rather than manufacturing another semantic binding.
         let (_, selection) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
         let bytes = opening.rendering.clone().unwrap();
-        let seed = PalwConstraintStreamSeedV1 {
+        let mut seed = PalwConstraintStreamSeedV1 {
             version: 1,
             claim: target.claim_id,
             reserver: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(818), index: 0 }),
@@ -275,7 +320,17 @@ pub(crate) mod tests {
                 tokenizer_key_events: bound,
             }),
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            retained_profile: None,
         };
+        let full_binding = seed.binding.clone();
+        if reference {
+            seed.retained_profile = Some(crate::palw_constraint_stream_carriage_v1::PalwRetainedCourtProfileV1 {
+                class_id: target.class_id,
+                original_bytes: borsh::to_vec(&full_binding.shape_profile).unwrap().len() as u64,
+            });
+            seed.binding.shape_profile =
+                crate::palw_constraint_stream_carriage_v1::palw_retained_profile_skeleton_v1(&full_binding.shape_profile);
+        }
         let config = PalwStagedPublicCourtConfigV1::network_v1();
         let plan = PalwTokenizerResourcePlanV1::derive_with_key_bound(operand_length, bound, config.prices)
             .unwrap()
@@ -290,7 +345,7 @@ pub(crate) mod tests {
         assert_eq!((terms.accepted_daa, terms.open_until_daa), (original_terms.accepted_daa, original_terms.open_until_daa));
         let funding = plan.rent_sompi + plan.deposit_sompi;
         let admit = |seed: &PalwConstraintStreamSeedV1, capital, material, panels: &[u64]| {
-            PalwOwnedTokenizerCourtV1::admit(
+            PalwOwnedTokenizerCourtV1::admit_with_resolved_binding_v1(
                 seed,
                 &job,
                 &target,
@@ -302,6 +357,7 @@ pub(crate) mod tests {
                 material,
                 terms.bond_exit_after_daa,
                 panels,
+                &full_binding,
             )
         };
         assert!(admit(&seed, funding - 1, terms.material_until_daa, &[terms.bond_exit_after_daa; 5]).is_err());
@@ -368,6 +424,23 @@ pub(crate) mod tests {
         row.movement(100, &m).unwrap();
         moves.push(m);
         moves
+    }
+    #[test]
+    fn compact_registered_profile_preserves_signed_tokenizer_seed_to_authenticated_eof() {
+        for fault in [false, true] {
+            let (mut full, raw, table) = admitted_case(fault, 64);
+            let (mut compact, compact_raw, compact_table) = admitted_case_with_profile(fault, 64, 0, 0, true);
+            assert_eq!(raw, compact_raw);
+            assert_eq!(table, compact_table);
+            assert_ne!(full.seed_id(), compact.seed_id());
+            complete(&mut full, &raw, &table);
+            complete(&mut compact, &compact_raw, &compact_table);
+            assert_eq!(compact.certificate().unwrap().is_some(), fault);
+            assert_eq!(
+                compact.certificate().unwrap().map(|c| c.execution_root),
+                full.certificate().unwrap().map(|c| c.execution_root)
+            );
+        }
     }
     #[test]
     fn actual_operand_eof_convicts_false_signed_length_without_trusting_the_operand_length() {

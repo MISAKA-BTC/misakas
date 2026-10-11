@@ -70,9 +70,20 @@ impl PalwOwnedConstraintStreamV1 {
         producer_exit_after: u64,
         panel_exit_after: &[u64],
     ) -> Result<Self, String> {
-        let job=seed.job.as_deref().ok_or("unrooted admission cannot resolve public job reference")?;
-        Self::admit_with_rooted_job(seed,job,expected_claim_root,terms,now_daa,available_owner_capital,
-            carrier_maximum,ladder,material_until,producer_exit_after,panel_exit_after)
+        let job = seed.job.as_deref().ok_or("unrooted admission cannot resolve public job reference")?;
+        Self::admit_with_rooted_job(
+            seed,
+            job,
+            expected_claim_root,
+            terms,
+            now_daa,
+            available_owner_capital,
+            carrier_maximum,
+            ladder,
+            material_until,
+            producer_exit_after,
+            panel_exit_after,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     pub fn admit_with_rooted_job(
@@ -87,6 +98,39 @@ impl PalwOwnedConstraintStreamV1 {
         material_until: u64,
         producer_exit_after: u64,
         panel_exit_after: &[u64],
+    ) -> Result<Self, String> {
+        if seed.retained_profile.is_some() {
+            return Err("rooted admission must resolve retained profile first".into());
+        }
+        Self::admit_with_resolved_binding_v1(
+            seed,
+            actual_job,
+            expected_claim_root,
+            terms,
+            now_daa,
+            available_owner_capital,
+            carrier_maximum,
+            ladder,
+            material_until,
+            producer_exit_after,
+            panel_exit_after,
+            &seed.binding,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_with_resolved_binding_v1(
+        seed: &PalwConstraintStreamSeedV1,
+        actual_job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        expected_claim_root: Hash64,
+        terms: PalwRenderingClaimTermsV1,
+        now_daa: u64,
+        available_owner_capital: u64,
+        carrier_maximum: u64,
+        ladder: u64,
+        material_until: u64,
+        producer_exit_after: u64,
+        panel_exit_after: &[u64],
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
     ) -> Result<Self, String> {
         seed.check(carrier_maximum)?;
         if now_daa < terms.accepted_daa
@@ -103,7 +147,7 @@ impl PalwOwnedConstraintStreamV1 {
         if available_owner_capital < required {
             return Err("owner lacks unencumbered capital for complete admitted staged work".into());
         }
-        let court = seed.court_with_rooted_job(expected_claim_root, ladder, actual_job)?;
+        let court = seed.court_with_resolved_binding_v1(expected_claim_root, ladder, actual_job, binding)?;
         let row = Self {
             claim: seed.claim,
             reserver: seed.reserver,
@@ -204,24 +248,30 @@ pub(crate) mod tests {
     use crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1;
     use crate::palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwRenderingResourcePricesV1};
     use crate::tx::{TransactionId, TransactionOutpoint};
-    fn seed() -> PalwConstraintStreamSeedV1 { seed_for(true).0 }
+    fn seed() -> PalwConstraintStreamSeedV1 {
+        seed_for(true).0
+    }
     fn seed_for(fault: bool) -> (PalwConstraintStreamSeedV1, crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1) {
         let (binding, a) = public_constrained_case_for_tests_v1(fault);
         let copy = a.clone();
-        (PalwConstraintStreamSeedV1 {
-            version: 1,
-            claim: Hash64::from_u64_word(1),
-            reserver: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(2), index: 0 }),
-            reserved_daa: 100,
-            binding,
-            job: Some(Box::new(a.job)),
-            pin: a.pin,
-            witness: a.witness,
-            eog_count: a.eog.ids.len() as u32,
-            eog_opening: a.eog.opening,
-            auxiliary: None,
-            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
-        }, copy)
+        (
+            PalwConstraintStreamSeedV1 {
+                version: 1,
+                claim: Hash64::from_u64_word(1),
+                reserver: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(2), index: 0 }),
+                reserved_daa: 100,
+                binding,
+                job: Some(Box::new(a.job)),
+                pin: a.pin,
+                witness: a.witness,
+                eog_count: a.eog.ids.len() as u32,
+                eog_opening: a.eog.opening,
+                auxiliary: None,
+                retained_profile: None,
+                signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            },
+            copy,
+        )
     }
     fn terms(seed: &PalwConstraintStreamSeedV1) -> PalwRenderingClaimTermsV1 {
         let p = PalwRenderingResourcePlanV1::derive(
@@ -241,16 +291,50 @@ pub(crate) mod tests {
     }
     /// Uses admitted, ordered public moves; no test checkpoint manufactures a certificate.
     pub(crate) fn completed_row(fault: bool) -> (PalwOwnedConstraintStreamV1, Hash64) {
-        let (seed, a) = seed_for(fault);
+        completed_profile_row(fault, false)
+    }
+    fn completed_profile_row(fault: bool, reference: bool) -> (PalwOwnedConstraintStreamV1, Hash64) {
+        let (mut seed, a) = seed_for(fault);
+        let binding = seed.binding.clone();
+        if reference {
+            seed.retained_profile = Some(crate::palw_constraint_stream_carriage_v1::PalwRetainedCourtProfileV1 {
+                class_id: binding.shape_profile.shape_profile_id(),
+                original_bytes: borsh::to_vec(&binding.shape_profile).unwrap().len() as u64,
+            });
+            seed.binding.shape_profile =
+                crate::palw_constraint_stream_carriage_v1::palw_retained_profile_skeleton_v1(&binding.shape_profile);
+        }
         let terms = terms(&seed);
         let root = seed.binding.committed_execution_root;
-        let mut row = PalwOwnedConstraintStreamV1::admit(&seed, root, terms, 100, u64::MAX,
-            2_880_000, 1 << 25, terms.material_until_daa, terms.bond_exit_after_daa,
-            &[terms.bond_exit_after_daa; 5]).unwrap();
+        let mut row = PalwOwnedConstraintStreamV1::admit_with_resolved_binding_v1(
+            &seed,
+            seed.job.as_deref().unwrap(),
+            root,
+            terms,
+            100,
+            u64::MAX,
+            2_880_000,
+            1 << 25,
+            terms.material_until_daa,
+            terms.bond_exit_after_daa,
+            &[terms.bond_exit_after_daa; 5],
+            &binding,
+        )
+        .unwrap();
+        if reference {
+            assert_eq!(row.seed_id(), Hash64::from_bytes(seed.signing_message().try_into().unwrap()));
+        }
         fn movement(row: &mut PalwOwnedConstraintStreamV1, action: PalwConstraintStreamActionV1) {
-            let m = PalwConstraintStreamMoveV1 { version: 1, claim: row.claim, reserver: row.reserver,
-                reserved_daa: row.reserved_daa, seed_id: row.seed_id(), phase: row.court.phase(), action,
-                signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
+            let m = PalwConstraintStreamMoveV1 {
+                version: 1,
+                claim: row.claim,
+                reserver: row.reserver,
+                reserved_daa: row.reserved_daa,
+                seed_id: row.seed_id(),
+                phase: row.court.phase(),
+                action,
+                signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
             row.movement(100, &m).unwrap();
         }
         movement(&mut row, PalwConstraintStreamActionV1::EogPart { offset: 0, ids: a.eog.ids.clone() });
@@ -262,19 +346,44 @@ pub(crate) mod tests {
                 continue;
             }
             let o = a.renderings.iter().find(|o| o.id == id).unwrap();
-            row.leaf(100, &PalwConstraintStreamLeafV1 { version: 1, claim: row.claim,
-                reserver: row.reserver, reserved_daa: row.reserved_daa, seed_id: row.seed_id(), id,
-                present: o.rendering.is_some(), length: o.rendering.as_ref().map_or(0, |b| b.len()) as u32,
-                opening: o.opening.clone(), signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }).unwrap();
+            row.leaf(
+                100,
+                &PalwConstraintStreamLeafV1 {
+                    version: 1,
+                    claim: row.claim,
+                    reserver: row.reserver,
+                    reserved_daa: row.reserved_daa,
+                    seed_id: row.seed_id(),
+                    id,
+                    present: o.rendering.is_some(),
+                    length: o.rendering.as_ref().map_or(0, |b| b.len()) as u32,
+                    opening: o.opening.clone(),
+                    signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+                },
+            )
+            .unwrap();
             if let Some(bytes) = &o.rendering {
                 for (n, part) in bytes.chunks(65536).enumerate() {
-                    movement(&mut row, PalwConstraintStreamActionV1::RenderingPart {
-                        offset: (n * 65536) as u32, bytes: part.to_vec() });
+                    movement(
+                        &mut row,
+                        PalwConstraintStreamActionV1::RenderingPart { offset: (n * 65536) as u32, bytes: part.to_vec() },
+                    );
                 }
             }
             movement(&mut row, PalwConstraintStreamActionV1::RenderingFinish);
         }
         (row, root)
+    }
+    #[test]
+    fn compact_registered_profile_reaches_same_constraint_verdict_with_original_signed_identity() {
+        for fault in [false, true] {
+            let (full, root) = completed_row(fault);
+            let (compact, compact_root) = completed_profile_row(fault, true);
+            assert_eq!(compact_root, root);
+            assert_eq!(compact.certificate().unwrap().is_some(), fault);
+            assert_eq!(compact.certificate().unwrap().map(|c| c.position), full.certificate().unwrap().map(|c| c.position));
+            assert_ne!(compact.seed_id(), full.seed_id());
+        }
     }
     #[test]
     fn admission_requires_entire_capital_and_retention_contract_before_owned_work() {

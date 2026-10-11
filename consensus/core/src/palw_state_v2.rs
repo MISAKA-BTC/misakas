@@ -9732,9 +9732,11 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
                 }
                 Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Prefix {
                     prefix_tokens,relation,..}) => {
-                    crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+                    crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive_with_profile_bytes(
                         &seed.binding.shape_profile,*relation,*prefix_tokens,seed.binding.step_leaf_count,
-                        90_000,config.prices)
+                        90_000,config.prices,seed.retained_profile.as_ref().map_or_else(
+                            ||borsh::to_vec(&seed.binding.shape_profile).map(|b|b.len() as u64).unwrap_or(u64::MAX),
+                            |r|r.original_bytes))
                         .map(|p|p.envelope.rent_sompi).unwrap_or(u64::MAX)
                 }
                 None=>config.claim_terms(0,4095,seed.binding.shape_profile.vocab_size)

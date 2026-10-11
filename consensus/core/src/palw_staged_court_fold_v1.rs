@@ -191,14 +191,12 @@ pub(super) fn open(
     }
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &seed.claim)
         .ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
-    if crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(
-        &target,
-        &seed.binding,
-        b.identity_rules_v1(ctx.daa_score),
-        false,
-    )
-    .map_err(|e| stage_refused(seed.claim, e.to_string()))?
-    .is_some()
+    let binding = seed
+        .resolved_binding_v1(target.class_id, b.state.fp_work_profiles.get(&target.class_id).map(|p| p.as_ref()))
+        .map_err(|e| stage_refused(seed.claim, e))?;
+    if crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(&target, &binding, b.identity_rules_v1(ctx.daa_score), false)
+        .map_err(|e| stage_refused(seed.claim, e.to_string()))?
+        .is_some()
     {
         return Err(stage_refused(seed.claim, "staged seed binding answers another claim's job"));
     }
@@ -235,10 +233,10 @@ pub(super) fn open(
             return Err(stage_refused(seed.claim, "prefix fee metadata changes actual job, immutable relation or rule ladder"));
         }
         let plan = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
-            &seed.binding.shape_profile,
+            &binding.shape_profile,
             *relation,
             *prefix_tokens,
-            seed.binding.step_leaf_count,
+            binding.step_leaf_count,
             90_000,
             config.prices,
         )
@@ -267,7 +265,7 @@ pub(super) fn open(
             seed.claim,
             seed.reserver,
             seed.reserved_daa,
-            &seed.binding,
+            &binding,
             &original.job,
             &target,
             extended_terms,
@@ -329,7 +327,7 @@ pub(super) fn open(
             bound,
             config.prices,
         )
-        .and_then(|p| p.court_envelope(seed.binding.shape_profile.vocab_size, config.prices))
+        .and_then(|p| p.court_envelope(binding.shape_profile.vocab_size, config.prices))
         .map_err(|e| stage_refused(seed.claim, e))?;
         let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
         let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
@@ -348,7 +346,7 @@ pub(super) fn open(
         b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
         let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
-        let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit(
+        let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit_with_resolved_binding_v1(
             seed,
             &original.job,
             &target,
@@ -360,6 +358,7 @@ pub(super) fn open(
             extended_claim.trace_retention_daa,
             extended_terms.bond_exit_after_daa,
             &exits,
+            &binding,
         )
         .map_err(|e| stage_refused(seed.claim, e))?;
         // Fee validation already burned the full declared carrier rent; the paid row reserves
@@ -398,12 +397,9 @@ pub(super) fn open(
     // Claim-wide clocks/holds remain the immutable conservative envelope stamped at acceptance.
     let mut terms = contract.terms;
     let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
-    terms.plan = crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1::derive(
-        4095,
-        seed.binding.shape_profile.vocab_size,
-        config.prices,
-    )
-    .map_err(|e| stage_refused(seed.claim, e))?;
+    terms.plan =
+        crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1::derive(4095, binding.shape_profile.vocab_size, config.prices)
+            .map_err(|e| stage_refused(seed.claim, e))?;
     if terms.plan.maximum_moves > contract.terms.plan.maximum_moves || terms.plan.inclusion_daa > contract.terms.plan.inclusion_daa {
         return Err(stage_refused(seed.claim, "authenticated seed exceeds immutable claim resource envelope"));
     }
@@ -417,7 +413,7 @@ pub(super) fn open(
         .checked_add(contract.terms.plan.deposit_sompi)
         .ok_or(PalwStateV2Error::Overflow("staged funding"))?;
     let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
-    let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit_with_rooted_job(
+    let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit_with_resolved_binding_v1(
         seed,
         &original.job,
         target.execution_root,
@@ -432,6 +428,7 @@ pub(super) fn open(
         b.state.claim(&seed.claim).ok_or(PalwStateV2Error::MissingClaim(seed.claim))?.trace_retention_daa,
         contract.terms.bond_exit_after_daa,
         &exits,
+        &binding,
     )
     .map_err(|e| stage_refused(seed.claim, e))?;
     b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Constraint(Box::new(row))));

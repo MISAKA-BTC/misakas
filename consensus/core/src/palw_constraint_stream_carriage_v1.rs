@@ -32,6 +32,25 @@ pub enum PalwAuxiliaryPublicCourtSeedV1 {
         relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1,
     },
 }
+/// Content-addressed profile already retained by the claim's class certification. The byte
+/// quote prices hydration; it cannot substitute a different graph for that historic class.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwRetainedCourtProfileV1 {
+    pub class_id: Hash64,
+    pub original_bytes: u64,
+}
+pub fn palw_retained_profile_skeleton_v1(profile: &crate::palw_step::PalwShapeProfileV3) -> crate::palw_step::PalwShapeProfileV3 {
+    let mut result = profile.clone();
+    for table in [&mut result.pre_nodes, &mut result.gdn_nodes, &mut result.attn_nodes, &mut result.post_nodes] {
+        for node in table {
+            node.weight_name.clear();
+            node.weight_dtypes.clear();
+        }
+    }
+    result.transcendental_bindings.clear();
+    result.contraction_facts.clear();
+    result
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamSeedV1 {
     pub version: u16,
@@ -48,6 +67,7 @@ pub struct PalwConstraintStreamSeedV1 {
     /// Prospective typed court selection. None preserves constrained-selection behavior.
     pub auxiliary: Option<PalwAuxiliaryPublicCourtSeedV1>,
     pub signature: Vec<u8>,
+    pub retained_profile: Option<PalwRetainedCourtProfileV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamLeafV1 {
@@ -121,8 +141,44 @@ impl PalwConstraintStreamSeedV1 {
                 &encode(&self.eog_count),
                 &encode(&self.eog_opening),
                 &encode(&self.auxiliary),
+                &encode(&self.retained_profile),
             ],
         )
+    }
+    /// Prepare a bounded reference before signing. Hydration still authenticates the literal
+    /// retained chain profile and accepted claim independently; this helper grants no authority.
+    pub fn use_retained_profile_v1(&mut self) -> Result<(), String> {
+        if self.retained_profile.is_some() {
+            return Err("seed already references an immutable profile".into());
+        }
+        let profile = &self.binding.shape_profile;
+        let class_id = profile.shape_profile_id();
+        if self.binding.job_context.shape_profile_id != class_id {
+            return Err("seed profile is not the signed binding's declared class".into());
+        }
+        let original_bytes = borsh::to_vec(profile).map_err(|e| e.to_string())?.len() as u64;
+        self.binding.shape_profile = palw_retained_profile_skeleton_v1(profile);
+        self.retained_profile = Some(PalwRetainedCourtProfileV1 { class_id, original_bytes });
+        Ok(())
+    }
+    pub fn resolved_binding_v1(
+        &self,
+        actual_class: Hash64,
+        profile: Option<&crate::palw_step::PalwShapeProfileV3>,
+    ) -> Result<PalwStepBindingV2, String> {
+        let Some(reference) = &self.retained_profile else { return Ok(self.binding.clone()) };
+        let profile = profile.ok_or("staged reference has no retained authenticated class profile")?;
+        if reference.class_id != actual_class
+            || self.binding.job_context.shape_profile_id != actual_class
+            || profile.shape_profile_id() != actual_class
+            || borsh::to_vec(profile).map_err(|e| e.to_string())?.len() as u64 != reference.original_bytes
+            || self.binding.shape_profile != palw_retained_profile_skeleton_v1(profile)
+        {
+            return Err("staged profile reference changes accepted class identity, bytes or exact skeleton".into());
+        }
+        let mut result = self.binding.clone();
+        result.shape_profile = profile.clone();
+        Ok(result)
     }
     pub fn check(&self, carrier_maximum: u64) -> Result<(), String> {
         check_signature_shape(self.version, &self.signature)?;
@@ -153,24 +209,41 @@ impl PalwConstraintStreamSeedV1 {
         ladder: u64,
         actual_job: &PalwFreePromptJobV3,
     ) -> Result<PalwConstraintStreamCourtV1, String> {
+        if self.retained_profile.is_some() {
+            return Err("unrooted helper cannot hydrate retained profile".into());
+        }
+        self.court_with_resolved_binding_v1(expected_claim_root, ladder, actual_job, &self.binding)
+    }
+    pub fn court_with_resolved_binding_v1(
+        &self,
+        expected_claim_root: Hash64,
+        ladder: u64,
+        actual_job: &PalwFreePromptJobV3,
+        binding: &PalwStepBindingV2,
+    ) -> Result<PalwConstraintStreamCourtV1, String> {
+        let resolved = self.resolved_binding_v1(actual_job.class_id, Some(&binding.shape_profile))?;
+        if &resolved != binding {
+            return Err("hydration changes signed non-profile binding fields".into());
+        }
         if self.job.as_deref().is_some_and(|j| j != actual_job) {
             return Err("stream seed changes literal retained job".into());
         }
         if self.auxiliary.is_some() {
             return Err("auxiliary seed is not a constrained-selection court".into());
         }
-        PalwConstraintStreamCourtV1::new(
+        PalwConstraintStreamCourtV1::new_with_seed_context_v1(
             self.claim,
             self.reserver,
             self.reserved_daa,
             expected_claim_root,
-            &self.binding,
+            binding,
             actual_job,
             &self.pin,
             self.witness,
             self.eog_count,
             &self.eog_opening,
             ladder,
+            self.retained_profile.as_ref().map(|_| Hash64::from_bytes(self.signing_message().try_into().expect("seed digest width"))),
         )
     }
 }
@@ -355,7 +428,7 @@ mod tests {
         let profile_bytes = borsh::to_vec(&binding.shape_profile).unwrap().len();
         assert_eq!(profile_bytes - base, 1500 * 65);
         let (_, a) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
-        let seed = PalwConstraintStreamSeedV1 {
+        let mut seed = PalwConstraintStreamSeedV1 {
             version: 1,
             claim: Hash64::from_u64_word(32),
             reserver: movement().reserver,
@@ -372,11 +445,37 @@ mod tests {
                 relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1,
             }),
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            retained_profile: None,
         };
         let seed_bytes = borsh::to_vec(&seed).unwrap().len();
         eprintln!("G14 full profile={profile_bytes} seed(job=None)={seed_bytes} carrier=90000");
         assert!(profile_bytes > 90_000);
         assert!(seed_bytes > 90_000);
         assert!(seed.check(90_000).is_err());
+        let full = seed.binding.shape_profile.clone();
+        let class = full.shape_profile_id();
+        seed.binding.job_context.shape_profile_id = class;
+        seed.binding.shape_profile = palw_retained_profile_skeleton_v1(&full);
+        seed.retained_profile = Some(PalwRetainedCourtProfileV1 { class_id: class, original_bytes: profile_bytes as u64 });
+        let compact_size = borsh::to_vec(&seed).unwrap().len();
+        eprintln!("G14 referenced profile seed={compact_size} original_profile={profile_bytes}");
+        assert!(compact_size < 90_000);
+        seed.check(90_000).unwrap();
+        let identity = seed.signing_message();
+        let resolved = seed.resolved_binding_v1(class, Some(&full)).unwrap();
+        assert_eq!(resolved.shape_profile, full);
+        assert_eq!(seed.signing_message(), identity);
+        assert!(seed.resolved_binding_v1(Hash64::default(), Some(&full)).is_err());
+        assert!(seed.resolved_binding_v1(class, None).is_err());
+        let mut false_quote = seed.clone();
+        false_quote.retained_profile.as_mut().unwrap().original_bytes -= 1;
+        assert!(false_quote.resolved_binding_v1(class, Some(&full)).is_err());
+        assert_ne!(false_quote.signing_message(), identity);
+        let mut false_stub = seed.clone();
+        false_stub.binding.shape_profile.hidden_dim += 1;
+        assert!(false_stub.resolved_binding_v1(class, Some(&full)).is_err());
+        let mut later_profile = full.clone();
+        later_profile.base0_rms_eps_q += 1;
+        assert!(seed.resolved_binding_v1(class, Some(&later_profile)).is_err());
     }
 }
