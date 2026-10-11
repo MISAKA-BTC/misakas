@@ -734,3 +734,9 @@ So even with every software failure closed, `D_all` tops out at 51.49% under tod
 [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 改定 — 2026-10-12（BeaconConformanceとbootstrap exact sourceの型分離：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §6。
+
+§17の通常のBeaconConformanceと、限定したbootstrap exact source経路（RFC-0007 2026-10-12改定の `BootstrapExact`、仮称）を型で分離する。bootstrap経路でsource候補を得たことは乱数としての資格を意味せず、entropy資格は別に審査する。単体/統合試験用のsynthetic randomnessはproduction不可として型・設定を分離する。

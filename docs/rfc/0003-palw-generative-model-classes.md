@@ -2604,3 +2604,12 @@ The rest of the RFC (Parts I and II, the program surface, the activation order) 
 各profileの真の実行仕様・全constraint検証と取得・裁定gateを満たし、既存class予算は追加経済枠でなく別のadmission制限として扱う。
 
 本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## 改定 — 2026-10-12（challenge windowの再付与禁止、公開検証不能な経路の報酬除外：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §5と[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md)。
+
+- **§I.4.7 / Decision 22の将来規則を置換:** challengeの放棄、失敗、close、Panel交代により、claim全体のchallenge windowを最初から付与し直してはならない。licence anchorを記録上更新する場合でも、challenge開始cutoff、absolute hard deadline、producer枠の回復時計は変更しない（RFC-0014 §7.2の2026-10-12改定と統一。旧claimは旧ruleset）。
+- **N4/X2:** 画像bytesやsource IDsがPanelにだけ渡されるなど、公開訴追に必要な証拠を確保できない生成物・画像入力・source経路は、新規の報酬・weight対象から外す。通常の非報酬AI推論ではプライバシーを維持して利用できる。既存の実装記録は削除せず、将来の有効化対象を限定する。過去の有効claimは旧rulesetで処理し、遡及変更しない。
+- **W2:** FP V4自体のtext規則は変更しない。TextStream pipelineには追加規則を適用する。
+- **readiness:** 単一seatで全検証scopeを覆える経路だけをPanel=1暫定modeの対象にする（RFC-0010 2026-10-12改定）。

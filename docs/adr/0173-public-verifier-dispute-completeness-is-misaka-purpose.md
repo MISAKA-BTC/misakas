@@ -208,3 +208,9 @@ RFC-0014のgatesを、少なくとも次の条件で満たすまで本目標を�
 | class/TIR admission、現行Panel basisとseat lock | 静的なcost/court検査や現行receipt条件である。新しいpublic-verifier completeness gateやPanel=0を文書だけで追加したことにはならない。 |
 
 このADRは必要な実装の優先順位と受入条件を固定する。コード変更、試験によるgate充足、deploymentは別の作業である。
+
+## 改定 — 2026-10-12（Panel=1でもnon-seatの公開訴追を維持：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+
+通常のreward-bearing modeを1 claim 1 seat（Panel=1）とする場合でも、non-seatの証拠取得・裁定権限を制限しない。Panel署名を計算の真実の最終根拠にしない。producerと唯一のseatが共謀した場合、必要なモデルを保有したnon-seatが公開証拠から反証でき、Panel署名で妨害されないこと（受入試験P04）を要求する。外部の実検査が一切ない場合の未検出リスクは残余リスクとして明示し、`p = 1` と報告しない（P05）。

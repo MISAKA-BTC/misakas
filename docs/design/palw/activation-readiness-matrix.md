@@ -318,6 +318,20 @@ Source: the user, with the reasoning in codex's `docs/audit/g14-review-2026-10-1
 | G14-L (34 sessions vs parallel lanes) | Not approved as a reinterpretation. A new explicit contract: 34 lifetime sessions + 64 lanes/session + 128 extra lanes/reservation. Full guarantee withheld until: cumulative scope 16 vs a first round of 36 lanes is closed, re-acquisition after pruning, retained RAM, and the maximum profile reaching its terminal. |
 | Rule E + DNS retirement arm path | Approved for salted drills only: E armed at or before retirement; genesis, network and parameter identity separated from public testnet-12; fix the remote L2 client's fixed `rule_e: None` (R12 WIP `rfc12/r12-wip`); verify node/client agreement, partition rejoin and pruned IBD. Normal-preset activation is a separate decision. |
 
+## 3j. RFC/ADR amendments (user, 2026-10-12) — design proposals, not activation
+
+Recorded in [rfc-adr-review-resolution-2026-10-12.md](rfc-adr-review-resolution-2026-10-12.md) and the full proposal
+[panel1-bond-budget-model-capital-amendments-2026-10-12.md](panel1-bond-budget-model-capital-amendments-2026-10-12.md); every affected ADR/RFC
+(ADR-0166/0173/0176/0177, RFC-0001/0002/0003/0004/0006/0007/0008/0010/0011/0012/0014/0015) carries a dated 2026-10-12 section.
+- **X1 withdrawn:** model distribution is free (no obligation on registrants), but Miner and Panel MUST hold the registered model, and each claim
+  still needs its computation/verification/adjudication/Final conditions — ADR-0177 now says so in a D1 supplement and a D7 note.
+- **Priorities:** N1/N2 keep Miner/Panel possession and independent Panels (RFC-0002 `class_seated`); N3 an independent Work Beacon
+  bootstrap, new reward profiles Dormant until then; X3 a fixed per-claim `hard_deadline`; N4/X2 publicly unverifiable paths leave
+  reward-bearing PALW; N5 Panel=0 not activated; W1 `le64(n+1)`; W2 FP V4 text rules unchanged, TextStream gets its own; X4/X5 wording.
+- **Proposals (undecided):** Panel=1 interim mode with bounded replacement and positive-evidence Final; ADR-0176 rolling Bond/time ledger;
+  Miner+Panel claim-bond aggregation with a 1.3–2× coefficient (its relation to the interim α = 1.5 curve, the Panel-bond inclusion and the
+  block-opportunity scope are recorded as open, not silently adopted). Acceptance tests B01–M01 and C01–C18 are specified, not run.
+
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
 Waves, because the Mac (32 GiB, ~40 GB free disk) cannot build a dozen targets at once, and builds are batched (user rule): each lane

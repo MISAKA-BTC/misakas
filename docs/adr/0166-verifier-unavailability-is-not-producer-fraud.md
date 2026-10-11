@@ -115,3 +115,9 @@ verifier unavailabilityをproducer fraudとしない決定を維持する。lice
 [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 改定 — 2026-10-12（非不正終了と採掘枠の非早期回復：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3（ADR166との接続）。
+
+新rulesetでは、PanelUnavailableは非不正の終了とし、producerを自動slashしない。ただし「無罰」と「消費した採掘枠を即時に再利用可能」は同義ではない。資金ロックを解除する実装を採る場合でも、元本の消費履歴と `reuse_not_before` を引き継ぎ、移転・再登録による迂回を禁止する。より単純な初期実装では、必要元本の拘束を既定回復時刻まで維持する。Panelの交代も、claimに固定した絶対期限の内側に制限する（RFC-0010・RFC-0014の2026-10-12改定）。

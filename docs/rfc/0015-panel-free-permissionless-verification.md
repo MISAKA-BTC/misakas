@@ -870,3 +870,9 @@ RFC14の既存機能に対する45 test PASSを、Panel=0や新gateの実装成�
 [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 改定 — 2026-10-12（Panel=0は当面有効化しない：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4と[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) N5。
+
+Panel=0は将来設計として保持するが、当面の実装・release対象から外す。§7のとおり監視市場を作るだけではhonest verifierの存在を保証できず、多数の監視者を登録させるだけでは誰かが必ず正直に検査することの証明にならない。モデル保有Panelを必要とするmode（RFC-0010 2026-10-12改定のPanel=1）を維持し、Panel=0は監視者の離脱、Panelの共謀、検証費用、最大claim負荷、cold model取得時間、不正発覚からcourtまでの時間を測る別の安全性実証の後に判断する。ADR-0176の共通bond予算はPanel=1にも適用し、RFC15の有効化を待たない。§8の共通経済部分にはモデル別claim bond台帳・配分係数（ADR-0177 2026-10-12改定）を置く。

@@ -902,3 +902,20 @@ G14の検証は正しい固定modelを保有/取得できた条件付きとな�
 public challengerの別責任・資源枠をproducer採掘capと同一視しない。正当な追及を包含できる能力、実効検出/徴収率、共有担保枯渇と自己共謀還流を評価し、capだけでG14/Rule E/ECON/MEASを満たしたと扱わない。
 
 本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## 改定 — 2026-10-12（固定期限と有限終了、共通経済会計：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §5・§3A。
+
+- **§7.2補足（X3）:** 経済的なclaim受理時点 `d0` で、rulesetに基づく最大の準備期間・観測期間・裁定期間と絶対deadlineを固定する。最初のcourt session受理時まで先延ばししない。
+
+```text
+receipt_deadline = d0 + T_prepare
+open_cutoff      = receipt_deadline + T_observe
+hard_deadline    = open_cutoff + T_resolve   (= dispute_hard_deadline)
+effective_deadline = min(proposed_challenge_deadline, hard_deadline)
+```
+
+  すべて合意上のDAA単位とする。receiptが早くてもopen_cutoffを早めず、遅いreceiptで時計を延ばさない。新しいinteractive pursuitは `start <= open_cutoff` かつ `start + B_remaining <= hard_deadline` の場合だけ受理する（残り時間が検証・証拠開示・court完了に足りなければ開始させない）。通常Finalはopen_cutoff通過後、未解決の適格pursuitがない場合にだけ可能とし、期限到達だけで未解決claimを自動Finalにしない。direct objective proofは別sessionが開いているだけでは拒否しない。境界は受理 `d <= deadline`、期限切れsweep `d > deadline` のように一意にし、同一blockでの処理順をcanonical orderingで固定する。旧claimには旧rulesetを適用し、新しい期限規則は別のversioned fenceで有効化する。
+- **§16（共通経済部分）:** モデル別claim bond台帳、配分snapshot、係数、正常Finalと非不正終了・没収時の取扱い、閉鎖/公開比較を置く（ADR-0177 2026-10-12改定、受入試験C01〜C18）。
+- **G14との関係:** G14-B（`misaka-palw-kernel/src/budget.rs`）の最悪追及スケジュールは、この `hard_deadline` に収まることを要件にする。長いG14 staged経路にdrill暫定の予算window W = 400 DAAをそのまま適用しない（2026-10-11裁定）。

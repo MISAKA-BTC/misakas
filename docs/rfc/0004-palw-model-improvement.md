@@ -1143,3 +1143,9 @@ committee/DNS/BFT authority, runtime activation or successful candidate benchmar
 candidate/evaluation/promotionの各claimにも、外部public bondによる証拠取得とobjective courtを適用する。admission/evaluationのjury多数決は計算の真偽を決めない。draw前のholdout secrecyは保てるが、評価claimの検査と裁定に必要な入力が公開に認証・取得できないまま新しい報酬を有効にしない。品質比較と計算の一致は別の主張である。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## 改定 — 2026-10-12（公開検証不能な経路の報酬除外：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) N4。
+
+`DataUseOptIn`（既定は無効）の範囲で扱うユーザーデータを、公開検証のために強制公開しない。公開訴追に必要な証拠を確保できない経路は新規の報酬・weight対象から外し、既存の実装記録は削除せず将来の有効化対象を限定する。

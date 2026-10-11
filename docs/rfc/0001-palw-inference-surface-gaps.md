@@ -416,3 +416,12 @@ claim の形(1 推論 = 1 claim)は変わらない。各リクエストが自分
 §Aと§2のdecode、artifact、KV reuse、adapter、multimodal拡張は、それぞれ公開の入力・state境界・version・outputと裁定証拠を拘束する。ローカルChatの非claim機能や将来profileのsource fidelityは、公開訴追可能性の代わりにならない。新しい報酬profileの受入にRFC14の外部public-bond試験を追加する。
 
 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+
+## 改定 — 2026-10-12（W1・W2・X4・N4：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md)。
+
+- **W1:** Gatewayの整数seed変換を `le64(n+1)` に統一し、オーバーフローとなる入力を拒否する。gateway側の表示・入力変換規則であり、直ちにコンセンサス分岐が起こると断定しない。
+- **W2:** FP V4自体のtext規則は変更しない。TextStream pipelineには追加規則を適用する。
+- **X4:** FP Job V6は「実装済み・dormant。ただしcourtの一部に未完了事項あり」と記録する。
+- **N4:** 通常の非報酬AI推論はプライバシーを維持して利用できる。公開訴追に必要な証拠を公開できない経路は、新規の報酬・weight対象から外す。

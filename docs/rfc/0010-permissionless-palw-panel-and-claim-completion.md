@@ -232,3 +232,13 @@ Final条件とFinal weight配分を分けて検査し、d+Wまでの消費履歴
 [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 改定 — 2026-10-12（Panel=1暫定mode・有界の交代・正の証拠を必須にしたFinal：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+
+- **§0追記:** 通常の新reward-bearing modeは、1 claimにつき同時に有効なassigned verification seatを1つ持つ。Panel=0へのtimeout fallbackを禁止する。候補集合には複数の参加者を認め、non-seatの検査・反証権限を制限しない。Minerとassigned Panelは適用scopeの正しい登録モデルを保有し、実行/検査と認証に必要な能力を備える（ADR-0177 D1補足）。モデル登録者に一般第三者への提供義務は導入しない。合意判定は認証済み状態と証拠に基づき、特定nodeのHTTP結果・model取得速度を直接入力にしない。Panelは承認済みの確率的checker、固定scope、commit済みstatementへの適正なchallenge、必要な正の検証証拠に基づくreceiptを提出し、署名数1だけを計算正当性の証明としない。producer/registrantとの同一bond・operatorを除外する（同一実質所有者でないことの証明ではない）。
+- **有界の交代:** snapshot、claim seal、選出policy、代替候補順序、最大交代数はclaimの規則に固定し、交代のために新しい乱数・候補集合・採掘枠・絶対期限を得ない。健全な検査に必要な残り時間がなければ交代を開始せず、候補か時間が尽きれば非不正・無報酬で終了する。検査不一致が出たら、bounded pursuitまたは完成したobjective proofへ進む。
+- **Final:** `FinalEligible = OriginalRulesetAndIdentityBound ∧ NetworkModelBondBudgetsSatisfied ∧ AuthorizedSingleSeatPositiveEvidenceAccepted ∧ RequiredClaimEvidenceAndCourtObligationsSatisfied ∧ ObservationCutoffPassed ∧ NoUnresolvedAcceptedPursuit ∧ NotRefuted ∧ UniqueWorkAndSettlementSatisfied`。支払、vesting、ブロック権、Final weight、EVM/bridge等のreaderも同じ結論を使う。
+- **1-seat移行監査:** `seat_count=1` の一括置換を禁止する。segment mask、`seats-1`、quorum、最低独立seat数、shard outsider、署名者担保、Panel fee配分、再抽選、FalseValid attribution、DA/court、全Final経路を点検し、単一seatで全検証scopeを担えないprofileはこのmodeで有効化しない（RFC-0002 seating・RFC-0006 shard・RFC-0003 readinessにも適用）。
+- **モデル配分:** 正規Panel予約は1 claimにつき1 seatとし、無応答の旧seat・待機seat・交代回数から架空の追加元本を作らない（ADR-0177 2026-10-12改定）。

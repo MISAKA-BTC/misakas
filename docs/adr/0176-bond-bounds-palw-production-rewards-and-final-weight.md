@@ -148,3 +148,13 @@ Panel=0、確率的検査、ADR177の元本/coinbase会計・経済評価・clai
 [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 改定 — 2026-10-12（共通原則の正本化、Bond/time台帳の具体化：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §1・§3・§3A。
+
+- **§1の正本:** 本ADRの§1を共通原則の正本とし、RFC索引と関連RFC（RFC-0010/0014/0015）から参照する。同額の適格拘束元本・同一期間・同一ruleset・容量倍率に対して、正直に計算するminerと計算省略で高速にclaimを出すminerに与える上限を同一にする。計算省略、即時Valid、再提出、取消、失効、鍵・bond・modelの分割や移動で、同じ元本の枠を増加・早期回復させない（MUST NOT）。枠を確保しただけでは支払わず、正当なclaim・検証証拠・裁定・Final条件を満たした範囲でだけ報酬・確定creditを付与する。Panel人数や計算速度を増やしても同じproducer元本の絶対上限は増えない。
+- **D1/D3/D4補足:** 長さW DAAのrolling会計を基準案とする。claim受理時に、そのclaimが派生させ得るclaim枠・ブロック権・報酬・Final weightの最大権利を同一の元本・予約へ原子的に帰属させる。受理DAA `d` の消費済み枠を `d + W` より前に再利用しない（Valid、Final、PanelUnavailable、取消、court終了は早期回復理由ではない）。失効額を新claimの予算へ早期に戻さない。採掘枠の回復、資金の送金可能性、court/retention責任からの解放を別々に検査し、同じ元本を新しいbond/鍵へ移して消費履歴を消さない。rhoを増やしても総量は増えず、端数・最小支払・複数leg・root/slice/rider/batchで増幅させない。network/model/bondの三層予算を受理・ブロック権行使・支払・Finalおよび全reader/undoで共通に検査する。期間内総量capと短時間のburst capを区別する。
+- **D6の受入条件:** `p_effective · (R_at_risk + L_collectible_net) > C_saved`。`p_effective`は検査、局所化、証拠包含、客観裁定、徴収の完了まで含む。共謀reporterへのbounty還流、担保の使い回し、同時claimの相関、外部利得、Panel報酬や検証費の省略益を評価に含める。総没収見込額を実在する回収可能資本より大きく見積もらない。
+- **モデル配分との関係:** ADR-0177の2026-10-12改定（Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数、提案）は、本ADRの個別Q/B/R/F絶対上限を後から乗算で増やさない。「各bondの絶対上限自体を1.3〜2倍へ変更する」案は別案であり、採用していない。
+- **2026-10-11の裁定との関係:** fee-only RoundはB_maxに数えず独立のExecutionCapで制限、market feeはv1でR_maxに含めない、予算window W = 400 DAAはdrill暫定（activation-readiness-matrix §3i）。

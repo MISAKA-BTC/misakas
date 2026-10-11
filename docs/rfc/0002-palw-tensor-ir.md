@@ -4189,3 +4189,9 @@ The protected distinct component pool is413: prior361 plus14 execution,
 Repeated35 regressions, local intermediate8/33/37 snapshots and immutable
 replays add zero. This engineering test count is not a model denominator or
 completion percentage; accepted native honest-Final model records remain0.
+
+## 改定 — 2026-10-12（seatingとモデル保有、単一seat scope：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) と[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+
+Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、モデル配布監査ではなく、実際にclaimを検証できるPanelを形成する条件として維持する（ADR-0177 D1補足：Miner・Panelは保有必須、登録者に配布義務はない）。Panel=1暫定modeでは、単一seatで全検証scopeを覆える経路だけを対象とし、旧複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定）。

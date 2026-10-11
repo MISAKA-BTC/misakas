@@ -1280,3 +1280,10 @@ G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普
 全constraint coverage・error composition・challenge bindingを維持する。carrier/claim数の細分化だけで独立乱数sourceや追加work creditを作らず、source/Final/settlement readerを同じversioned会計へ接続する。
 
 本節は将来の規範・受入条件を改定する。過去の実装/測定、旧claim会計とactivation履歴は保持し、文書改定だけで新規則を有効化しない。
+
+## 改定 — 2026-10-12（Work Beaconの独立bootstrap：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §6と[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) N3。
+
+§VI.3の「既存の独立して有効なPALW workをsourceにする」規則に、自己依存しない根を追加する候補を設計する。`BootstrapExact`（仮称）は、小さく資源有界な実際のモデル/kernel計算を検証するsource専用経路で、全validatorが明示された入力・実行規則から厳密に検証でき、通常のWork Beacon・そのBeaconによるPanel選出・候補model自身のconformance・将来のPALW Finalを要求しない。source-only経路はoptimisticなPanel=0 modeではなく別の明示的exact-validation種別とし、初期案では追加の報酬・ブロック権・Final weightを発生させない。
+§VI.8: `IndependentValidityVerified` と `EntropyEligibilityVerified` を別の判定にする。後者にはtargetのcommit後の予測困難性、候補の自由な選別、withholding、private fork、複数bond、隠れた未公表試行、reorg、source ID再包装への耐性が必要で、正しい確定的な計算でも事前計算可能なら不適格である。依存グラフは型付きの有向非循環グラフとし、candidateのsourceに自身やその新しいsemanticsに依存するworkを含めない（Final・settlement・Panel assignmentまで含めて検査）。既存block hash・管理者seed・heartbeat・BASE-0・委員会seed・local RNGへの隠れたfallbackは追加しない。十分なbootstrap sourceが設計・検証されない場合、新しい報酬profileはDormantに維持する（既存チェーンの通常動作は止めない）。

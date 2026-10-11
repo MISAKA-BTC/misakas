@@ -4,6 +4,7 @@
 * **Scope:** Future PALW model distribution and model-specific coinbase allocation, with Panels or the separately gated Panel=0 mode.
 * **Supersedes:** MISAKA Torrent adoption/integration, dedicated Bonded Seeder roles/rewards, and the model-availability parts of [ADR173 D9–D11](0173-public-verifier-dispute-completeness-is-misaka-purpose.md), [RFC14 §16](../rfc/0014-panel-independent-fraud-prosecution.md), RFC15 and their related amendments. Mandatory Torrent, independent Bonded Seeder requirements, PoR/Full Fetch leases, TRDC/FPR model-disclosure gates and availability-based reward/weight suspension are withdrawn.
 * **Preserves:** [ADR175](0175-registered-models-are-permanently-immutable.md)'s permanent model identity, [ADR176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)'s per-bond production/reward/Final-weight ceilings and common DAA hold, authenticated computation adjudication, existing monetary issuance constraints and old-claim rules.
+* **2026-10-12 誤読防止:** 本ADRが外すのは**モデル配布**の合意管理であり、Miner・Panelのモデル保有義務と個別claimの検証・裁定・Final条件は外さない。[D1補足](#d1補足--役割の区別2026-10-12誤読防止)と[D7注記](#d7--非強制取得の下での検証経済安全性)を先に読むこと。Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数は末尾の[2026-10-12改定](#改定--2026-10-12minerpanelのclaim-bond合算と1320倍の配分係数提案)（提案・未決）。
 * **Implementation:** No code, wire id, Params field, activation DAA, fingerprint or deployment is assigned by this document. The earlier availability/FPR document checks record a withdrawn design, not current acceptance or economic evidence.
 
 ## 1. 採択する原則
@@ -33,6 +34,20 @@
 一般的なP2P配布、DHT/PEX、HTTP mirror、任意の保存・共有契約はoff-chainで選べる。
 MISAKA固有の取得プロトコルやSeeder制度は設けず、Panel/miner/一般peerの共有は任意である。
 外部の配布契約をchainのminer bond責任へ自動変換せず、専用Seederへの固定15%配分も採用しない。
+
+### D1補足 — 役割の区別（2026-10-12、誤読防止）
+
+D1は**モデルの配布**を合意の管理対象から外す決定であり、**計算・検証に参加する者の保有義務**や**個別claimの検証条件**を外す決定ではない。次の3つを区別する。
+
+1. **Miner・Panel:** PALW計算に参加するMinerおよび検証を担当するPanelは、適用されるrulesetに従い、正しい固定Model ID/root/specに対応するモデルを保有し、モデル同一性を確認でき、必要な実行・検証能力とreadiness条件を満たさなければならない（MUST）。
+2. **モデル登録者・所有者:** 第三者へのモデル配布、取得成功、継続的な公開提供を合意上保証する義務を負わない。モデルを配布できない、または配布を拒否したという理由だけで、登録モデルの報酬資格を停止したり、登録者に制裁を科したりしない（MUST NOT）。
+3. **個別claim:** 実際の計算・検証・裁定・Finalに必要な条件は満たさなければならない。モデルの配布自由と、未検証の計算への無条件支払いは別問題である。
+
+必要なPanelが成立しない個別claimを受理しないことは、モデル登録者の配布義務違反や計算不正の認定を意味しない。モデルの取得不能だけを理由とする登録資格の取消し、既存の有効claimの報酬停止、slashは行わない。
+モデルへのアクセス結果、peerの接続状態、配布者の応答状況を、合意判定への暗黙の入力としてはならない。Miner・Panelの資格は、適用rulesetで定義された認証済みの状態・証拠によって判定する。
+仕様上は「**第三者がモデルを取得できなかった場合**（登録者の義務違反でも不正でもない）」と「**必要なPanelが成立しなかった場合**（そのclaimは検証条件を満たさないため受理・Finalされない。非不正の終了）」を区別して扱う。
+RFC-0002 Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、この保有義務と両立し、claim受理・報酬資格・登録者の責任の関係を同時に満たすよう検証する。
+詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md)。
 
 ### D2 — 入手性と登録モデルの同一性を分離する
 
@@ -137,6 +152,10 @@ model資本増加やclaim capだけで成立したとしない。閉鎖して検
 Panel=0は別の実装・fresh-verifier試験・経済評価・協調activationを要する。
 閉鎖モデルへの実効検出が未立証である間は、その経済安全性も未立証と報告する。
 
+**D7注記（2026-10-12、誤読防止）:** 上の「必要なmodelを得られず監視できない場合、実効検出確率`p`は0にもなり得る」は、**モデルを保有する独立した検証者が一人もいない場合**の話である。
+D1補足のとおりMiner・Panelはモデル保有が必須であり、独立したモデル保有Panelが検証できる場合、閉鎖モデルでも`p`は0とは限らない。「閉鎖モデルなら必ず`p=0`」とは読まない。
+残る課題は、Panelの共謀・独立性の偽装・検証能力不足をどの程度抑止できるかであり、operator IDが別でも実質所有者が同一である可能性は残る。
+
 ## 3. 完成条件と移行
 
 | Gate | 必須の証拠 |
@@ -177,3 +196,28 @@ DAA emission budgetは総発行制約の参考であり、`S_m`/`f(S_m)`の実�
 - **範囲:** 変更するのはモデル別coinbase配分だけである。個別bondのQ/B/R/F上限、元本の重複禁止、共通拘束期間、総発行予算はADR-0176・D3–D5のまま維持する。
   bond集約倍率をblock発行数・beacon・Final weight・fork-choiceへ掛けることは含めない。
 - **検証承認gate（ECON round 2の設計）の位置づけ:** 補助金を検証承認に条件付ける機構として休眠実装を続けてよいが、`p=0`の解消証拠には数えない。
+
+## 改定 — 2026-10-12（Miner＋Panelのclaim bond合算と1.3〜2倍の配分係数：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。
+ユーザーの追加方針として、**モデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和**に応じた**1.3〜2倍の配分係数**を、モデル別の報酬配分（とブロック生成機会の配分）に反映する設計を提案として採録する。全文と攻撃試験C01〜C18は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §3A。
+
+> モデル別のブロック生成機会と報酬配分には、そのモデルに実際に拘束されたMinerおよびPanelの適格claim bond元本の和を使用する（MUST）。同じ実元本を複数claim・role・modelで重複計上してはならない（MUST NOT）。
+>
+> 適格元本に応じた1.3〜2倍の配分係数を設計候補とし、公開によって実参加資本を集めるモデルを、自己資本だけの閉鎖的な運用より相対的に有利にすることを目的とする。倍率曲線・閾値・snapshot・評価期間・整数丸め・model内配分はrelease前に確定する。
+>
+> claim bondは、正常claimの検証・Finalおよび共通の枠回復・責任保持条件を満たす前に再利用してはならない。Finalの故意の遅延、challenge、Panel交代で評価期間・採掘枠・絶対期限を延長してはならない。
+>
+> 配分係数は検証とFinalの代替ではない。network/model/producer-bondの上限を同時に維持し、既定の個別絶対capや総発行を後付けの乗算で増やしてはならない。モデル資本にはPanel元本を含めても、producer元本として二重に扱わない。
+>
+> モデルの非公開や第三者への提供拒否だけで登録者を罰しない。同じ適格元本・条件なら、自己資本と外部資本を同じ規則で扱う。公開の利益は追加の実参加・実資本から生じるという仮定を、敵対的な経済試験で評価する。
+>
+> 通常claimのPanel=1、必要な正の検証証拠、non-seatの客観反証、N1の実効検出・経済評価は維持する。モデル拘束資本倍率を追加しただけで、Miner/Panel共謀に対する安全性を証明済みと宣言してはならない。
+
+候補式（未採用）: `S_m = C_miner_claim(m) + C_panel_claim(m)`（資金単位で重複なし）、`S_m > 0` のとき `A_m = S_m · μ(S_m)`、`1.3 ≤ μ ≤ 2.0`、`S_m = 0` のとき `A_m = 0`。倍率は配分重みの段階で一度だけ反映し、実支払・ブロック数へ重ねない。全モデルへ一律の係数を掛けて正規化しても相対配分は変わらない（資本に依存する曲線が必要）。
+
+**既存決定との関係（未決として明記）:**
+- **曲線:** 2026-10-10の目的改定と同日のユーザー裁定で暫定採用した `A_m = S_m^α`（α = 1.5、BUDGETの休眠実装 `palw_model_bond_allocation_v1`）と、本提案の `S_m · μ(S_m)`（1.3〜2.0の有界係数）は別の曲線である。どちらを採るか、または `μ` をどう定めるかは未決であり、本改定は暫定のα = 1.5を置き換えない。
+- **集計対象:** 2026-10-10の改定はminer bondのみを集計した。本提案はPanelのclaim bondも合算する（ただしproducerのQ/B/R/F上限の元本としては二重に扱わない）。新しいpolicy/versionと移行規則を要する。
+- **範囲:** 2026-10-10の改定は「変更するのはモデル別coinbase配分だけ。block発行数・Final weight・fork-choiceへは掛けない」とした。本提案はブロック生成機会の配分への接続を含むが、物理block頻度・DAA・fork choice・Final weightの変更は決定しておらず、Final weightへ係数を自動乗算しない。ブロック機会への接続はRFC-0008/0010/0012で別review・versioned activationを要する。
+- **評価:** 閉鎖攻撃者が同額の実資本を拘束できれば同じ係数を得る。倍率だけで全Panel共謀や`p=0`の計算省略益を排除できるとはしない（2026-10-10改定の「p=0の分離」を維持）。

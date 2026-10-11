@@ -985,3 +985,9 @@ Panel有りのmodeでも共通予算・最早回復時計と残存責任を維�
 [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
+
+## 改定 — 2026-10-12（shardとPanel=1：提案）
+
+**状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
+
+Panel=1暫定modeでは、単一seatで全shard・全検証scopeを覆える経路だけを対象にする。shard outsider、segment mask、`seats-1` 等の複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定の1-seat移行監査）。
