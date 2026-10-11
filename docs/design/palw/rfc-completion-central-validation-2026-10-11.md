@@ -55,3 +55,17 @@ The finite private three-process driver is committed. It explicitly distinguishe
 | Panel/private guard v1, `38c524090`; `/tmp/rfc06-rfc12-panel-private-guard-v1.log` | Compilation in progress. | No runtime or genuine process result yet. |
 
 These commits are progress checkpoints, not completion claims. The failure logs are retained so a pushed revision does not conceal unresolved validation.
+
+## Follow-up checkpoint: f22a37d46
+
+The native v4 run terminated with exit 101/SIGABRT. Of 17 announced native cases, 12 printed PASS, four printed FAIL, and the Round boundary case aborted. The primary abort was `Exhausted { dim: Reward }` at the Round reservation's assumption that candidate caps and actual admission agreed; the subsequent DB-lifetime panic was cleanup after the virtual processor died. Consensus core and wallet binaries in that cargo invocation did not execute. Independently diagnosed Final failure was `ClockStepTemplateTooFarAhead`; the V5 migration diagnosis reached the exact cash/payment assertions and failed an invalid requirement that a later block must advance DAA. A later native block may have the same DAA. These diagnoses are not replacement PASS evidence.
+
+The separate core/wallet v8 compile (`9b6198ae5`, `/tmp/rfc07-rfc08-rfc12-market-wallet-v8.log`) failed on LLVM `No space left on device`; neither binary ran. Generated build space was recovered for a fresh attempt.
+
+The Panel/private v1 compile also terminated without runtime: SDK reexports, a private coordinate path, a checked run-address conversion and an additional occurrence partition fixture needed repair. Those repairs are integrated. The cell fixture now uses its class's effective prompt form, exactly as the backend does; capture authentication is unchanged.
+
+Every positive partial native payment now carries its own exact queue receipt. The unpaid remainder cannot be reassigned or revived; each actual cash drain starts its own W while aggregate recipient R remains conserved. New engine and fold cases exercise opposing FD/FE queue orders, backlog, partial cancellation and journal replay/undo. Wallet monetary insert, promotion, cancellation and explicit local tracking clear now serialize with network/connection generations; the new race test uses actual OS threads and the actual insert API.
+
+Opt-in Panel epoch subjects now freeze the actual release-step DAA, parent checkpoint, eligibility, excluded profiles and all sealed work identities in rooted auxiliary namespace 49. Dedicated v4/v5 verification reads complete opt-in/fee inventories and rejects self-assignment reuse without filtering a mixed source out. Authenticated Panel sponsor/target creation and its full liability bound are still missing, so this does not enable paid Panel funding. The new unit cases and the actual freezing-fold replay/carriage case are pending execution; the latter is a separate subsequent candidate.
+
+Fresh validation on `f22a37d46` is in progress: core/wallet v9 (`/tmp/rfc07-rfc08-rfc12-payment-wallet-panel-v9.log`) and SDK library/cell/shard court v3 (`/tmp/rfc06-partial-shard-court-node-v3.log`). No terminal PASS is assigned yet. Round full-vector refusal, opt-in fixture clocks, retirement compaction and private construction/resource scenarios remain active follow-up work.
