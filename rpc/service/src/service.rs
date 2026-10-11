@@ -76,7 +76,7 @@ use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     iter::once,
-    sync::{Arc, atomic::Ordering},
+    sync::{Arc, OnceLock, atomic::Ordering},
     vec,
 };
 use tokio::join;
@@ -528,6 +528,9 @@ pub struct RpcCoreService {
     flow_context: Arc<FlowContext>,
     utxoindex: Option<UtxoIndexProxy>,
     config: Arc<Config>,
+    // Config/Params have no interior mutation after this service is constructed. Hashing the
+    // boot bundle serializes every genesis registration, so status reads must not repeat it.
+    boot_consensus_params_id: OnceLock<String>,
     consensus_converter: Arc<ConsensusConverter>,
     index_converter: Arc<IndexConverter>,
     protocol_converter: Arc<ProtocolConverter>,
@@ -858,6 +861,7 @@ impl RpcCoreService {
             flow_context,
             utxoindex,
             config,
+            boot_consensus_params_id: OnceLock::new(),
             consensus_converter,
             index_converter,
             protocol_converter,
@@ -1860,7 +1864,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             None => "idle",
         };
         Ok(GetPalwNodeStatusResponse {
-            consensus_params_id: params.consensus_params_id().to_string(),
+            consensus_params_id: self.boot_consensus_params_id.get_or_init(|| params.consensus_params_id().to_string()).clone(),
             fence_schedule: params.fence_schedule_v1(),
             consensus_schedule_id: params.consensus_schedule_id().to_string(),
             producer_state: if rt.producer_state.is_empty() { "off".to_string() } else { rt.producer_state.to_string() },

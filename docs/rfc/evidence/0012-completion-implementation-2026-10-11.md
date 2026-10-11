@@ -49,3 +49,10 @@ The feature-gated `population-v1` construction profile derives a bounded total r
 | OPS | Execute the 100k resource/latency gate and actual SDK/wRPC callers with the selected private binary, inspect every preserved log/root and validate the chunked snapshot transport. Public presets remain dormant and startup activation remains refused until release evidence and explicit policy approval exist. |
 
 The additional locked-table MuHash check performs an O(N) import-only scan. Its memory is bounded by the chunk size, but elapsed time / DB-I/O cost at release scale is unmeasured and belongs in the pruned-join resource gate. It is not a per-block fee or a public court-cost result.
+
+The status service caches only the immutable boot consensus fingerprint. Its first calculation
+still uses the unchanged `Params::consensus_params_id()` algorithm, which serializes the PALW
+bundle and its genesis registrations; subsequent reads reuse that value instead of repeating a
+registry-sized allocation. Import epoch, active point, phase, stable state and live authority
+continue to come from the current consensus session on every request. This bounds repeated
+status reads during a population probe; it does not establish a measured 100k latency gate.
