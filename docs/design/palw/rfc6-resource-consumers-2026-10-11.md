@@ -163,7 +163,7 @@ Experimental consensus refusal constants:
 | Resource | Complete-profile bound | Meaning / unresolved release condition |
 | --- | ---: | --- |
 | Candidates in one frozen population | 100,000 | An overfull population is refused whole; no truncation. |
-| Candidates retained across claims | 400,000 | Four 100k populations exhaust it; shared population storage/expiry and long-running liveness remain unimplemented. |
+| Candidates retained across claims | 400,000 | Version 3 retains full populations forever. Separate dormant version 4 compacts only under actual native retirement authority; measured long-running liveness remains open. |
 | Historical seats across claims/retries | 65,536 | Retry history and reservations must validate below the bound. |
 | Encoded engine import | 256 MiB | Bounds the engine only; native registry, class declarations, allocator RSS and prover memory are separate. |
 | Admissions / assignments per block | 1 / 1 | Refuses unbounded parallel population work; it does not approve latency. |
@@ -295,7 +295,9 @@ completion. Four 100k seals still exhaust the 400k retained-candidate bound. The
 engine releases reservations at a validated terminal outcome that includes licensing;
 public court/liability may still remain. That event is not sufficient authority to
 drop the full population or its draw provenance. Reviewed population sharing/expiry,
-long-running liveness and historical migration remain unresolved.
+long-running liveness and historical migration remain unresolved. The separate
+version-4 native-authorized compaction below is implemented and locally tested; it
+does not add an expiry or compact a live version-2/3 claim.
 
 Actual multiple-process P2P/pruning/drop/reorg/resume/pruned-join evidence is still
 required. Leaf reassembly or block-feed replay does not provide it. The implementation
@@ -389,4 +391,30 @@ reuse and permanent-archive refusal before mutation. An actual native fold fixtu
 ReceiptLicensed → Final → existing native removal → next-checkpoint compaction; every
 step uses real delta replay/undo and root-checked native carriage. Its reference beacon is
 explicit test construction, not an independent public source. These newly added tests
-are **pending centralized compilation/runtime** until a concrete result is recorded.
+passed the central runs below. Large four-population lifecycle/resource fixtures and
+real network acceptance remain pending.
+
+## Central native-retirement and partial-court evidence
+
+At parent integration `1435fd151`, the node-feature executor run passed all 26 tests:
+13 sparse-tree/evidence tests, all 12 cell tests, and the all-corpus partial-court test
+(log `/tmp/rfc06-partial-shard-court-node-v4.log`). The canonical H-window program's
+input bound is 16 while its output logits width is 4; metadata now authenticates the
+declared post/logits tensor width and separately bounds consumed input ids. The actual
+node shard/cache/cell-run/private DB guard run passed all 15 selected tests
+(`/tmp/rfc06-rfc12-panel-private-guard-v2.log`). These results precede the new framed
+capture decoder and occurrence/prefix acquisition candidates, which need fresh runs.
+
+Version-4 retired population tests passed 3/3 in the engine leaf suite
+(`/tmp/rfc06-retired-population-leaf-v1.log`) and 4/4 Params/preset/identity/arming
+controls (`/tmp/rfc06-retired-population-presets-v11.log`). The actual native production
+fold test `retired_population_compacts_after_actual_native_retirement_and_op220_keeps_typed_identity`
+also passed (`/tmp/rfc06-rfc07-rfc08-retirement-round-freeze-v11.log`). It checks rooted
+carriage, typed RPC identity and real delta replay/undo around native-authorized
+compaction; it uses an explicitly constructed reference beacon. That combined log
+also contains an unrelated RFC07 source-freeze fixture failure; this record certifies
+only the named retirement test, not the entire combined invocation.
+
+None of these results certifies all-model whole-claim probabilistic soundness, an
+approved cost/capital fee, actual 100k native throughput/peak RSS, four-100k-seal
+native-carriage acceptance, permanent archive liveness or a real pruned P2P join.
