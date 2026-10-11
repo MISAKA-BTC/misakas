@@ -858,6 +858,32 @@ impl PalwFraudFilerCaseV1 {
         Ok(())
     }
 
+    /// A pruned round still needs the ordinary priced reacquisition path. Select only bytes
+    /// this phase can consume, so an already accumulated input or learned node is never
+    /// reacquired repeatedly. This is one unit/session; it does not imply batch feasibility.
+    fn missing_legacy_round_v1(
+        &self,
+        view: &PalwLegacyDisputeViewV1,
+        answer_read: impl Fn(&PalwDaUnitV1) -> bool,
+    ) -> Option<PalwLegacyProbeV1> {
+        self.legacy_round.iter().find_map(|unit| {
+            let needed = match unit {
+                PalwLegacyHeldUnitV2::PromptIds { chunk } => {
+                    self.fp_bootstrap.as_ref().is_some_and(|input| !input.ready() && input.chunk == *chunk)
+                }
+                PalwLegacyHeldUnitV2::StepNode { level, index } | PalwLegacyHeldUnitV2::CheckpointNode { level, index } => {
+                    !self.frontiers.iter().any(|f| f.level == *level && f.index == *index)
+                }
+                PalwLegacyHeldUnitV2::KernelWitness { leaf } => {
+                    self.witness.as_ref().is_none_or(|w| w.refutation.output_opening.leaf_index != *leaf)
+                }
+                PalwLegacyHeldUnitV2::FpJob => self.public_fp_job_v1().is_none(),
+            };
+            let key = PalwDaUnitV1::LegacyHeldV2(*unit);
+            (needed && view.unit_was_answered_v1(&key) && !answer_read(&key)).then_some(PalwLegacyProbeV1::HeldNode { unit: *unit })
+        })
+    }
+
     /// Give the bounded history walk a retry interval, then explicitly reacquire a missing answered unit. A new request
     /// consumes this reservation's next session counter; retries of the same signed request never consume another counter.
     pub(super) fn reacquire_after_v1(
@@ -3052,25 +3078,18 @@ impl PalwPanelService {
                             PalwLegacyProbeV1::Binding { row, tile } if (row, tile) != (0, 0) => book.want_rcore(claim, probe.unit()),
                             _ => {}
                         }
-                        if let Some(view) = view.as_ref()
-                            && let Some(request) =
-                                book.cases.get_mut(&claim).and_then(|c| c.reacquire_after_v1(view, bond_key, probe, current_daa))
-                        {
-                            let item = PalwFraudFilerSentV1::Reacquire { probe, session_number: request.session_number };
-                            self.fraud_filer_queue_v1(book, claim, item, current_daa, court_pending, court_due, || {
-                                let mut signed = true;
-                                let object = kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reacquire_object_v1(
-                                    network_domain,
-                                    request,
-                                    |m| {
-                                        self.sign(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(|| {
-                                            signed = false;
-                                            Vec::new()
-                                        })
-                                    },
-                                );
-                                if signed { Ok(object) } else { Err("no signing key for reacquisition".into()) }
-                            });
+                        if let Some(view) = view.as_ref() {
+                            self.fraud_filer_reacquire_v1(
+                                book,
+                                claim,
+                                view,
+                                bond_key,
+                                probe,
+                                current_daa,
+                                network_domain,
+                                court_pending,
+                                court_due,
+                            );
                         }
                         break;
                     }
@@ -3085,6 +3104,25 @@ impl PalwPanelService {
                             )
                         {
                             debug!("[{PALW_PANEL}] claim {claim}: {why}; the public round remains Pending");
+                            break;
+                        }
+                        if let Some(view) = view.as_ref()
+                            && let Some(probe) = book
+                                .cases
+                                .get(&claim)
+                                .and_then(|case| case.missing_legacy_round_v1(view, |unit| book.answers.contains_key(&(claim, *unit))))
+                        {
+                            self.fraud_filer_reacquire_v1(
+                                book,
+                                claim,
+                                view,
+                                bond_key,
+                                probe,
+                                current_daa,
+                                network_domain,
+                                court_pending,
+                                court_due,
+                            );
                         }
                         break;
                     }
@@ -3355,6 +3393,38 @@ impl PalwPanelService {
                 }
             }
         }
+    }
+
+    /// The same native counter/deadline/standing checks serve single reads and missing lanes.
+    /// A round never gets an unpaid second DA demand for a historically answered unit.
+    #[allow(clippy::too_many_arguments)]
+    fn fraud_filer_reacquire_v1(
+        &self,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        view: &PalwLegacyDisputeViewV1,
+        bond_key: PalwBondKeyV2,
+        probe: PalwLegacyProbeV1,
+        current_daa: u64,
+        network_domain: Hash64,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) {
+        let Some(request) = book.cases.get_mut(&claim).and_then(|c| c.reacquire_after_v1(view, bond_key, probe, current_daa)) else {
+            return;
+        };
+        let item = PalwFraudFilerSentV1::Reacquire { probe, session_number: request.session_number };
+        self.fraud_filer_queue_v1(book, claim, item, current_daa, court_pending, court_due, || {
+            let mut signed = true;
+            let object =
+                kaspa_consensus_core::palw_legacy_public_filer_v1::palw_dispute_reacquire_object_v1(network_domain, request, |m| {
+                    self.sign(m, PALW_LEGACY_DISPUTE_MLDSA87_CONTEXT_V1).unwrap_or_else(|| {
+                        signed = false;
+                        Vec::new()
+                    })
+                });
+            if signed { Ok(object) } else { Err("no signing key for reacquisition".into()) }
+        });
     }
 
     /// **Queue one item of a case** under the filer's own key, dated now — once per [`PALW_FRAUD_FILER_RESEND_DAA_V1`] and at most
@@ -4302,6 +4372,68 @@ pub(super) mod tests {
         let executed =
             backend.execute_free_prompt(job, &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
         misaka_palw_base0::produce::base0_material_decode_any_v1(&executed.outcome.material).unwrap().binding().clone()
+    }
+
+    #[test]
+    fn pruned_round_selects_only_answered_unread_material_needed_by_this_phase() {
+        let mut case = PalwFraudFilerCaseV1::new(candidate(3, 300, false));
+        let payload = input::tests::payload();
+        assert!(payload.commitment.job.prompt_tokens > 0);
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(payload)),
+            form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            ids: Vec::new(),
+            chunk: 0,
+            _reservation: None,
+        });
+        let old = PalwLegacyHeldUnitV2::PromptIds { chunk: 1 };
+        let wanted = PalwLegacyHeldUnitV2::PromptIds { chunk: 0 };
+        case.legacy_round = vec![old, wanted];
+        let mut v = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 150 });
+        assert!(case.missing_legacy_round_v1(&v, |_| false).is_none(), "unanswered lanes still use ordinary demand/default");
+        v.answered = vec![PalwDaUnitV1::LegacyHeldV2(old), PalwDaUnitV1::LegacyHeldV2(wanted)];
+        assert_eq!(case.missing_legacy_round_v1(&v, |_| false), Some(PalwLegacyProbeV1::HeldNode { unit: wanted }));
+        assert!(case.missing_legacy_round_v1(&v, |unit| *unit == PalwDaUnitV1::LegacyHeldV2(wanted)).is_none());
+        let input = case.fp_bootstrap.as_mut().unwrap();
+        input.ids.resize(input.payload.job().prompt_tokens as usize, 0);
+        assert!(case.missing_legacy_round_v1(&v, |_| false).is_none(), "already accumulated input never spends another session");
+        let node = PalwLegacyHeldUnitV2::StepNode { level: 9, index: 0 };
+        case.legacy_round = vec![node];
+        v.answered.push(PalwDaUnitV1::LegacyHeldV2(node));
+        assert!(case.missing_legacy_round_v1(&v, |_| false).is_some());
+        case.frontiers.push(PalwLegacyFrontierV2 { level: 9, index: 0, below: 0, first: 0, nodes: vec![], leaf_hashes: None });
+        assert!(
+            case.missing_legacy_round_v1(&v, |_| false).is_none(),
+            "a retained authenticated frontier is consumed without reacquisition"
+        );
+    }
+
+    #[test]
+    fn round_reacquisition_keeps_the_native_counter_wait_and_hard_deadline() {
+        let me = bond(1);
+        let unit = PalwLegacyHeldUnitV2::StepNode { level: 9, index: 0 };
+        let mut case = PalwFraudFilerCaseV1::new(candidate(3, 300, false));
+        case.binding = Some(material_budget_binding());
+        case.legacy_round = vec![unit];
+        let mut v = view(3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 150 });
+        let mut record = PalwDisputeClaimV1::default();
+        record.live.insert(me, PalwDisputeReservationRowV1 { reserved_daa: 151, deposit: 1, sessions_opened: 3, lanes_joined: 5 });
+        v.record = Some(record);
+        v.answered.push(PalwDaUnitV1::LegacyHeldV2(unit));
+        let probe = case.missing_legacy_round_v1(&v, |_| false).unwrap();
+        assert!(case.reacquire_after_v1(&v, me, probe, 200).is_none());
+        assert!(case.reacquire_after_v1(&v, me, probe, 229).is_none());
+        let request = case.reacquire_after_v1(&v, me, probe, 230).unwrap();
+        assert_eq!(request.session_number, 4);
+        assert_eq!(request.reserved_daa, 151);
+        assert_eq!(request.unit, PalwDaUnitV1::LegacyHeldV2(unit));
+        assert_eq!(case.reacquire_after_v1(&v, me, probe, 230).unwrap(), request, "a signed retry never advances the native counter");
+        v.hard_deadline_daa = 235;
+        assert_eq!(case.reacquire_after_v1(&v, me, probe, 230).unwrap().valid_until_daa, 235);
+        assert!(case.reacquire_after_v1(&v, me, probe, 236).is_none());
+        v.hard_deadline_daa = 3800;
+        v.record.as_mut().unwrap().live.get_mut(&me).unwrap().sessions_opened = PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1;
+        assert!(case.reacquire_after_v1(&v, me, probe, 230).is_none(), "the bridge cannot waive the lifetime session cap");
     }
 
     #[test]
