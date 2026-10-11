@@ -12051,6 +12051,7 @@ pub struct PalwChainStateV2 {
     class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
+    staged_courts: BTreeMap<crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>,
     terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
@@ -12288,6 +12289,7 @@ impl PalwChainStateV2 {
             claim_semantics: BTreeMap::new(),
             legacy_answers: BTreeMap::new(),
             terminal_evidence: BTreeMap::new(),
+            staged_courts: BTreeMap::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -14748,6 +14750,10 @@ impl PalwChainStateV2 {
         }
         // **Lane LG14-A.** Its own block, Some-only: empty until the first reservation past `palw_legacy_public_filer_v1`, which no
         // network can arm, so a dormant network roots exactly as before.
+        if !self.staged_courts.is_empty() {
+            state.update(b"staged_public_courts/v1");
+            state.update(collection_root(b"staged_public_courts", &self.staged_courts).as_byte_slice());
+        }
         if !self.terminal_evidence.is_empty() {
             state.update(b"terminal_evidence/v1");
             state.update(collection_root(b"terminal_evidence", &self.terminal_evidence).as_byte_slice());
@@ -15619,6 +15625,9 @@ impl PalwChainStateV2 {
         self.assert_public_fp_jobs_consistency_v1(params)?;
         self.assert_legacy_answers_v2()?;
         self.assert_terminal_evidence_v1()?;
+        for (key, row) in &self.staged_courts {
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
@@ -17044,6 +17053,8 @@ pub enum PalwDeltaEntryV2 {
     LegacyAnswer { key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, old: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>, new: Option<crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2> } = 202,
     TerminalEvidence { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, old: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, new: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1> } = 203,
     TerminalPart { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, index: u8, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 205,
+    StagedCourtSeed { key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, old: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>, new: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1> } = 207,
+    StagedCourtMove { key: crate::palw_constraint_stream_owned_v1::PalwConstraintStreamKeyV1, old: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1, new: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1 } = 208,
     /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's): a claim's dispute record**
     /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
     LegacyDispute {
@@ -42114,6 +42125,16 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ClassSemantics { key, old, new } => swap_write!(state.class_semantics, key, old, new),
         PalwDeltaEntryV2::ClaimSemantics { key, old, new } => swap_write!(state.claim_semantics, key, old, new),
         PalwDeltaEntryV2::LegacyAnswer { key, old, new } => swap_write!(state.legacy_answers, key, old, new),
+        PalwDeltaEntryV2::StagedCourtSeed { key, old, new } => swap_write!(state.staged_courts, key, old, new),
+        PalwDeltaEntryV2::StagedCourtMove { key, old, new } => {
+            let lookup = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::Owner(key.0, key.1);
+            let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::Constraint(row)) = state.staged_courts.get_mut(&lookup) else {
+                return Err(PalwStateV2Error::DeltaMismatch("staged move lacks immutable owned seed"));
+            };
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if &row.checkpoint_v1() != expected { return Err(PalwStateV2Error::DeltaMismatch("staged move checkpoint mismatch")); }
+            row.restore_checkpoint_v1(install).map_err(|_| PalwStateV2Error::DeltaMismatch("staged checkpoint exceeds immutable contract"))?;
+        }
         PalwDeltaEntryV2::TerminalEvidence { key, old, new } => swap_write!(state.terminal_evidence, key, old, new),
         PalwDeltaEntryV2::TerminalPart { key, index, old, new } => {
             if old.is_some() || new.is_some() {
@@ -42565,6 +42586,7 @@ pub struct PalwStateCarriageV2 {
     pub class_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub claim_semantics: BTreeMap<Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
     pub legacy_answers: BTreeMap<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
+    pub staged_courts: BTreeMap<crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>,
     pub terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
     /// Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's engine, in appended tail `0xEF`, present only when `Some`.
     pub bond_budget: Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>,
@@ -43269,6 +43291,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             crate::palw_kernel_route_v1::PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1.serialize(writer)?;
             kernel.serialize(writer)?;
         }
+        if !self.staged_courts.is_empty() {
+            crate::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_TAIL_V1.serialize(writer)?;
+            self.staged_courts.serialize(writer)?;
+        }
         if !self.terminal_evidence.is_empty() {
             crate::palw_terminal_carriage_v1::PALW_TERMINAL_TAIL_V1.serialize(writer)?;
             self.terminal_evidence.serialize(writer)?;
@@ -43490,6 +43516,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_kernel_route = false;
         let mut legacy_disputes = BTreeMap::new();
         let mut legacy_answers = BTreeMap::new();
+        let mut staged_courts = BTreeMap::new();
+        let mut seen_staged_courts = false;
         let mut terminal_evidence = BTreeMap::new();
         let mut seen_terminal_evidence = false;
         let mut seen_legacy_answers = false;
@@ -43774,6 +43802,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_kernel_route = true;
                     kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::deserialize_reader(reader)?);
                 }
+                crate::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_TAIL_V1 if !seen_staged_courts => {
+                    seen_staged_courts = true;
+                    staged_courts = BTreeMap::deserialize_reader(reader)?;
+                    if staged_courts.is_empty() { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "empty staged public court tail")); }
+                }
                 crate::palw_terminal_carriage_v1::PALW_TERMINAL_TAIL_V1 if !seen_terminal_evidence => {
                     seen_terminal_evidence = true;
                     terminal_evidence = BTreeMap::deserialize_reader(reader)?;
@@ -43961,6 +43994,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             claim_semantics,
             legacy_answers,
             terminal_evidence,
+            staged_courts,
             bond_budget,
             exec_v2,
         })
@@ -44086,6 +44120,7 @@ impl PalwStateCarriageV2 {
             claim_semantics: state.claim_semantics.clone(),
             legacy_answers: state.legacy_answers.clone(),
             terminal_evidence: state.terminal_evidence.clone(),
+            staged_courts: state.staged_courts.clone(),
             bond_budget: state.bond_budget.clone(),
             exec_v2: state.exec_v2.clone(),
             model_versions: state.model_versions.clone(),
@@ -44345,6 +44380,7 @@ impl PalwStateCarriageV2 {
             claim_semantics: self.claim_semantics,
             legacy_answers: self.legacy_answers,
             terminal_evidence: self.terminal_evidence,
+            staged_courts: self.staged_courts,
             kernel_route: self.kernel_route,
             bond_budget: self.bond_budget,
             exec_v2: self.exec_v2,
@@ -61721,6 +61757,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassSemantics { .. } => "class_semantics",
                     PalwDeltaEntryV2::ClaimSemantics { .. } => "claim_semantics",
                     PalwDeltaEntryV2::LegacyAnswer { .. } => "legacy_answer",
+                    PalwDeltaEntryV2::StagedCourtSeed { .. } => "staged_seed",
+                    PalwDeltaEntryV2::StagedCourtMove { .. } => "staged_move",
                     PalwDeltaEntryV2::TerminalEvidence { .. } => "terminal_evidence",
                     PalwDeltaEntryV2::TerminalPart { .. } => "terminal_part",
                     // Lane BUDGET: their round trip is the bond budget's suite (`palw_bond_budget_fold_v1`).
@@ -62821,6 +62859,7 @@ pub(crate) mod tests {
             claim_semantics: _,
             legacy_answers: _,
             terminal_evidence: _,
+            staged_courts: _,
             // Lane BUDGET: one Some-only block (`bond_budget/v1`), as the kernel route's; absent here.
             bond_budget: _,
             // RFC-0008 v2: one Some-only block of three, empty here.
@@ -78901,5 +78940,35 @@ mod audit_1004_a1_dissolved_line_carriage {
         palw_improvement_carriage_consistent_v1(&c).expect("a dissolved line holds no policy, usage or pool");
         c.improvement_lines.insert(id, line(id, PalwImprovementLineStatusV1::Governed));
         assert!(palw_improvement_carriage_consistent_v1(&c).is_err(), "a governed line must hold all three");
+    }
+}
+
+#[cfg(test)]
+mod staged_court_state_tests_v1 {
+    use super::*;
+    use crate::palw_staged_court_state_v1::*;
+    #[test]
+    fn prospective_contract_roots_carries_and_reverts_without_historic_tail_changes() {
+        let mut state = PalwChainStateV2::genesis();
+        let empty_root = state.state_root();
+        let empty_wire = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+        let terms = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
+            .claim_terms(100, 4, 4099).unwrap();
+        let key = PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(107));
+        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(terms)) };
+        assert_eq!(borsh::to_vec(&entry).unwrap()[0], 207);
+        apply_delta_entry(&mut state, &entry, false).unwrap();
+        assert_ne!(state.state_root(), empty_root);
+        let wire = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+        let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).unwrap();
+        assert_eq!(carriage.staged_courts, state.staged_courts);
+        assert!(apply_delta_entry(&mut state, &entry, false).is_err());
+        apply_delta_entry(&mut state, &entry, true).unwrap();
+        assert_eq!(state.state_root(), empty_root);
+        assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap(), empty_wire);
+        let mut empty_tail = empty_wire;
+        empty_tail.push(crate::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_TAIL_V1);
+        empty_tail.extend(0u32.to_le_bytes());
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&empty_tail).is_err());
     }
 }
