@@ -70,6 +70,32 @@ fn locked(c: &BeaconContextV1, seals: &[SealedSourceV3]) -> Option<Digest> {
     }
 }
 
+#[test]
+fn one_work_cannot_supply_two_sealed_sources_even_from_distinct_producers() {
+    let c = ctx();
+    let a = sealed(SRC_A, 1, 1, 103, Some(125), 11);
+    let b = sealed(SRC_A, 1, 2, 104, Some(126), 22);
+    for seals in [vec![a.clone(), b.clone()], vec![b, a]] {
+        assert!(matches!(
+            collect_sealed_work_beacon_v3(&c, &seals, TIP).unwrap(),
+            SealedBeaconStateV3::Vetoed { withheld: 0, failed: 1 }
+        ));
+    }
+}
+
+#[test]
+fn a_source_cannot_settle_before_its_reveal() {
+    let c = ctx();
+    let a = sealed(SRC_A, 1, 1, 103, Some(125), 11);
+    let mut b = sealed(SRC_B, 2, 2, 104, Some(126), 22);
+    let SourceFateV3::Final(ev) = &mut b.reveal.as_mut().unwrap().fate else { unreachable!() };
+    ev.settlement_position = 125;
+    assert!(matches!(
+        collect_sealed_work_beacon_v3(&c, &[a, b], TIP).unwrap(),
+        SealedBeaconStateV3::Vetoed { withheld: 0, failed: 1 }
+    ));
+}
+
 /// **The last contributor is gone.** Under v2 one attacker job ground offline gave 2^12 distinct beacons (`grinding.rs`). Under
 /// v3 the attacker must SEAL before the window closes, while the honest salt is still hidden: whatever it seals, the output it gets
 /// is a function of a salt it never saw. After the reveals its only move is to withhold — and every withholding vetoes: among all

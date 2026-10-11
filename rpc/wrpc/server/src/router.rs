@@ -121,6 +121,7 @@ impl Router {
                 GetPalwFraudFilerStatus,
                 GetPalwPanelV3Status,
                 GetPalwExecV2Status,
+                GetPalwRewardVesting,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,

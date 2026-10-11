@@ -170,6 +170,7 @@ fn final_qualifies_v3(ctx: &BeaconContextV1, seal: &SealedSourceV3, reveal: &Sea
         && !ev.depends_on_profiles.iter().any(|p| ctx.excluded_profiles.contains(p) || is_candidate(p))
         && ev.accepted_position == reveal.reveal_position
         && ev.accepted_position >= seal_window_end_v3(ctx)
+        && ev.settlement_position >= ev.accepted_position
         && ev.claim_final
         && ev.da_satisfied
         && ev.validity_independent
@@ -233,6 +234,7 @@ pub fn collect_sealed_work_beacon_v3(
         return Ok(SealedBeaconStateV3::Revealing { mixed: n, revealed });
     }
     let (mut withheld, mut failed, mut live) = (0u32, 0u32, 0u32);
+    let mut work_ids = BTreeSet::new();
     let mut finals: Vec<(&SealedSourceV3, SealRevealV3, WorkFinalEventV1)> = Vec::new();
     for s in &mixed {
         let Some(r) = in_time(s) else {
@@ -241,9 +243,11 @@ pub fn collect_sealed_work_beacon_v3(
         };
         match r.fate.clone() {
             SourceFateV3::Final(ev) if ev.settlement_position <= tip_position => {
-                if final_qualifies_v3(ctx, s, &r, &ev) {
+                if final_qualifies_v3(ctx, s, &r, &ev) && work_ids.insert(ev.canonical_work_id) {
                     finals.push((*s, r, ev));
                 } else {
+                    // A mixed seal cannot be dropped after reveal: an invalid or duplicate
+                    // work vetoes the entire attempt, preserving the fixed source set.
                     failed += 1;
                 }
             }

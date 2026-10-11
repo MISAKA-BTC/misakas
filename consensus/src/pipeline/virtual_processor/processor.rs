@@ -536,8 +536,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
     pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
-    /// RFC-0012 D1: the last `safe`-readiness explanation served, keyed by the sink it stands at (memory only, advisory). Bounds the
-    /// cost of the RPC to one evaluation per virtual change; see `native_settlement::native_safe_readiness`.
+    /// RFC-0012 D1: the last `safe`-readiness explanation served (memory only, advisory). Reused only when both
+    /// sink and its contained pruning point agree, including context changes without a virtual change.
+    /// See `native_settlement::native_safe_readiness`.
     pub(super) native_readiness_memo:
         parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
     /// LIVE-R1 N3: the PALW state AT the committed virtual sink, for the `palw_*` readers
@@ -556,9 +557,6 @@ pub struct VirtualStateProcessor {
     /// harness can produce) is read as REAL work. The node's own delta, extraction, conversion and certificate run unchanged.
     #[cfg(test)]
     pub(super) native_relabel_class: parking_lot::Mutex<Option<Hash64>>,
-    /// The `finalized` head a virtual change published and a later one withdrew while no conflict was recorded (RFC-0012 C11), kept
-    /// until a `finalized` is published again. Memory only, for the explanation; the `error!` at the withdrawal is the durable signal.
-    pub(super) native_finalized_withdrawn: parking_lot::Mutex<Option<BlockHash>>,
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override:
@@ -716,6 +714,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_typed_roots_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_verifier_pay_v1` (G14R round 3): M*-49 verifier pay and the held default share on the kernel route.
     pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
     pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1112,6 +1111,8 @@ pub(super) enum PalwMergedOwnedWorkV1 {
         Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
         /// ADR-0132 Upgrade C: the block's own compact `bits`, for its claim's snapshot.
         u32,
+        /// The exact header admitted above, retained for the native keys and original EXEC clock.
+        Arc<Header>,
     ),
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
@@ -1332,7 +1333,6 @@ impl VirtualStateProcessor {
             template_clock: Default::default(),
             #[cfg(test)]
             native_relabel_class: Default::default(),
-            native_finalized_withdrawn: Default::default(),
             #[cfg(test)]
             native_fact_override: Default::default(),
             palw_native_ruleset_id: params.consensus_params_id(),
@@ -1383,6 +1383,7 @@ impl VirtualStateProcessor {
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,
             palw_verifier_pay_v1: params.palw_verifier_pay_v1,
+            palw_beacon_source_opt_in_v1: params.palw_beacon_source_opt_in_v1,
             palw_signed_registration_v1: params.palw_signed_registration_v1,
             palw_provider_court_v1: params.palw_provider_court_v1,
             palw_legacy_held_da_v2: params.palw_legacy_held_da_v2,
@@ -1755,11 +1756,35 @@ impl VirtualStateProcessor {
         self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
     }
 
+    /// The single-Origin writer starts with a fresh work budget, so this one proof cannot exhaust it.
+    /// Ask the core's read-only verdict once, retaining the no-V2-bundle gate and both refusal variants.
+    fn palw_exec_origin_rehearsal_v1_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1> {
+        if !matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { .. }) {
+            return None;
+        }
+        if self.palw_panel_params_v2.is_none() {
+            return Some(kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1::NotAccepted(
+                "PALW objects on a network with no V2 bundle".into(),
+            ));
+        }
+        Some(kaspa_consensus_core::palw_state_v2::palw_v2_origin_rehearsal_v1(state, state_params, point, object, || {
+            self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object))
+        }))
+    }
+
     /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
     /// acceptance layer first (cheap refusals — an unknown bond, a signature that does not verify —
-    /// before any state is cloned), then the fold's own arm. A dormant public-filer exception
-    /// relays an authenticated binding which the objective court convicts, while the DA fold
-    /// still refuses it as an answer. No unauthenticated binding gets this exception.
+    /// before any state is cloned), then the fold's own conditions. Origin asks the read-only
+    /// verdict once; all other objects use the single-object writer. `None` when both take it.
+    /// A dormant public-filer exception relays an authenticated binding which the objective court
+    /// convicts, while the DA fold still refuses it as an answer. No unauthenticated binding gets
+    /// this exception.
     pub(super) fn palw_h1_carrier_refusal_on(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -1767,6 +1792,14 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> Option<String> {
+        if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
+            use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 as Verdict;
+            return match verdict {
+                Verdict::Accepted => None,
+                Verdict::NotAccepted(why) => Some(why),
+                Verdict::Refused(why) => Some(why.to_string()),
+            };
+        }
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return Some(why);
         }
@@ -1779,7 +1812,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
         )
         .err()?;
         if matches!(refusal, kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DaOpeningRefused { .. })
@@ -2841,10 +2874,10 @@ impl VirtualStateProcessor {
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits) => self
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits, origin_header) => self
                                             .palw_merged_attempt_work_v1(
                                                 *blue,
-                                                self.headers_store.get_header(*blue).ok().as_deref(),
+                                                Some(origin_header.as_ref()),
                                                 envelope,
                                                 *subsidy,
                                                 *carve,
@@ -2876,7 +2909,7 @@ impl VirtualStateProcessor {
                                 // carries no attempt.
                                 let (own_execution_key, own_job_anchor) = match attempt.as_ref() {
                                     Some(envelope) => self.palw_attempt_keys_v1(
-                                        self.headers_store.get_header(current).ok().as_deref(),
+                                        Some(header.as_ref()),
                                         &envelope.attempt,
                                     ),
                                     None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
@@ -2899,7 +2932,21 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_for_objects(&point, &objects);
+                                        let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
+                                        if state_params.exec_v2_active_at(point.daa_score) {
+                                            if attempt.is_some() {
+                                                if let Ok(bytes) = borsh::to_vec(header.as_ref()) {
+                                                    extras.exec_v2_origin_headers.insert(current, bytes);
+                                                }
+                                            }
+                                            for owned in &merged_owned {
+                                                if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned {
+                                                    if let Ok(bytes) = borsh::to_vec(origin_header.as_ref()) {
+                                                        extras.exec_v2_origin_headers.insert(*source, bytes);
+                                                    }
+                                                }
+                                            }
+                                        }
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
@@ -3534,7 +3581,12 @@ impl VirtualStateProcessor {
         if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             let policy = self.palw_dns_retirement.expect("retirement is active").settlement.id();
             let previous_finalized = match self.evm_heads_store.read().native_snapshot() {
-                Ok(Some(s)) if s.version != 1 || s.policy_id != policy || s.ruleset_id != self.palw_native_ruleset_id => {
+                Ok(Some(s))
+                    if s.version != 1
+                        || s.policy_id != policy
+                        || s.ruleset_id != self.palw_native_ruleset_id
+                        || s.retirement_daa != self.palw_dns_retirement.unwrap().activation.daa_score() =>
+                {
                     error!("[native-settlement] incompatible persisted evidence; preserving it for resync");
                     return;
                 }
@@ -3545,18 +3597,39 @@ impl VirtualStateProcessor {
                     return;
                 }
             };
+            let mut publication = match self.native_finalized_publication() {
+                Ok(s) => s,
+                Err(()) => {
+                    error!("[native-settlement] incompatible or unreadable finalized publication; preserving it for resync");
+                    return;
+                }
+            };
             let snapshot = self.native_evm_settlement_snapshot(sink);
+            if let Some(finalized) = snapshot.finalized {
+                // Never replace the alarm anchor with an older publication. This cannot veto selection.
+                let advances = publication
+                    .as_ref()
+                    .and_then(|s| s.finalized)
+                    .is_none_or(|previous| self.reachability_service.try_is_chain_ancestor_of(previous, finalized).unwrap_or(false));
+                if advances {
+                    publication = Some(snapshot.clone());
+                }
+            }
             self.note_finalized_withdrawal(sink, previous_finalized, &snapshot);
             let heads = kaspa_consensus_core::evm::CanonicalEvmHeads {
-                latest: snapshot.latest.unwrap_or_default(), safe: snapshot.safe.unwrap_or_default(), finalized: snapshot.finalized.unwrap_or_default(),
+                latest: snapshot.latest.unwrap_or_default(),
+                safe: snapshot.safe.unwrap_or_default(),
+                finalized: snapshot.finalized.unwrap_or_default(),
             };
             let mut store = self.evm_heads_store.write();
+            store.set_native_finalized_publication_batch(batch, publication).unwrap();
             store.set_native_batch(batch, Some(snapshot)).unwrap();
             store.set_batch(batch, heads).unwrap();
             return;
         }
-        // A legal rollback across the fence restores the legacy derivation, without stale V1 labels.
-        self.evm_heads_store.write().set_native_batch(batch, None).unwrap();
+        // A legal rollback across the fence restores the legacy derivation. Reader gates hide native labels.
+        // Preserve both native incident snapshot and publication history: re-entry must not erase a sticky
+        // conflict, even if it returns to the originally published branch. Only validated resync clears them.
         // The sink carries an EVM result iff the lane is live for it (it may
         // predate activation right after the fork).
         if !self.evm_header_store.has(sink).unwrap_or(false) {
@@ -5234,8 +5307,41 @@ impl VirtualStateProcessor {
     /// [`Self::palw_object_rehearsal_v1_impl`] on a given state and point — the H-1 gate's two
     /// layers ([`Self::palw_h1_carrier_refusal_on`]) with the fold's reason kept typed. The acceptance
     /// layer first (cheap refusals before any state is cloned), then `palw_v2_apply_one_object_v1`
-    /// under the point's own flags and extras.
+    /// under the point's own flags and extras. Origin uses the equivalent read-only verdict above.
     pub(crate) fn palw_object_rehearsal_v1_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        if let Some(verdict) = self.palw_exec_origin_rehearsal_v1_on(state, state_params, point, object) {
+            return verdict;
+        }
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return PalwObjectRehearsalV1::NotAccepted(why);
+        }
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
+        ) {
+            Ok(_) => PalwObjectRehearsalV1::Accepted,
+            Err(why) => PalwObjectRehearsalV1::Refused(why),
+        }
+    }
+
+    /// The pre-optimization acceptance + writer oracle, with this node's private flags/extras.
+    /// No admission bypass: used only by equivalence tests, never compiled into a production node.
+    #[cfg(test)]
+    pub(crate) fn palw_object_rehearsal_with_writer_for_tests(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
@@ -5255,7 +5361,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
         ) {
             Ok(_) => PalwObjectRehearsalV1::Accepted,
             Err(why) => PalwObjectRehearsalV1::Refused(why),
@@ -5525,7 +5631,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for_objects(point, std::slice::from_ref(object)),
+            &self.palw_transition_extras_for_objects(state, point, std::slice::from_ref(object)),
         ) {
             Ok(_) => check,
             Err(why) => Check::Refused(why.to_string()),
@@ -6042,6 +6148,28 @@ impl VirtualStateProcessor {
         ))
     }
 
+    pub fn palw_reward_vesting_v2_impl(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        exec_after: Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        Some(kaspa_consensus_core::palw_reward_vesting_read_v2::palw_reward_vesting_read_v2(
+            &state,
+            state_params,
+            next_daa,
+            self.palw_settled_anchor_depth_at(next_daa),
+            &query,
+            limit,
+            after,
+            exec_after,
+        ))
+    }
+
     /// **RFC-0008 v2: `getPalwExecV2Status` (op 240)** — the EXEC v2 lane's observation over the committed tip (`load_tip_cached`):
     /// roots, slices and the state of each verification claim, `block`'s refusal record (its delta's `ExecV2Verdict` notes), the lane's
     /// health. A read: no rule calls it. `None` where the payload is not armed.
@@ -6074,7 +6202,7 @@ impl VirtualStateProcessor {
             (hash, notes)
         });
         let lane = self.palw_exec_v2_health(&state, tip, tip_daa);
-        Some(kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_observation_v1(
+        Some(kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_observation_with_retention_v2(
             &state,
             Some(fence.daa_score()),
             tip,
@@ -6082,6 +6210,7 @@ impl VirtualStateProcessor {
             &roots,
             record,
             lane,
+            Some(state_params.window_court()),
         ))
     }
 
@@ -6095,9 +6224,12 @@ impl VirtualStateProcessor {
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     ) -> Result<kaspa_consensus_core::palw_exec_v2::PalwWorkSliceV1, String> {
         let state_params = self.palw_state_params_v2.as_ref().ok_or("this network has no PALW state")?;
-        let (_, state) =
+        let (tip, state) =
             self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten().ok_or("no PALW tip on this node yet")?;
-        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_v1(&state, root, index, claim, bond)
+        let tip_daa = self.headers_store.get_daa_score(tip).map_err(|error| error.to_string())?;
+        kaspa_consensus_core::palw_exec_v2_verify::palw_exec_v2_slice_statement_at_depth_v2(
+            &state, state_params, root, index, claim, bond, self.palw_settled_anchor_depth_at(tip_daa),
+        )
     }
 
     /// **RFC-0008 v2 amendment 1, §10.3: the relay prefilter of an `EXEC_SLICE` block** against the committed tip: the root is open, the
@@ -6831,7 +6963,8 @@ impl VirtualStateProcessor {
     /// `palw_bond_collateral_is_locked_v6` with the RAW second-clock depth (`palw_settled_anchor_depth_at`)
     /// — v6 computes the liveness escape itself from the state's ring and the params' court window,
     /// which is exactly what `palw_second_clock_depth_at` computed here before, and adds the accuser
-    /// and vesting-payee clauses past `palw_rcore_plus`. Below that fence it is v5, byte for byte. A
+    /// and vesting-payee clauses past `palw_rcore_plus`. Actual forced EXEC vesting also holds its
+    /// payees below that fence; without EXEC receipts the old v5 rule remains byte-identical. A
     /// node with no state params keeps v5 with the unbounded second-clock hold (fail closed), as before.
     fn palw_v2_bond_is_locked(
         &self,
@@ -7028,7 +7161,7 @@ impl VirtualStateProcessor {
         }
         let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
         for work in &works {
-            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _) = work {
+            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _, _) = work {
                 withheld.insert(*blue, self.native_base_withheld_at(*blue, point.daa_score, state_params.worker_carve_at(*subsidy, *carve)));
             }
         }
@@ -7645,7 +7778,7 @@ impl VirtualStateProcessor {
             self.palw_da_court_at(point.daa_score),
             // The extras the BLOCK fold builds for its objects (the per-model court windows included): under an armed
             // `palw_model_court_window` a registration the node accepts needs the window the node derives for it.
-            &self.palw_transition_extras_for_objects(point, objects),
+            &self.palw_transition_extras_for_objects(state, point, objects),
         )
         .map(|(next, _, _)| next)
     }
@@ -7709,6 +7842,11 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
         let (execution_key, job_anchor) = self.palw_attempt_keys_v1(Some(header), &envelope.attempt);
+        let mut extras = self.palw_transition_extras_for_objects(state, point, objects);
+        extras.own_job_anchor = job_anchor;
+        if let Ok(bytes) = borsh::to_vec(header) {
+            extras.exec_v2_origin_headers.insert(point.block, bytes);
+        }
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             state,
             state_params,
@@ -7722,10 +7860,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
-                own_job_anchor: job_anchor,
-                ..self.palw_transition_extras_for(point)
-            },
+            &extras,
         )
     }
 
@@ -7753,6 +7888,12 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
         let merged = [self.palw_merged_attempt_work_v1(blue, blue_header, envelope, subsidy, None, 0)];
+        let mut extras = self.palw_transition_extras_for(point);
+        if let Some(header) = blue_header {
+            if let Ok(bytes) = borsh::to_vec(header) {
+                extras.exec_v2_origin_headers.insert(blue, bytes);
+            }
+        }
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             state,
             state_params,
@@ -7766,7 +7907,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_for(point),
+            &extras,
         )
     }
 
@@ -8216,6 +8357,7 @@ impl VirtualStateProcessor {
         // 1,016-row queue, a row maturing in the same block, and a same-block conviction.
         let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
+        let mut exec_origin_budget = kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginBudgetV1::default();
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
@@ -8671,13 +8813,35 @@ impl VirtualStateProcessor {
             };
             // **G14 lane D: a chunk group that carries a kernel route object is not a certification.** The grading cap and its work
             // budget are the family court's; the kernel route's own bounds are its fold's (and the carrier's fee).
+            let chunk_inner = self.palw_kernel_chunk_inner(&folded, &object, point.daa_score);
+            // Origin proof work has its own direct/chunk budget. A dormant inner still answers None (A-2).
+            let origin_witness = match &object {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { witness } => Some(witness),
+                _ => match &chunk_inner {
+                    Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { witness }) => Some(witness),
+                    _ => None,
+                },
+            };
+            if let Some(witness) = origin_witness {
+                if let Err(why) = folded.exec_v2_origin_witness_metadata_admissible_v1(state_params, point.daa_score, witness) {
+                    info!("Block {block}: an EXEC origin proof was dropped before header decoding, and the block stands: {why}");
+                    continue;
+                }
+                if let Err(why) = exec_origin_budget.charge() {
+                    info!("Block {block}: an EXEC origin proof was dropped before header verification, and the block stands: {why}");
+                    continue;
+                }
+            }
             let completes_a_group = completes_a_group
-                && !self.palw_kernel_chunk_inner(&folded, &object, point.daa_score).is_some_and(|inner| {
-                    kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(&inner)
-                        || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(&inner)
-                        || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(&inner)
-                        || kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(&inner)
+                && !chunk_inner.as_ref().is_some_and(|inner| {
+                    (state_params.exec_v2_active_at(point.daa_score)
+                        && matches!(inner, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ExecOriginRecordedV1 { .. }))
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_kernel_route_v1(inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_onboarding_v1(inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_provider_court_v1(inner)
+                        || kaspa_consensus_core::palw_state_v2::palw_object_is_legacy_held_da_v2(inner)
                 });
+
             let is_certification =
                 matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
                     || completes_a_group;
@@ -8954,7 +9118,7 @@ impl VirtualStateProcessor {
                         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                            ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                            ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                         },
                     ) {
                         Ok(next) => rehearsed_registration = Some(next),
@@ -9109,7 +9273,7 @@ impl VirtualStateProcessor {
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
                         )
                     } else {
@@ -9128,7 +9292,7 @@ impl VirtualStateProcessor {
                             self.palw_da_court_at(point.daa_score),
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
-                                ..self.palw_transition_extras_for_objects(point, std::slice::from_ref(&object))
+                                ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
                         )
                         .map(|(next, _)| next)
@@ -10402,6 +10566,9 @@ impl VirtualStateProcessor {
                         Self::verify_mldsa87_with_context_bool,
                     )
                     .map_err(|e| e.to_string())?;
+                }
+                Obj::ExecOriginRecordedV1 { witness } => {
+                    state.exec_v2_origin_witness_admissible_v1(state_params, point.daa_score, witness).map_err(|e| e.to_string())?;
                 }
                 // **RFC-0007 Part IV.1: a trap commitment** (tag 93): the fence, the stateful admission (a registered Active setter drawn
                 // by the slot lottery with no trap open and the deposit free), then the setter's one ML-DSA-87 signature.
@@ -14321,7 +14488,12 @@ impl VirtualStateProcessor {
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as Obj, palw_object_chunk_group_id_v1};
         let Obj::ObjectChunk { group, index, count, bytes } = object else { return None };
-        if *count == 0 || *index >= *count || bytes.is_empty() {
+        if *count == 0
+            || *count > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
+            || *index >= *count
+            || bytes.is_empty()
+            || bytes.len() > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
+        {
             return None;
         }
         let mut parts: std::collections::BTreeMap<u8, &[u8]> = Default::default();
@@ -14358,6 +14530,7 @@ impl VirtualStateProcessor {
             .objects
             .into_iter()
             .next()
+            .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, virtual_daa_score))
             .map(|carried| carried.object)?;
         if !matches!(object, Obj::KernelRouteV1 { .. } | Obj::KernelConstraintReceiptV1 { .. }) {
             return None;
@@ -14471,6 +14644,9 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                     "a typed-root object is refused: palw_typed_roots_v1 is not in force at this block (RFC-0004 Part II)".to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
+                    "a source opt-in is refused: palw_beacon_source_opt_in_v1 is not in force at this block".to_string()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                     "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
                         .to_string()
@@ -14490,6 +14666,11 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => self.palw_kernel_opv_at(daa_score),
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::TypedRootsV1 => {
                 self.palw_kernel_typed_roots_at(daa_score)
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceOptInV1 => {
+                self.palw_beacon_source_opt_in_v1
+                    .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+                    && self.palw_kernel_opv_at(daa_score)
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                 self.palw_kernel_opv_at(daa_score) && self.palw_kernel_typed_roots_at(daa_score)
@@ -15685,6 +15866,7 @@ impl VirtualStateProcessor {
             round_permit_uses: Vec::new(),
             // RFC-0008 v2: the slice carriers the covered set holds (empty until the closure carriage fills it).
             exec_v2_covered: Vec::new(),
+            exec_v2_origin_headers: Default::default(),
             exec_v2_anchor: None,
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
             // carried it is this one, and the block that pays it is its selected-chain child, always
@@ -16197,6 +16379,7 @@ impl VirtualStateProcessor {
 
     fn palw_transition_extras_for_objects(
         &self,
+        _state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
@@ -17505,6 +17688,7 @@ impl VirtualStateProcessor {
                     self.palw_escrow_for_carrier_at(*blue, header.daa_score, point.daa_score),
                     // ADR-0132 Upgrade C: the merged block's own `bits`, the lottery its forward faced.
                     header.bits,
+                    header.clone(),
                 )),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
@@ -19296,11 +19480,11 @@ impl VirtualStateProcessor {
         }
         // **Unit D, site 4: on a V2 network the deep-reorg gate IS the one comparator.**
         //
-        // A private fork can pile blue work without limit, but its frontier died at the fork
-        // point — piles do not mature, because nobody could collect receipts on a chain nobody
-        // saw — so frontier-first ordering refuses it here with the same three keys the virtual
-        // tip used. Consulting depth, raw blue work or the stake overlay INSTEAD would be the
-        // second authority coming back through the basement, which is P0-5.
+        // Every actual V2 reorg uses the same PALW comparator as the virtual tip. Consulting
+        // depth, raw blue work or the stake overlay INSTEAD would create a second authority (P0-5).
+        // This is not a proof that private work cannot mature: colluding producers and Panel seats
+        // can supply receipts on a private branch. RFC-0012 requires analysis and adversarial fork
+        // drills under that case, rather than assuming its frontier stays at the fork point.
         //
         // **Scoped to actual REORGS, and the scoping is load-bearing.** A first version ran the
         // comparator on every sink-search candidate and the node wedged with "valid sink must
@@ -22297,7 +22481,18 @@ impl VirtualStateProcessor {
         snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
     ) -> PruningImportResult<()> {
         info!("Importing the EVM state of the pruning point {}", pruning_point);
-        let l1_header = self.headers_store.get_header(pruning_point).unwrap();
+        let context_error =
+            |where_: &str, e: StoreError| PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("{where_}: {e}"));
+        let require_target = |established: BlockHash| {
+            if pruning_point == established {
+                Ok(())
+            } else {
+                Err(PruningImportError::ImportedEvmPruningPointMismatch(pruning_point, established))
+            }
+        };
+        // Root validity is not import authority. The IBD proof/catch-up installs this target first.
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| context_error("pruning-point store", e))?)?;
+        let l1_header = self.headers_store.get_header(pruning_point).map_err(|e| context_error("L1 header", e))?;
 
         // (1) The EVM header must reproduce the L1 commitment (pure; works on any build).
         let got = evm_header.commitment_root();
@@ -22319,9 +22514,33 @@ impl VirtualStateProcessor {
             }
         }
 
-        // (3) Persist the rows and pin the finalized EVM head to the pruning point.
+        // (3) Serialize retries, then recheck and pin the target through the durable batch.
+        // Memo -> pruning -> heads matches the readiness reader's lock order. No mutation precedes
+        // validation of every existing row; a retry reuses identical immutable data, never overwrites it.
+        let mut readiness_memo = self.native_readiness_memo.lock();
+        let pruning_point_read = self.pruning_point_store.read();
+        require_target(pruning_point_read.pruning_point().map_err(|e| context_error("pruning-point store", e))?)?;
+        let insert_header =
+            match self.evm_header_store.get(pruning_point).optional().map_err(|e| context_error("existing execution header", e))? {
+                None => true,
+                Some(existing) if existing == evm_header => false,
+                Some(_) => return Err(PruningImportError::ImportedEvmExistingStateMismatch(pruning_point, "execution header".into())),
+            };
+        let insert_snapshot = match self.evm_state_store.get(pruning_point).optional().map_err(|e| context_error("existing snapshot", e))? {
+            None => true,
+            Some(existing) if existing == snapshot => false,
+            Some(_) => return Err(PruningImportError::ImportedEvmExistingStateMismatch(pruning_point, "snapshot".into())),
+        };
+        use crate::model::stores::evm::EvmStateCheckpointStoreReader;
+        let checkpoint =
+            kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pruning_point, evm_header.evm_number, evm_header.state_root, &snapshot);
+        let insert_checkpoint =
+            match self.evm_state_checkpoint_store.get(pruning_point).map_err(|e| context_error("existing checkpoint", e))? {
+                None => true,
+                Some(existing) if existing == checkpoint => false,
+                Some(_) => return Err(PruningImportError::ImportedEvmExistingStateMismatch(pruning_point, "checkpoint".into())),
+            };
         let state_root = evm_header.state_root; // captured before `evm_header` is moved below
-        let evm_number_for_checkpoint = evm_header.evm_number; // ditto, for the F2a anchor checkpoint
         let mut batch = WriteBatch::default();
         // C-01 S8 (audit M-01): also seed the flat latest-canonical state from the verified
         // snapshot, so a pruned-IBD node starts with a flat store materialized at the pruning point
@@ -22343,25 +22562,20 @@ impl VirtualStateProcessor {
             )
             .map_err(|e| PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, format!("flat seed: {e}")))?;
         }
-        self.evm_header_store.insert_batch(&mut batch, pruning_point, evm_header).unwrap();
+        if insert_header {
+            self.evm_header_store.insert_batch(&mut batch, pruning_point, evm_header).unwrap();
+        }
         // F2a (t10 recovery): the imported, root-verified snapshot is also this
         // node's FIRST pruning-point state anchor — persist it as a checkpoint so
         // the pruning processor's pp-anchor induction (`ensure_pp_evm_anchor`) has
         // a base once the pp advances, even on a retired-206 node (which writes no
         // per-block 206 rows of its own; §12 gathering anchors on checkpoints).
-        {
-            use crate::model::stores::evm::EvmStateCheckpointStoreReader;
-            if self.evm_state_checkpoint_store.get(pruning_point).ok().flatten().is_none() {
-                let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(
-                    pruning_point,
-                    evm_number_for_checkpoint,
-                    state_root,
-                    &snapshot,
-                );
-                self.evm_state_checkpoint_store.insert_batch(&mut batch, pruning_point, checkpoint).unwrap();
-            }
+        if insert_checkpoint {
+            self.evm_state_checkpoint_store.insert_batch(&mut batch, pruning_point, checkpoint).unwrap();
         }
-        self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
+        if insert_snapshot {
+            self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
+        }
         {
             let mut heads_write = self.evm_heads_store.write();
             let prev = heads_write.get().ok();
@@ -22369,12 +22583,21 @@ impl VirtualStateProcessor {
             let safe = prev.as_ref().map(|h| h.safe).unwrap_or(pruning_point);
             let retired = self.headers_store.get_daa_score(pruning_point).is_ok_and(|daa| self.dns_retired_at(daa));
             let heads = if retired {
-                kaspa_consensus_core::evm::CanonicalEvmHeads { latest: pruning_point, safe: BlockHash::default(), finalized: BlockHash::default() }
-            } else { kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point } };
+                kaspa_consensus_core::evm::CanonicalEvmHeads {
+                    latest: pruning_point,
+                    safe: BlockHash::default(),
+                    finalized: BlockHash::default(),
+                }
+            } else {
+                kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point }
+            };
+            heads_write.set_native_finalized_publication_batch(&mut batch, None).unwrap();
             heads_write.set_native_batch(&mut batch, None).unwrap();
             heads_write.set_batch(&mut batch, heads).unwrap();
         }
         self.db.write(batch).unwrap();
+        *readiness_memo = None;
+        drop(pruning_point_read);
         Ok(())
     }
 
@@ -23082,6 +23305,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::VerificationVertexV1 { .. } => "VerificationVertexV1",
         O::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
+        O::ExecOriginRecordedV1 { .. } => "ExecOriginRecordedV1",
         O::VertexEquivocationV1 { .. } => "VertexEquivocationV1",
         O::TrapCommittedV1 { .. } => "TrapCommittedV1",
         O::TrapRevealedV1 { .. } => "TrapRevealedV1",

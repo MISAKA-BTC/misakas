@@ -3174,6 +3174,66 @@ mod mockery {
     }
     test!(GetPalwVestingResponse);
 
+    impl Mock for GetPalwRewardVestingRequest {
+        fn mock() -> Self {
+            Self {
+                bond: mock_hex(),
+                payout_address: mock_hex(),
+                claim_id: mock_hex(),
+                limit: mock(),
+                after: mock_hex(),
+                exec_after: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwRewardVestingRequest);
+
+    impl Mock for RpcPalwExecRewardLeg {
+        fn mock() -> Self {
+            Self {
+                claim_id: mock_hex(),
+                bond: mock_hex(),
+                fund: "kernel_fee".into(),
+                payload: mock_hex(),
+                sompi: "18446744073709551615".into(),
+                final_daa: mock(),
+                earliest_daa: mock(),
+                native_pending: mock(),
+                native_clock_live: mock(),
+                native_expiry_daa: mock(),
+                native_second_clock_bound_daa: mock(),
+                lock_live: mock(),
+                ready: mock(),
+                in_next_block: mock(),
+            }
+        }
+    }
+    test!(RpcPalwExecRewardLeg);
+
+    impl Mock for GetPalwRewardVestingResponse {
+        fn mock() -> Self {
+            Self {
+                available: mock(),
+                native: mock(),
+                state_root: mock_hex(),
+                outstanding_sompi: "340282366920938463463374607431768211455".into(),
+                exec_slice_sompi: "18446744073709551616".into(),
+                exec_kernel_fee_sompi: mock::<u64>().to_string(),
+                query_outstanding_sompi: "18446744073709551617".into(),
+                query_exec_pending_sompi: mock::<u64>().to_string(),
+                query_exec_ready_sompi: mock::<u64>().to_string(),
+                reporter_pending_sompi_of_query: "18446744073709551618".into(),
+                reporter_awarded_sompi_of_query: mock::<u64>().to_string(),
+                locked_sources: mock(),
+                last_lock_daa: mock(),
+                exec_rows: mock(),
+                exec_rows_total: mock(),
+                exec_next_after: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwRewardVestingResponse);
+
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {
             RpcPalwModelLifecycle {

@@ -1,5 +1,13 @@
 # RFC-0008 v2 implementation record — claim-backed work slices on the weightless EXEC lane (DORMANT)
 
+**2026-10-10 audit addendum:** the review branch combines integration `3730cc90f` and X8R `5c04fc473`.
+The [four-RFC code-design audit](rfc-0006-0007-0008-0012-design-audit-2026-10-10.md) identifies open **CODE_GAP** items:
+kernel rewards paid before root Final, declared suffix work without canonical execution-cost derivation, and post-settlement
+convictions/defaults not propagated to the root or its slice payouts. The round-3 netting below is not a proof that these gates pass.
+The audit changes rounding to once per executor and caps new settlement legs by the remaining allocation; already-paid route excess
+still requires the reward-path hooks. All public fences remain dormant. Its validation record supersedes earlier test counts for this
+combined branch, without claiming VPS or multi-process network verification.
+
 Branch `rfc8/x8-exec-v2` (worktree `MISAKA-wt-b/wc-x8`), base `c931df046`, written 2026-10-08 by lane X8; reviewed, integrated and
 completed on `rfc8/x8r-review` by lane X8R (sections 10–12), merged with the integration line at `35a9ae1c8` (the UNSCHED reset: the
 shipped t12 ids are int-12's). Normative text: [RFC-0008](../../rfc/0008-palw-claim-backed-consensus-blocks.md) and the
@@ -500,3 +508,402 @@ to say what it now stands for. No code here calls the gate, and OPVB was not mer
 
 **Follow-up (OPVB / Lead).** When OPVB integrates, `PalwRewardGateV1::channel()` names the channel each leg draws from. The composed
 run's seam goes only when a harness can prove seat readiness, or when the Lead lets a session's root be a kernel-route claim.
+
+
+## Later audit correction: finite job authorization
+
+The original milestone's active `jobs` index retires with its claim. It is not the current replay
+protection boundary. RFC8 implementation spec §12.6 adds an independent authenticated one-use
+history, keyed by class / REAL authorization / authenticated input, and a fixed 100,000-DAA
+source-header authorization. Inner delta table 7 and optional carriage tail `0xF2` record the
+history; tables 5/6 and tails F0/F1 are the later reward/hold amendments. Root/slice wire fields
+and top-level object/delta numbers are unchanged. History admits at most 100,000 rows and expires
+at most 256 retired-owner rows per block, without evicting unexpired rows.
+
+Claim retirement cannot renew the original source's deadline. A different claim id is not evidence
+that an execution anchor cannot recur. The public fence remains refused; source-clock provenance
+for pruned joiners, multi-process replay and release resource bounds are separate open requirements.
+Current verification is recorded in the RFC6/7/8/12 design audit, rather than inferred from the
+original milestone's counts above.
+
+The subsequent §12.7 correction captures the original REAL clock at native acceptance in
+authenticated state, instead of fetching its header again when a root opens. Own and merged
+native work retain the header that admission checked. Inner table 8, conditional
+`exec_v2_origins/v1` root domain and optional F3 carriage tail carry one 136-byte primary entry
+per eligible live native claim; there is no separate EXEC cap on native work. Claim retirement
+removes that entry through the same journal while the one-use history remains independent.
+Capture leaves native weight/income and admission clock rules unchanged. Root opening enforces
+the finite profile using only recorded state, including after original-header deletion.
+
+Unrecorded legacy claims cannot receive a clock from a late local lookup: new root opening
+explicitly refuses with `AuthorizationUnrecorded`. This is an interim fail-closed rule, not an
+approved permanent exclusion. The carried proof in §12.8 below provides a bounded explicit migration.
+Its historical coverage/availability, real pruned P2P recovery, release
+resource measurements and the finite profile's coverage of eligible DAG work remain open.
+An already opened root's authenticated F2 history continues to supply its original clock when
+F3 is absent. The native header-loss regression exercises signed root reader/fold and snapshot
+restore, with no DAG mining while the original header is absent; it is not an actual pruning drill.
+
+Spec §12.8 adds `ExecOriginRecordedV1` (tag 131), under the same dormant EXEC fence, to record a
+legacy native clock from an explicitly carried original header. The claim's immutable carrying
+hash, attempt id/class/bond and recorded attribution authenticate the proof; no new income,
+weight, authorization lease or signature permission is created. Existing origin rows cannot be
+overwritten, and an opened root's F2 history cannot be contradicted. This uses existing F3/table 8
+recovery. The ordinary fee-market carrier and generic ObjectChunk completion use the same owning
+fence/A2 semantics. The old live-kind wire pins are unchanged; tag 131 has its own new-kind pin.
+
+Proof length is bounded by the existing 1,600,000-byte assembled-object budget, including the
+69-byte tag/key/length. Parent vectors are checked against remaining bytes and canonical run
+structure before hashing; malformed Borsh parent runs refuse without a panic. Native capture
+uses that safe header decoder too. Core tests cover carried proof, chunks, rollback, no new
+native income/weight, immutable original expiry and rejected substitutions/history conflicts.
+Node tests use an actually admitted signed header in a dormant-native fold control, then exercise
+reader/fold migration from a legacy-shaped snapshot with the actual source header deleted.
+They retain the existing class/Panel and synthetic native-trace seams, and are not a historical
+activation or multi-process pruning/P2P drill. Oversized historical header coverage, availability
+before every original copy is pruned and worst expanded hash cost remain required gates.
+
+The finite profile now compares both authenticated clocks with root opening:
+`max(source_daa, accepted_daa) <= opening_daa < source_daa + 100_000` (spec §12.6).
+The earlier source/acceptance inequality was unproven and unnecessary for finite replay protection.
+A later source clock waits until opening reaches it; acceptance cannot renew the source deadline.
+Snapshot validation checks source DAA against the retained root's opening DAA, rather than just
+against the later state point. This changes only the dormant EXEC profile, not native admission,
+income, weight or existing wire fields. All previously admissible clock pairs remain admissible.
+The reversed pair's provenance/fold regression is an arithmetic fixture, not a validated live DAG
+counterexample. Actual multi-process DAG/activation/pruning evidence remains required.
+
+### EXEC origin hashing: bounded run scratch (2026-10-11)
+
+The original header writer borrows `CompressedParents::expanded_iter`; its worst-case nearly
+408 MB of parent input per digest was never a single expanded allocation. It does, however,
+iterate and submit each hash again at every repeated level. EXEC origin verification now uses
+the same frozen preimage with repeated run bytes cached in at most 2 MiB of temporary scratch.
+Each expanded level still writes its own length and all the original hash bytes in the same order.
+Runs larger than 32,768 hashes fall back to the original writer; no header is rejected by this
+scratch choice. It is not a new consensus/admission cap or a migration-coverage decision.
+
+Only EXEC native capture/carried-proof verification calls the optimized identity and pre-PoW
+functions. Those calls already require the dormant EXEC profile. Ordinary block/PoW/Round callers
+retain the original parent writer. Both paths share the existing field writer and its version,
+algo, state-root and commitment gates. No domain, wire id, fingerprint, native entitlement or
+Root authorization/expiry policy changes. No cache enters state or survives its hashing invocation.
+
+The parent-byte oracle compares the entire written sequence against the original expanded
+writer, including empty/single parents, mixed runs, level 255 and below/at/above the scratch bound.
+Full identity/pre-PoW digests are compared on nonzero fields across versions 0–3 and algo ids 0–10;
+an arbitrary cached header hash is ignored. An above-bound header exercises the fallback without
+imposing the witness carriage cap on ordinary native capture. The explicit timing test compares
+the original and cached writers on the same synthetic headers, alternates order and checks both
+digests first. Its largest case fits the witness byte cap and repeats its run across 255 levels;
+it is adversarial structural work, not an actually accepted native header or a valid EXEC claim.
+The cryptographic input bytes, worst CPU budget, release resource approval and shared eight-slot
+chunk transport availability remain separate gates.
+
+The explicit timing run passed once (the ordinary regression keeps it ignored), using Rust 1.93.0
+on macOS aarch64, jobs 2, dev/test debug 0 and incremental 0. The test profile prints
+`[unoptimized]`, but the workspace overrides consensus-core, hashes and blake2b to opt-level 2.
+Each row reports one identity digest, not two-digest provenance verification, node admission or
+throughput under load. Six samples alternate writer order; the table uses sorted sample index 3.
+These are observations, not an approved maximum latency or RSS bound.
+
+| Parents in run | Repeated levels | Borsh bytes | Parent input bytes/digest | Original | Cached | Cached/original |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 1 | 8,892 | 0 | 6.031 µs | 6.030 µs | 1.000 |
+| 1 | 255 | 8,956 | 16,320 | 20.728 µs | 20.765 µs | 1.002 |
+| 10 | 8 | 9,532 | 5,120 | 9.967 µs | 9.637 µs | 0.967 |
+| 64 | 255 | 12,988 | 1,044,480 | 781.716 µs | 695.000 µs | 0.889 |
+| 24,859 | 255 | 1,599,868 | 405,698,880 | 299.763458 ms | 265.722500 ms | 0.886 |
+
+Reproduce with `cargo test --locked -p kaspa-consensus-core --lib exec_origin_header_parent_run_timing -- --ignored --nocapture --test-threads=1`
+and the environment above. `/tmp/rfc-exec-origin-hash-timing.log` records **1 passed, 0 failed**,
+4.91 seconds of test runtime; timing is deliberately not a pass/fail threshold. The largest row's
+direct parent count exceeds the native u8 parent-count limit, reinforcing its structural-only
+scope. The measured roughly 11% reduction justifies retaining the bounded scratch optimization;
+it does not close the release resource or historical coverage gates.
+
+The final broad core run passed **469 tests, 0 failed, 1 ignored**, in 36.07 seconds
+(4m 02s build including artifact-lock waiting). The ignored test is the timing test explicitly
+run above. Command: `cargo test --locked -p kaspa-consensus-core --lib -- exec_origin_header hashing::header:: header::tests:: exec_v2 palw_exec palw_lifecycle palw_vesting_read_v1 rfc0012 da_ court_ provider_ rider --test-threads=2`.
+This includes the three new parity/fallback tests and existing EXEC, court, DA, provider, rider,
+vesting and RFC12 core regressions; do not add the earlier narrow parity run to this count.
+Log: `/tmp/rfc-exec-origin-run-cache-core.log`.
+
+The EVM-enabled node regression also passed **1 test, 0 failed** in 52.28 seconds (4m 02s
+build): `cargo test --locked -p kaspa-consensus --features evm --lib -- x8_g14_root_admission --test-threads=1`.
+It exercises native capture from an actually admitted signed header, then removes that header
+from the node store and compares snapshot authority and carried-proof migration, state/delta
+equality and undo. The existing class/Panel/synthetic-trace test seams remain; this is not a
+multi-process pruning/P2P or historical activation approval.
+Log: `/tmp/rfc-exec-origin-run-cache-node.log`.
+
+The unfiltered payload-fence suite passed **7 tests, 0 failed** in 0.36 seconds (3m 57s build):
+`cargo test --locked -p kaspa-consensus-core --test palw_exec_payload_v2_fence -- --test-threads=1`.
+It preserves public non-armability while allowing the existing salted private drill.
+Log: `/tmp/rfc-exec-origin-run-cache-fence.log`.
+
+`cargo check --locked -p kaspad --features evm` completed successfully in 4m 34s, with existing
+warnings (`/tmp/rfc-exec-origin-run-cache-daemon.log`). `git diff --check` and rustfmt checks for
+the three changed Rust files passed. The final distinct ordinary regression total is **477 passed,
+0 failed, 1 ignored** (469 core + 1 node + 7 fence); the separately invoked timing test passed once.
+No public activation fence was armed, no deployment/push was performed, and broader requirements
+remain open as documented above.
+
+### EXEC origin verification: cheap refusal before expanded digests (2026-10-11)
+
+The origin verifier previously recomputed the accepted header identity before checking the algo
+and envelope, then recomputed the pre-PoW digest before rejecting an attempt-id/class/bond mismatch.
+An obviously incompatible proof could therefore feed nearly 408 MB into a header digest.
+The verifier now performs those rejection-only checks first, followed by full accepted identity
+and the original anchor binding. The result/refusal reason and the existing optional zero job
+identity behavior are preserved; successful proofs still compute both digests. Source DAA is
+returned only after all required checks pass. Native capture and carried-proof validation use
+the same dormant EXEC path. No cached hash, caller hint, version migration rule or new admission
+cap replaces accepted identity authentication.
+
+Moving envelope decoding earlier also requires bounded allocation on hostile vector lengths.
+The ordinary Borsh 1.5.1 `Vec<u8>` reader can initially allocate up to 1 MiB even when the incoming
+envelope is at most 8,192 bytes. The origin-only reader decodes the same PAV2/Borsh fields and
+checks public-key and signature lengths against bytes actually remaining before copying either.
+It rejects truncation and trailing bytes as before. It does not impose current version, signature
+length or key-shape policies on already accepted historical headers. Other ordinary envelope
+decoders and the live block/PoW/Round paths remain unchanged. The explicit struct initializer and
+nonzero-field codec comparison guard its correspondence to the ordinary wire format.
+
+Codec tests compare decoded values for 64 combinations of versions and vector sizes, including
+unsupported versions and non-admission sizes. They also compare all truncations of a small
+nonzero-field envelope, missing magic, trailing data and hostile lengths in each vector.
+A separate provenance fixture compares the old predicate using ordinary hashing/decoding with
+the new pipeline in 13 binding/substitution cases, counting each digest via local callbacks rather
+than timing or global counters. Matching fields alone never authorize changed nonce or signature
+bytes; arbitrary cached hashes remain irrelevant. A synthetic within-carriage-cap parent run
+expanding above 400 MB with a wrong class must refuse before entering either header digest.
+These fixtures do not certify native admission, soundness, economic conditions or resource maxima.
+
+The adversary may copy all matching public envelope fields and still reach the identity digest.
+Header decoding also still does work proportional to the encoded bytes. Thus this removes needless
+work on cheaply incompatible proofs, while the worst-case release CPU/RSS/fee and eight-slot lane
+availability gates remain open. No public fence is armed by this change.
+
+The broad core regression passed **473 tests, 0 failed, 1 ignored** in 31.81 seconds
+(3m 57s build), including all four new tests. The ignored case remains the previous explicit
+hash-writer timing test; no timing measurement is needed to establish zero digest invocations.
+Command: `cargo test --locked -p kaspa-consensus-core --lib -- exec_origin_attempt_codec exec_origin_header hashing::header:: header::tests:: exec_v2 palw_exec palw_lifecycle palw_vesting_read_v1 rfc0012 da_ court_ provider_ rider --test-threads=2`.
+Environment: Rust 1.93.0 / macOS aarch64, jobs 2, dev/test debug 0, incremental 0, locked dependencies.
+Log: `/tmp/rfc-exec-origin-early-refusal-core.log`.
+
+The EVM-enabled node origin regression passed **1 test, 0 failed** in 5.69 seconds (3m 56s build):
+`cargo test --locked -p kaspa-consensus --features evm --lib -- x8_g14_root_admission --test-threads=1`.
+The actually admitted signed header exercises native capture and carried proof after source-header
+deletion, with snapshot, state/delta and undo checks. Existing class/Panel/synthetic-trace seams
+remain, and it does not approve actual multi-process pruning/P2P or all historical inputs.
+Log: `/tmp/rfc-exec-origin-early-refusal-node.log`. These suite runtimes on a shared host are
+verification records, not a normalized old/new performance comparison.
+
+The unfiltered payload-fence suite passed **7 tests, 0 failed** in 0.36 seconds (5m 26s build
+including lock waiting): `cargo test --locked -p kaspa-consensus-core --test palw_exec_payload_v2_fence -- --test-threads=1`.
+Log: `/tmp/rfc-exec-origin-early-refusal-fence.log`. `cargo check --locked -p kaspad --features evm`
+also completed successfully in 6m 05s with existing warnings, recorded in
+`/tmp/rfc-exec-origin-early-refusal-daemon.log`.
+
+The final distinct regression total is **481 passed, 0 failed, 1 ignored** (473 core + 1 node +
+7 fence). `git diff --check`, rustfmt checks on the origin reader/new codec test file and a scoped
+rustfmt check of only the two new fold tests passed; existing fold-test sections were not reformatted.
+No public activation, push or deployment was performed. Full RFC6/7/8/12 completion remains unproven
+for the original coverage, resource, economic, soundness and multi-process conditions.
+
+### EXEC origin resources: actual reader, canonical release (2026-10-11)
+
+An ignored `exec_v2_origin_resource_probe` now calls the public
+`PalwChainStateV2::exec_v2_origin_witness_admissible_v1` on separate process fixtures.
+It covers setup-only baseline, wrong class (cheap refusal), matching public attempt fields with
+substituted nonce (identity refusal), a synthetically pinned large-header success control, eight
+sequential identity refusals, and a one-parent success control. Each measured case warms up once
+and takes six samples; values below are the **upper median**, sorted sample index 3. For eight
+refusals, per-reader time is that batch duration divided by eight, not a distribution of individual
+request latencies. Semantic assertions check the exact expected refusal/source clock and that the
+read-only method stores no origin. There is no timing/RSS pass threshold.
+
+Both profiles ran all six cases successfully. Large inputs have 24,977 parents repeated over 255
+levels, Borsh size 1,599,918 bytes, and **407,624,640 parent bytes per digest**. The direct-parent
+count exceeds native's u8 bound: the success control uses an arithmetic row pinned by the ordinary
+writers, not an actually native-admitted signed header. The fake copies its public attempt id,
+class and bond, while nonce substitution must fail at identity. Eight calls are an artificial
+sequence, not evidence that eight full proofs are admissible in a block or available through chunks.
+
+| Case | Dev opt-level 2 per reader (ms) | Release per reader (ms) | Release batch (ms) | Release maximum process RSS (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Setup-only baseline | — | — | — | 15.266 |
+| Wrong class | 0.128458 | 0.104875 | 0.104875 | 15.422 |
+| Matching fake | 266.786792 | 261.117541 | 261.117541 | 20.062 |
+| Pinned large identity | 531.719416 | 522.286958 | 522.286958 | 20.016 |
+| Eight refusals | 266.439744 | 261.079411 | 2,088.635292 | 20.188 |
+| One parent × 255 levels | 0.032750 | 0.030542 | 0.030542 | 12.844 |
+
+RSS is the child process's maximum, including setup, test harness, loaded code and retained bytes.
+It is not incremental verifier RSS, a heap measurement, or an all-node memory bound; baseline
+subtraction is not a guaranteed allocation bound. Darwin `getrusage(2)` specifies bytes for
+`ru_maxrss`; the runner converts GNU time's Linux kilobytes to bytes separately. No Linux run was
+performed. Samples run sequentially on a shared macOS aarch64 host, Rust 1.93.0; no tail-latency,
+confidence-bound, node concurrency, 100k-claim state or availability approval follows from medians.
+The dev profile has the existing core/hashes/blake2b opt-level 2 overrides, debug 0, incremental 0.
+
+The fresh EVM-enabled release build used the workspace's canonical profile: opt-level 3,
+thin LTO, strip true, overflow checks true, debug assertions false, jobs 2 and incremental 0.
+It completed in **6m 49s**, with no profile weakening or release-LTO override.
+`cargo test --locked --release -p kaspa-consensus-core --features evm --lib exec_v2_origin_resource_probe --no-run --message-format=json-render-diagnostics`
+used the isolated `CARGO_TARGET_DIR=/tmp/misaka-rfc8-origin-release-7tzx12r5`.
+The runner checks that Cargo's JSON artifact matches the executable, opt-level 3 and its assertion /
+overflow policy. It records the binary and build-log SHA-256; labels alone are not build evidence.
+
+Reproduce with the actual executable from the Cargo artifact:
+`python3 scripts/rfc8-origin-resource-probe.py --binary <executable> --profile canonical-release --build-log <cargo-json-log> --output-dir <new-directory>`.
+The script invokes `/usr/bin/time -l` on macOS or `-v` on Linux, preserves each raw case log,
+and checks exactly one successful explicit test plus metrics. It never overwrites an existing
+output directory or interprets observations as an approved gate.
+Build log: `/tmp/rfc8-origin-resource-release-build.log`; final raw cases:
+`/tmp/rfc8-origin-resource-dev-cases` and `/tmp/rfc8-origin-resource-release-cases`.
+The committed machine-readable observations are
+[evidence/rfc-0008-origin-resource-2026-10-11.json](evidence/rfc-0008-origin-resource-2026-10-11.json),
+including the source/runner hashes and all 12 final case logs parsed against the final runner.
+The earlier dev smoke run is not added to those final case counts.
+
+At the measured production base `89a2555ce`, the caller inventory revealed an additional scope gap: `palw_v2_validate_objects` checks
+tag 131, while H1/rehearsal then uses the core single-object fold, which checks it again before
+writing. At that base, a successful H1 could hash four parent preimages, with clone/journal overhead
+outside this reader probe; actual block fold and pool/template/reorg repetition remain to measure.
+The spec now makes those consumers and unaccepted traffic explicit resource/fee approval conditions.
+An inclusion fee cannot fund a refused proof, and eight chunk slots alone do not bound all calls.
+No authenticated reuse, admission-cost policy or smaller historical-header cap was introduced here.
+
+The final normal core regression on the measured dev executable passed **473 tests, 0 failed,
+2 ignored** in 47.93 seconds. The ignored cases are the prior hash-writer timing test and this
+explicit resource probe. It uses the same broad filters recorded above, without `--ignored`.
+Log: `/tmp/rfc8-origin-resource-core-regression.log`. The dev smoke probe passed once in 2.52 seconds
+(5m 13s build); both final six-case runner processes exited successfully. Production logic was
+unchanged; the previous node/fence/daemon verification remains attached to production base
+`89a2555ce`. Full RFC coverage, composite CPU/memory/fee bounds, soundness, economic conditions,
+real-node workload, archival migration and chunk/P2P availability remain unapproved.
+
+Final script verification re-parsed all 12 actual case logs, checked the committed source/runner
+hashes, successfully ran a release matching-fake smoke case, and rejected a dev executable labeled
+as release before creating output files. The additional smoke is not added to the six-case table.
+`git diff --check`, Python syntax parsing, and a scoped rustfmt check on only the new ignored Rust
+test passed. No public activation, push or deployment was performed.
+
+
+### EXEC origin H1/rehearsal: one fresh authentication (2026-10-11)
+
+Starting from `5d8efa11e`, tag 131's query paths now ask
+`palw_v2_origin_rehearsal_v1`. It checks the exact state/proof/point with the existing public
+admission reader, then runs the writer's common guards, loaded through a lazy extras supplier.
+All common guard expressions and their order were mechanically compared with the prior writer;
+only the state/params/extras access and in-transition registration view were substituted.
+The actual writer still supplies its own delta entries, so a newly registered class can bind its
+plan in that same transition. Origin has no registration arm and supplies an empty registration view.
+
+H1 and typed rehearsal preserve the node's no-V2-bundle gate and the old `NotAccepted` / `Refused`
+classification. They create no transition builder or discarded write journal for Origin. The
+successful query authenticates once (identity and pre-PoW, two digests); the previous successful
+query authenticated twice (four digests). Failed proofs do not load extras. Other object paths
+keep their single-object writer. Actual node acceptance and actual block folding still perform
+fresh checks independently: a read verdict is not a mutable authorization, reusable hint or cache.
+No object encoding, source-DAA rule, carriage row, state commitment or public fence changed.
+
+The new core comparison uses the former admission-reader + one-object writer as its oracle:
+17 input/state cases and 32 combinations of writer flags and immutable-model policy, plus changed
+points across the fence and an unrelated object. It checks cached-hash irrelevance, changed nonce /
+DAA / claim / class / bond / anchor, missing claim, wrong source, already recorded origin, dormant
+and boundary fences, malformed bytes, lazy extras, and read-only state roots/counts. Its provenance
+fixture remains arithmetic, not native signature evidence.
+
+The extended node regression uses its actually admitted signed REAL header and compares both query
+APIs with the former node acceptance + writer path for missing/recorded clocks, four fence settings
+and five proof variants. A `cfg(test)` copy of the former node query uses the private flags/extras
+without changing their production visibility or skipping authentication. A separate processor with
+no V2 bundle preserves the early refusal. The
+existing missing-source-header, actual migration write, carriage and undo assertions remain.
+That fixture still has the documented REAL model-registry/seat/share and synthetic-trace seam;
+it does not certify native REAL Final, public-market payment, historical activation or P2P pruning.
+
+The §12.8 cryptographic parent-input bound for one successful H1/rehearsal query is now `510B`,
+not the former `1,020B`. The prior dated resource observations and their frozen-source hashes are
+historical evidence attached to `5d8efa11e`; they are not fresh composite-path measurements.
+State materialization, extras, repeated pool/template/reorg/chunk calls, actual block pipelines,
+uncapped native capture, tail latency, fees and shared-lane availability remain open. Removing this
+one duplication does not approve resource/economic/participation gates or the complete four RFCs.
+
+The final full EVM-enabled core run passed **3,642 tests, 0 failed, 13 ignored** in **70.13 s**
+after a 5m 43s build (including artifact-lock wait). Command:
+`cargo test --locked -p kaspa-consensus-core --features evm --lib -- --test-threads=2`,
+with jobs 2, dev/test debug 0 and incremental 0. Log:
+`/tmp/rfc8-origin-rehearsal-core-final.log`. The preliminary full run's only failure was a stale
+source pin to the old two-argument extras-builder call; the previous compiled core binary also
+failed that same pin, and HEAD already passed state/point/objects. Only the pin was updated;
+all production market/fence/refund wiring stayed unchanged. The full run includes the new Origin
+comparison and the existing same-block immutable-model plan-registration regression. The earlier
+one-test smoke is not counted again. The 13 ignored cases are explicit probes/dumps/measurements;
+they are not additional successful tests or resource approval.
+
+The final EVM-enabled node command
+`cargo test --locked -p kaspa-consensus --features evm --lib x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_absent -- --test-threads=1`
+passed **1 test, 0 failed, 0 ignored** in **29.71 s** (6m 57s build including lock wait),
+log `/tmp/rfc8-origin-rehearsal-node-final.log`. From that exact newly built executable,
+`pipeline::virtual_processor::tests::h1_the_template_asks_the_carrier_gate_the_mempool_asks`
+also passed **1 test** (0.00 s), log `/tmp/rfc8-origin-rehearsal-h1-callers.log`. This checks the
+mempool/template/sweep caller wiring; it is distinct from the behavioral Origin test above.
+`cargo check --locked -p kaspad --features evm` succeeded in **2m 55s**, including lock wait,
+with existing warnings; log `/tmp/rfc8-origin-rehearsal-daemon.log`. The same jobs/debug/incremental
+settings were used. Scoped rustfmt checks for the new core query/test and node helper/oracle/test
+block, the common-guard text/order comparison, and `git diff --check` passed.
+No public fence activation, push or deployment was performed. All remaining RFC obligations above
+remain open; these successes are not soundness, whole-node resource, archival/P2P or economic approval.
+
+
+### Carried Origin per-block verification budget (2026-10-11)
+
+Starting from `b6404f59e`, direct Origin and completed Origin chunks use an explicit ceiling
+of two eligible header decode/authentication attempts per block. The node filter and whole fold
+enforce the same rule with independent ephemeral counters. Failed attempts consume the counter;
+state restore does not refund spent work, and a new block starts fresh. Cheap metadata is checked
+before charging, and the existing full reader repeats its checks and authenticates independently.
+No verified flag, permit or caller-supplied authority is passed to the writer. A one-object
+rehearsal starts with a fresh counter and cannot exhaust this ceiling.
+
+Completed Origin chunks no longer consume FamilyCertified grading slots. Before EXEC's owning
+fence they remain unknown to the inner classifier, preserving dormant accounting. The generic
+inner classifier now checks the writer's structural count/index/size limits before assembly.
+The ceiling is an initial dormant-lane bound, chosen from the former incidental two-completion
+limit under dormant grading accounting; it is not a calibrated throughput, latency, fee or
+availability approval. No public preset, Round ticket code, wire, carriage or state-root layout
+changed, and no public activation was performed.
+
+The new core test checks missing-claim refusal without a charge, two rejected nonce lies,
+non-refund after checkpoint restore, refusal of a third valid proof, fresh-block success and
+dormant refusal. The extended actual-processor fixture uses three admitted signed REAL headers,
+two coherent partial chunk groups and an independently admissible Base0 certificate. It checks
+Origin/certification isolation, the shared direct/chunk ceiling, next-block retry, repeated
+rejected completion charging, a coherent oversized chunk's structural refusal, raw whole-fold
+refusal of three proofs without changing the parent, and delta undo. Existing missing-source-
+header Root and H1/rehearsal oracle assertions remain. The documented model/seat/share waiver,
+synthetic REAL trace, skip-PoW and simulated-node limitations remain: this does not prove native
+REAL Final/payment, historical migration liveness, pruning or network/P2P availability.
+
+For one acceptance-filter pass followed by one committed fold, the conservative carried-Origin
+cryptographic parent-input bound is `3,060B` (4,895,788,860 bytes at the header cap). Raw chunk
+assembly/group hashes, cheap rejected traffic, repeated invocations, native capture, state
+cloning/roots, RSS and elapsed time are outside this bound. Eligible malicious attempts may
+exhaust the honest proof slots; next-block acceptance is tested, automatic requeue is not promised.
+The dated release observations remain historical evidence from `5d8efa11e`; no fresh whole-node
+resource approval or service-rate/fee calibration is claimed. The broader four-RFC goal remains open.
+
+Validation with jobs 2, dev/test debug 0 and incremental 0:
+
+- `cargo test --locked -p kaspa-consensus-core --features evm --lib -- --test-threads=2`: **3,643 passed, 0 failed, 13 ignored**, 69.55s runtime, 0.18s cached build. Log `/tmp/rfc8-origin-budget-core-full.log`. The earlier one-test smoke is included here, not counted again; the ignored cases remain explicit probes/dumps/measurements.
+- EVM node Origin fixture: **1 passed, 0 failed, 0 ignored**, 204.66s runtime after a 3m55s build. Log `/tmp/rfc8-origin-budget-node.log`. Two additional actual signed REAL admissions extend the fixture; its total runtime is not a header-reader performance measurement.
+- From that exact EVM node executable, sequential regression filters: `chunk` **8 passed** (46.18s), `certification` **4 passed** (58.32s), H1 caller **1 passed** (0.00s), `t12_a2u_` **3 passed** (26.79s), and the existing Family two-drill cap **1 passed** (20.02s). All have zero failures/ignored. Two cases overlap between chunk/certification: these are 15 distinct regressions, or 16 distinct node tests including Origin. Logs `/tmp/rfc8-origin-budget-node-{chunk,certification,h1_the_template_asks_the_carrier_gate_the_mempool_asks,t12_a2u_,grading-cap}.log`.
+- `cargo check --locked -p kaspad --features evm`: success in 35.78s, existing warnings. Log `/tmp/rfc8-origin-budget-daemon.log`.
+- Scoped rustfmt checks of the new budget type/core test/metadata reader/node charging and classification/node fixture, plus `git diff --check`: success. After compilation only placement of a Rust documentation comment was corrected; tested behavior was unchanged.
+
+No public activation, push or deployment was performed. These results do not close the remaining
+resource, fee/rate, migration availability, historical coverage, soundness or economic gates.

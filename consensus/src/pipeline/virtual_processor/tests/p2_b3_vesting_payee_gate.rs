@@ -377,3 +377,81 @@ async fn p2_t23_fence_off_twin_no_row_holds_a_bond_below_rcore_plus() {
         g.every_site_answers(case.name, &state, case.now, false);
     }
 }
+
+/// A restored closed EXEC receipt holds both funding roles at every actual UTXO caller until its actor lift,
+/// including below R-core+. This planted receipt proves the reader/gate connection, not a funded node Final
+/// or public court proof (the funded fold and prosecution gates are verified separately).
+#[tokio::test]
+async fn p2_exec_actor_holds_reach_block_burn_mempool_and_wallet_after_carriage_restore() {
+    use kaspa_consensus_core::palw_work_slice_v2::{PalwExecV2RewardFundV1 as Fund, PalwExecV2RewardRowV1};
+    for armed in [true, false] {
+        let g = gate(armed).await;
+        let lift = g.expiry() + 10;
+        let case = Case {
+            name: "EXEC actor lift",
+            now: lift - 1,
+            ring: vec![lift - 1],
+            licences_met: true,
+            latched: false,
+            halted: false,
+            held: true,
+        };
+        let bare = g.state(&case, false);
+        g.every_site_answers("no EXEC receipt", &bare, case.now, false);
+        let mut carriage = PalwStateCarriageV2::from_state(&bare);
+        let root = Hash64::from_u64_word(0xB3_E8EC);
+        // This harness heartbeat remains at DAA 0. Like the native row scenarios, plant the
+        // historical point explicitly; the receipt's horizon must be behind it for a retired root.
+        carriage.last_point.as_mut().unwrap().daa_score = 1;
+        let past = 0;
+        let legs = [(PAYEE, Fund::KernelFee), (SEAT, Fund::NativeSlice)]
+            .into_iter()
+            .map(|(card, fund)| {
+                let bond = g.bond(card);
+                ((bond, fund), PalwPayoutV2 { payload: bare.bond(&bond).unwrap().payout_payload, amount: 1_000 })
+            })
+            .collect();
+        carriage
+            .exec_v2_rewards
+            .insert(root, PalwExecV2RewardRowV1 { final_daa: past, liability_until: past, allocation_sompi: 2_000, legs });
+        carriage.vesting_counters.created += 2_000;
+        for card in PAYEES {
+            carriage.exec_v2_reward_holds.insert((root, g.bond(card)), lift);
+        }
+        let rooted = carriage.clone().into_state(g.sp(), None).unwrap();
+        let bytes = borsh::to_vec(&carriage).unwrap();
+        let restored =
+            borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(g.sp(), Some(rooted.state_root())).unwrap();
+        for card in PAYEES {
+            assert_eq!(restored.exec_v2_reward_hold_after_v1(&root, &g.bond(card)), Some(lift));
+            assert!(g.v6(&restored, case.now, card));
+            assert!(!g.v6(&restored, lift, card), "queue presence alone cannot rearm the actor's clocks");
+        }
+        g.every_site_answers("restored EXEC funds before lift", &restored, case.now, true);
+        g.every_site_answers("restored EXEC funds at lift", &restored, lift, false);
+        use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
+        let vp = g.chain.vp();
+        let chain = vp.palw_reward_vesting_v2_impl(PalwVestingQueryV1::Chain, 1, None, None).unwrap();
+        assert_eq!(chain.state_root, restored.state_root());
+        assert_eq!((chain.outstanding_sompi, chain.native.live_sompi, chain.exec_rows_total), (2_000, 0, 2));
+        assert_eq!((chain.exec_slice_sompi, chain.exec_kernel_fee_sompi), (1_000, 1_000));
+        assert_eq!(chain.exec_rows.len(), 1);
+        let claim = vp.palw_reward_vesting_v2_impl(PalwVestingQueryV1::Claim(root), 1, None, None).unwrap();
+        assert_eq!(claim.query_outstanding_sompi, 2_000);
+        assert_eq!(claim.locked_sources, 2);
+        assert_eq!(claim.native.claim_stage, Some(kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::ExecPending));
+
+        let next = vp.palw_reward_vesting_v2_impl(PalwVestingQueryV1::Chain, 1, None, chain.exec_next_after).unwrap();
+        assert_eq!(next.outstanding_sompi, 2_000);
+        assert_eq!(next.exec_rows.len(), 1);
+        assert_ne!(chain.exec_rows[0].bond, next.exec_rows[0].bond);
+        for card in PAYEES {
+            let own = vp
+                .palw_reward_vesting_v2_impl(PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(g.bond(card))), 1, None, None)
+                .unwrap();
+            assert_eq!((own.query_outstanding_sompi, own.locked_sources, own.last_lock_daa), (1_000, 1, Some(lift)));
+            assert_eq!(own.native.rows_total, 0);
+            assert!(own.native.payee_holds_collateral && own.exec_rows[0].lock_live);
+        }
+    }
+}

@@ -5,12 +5,12 @@
 //! licences), latches, waits its turn behind every row before it, moves into the payout queue and is
 //! minted by the next coinbase — whose output then matures like any coinbase output. A conviction
 //! inside the window burns the row instead. This command prints that path for a bond, a payout
-//! address or a claim, from `getPalwVesting` (op 199), in the node's own terms: every date and every
+//! address or a claim, from `getPalwRewardVesting` (op 241), in the node's own terms: every date and every
 //! "moves next block" is the node's answer from the vesting rules themselves, never this CLI's
 //! arithmetic. The one thing added here is time: an ETA in DAA is converted at the pace the node
 //! measured (`measuredMsPerDaa`), and marked as an estimate.
 //!
-//! **Op 199 is new.** A node built before it does not answer "unknown method": it drops the
+//! **Op 241 is new.** A node built before it does not answer "unknown method": it drops the
 //! WebSocket. So the read is this command's only one on its connection, and a dropped connection is
 //! reported as the node's age ([`vesting_read_error`]), not as a network fault.
 
@@ -19,10 +19,10 @@ use crate::operator::catalog::msk;
 use crate::operator::status::group;
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_rpc_core::api::rpc::RpcApi;
-use kaspa_rpc_core::{GetPalwVestingRequest, GetPalwVestingResponse, RpcPalwVestingRow};
+use kaspa_rpc_core::{GetPalwRewardVestingRequest, GetPalwRewardVestingResponse, GetPalwVestingResponse, RpcPalwVestingRow};
 use kaspa_wrpc_client::error::rpc_error_is_connection_loss;
 
-/// What the probe of op 199 says when it fails: a node that DROPPED the connection predates the op
+/// What the probe of op 241 says when it fails: a node that DROPPED the connection predates the op
 /// (it closes the WebSocket on an unknown one); any other error is the node refusing the request
 /// for its own reason, printed as it came. Told apart by the error itself
 /// ([`rpc_error_is_connection_loss`]), never by `is_connected()` afterwards: the client reconnects
@@ -33,12 +33,12 @@ pub(crate) fn vesting_read_error(e: &kaspa_rpc_core::RpcError) -> CliError {
         CliError::new(
             exit::COMPONENT_DOWN,
             format!(
-                "getPalwVesting: {e} — the node closed the connection on op 199, so it predates ADR-0152's vesting read; \
+                "getPalwRewardVesting: {e} — the node closed the connection on op 241, so it predates ADR-0152's vesting read; \
                  rebuild it from this tree (its rewards still vest: only the read is missing)"
             ),
         )
     } else {
-        CliError::new(exit::GENERIC, format!("getPalwVesting: {e}"))
+        CliError::new(exit::GENERIC, format!("getPalwRewardVesting: {e}"))
     }
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
         out.push_str("vesting unavailable: the node keeps no ConsensusV2 PALW state (not testnet-12, or still syncing)\n");
         return out;
     }
-    if !r.rcore_plus_active {
+    if !r.rcore_plus_active && r.live_rows == 0 {
         out.push_str(&format!(
             "nothing vests on this network at DAA {}: a Final's reward is queued for the next coinbase at Final (no R-core+ fence)\n",
             group(r.next_daa)
@@ -138,7 +138,7 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
         msk(u128_of(&r.latched_sompi))
     ));
     out.push_str(&format!(
-        "            since genesis: created {} · moved to the payout queue {} (each minted by the block after its move) · burned by convictions {}\n",
+        "            all-fund counters since genesis: created {} · moved to the payout queue {} (each minted by the block after its move) · burned by convictions {}\n",
         msk(u128_of(&r.created_sompi)),
         msk(u128_of(&r.moved_sompi)),
         msk(u128_of(&r.burned_sompi))
@@ -192,6 +192,7 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
         ));
         if !r.claim_id.is_empty() && r.rows.is_empty() {
             let stage = match r.claim_stage.as_str() {
+                "exec_pending" => "native has moved; additional EXEC funds still await release",
                 "moved" => {
                     "its row MOVED to the payout queue: the block after the move minted it (spendable after the coinbase maturity)"
                 }
@@ -247,6 +248,66 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
     out
 }
 
+pub(crate) fn render_complete(r: &GetPalwRewardVestingResponse, spend_after: u64) -> String {
+    if !r.available {
+        return "reward vesting is unavailable on this node\n".into();
+    }
+    let mut out = format!(
+        "All vested funds: {} outstanding (native {}, EXEC slice {}, kernel fee {})\n",
+        msk(u128_of(&r.outstanding_sompi)),
+        msk(u128_of(&r.native.live_sompi)),
+        msk(u128_of(&r.exec_slice_sompi)),
+        msk(u128_of(&r.exec_kernel_fee_sompi))
+    );
+    out.push_str(&format!(
+        "Query: {} outstanding; {} collateral-holding source(s)\n",
+        msk(u128_of(&r.query_outstanding_sompi)),
+        r.locked_sources
+    ));
+    out.push_str("Native component:\n");
+    let mut component = r.native.clone();
+    // This section reports native rows; the full hold count is reported above and by each EXEC leg.
+    component.payee_holds_collateral = component.lock_live_rows > 0;
+    if component.rcore_plus_active || component.live_rows > 0 {
+        out.push_str(&render(&component, spend_after));
+    } else {
+        out.push_str("  No native row is pending.\n");
+        if component.claim_stage == "exec_pending" {
+            out.push_str("  Native has moved; additional EXEC funds still await release.\n");
+        }
+    }
+    out.push_str(&format!(
+        "Reporter rewards (whole query): {} pending, {} awarded\n",
+        msk(u128_of(&r.reporter_pending_sompi_of_query)),
+        msk(u128_of(&r.reporter_awarded_sompi_of_query))
+    ));
+    if r.exec_rows_total > 0 {
+        out.push_str(&format!(
+            "EXEC funds: {} leg(s), {} pending, {} ready for payout capacity\n",
+            r.exec_rows_total,
+            msk(u128_of(&r.query_exec_pending_sompi)),
+            msk(u128_of(&r.query_exec_ready_sompi))
+        ));
+        for row in &r.exec_rows {
+            out.push_str(&format!(
+                "  {} {} {}: {}; earliest DAA {}; native pending {}; collateral held {}; moves next block {}\n",
+                row.claim_id,
+                row.bond,
+                row.fund,
+                msk(u128_of(&row.sompi)),
+                row.earliest_daa,
+                row.native_pending,
+                row.lock_live,
+                row.in_next_block
+            ));
+        }
+        if !r.exec_next_after.is_empty() {
+            out.push_str(&format!("Next EXEC page: --exec-after {}\n", r.exec_next_after));
+        }
+    }
+    out
+}
+
 /// A payee read shows each row's legs to that payee; a claim or chain read the whole row.
 fn who_is_payee(r: &GetPalwVestingResponse) -> bool {
     !r.bond.is_empty() || !r.payout_address.is_empty()
@@ -260,17 +321,19 @@ pub(crate) async fn run(
     claim: Option<String>,
     limit: u32,
     after: Option<String>,
+    exec_after: Option<String>,
     json: bool,
 ) -> CliResult {
-    let request = GetPalwVestingRequest {
+    let request = GetPalwRewardVestingRequest {
         bond: bond.unwrap_or_default(),
         payout_address: address.unwrap_or_default(),
         claim_id: claim.unwrap_or_default(),
         limit,
         after: after.unwrap_or_default(),
+        exec_after: exec_after.unwrap_or_default(),
     };
     let reader = crate::palw_derived::connect(ctx).await?;
-    let answer = reader.client.get_palw_vesting(request).await;
+    let answer = reader.client.get_palw_reward_vesting(request).await;
     let _ = reader.client.disconnect().await;
     let response = answer.map_err(|e| vesting_read_error(&e))?;
     let params = kaspa_consensus_core::config::params::Params::from(
@@ -279,11 +342,11 @@ pub(crate) async fn run(
     );
     if json || ctx.output == OutputFormat::Json {
         let mut doc = serde_json::to_value(&response).expect("a response serializes");
-        doc["schema"] = "misaka.palw.vesting.v1".into();
+        doc["schema"] = "misaka.palw.vesting.v2".into();
         doc["coinbaseSpendMaturity"] = params.coinbase_spend_maturity().into();
         println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
     } else {
-        print!("{}", render(&response, params.coinbase_spend_maturity()));
+        print!("{}", render_complete(&response, params.coinbase_spend_maturity()));
     }
     Ok(())
 }
@@ -420,7 +483,7 @@ mod tests {
     /// The errors are the wRPC client's own renderings, flattened as its `RpcApi` methods flatten
     /// them (`RpcSubsystem`), the pending call's `Disconnect` and a call after the drop alike.
     #[test]
-    fn t51_a_dropped_connection_reads_as_a_node_older_than_op_199() {
+    fn t51_a_dropped_connection_reads_as_a_node_older_than_op_241() {
         use kaspa_rpc_core::RpcError;
         use kaspa_wrpc_client::client::WebSocketError;
         for lost in [
@@ -439,5 +502,39 @@ mod tests {
             assert_eq!(refused.code, exit::GENERIC);
             assert!(!refused.msg.contains("predates"));
         }
+    }
+    #[test]
+    fn complete_view_keeps_auxiliary_only_debt_and_never_calls_it_paid() {
+        let r = GetPalwRewardVestingResponse {
+            available: true,
+            native: GetPalwVestingResponse {
+                available: true,
+                claim_id: "claim".into(),
+                claim_stage: "exec_pending".into(),
+                ..Default::default()
+            },
+            outstanding_sompi: "300000000".into(),
+            exec_slice_sompi: "100000000".into(),
+            exec_kernel_fee_sompi: "200000000".into(),
+            query_outstanding_sompi: "300000000".into(),
+            query_exec_pending_sompi: "300000000".into(),
+            locked_sources: 1,
+            exec_rows_total: 2,
+            exec_next_after: "more".into(),
+            ..Default::default()
+        };
+        let text = render_complete(&r, 100);
+        assert!(text.contains("EXEC funds: 2 leg(s)"), "{text}");
+        assert!(!text.contains("BILI BILI"), "{text}");
+        assert!(text.contains("1 collateral-holding source(s)"), "{text}");
+        assert!(text.contains("--exec-after more"), "{text}");
+        assert!(!text.contains("its row MOVED"), "{text}");
+        assert!(!text.contains("nothing vests on this network"), "{text}");
+        let mut forced = r;
+        forced.native.live_rows = 1;
+        forced.native.live_sompi = "100000000".into();
+        let text = render_complete(&forced, 100);
+        assert!(text.contains("1 row(s) live"), "{text}");
+        assert!(!text.contains("nothing vests on this network"), "{text}");
     }
 }

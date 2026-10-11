@@ -4,12 +4,15 @@
 //! change commits beside the legacy three-hash EVM-head row. It reads nothing from the DNS overlay.
 //!
 //! **Cost.** The selected chain between the sink and the pruning point is walked on every virtual change
-//! (testnet-12's pruning point stays near genesis for a long time). Everything the walk needs from one block
-//! is a pure function of immutable rows keyed by that block's hash, so it is read once and kept in
+//! (testnet-12's pruning point stays near genesis for a long time). Above the pruning boundary, a row
+//! is a pure function of immutable data keyed by its block hash, so it is read once and kept in
 //! [`NativeRowCache`]; a virtual change then costs one cache lookup per chain block and one O(N + F) sweep
 //! ([`certify_native_prefix_v1`]) instead of a database read and a delta decode per block and an
 //! O(chain x claims) lifecycle scan. The cache is memory only and is rebuilt from the retained deltas after a
-//! restart: nothing in it is authoritative, and a block whose rows cannot be read again stops the snapshot at
+//! restart. The current pruning-point row is read separately on each walk and is never cached: its delta
+//! is not required at the checkpoint, but is required again if a later import moves the boundary below it.
+//! A cached ordinary row is evicted when it becomes the checkpoint. Nothing in memory is authoritative;
+//! rebuilding a required row whose data cannot be read stops the snapshot at
 //! `MissingHistory` rather than being skipped.
 //!
 //! **Evidence.** REAL work comes from the `Final` transitions in each chain block's PALW delta, free-prompt
@@ -21,7 +24,8 @@
 //! **Readiness (RFC-0012 D1).** [`VirtualStateProcessor::native_evaluate`] returns the snapshot AND the material it was weighed from
 //! (or the reason nothing was weighed); [`VirtualStateProcessor::native_safe_readiness`] turns that into the structured explanation
 //! `getPalwSettlement` serves as `nativeReadiness` (`palw_native_readiness_v1`). The snapshot path is `native_evaluate(..).snapshot`
-//! and pays nothing for the explanation; the explanation is advisory, never persisted, and memoized per sink.
+//! and pays nothing for the explanation; the explanation is advisory, never persisted, and memoized by
+//! sink plus the pruning point used by that evaluation.
 
 use super::VirtualStateProcessor;
 use crate::model::{
@@ -39,8 +43,8 @@ use kaspa_consensus_core::{
     },
     palw_native_settlement_v1::{
         MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, NativeFactRulesV1, NativePrefixV1, NativeSettlementSnapshotV1,
-        SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_facts_and_skips_v1,
-        native_open_from_v1,
+        SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_effective_retention_v1,
+        native_facts_and_skips_v1, native_open_from_v1, native_open_sessions_v1,
     },
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
@@ -51,7 +55,8 @@ use std::{
     sync::Arc,
 };
 
-/// What one executed selected-chain block contributes to the snapshot, independent of the sink.
+/// What one executed selected-chain block contributes to the snapshot at the captured pruning boundary.
+/// Ordinary cached rows are independent of the sink/boundary; a checkpoint-only row is never cached.
 pub(super) struct NativeChainRow {
     hash: BlockHash,
     parent: BlockHash,
@@ -110,7 +115,7 @@ fn native_roots_chain_v1(
 }
 
 /// Memory-only, rebuildable index of [`NativeChainRow`]s by block hash. Only blocks that are executed, with
-/// a root-verified EVM result and a readable delta, are ever stored.
+/// a root-verified EVM result and their required delta, are stored. Checkpoint-only rows are excluded.
 #[derive(Default)]
 pub(super) struct NativeRowCache {
     rows: HashMap<BlockHash, Arc<NativeChainRow>>,
@@ -163,8 +168,15 @@ impl VirtualStateProcessor {
     /// Read (or load and remember) the row of `cursor` if it is executed with a root-verified EVM result.
     /// `Ok(None)`: not executed (yet). `Err`: an unreadable row, or a result that disagrees with the header.
     fn native_row(&self, cursor: BlockHash, pruning: BlockHash) -> Result<Result<Arc<NativeChainRow>, (u64, BlockHash)>, WalkFault> {
-        if let Some(row) = self.native_rows.lock().rows.get(&cursor) {
-            return Ok(Ok(row.clone()));
+        {
+            let mut cache = self.native_rows.lock();
+            if cursor == pruning {
+                // A checkpoint has no delta contribution. Its role is not a function of its hash:
+                // never reuse/store that incomplete row, or retain its formerly ordinary evidence.
+                cache.rows.remove(&cursor);
+            } else if let Some(row) = cache.rows.get(&cursor) {
+                return Ok(Ok(row.clone()));
+            }
         }
         let Ok(header) = self.headers_store.get_header(cursor) else {
             return Err(WalkFault(HistoryGapV1::HeaderUnreadable, Some(cursor)));
@@ -173,10 +185,8 @@ impl VirtualStateProcessor {
             Ok(execution) if execution.commitment_root() == header.evm_commitment_root => {}
             Ok(_) => return Err(WalkFault(HistoryGapV1::ExecutionDisagreesWithHeader, Some(cursor))),
             Err(StoreError::KeyNotFound(_)) => {
-                let parent = self
-                    .ghostdag_store
-                    .get_selected_parent(cursor)
-                    .map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
+                let parent =
+                    self.ghostdag_store.get_selected_parent(cursor).map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
                 return Ok(Err((header.daa_score, parent)));
             }
             Err(_) => return Err(WalkFault(HistoryGapV1::ExecutionRowUnreadable, Some(cursor))),
@@ -211,7 +221,9 @@ impl VirtualStateProcessor {
             evidence,
             fork_choice,
         });
-        self.native_rows.lock().rows.insert(cursor, row.clone());
+        if cursor != pruning {
+            self.native_rows.lock().rows.insert(cursor, row.clone());
+        }
         Ok(Ok(row))
     }
 
@@ -219,9 +231,41 @@ impl VirtualStateProcessor {
     ///
     /// Every early return carries the `latest` found so far: the newest executed, root-verified result on the
     /// selected chain is a fact about execution, not about evidence, and it must not disappear because a
-    /// certificate could not be built. `safe` and `finalized` are `None` whenever `stop` is set.
+    /// certificate could not be built. A certification stop can retain an older safe prefix; an early
+    /// history/conflict stop withholds both `safe` and `finalized`.
     pub(super) fn native_evm_settlement_snapshot(&self, sink: BlockHash) -> NativeSettlementSnapshotV1 {
         self.native_evaluate(sink).snapshot
+    }
+
+    /// The deepest head this node published as finalized, retained through absent labels and restart.
+    /// This is incident history, never a certificate or an input to fork choice. Old positive snapshots
+    /// bootstrap the local row; an already-withdrawn pre-upgrade snapshot cannot reconstruct lost history.
+    pub(crate) fn native_finalized_publication(&self) -> Result<Option<NativeSettlementSnapshotV1>, ()> {
+        let retirement = self.palw_dns_retirement.ok_or(())?;
+        let store = self.evm_heads_store.read();
+        let publication = match store.native_finalized_publication() {
+            Ok(s) => s,
+            Err(StoreError::KeyNotFound(_)) => match store.native_snapshot() {
+                Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
+                Ok(Some(s)) if s.finalized.is_some() => Some(s),
+                // A legacy absent label may be a forgotten withdrawal: require validated recovery.
+                Ok(Some(_)) | Err(_) => return Err(()),
+            },
+            Err(_) => return Err(()),
+        };
+        if publication.as_ref().is_some_and(|s| {
+            s.version != 1
+                || s.policy_id != retirement.settlement.id()
+                || s.ruleset_id != self.palw_native_ruleset_id
+                || s.retirement_daa != retirement.activation.daa_score()
+                || s.finalized.is_none()
+                || s.safe.is_none()
+                || s.latest.is_none()
+                || s.stop == Some(SettlementStopV1::FinalizedConflict)
+        }) {
+            return Err(());
+        }
+        Ok(publication)
     }
 
     /// The snapshot AND the material it was weighed from (or the reason nothing was weighed). One function, so the explanation
@@ -253,13 +297,21 @@ impl VirtualStateProcessor {
         };
         let previous = match self.evm_heads_store.read().native_snapshot() {
             Ok(Some(s))
-                if s.version == 1 && s.policy_id == retirement.settlement.id() && s.ruleset_id == self.palw_native_ruleset_id =>
+                if s.version == 1
+                    && s.policy_id == retirement.settlement.id()
+                    && s.ruleset_id == self.palw_native_ruleset_id
+                    && s.retirement_daa == retirement.activation.daa_score() =>
             {
                 Some(s)
             }
             Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
             // Corrupt or incompatible evidence is never silently forgotten.
             _ => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
+        };
+
+        let publication = match self.native_finalized_publication() {
+            Ok(s) => s,
+            Err(()) => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
         };
 
         // 1. The selected chain, newest first: executed rows only, an execution gap inside them is a stop.
@@ -308,7 +360,8 @@ impl VirtualStateProcessor {
             result.stop = Some(SettlementStopV1::FinalizedConflict);
             return stopped(result, SafeWaitV1::FinalizedConflict);
         }
-        if let Some(previous_finalized) = previous.and_then(|s| s.finalized) {
+        // A withdrawal of the current label must not forget a later fork below that publication.
+        if let Some(previous_finalized) = publication.and_then(|s| s.finalized) {
             match self.reachability_service.try_is_chain_ancestor_of(previous_finalized, sink) {
                 Ok(false) => {
                     error!("[native-settlement] FINALIZED CONFLICT: {sink} abandons {previous_finalized}; resync required");
@@ -347,13 +400,14 @@ impl VirtualStateProcessor {
 
         // 5. Facts: oldest first is not needed, only the set. The pruning point's own delta is never read.
         let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence.voided.iter().copied()).collect();
-        let claims_with_open_da: BTreeSet<Hash64> = state.da_sessions_iter().map(|((claim, _), _)| *claim).collect();
+        let open_sessions = native_open_sessions_v1(&state);
+        let claims_with_open_disputes: BTreeSet<Hash64> = open_sessions.iter().map(|(claim, _)| *claim).collect();
         let rules = NativeFactRulesV1 {
             state: &state,
             params,
             canonical_work_daa: self.palw_canonical_work_daa,
             quantum_maturity_daa: self.palw_exec_quantum_maturity_daa,
-            claims_with_open_da: &claims_with_open_da,
+            claims_with_open_disputes: &claims_with_open_disputes,
         };
         let mut facts: Vec<MatureUsefulWorkV1> = Vec::new();
         let mut skipped = SkippedEvidenceV1::default();
@@ -371,12 +425,14 @@ impl VirtualStateProcessor {
         }
 
         // 6. The lifecycle question, once: an effect at `blue` is closed iff every claim accepted at or before it is
-        // resolved (Voided, or Final with its trace retention lapsed) and no DA session names a claim at or before it
+        // resolved (Voided, or Final with its trace retention lapsed) and no dispute session names a claim at or before it
         // (a session whose claim is gone is open for every effect). Claims already retired are absent from state and
         // therefore closed.
         let open_from = native_open_from_v1(
-            state.claims_iter().map(|(_, c)| (c.accepted_blue_score, c.phase.clone(), c.trace_retention_daa)),
-            state.da_sessions_iter().map(|((claim, _), _)| state.claim(claim).map(|c| c.accepted_blue_score)),
+            state.claims_iter().map(|(id, c)| {
+                (c.accepted_blue_score, c.phase.clone(), native_effective_retention_v1(&state, params, id, c).unwrap_or(u64::MAX))
+            }),
+            open_sessions.iter().map(|(claim, _)| state.claim(claim).map(|c| c.accepted_blue_score)),
             sink_daa,
         );
 
@@ -444,21 +500,15 @@ impl VirtualStateProcessor {
         previous_finalized: Option<BlockHash>,
         snapshot: &NativeSettlementSnapshotV1,
     ) {
-        let mut slot = self.native_finalized_withdrawn.lock();
-        if snapshot.finalized.is_some() {
-            *slot = None;
-            return;
-        }
-        if snapshot.stop == Some(SettlementStopV1::FinalizedConflict) {
+        if snapshot.finalized.is_some() || snapshot.stop == Some(SettlementStopV1::FinalizedConflict) {
             return;
         }
         if let Some(head) = previous_finalized {
             error!(
                 "[native-settlement] FINALIZED LABEL WITHDRAWN: {head} was published as finalized and is still canonical, but at {sink} the \
-                 evidence no longer certifies it (stop {:?}); safe and finalized read null until it is certified again",
+                 evidence no longer certifies it (stop {:?}); finalized reads null until it is certified again",
                 snapshot.stop
             );
-            *slot = Some(head);
         }
     }
 
@@ -484,18 +534,32 @@ impl VirtualStateProcessor {
             pruning_point: pruning,
             pruning_blue: blue_of(pruning),
             wait,
-            withdrawn_from: if snapshot.finalized.is_none() { *self.native_finalized_withdrawn.lock() } else { None },
+            withdrawn_from: if snapshot.finalized.is_none() && snapshot.stop != Some(SettlementStopV1::FinalizedConflict) {
+                // Only a committed withdrawal is reported, not an advisory reevaluation before publication.
+                let committed_withdrawal = self
+                    .evm_heads_store
+                    .read()
+                    .native_snapshot()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|s| s.generation == snapshot.generation && s.finalized.is_none());
+                if committed_withdrawal { self.native_finalized_publication().ok().flatten().and_then(|s| s.finalized) } else { None }
+            } else {
+                None
+            },
         }
     }
 
     /// **RFC-0012 D1: why `safe` stands where it does, at `sink`** — the structured reasons served on `getPalwSettlement`
     /// (`nativeReadiness`). Advisory and never persisted: it is derived from the same evaluation as the snapshot, decides nothing,
-    /// and is memoized per sink so repeated RPC calls cost one evaluation per virtual change, not one per call.
+    /// and is memoized by sink plus pruning point. Repeated calls reuse the evaluation while both agree;
+    /// context import/catch-up can move pruning without changing the sink.
     pub(crate) fn native_safe_readiness(&self, sink: BlockHash) -> Option<NativeSafeReadinessV1> {
         let retirement = self.palw_dns_retirement?;
         let mut memo = self.native_readiness_memo.lock();
+        let pruning = self.pruning_point_store.read().pruning_point().unwrap();
         if let Some((at, readiness)) = memo.as_ref() {
-            if *at == sink {
+            if *at == sink && readiness.finalized.pruning_point == pruning {
                 return Some(readiness.clone());
             }
         }
@@ -524,15 +588,17 @@ impl VirtualStateProcessor {
                 let mut open_claims: Vec<OpenClaimV1> = w
                     .state
                     .claims_iter()
-                    .filter(|(_, c)| {
+                    .filter(|(id, c)| {
                         !(matches!(c.phase, PalwClaimPhaseV2::Voided { .. })
-                            || (matches!(c.phase, PalwClaimPhaseV2::Final { .. }) && c.trace_retention_daa <= w.sink_daa))
+                            || (matches!(c.phase, PalwClaimPhaseV2::Final { .. })
+                                && params.and_then(|p| native_effective_retention_v1(&w.state, p, id, c)).unwrap_or(u64::MAX)
+                                    <= w.sink_daa))
                     })
                     .map(|(id, c)| OpenClaimV1 {
                         claim: *id,
                         stage: ClaimStageV1::of(&c.phase),
                         accepted_blue: c.accepted_blue_score,
-                        retention_daa: c.trace_retention_daa,
+                        retention_daa: params.and_then(|p| native_effective_retention_v1(&w.state, p, id, c)).unwrap_or(u64::MAX),
                         next_deadline_daa: None,
                     })
                     .collect();
@@ -540,13 +606,12 @@ impl VirtualStateProcessor {
                 for c in open_claims.iter_mut().take(NATIVE_READINESS_LISTED_V1) {
                     c.next_deadline_daa = w.state.deadline_of(&c.claim);
                 }
-                let open_sessions: Vec<OpenSessionV1> = w
-                    .state
-                    .da_sessions_iter()
-                    .map(|((claim, _), session)| OpenSessionV1 {
-                        claim: *claim,
-                        claim_accepted_blue: w.state.claim(claim).map(|c| c.accepted_blue_score),
-                        deadline_daa: session.deadline_daa,
+                let open_sessions: Vec<OpenSessionV1> = native_open_sessions_v1(&w.state)
+                    .into_iter()
+                    .map(|(claim, deadline)| OpenSessionV1 {
+                        claim,
+                        claim_accepted_blue: w.state.claim(&claim).map(|c| c.accepted_blue_score),
+                        deadline_daa: deadline,
                     })
                     .collect();
                 native_safe_readiness_v1(&NativeReadinessInputV1 {
@@ -581,8 +646,7 @@ mod tests {
     /// that finalize or spend work.
     #[test]
     fn rfc0012_a_row_without_evidence_is_small() {
-        let bytes =
-            std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
+        let bytes = std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
         eprintln!(
             "[rfc0012-cost] NativeChainRow: {} bytes (+ map entry): about {bytes} bytes per chain block",
             std::mem::size_of::<NativeChainRow>()

@@ -425,6 +425,20 @@ pub(super) fn tick_provider_court_v1(builder: &mut TransitionBuilder<'_>, ctx: &
         .collect();
     for (subject, provider) in expired {
         write_lease(builder, &subject, &provider, None);
+        // Lease expiry is lawful, but a transferred claim still inside its material
+        // obligation cannot remain eligible with no provider left. Do not charge a
+        // provider for serving its complete signed term, or lapse a fully spent Final.
+        if let ProviderSubjectV1::KernelClaim { claim } = &subject {
+            let route = route_of(builder)?;
+            let transferred = route.provider_subject_v1(&subject).is_some_and(|row| row.transferred_daa.is_some());
+            let collectible = route.kernel_claim_row_v1(claim).is_some_and(|row| {
+                !matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
+                    || row.liability_until.is_none_or(|until| now <= until)
+            });
+            if transferred && collectible {
+                lapse_if_uncovered(builder, ctx, &subject)?;
+            }
+        }
     }
     Ok(())
 }

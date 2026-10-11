@@ -14138,3 +14138,183 @@ mod palw_vesting_wire_tests {
         assert!(old.bond_locks.is_empty() && old.bond_live_lock_count == 0 && !old.bond_retire_refused_while_locked);
     }
 }
+
+// RFC6/8/12: one snapshot of all reward funds; independent paging of native rows and EXEC legs.
+// New op 241 preserves op 199's fixed binary layout. Global counters conserve outstandingSompi.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRewardVestingRequest {
+    pub bond: String,
+    pub payout_address: String,
+    pub claim_id: String,
+    pub limit: u32,
+    pub after: String,
+    pub exec_after: String,
+}
+impl Serializer for GetPalwRewardVestingRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.payout_address, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(u32, &self.limit, writer)?;
+        store!(String, &self.after, writer)?;
+        store!(String, &self.exec_after, writer)?;
+        Ok(())
+    }
+}
+impl Deserializer for GetPalwRewardVestingRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        if load!(u16, reader)? != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported reward vesting version"));
+        }
+        Ok(Self {
+            bond: load!(String, reader)?,
+            payout_address: load!(String, reader)?,
+            claim_id: load!(String, reader)?,
+            limit: load!(u32, reader)?,
+            after: load!(String, reader)?,
+            exec_after: load!(String, reader)?,
+        })
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwExecRewardLeg {
+    pub claim_id: String,
+    pub bond: String,
+    pub fund: String,
+    pub payload: String,
+    pub sompi: String,
+    pub final_daa: u64,
+    pub earliest_daa: u64,
+    pub native_pending: bool,
+    pub native_clock_live: bool,
+    pub native_expiry_daa: Option<u64>,
+    pub native_second_clock_bound_daa: Option<u64>,
+    pub lock_live: bool,
+    pub ready: bool,
+    pub in_next_block: bool,
+}
+impl Serializer for RpcPalwExecRewardLeg {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.fund, writer)?;
+        store!(String, &self.payload, writer)?;
+        store!(String, &self.sompi, writer)?;
+        store!(u64, &self.final_daa, writer)?;
+        store!(u64, &self.earliest_daa, writer)?;
+        store!(bool, &self.native_pending, writer)?;
+        store!(bool, &self.native_clock_live, writer)?;
+        store!(Option<u64>, &self.native_expiry_daa, writer)?;
+        store!(Option<u64>, &self.native_second_clock_bound_daa, writer)?;
+        store!(bool, &self.lock_live, writer)?;
+        store!(bool, &self.ready, writer)?;
+        store!(bool, &self.in_next_block, writer)?;
+        Ok(())
+    }
+}
+impl Deserializer for RpcPalwExecRewardLeg {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        if load!(u16, reader)? != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported reward vesting version"));
+        }
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            bond: load!(String, reader)?,
+            fund: load!(String, reader)?,
+            payload: load!(String, reader)?,
+            sompi: load!(String, reader)?,
+            final_daa: load!(u64, reader)?,
+            earliest_daa: load!(u64, reader)?,
+            native_pending: load!(bool, reader)?,
+            native_clock_live: load!(bool, reader)?,
+            native_expiry_daa: load!(Option<u64>, reader)?,
+            native_second_clock_bound_daa: load!(Option<u64>, reader)?,
+            lock_live: load!(bool, reader)?,
+            ready: load!(bool, reader)?,
+            in_next_block: load!(bool, reader)?,
+        })
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRewardVestingResponse {
+    pub available: bool,
+    pub native: GetPalwVestingResponse,
+    pub state_root: String,
+    pub outstanding_sompi: String,
+    pub exec_slice_sompi: String,
+    pub exec_kernel_fee_sompi: String,
+    pub query_outstanding_sompi: String,
+    pub query_exec_pending_sompi: String,
+    pub query_exec_ready_sompi: String,
+    pub reporter_pending_sompi_of_query: String,
+    pub reporter_awarded_sompi_of_query: String,
+    pub locked_sources: u64,
+    pub last_lock_daa: Option<u64>,
+    pub exec_rows: Vec<RpcPalwExecRewardLeg>,
+    pub exec_rows_total: u64,
+    pub exec_next_after: String,
+}
+impl Serializer for GetPalwRewardVestingResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        serialize!(GetPalwVestingResponse, &self.native, writer)?;
+        store!(String, &self.state_root, writer)?;
+        store!(String, &self.outstanding_sompi, writer)?;
+        store!(String, &self.exec_slice_sompi, writer)?;
+        store!(String, &self.exec_kernel_fee_sompi, writer)?;
+        store!(String, &self.query_outstanding_sompi, writer)?;
+        store!(String, &self.query_exec_pending_sompi, writer)?;
+        store!(String, &self.query_exec_ready_sompi, writer)?;
+        store!(String, &self.reporter_pending_sompi_of_query, writer)?;
+        store!(String, &self.reporter_awarded_sompi_of_query, writer)?;
+        store!(u64, &self.locked_sources, writer)?;
+        store!(Option<u64>, &self.last_lock_daa, writer)?;
+        serialize!(Vec<RpcPalwExecRewardLeg>, &self.exec_rows, writer)?;
+        store!(u64, &self.exec_rows_total, writer)?;
+        store!(String, &self.exec_next_after, writer)?;
+        Ok(())
+    }
+}
+impl Deserializer for GetPalwRewardVestingResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        if load!(u16, reader)? != 1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported reward vesting version"));
+        }
+        Ok(Self {
+            available: load!(bool, reader)?,
+            native: deserialize!(GetPalwVestingResponse, reader)?,
+            state_root: load!(String, reader)?,
+            outstanding_sompi: load!(String, reader)?,
+            exec_slice_sompi: load!(String, reader)?,
+            exec_kernel_fee_sompi: load!(String, reader)?,
+            query_outstanding_sompi: load!(String, reader)?,
+            query_exec_pending_sompi: load!(String, reader)?,
+            query_exec_ready_sompi: load!(String, reader)?,
+            reporter_pending_sompi_of_query: load!(String, reader)?,
+            reporter_awarded_sompi_of_query: load!(String, reader)?,
+            locked_sources: load!(u64, reader)?,
+            last_lock_daa: load!(Option<u64>, reader)?,
+            exec_rows: deserialize!(Vec<RpcPalwExecRewardLeg>, reader)?,
+            exec_rows_total: load!(u64, reader)?,
+            exec_next_after: load!(String, reader)?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod reward_vesting_codec_version_tests {
+    use super::*;
+    #[test]
+    fn reward_vesting_rejects_unknown_versions_before_reading_fields() {
+        let bytes = 2u16.to_le_bytes();
+        assert!(<GetPalwRewardVestingRequest as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
+        assert!(<RpcPalwExecRewardLeg as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
+        assert!(<GetPalwRewardVestingResponse as Deserializer>::deserialize(&mut bytes.as_slice()).is_err());
+    }
+}

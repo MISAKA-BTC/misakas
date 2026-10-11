@@ -58,16 +58,107 @@ pub fn palw_exec_v2_token_state_root_v1(parts: &[&[u32]]) -> Hash64 {
     finish(state)
 }
 
+/// Signed by the executor indirectly: a KernelCommit signs the claim id, which
+/// binds the kernel job id and its nonce. Canonical terms are derived from the
+/// accepting root and network policy, never supplied by a carrier as authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwExecRetentionTermsV1 {
+    pub expiry_daa: u64,
+    pub liability_until: u64,
+    #[serde(serialize_with = "retention_exposure_json")]
+    pub executor_exposure_sompi: u128,
+    pub policy_root: Hash64,
+}
+
+fn retention_exposure_json<S: serde::Serializer>(amount: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&amount.to_string())
+}
+
+/// Terms a worker can inspect before signing a slice's kernel claim. The policy
+/// commitment covers the whole kernel policy (including domain and economics)
+/// and the native evidence window. It authorizes the consumer floor, not a later
+/// unilateral extension, and is not proof that the offered price is adequate.
+pub fn palw_exec_v2_retention_terms_v1(
+    expiry_daa: u64,
+    executor_exposure_sompi: u128,
+    native_window: u64,
+    policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+) -> Result<PalwExecRetentionTermsV1, &'static str> {
+    let liability_until = expiry_daa
+        .checked_add(native_window.max(policy.liability_daa))
+        .and_then(|until| until.checked_add(policy.court_deadline_daa))
+        .and_then(|until| until.checked_add(policy.proof_grace_daa))
+        .filter(|until| *until < u64::MAX)
+        .ok_or("EXEC liability horizon overflows")?;
+    let mut hash = keyed(b"misaka-palw/exec-v2/retention-policy/v1");
+    hash.update(&native_window.to_le_bytes());
+    hash.update(&borsh::to_vec(policy).expect("the fixed kernel policy serializes"));
+    Ok(PalwExecRetentionTermsV1 { expiry_daa, liability_until, executor_exposure_sompi, policy_root: finish(hash) })
+}
+
+fn retention_nonce_v2(base: Hash64, terms: &PalwExecRetentionTermsV1) -> Hash64 {
+    let mut hash = keyed(b"misaka-palw/exec-v2/slice-job-nonce/v2");
+    hash.update(base.as_byte_slice());
+    hash.update(&terms.expiry_daa.to_le_bytes());
+    hash.update(&terms.liability_until.to_le_bytes());
+    hash.update(&terms.executor_exposure_sompi.to_le_bytes());
+    hash.update(terms.policy_root.as_byte_slice());
+    finish(hash)
+}
+
+/// The live consumer check under the dormant EXEC-v2 fence requires this profile:
+/// the signed job binds both the work interval and its retention obligation.
+pub fn palw_exec_v2_slice_job_nonce_v2(slice: &PalwWorkSliceV1, terms: &PalwExecRetentionTermsV1) -> Hash64 {
+    retention_nonce_v2(palw_exec_v2_slice_job_nonce_v1(slice), terms)
+}
+
+/// The same nonce derived directly from a rooted interval, including on restore.
+pub fn palw_exec_v2_root_slice_job_nonce_v2(
+    root_claim_id: &Hash64,
+    index: u32,
+    root: &crate::palw_work_slice_v2::PalwWorkRootV2,
+    terms: &PalwExecRetentionTermsV1,
+) -> Result<Hash64, &'static str> {
+    let range = crate::palw_work_slice_v2::palw_work_plan_range_v2(&root.boundaries, index).ok_or("no such execution cell")?;
+    Ok(retention_nonce_v2(slice_job_nonce_base_v1(root_claim_id, index, range, &root.canonical_job_id, &root.plan_root), terms))
+}
+
+/// Public worker preparation: derive the nonce from the accepted root and this
+/// node's consensus policy before producing/signing a claim. Pre-declaration
+/// producers use the pure terms/nonce helpers against the proposed declaration.
+pub fn palw_exec_v2_slice_job_nonce_at_root_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    root_claim_id: &Hash64,
+    index: u32,
+) -> Result<Hash64, String> {
+    let root = state.exec_v2_root_v1(root_claim_id).ok_or("no such EXEC root")?;
+    let route = state.kernel_route().ok_or("no kernel route")?;
+    let terms = palw_exec_v2_retention_terms_v1(root.expiry_daa, root.executor_exposure, params.window_court(), &route.header.policy)?;
+    Ok(palw_exec_v2_root_slice_job_nonce_v2(root_claim_id, index, root, &terms)?)
+}
+
 /// **The nonce of the kernel job that backs a slice**: `H(domain; root claim ‖ index ‖ range ‖ canonical job ‖ plan root)`. The job's id
 /// hashes its nonce, so a job carrying it is this slice's and no other's.
 pub fn palw_exec_v2_slice_job_nonce_v1(slice: &PalwWorkSliceV1) -> Hash64 {
+    slice_job_nonce_base_v1(&slice.root_claim_id, slice.slice_index, slice.canonical_range, &slice.canonical_job_id, &slice.plan_root)
+}
+
+fn slice_job_nonce_base_v1(
+    root: &Hash64,
+    index: u32,
+    range: crate::palw_exec_v2::PalwWorkRangeV1,
+    job: &Hash64,
+    plan: &Hash64,
+) -> Hash64 {
     let mut state = keyed(PALW_EXEC_V2_SLICE_JOB_NONCE_DOMAIN_V1);
-    state.update(slice.root_claim_id.as_byte_slice());
-    state.update(&slice.slice_index.to_le_bytes());
-    state.update(&slice.canonical_range.start.to_le_bytes());
-    state.update(&slice.canonical_range.end.to_le_bytes());
-    state.update(slice.canonical_job_id.as_byte_slice());
-    state.update(slice.plan_root.as_byte_slice());
+    state.update(root.as_byte_slice());
+    state.update(&index.to_le_bytes());
+    state.update(&range.start.to_le_bytes());
+    state.update(&range.end.to_le_bytes());
+    state.update(job.as_byte_slice());
+    state.update(plan.as_byte_slice());
     finish(state)
 }
 
@@ -128,7 +219,8 @@ pub struct PalwExecV2PrefixInputsV1<'a> {
 ///
 /// 1. a single-program claim of the bound kernel class, by the root bond, of a job carrying the prefix job nonce, not failed;
 /// 2. its job's prompt is the prompt the REAL claim's anchor names;
-/// 3. its generated tokens are the REAL claim's committed output: `palw_attempt_output_root_v1(ctx, generated) == output_root`;
+/// 3. its job and generated tokens have the REAL context's nonzero exact decode length, and are
+///    the committed output: `palw_attempt_output_root_v1(ctx, generated) == output_root`;
 /// 4. the declared initial boundary is `token_state(prompt ‖ generated)`.
 ///
 /// So the initial boundary is linked to the REAL claim's output from public material alone, and the REAL claim's run is a claim the
@@ -168,6 +260,12 @@ pub fn palw_exec_v2_prefix_binding_v1(
     }
     if job.prompt != inputs.real_prompt {
         return Err(PrefixNotBound("prompt"));
+    }
+    if inputs.real_context.exact_decode_tokens == 0
+        || job.max_new_tokens != inputs.real_context.exact_decode_tokens
+        || claim.generated.len() != inputs.real_context.exact_decode_tokens as usize
+    {
+        return Err(PrefixNotBound("decode"));
     }
     if crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(inputs.real_context, &claim.generated) != inputs.real_output_root {
         return Err(PrefixNotBound("output"));
@@ -237,6 +335,7 @@ pub fn palw_exec_v2_route_reward_v1(row: &ClaimRowV1, claim_reward: u64) -> u64 
 /// **The verification binding** (admission rule 5, amendment 1): does the kernel claim `row` (the claim `slice.evidence_root` names, its
 /// job `job` as the route holds it) verify exactly this slice, for the root class's kernel `binding`, executed by the bond whose kernel
 /// digest is `executor_kernel_bond`, judged at `daa`? Each mismatch is named; nothing is written by a caller on a refusal.
+#[deprecated(note = "legacy work binding has no retention authorization; EXEC admission uses v2")]
 pub fn palw_exec_v2_verification_binding_v1(
     slice: &PalwWorkSliceV1,
     binding: &KernelBindingRowV1,
@@ -244,6 +343,32 @@ pub fn palw_exec_v2_verification_binding_v1(
     job: Option<&KernelJobV1>,
     executor_kernel_bond: &[u8; 64],
     daa: u64,
+) -> Result<(), PalwSliceRefusalV2> {
+    verification_binding(slice, binding, row, job, executor_kernel_bond, daa, palw_exec_v2_slice_job_nonce_v1(slice))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_exec_v2_verification_binding_v2(
+    slice: &PalwWorkSliceV1,
+    binding: &KernelBindingRowV1,
+    row: &ClaimRowV1,
+    job: Option<&KernelJobV1>,
+    executor_kernel_bond: &[u8; 64],
+    daa: u64,
+    terms: &PalwExecRetentionTermsV1,
+) -> Result<(), PalwSliceRefusalV2> {
+    verification_binding(slice, binding, row, job, executor_kernel_bond, daa, palw_exec_v2_slice_job_nonce_v2(slice, terms))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verification_binding(
+    slice: &PalwWorkSliceV1,
+    binding: &KernelBindingRowV1,
+    row: &ClaimRowV1,
+    job: Option<&KernelJobV1>,
+    executor_kernel_bond: &[u8; 64],
+    daa: u64,
+    expected_nonce: Hash64,
 ) -> Result<(), PalwSliceRefusalV2> {
     use PalwSliceRefusalV2::{VerificationClaimFailed, VerificationClaimNotBound, VerificationKindUnsupported};
     let ClaimBodyV1::Program { claim, .. } = &row.body else {
@@ -262,11 +387,14 @@ pub fn palw_exec_v2_verification_binding_v1(
     if claim.job_id != row.job_id || job.id() != row.job_id || job.class_binding_id != row.class_binding_id {
         return Err(VerificationClaimNotBound("job"));
     }
-    if Hash64::from_bytes(job.nonce) != palw_exec_v2_slice_job_nonce_v1(slice) {
+    if Hash64::from_bytes(job.nonce) != expected_nonce {
         return Err(VerificationClaimNotBound("job nonce"));
     }
     if slice.predecessor_state_root != palw_exec_v2_token_state_root_v1(&[&job.prompt]) {
         return Err(VerificationClaimNotBound("predecessor"));
+    }
+    if slice.input_root != palw_exec_v2_token_state_root_v1(&[&job.prompt]) {
+        return Err(VerificationClaimNotBound("input"));
     }
     if slice.result_state_root != palw_exec_v2_token_state_root_v1(&[&job.prompt, &claim.generated]) {
         return Err(VerificationClaimNotBound("result"));
@@ -297,10 +425,27 @@ pub fn palw_exec_v2_kernel_key_v1(id: &Hash64) -> Vec<u8> {
 /// carrier again; this only spares the executor a carrier it would refuse.
 pub fn palw_exec_v2_slice_statement_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
     root_claim_id: Hash64,
     index: u32,
     claim_id: Hash64,
     bond: crate::palw_state_v2::PalwBondKeyV2,
+) -> Result<PalwWorkSliceV1, String> {
+    palw_exec_v2_slice_statement_at_depth_v2(state, params, root_claim_id, index, claim_id, bond, Some(u64::MAX))
+}
+
+/// The node passes the network's actual required second-clock depth (including
+/// known None on a DAA-only network), so preflight and the accepting Work gate
+/// use the same clock rule. No statement may pledge a new unfunded reservation.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_exec_v2_slice_statement_at_depth_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    root_claim_id: Hash64,
+    index: u32,
+    claim_id: Hash64,
+    bond: crate::palw_state_v2::PalwBondKeyV2,
+    raw_depth: Option<u64>,
 ) -> Result<PalwWorkSliceV1, String> {
     use crate::palw_work_slice_v2::{PalwWorkRootPhaseV2, palw_work_plan_range_v2};
     let root = state.exec_v2_root_v1(&root_claim_id).ok_or("no such root on this node's chain")?;
@@ -320,6 +465,17 @@ pub fn palw_exec_v2_slice_statement_v1(
         .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&claim_id)))
         .and_then(|bytes| borsh::from_slice::<ClaimRowV1>(bytes).ok())
         .ok_or("the kernel route holds no such claim")?;
+    if row.rewarded {
+        return Err("the kernel claim has already been paid".into());
+    }
+    if row.reserved == 0
+        || row.convicted
+        || matches!(row.life.state, ClaimStateV1::Unavailable { .. } | ClaimStateV1::TimedOut { .. })
+        || (matches!(row.life.state, ClaimStateV1::Final { .. })
+            && row.liability_until.is_none_or(|until| route.header.scalars.daa > until))
+    {
+        return Err("the kernel claim no longer has an open collectible liability".into());
+    }
     let ClaimBodyV1::Program { claim, .. } = &row.body else {
         return Err("the claim is a pipeline claim: pipeline-class slices await a segment state".into());
     };
@@ -331,7 +487,7 @@ pub fn palw_exec_v2_slice_statement_v1(
         .get(&(misaka_palw_kernel::rows::TABLE_JOBS_V1, borsh::to_vec(&row.job_id).expect("a digest serializes")))
         .and_then(|bytes| borsh::from_slice::<KernelJobV1>(bytes).ok())
         .ok_or("the kernel route holds no job for the claim")?;
-    Ok(PalwWorkSliceV1 {
+    let slice = PalwWorkSliceV1 {
         root_claim_id,
         slice_index: index,
         class_id: root.class_id,
@@ -341,12 +497,26 @@ pub fn palw_exec_v2_slice_statement_v1(
         canonical_range,
         predecessor_state_root: palw_exec_v2_token_state_root_v1(&[&job.prompt]),
         result_state_root: palw_exec_v2_token_state_root_v1(&[&job.prompt, &claim.generated]),
-        input_root: root.initial_state_root,
+        input_root: palw_exec_v2_token_state_root_v1(&[&job.prompt]),
         output_root: palw_exec_v2_token_state_root_v1(&[&claim.generated]),
         evidence_root: claim_id,
         da_root: Hash64::from_bytes(claim.evidence_root),
         executor_bond: bond,
-    })
+    };
+    // Full admission below performs the binding and IR work checks once, with
+    // the same funding/clock predicate as inclusion.
+    let pubkey = state.bond(&bond).ok_or("the executor bond is missing")?.pubkey.clone();
+    let preflight = crate::palw_work_slice_v2::PalwExecV2CoveredSliceV1 { carrier: Hash64::default(), slice: slice.clone(), pubkey };
+    state
+        .exec_v2_admit_slice_at_depth_v2(
+            params,
+            state.last_point().map(|point| point.daa_score).unwrap_or(0),
+            &preflight,
+            0,
+            raw_depth,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(slice)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -371,6 +541,9 @@ pub struct PalwExecV2ObservationV1 {
     pub roots_total: usize,
     pub slices_total: usize,
     pub jobs_total: usize,
+    /// Includes retired roots whose finite authorization still needs reuse protection; separate from active indexes.
+    pub job_use_history_total: usize,
+    pub authorization_origins_total: usize,
     pub anchored_total: usize,
     pub roots: Vec<PalwExecV2RootObservationV1>,
     pub unknown_roots: Vec<String>,
@@ -404,6 +577,10 @@ pub struct PalwExecV2RootObservationV1 {
     pub prefix_claim: String,
     pub prefix_stage: String,
     pub prefix_verification_state: Option<String>,
+    /// Exact terms the slice's signed kernel job must bind. None when unavailable.
+    pub retention_terms: Option<PalwExecRetentionTermsV1>,
+    /// Nonce for the next interval; a worker can inspect terms before signing.
+    pub next_job_nonce: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -489,6 +666,22 @@ pub fn palw_exec_v2_observation_v1(
     block: Option<(Hash64, Vec<(Hash64, u8)>)>,
     lane: Option<crate::palw_exec_v2_anchor::PalwExecV2LaneHealthV1>,
 ) -> PalwExecV2ObservationV1 {
+    palw_exec_v2_observation_with_retention_v2(state, fence_daa, tip, tip_daa, roots, block, lane, None)
+}
+
+/// Append-only public worker terms, with the node's actual native window. The
+/// historical read wrapper cannot invent that window and reports terms unknown.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_exec_v2_observation_with_retention_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    fence_daa: Option<u64>,
+    tip: Hash64,
+    tip_daa: u64,
+    roots: &[Hash64],
+    block: Option<(Hash64, Vec<(Hash64, u8)>)>,
+    lane: Option<crate::palw_exec_v2_anchor::PalwExecV2LaneHealthV1>,
+    native_window: Option<u64>,
+) -> PalwExecV2ObservationV1 {
     let table = state.exec_v2_state_v1();
     let route = state.kernel_route();
     let named: Vec<Hash64> = if roots.is_empty() {
@@ -518,7 +711,20 @@ pub fn palw_exec_v2_observation_v1(
                 verification_state: claim_state_name(route, &row.evidence_root, tip_daa),
             })
             .collect();
+        let retention_terms = route.zip(native_window).and_then(|(route, window)| {
+            palw_exec_v2_retention_terms_v1(root.expiry_daa, root.executor_exposure, window, &route.header.policy).ok()
+        });
+        let next_job_nonce = if matches!(root.phase, crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Open) {
+            retention_terms
+                .as_ref()
+                .and_then(|terms| palw_exec_v2_root_slice_job_nonce_v2(&id, root.next_index, root, terms).ok())
+                .map(|nonce| nonce.to_string())
+        } else {
+            None
+        };
         observed.push(PalwExecV2RootObservationV1 {
+            retention_terms,
+            next_job_nonce,
             root_claim_id: id.to_string(),
             phase: format!("{:?}", root.phase),
             class_id: root.class_id.to_string(),
@@ -553,6 +759,8 @@ pub fn palw_exec_v2_observation_v1(
         roots_total: table.roots.len(),
         slices_total: table.slices.len(),
         jobs_total: table.jobs.len(),
+        job_use_history_total: state.exec_v2_job_use_count_v1(),
+        authorization_origins_total: state.exec_v2_origin_count_v1(),
         anchored_total: table.anchored.len(),
         roots: observed,
         unknown_roots: unknown,
@@ -612,6 +820,32 @@ mod tests {
                 0,
             )),
         }
+    }
+
+    #[test]
+    fn the_retention_nonce_commits_expiry_horizon_and_policy_even_when_the_horizon_is_equal() {
+        let base = slice();
+        let policy = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let terms = palw_exec_v2_retention_terms_v1(1_000, 123, 0, &policy).unwrap();
+        let nonce = palw_exec_v2_slice_job_nonce_v2(&base, &terms);
+        assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v1(&base), "the legacy nonce cannot authorize retention");
+        let later = palw_exec_v2_retention_terms_v1(1_001, 123, 0, &policy).unwrap();
+        assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v2(&base, &later));
+        let mut different = terms;
+        different.liability_until += 1;
+        assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v2(&base, &different));
+        let mut larger = terms;
+        larger.executor_exposure_sompi += 1;
+        assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v2(&base, &larger));
+        let same_horizon = palw_exec_v2_retention_terms_v1(1_000, 123, 1, &policy).unwrap();
+        assert_eq!(same_horizon.liability_until, terms.liability_until);
+        assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v2(&base, &same_horizon));
+        let mut price = policy;
+        price.claim_reward += 1;
+        let changed_price = palw_exec_v2_retention_terms_v1(1_000, 123, 0, &price).unwrap();
+        assert_eq!(changed_price.liability_until, terms.liability_until);
+        assert_ne!(nonce, palw_exec_v2_slice_job_nonce_v2(&base, &changed_price));
+        assert!(palw_exec_v2_retention_terms_v1(u64::MAX - 1, 123, 0, &policy).is_err());
     }
 
     #[test]

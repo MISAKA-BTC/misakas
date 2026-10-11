@@ -229,13 +229,31 @@ impl KernelLedgerV1 {
             )
         };
         // The court scope (table 28, `palw_provider_court_v1`, G14-S): an extension only once it holds a row.
-        if self.court_scope.is_empty() {
-            return base;
+        let base = if self.court_scope.is_empty() {
+            base
+        } else {
+            crate::rows::court_scope_root_extension_v1(
+                &base,
+                &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
+            )
+        };
+        // The same fixed order as `rows::root_of_rows`: table 30 (beacon sources), then 31 (EXEC reward holds).
+        let base = if self.beacon_sources.is_empty() {
+            base
+        } else {
+            crate::rows::beacon_source_root_extension_v1(
+                &base,
+                &collection_root(&d("beacon-sources"), self.beacon_sources.len(), self.beacon_sources.iter()),
+            )
+        };
+        if self.exec_reward_holds.is_empty() {
+            base
+        } else {
+            crate::rows::exec_reward_root_extension_v1(
+                &base,
+                &collection_root(&d("exec-reward-holds"), self.exec_reward_holds.len(), self.exec_reward_holds.iter()),
+            )
         }
-        crate::rows::court_scope_root_extension_v1(
-            &base,
-            &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
-        )
     }
 
     /// RFC-0004 Part II: `(table, collection root)` of every NON-EMPTY typed table, in root order (empty for an untyped ledger).

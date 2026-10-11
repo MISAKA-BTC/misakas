@@ -389,6 +389,130 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     kernel.ledger_cache.set(cached);
 }
 
+/// Latest permitted root Final plus native evidence window and the complete kernel court path.
+/// Checked additions refuse an impossible horizon before any consensus write.
+pub(super) fn exec_liability_floor_v1(
+    expiry: u64,
+    native_window: u64,
+    policy: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+) -> Result<u64, PalwStateV2Error> {
+    crate::palw_exec_v2_verify::palw_exec_v2_retention_terms_v1(expiry, 0, native_window, policy)
+        .map(|terms| terms.liability_until)
+        .map_err(refused)
+}
+
+/// A transfer changes who owes material, not the term signed by its providers.
+pub(super) fn require_exec_provider_horizon_v1(
+    state: &PalwChainStateV2,
+    claim: &Hash64,
+    row: &misaka_palw_kernel::ledger::ClaimRowV1,
+    daa: u64,
+    liability_floor: u64,
+) -> Result<(), &'static str> {
+    use crate::palw_provider_court_v1::ProviderSubjectV1;
+    let route = state.kernel_route.as_ref().ok_or("the EXEC kernel route is missing")?;
+    let subject = ProviderSubjectV1::KernelClaim { claim: *claim };
+    let Some(transfer) = route.provider_subject_v1(&subject).filter(|transfer| transfer.transferred_daa.is_some()) else {
+        return Ok(());
+    };
+    if transfer.lapsed_daa.is_some() {
+        return Err("a lapsed provider transfer cannot attach to EXEC");
+    }
+    let producer = route.bond_key_of(&row.producer).ok_or("the transferred EXEC producer has no bond mapping")?;
+    let operator = state.bond(&producer).ok_or("the transferred EXEC producer bond is missing")?.operator_id;
+    let until = liability_floor.max(row.liability_until.unwrap_or(0));
+    let availability = state.provider_availability_v1(&subject, daa, until, Some(operator));
+    if !availability.ready {
+        return Err("the transferred EXEC claim needs two distinct non-producer operator leases through its consumer horizon");
+    }
+    if availability.reserved < row.reserved {
+        return Err("the transferred EXEC provider leases reserve less than its claim");
+    }
+    Ok(())
+}
+
+/// A provider failure is the transferred claim's failure, including after computation Final.
+/// Ordinary expiry after the collectible horizon is not a failure.
+pub(super) fn exec_provider_lapsed_v1(state: &PalwChainStateV2, claim: &Hash64, row: &misaka_palw_kernel::ledger::ClaimRowV1) -> bool {
+    use crate::palw_provider_court_v1::ProviderSubjectV1;
+    state
+        .kernel_route
+        .as_ref()
+        .and_then(|route| route.provider_subject_v1(&ProviderSubjectV1::KernelClaim { claim: *claim }))
+        .is_some_and(|transfer| {
+            transfer.transferred_daa.is_some()
+                && transfer.lapsed_daa.is_some_and(|at| row.liability_until.is_none_or(|until| at <= until))
+        })
+}
+
+/// Consumer hooks retain the current block budget; they do not begin a new kernel block.
+pub(super) fn bind_exec_reward_v1(
+    builder: &mut TransitionBuilder<'_>,
+    root: Hash64,
+    claim: Hash64,
+    expiry: u64,
+    daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
+    let before = route.rows.clone();
+    let mut ledger = route.ledger().map_err(refused)?;
+    ledger.daa = daa;
+    let until = exec_liability_floor_v1(expiry, builder.params.window_court(), &ledger.policy)?;
+    let row = ledger.claims.get(&claim.as_bytes()).ok_or_else(|| refused("the EXEC reward claim is missing"))?;
+    require_exec_provider_horizon_v1(&builder.state, &claim, row, daa, until).map_err(refused)?;
+    ledger.bind_exec_reward_until(root.as_bytes(), claim.as_bytes(), expiry, until).map_err(refused)?;
+    flush(builder, &ledger, &before);
+    Ok(())
+}
+
+/// Pay only actual poster debits, inside each executor's remaining root share.
+pub(super) fn finish_exec_rewards_v1(
+    builder: &mut TransitionBuilder<'_>,
+    root: Hash64,
+    claims: &[(Hash64, PalwBondKeyV2)],
+    caps: &std::collections::BTreeMap<PalwBondKeyV2, u64>,
+    daa: u64,
+) -> Result<Vec<u64>, PalwStateV2Error> {
+    let route = builder.state.kernel_route.as_ref().expect("EXEC kernel binding");
+    let before = route.rows.clone();
+    let mut ledger = route.ledger().map_err(refused)?;
+    ledger.daa = daa;
+    let ids: Vec<_> = ledger.bonds.keys().copied().collect();
+    for id in ids {
+        if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
+            ledger.sync_bond(id, builder.kernel_synced_collateral(&key, daa));
+        }
+    }
+    let mut events = Vec::new();
+    let mut paid = Vec::new();
+    let mut remaining = caps.clone();
+    for (claim, bond) in claims {
+        let cap = remaining.entry(*bond).or_default();
+        let fee = ledger.finish_exec_reward(root.as_bytes(), claim.as_bytes(), *cap, &mut events).map_err(refused)?;
+        *cap -= fee;
+        paid.push(fee);
+    }
+    apply_settlements_to_exec_vesting(builder, &events, true, Some(root))?;
+    flush(builder, &ledger, &before);
+    Ok(paid)
+}
+
+pub(super) fn cancel_exec_rewards_v1(builder: &mut TransitionBuilder<'_>, root: Hash64, daa: u64) -> Result<(), PalwStateV2Error> {
+    let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+    let before = route.rows.clone();
+    let mut ledger = route.ledger().map_err(refused)?;
+    ledger.daa = daa;
+    let claims: Vec<_> =
+        ledger.exec_reward_holds.iter().filter(|(_, hold)| hold.owner_root == root.as_bytes()).map(|(id, _)| *id).collect();
+    let mut events = Vec::new();
+    for claim in claims {
+        ledger.cancel_exec_reward(root.as_bytes(), claim, &mut events).map_err(refused)?;
+    }
+    apply_settlements(builder, &events, true)?;
+    flush(builder, &ledger, &before);
+    Ok(())
+}
+
 /// **Apply a ledger's settlement instructions to the real bonds** (module doc).
 ///
 /// `strict` (every object arm): a slash the real bond cannot pay in full refuses the object (it is dropped, the block stands). The closing
@@ -399,9 +523,18 @@ pub(super) fn apply_settlements(
     events: &[LedgerEventV1],
     strict: bool,
 ) -> Result<(), PalwStateV2Error> {
+    apply_settlements_to_exec_vesting(builder, events, strict, None)
+}
+
+fn apply_settlements_to_exec_vesting(
+    builder: &mut TransitionBuilder<'_>,
+    events: &[LedgerEventV1],
+    strict: bool,
+    exec_root: Option<Hash64>,
+) -> Result<(), PalwStateV2Error> {
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
-    let mut escrow_debited: u64 = 0;
+    let mut escrow_debited: std::collections::BTreeMap<Option<misaka_palw_kernel::hash::Digest>, u64> = Default::default();
     for event in events {
         let LedgerEventV1::Settlement(s) = event else { continue };
         let key = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&s.bond));
@@ -429,15 +562,17 @@ pub(super) fn apply_settlements(
                     return Err(refused(format!("a slash of {} took {debit}: the synced collateral did not cover it", s.amount)));
                 }
                 if s.kind == SettlementKindV1::PayJobEscrow {
-                    escrow_debited = escrow_debited.saturating_add(debit);
+                    let funded = escrow_debited.entry(s.claim).or_default();
+                    *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
                 }
             }
             // ADR-0176 HOOK `budget-final` on the node (lane BUDGET): a payout is paid only inside the R / F reservation the claim
             // made at acceptance — this arm is where the consumer re-checks it, beside the escrow check below.
             SettlementKindV1::AccuserReward | SettlementKindV1::DemanderShare | SettlementKindV1::FinalReward => {
                 let amount = if s.kind == SettlementKindV1::FinalReward {
-                    let funded = s.amount.min(escrow_debited);
-                    escrow_debited -= funded;
+                    let debited = escrow_debited.entry(s.claim).or_default();
+                    let funded = s.amount.min(*debited);
+                    *debited -= funded;
                     if funded != s.amount && strict {
                         return Err(refused("a Final reward with no spent escrow behind it (GAP-5: nothing is issued)"));
                     }
@@ -445,6 +580,19 @@ pub(super) fn apply_settlements(
                 } else {
                     s.amount
                 };
+                if s.kind == SettlementKindV1::FinalReward
+                    && let Some(root) = exec_root
+                {
+                    let bond = key.ok_or_else(|| refused("an EXEC fee names an unknown bond"))?;
+                    super::palw_exec_v2_rewards_v1::add(
+                        builder,
+                        root,
+                        bond,
+                        crate::palw_work_slice_v2::PalwExecV2RewardFundV1::KernelFee,
+                        amount,
+                    )?;
+                    continue;
+                }
                 let payee = key.and_then(|key| builder.state.bonds.get(&key).map(|b| b.payout_payload));
                 match payee {
                     Some(payload) => match builder.add_kernel_payout(payload, amount) {

@@ -41,12 +41,24 @@ fn write_header_preimage<H: HasherBase>(
     timestamp: u64,
     palw_rule: PalwCommitmentDigestRule,
 ) {
-    hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len()); // Write the number of parent levels
-
-    // Write parents at each level
-    header.parents_by_level.expanded_iter().for_each(|level| {
-        hasher.write_var_array(level);
+    write_header_preimage_with_parents(hasher, header, nonce, timestamp, palw_rule, |hasher, parents| {
+        parents.expanded_iter().for_each(|level| {
+            hasher.write_var_array(level);
+        });
     });
+}
+
+#[inline]
+fn write_header_preimage_with_parents<H: HasherBase>(
+    hasher: &mut H,
+    header: &Header,
+    nonce: u64,
+    timestamp: u64,
+    palw_rule: PalwCommitmentDigestRule,
+    write_parents: impl FnOnce(&mut H, &crate::header::CompressedParents),
+) {
+    hasher.update(header.version.to_le_bytes()).write_len(header.parents_by_level.expanded_len()); // Write the number of parent levels
+    write_parents(hasher, &header.parents_by_level);
 
     // Write all header fields
     hasher
@@ -211,6 +223,58 @@ pub fn hash_override_nonce_time_64(header: &Header, nonce: u64, timestamp: u64) 
 pub fn pre_pow_hash_64(header: &Header) -> kaspa_hashes::Hash64 {
     hash_override_nonce_time_64(header, 0, 0)
 }
+
+// Performance scratch bound, NOT a header/admission limit. A larger run uses the original streaming writer.
+const PARENT_RUN_CACHE_MAX_HASHES: usize = 32_768; // at most 2 MiB; includes every run fitting the EXEC witness carriage budget
+
+fn write_cached_parent_runs<H: HasherBase>(hasher: &mut H, parents: &crate::header::CompressedParents) {
+    let mut previous = 0u8;
+    for (end, level) in parents.raw() {
+        let repeat = end.checked_sub(previous).filter(|repeat| *repeat > 0).expect("parent runs must increase from zero");
+        previous = *end;
+        if repeat > 1 && level.len() > 1 && level.len() <= PARENT_RUN_CACHE_MAX_HASHES {
+            // Serialize each hash once, reuse the contiguous bytes for every level of this run. Preserve each level's length.
+            // Hash64's AsRef bytes are the exact bytes the original write_var_array streams; no representation cast is used.
+            let mut bytes = Vec::with_capacity(level.len() * kaspa_hashes::HASH64_SIZE);
+            for parent in level {
+                let hash_bytes: &[u8] = parent.as_ref();
+                bytes.extend_from_slice(hash_bytes);
+            }
+            for _ in 0..repeat {
+                hasher.write_len(level.len()).update(&bytes);
+            }
+        } else {
+            for _ in 0..repeat {
+                hasher.write_var_array(level);
+            }
+        }
+    }
+}
+
+/// Byte-identical block identity with bounded scratch for repeated parent runs. Used by dormant EXEC origin verification;
+/// ordinary block/PoW/Round hashing retains its original streaming writer. This reduces update calls, not hashed bytes.
+pub(crate) fn hash_with_parent_run_cache(header: &Header) -> Hash64 {
+    let mut hasher = kaspa_hashes::BlockHash64::new();
+    write_header_preimage_with_parents(
+        &mut hasher,
+        header,
+        header.nonce,
+        header.timestamp,
+        PalwCommitmentDigestRule::Include,
+        write_cached_parent_runs,
+    );
+    hasher.finalize()
+}
+
+/// The matching pre-PoW digest: nonce/time zero, the ordinary domain, and the same commitment exclusion as pre_pow_hash_64.
+pub(crate) fn pre_pow_hash_with_parent_run_cache(header: &Header) -> Hash64 {
+    let mut hasher = kaspa_hashes::BlockPrePowHash64::new();
+    write_header_preimage_with_parents(&mut hasher, header, 0, 0, PalwCommitmentDigestRule::Exclude, write_cached_parent_runs);
+    hasher.finalize()
+}
+
+#[cfg(test)]
+mod parent_run_cache;
 
 #[cfg(test)]
 mod tests {

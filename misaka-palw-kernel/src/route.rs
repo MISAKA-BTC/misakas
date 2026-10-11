@@ -60,9 +60,15 @@ pub const TAG_POST_TILED_JOB_V1: u8 = 17;
 pub const TAG_POST_PROMPT_TILE_V1: u8 = 18;
 /// RFC-0004 Part II: a typed-root object (registration, job, claim — versioned inside [`crate::spec::SpecObjectV1`]).
 pub const TAG_SPEC_V1: u8 = 19;
-// 16–18 are K2S's (K2-TIR-v4); 21 and 22 were reserved beside 20 and are released.
+// 16–18 are K2S's (K2-TIR-v4); 21–37 are RFC-02's (conformance classes, model artifact binding / conformance, model refutation
+// seal v4) on the integration line, 38/39 are G14R's verifier pay (reserved, not yet used); registry
+// `remaining-rfc-integration-matrix.md` §2.
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
+/// Per-attempt beacon source opt-in (codex RFC-7, lane R6781). Refused without its own consumer-supplied fence and authenticated
+/// target. codex used 21 (RFC-02's `RegisterConformanceClass` on the integration line); renumbered to 40 at the merge.
+pub const TAG_OPT_IN_BEACON_SOURCE_V1: u8 = 40;
+pub const MAX_OPT_IN_BEACON_SOURCE_BYTES_V1: usize = 384;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -298,6 +304,15 @@ pub enum KernelRouteObjectV1 {
         salt: Digest,
         commit: SaltedCommitV1,
     } = 20,
+    /// The producer signs the exact target and terms, in addition to its ordinary salted race seal.
+    /// Each target reserves a fresh source deposit. No transaction can supply the target inventory or fence.
+    OptInBeaconSource {
+        producer: Digest,
+        job: Digest,
+        seal: Digest,
+        context: Digest,
+        terms: Digest,
+    } = 40,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -406,6 +421,7 @@ impl KernelRouteObjectV1 {
             Self::RegisterPipelineClassV2 { .. } => TAG_REGISTER_PIPELINE_CLASS_V2,
             Self::SealProof { .. } => TAG_SEAL_PROOF_V1,
             Self::CommitClaimSalted { .. } => TAG_COMMIT_CLAIM_SALTED_V1,
+            Self::OptInBeaconSource { .. } => TAG_OPT_IN_BEACON_SOURCE_V1,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
             Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
@@ -498,6 +514,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_REGISTER_PIPELINE_CLASS_V2 => "RegisterPipelineClassV2",
         TAG_SEAL_PROOF_V1 => "SealProof",
         TAG_COMMIT_CLAIM_SALTED_V1 => "CommitClaimSalted",
+        TAG_OPT_IN_BEACON_SOURCE_V1 => "OptInBeaconSource",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
         TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
@@ -525,6 +542,7 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_REGISTER_PIPELINE_CLASS_V2 => MAX_REGISTER_PIPELINE_CLASS_V2_BYTES_V1,
         TAG_SEAL_PROOF_V1 => MAX_SEAL_PROOF_BYTES_V1,
         TAG_COMMIT_CLAIM_SALTED_V1 => MAX_COMMIT_CLAIM_SALTED_BYTES_V1,
+        TAG_OPT_IN_BEACON_SOURCE_V1 => MAX_OPT_IN_BEACON_SOURCE_BYTES_V1,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -573,6 +591,13 @@ mod tests {
             KernelRouteObjectV1::FileProof { accuser: [1; 64], claim: [2; 64], proof: ProsecutionV1::Kernel(vec![9]) },
             KernelRouteObjectV1::FileProof { accuser: [1; 64], claim: [2; 64], proof: ProsecutionV1::Pipeline(vec![9]) },
             KernelRouteObjectV1::SealProof { accuser: [1; 64], claim: [2; 64], seal: [3; 64] },
+            KernelRouteObjectV1::OptInBeaconSource {
+                producer: [1; 64],
+                job: [2; 64],
+                seal: [3; 64],
+                context: [4; 64],
+                terms: [5; 64],
+            },
         ];
         for o in objects {
             let bytes = o.encode();
@@ -582,10 +607,10 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1]).collect();
+        let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_OPT_IN_BEACON_SOURCE_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!((21..=22).all(|t| max_encoded_bytes_of_tag(t).is_none()), "21 and 22 are not used");
+        assert!((21..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "21–39 are RFC-02's and G14R's, not in this tree yet");
         assert!(max_encoded_bytes_of_tag(TAG_SPEC_V1).is_some() && name_of_tag(TAG_SPEC_V1) == "Spec", "RFC-0004 Part II's tag 19");
     }
 
