@@ -1339,6 +1339,26 @@ pub fn palw_forged_output_tiled_fault_v1(
     ladder: u64,
     fp_decode_rules_active: bool,
 ) -> Result<(), PalwOffenceVerifyError> {
+    palw_forged_output_tiled_fault_at_v2(
+        target,
+        binding,
+        proof,
+        ladder,
+        fp_decode_rules_active,
+        PalwSessionRuleV1::RefusedUnderSession,
+    )
+}
+
+/// Block-context admission: an authenticated out-of-vocabulary id violates every FP decode rule.
+/// Greedy selection remains attempt-only; old height-free callers keep the pre-fence refusal.
+pub fn palw_forged_output_tiled_fault_at_v2(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    proof: &crate::palw_offence_v1::PalwForgedOutputTiledProofV1,
+    ladder: u64,
+    fp_decode_rules_active: bool,
+    sessions: PalwSessionRuleV1,
+) -> Result<(), PalwOffenceVerifyError> {
     use crate::palw_offence_v1::PalwForgedOutputTiledProofV1 as P;
     palw_claims_own_binding_v1(target, binding)?;
     let profile = &binding.shape_profile;
@@ -1349,7 +1369,10 @@ pub fn palw_forged_output_tiled_fault_v1(
             "ForgedOutputTiled judges a tiled integer class; a flat class's forged token is ForgedOutput (8)",
         ));
     }
-    if fp_decode_rules_active && target.lane != Some(PalwClaimSourceKindV1::Attempt) {
+    let public_fp_domain_proof = sessions == PalwSessionRuleV1::DirectProofFirst
+        && target.lane == Some(PalwClaimSourceKindV1::FreePrompt)
+        && matches!(proof, P::OutOfVocab { .. });
+    if fp_decode_rules_active && target.lane != Some(PalwClaimSourceKindV1::Attempt) && !public_fp_domain_proof {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
             "under ADR-0082's decode rules a free-prompt token is not the greedy selection",
         ));
@@ -1654,12 +1677,14 @@ pub fn palw_offence_heavy_prompt_ids_at_v2(
         _ => None,
     };
     match contradiction {
-        Some(PalwPanelContradictionV1::PromptNotAnchored {
-            binding,
-            proof: PalwPromptProofV1::Whole,
-        }) => u64::from(binding.job_context.declared_prefill_tokens),
+        Some(PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole }) => {
+            u64::from(binding.job_context.declared_prefill_tokens)
+        }
         Some(PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::FpCanonicalWhole { .. } })
-            if legacy_public_filer => u64::from(binding.job_context.declared_prefill_tokens),
+            if legacy_public_filer =>
+        {
+            u64::from(binding.job_context.declared_prefill_tokens)
+        }
         _ => 0,
     }
 }
@@ -1811,14 +1836,22 @@ fn adjudicate_against_claim_v1(
     prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
     fp_decode_rules_active: bool,
     rules: PalwIdentityRulesV1,
+    sessions: PalwSessionRuleV1,
 ) -> Result<(PalwForfeitScopeV1, Option<PalwIdentityFaultV1>), PalwOffenceVerifyError> {
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
     match admission {
         PalwFalseValidAdmissionV1::NamedVoid { .. } => Ok((PalwForfeitScopeV1::None, None)),
         PalwFalseValidAdmissionV1::ExecutionProving => {
+            // A domain violation is independent of sampling/constraints. Only an authenticated
+            // out-of-vocab id gets this exception; an in-vocab non-greedy FP token stays refused.
+            let public_fp_domain_proof = sessions == PalwSessionRuleV1::DirectProofFirst
+                && target.lane == Some(PalwClaimSourceKindV1::FreePrompt)
+                && matches!(contradiction, PalwPanelContradictionV1::ForgedOutput { binding, pin, position }
+                    if pin.generated_token_ids.get(*position as usize).is_some_and(|id| *id >= binding.shape_profile.vocab_size));
             if fp_decode_rules_active
                 && matches!(contradiction, PalwPanelContradictionV1::ForgedOutput { .. })
                 && target.lane != Some(PalwClaimSourceKindV1::Attempt)
+                && !public_fp_domain_proof
             {
                 return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
                     "ForgedOutput under ADR-0082's decode rules convicts only a claim known to be an attempt",
@@ -1831,13 +1864,15 @@ fn adjudicate_against_claim_v1(
                 PalwPanelContradictionV1::ConstrainedDecodeFlat { binding, accusation } => {
                     palw_constrained_job_target_v1(target, binding, &accusation.job)?;
                     match crate::palw_step_refute::check_constrained_flat_decode_token_v1(binding, accusation, ladder) {
-                        Ok(_) => {},
-                        Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound) => return Err(PalwOffenceVerifyError::TokenHolds),
+                        Ok(_) => {}
+                        Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound) => {
+                            return Err(PalwOffenceVerifyError::TokenHolds);
+                        }
                         _ => return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
                     }
                 }
                 PalwPanelContradictionV1::ForgedOutputTiled { binding, proof } => {
-                    palw_forged_output_tiled_fault_v1(target, binding, proof, ladder, fp_decode_rules_active)?
+                    palw_forged_output_tiled_fault_at_v2(target, binding, proof, ladder, fp_decode_rules_active, sessions)?
                 }
                 PalwPanelContradictionV1::LogitsNotStepOutput { event, row, head_tile, head_opening } => {
                     palw_logits_not_step_output_fault_v1(target, event, *row, *head_tile, head_opening, ladder)?
@@ -2017,6 +2052,7 @@ pub fn palw_check_panel_false_valid_at_v2(
         payload.prompt_ids_opening.as_ref(),
         fp_decode_rules_active,
         rules,
+        sessions,
     )?;
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
     let (site, step_leaf_count) = match palw_claim_proving_site_v1(&payload.contradiction, identity_fault) {
@@ -2340,6 +2376,7 @@ pub fn palw_check_executor_refuted_at_v1(
         payload.prompt_ids_opening.as_ref(),
         fp_decode_rules_active,
         rules,
+        sessions,
     )?;
     Ok(PalwExecutorRefutedFindingV1 { target, forfeit, identity_fault })
 }
@@ -4101,6 +4138,106 @@ mod f1c_tests {
             palw_prompt_not_anchored_fault_v1(&not_its, &relabel, &PalwPromptProofV1::Whole, rules),
             Err(E::PanelFalseValidWorkMismatch)
         );
+    }
+
+    /// An invalid committed ID is a decode-domain fault even when sampling or a constraint
+    /// makes a greedy-selection proof inadmissible. The old API and below-fence rule do not move.
+    #[test]
+    fn public_fp_out_of_vocab_convicts_executor_and_every_valid_signer_without_greedy_assumption() {
+        use crate::palw_offence_v1::PalwForgedOutputTiledProofV1;
+        use crate::palw_step_refute::*;
+        for tiled in [false, true] {
+            for committed in [0, 1, 17, u32::MAX] {
+                let template = floor_binding_for_tests_v1(&h64(0xD01), Form::Flat);
+                let mut binding = moved(&template, |b| {
+                    b.shape_profile.vocab_size = 17;
+                    if tiled { b.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1(); }
+                    b.job_context.shape_profile_id = b.shape_profile.shape_profile_id();
+                });
+                let count = binding.job_context.exact_decode_tokens as usize;
+                assert!(count > 0);
+                let rows = vec![vec![0; 17]; count];
+                let mut ids = vec![0; count];
+                ids[count - 1] = committed;
+                binding.full_logits_trace_root = if tiled {
+                    tiled_logits_trace_root_v1(&binding.job_context, &rows, &ids).unwrap()
+                } else {
+                    base0_logits_trace_root_v1(&binding.job_context, &rows, &ids)
+                };
+                binding = moved(&binding, |_| {});
+                let proof = if tiled {
+                    PalwPanelContradictionV1::ForgedOutputTiled {
+                        binding: binding.clone(),
+                        proof: PalwForgedOutputTiledProofV1::OutOfVocab {
+                            position: (count - 1) as u32,
+                            tokens: PalwTiledDecodeTokensV1 {
+                                rows_root: tiled_logits_rows_root_v1(&binding.job_context, &rows).unwrap(),
+                                generated_token_ids: ids,
+                            },
+                        },
+                    }
+                } else {
+                    PalwPanelContradictionV1::ForgedOutput {
+                        binding: binding.clone(),
+                        pin: PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: ids },
+                        position: (count - 1) as u32,
+                    }
+                };
+                let mut row = claim_row(PalwClaimPhaseV2::Provisional, binding.committed_execution_root);
+                row.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+                row.class_id = binding.shape_profile.shape_profile_id();
+                row.trace_root = binding.full_logits_trace_root;
+                let mut state = PalwChainStateV2::genesis();
+                state.set_false_valid_rows_for_tests(h64(CLAIM), Some(row), Some(five_seat_panel()), None, 0);
+                let (_, executor_bytes) = palw_executor_refuted_evidence_v1(h64(CLAIM), proof.clone(), None);
+                assert!(matches!(palw_check_executor_refuted_v1(&state, &seat(99), &executor_bytes, true, false, rules()),
+                    Err(E::ContradictionNotAdmitted(_))));
+                let judged = palw_check_executor_refuted_at_v1(&state, &seat(99), &executor_bytes, true, false, rules(),
+                    PalwSessionRuleV1::DirectProofFirst);
+                if committed >= 17 {
+                    assert_eq!(judged.map(|f| f.forfeit), Ok(PalwForfeitScopeV1::ByRoot));
+                } else if tiled {
+                    assert_eq!(judged, Err(E::TokenHolds));
+                } else {
+                    assert!(matches!(judged, Err(E::ContradictionNotAdmitted(_))), "in-vocab FP selection stays refused");
+                }
+                for signer in 1..=5 {
+                    let payload = evidence(full(signer), proof.clone());
+                    let judged = palw_check_panel_false_valid_at_v2(&state, &seat(signer), &bytes(&payload),
+                        true, false, rules(), None, PalwSessionRuleV1::DirectProofFirst);
+                    if committed >= 17 {
+                        assert_eq!(judged.map(|f| f.forfeit), Ok(PalwForfeitScopeV1::ByRoot));
+                    } else {
+                        assert!(judged.is_err());
+                    }
+                }
+                if tiled && committed == 1 {
+                    let rows = vec![vec![0; 17]; count];
+                    let mut ids = vec![0; count];
+                    ids[count - 1] = 1;
+                    let selection = PalwForgedOutputTiledProofV1::NotSelected {
+                        pin: tiled_decode_pin_v1(&binding.job_context, &rows, &ids, (count - 1) as u32, 0).unwrap(),
+                    };
+                    let target = palw_offence_target_v1(&state, &h64(CLAIM)).unwrap();
+                    assert!(matches!(palw_forged_output_tiled_fault_at_v2(&target, &binding, &selection,
+                        binding.step_leaf_count, true, PalwSessionRuleV1::DirectProofFirst),
+                        Err(E::ContradictionNotAdmitted(_))), "FP greedy selection remains inadmissible");
+                }
+                if committed >= 17 {
+                    let mut bad = proof.clone();
+                    match &mut bad {
+                        PalwPanelContradictionV1::ForgedOutput { pin, .. } => pin.generated_token_ids[0] ^= 1,
+                        PalwPanelContradictionV1::ForgedOutputTiled {
+                            proof: PalwForgedOutputTiledProofV1::OutOfVocab { tokens, .. }, ..
+                        } => tokens.generated_token_ids[0] ^= 1,
+                        _ => unreachable!(),
+                    }
+                    let (_, bad_bytes) = palw_executor_refuted_evidence_v1(h64(CLAIM), bad, None);
+                    assert!(palw_check_executor_refuted_at_v1(&state, &seat(99), &bad_bytes, true, false, rules(),
+                        PalwSessionRuleV1::DirectProofFirst).is_err(), "unauthenticated ID never convicts");
+                }
+            }
+        }
     }
 
     /// **The heavy charge is the whole prompt a `Whole` 13 recomputes, and nothing else costs one.**

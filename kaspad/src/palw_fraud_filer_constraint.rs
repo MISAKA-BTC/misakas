@@ -336,7 +336,7 @@ mod tests {
             base_class_id: job.class_id,
             da_signer_liability: false,
         };
-        for case in 0..4 {
+        for case in 0..5 {
             let mut binding = *original.clone();
             let mut pin = original_pin.clone();
             if case == 1 {
@@ -349,6 +349,9 @@ mod tests {
                 pin.logits_rows[2][0] = 10;
                 pin.logits_rows[2][1] = 20;
                 pin.generated_token_ids[2] = 0;
+            }
+            if case == 4 {
+                pin.generated_token_ids[2] = vocab as u32;
             }
             binding.full_logits_trace_root =
                 base0_logits_trace_root_v1(&binding.job_context, &pin.logits_rows, &pin.generated_token_ids);
@@ -370,7 +373,9 @@ mod tests {
                     &pin.generated_token_ids,
                 ),
             };
-            let proof = flat_contradiction_v1(&target, &binding, &job, &pin, table.clone()).unwrap();
+            let proof = if case == 4 { None } else {
+                flat_contradiction_v1(&target, &binding, &job, &pin, table.clone()).unwrap()
+            };
             let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
                 PalwTraceEventDisclosureV1::Flat { binding: Box::new(binding.clone()), pin: pin.clone() },
             ));
@@ -378,6 +383,15 @@ mod tests {
             if case == 0 {
                 assert!(proof.is_none());
                 assert!(filing.is_none());
+                continue;
+            }
+            if case == 4 {
+                let filing = filing.expect("out-of-vocab pin files directly without rendering an invalid ID");
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &filing.object else {
+                    panic!("offence")
+                };
+                let decoded: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).unwrap();
+                assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::ForgedOutput { position: 2, .. }));
                 continue;
             }
             let proof = proof.unwrap();
@@ -477,7 +491,7 @@ mod tests {
         )
         .unwrap();
         let own = vec![0; job.decode_token_limit as usize];
-        for fault in 0..5 {
+        for fault in 0..6 {
             let mut ids = own.clone();
             let mut rows = vec![vec![0; vocab]; ids.len()];
             for row in &mut rows {
@@ -497,6 +511,9 @@ mod tests {
             if fault == 4 {
                 nominee[2] = PALW_LOGITS_TILE_LANES as u32;
             }
+            if fault == 5 {
+                ids[2] = vocab as u32;
+            }
             let mut binding = template.clone();
             binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows, &ids).unwrap();
             binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
@@ -515,6 +532,24 @@ mod tests {
                 output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &ids),
             };
             let initial = logits_event_disclosure_v1(&binding, &rows, &ids, 0, 0).unwrap();
+            if fault == 5 {
+                let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(
+                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(initial.clone()));
+                let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+                    prompt_ids_form: backend.prompt_ids_form(), base_class_id: Hash64::default(), da_signer_liability: false,
+                };
+                let filing = super::super::palw_fraud_filer_public_filing_with_fp_v2(&target, rules, &answer, None, Some(&job))
+                    .unwrap().expect("invalid tiled ID requires no selected tile or table opening");
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = filing.object else {
+                    panic!("offence")
+                };
+                let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
+                    borsh::from_slice(&evidence).unwrap();
+                assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::ForgedOutputTiled {
+                    proof: kaspa_consensus_core::palw_offence_v1::PalwForgedOutputTiledProofV1::OutOfVocab { position: 2, .. }, ..
+                }));
+                continue;
+            }
             let plan = tiled_plan_v1(&target, &job, &initial, &nominee, table.clone()).unwrap();
             if fault == 0 {
                 assert!(plan.is_none());

@@ -1217,6 +1217,28 @@ pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
         };
         if palw_output_fault_v1(target, binding, &pin).map_err(|e| e.to_string())? {
             PalwPanelContradictionV1::OutputMismatch { binding: binding.clone(), pin }
+        } else if let Some(position) = match &pin {
+            PalwDecodeTokenPinV1::Base0V1(tokens) => tokens.generated_token_ids.iter(),
+            PalwDecodeTokenPinV1::TiledV1(tokens) => tokens.generated_token_ids.iter(),
+            PalwDecodeTokenPinV1::FloatV2(_) => return Ok(None),
+        }
+        .position(|id| *id >= binding.shape_profile.vocab_size)
+        {
+            // The event already authenticates these IDs. This proof needs neither a host token
+            // table nor another logits tile; the core gate applies the block's public-filer fence.
+            match pin {
+                PalwDecodeTokenPinV1::Base0V1(pin) => {
+                    PalwPanelContradictionV1::ForgedOutput { binding: binding.clone(), pin, position: position as u32 }
+                }
+                PalwDecodeTokenPinV1::TiledV1(tokens) => PalwPanelContradictionV1::ForgedOutputTiled {
+                    binding: binding.clone(),
+                    proof: kaspa_consensus_core::palw_offence_v1::PalwForgedOutputTiledProofV1::OutOfVocab {
+                        position: position as u32,
+                        tokens,
+                    },
+                },
+                PalwDecodeTokenPinV1::FloatV2(_) => unreachable!(),
+            }
         } else if let (Some(job), PalwTraceEventDisclosureV1::Flat { pin, .. }) = (fp_job.filter(|j| j.is_constraint()), event) {
             let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
                 .ok_or("the public verifier does not hold this job's tokenizer table")?;
