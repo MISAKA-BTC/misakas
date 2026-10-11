@@ -1537,6 +1537,9 @@ enum PalwCmd {
         /// (`DUPLICATE_CLASS`) or hold it in conflict (`CLASS_CONFLICT`), or cannot be read. Without it those are refused before any fee.
         #[arg(long)]
         allow_duplicate: bool,
+        /// Refuse the entire batch before broadcast if its actual carrier fees exceed this total.
+        #[arg(long)]
+        maximum_total_fee_sompi: Option<u64>,
     },
     /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
@@ -3383,9 +3386,12 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }),
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate }) => {
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate, maximum_total_fee_sompi }) => {
             Box::pin(
-                async move { palw_fp::submit_objects_v2(&ctx, &key.source(), &object, yes, allow_duplicate).await.map(|_| ()) },
+                async move {
+                    palw_fp::submit_objects_v2_capped(&ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
+                        .await.map(|_| ())
+                },
             )
         }
         Command::Palw(PalwCmd::TirRegistration {

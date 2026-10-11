@@ -219,3 +219,33 @@ excessive cost measurements. Together with the six existing oracle/socket contro
 `python3 -m unittest discover -s scripts/tests -p 'test_rfc12_*.py' -v` passes ten
 tests. These tests are resource instrumentation controls, not native node or 100k
 measurements.
+# Finite signed-bootstrap transport driver (runtime pending)
+
+`scripts/misaka-rfc12-private-bootstrap.py` is the finite next boundary after the
+constructor-only smoke. It requires the opt-in private helper, the normal CLI,
+an explicit private salt, a total carrier-fee cap, and the existing predeclared
+resource-limits JSON. It creates the exact complete-v1 export, starts three
+separate owned databases with different actual salted seat keys, queues the
+signed registration and artifact binding through the normal CLI Borsh wRPC
+carrier path, and then connects only ordinary driver-owned P2P links. The A
+process uses the shipped floor producer with its real execution and PoW checks;
+B and JOIN judge through their normal seat services.
+
+The CLI's `palw submit-object --maximum-total-fee-sompi=<cap>` checks the actual
+fee sum after assembling all carriers and before its first broadcast. The driver
+also obtains a bounded dry-run preview, and queues the factory-priced objects
+before enabling the first production peer. It waits for actual native class and
+artifact-binding rows on all three processes, compares both public route roots
+at the same sink/clock, kills only its own A process with the OS, reopens its
+same DB as an observer under the identical consensus factory, and checks those
+persisted identities and binding terms again.
+
+A successful run records `nativeRegistrationBindingMeasured=true` only.
+Complete-check, useful-work maturity, pruned IBD, market fills, 100k, and security
+approval remain false. No clock, Final, registration or state carriage is
+injected. Missing Panel participation, a closed participation gate, expired
+envelope, native admission refusal, unavailable funds or a resource limit ends
+the run with diagnostics; the driver does not weaken those conditions. Its
+three Python controls verify refusal on another factory, actual OS child timeout
+cleanup, and preservation of failed-command diagnostics. They are not native
+registration or P2P evidence.

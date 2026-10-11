@@ -361,6 +361,19 @@ pub async fn submit_objects_v2(
     yes: bool,
     allow_duplicate: bool,
 ) -> Result<Vec<String>, CliError> {
+    submit_objects_v2_capped(ctx, ks, paths, yes, allow_duplicate, None).await
+}
+
+/// Build the entire batch and enforce the caller's total carrier fee cap before
+/// broadcasting its first transaction. The legacy caller keeps its old API.
+pub async fn submit_objects_v2_capped(
+    ctx: &Ctx,
+    ks: &crate::keys::KeySource,
+    paths: &[std::path::PathBuf],
+    yes: bool,
+    allow_duplicate: bool,
+    maximum_total_fee_sompi: Option<u64>,
+) -> Result<Vec<String>, CliError> {
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
     use kaspa_consensus_core::tx::UtxoEntry;
 
@@ -487,12 +500,23 @@ pub async fn submit_objects_v2(
         carriers.push((path.clone(), summary.clone(), tx, compute_mass, fee));
     }
 
+    let total_fee_sompi = carriers.iter().try_fold(0u64, |sum, (_, _, _, _, fee)| sum.checked_add(*fee))
+        .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast".into()))?;
+    if let Some(maximum) = maximum_total_fee_sompi {
+        if total_fee_sompi > maximum {
+            return Err(CliError::new(exit::GENERIC,
+                format!("the actual batch carrier fee {total_fee_sompi} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast")));
+        }
+    }
+
     if !yes {
         match ctx.output {
             OutputFormat::Json => println!(
                 "{}",
                 serde_json::json!({
                     "dry_run": true,
+                    "total_fee_sompi": total_fee_sompi,
+                    "maximum_total_fee_sompi": maximum_total_fee_sompi,
                     "carriers": carriers.iter().map(|(path, summary, tx, mass, fee)| serde_json::json!({
                         "object": path.display().to_string(), "summary": summary, "txid": tx.id().to_string(),
                         "payload_bytes": tx.payload.len(), "compute_mass": mass, "fee_sompi": fee,

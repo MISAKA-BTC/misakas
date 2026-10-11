@@ -183,6 +183,20 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
     write_new(&output.join("bond.seed"), faster_hex::hex_string(&card.bond.seed).as_bytes())?;
     let main = palw_t12_drill_main_key_v1(salt);
     write_new(&output.join("funding.seed"), faster_hex::hex_string(&main.seed).as_bytes())?;
+    let mut seats = Vec::new();
+    for (index, seat) in palw_t12_drill_cards_v1(salt).into_iter().enumerate() {
+        let key_file = if index == 0 { "bond.seed".into() } else { format!("bond-{index}.seed") };
+        if index != 0 {
+            write_new(&output.join(&key_file), faster_hex::hex_string(&seat.bond.seed).as_bytes())?;
+        }
+        let point = palw_t12_drill_premine_outpoint_v1(salt, seat.premine_index);
+        let fee = palw_t12_drill_fee_float_outpoint_v1(salt, index as u32);
+        seats.push(serde_json::json!({
+            "keyFile": key_file, "bond": format!("{}:{}", point.transaction_id, point.index),
+            "payAddress": seat.bond.address(kaspa_addresses::Prefix::Testnet).to_string(),
+            "feeOutpoint": format!("{}:{}", fee.transaction_id, fee.index),
+        }));
+    }
     let manifest = serde_json::json!({
         "version": 1, "kind": "rfc12-private-complete-bootstrap-file-fixture",
         "consensusParamsId": expected.consensus_params_id().to_string(), "genesis": expected.genesis.hash.to_string(),
@@ -197,6 +211,7 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
         "producerFeeOutpoint": format!("{}:{}", palw_t12_drill_fee_float_outpoint_v1(salt, 0).transaction_id,
             palw_t12_drill_fee_float_outpoint_v1(salt, 0).index),
         "fundingAddress": main.address(kaspa_addresses::Prefix::Testnet).to_string(),
+        "seats": seats,
         "floorClass": bundle.base_class_id.to_string(), "pricingScope": "exact factory genesis; no live retarget claim",
         "initialTarget": initial_target.to_string(), "slashValuePerPwu": slash_value_per_pwu.to_string(),
         "envelopeValidFromDaa": 1, "envelopeValidUntilDaa": 32,
