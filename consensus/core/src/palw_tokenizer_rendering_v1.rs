@@ -40,12 +40,28 @@ pub fn palw_qwen_byte_alphabet_v1() -> [char; 256] {
     table
 }
 
-pub fn palw_qwen_token_rendering_v1(token: &str, added: bool) -> Option<Vec<u8>> {
-    if added {
-        return Some(token.as_bytes().to_vec());
+/// Fixed inverse table: rendering a long ordinary token costs one lookup per character.
+const fn inverse_byte_alphabet() -> [u16; 324] {
+    let mut inverse = [u16::MAX; 324];
+    let mut b = 0usize;
+    let mut next = 256usize;
+    while b < 256 {
+        let c = if (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || b >= 174 { b }
+            else { let c = next; next += 1; c };
+        inverse[c] = b as u16;
+        b += 1;
     }
-    let alphabet = palw_qwen_byte_alphabet_v1();
-    token.chars().map(|c| alphabet.iter().position(|symbol| *symbol == c).map(|b| b as u8)).collect()
+    inverse
+}
+const INVERSE_BYTE_ALPHABET_V1: [u16; 324] = inverse_byte_alphabet();
+
+pub fn palw_qwen_char_byte_v1(c: char) -> Option<u8> {
+    INVERSE_BYTE_ALPHABET_V1.get(c as usize).copied().filter(|b| *b != u16::MAX).map(|b| b as u8)
+}
+
+pub fn palw_qwen_token_rendering_v1(token: &str, added: bool) -> Option<Vec<u8>> {
+    if added { return Some(token.as_bytes().to_vec()); }
+    token.chars().map(palw_qwen_char_byte_v1).collect()
 }
 
 /// Sparse id map: a tiny JSON file naming a huge id never allocates an id-sized array here.
