@@ -377,19 +377,27 @@ async fn register_opv(net: &mut Net, card: usize, o: &Onb) -> bool {
 
 /// `n` jobs on `class`, posted by card `card`.
 async fn post_jobs(net: &mut Net, card: usize, class: Digest, n: u8, nonce: u8) -> Vec<KernelJobV1> {
-    let jobs: Vec<KernelJobV1> = (0..n)
+    post_jobs_from_payers(net, &vec![card; n as usize], class, nonce).await
+}
+
+/// Beacon quorum controls require distinct authenticated payers as well as
+/// producers. This helper actually signs/funds each job under its payer's bond.
+async fn post_jobs_from_payers(net: &mut Net, payers: &[usize], class: Digest, nonce: u8) -> Vec<KernelJobV1> {
+    let jobs: Vec<KernelJobV1> = (0..payers.len())
         .map(|i| KernelJobV1 {
             class_binding_id: class,
             prompt: vec![3, 17, 9],
             max_new_tokens: 3,
             decode: DecodeRuleV1::Greedy,
-            nonce: [nonce.wrapping_add(i); 64],
+            nonce: [nonce.checked_add(u8::try_from(i).expect("bounded test job count")).expect("bounded test nonce"); 64],
         })
         .collect();
-    let posts: Vec<(usize, Obj)> = jobs.iter().map(|j| (card, net.route(card, &K::PostJob { job: j.clone() }))).collect();
+    let posts: Vec<(usize, Obj)> =
+        jobs.iter().zip(payers).map(|(j, &payer)| (payer, net.route(payer, &K::PostJob { job: j.clone() }))).collect();
     net.send(posts).await;
-    for j in &jobs {
+    for (j, &payer) in jobs.iter().zip(payers) {
         assert!(net.ledger().jobs.contains_key(&j.id()), "the job posted");
+        assert_eq!(net.ledger().job_poster(&j.id()), Some(net.kid(payer)), "the actual signed/funded job payer");
     }
     jobs
 }
@@ -506,7 +514,7 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     );
 
     // ---- B's OPV claims reach Final with no Panel and lock C's beacon ----
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x10).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x10).await;
     let ids = claims(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
     for id in &ids {
         assert!(net.ledger().claims.contains_key(id), "an eligible OPV class's claim commits");
@@ -516,6 +524,7 @@ async fn g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_an
     assert_eq!(sources.len(), 2, "the beacon's two sources: the bootstrap's Finals");
     assert!(sources.iter().all(|w| w.event.source_profile_id == b.opv && w.event.final_path == FinalPathV1::PanelIndependent));
     assert_ne!(sources[0].attribution.producer_id, sources[1].attribution.producer_id, "distinct producers (the distinct rule)");
+    assert_ne!(sources[0].attribution.consumer_id, sources[1].attribution.consumer_id, "distinct authenticated payers");
     assert!(lock > attempt.committed_daa);
     assert_eq!(chunk_target(&net, c.v2), Some(lock + PALW_CONFORMANCE_EVIDENCE_DEADLINE_DAA_V1), "a Post: lock + deadline");
 
@@ -860,7 +869,7 @@ async fn g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refu
     net.send(vec![(BOOT, o)]).await;
     assert!(register_opv(&mut net, BOOT, &b).await);
     // The bootstrap's jobs wait posted (a job is no source; its claim, after C's start, is).
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x50).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x50).await;
     // A false binding: the V2 artifact is seed 37's weights, the kernel class runs seed 38's (the same program).
     let c =
         onboard_all(&mut net, vec![Spec { v2: onb_fixture(37), kernel: onb_fixture(38), card: CAND, complete: false, sealed: false }])
@@ -1127,7 +1136,7 @@ async fn g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_t
     let policy = palw_onboarding_sealed_policy_v1();
     let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
     let w = policy.beacon_window_slots;
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 2, 0x70).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..2], b.opv, 0x70).await;
     net.beat_to(start).await;
     let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..2]).await;
     assert!(net.daa() < start + w, "both seals inside the seal window");
@@ -1207,7 +1216,7 @@ async fn g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted(
     let policy = palw_onboarding_sealed_policy_v1();
     let start = net.attempt(c.v2).committed_daa + policy.anchor_delay_slots;
     let w = policy.beacon_window_slots;
-    let jobs = post_jobs(&mut net, BOOT, b.opv, 3, 0x78).await;
+    let jobs = post_jobs_from_payers(&mut net, &PRODUCERS[..3], b.opv, 0x78).await;
     net.beat_to(start).await;
     let reveals = seal_now(&mut net, &b.kfx(), b.opv, &jobs, &PRODUCERS[..3]).await;
     net.beat_to(start + w).await;

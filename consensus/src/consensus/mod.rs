@@ -2512,6 +2512,16 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_vesting_v1_impl(query, limit, after)
     }
 
+    fn palw_reward_vesting_v2(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        exec_after: Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<kaspa_consensus_core::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        self.virtual_processor.palw_reward_vesting_v2_impl(query, limit, after, exec_after)
+    }
+
     fn palw_capacity_shadow_v1(
         &self,
         options: kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
@@ -3030,6 +3040,9 @@ impl ConsensusApi for Consensus {
         else {
             return Ok(None);
         };
+        self.virtual_processor.native_finalized_publication().map_err(|()| {
+            ConsensusError::General("native finalized publication is incompatible or unreadable; reconstruct or resync")
+        })?;
         let snapshot = self
             .storage
             .evm_heads_store
@@ -3043,6 +3056,7 @@ impl ConsensusApi for Consensus {
                 || s.generation != sink
                 || s.policy_id != retirement.settlement.id()
                 || s.ruleset_id != self.config.params.consensus_params_id()
+                || s.retirement_daa != retirement.activation.daa_score()
             {
                 return Err(ConsensusError::General("native settlement generation/ruleset mismatch; reconstruct or resync"));
             }

@@ -405,6 +405,8 @@ pub(crate) struct ClaimExtra {
 pub(crate) enum VestingStage {
     Maturing,
     Latched,
+    #[serde(rename = "exec_pending")]
+    ExecPending,
     Moved,
 }
 
@@ -429,6 +431,7 @@ pub(crate) fn vesting_of(row: &kaspa_rpc_core::RpcPalwClaimRow) -> Option<Vestin
     let stage = match row.vesting_stage.as_str() {
         "maturing" => VestingStage::Maturing,
         "latched" => VestingStage::Latched,
+        "exec_pending" => VestingStage::ExecPending,
         "moved" => VestingStage::Moved,
         _ => return None,
     };
@@ -465,6 +468,7 @@ pub(crate) fn vesting_detail(v: &VestingExtra) -> String {
             let eta = v.eta_daa.map(|d| format!("; moves {}DAA {d}", if v.eta_estimated { "≥ " } else { "at " })).unwrap_or_default();
             format!("{amount}matured{at}, waiting its turn to be minted{eta}")
         }
+        VestingStage::ExecPending => "native has moved; additional EXEC funds still await release".to_string(),
         VestingStage::Moved => "vested and minted: a coinbase paid it; the output matures like any coinbase output".to_string(),
     }
 }
@@ -493,7 +497,7 @@ pub(crate) fn refine(lane: Lane, mut reading: Reading, extra: &ClaimExtra) -> Re
         // the reward is pending on the row's clocks and turn — dated by the node's own plan — and
         // once the row moved a coinbase minted it.
         match extra.vesting {
-            Some(v @ VestingExtra { stage: VestingStage::Maturing | VestingStage::Latched, .. }) => {
+            Some(v @ VestingExtra { stage: VestingStage::Maturing | VestingStage::Latched | VestingStage::ExecPending, .. }) => {
                 return Reading {
                     state: RewardPending,
                     detail: vesting_detail(&v),
@@ -941,6 +945,11 @@ mod tests {
         let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(latched), ..Default::default() });
         assert_eq!((r.state, r.deadline_daa, r.estimated), (WorkState::RewardPending, Some(13_001), false));
         assert!(r.detail.contains("matured at DAA 13000, waiting its turn to be minted; moves at DAA 13001"), "{}", r.detail);
+        let pending =
+            vesting_of(&kaspa_rpc_core::RpcPalwClaimRow { vesting_stage: "exec_pending".into(), ..Default::default() }).unwrap();
+        let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(pending), ..Default::default() });
+        assert_eq!((r.state, r.deadline_daa), (WorkState::RewardPending, None));
+        assert!(r.detail.contains("additional EXEC funds still await release"), "{}", r.detail);
         let moved = VestingExtra { stage: VestingStage::Moved, payee_sompi: 0, ..maturing };
         let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(moved), ..Default::default() });
         assert_eq!(r.state, WorkState::Rewarded);

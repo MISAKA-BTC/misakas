@@ -439,7 +439,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // fold's past `palw_exec_payload_v2`; below it the walk drops the object by name, as the older build skips it.
         // [`validate_palw_lifecycle_tx`] holds the other half: where a ruleset does NOT tolerate undecodable payloads, tag 130 is
         // refused as undecodable, as the older build refuses it.
-        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => Ok(()),
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } | PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => Ok(()),
         PalwConsensusObjectV2::VerificationVertexV1 { vertex } => {
             crate::palw_vertex_v1::palw_vertex_shape_v1(vertex).map_err(|_| "a verification vertex is malformed (RFC-0007 Part I)")
         }
@@ -1343,7 +1343,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
-        O::ExecWorkRootOpenedV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
+        O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
         // Lane LG14-A: the dispute reservation and its release (154, 155).
         O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
@@ -1482,6 +1482,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (159, "LegacyLeafRecomputedV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (160, "LegacyHeldAnswerDeclaredV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
     (161, "LegacyHeldAnswerChunkV2", PalwLifecycleKindFenceV1::LegacyHeldDaV2),
+    (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
 /// **The owning fences' activations, resolved once from `Params`** (`Params::palw_lifecycle_kind_fences_v1`) and asked by every site
@@ -1643,11 +1644,20 @@ pub enum PalwKernelInnerFenceV1 {
     /// refutation of a candidate statement (inner 36 seal, 37 reveal). Its row names `palw_model_refutation_seal_v1`; in force only
     /// where `palw_panel_free_v1` is too (the candidate statements it refutes exist only there).
     ModelRefutationSealV1,
+    /// Separate source opt-in fence, inner 40 (codex used 21, RFC-02's on the integration line; renumbered at the merge); no
+    /// activated preset or approved consumer tuple.
+    BeaconSourceOptInV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 4] = [Self::PanelFreeV1, Self::TypedRootsV1, Self::PanelFreeAndTypedRootsV1, Self::ModelRefutationSealV1];
+    pub const ALL: [Self; 5] = [
+        Self::PanelFreeV1,
+        Self::TypedRootsV1,
+        Self::PanelFreeAndTypedRootsV1,
+        Self::ModelRefutationSealV1,
+        Self::BeaconSourceOptInV1,
+    ];
 
     /// The `Params` field the fence is resolved from.
     pub const fn params_field(self) -> &'static str {
@@ -1655,6 +1665,7 @@ impl PalwKernelInnerFenceV1 {
             Self::PanelFreeV1 => "palw_panel_free_v1",
             Self::TypedRootsV1 | Self::PanelFreeAndTypedRootsV1 => "palw_typed_roots_v1",
             Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
+            Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
         }
     }
 }
@@ -1708,6 +1719,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
         K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
+        K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
     }
 }
 
@@ -1750,6 +1762,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (35, "SettleFlatModelVectorDemandV3", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (36, "SealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
     (37, "RevealModelRefutationV4", Some(PalwKernelInnerFenceV1::ModelRefutationSealV1)),
+    (40, "OptInBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -1799,6 +1812,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         "consensus/core/src/dns_finality.rs::TakeoverToken",
         PalwInt12WireChangeV1::NotCarried(
             "the HA takeover token, removed with the retired HA-takeover path (codex/docs-retired-designs, the user, 2026-10-10); a signer message, never a lifecycle carriage",
+        ),
+    ),
+    (
+        "consensus/core/src/palw_vesting_v1.rs::PalwVestingNoteV1",
+        PalwInt12WireChangeV1::NotCarried(
+            "journal-only notes in stored deltas; existing tags are unchanged, appended EXEC notes require a dormant EXEC root",
         ),
     ),
     ("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2", PalwInt12WireChangeV1::ObjectEnum),
@@ -1856,6 +1875,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         ),
     ),
     // SMALL (RFC-0009 RDA4, RFC-0001 P1): the signer protocol and the worker frame — node-local wire forms, never a block's.
+    (
+        "consensus/core/src/dns_finality.rs::TakeoverToken",
+        PalwInt12WireChangeV1::NotCarried(
+            "the removed HA takeover's node-local signer credential; no lifecycle object carries it (retired paths, 27252fa18)",
+        ),
+    ),
     (
         "consensus/core/src/dns_finality.rs::SigningPurpose",
         PalwInt12WireChangeV1::NotCarried(
@@ -2012,6 +2037,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
     ),
+    // 38/39 are G14R's verifier pay (reserved, not yet used).
+    // codex RFC-7 (lane R6781): the per-attempt beacon source opt-in under its own dormant fence (codex used 21; renumbered).
+    a2_row(PalwA2SlotV1::KernelInner { lo: 40, hi: 40 }, "palw_beacon_source_opt_in_v1", "RFC-7 OptInBeaconSource (per-attempt source)", true),
     // K2S: a segmented fault rides a filing (inner 7) under tag 110's own fence, as the filing does, so no guarded arm is needed;
     // `ClaimBodyV1::Segmented` is the kernel ledger's state, never carried.
     a2_row(
@@ -4388,6 +4416,7 @@ pub(crate) mod tests {
             (159, 0x0395636b651f74fa),
             (160, 0x730c4ce9aa0ff75e),
             (161, 0xec0447b18452362b),
+            (131, 0xab59e37a222e6f74),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

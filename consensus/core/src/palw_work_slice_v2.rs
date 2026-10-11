@@ -10,7 +10,8 @@
 //! ```text
 //! roots[root_claim_id]          -> PalwWorkRootV2     RootWorkBudget: job identity, plan, accepted/verified work, lifecycle
 //! slices[(root_claim_id, i)]    -> PalwWorkSliceRowV2 WorkSliceUse: range, roots, carrier, stage, executor
-//! jobs[job_work_id]             -> root_claim_id      JobWorkUse: the one-use history rule for a job's computation
+//! jobs[job_work_id]             -> root_claim_id      active root index
+//! job_uses[job_work_id]         -> PalwExecJobUseV1    finite authenticated one-use history, retained after claim retirement
 //! ```
 //!
 //! They are separate from the round-permit ledger (`round_permits_used`): a permit's consumption creates no work credit and a
@@ -62,6 +63,60 @@ pub const PALW_EXEC_V2_MAX_SLICES_PER_BLOCK: usize = 8;
 
 /// The most DAA a root may stay open from its declaration (a hard cap on the declared expiry).
 pub const PALW_EXEC_V2_MAX_ROOT_LIFETIME_DAA: u64 = 100_000;
+
+/// Version-1 REAL authorization is finite and never renewed by later acceptance or a new root.
+pub const PALW_EXEC_V2_JOB_AUTHORIZATION_DAA_V1: u64 = 100_000;
+/// A structural history bound, not a reward/production budget or approved activation parameter.
+pub const PALW_EXEC_V2_MAX_JOB_USES_V1: usize = 100_000;
+pub const PALW_EXEC_V2_JOB_USE_SWEEP_V1: usize = PALW_EXEC_V2_MAX_OPEN_ROOTS;
+
+/// The original carrying-header clock, captured before native admission writes and retired with its claim.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecOriginV1 {
+    pub source_block: Hash64,
+    pub issued_daa: u64,
+}
+
+/// One legacy native clock proof fits the existing assembled-object carriage budget, including its tag/key/length.
+pub const PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1: usize = crate::palw_state_v2::PALW_OBJECT_CHUNK_SLOT_MASS as usize - 69;
+
+/// Self-authenticating provenance, not a new execution authorization: the full header must hash to the claim's carrying block.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]
+pub struct PalwExecOriginWitnessV1 {
+    pub claim: Hash64,
+    pub header: Vec<u8>,
+}
+
+impl borsh::BorshDeserialize for PalwExecOriginWitnessV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let claim = Hash64::deserialize_reader(reader)?;
+        let len = u32::deserialize_reader(reader)? as usize;
+        if len > PALW_EXEC_ORIGIN_HEADER_MAX_BYTES_V1 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "EXEC origin header exceeds its carriage budget"));
+        }
+        let mut header = vec![0; len];
+        reader.read_exact(&mut header)?;
+        Ok(Self { claim, header })
+    }
+}
+
+/// Authenticated one-use history survives its native claim, without retaining collateral or material beyond signed terms.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecJobUseV1 {
+    pub owner_root: Hash64,
+    pub class_id: Hash64,
+    pub canonical_job_id: Hash64,
+    pub input_root: Hash64,
+    pub source_block: Hash64,
+    pub issued_daa: u64,
+    pub expires_daa: u64,
+}
+
+impl PalwExecJobUseV1 {
+    pub fn work_id(&self) -> Hash64 {
+        palw_exec_job_work_id_v1(&self.class_id, &self.canonical_job_id, &self.input_root)
+    }
+}
 
 /// The most canonical work one root may plan (2^48): a bound on the plan, not a price. The reward is the claim's own funded
 /// allocation split by work share, so a larger plan only dilutes the share per unit.
@@ -152,24 +207,12 @@ impl PalwWorkRootDeclarationV2 {
         finish(state)
     }
 
-    /// **The job's work identity** — the key of [`PalwExecV2StateV1::jobs`]. It binds the class, the canonical job, its input,
-    /// the initial boundary state, the whole plan and the kernel, and **not** the root claim, the executors or the branch, so
+    /// **The job's work identity** — the key of [`PalwExecV2StateV1::jobs`]. It binds the immutable class, canonical job,
+    /// authenticated input, independently of output, cuts, execution extent, verification plan or carrier, so
     /// copying a job into a new root cannot earn the same work twice in a canonical history. Repeated-job semantics come from
     /// the existing ticket rules: `canonical_job_id` is the REAL claim's own job identity, which differs per attempt.
     pub fn job_work_id(&self, class_id: &Hash64) -> Hash64 {
-        let mut state = keyed(PALW_EXEC_V2_JOB_WORK_DOMAIN);
-        state.update(class_id.as_byte_slice());
-        state.update(self.canonical_job_id.as_byte_slice());
-        state.update(self.input_root.as_byte_slice());
-        state.update(self.initial_state_root.as_byte_slice());
-        state.update(&self.kernel_version.to_le_bytes());
-        state.update(self.plan_root.as_byte_slice());
-        state.update(&(self.boundaries.len() as u64).to_le_bytes());
-        for boundary in &self.boundaries {
-            state.update(&boundary.to_le_bytes());
-        }
-        state.update(&self.total_work.to_le_bytes());
-        finish(state)
+        palw_exec_job_work_id_v1(class_id, &self.canonical_job_id, &self.input_root)
     }
 
     /// The shape a stateless reader can check: a valid plan and roots that are set.
@@ -196,6 +239,15 @@ impl PalwWorkRootDeclarationV2 {
         }
         Ok(())
     }
+}
+
+/// The useful-work key, also reconstructed from immutable REAL inputs during restart validation.
+pub fn palw_exec_job_work_id_v1(class: &Hash64, job: &Hash64, input: &Hash64) -> Hash64 {
+    let mut state = keyed(PALW_EXEC_V2_JOB_WORK_DOMAIN);
+    state.update(class.as_byte_slice());
+    state.update(job.as_byte_slice());
+    state.update(input.as_byte_slice());
+    finish(state)
 }
 
 /// The domain a root declaration's signed message is hashed under (network-bound; the id alone is not).
@@ -235,9 +287,45 @@ where
     }
 }
 
+/// Explicit Origin decode/hash attempts per block, independent of FamilyCertified's grading slots.
+/// Initial dormant-lane bound preserves the former two chunk-completion ceiling for Origin;
+/// it is not a release latency, fee or availability approval, and also bounds direct carriage.
+pub const PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1: usize = 2;
+
+/// Ephemeral work accounting, not state or a proof-authentication hint. Refused work is not refunded.
+#[derive(Default)]
+pub struct PalwExecOriginBudgetV1 {
+    charged: usize,
+}
+
+impl PalwExecOriginBudgetV1 {
+    /// Charge before decoding/hashing an eligible Origin's header; the writer still authenticates afresh.
+    pub fn charge(&mut self) -> Result<(), PalwWorkRootRefusalV2> {
+        if self.charged >= PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1 {
+            return Err(PalwWorkRootRefusalV2::OriginVerificationBudget);
+        }
+        self.charged += 1;
+        Ok(())
+    }
+
+    pub fn charged(&self) -> usize {
+        self.charged
+    }
+}
+
 /// Why a root declaration was refused (each leaves no row).
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwWorkRootRefusalV2 {
+    #[error("the block has exhausted its EXEC original-header verification budget")]
+    OriginVerificationBudget,
+    #[error("the REAL job authorization header is unavailable or does not match its native claim")]
+    AuthorizationOrigin,
+    #[error("the REAL job has no recorded original authorization clock; legacy provenance migration is required")]
+    AuthorizationUnrecorded,
+    #[error("the REAL claim already has a recorded original authorization clock")]
+    AuthorizationRecorded,
+    #[error("the REAL job authorization has expired or its finite expiry overflows")]
+    AuthorizationExpired,
     #[error("the work-slice lane is not in force at this height")]
     Dormant,
     #[error("the root's {0} is unset (all zero)")]
@@ -262,6 +350,8 @@ pub enum PalwWorkRootRefusalV2 {
     ClaimBindingMismatch,
     #[error("the root claim's canonical work cannot be derived, so no prefix can be bound")]
     ClaimWorkNotDerivable,
+    #[error("the plan's execution work cannot be derived exactly from the registered IR and REAL job")]
+    ExecutionWorkNotDerivable,
     #[error("the plan's prefix {declared} is not the root claim's admitted canonical work {admitted}")]
     PrefixMismatch { declared: u64, admitted: u64 },
     #[error("the plan's total work {0} is above the per-root bound")]
@@ -276,6 +366,8 @@ pub enum PalwWorkRootRefusalV2 {
     ExecutorUnfunded,
     #[error("the lane already holds the most open roots, or this bond the most of its own")]
     RootQuota,
+    #[error("the finite job-use history is full; no root may evict unexpired authorization")]
+    JobHistoryQuota,
     #[error("checked arithmetic overflowed")]
     Overflow,
     /// Amendment 1 (spec §10.1): where the kernel route is in force a session opens only on a G14-complete class — one bound to a kernel
@@ -292,6 +384,8 @@ pub enum PalwWorkRootRefusalV2 {
     /// GAP-62: the declaration names no kernel claim the route holds.
     #[error("the declaration's prefix claim is not held by the kernel route")]
     PrefixClaimMissing,
+    #[error("the prefix kernel claim has already been paid")]
+    PrefixAlreadyPaid,
     /// GAP-62: the prefix claim is a pipeline claim (pipeline-class sessions await a segment state, as their slices do).
     #[error("the prefix claim is not a single-program kernel claim")]
     PrefixKindUnsupported,
@@ -374,7 +468,7 @@ pub struct PalwWorkRootV2 {
     /// The other authorised executors, ascending.
     pub extra_executors: Vec<PalwBondKeyV2>,
     /// What each extra executor stands behind for this root (the root claim's own reservation), held in `reserved_exposure` for the
-    /// root's life. Recorded so the release returns exactly what the open took.
+    /// root's life once its first signed slice is accepted. Listed nonparticipants reserve nothing.
     pub executor_exposure: u128,
     /// The REAL chain anchor: the block that carried the root claim.
     pub anchor: BlockHash,
@@ -522,6 +616,41 @@ pub struct PalwExecV2StateV1 {
     pub anchored: std::collections::BTreeMap<Hash64, u64>,
 }
 
+/// Separate from Panel seats: a seat-only penalty must never consume a slice executor's reward.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwExecV2RewardFundV1 {
+    NativeSlice,
+    KernelFee,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwExecV2RewardActionV1 {
+    Created,
+    Moved,
+    Burned,
+    /// Aggregate intent forfeiture of this payee; does not invalidate the unrelated root.
+    Forfeited {
+        offence_id: Hash64,
+    },
+}
+
+/// The additional executor legs of one settled root, with payee payloads frozen at Final.
+/// Lives in a separate optional carriage tail; existing root/slice and native vesting layouts are unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecV2RewardRowV1 {
+    pub final_daa: u64,
+    pub liability_until: u64,
+    /// The executor allocation before fee replacement. All these legs together fit inside it.
+    pub allocation_sompi: u64,
+    pub legs: std::collections::BTreeMap<(PalwBondKeyV2, PalwExecV2RewardFundV1), crate::palw_state_v2::PalwPayoutV2>,
+}
+
+impl PalwExecV2RewardRowV1 {
+    pub fn total_sompi_u128(&self) -> u128 {
+        self.legs.values().map(|leg| u128::from(leg.amount)).sum()
+    }
+}
+
 impl PalwExecV2StateV1 {
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty() && self.slices.is_empty() && self.jobs.is_empty() && self.anchored.is_empty()
@@ -623,6 +752,16 @@ pub enum PalwSliceRefusalV2 {
     VerificationClaimNotBound(&'static str),
     #[error("5: the named kernel claim already failed (convicted, unavailable or timed out)")]
     VerificationClaimFailed,
+    #[error("5: the kernel run's execution scope differs from its registered IR work interval")]
+    ExecutionScopeMismatch,
+    #[error("5: the kernel claim has already been paid")]
+    VerificationAlreadyPaid,
+    #[error("5: the kernel claim reward already belongs to another root")]
+    VerificationRewardBound,
+    #[error("5: the transferred kernel claim lacks provider terms or collateral covering the EXEC horizon")]
+    VerificationProviderHorizon,
+    #[error("6: the first signed slice's executor lacks Work room for its root reservation")]
+    ExecutorUnfunded,
 }
 
 impl PalwSliceRefusalV2 {
@@ -658,6 +797,11 @@ impl PalwSliceRefusalV2 {
             R::VerificationKindUnsupported => 25,
             R::VerificationClaimNotBound(_) => 26,
             R::VerificationClaimFailed => 27,
+            R::ExecutionScopeMismatch => 28,
+            R::VerificationAlreadyPaid => 29,
+            R::VerificationRewardBound => 30,
+            R::VerificationProviderHorizon => 31,
+            R::ExecutorUnfunded => 32,
         }
     }
 
@@ -692,13 +836,18 @@ impl PalwSliceRefusalV2 {
             25 => "verification_kind_unsupported",
             26 => "verification_claim_not_bound",
             27 => "verification_claim_failed",
+            28 => "execution_scope_mismatch",
+            29 => "verification_already_paid",
+            30 => "verification_reward_bound",
+            31 => "verification_provider_horizon",
+            32 => "executor_unfunded",
             _ => "unknown",
         }
     }
 }
 
 /// **One root's single settlement** (spec §4): the claim's funded allocation `allocation` (the root executor's leg of the reward)
-/// split by work share. Each slice executor is paid `floor(allocation × credited_work / total_work)` — summed per executor — and
+/// split by work share. Each executor is paid `floor(allocation × sum(credited_work) / total_work)` and
 /// the root executor keeps the rest, which is its prefix share plus the division's remainder. So:
 ///
 /// * `sum(paid) == allocation` exactly (nothing minted, nothing lost, no dust stranded);
@@ -721,11 +870,9 @@ pub fn settle_root_v2(
     settle_core_v2(allocation, allocation, total_work, slices, root_bond)
 }
 
-/// **A partial settlement** — the defensive door for a root that reaches the claim's `Final` without every slice verified (the
-/// claim holds its `Final` while the root is not ready, so this is unreachable by construction; it is here so that if the
-/// invariant were ever broken the chain pays only what was verified and never wedges). Only the prefix and the *verified*
-/// slices are payable: `payable = floor(allocation × (prefix + verified) / total)`; the rest of the allocation is never named
-/// (never minted). Shares are still `floor(allocation × work / total)`, and the root keeps `payable − Σ shares`.
+/// Legacy partial-share arithmetic, retained for partition-conservation tests.
+/// No production reward consumer calls this calculator: an incomplete root cannot settle,
+/// and a voided root pays zero. It does not authorize a partial Final or a payout.
 pub fn settle_root_partial_v2(
     allocation: u64,
     total_work: u64,
@@ -749,13 +896,19 @@ fn settle_core_v2(
     slices: &[(PalwBondKeyV2, u64)],
     root_bond: PalwBondKeyV2,
 ) -> Option<PalwRootSettlementV2> {
+    // Aggregate before rounding: cutting the same executor's range into more slices
+    // must not transfer additional dust to the root executor.
+    let mut work_by_executor: std::collections::BTreeMap<PalwBondKeyV2, u64> = std::collections::BTreeMap::new();
+    for (executor, work) in slices {
+        let total = work_by_executor.entry(*executor).or_insert(0);
+        *total = total.checked_add(*work)?;
+    }
     let mut legs: std::collections::BTreeMap<PalwBondKeyV2, u64> = std::collections::BTreeMap::new();
     let mut slice_paid: u64 = 0;
-    for (executor, work) in slices {
-        let share = u64::try_from((allocation as u128).checked_mul(*work as u128)? / total_work as u128).ok()?;
+    for (executor, work) in work_by_executor {
+        let share = u64::try_from((allocation as u128).checked_mul(work as u128)? / total_work as u128).ok()?;
         slice_paid = slice_paid.checked_add(share)?;
-        let leg = legs.entry(*executor).or_insert(0);
-        *leg = leg.checked_add(share)?;
+        legs.insert(executor, share);
     }
     let root_leg = payable.checked_sub(slice_paid)?;
     // The root executor may itself have executed slices: its legs merge into its one payout.
@@ -900,7 +1053,15 @@ mod tests {
         assert_ne!(a.job_work_id(&h(50)), c.job_work_id(&h(50)), "input");
         let mut d = decl();
         d.boundaries = vec![10, 50, 70, 100];
-        assert_ne!(a.job_work_id(&h(50)), d.job_work_id(&h(50)), "plan");
+        d.initial_state_root = h(900);
+        d.plan_root = h(901);
+        d.kernel_version = 900;
+        d.total_work = 900;
+        assert_eq!(
+            a.job_work_id(&h(50)),
+            d.job_work_id(&h(50)),
+            "repartitioning or changing output/verification metadata is the same work"
+        );
         let mut e = decl();
         e.canonical_job_id = h(9);
         assert_ne!(a.job_work_id(&h(50)), e.job_work_id(&h(50)), "job");
@@ -1013,11 +1174,22 @@ mod tests {
         assert_eq!(fine.total(), Some(10_000));
         let coarse_leg: u64 = coarse.slice_legs.iter().map(|(_, a)| *a).sum();
         let fine_leg: u64 = fine.slice_legs.iter().map(|(_, a)| *a).sum();
-        assert!(fine_leg <= coarse_leg, "floor division per slice can only lose dust, never gain");
+        assert_eq!(fine, coarse, "an executor's aggregate work determines its share");
         assert_eq!(coarse_leg, 9_000);
-        assert!(coarse_leg - fine_leg <= 90, "at most one sompi of dust per slice");
         // The dust goes to the root, not out of the allocation.
         assert_eq!(fine.root_leg + fine_leg, 10_000);
+    }
+
+    #[test]
+    fn an_executors_share_is_invariant_under_slice_splitting_with_fractional_rewards() {
+        let coarse = settle_root_v2(7, 10, 2, &[(bond(8), 8)], bond(7)).unwrap();
+        let fine = settle_root_v2(7, 10, 2, &[(bond(8), 4), (bond(8), 4)], bond(7)).unwrap();
+        assert_eq!(coarse, fine);
+        assert_eq!(coarse.slice_legs, vec![(bond(8), 5)]);
+        assert_eq!(coarse.total(), Some(7));
+        let partial_coarse = settle_root_partial_v2(7, 10, 2, &[(bond(8), 4)], bond(7)).unwrap();
+        let partial_fine = settle_root_partial_v2(7, 10, 2, &[(bond(8), 2), (bond(8), 2)], bond(7)).unwrap();
+        assert_eq!(partial_coarse, partial_fine);
     }
 
     #[test]

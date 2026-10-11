@@ -128,11 +128,13 @@ pub(super) fn parts_with(fence: Option<u64>, bft: bool) -> Parts {
 
 /// [`parts_with`] and then `edit` on the params copy (a test value, never a preset).
 ///
-/// **Built as a `Config` directly, never through `ConfigBuilder::build`.** The copy (the harness cards, the EVM lane as shipped,
-/// the BFT gate when `bft`, then `edit`) is validated by `validate_palw_v2` WITHOUT the retirement, so everything else in it is
-/// still a validated ruleset; the retirement is set afterwards. The release's validation requires `palw_fork_choice_rule_e_v1`
-/// armed at or below the retirement (ADR-0178), a fence this harness does not arm: these tests exercise the retirement's own
-/// behaviour and must not depend on it.
+/// **Built as a `Config` directly, never through `ConfigBuilder::build`.** The complete params copy (the harness cards, the EVM lane
+/// as shipped, the BFT gate when `bft`, then `edit`) is validated by `validate_palw_v2` first without the retirement and then again
+/// with it (codex RFC-12: the retirement's own params are validated, never bypassed). The one refusal the second pass tolerates is
+/// ADR-0178's ordering rule `PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1` — `palw_fork_choice_rule_e_v1` armed at or below the retirement, a
+/// fence this harness does not arm and this binary refuses; `validate_palw_v2` checks it last, after every other refusal, so a
+/// ruleset reaching it passes everything else. This is still a private test policy, not an approved release schedule or evidence
+/// of the remaining settlement/security gates.
 pub(super) fn parts_custom(
     fence: Option<u64>,
     bft: bool,
@@ -149,14 +151,30 @@ pub(super) fn parts_custom(
         });
     }
     edit(&mut params);
-    params.validate_palw_v2().expect("testnet-12 with the harness cards and the test edits validates");
+    let retirement_from_edit = params.palw_dns_retirement.take();
+    params.validate_palw_v2().expect("testnet-12 with the harness cards and the test edits validates (without the retirement)");
+    params.palw_dns_retirement = retirement_from_edit;
     if let Some(at) = fence {
         let retirement = test_retirement(at);
         assert!(retirement.settlement.valid() && retirement.legacy_evidence_horizon_daa > 0, "a complete test retirement");
         params.palw_dns_retirement = Some(retirement);
     }
+    if params.palw_dns_retirement.is_some() {
+        validate_but_rule_e_order(&params);
+    }
     params.skip_proof_of_work = true;
     (Config::new(params), bundle, premine, floats)
+}
+
+/// The complete params copy, retirement included, validates — except for ADR-0178's ordering rule (rule E armed at or below the
+/// retirement), which `validate_palw_v2` checks last and which no test network can satisfy while this binary refuses rule E.
+pub(super) fn validate_but_rule_e_order(params: &kaspa_consensus_core::config::params::Params) {
+    match params.validate_palw_v2() {
+        Ok(()) => {}
+        Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(why))
+            if why == kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1 => {}
+        Err(other) => panic!("the complete params copy with its retirement must validate (rule E's order aside): {other:?}"),
+    }
 }
 
 /// The combined ledger in wei: the virtual UTXO set, the EVM state, the wei burned by base fees.
@@ -1045,7 +1063,11 @@ async fn rfc12_x6_a_node_without_the_fence_follows_history_to_the_fence_and_no_f
 fn publish_native(rig: &Rig, snapshot: NativeSettlementSnapshotV1) {
     let vp = rig.vp();
     let mut batch = rocksdb::WriteBatch::default();
-    vp.evm_heads_store.write().set_native_batch(&mut batch, Some(snapshot)).unwrap();
+    let mut store = vp.evm_heads_store.write();
+    if snapshot.finalized.is_some() {
+        store.set_native_finalized_publication_batch(&mut batch, Some(snapshot.clone())).unwrap();
+    }
+    store.set_native_batch(&mut batch, Some(snapshot)).unwrap();
     vp.db.write(batch).unwrap();
 }
 
@@ -1098,8 +1120,40 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     assert_eq!((still.stop, still.generation), (Some(SettlementStopV1::FinalizedConflict), z2[0].header.hash), "sticky");
     // The resync: a root-verified import of the pruning point's EVM state (a retired pruning point).
     let pp = a.chain.sink();
+    // Fixture pruning context; its headers are real, but no long-range proof/GC is claimed.
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
     let header = a.api().get_evm_header_of(pp).unwrap().expect("the EVM header");
     let snapshot = a.api().get_evm_state_snapshot_of(pp).unwrap().expect("the EVM state");
+    let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
+    assert!(publication.as_ref().unwrap().finalized.is_some());
+    {
+        // Exercise the legacy side of the writer; this is a direct boundary seam, not a mined deep rollback.
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().update_evm_canonical_heads(&mut batch, a.config.params.genesis.hash);
+        a.vp().db.write(batch).unwrap();
+        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(still.clone()), "rollback cannot erase a sticky alarm");
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
+    }
+    assert_eq!(readiness_of(&a).stop, Some(SettlementStopV1::FinalizedConflict), "prime the advisory memo before resync");
+    let mut wrong_header = header.clone();
+    wrong_header.evm_number += 1;
+    assert!(a.vp().import_pruning_point_evm_state(pp, wrong_header, snapshot.clone()).is_err());
+    let mut wrong_state = snapshot.clone();
+    if let Some(account) = wrong_state.accounts.first_mut() {
+        account.nonce ^= 1;
+    } else {
+        wrong_state.accounts.push(kaspa_consensus_core::evm::EvmAccountSnapshot {
+            address: EvmAddress::from_bytes([0xee; 20]),
+            nonce: 1,
+            code_hash: kaspa_consensus_core::evm::EVM_EMPTY_CODE_HASH,
+            ..Default::default()
+        });
+    }
+    assert!(a.vp().import_pruning_point_evm_state(pp, header.clone(), wrong_state).is_err());
+    assert_eq!(snapshot_of(&a), Some(still.clone()), "rejected imports cannot clear the conflict");
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
     {
         // A node that imports has not got these rows (that is why it imports); this one has, so they go first.
         use crate::model::stores::evm::{EvmHeaderStore, EvmStateStore};
@@ -1110,6 +1164,9 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
     }
     a.vp().import_pruning_point_evm_state(pp, header, snapshot).expect("a root-verified import");
     assert_eq!(snapshot_of(&a), None, "the import clears native evidence until reconstruction supplies proof");
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+    assert_ne!(readiness_of(&a).stop, Some(SettlementStopV1::FinalizedConflict), "same-generation memo is invalidated immediately");
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
     let heads = heads_of(&a).expect("heads");
     assert_eq!(
         (heads.latest_head(), heads.safe_head(), heads.finalized_head()),
@@ -1122,13 +1179,494 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
         (rebuilt.generation, rebuilt.latest, rebuilt.safe, rebuilt.finalized),
         (z3[0].header.hash, Some(z3[0].header.hash), None, None)
     );
-    assert_eq!(
-        rebuilt.stop,
-        Some(SettlementStopV1::FrontierNotCovered),
-        "reconstruction built it from the chain; the conflict is gone"
-    );
+    assert_eq!(rebuilt.stop, Some(SettlementStopV1::FrontierNotCovered), "reconstruction built it from the chain; the conflict is gone");
 }
 
+/// A test publication names a real canonical block, but is not a genuine Final-work certificate.
+/// The regression concerns retention of what was published, not source soundness.
+async fn withdrawn_publication_fork_case(restart: bool) {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let p = parts(Some(FENCE));
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &p.0, sender);
+    let mut a = Rig::on(first, &p, 0x12_0720_0000);
+    let common = prefix(&mut a).await;
+    let mut b = follower(&p, 0x12_0730_0000, &common).await;
+    let main = extend(&mut a, &[2]).await;
+    let published = main[0].header.hash;
+    publish_native(
+        &a,
+        NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: a.config.params.consensus_params_id(),
+            policy_id: test_policy().id(),
+            generation: published,
+            retirement_daa: FENCE,
+            frontier: None,
+            latest: Some(published),
+            safe: Some(published),
+            finalized: Some(published),
+            depth: 1,
+            unique_work: "1".into(),
+            stop: None,
+        },
+    );
+    // No certified work: the next canonical extension withdraws the labels, without abandoning the head.
+    extend(&mut a, &[4]).await;
+    let withdrawn = snapshot_of(&a).unwrap();
+    assert_eq!((withdrawn.safe, withdrawn.finalized), (None, None));
+    assert_ne!(withdrawn.stop, Some(SettlementStopV1::FinalizedConflict));
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, Some(published));
+    if restart {
+        let (wallets, nonce, simulated_time, reopen_nonce) =
+            (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
+        drop(a);
+        let mut config = p.0.clone();
+        config.process_genesis = false;
+        let (sender, _rx) = async_channel::unbounded();
+        let second = TestConsensus::with_db(db.clone(), &config, sender);
+        let chain = t12_reopened_chain(second, &config, &p.1, simulated_time, reopen_nonce);
+        let resumed = (config, p.1.clone(), p.2.clone(), p.3.clone());
+        a = Rig::resumed(chain, &resumed, wallets, nonce);
+        assert_eq!(snapshot_of(&a), Some(withdrawn));
+        assert_eq!(readiness_of(&a).finalized.withdrawn_from, Some(published), "restart preserves the publication history");
+    }
+    let private = extend(&mut b, &[3, 4, 5, 6]).await;
+    for block in private.iter().cloned() {
+        a.arrive(block, "a heavier fork abandoning the withdrawn publication").await;
+    }
+    assert_eq!(a.chain.sink(), private.last().unwrap().header.hash, "fork choice still selects the heavier branch");
+    let conflict = snapshot_of(&a).unwrap();
+    assert_eq!(conflict.stop, Some(SettlementStopV1::FinalizedConflict), "withdrawal must not erase the historical conflict anchor");
+    assert_eq!((conflict.safe, conflict.finalized), (None, None));
+}
+
+#[tokio::test]
+async fn rfc12_publication_a_withdrawn_head_still_detects_a_later_abandoning_fork() {
+    withdrawn_publication_fork_case(false).await;
+}
+
+#[tokio::test]
+async fn rfc12_publication_a_restart_preserves_withdrawal_and_later_fork_detection() {
+    withdrawn_publication_fork_case(true).await;
+}
+#[tokio::test]
+async fn rfc12_publication_incompatible_history_is_preserved_and_readers_fail_closed() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0740_0000);
+    prefix(&mut a).await;
+    let native = snapshot_of(&a).unwrap();
+    let valid = NativeSettlementSnapshotV1 {
+        safe: native.latest,
+        finalized: native.latest,
+        // A stop beyond a certified prefix may coexist with a genuine older positive head.
+        stop: Some(SettlementStopV1::InsufficientDepth),
+        ..native.clone()
+    };
+    for kind in 0..8 {
+        let mut invalid = valid.clone();
+        match kind {
+            0 => invalid.version = 2,
+            1 => invalid.policy_id = Hash64::from_u64_word(71),
+            2 => invalid.ruleset_id = kaspa_hashes::Hash::from_bytes([72; 32]),
+            3 => invalid.retirement_daa += 1,
+            4 => invalid.finalized = None,
+            5 => invalid.safe = None,
+            6 => invalid.latest = None,
+            7 => invalid.stop = Some(SettlementStopV1::FinalizedConflict),
+            _ => unreachable!(),
+        }
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, Some(invalid.clone())).unwrap();
+        a.vp().db.write(batch).unwrap();
+        assert!(a.api().get_native_settlement_snapshot().is_err(), "reader must reject incompatible publication {kind}");
+        assert!(a.api().get_evm_canonical_heads().is_err(), "ETH tags share the fail-closed reader");
+        extend(&mut a, &[2 + kind % 6]).await;
+        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(native.clone()), "not overwritten");
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(invalid));
+        assert_eq!(
+            readiness_of(&a).stopped_early,
+            Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
+        );
+    }
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, Some(valid)).unwrap();
+    a.vp().db.write(batch).unwrap();
+    extend(&mut a, &[4]).await;
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, native.latest, "partial-prefix publication is valid incident history");
+}
+/// Simulate a pre-publication-history database, discarding its in-memory store cache as on restart.
+fn remove_publication_row_for_legacy_upgrade(rig: &Rig) {
+    use crate::model::stores::evm::DbEvmCanonicalHeadsStore;
+    let mut key: Vec<u8> = kaspa_database::registry::DatabaseStorePrefixes::EvmCanonicalHeads.into();
+    key.extend_from_slice(b"/native/finalized-publication/v1");
+    rig.vp().db.delete(key).unwrap();
+    *rig.vp().evm_heads_store.write() = DbEvmCanonicalHeadsStore::new(rig.vp().db.clone());
+}
+
+#[tokio::test]
+async fn rfc12_publication_legacy_positive_snapshot_bootstraps_retained_history() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0750_0000);
+    prefix(&mut a).await;
+    let snapshot = snapshot_of(&a).unwrap();
+    let published = NativeSettlementSnapshotV1 {
+        safe: snapshot.latest,
+        finalized: snapshot.latest,
+        // Certified prefix followed by a newer stop must not disqualify the positive publication.
+        stop: Some(SettlementStopV1::InsufficientDepth),
+        ..snapshot
+    };
+    publish_native(&a, published.clone());
+    remove_publication_row_for_legacy_upgrade(&a);
+    assert_eq!(a.vp().native_finalized_publication().unwrap(), Some(published.clone()));
+    extend(&mut a, &[2]).await;
+    assert_eq!(snapshot_of(&a).unwrap().finalized, None);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(published.clone()));
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, published.finalized);
+}
+
+#[tokio::test]
+async fn rfc12_publication_legacy_negative_snapshot_requires_recovery_not_invented_empty_history() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0760_0000);
+    prefix(&mut a).await;
+    let legacy = snapshot_of(&a).unwrap();
+    assert_eq!(legacy.finalized, None);
+    remove_publication_row_for_legacy_upgrade(&a);
+    assert!(a.api().get_native_settlement_snapshot().is_err());
+    extend(&mut a, &[2]).await;
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(legacy));
+    assert!(a.vp().evm_heads_store.read().native_finalized_publication().is_err(), "missing history is not overwritten with None");
+    assert_eq!(
+        readiness_of(&a).stopped_early,
+        Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
+    );
+    let pp = a.chain.sink();
+    // Fixture pruning context; its headers are real, but no long-range proof/GC is claimed.
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    {
+        use crate::model::stores::evm::{EvmHeaderStore, EvmStateStore};
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().db.write(batch).unwrap();
+    }
+    a.vp().import_pruning_point_evm_state(pp, header, state).unwrap();
+    assert_eq!(snapshot_of(&a), None);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
+    extend(&mut a, &[3]).await;
+    assert_ne!(snapshot_of(&a).unwrap().stop, Some(SettlementStopV1::FinalizedConflict));
+}
+
+#[tokio::test]
+async fn rfc12_publication_corrupt_bytes_never_fall_back_to_a_convenient_snapshot() {
+    use crate::model::stores::evm::DbEvmCanonicalHeadsStore;
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0770_0000);
+    prefix(&mut a).await;
+    let current = snapshot_of(&a).unwrap();
+    let published = NativeSettlementSnapshotV1 { safe: current.latest, finalized: current.latest, stop: None, ..current };
+    publish_native(&a, published.clone());
+    let mut key: Vec<u8> = kaspa_database::registry::DatabaseStorePrefixes::EvmCanonicalHeads.into();
+    key.extend_from_slice(b"/native/finalized-publication/v1");
+    a.vp().db.put(&key, [0xff]).unwrap();
+    *a.vp().evm_heads_store.write() = DbEvmCanonicalHeadsStore::new(a.vp().db.clone());
+    assert!(a.api().get_native_settlement_snapshot().is_err());
+    assert!(a.api().get_evm_canonical_heads().is_err());
+    extend(&mut a, &[2]).await;
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(published));
+    assert_eq!(a.vp().db.get(key).unwrap(), Some(vec![0xff]), "unreadable incident evidence is preserved");
+    assert_eq!(
+        readiness_of(&a).stopped_early,
+        Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PersistedSnapshotIncompatible, block: None })
+    );
+}
+#[tokio::test]
+async fn rfc12_import_a_valid_execution_of_another_block_cannot_clear_the_incident() {
+    use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStore, EvmStateStore};
+    use crate::model::stores::pruning::PruningStoreReader;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0780_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let requested = a.chain.sink();
+    let current_pruning = a.vp().pruning_point_store.read().pruning_point().unwrap();
+    assert_ne!(requested, current_pruning);
+    let ordinary = snapshot_of(&a).unwrap();
+    let positive = NativeSettlementSnapshotV1 { safe: ordinary.latest, finalized: ordinary.latest, stop: None, ..ordinary };
+    publish_native(&a, positive.clone());
+    let incident =
+        NativeSettlementSnapshotV1 { safe: None, finalized: None, stop: Some(SettlementStopV1::FinalizedConflict), ..positive.clone() };
+    publish_native(&a, incident.clone());
+    let heads = a.vp().evm_heads_store.read().get().unwrap();
+    assert_eq!(readiness_of(&a).stop, incident.stop);
+    let header = a.api().get_evm_header_of(requested).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(requested).unwrap().unwrap();
+    // The supplied state is genuinely root-verified, but it is not the established pruning target.
+    // Removing local rows models a sidecar import and avoids an unrelated duplicate-insert panic.
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().evm_header_store.delete_batch(&mut batch, requested).unwrap();
+    a.vp().evm_state_store.delete_batch(&mut batch, requested).unwrap();
+    a.vp().db.write(batch).unwrap();
+    assert!(
+        a.vp().import_pruning_point_evm_state(requested, header, state).is_err(),
+        "root validity alone must not authorize clearing a finalized incident at another block"
+    );
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(incident.clone()));
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(positive));
+    assert_eq!(a.vp().evm_heads_store.read().get().unwrap(), heads);
+    assert_eq!(readiness_of(&a).stop, incident.stop);
+    assert!(a.api().get_evm_header_of(requested).unwrap().is_none(), "refused import stages no execution row");
+    assert_eq!(a.vp().pruning_point_store.read().pruning_point().unwrap(), current_pruning);
+}
+
+#[tokio::test]
+async fn rfc12_import_retry_after_a_processor_restart_is_idempotent() {
+    use crate::model::stores::evm::{EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore};
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let p = parts(Some(FENCE));
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &p.0, sender);
+    let mut a = Rig::on(first, &p, 0x12_0790_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let pp = a.chain.sink();
+    // Establish context through the real import entry; normal header processing already installed
+    // the same sample. This is a harness history list, not a full pruning proof or actual GC.
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+    a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+    a.vp().db.write(batch).unwrap();
+    a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()).unwrap();
+    let checkpoint = a.vp().evm_state_checkpoint_store.get(pp).unwrap().unwrap();
+    assert_eq!(checkpoint.decode_snapshot().unwrap(), state);
+    let first_heads = heads_of(&a).unwrap();
+    let (wallets, nonce, simulated_time, reopen_nonce) =
+        (a.wallets.clone(), a.nonce, a.chain.ctx.simulated_time, a.chain.nonce_for_reopen());
+    drop(a);
+    let mut config = p.0.clone();
+    config.process_genesis = false;
+    let (sender, _rx) = async_channel::unbounded();
+    let second = TestConsensus::with_db(db, &config, sender);
+    let chain = t12_reopened_chain(second, &config, &p.1, simulated_time, reopen_nonce);
+    let resumed = (config, p.1.clone(), p.2.clone(), p.3.clone());
+    let a = Rig::resumed(chain, &resumed, wallets, nonce);
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    a.vp()
+        .import_pruning_point_evm_state(pp, header.clone(), state.clone())
+        .expect("retrying a committed import must not panic on existing immutable rows");
+    assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(header));
+    assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(state));
+    assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(checkpoint));
+    assert_eq!(heads_of(&a), Some(first_heads));
+    assert_eq!(snapshot_of(&a), None);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+    assert_eq!(readiness_of(&a).finalized.withdrawn_from, None);
+}
+#[tokio::test]
+async fn rfc12_import_partial_execution_rows_are_completed_without_overwriting_identical_data() {
+    use crate::model::stores::evm::{EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_07a0_0000);
+    prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let pp = a.chain.sink();
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pp, header.evm_number, header.state_root, &state);
+    // Retire-206/recovery may have only a header, only a snapshot, or only the checkpoint.
+    for (keep_header, keep_state, keep_checkpoint) in [(true, false, true), (false, true, false), (false, false, true)] {
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_checkpoint_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().db.write(batch).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        if keep_header {
+            a.vp().evm_header_store.insert_batch(&mut batch, pp, header.clone()).unwrap();
+        }
+        if keep_state {
+            a.vp().evm_state_store.insert_batch(&mut batch, pp, state.clone()).unwrap();
+        }
+        if keep_checkpoint {
+            a.vp().evm_state_checkpoint_store.insert_batch(&mut batch, pp, checkpoint.clone()).unwrap();
+        }
+        a.vp().db.write(batch).unwrap();
+        a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()).unwrap();
+        assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(header.clone()));
+        assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(state.clone()));
+        assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(checkpoint.clone()));
+        assert_eq!(snapshot_of(&a), None);
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), None);
+        let heads = heads_of(&a).unwrap();
+        assert_eq!((heads.latest_head(), heads.safe_head(), heads.finalized_head()), (Some(pp), None, None));
+    }
+}
+
+#[tokio::test]
+async fn rfc12_import_conflicting_existing_rows_preserve_incident_and_flat_head() {
+    use crate::model::stores::evm::{
+        EvmCanonicalHeadsStoreReader, EvmHeaderStore, EvmStateCheckpointStoreReader, EvmStateStore,
+    };
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    let mut p = parts(Some(FENCE));
+    p.0.evm_shadow_state_backend = true;
+    let mut a = Rig::new(&p, 0x12_07b0_0000);
+    let pre = prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let pp = pre[0].header.hash;
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(pp).unwrap()])
+        .unwrap();
+    let header = a.api().get_evm_header_of(pp).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(pp).unwrap().unwrap();
+    let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(pp, header.evm_number, header.state_root, &state);
+    let ordinary = snapshot_of(&a).unwrap();
+    let positive = NativeSettlementSnapshotV1 { safe: ordinary.latest, finalized: ordinary.latest, stop: None, ..ordinary };
+    publish_native(&a, positive.clone());
+    let incident =
+        NativeSettlementSnapshotV1 { safe: None, finalized: None, stop: Some(SettlementStopV1::FinalizedConflict), ..positive.clone() };
+    publish_native(&a, incident.clone());
+    assert_eq!(readiness_of(&a).stop, incident.stop);
+    let ptr = a.vp().evm_latest_state_ptr_store.read().get().unwrap().unwrap();
+    assert_ne!(ptr.canonical_head, pp, "the failed import must not rewind the flat pointer to P");
+    let heads = a.vp().evm_heads_store.read().get().unwrap();
+    for kind in 0..3 {
+        let (mut stored_header, mut stored_state, mut stored_checkpoint) = (header.clone(), state.clone(), checkpoint.clone());
+        match kind {
+            0 => stored_header.evm_number += 1,
+            1 => stored_state.accounts.push(kaspa_consensus_core::evm::EvmAccountSnapshot {
+                address: EvmAddress::from_bytes([0xee; 20]),
+                nonce: 1,
+                code_hash: kaspa_consensus_core::evm::EVM_EMPTY_CODE_HASH,
+                ..Default::default()
+            }),
+            2 => stored_checkpoint.checksum[0] ^= 1,
+            _ => unreachable!(),
+        }
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().evm_state_checkpoint_store.delete_batch(&mut batch, pp).unwrap();
+        a.vp().db.write(batch).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        a.vp().evm_header_store.insert_batch(&mut batch, pp, stored_header.clone()).unwrap();
+        a.vp().evm_state_store.insert_batch(&mut batch, pp, stored_state.clone()).unwrap();
+        a.vp().evm_state_checkpoint_store.insert_batch(&mut batch, pp, stored_checkpoint.clone()).unwrap();
+        a.vp().db.write(batch).unwrap();
+        assert!(matches!(a.vp().import_pruning_point_evm_state(pp, header.clone(), state.clone()),
+            Err(PruningImportError::ImportedEvmExistingStateMismatch(target, _)) if target == pp));
+        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(incident.clone()));
+        assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), Some(positive.clone()));
+        assert_eq!(a.vp().evm_heads_store.read().get().unwrap(), heads);
+        assert_eq!(a.vp().evm_latest_state_ptr_store.read().get().unwrap(), Some(ptr));
+        assert_eq!(a.vp().evm_state_checkpoint_store.get(pp).unwrap(), Some(stored_checkpoint));
+        assert_eq!(a.api().get_evm_header_of(pp).unwrap(), Some(stored_header));
+        assert_eq!(a.api().get_evm_state_snapshot_of(pp).unwrap(), Some(stored_state));
+        assert_eq!(readiness_of(&a).stop, incident.stop, "failed validation cannot clear the memo");
+    }
+}
+
+#[tokio::test]
+async fn rfc12_import_missing_context_header_is_an_error_not_a_panic() {
+    use crate::model::stores::{evm::EvmCanonicalHeadsStoreReader, pruning::PruningStore};
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_07c0_0000);
+    prefix(&mut a).await;
+    let tip = a.chain.sink();
+    let header = a.api().get_evm_header_of(tip).unwrap().unwrap();
+    let state = a.api().get_evm_state_snapshot_of(tip).unwrap().unwrap();
+    let native = a.vp().evm_heads_store.read().native_snapshot().unwrap();
+    let publication = a.vp().evm_heads_store.read().native_finalized_publication().unwrap();
+    let heads = a.vp().evm_heads_store.read().get().unwrap();
+    let missing = Hash64::from_u64_word(0x12_07c0_dead);
+    // Deliberately broken fixture context: a production proof must have installed this header.
+    a.vp().pruning_point_store.write().set(missing, 1).unwrap();
+    assert!(matches!(a.vp().import_pruning_point_evm_state(missing, header, state),
+        Err(PruningImportError::PruningPointImportContextUnavailable(target, _)) if target == missing));
+    assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), native);
+    assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
+    assert_eq!(a.vp().evm_heads_store.read().get().unwrap(), heads);
+}
+
+#[tokio::test]
+async fn rfc12_import_context_is_repeatable_and_invalid_history_never_changes_the_target() {
+    use crate::model::stores::{
+        past_pruning_points::PastPruningPointsStoreReader, pruning::PruningStoreReader, pruning_samples::PruningSamplesStoreReader,
+    };
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_07d0_0000);
+    let pre = prefix(&mut a).await;
+    extend(&mut a, &[2]).await;
+    let genesis = a.api().get_header(a.config.params.genesis.hash).unwrap();
+    let pp = a.api().get_header(a.chain.sink()).unwrap();
+    let earlier = pre[0].header.clone();
+    assert_eq!(
+        a.vp().pruning_samples_store.pruning_sample_from_pov(pp.hash).unwrap(),
+        genesis.hash,
+        "normal processing already has the identical immutable sample"
+    );
+    for _ in 0..2 {
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone()]).unwrap();
+    }
+    assert!(matches!(a.api().import_pruning_points(Vec::new()), Err(PruningImportError::PruningProofNotEnoughHeaders)));
+    assert!(matches!(a.api().import_pruning_points(vec![pp.clone()]), Err(PruningImportError::PruningPointsWrongGenesis(_, _))));
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone(), earlier.clone()]),
+        Err(PruningImportError::InconsistentPastPruningPoints(..))
+    ));
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone(), pp.clone()]),
+        Err(PruningImportError::DuplicatedPastPruningPoints(_))
+    ));
+    let mut unknown = pp.as_ref().clone();
+    unknown.pow_algo_id = 255;
+    unknown.finalize();
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), std::sync::Arc::new(unknown)]),
+        Err(PruningImportError::PruningProofUnknownPowAlgoId(..))
+    ));
+    assert_eq!(a.vp().past_pruning_points_store.get(0).unwrap(), genesis.hash);
+    assert_eq!(a.vp().past_pruning_points_store.get(1).unwrap(), pp.hash);
+    assert!(a.vp().past_pruning_points_store.get(2).is_err(), "refused input cannot leave a partial history row");
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().pruning_samples_store.delete_batch(&mut batch, pp.hash).unwrap();
+    a.vp().db.write(batch).unwrap();
+    let mut batch = rocksdb::WriteBatch::default();
+    a.vp().pruning_samples_store.insert_batch(&mut batch, pp.hash, earlier.hash).unwrap();
+    a.vp().db.write(batch).unwrap();
+    assert!(matches!(
+        a.api().import_pruning_points(vec![genesis.clone(), pp.clone()]),
+        Err(PruningImportError::ImportedPruningPointHistoryMismatch(..))
+    ));
+    assert_eq!(a.vp().pruning_samples_store.pruning_sample_from_pov(pp.hash).unwrap(), earlier.hash);
+    assert_eq!(a.vp().pruning_point_store.read().pruning_point().unwrap(), pp.hash);
+    assert_eq!(a.vp().past_pruning_points_store.get(0).unwrap(), genesis.hash);
+    assert_eq!(a.vp().past_pruning_points_store.get(1).unwrap(), pp.hash);
+}
 // =====================================================================================================================
 // MATRIX 7 — certified work makes a prefix safe; a reorg takes it back; lost history stops certification
 // =====================================================================================================================
@@ -1191,6 +1729,76 @@ async fn certified(a: &mut Rig) -> (Block, Block, Vec<Block>) {
     a.vp().pruning_point_store.write().set(pre[0].header.hash, 1).unwrap();
     extend(a, &[3]).await;
     (pre[0].clone(), e3, pre)
+}
+
+/// A checkpoint row has no delta evidence; moving that checkpoint backwards must require its retained
+/// delta again. Hot memory and a cold walk must agree even when that previously unnecessary row is gone.
+#[tokio::test]
+async fn rfc12_cache_a_former_pruning_boundary_cannot_hide_missing_delta_after_context_rewind() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0c10_0000);
+    let (boundary, _, _) = certified(&mut a).await;
+    let sink = a.chain.sink();
+    a.vp().native_rows.lock().clear();
+    let baseline = a.vp().native_evaluate(sink);
+    assert_eq!(baseline.snapshot.safe, Some(boundary.header.hash));
+    let (root, delta) = a.vp().palw_state_v2_store.read().delta_of(boundary.header.hash).unwrap();
+    let record =
+        crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2 { state_root: root, delta_borsh: borsh::to_vec(&delta).unwrap() };
+    a.vp().palw_state_v2_store.write().delete_delta_for_tests(boundary.header.hash).unwrap();
+    assert_eq!(a.vp().native_evaluate(sink).snapshot, baseline.snapshot, "a checkpoint needs no own delta");
+    // Actual context entry with fixture history, not a full adopted pruning proof or real GC.
+    a.api().import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap()]).unwrap();
+    let warm = a.vp().native_evaluate(sink).snapshot;
+    a.vp().native_rows.lock().clear();
+    let cold = a.vp().native_evaluate(sink);
+    assert_eq!((cold.snapshot.safe, cold.snapshot.finalized, cold.snapshot.stop), (None, None, Some(SettlementStopV1::MissingHistory)));
+    assert!(matches!(cold.detail, super::super::native_settlement::NativeDetail::Stopped(
+        SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(hash) }
+    ) if hash == boundary.header.hash));
+    assert_eq!(warm, cold.snapshot, "a cached checkpoint must not supply an empty delta above the new boundary");
+    a.vp().palw_state_v2_store.write().set_delta_record_for_tests(boundary.header.hash, record).unwrap();
+    let restored = a.vp().native_evaluate(sink).snapshot;
+    assert_eq!(
+        (restored.safe, restored.finalized),
+        (Some(boundary.header.hash), None),
+        "restored evidence is read without flushing memory"
+    );
+}
+
+/// Pruning context can change without a virtual-sink change (IBD catch-up/context import). Readiness
+/// must derive from that context on the next call rather than reuse the old per-sink explanation.
+#[tokio::test]
+async fn rfc12_cache_readiness_observes_a_new_pruning_context_at_the_same_sink() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0c20_0000);
+    let (boundary, _, pre) = certified(&mut a).await;
+    let before = readiness_of(&a);
+    let published = snapshot_of(&a).unwrap();
+    assert!(before.agrees_with_snapshot(&published), "stable RPC readings can be paired");
+    assert_eq!(before.finalized.finalized, Some(boundary.header.hash));
+    let next = pre[1].header.hash;
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(next).unwrap()])
+        .unwrap();
+    let warm = readiness_of(&a);
+    a.vp().native_readiness_memo.lock().take();
+    let cold = readiness_of(&a);
+    assert_eq!(cold.generation, before.generation, "the sink did not change");
+    assert_eq!(cold.finalized.pruning_point, next);
+    assert_eq!((cold.safe, cold.finalized.finalized), (None, None));
+    assert_eq!(warm, cold, "the memo key must include pruning context, not just the sink");
+    assert!(!warm.agrees_with_snapshot(&published), "RPC must omit the new advice beside an older same-sink certificate");
+    extend(&mut a, &[4]).await;
+    let committed = snapshot_of(&a).unwrap();
+    let current = readiness_of(&a);
+    assert!(current.agrees_with_snapshot(&committed), "the next coherent publication restores the explanation");
+    let mut another_policy = current.clone();
+    another_policy.policy.unique_mature_work = "340282366920938463463374607431768211456".into();
+    assert!(!another_policy.agrees_with_snapshot(&committed), "overflowing policy work cannot be paired");
+    another_policy.policy.unique_mature_work = "2".into();
+    assert!(!another_policy.agrees_with_snapshot(&committed), "different policy cannot explain this certificate");
 }
 
 /// **EXPECTED.** With a safe frontier at b0, one unit of matured work (10) placed after it, and b0 the pruning point:

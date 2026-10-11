@@ -435,7 +435,7 @@ pub struct ClaimBeaconSealV1 {
 /// the start of a seal window `[S, S + W)` must still be revealable at the end of its reveal window `[S + W, S + 2W)`). OPV-BOOT's
 /// policy validation asks this with its `beacon_window_slots`.
 pub fn seal_ttl_admits_beacon_window_v1(policy: &LedgerPolicyV1, beacon_window_daa: u64) -> bool {
-    beacon_window_daa.saturating_mul(2) <= policy.seal_ttl_daa
+    beacon_window_daa.checked_mul(2).is_some_and(|span| span <= policy.seal_ttl_daa)
 }
 
 /// An unrevealed seal: the claim seal and the DAA it was carried at.
@@ -813,6 +813,12 @@ pub struct KernelLedgerV1 {
     pub proof_seals: BTreeMap<(Digest, Digest), SealRowV1>,
     /// GAP-5: `job → its poster's escrow` — reserved at posting, paid out (once) as the job's Final reward, or returned.
     pub job_escrows: BTreeMap<Digest, JobEscrowRowV1>,
+    /// Consumer-bound EXEC rewards: escrow stays reserved until the owning root settles or cancels.
+    pub exec_reward_holds: BTreeMap<Digest, crate::exec_reward::ExecRewardHoldV1>,
+    /// Per-target source deposits (table 28). Failure rows survive as veto evidence and cannot re-opt in.
+    pub beacon_sources: BTreeMap<(Digest, Digest), crate::beacon_source::BeaconSourceRowV1>,
+    /// Trusted consumer inputs, never rows/rooted state. Empty on restore; the new feature is refused by default.
+    pub beacon_source_inputs: crate::beacon_source::BeaconSourceInputsV1,
     /// **The demand bonds of SERVED positions, awaiting their fate** (K2S's producer-side DA griefing, G14-R4): a position served on
     /// chain keeps its demanders' bonds reserved; they are refunded the moment the claim is convicted, defaults or times out, and
     /// burned only when its liability horizon ends with no conviction — a true demand that leads to a conviction is never penalised.
@@ -919,6 +925,9 @@ impl KernelLedgerV1 {
             seals: BTreeMap::new(),
             proof_seals: BTreeMap::new(),
             job_escrows: BTreeMap::new(),
+            exec_reward_holds: BTreeMap::new(),
+            beacon_sources: BTreeMap::new(),
+            beacon_source_inputs: Default::default(),
             served_demands: BTreeMap::new(),
             claim_beacon_salts: BTreeMap::new(),
             forfeited_claim_seals: BTreeMap::new(),
@@ -1244,6 +1253,10 @@ impl KernelLedgerV1 {
                 self.seals.insert((*job, *producer), SealRowV1 { seal: *seal, daa: self.daa, deposit });
                 out.push(LedgerEventV1::ClaimSealed { job: *job, producer: *producer });
             }
+            KernelRouteObjectV1::OptInBeaconSource { producer, job, seal, context, terms } => {
+                self.opt_in_beacon_source(*producer, *job, *seal, *context, *terms, &mut out)
+                    .map_err(|why| KernelRefusalV1::rule(name, why))?;
+            }
             KernelRouteObjectV1::SealProof { accuser, claim, seal } => {
                 const NAME: &str = "SealProof";
                 let fee = self.policy.dismissed_proof_fee;
@@ -1360,7 +1373,7 @@ impl KernelLedgerV1 {
             O::FileProof { accuser, .. } => Some((*accuser, "accuser")),
             O::FileDemand { demander, .. } => Some((*demander, "demander")),
             O::RequestExit { bond } | O::Withdraw { bond } => Some((*bond, "bond")),
-            O::SealClaim { producer, .. } => Some((*producer, "producer")),
+            O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } => Some((*producer, "producer")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
             O::Spec { object } => object.named_actor(),
             _ => None,
@@ -1426,10 +1439,21 @@ impl KernelLedgerV1 {
     /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
     /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
     fn pay_from_job_escrow(&mut self, job: &Digest, claim: &Digest, producer: Digest, out: &mut Vec<LedgerEventV1>) -> u64 {
+        self.pay_from_job_escrow_capped(job, claim, producer, u64::MAX, out)
+    }
+
+    pub(crate) fn pay_from_job_escrow_capped(
+        &mut self,
+        job: &Digest,
+        claim: &Digest,
+        producer: Digest,
+        cap: u64,
+        out: &mut Vec<LedgerEventV1>,
+    ) -> u64 {
         let Some(row) = self.job_escrows.remove(job) else { return 0 };
         let collateral = self.bonds.get(&row.poster).map_or(0, |b| b.collateral);
         // Never instruct more than the poster's bond still holds (another subsystem may have slashed it since).
-        let paid = row.amount.min(collateral);
+        let paid = row.amount.min(collateral).min(cap);
         if let Some(b) = self.bonds.get_mut(&row.poster) {
             b.reserved = b.reserved.saturating_sub(row.amount);
             b.collateral -= paid;
@@ -1447,7 +1471,7 @@ impl KernelLedgerV1 {
     /// make on an unclaimed job, and a re-seal restarts its clock on the same deposit, so "no live seal" let a squatter keep the
     /// escrow — and, through `reserved`, the poster's whole bond exit — for as long as it re-sealed. A producer that sealed by the
     /// escrow's TTL has `seal_ttl_daa` to reveal (its seal expires then anyway).
-    fn release_idle_job_escrows(&mut self, out: &mut Vec<LedgerEventV1>) {
+    fn release_idle_job_escrows(&mut self, held_jobs: &BTreeSet<Digest>, out: &mut Vec<LedgerEventV1>) {
         let ttl = self.policy.job_escrow_ttl_daa;
         let seal_ttl = self.policy.seal_ttl_daa;
         let idle: Vec<Digest> = self
@@ -1456,6 +1480,7 @@ impl KernelLedgerV1 {
             .filter(|(job, row)| {
                 let expired = row.posted_daa.saturating_add(ttl);
                 self.daa > expired
+                    && !held_jobs.contains(*job)
                     && !self.job_claims.get(*job).and_then(|c| self.claims.get(c)).is_some_and(ClaimRowV1::holds_job)
                     && (self.daa > expired.saturating_add(seal_ttl)
                         || self.seals.range((**job, [0u8; 64])..=(**job, [0xFFu8; 64])).next().is_none())
@@ -1838,6 +1863,7 @@ impl KernelLedgerV1 {
         bond.collateral -= fee;
         self.burned += fee;
         let daa = self.daa;
+        let source_floor = self.beacon_source_liability_floor(job, producer);
         let mut life = ClaimLifecycleV1::new(LifecyclePolicyV1 {
             check_window_daa: self.policy.check_window_daa,
             challenge_window_daa: match &opv_row {
@@ -1864,12 +1890,13 @@ impl KernelLedgerV1 {
                 committed_daa: daa,
                 life,
                 reserved: need,
-                liability_until: None,
+                liability_until: source_floor,
                 convicted: false,
                 rewarded: false,
                 sealed_daa,
             },
         );
+        self.beacon_source_revealed(job, producer, id);
         if let Some((_, row)) = opv_row {
             // An OPV claim holds its job from its first reveal: it is prosecutable by any bond from this block, so a junk claim
             // squatting the job is slashed (or defaults) at the squatter's cost, and a well-formed one is the job's answer.
@@ -1998,6 +2025,7 @@ impl KernelLedgerV1 {
             Some(b) if b.exit_requested.is_some() => return Err("the producer bond is exiting".into()),
             Some(_) => {}
         }
+        self.beacon_source_reveal_ready(*job, *producer, salt.is_some())?;
         let expected = match salt {
             None => claim_seal_v1(id),
             Some(s) => claim_seal_v2(id, s),
@@ -2798,6 +2826,8 @@ impl KernelLedgerV1 {
         let daa = self.daa;
         // S3 (`palw_verifier_pay_v1`): a forfeited beacon-source seal forfeits its extra deposit too (`d_src` in all).
         self.close_beacon_source_v1(&job, &producer, row.daa, true, out);
+        // Codex RFC-7 (table 30): every per-target source reservation attached to this seal burns too, independently.
+        self.beacon_source_seal_forfeited(job, producer, row.seal, row.daa, out);
         if self.salted_seals_from().is_some_and(|at| row.daa >= at) {
             self.forfeited_claim_seals.insert((job, producer, row.daa), ForfeitedSealRowV1 { seal: row.seal, forfeited_daa: daa });
         }
@@ -2833,8 +2863,13 @@ impl KernelLedgerV1 {
             self.forfeit_claim_seal(job, producer, row, out);
         }
         self.proof_seals.retain(|_, row| daa <= row.daa.saturating_add(ttl));
+        // EXEC holds are keyed by claim, but the poster's escrow is keyed by job. A pending Panel claim may be bound before
+        // another producer wins coverage of that same job. Neither its sibling's Final nor idle expiry may spend the held escrow.
+        // Derive this bounded set once per tick; lifecycle updates below do not change hold ownership or claim job bindings.
+        let held_jobs: BTreeSet<_> =
+            self.exec_reward_holds.keys().filter_map(|id| self.claims.get(id).map(|row| row.job_id)).collect();
         // GAP-5: escrows no claim can still use go back to their posters.
-        self.release_idle_job_escrows(out);
+        self.release_idle_job_escrows(&held_jobs, out);
         self.spec_prune_lines(daa);
         // Demands past their deadline: the producer's availability default.
         let due: Vec<_> = self.demands.iter().filter(|(_, d)| daa >= d.deadline_daa).map(|(k, _)| *k).collect();
@@ -2890,7 +2925,8 @@ impl KernelLedgerV1 {
                     // stays held, and a valid proof filed by `daa + liability_daa` still convicts it — keeping one proof out of the
                     // chain for a demand's deadline must not turn a provable fraud into a cheap default. If no valid proof arrives
                     // the outcome stays the default (availability, never fraud) and the reservation is released at the horizon.
-                    row.liability_until = Some(daa.saturating_add(liability_daa));
+                    // The per-class horizon (G14-B), never shortening one an EXEC hold or a source opt-in already extended.
+                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)));
                 }
                 if let Some(b) = self.bonds.get_mut(&row.producer) {
                     b.reserved = b.reserved.saturating_sub(taken - held);
@@ -2935,12 +2971,16 @@ impl KernelLedgerV1 {
                 (b, ClaimStateV1::Final { .. }) if !matches!(b, ClaimStateV1::Final { .. }) => {
                     let liability_daa = self.claim_liability_daa_v1(&id);
                     let row = self.claims.get_mut(&id).expect("listed");
-                    row.liability_until = Some(daa + liability_daa);
+                    row.liability_until = Some(row.liability_until.unwrap_or(0).max(daa.saturating_add(liability_daa)));
                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
                     let (job, convicted) = (row.job_id, row.convicted);
                     let mut paid = Vec::new();
-                    let reward = if convicted { 0 } else { self.pay_from_job_escrow(&job, &id, producer, &mut paid) };
+                    let reward = if convicted || held_jobs.contains(&job) {
+                        0
+                    } else {
+                        self.pay_from_job_escrow(&job, &id, producer, &mut paid)
+                    };
                     self.claims.get_mut(&id).expect("listed").rewarded = reward > 0;
                     out.push(LedgerEventV1::Final { claim: id, reward });
                     out.extend(paid);
@@ -2972,6 +3012,7 @@ impl KernelLedgerV1 {
         self.tick_verifier_pay_v1(out);
         // The served positions' demand bonds whose claim is now decided (after this block's defaults, Finals and releases).
         self.settle_due_served_demand_bonds(out);
+        self.tick_beacon_sources(out);
     }
 
     /// **DA16: would `bytes` serve this committed position?** — exactly the classification a `Respond` gets (the class's response

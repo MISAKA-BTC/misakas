@@ -638,8 +638,8 @@ pub struct KernelFinalReadV1 {
     /// `PanelIndependent` (an OPV Final, never anything else) or `PanelLicensed` (the interim route does not know the licensing
     /// Panel's seed and epoch, so it exports no beacon event for it).
     pub final_path: &'static str,
-    /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then the producer bond and the consumer — `Absent` until the
-    /// route records a job's payer); `None` for a Panel-licensed Final.
+    /// Borsh of `misaka_palw_challenge::AttributedWorkV1` (the event, then producer and recorded job payer; `Absent` only for a
+    /// historical job without a payer row). The payer survives escrow payment. `None` for a Panel-licensed Final.
     pub event: Option<Vec<u8>>,
     pub statement: &'static str,
 }
@@ -673,15 +673,15 @@ impl PalwKernelRouteStateV1 {
                         panel: None,
                     };
                     let event = receipt.to_work_final_event(&ctx)?;
-                    // Who stands behind the work: the producer bond of the Final claim (the route keeps no job poster yet, so the
-                    // consumer is Absent and the distinct rule's consumer clause is a no-op until it does).
+                    // Derive both identities from authenticated ledger rows. The job's payer is permanent even after its escrow
+                    // is paid/refunded; dropping it here would let one payer fill the distinct-consumer quorum via several producers.
                     let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
+                    let consumer = work
+                        .and_then(|(_, job)| ledger.job_poster(&job))
+                        .map_or(misaka_palw_challenge::RootV1::Absent, misaka_palw_challenge::RootV1::Present);
                     let attributed = misaka_palw_challenge::AttributedWorkV1 {
                         event,
-                        attribution: misaka_palw_challenge::SourceAttributionV1 {
-                            producer_id: producer,
-                            consumer_id: misaka_palw_challenge::RootV1::Absent,
-                        },
+                        attribution: misaka_palw_challenge::SourceAttributionV1 { producer_id: producer, consumer_id: consumer },
                     };
                     ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
                 }

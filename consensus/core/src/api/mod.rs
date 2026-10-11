@@ -977,6 +977,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    fn palw_reward_vesting_v2(
+        &self,
+        query: crate::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, crate::Hash64)>,
+        exec_after: Option<crate::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<crate::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        let _ = (query, limit, after, exec_after);
+        None
+    }
+
     /// **ADR-0160 §7.5: the capacity shadow at the tip** (`getPalwCapacityShadow`; kaspad's
     /// interval log): what the capacity formulas would reserve, weigh and allow for every live
     /// claim and bond, per ramp step, next to today's values — asked at the next block's DAA with

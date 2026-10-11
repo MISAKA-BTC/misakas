@@ -44,13 +44,13 @@ Amounts are in BILI.
 | **C** | **Correlation and shared collateral.** With fully backed reservations (`κ ≤ 1`), expected collection is linear and correlation is irrelevant. With `κ > 1`, the worst case (comonotone detection, which a forger can induce) divides deterrence by `κ`. | **PROVEN** (§2.5). |
 | **T0** | **A bounty-only verifier cannot be paid** once deterrence works: its income is at most the fraud rate times its share. | **PROVEN** (predecessor). Numbers redone at 49% (§3.1). |
 | **A, B** | Remedy A (pay only inside the watcher's salted sample) falls to grinding, about `1/q` trials. Remedy B (equal split) is diluted by Sybils: 245, 44 and 4 BILI at 1, 10 and 100 Sybils. | **COUNTEREXAMPLE**. DERIVED (§3.1). |
-| **H** | **Under M\*-49, an honest drawn verifier recovers** its evidence, DA fetch, check, localization, attestation and filing costs. This holds given the assumptions in §3.3: the fee is escrowed by the user and paid on the attestation or on the claim's fate, the verifier holds the model, drawn demands are not burned, and costs are bounded. | **PROVEN** under stated assumptions (§3.3). Counterexamples to its scope: H-1 to H-6. |
+| **H** | **Conditional running-cost recovery under M\*-49.** §3.3 requires net collectible fee/bounty minima and measured cost upper bounds, including any filing shortfall. Amortised acquisition and an expected capital surcharge do not prove each-epoch recovery. | Mathematical bound under stated assumptions (§3.3); actual minima remain UNKNOWN. Epoch/startup counterexamples and criteria in §5f. |
 | **T6** | Whether a drawn verifier really checks (the lazy verifier) can be made observable on chain. | **OPEN**. |
 | **B12** | The seal deposit is derived. A withheld seal stalls 83 DAA. An abandoned one stalls 151 DAA (MEASURED) for 52 BILI. Parity gives `d* = c_ab·T_w/T_ab ≈ 28.6` BILI. A deposit above `d*` buys nothing. The deterred delay value is 0.345/`N_c` BILI per victim-DAA. `d*` exceeds the honest-race ceiling of 1 BILI, so the prices must be split (S3). | **DERIVED** (§4). |
 | **F1–F5** | **Open versus closed for `f(S_m)`.** F1: split-proof and merge-proof together force `f` linear. F2: equal self-funding beats publishing for every `f`. F3: the publish premium *is* a concentration premium. F4: at `p` = 0, a closed model out-earns an open one by `1/(1 − λ)` for every `f`. F5: the budget and the per-bond cap saturate. | **PROVEN** (§5). Grid DERIVED from an ASSUMED market. |
 | **F-BFT** | **Under the user's premise (§3f)**, a verified-work gate makes publishing overwhelmingly better with **linear `f`**. The gate pays a model's epoch allocation only if ≥ `k` of `m` verifiers, drawn by stake from the global pool, attest a checked claim; at `σ` = 1/3, `m` = 47 and `k` = 24. Open/closed is ≥ 38.5×. A closed model is paid with probability 0.9%, so the stake-only residual is ≤ 0.30% of the model budget, and payment stays tied to verified work. It breaks at an adversary share of 0.40 (the 1% and 99% bars) and of 0.44 (the 2× bar), and at 50% closed and open are paid alike. | DERIVED under A-BFT (§5c). The ADR-0177 D1 reading needs the user. |
 | **AGG** | **The revised ADR-0177 goal** (§5d): `A_m = S_m^α`, with the 2× net-profit bar fixed first over 4–30× capital, below the caps. α = 1.5 passes 52 of 54 cells and never caps in range. α = 2 passes 16 of 18 and caps at about 10% of capital, withholding 19% of the budget at 30×. Every failing cell is one where honest mining is unprofitable for any α. Concentration premium: 1.4–1.8 at α = 1.5, 2.0–2.8 at α = 2; the operator's advantage is 2.0× at 10% of capital. `p = 0` stays separate: the whole model budget is fraud revenue there, for any α. | DERIVED (§5d). Recommended α = 1.5. |
-| **PESG A/E** | §5e. **T4:** UNKNOWN for every class and profile, and FAIL where MEAS proves `p_min = 0` (gather lie, 9B-8k, closed model). Known `G` = 25 per claim; the full `G` is UNKNOWN (weight value, external settlement). **E:** six of the seven attack rows PASS; one deposit with many attempts FAILS at the interim `d`. **T5:** `F_min` = 0.81–1.38, but `F = F_min` FAILS in fault-free periods unless it also carries the stake's capital cost (C9). Counter-examples: B3–B5 UNKNOWN; C3–C5 FAIL; C6–C8 UNKNOWN. | Verdicts as stated (§5e). |
+| **PESG A/E** | §5e. **T4:** UNKNOWN for every class and profile, and FAIL where MEAS proves `p_min = 0` (gather lie, 9B-8k, closed model). Known `G` = 25 per claim; the full `G` is UNKNOWN (weight value, external settlement). **E:** six of the seven attack rows PASS; one deposit with many attempts FAILS at the interim `d`. **T5:** `F_min` = 0.81–1.38 is an amortised running estimate, not an epoch guarantee. C9/C11/C12 require actual capital/startup costs and collectible minima (§5f). | Verdicts as stated (§5e–5f); expected recovery and each-epoch recovery are separate. |
 | **GATE** | **Round/EXEC ECON gate** (acceptance §4–§5), with nine criteria fixed before judging (§5a). Tickets track canonical work exactly. Revenue per compute cost is equal across model sizes. Saturation and splitting are size-neutral. It **fails** on net revenue per compute: the interim per-claim overhead is 65% of a small job's escrow against 3.6% of a large one's, a 2.7× gap. It also **fails** on capital-bound marginal revenue for the large model: a 28.8-BILI escrow fills the R cap after one job, before the Round cap. | 7 PASS, 2 FAIL. DERIVED from an ASSUMED market (§5a). |
 | **P-list** | BUDGET P-1..P-11. P-1 and P-11 together leave `280 ≤ W ≤ 436` DAA: below that, claims outlive the window; above it, the 65,536 per-span bound stops the shared window from ever saturating. Theorem Y gives P-2's `r` ceiling. G6 gives P-2's `q·ρ` floor. §2.5 gives the open-claim cap. | DERIVED where stated; the rest PROPOSED (§5b). |
 | **F-bar** | **No curve makes publication "overwhelmingly better".** No `f` beats equal self-funding (F2). On the grid, no `f` meets the proposed bar against a closed model that can forge. The one curve that meets it against a non-forging closed model, `S²`, fails the concentration bar with a premium of 1.9–2.8. | **COUNTEREXAMPLE** (§5.4). |
@@ -385,7 +385,9 @@ Both pay on lies only (T0).
    * the rest of the collected amount is burned.
 
    With E1 fixed (§2.2), the coalition still recoups at most `a·collected`. So S holds unchanged.
-5. **`B_cap = m·G`**, the bribery floor (T5). At the interim terms that is 40 of the 490. DERIVED.
+5. **`B_cap = m·G`** is the former gross bribery illustration (T5), 40 of the 490 at interim terms. A cap does not establish a
+   collectible floor. To dominate a bribe, the actual receipt net of incremental prosecution costs must exceed the affordable
+   bribe upper bound; equality permits indifference. §5f corrects the condition. Neither `G` nor future collection is proven here.
 
 **Budgets named** (ADR-0176 requires every new payment to name its source).
 * `F` comes from the poster's escrow. It is a user transfer, not issuance, not `R_PALW`, and not any producer's `R_max`.
@@ -394,7 +396,7 @@ Both pay on lies only (T0).
 * `C`'s watcher slots earn `F` on `C`'s own claims at the same rate as on anyone's (T2), so the fee is not a renamed producer reward
   (RFC-0015 §8.3.2).
 
-### 3.3 Theorem H: an honest drawn verifier recovers its costs (PROVEN under A-FEE, A-INC, A-ACQ, A-COST)
+### 3.3 Theorem H: conditional running-cost recovery under actual receipt/cost bounds
 
 **The fee floor.**
 
@@ -405,23 +407,24 @@ F_min = c_fetch + c_check + c_loc + c_attest + c_carrier + E[burned demand bond]
 Here `c_acquire,m / n_m` amortizes one acquisition of model `m` over the verifier's expected draws on `m`. The fee therefore depends on
 the model's volume: a niche model's users pay more per check.
 
-**Statement.** If `F ≥ F_min` and `B_cap/m ≥ c_file`, then an honest drawn slot nets at least 0 on every claim, honest or lying,
-whatever `C` does:
+**Statement, corrected 2026-10-11.** The displayed `F_min` is an expected/amortised running-cost calculation. It does not bound
+first-use acquisition, an idle epoch or stake capital cost. For a per-claim guarantee use a measured upper bound `C_run,+` on costs
+actually incurred on that claim, including carrier/demand costs on aborted paths. Let `P_-` be a proven minimum remaining reporter
+pool actually collectible after earlier splits, in sompi, and `b_- = floor(min(B_cap, P_-)/m)`. For a slot with an accepted convicting
+seal, this is a conservative receipt floor; without that eligibility or a collection proof, use zero. Then require:
 
 ```text
-net ≥ F − F_min + 1[it sealed a convicting proof]·(⌊min(B_cap, a·Γ) / n_s⌋ − c_file) ≥ 0,   n_s ≤ m
+F_minimum ≥ C_run,+ + max(0, c_file,+ − b_-)
+net ≥ F_minimum − C_run,+ + 1[it incurs filing cost]·(b_- − c_file,+) ≥ 0
 ```
 
-**Proof.**
-1. `F` is escrowed (A-FEE). It is paid on the attestation, or on the claim's fate if that comes first. So no ordering by `C` can leave
-   a slot that started work unpaid, and the fee covers everything up to localization.
-2. On a fault:
-   * the drawn sealers take the first `min(B_cap, a·Γ)`, ahead of `C`'s earliest-sealer Sybil;
-   * there are at most `m` drawn sealers;
-   * so each gets at least `B_cap/m ≥ c_file`.
-3. If `C` convicts first through a non-drawn bond, the slot stops having spent no more than the fee covers.
-4. A drawn slot's demands are never burned (A-DEM, part of A-FEE).
-5. A-INC bounds inclusion. A-COST bounds the court's cost by the class's prosecution bounds. A-ACQ makes the check possible. □
+The minimum fee must be net collectible on every permitted ordering in this guarantee (A-FEE/A-INC), including another actor's
+earlier conviction/default. For filing that does not earn a convicting seal, `b_- = 0`; a conditional bounty cannot subsidise such
+costs. At most `m` sealing slots share `min(B_cap, remaining pool)`, rounded down, so an eligible slot gets at least `b_-`.
+Substituting the stated fee bound proves nonnegative running net. This proof supplies neither eligibility nor a collection floor.
+`B_cap/m ≥ c_file` alone is insufficient: the cap is a ceiling, and `P_-` may be zero or too small after rounding. A fee covering the
+entire filing cost is the conservative alternative when no bounty minimum is established. Whole-epoch capital/startup costs need
+the separate bound in §5f (model §15); no acquisition over an expected `n_m` proves actual recovery in the first or last epoch.
 
 **Numbers** (ASSUMED costs until MEAS):
 
@@ -1037,8 +1040,11 @@ needs a stake-capital term:
 F ≥ F_min + r_w · S_pool / (q·m·N)
 ```
 
-At 0.001 draws per BILI of stake that is 1.36, against 0.86. With that term, the books are ≥ 0 in every epoch. **PASS** by parameter;
-the values stay **UNKNOWN** until MEAS P2 and a price exist.
+At 0.001 draws per BILI of stake that is 1.36, against 0.86. This covers **expected** capital cost only under the stated positive
+volume and fully paid draw assumptions. It does not guarantee nonnegative books in every epoch: an undrawn watcher receives zero
+and still pays capital cost. At `q·m·N = 0` no finite slot fee funds locked stake. Actual first-use acquisition can also exceed the
+amortised cost. §5f (model §15) gives the corrected expected/each-epoch criteria and exact counterexamples. **UNKNOWN** until measured cost,
+joint payment floors and funded minimum contracts exist; no each-epoch PASS follows from the `r_w` term.
 
 **Sybil farming of the fee:**
 
@@ -1069,8 +1075,10 @@ The verifier cannot work at all for a closed model, or past MEAS's time, RAM or 
 | C6 | served-demand burn on a drawn demand | UNKNOWN until built |
 | C7 | pool capture (the coalition's share `σ` of a model's pool) | UNKNOWN |
 | C8 | lazy verifier (T6) | UNKNOWN |
-| C9 | `F = F_min` leaves the stake's capital cost unpaid in fault-free periods | FAIL at `F_min`; PASS with the `r_w` term |
+| C9 | `F = F_min` leaves stake capital unpaid; a positive-volume surcharge pays only in expectation | FAIL at `F_min`; expected recovery conditional; each-epoch guarantee fails on an undrawn watcher without idle funding |
 | C10 | DA load of checking every claim (149 MB/s and 117 cores at 100 claims/DAA) | PASS only with sampling (`q < 1`) |
+| C11 | `B_cap/m` is a ceiling; remaining collectible reporter pool, eligibility and integer splits can reduce income below filing/bribery cost | UNKNOWN floor; include filing shortfall in fee and compare net bounty with bribe |
+| C12 | Acquisition amortised over expected checks leaves first-use/stranded acquisition unpaid | FAIL as a per-epoch proof; measure actual startup cost and bind its funded minimum separately |
 
 ### 5e.4 §6 values the economics needs (for BUDGET)
 
@@ -1084,6 +1092,60 @@ The verifier cannot work at all for a closed model, or past MEAS's time, RAM or 
 | no payout before Final | every leg (escrow, model leg, Round subsidy) at Final; the bounty at conviction, from collected slash |
 
 ---
+
+## 5f. Watcher funding: expected recovery and actual epoch recovery (2026-10-11 correction)
+
+The cost and receipt bounds must use the same scope, fixed before the run. For watcher `j`, require:
+
+```text
+net_lower,j = H_lower,j + L_paid,j · F_minimum,j − C_upper,j ≥ 0
+```
+
+For an **expected** criterion, `C_upper` bounds expected TOTAL cost, `L_paid` bounds the expected number of slots actually paid and
+`H_lower` bounds expected net collectible standby/startup income. For an **each-epoch** criterion, all three are bounds on every
+permitted outcome and `L_paid` is a guaranteed integer count. A fractional expected draw count cannot be used in the latter.
+Check each watcher/class and the portfolio; pool-average solvency does not fund a watcher's higher acquisition or capital costs.
+Missing measurements, inclusion/payment floors or minimum contracts are UNKNOWN. A reward/escrow/bounty ceiling is not a minimum.
+
+`C_upper` includes actual first acquisition and preparation, fetch/check/localisation, attestations/carriers, filing shortfalls,
+burned demand bonds, aborts/unpaid work and distinct locked capital-time through liability/exit/release. Do not charge the same
+capital-time twice across overlapping clocks. Amortisation over expected future jobs is a long-run calculation; it is not a bound
+on a first-use acquisition followed by no more jobs. A collectible bounty can reduce filing cost only on a path which earns it,
+after prior reporter/demander splits and integer rounding. With no positive collection floor, budget the full filing cost.
+
+For positive `L_paid`, the exact sompi quote is `ceil(max(0, C_upper − H_lower)/L_paid)`. Round once, upward, on the final quote.
+A quote above u64 is unrepresentable, not clamped. If `L_paid = 0` and `H_lower < C_upper`, no finite conditional slot fee meets the
+criterion. Returning the watcher's own principal is not `H_lower`. Draw, DA, inclusion and payment probabilities need a joint floor;
+their marginals do not justify multiplication. The cost bound must still include work done on paths that never pay.
+
+**C9 counterexample.** A single claim is checked with probability `q` and, when checked, draws `m` independent stake-weighted slots.
+For watcher share `s/S`, the probability of zero slots is `(1−q) + q·(1−s/S)^m`. Conditional independence of slots does not make the
+shared claim-check events independent. If both watchers have half the stake, `q=1` and `m=2`, each has probability 1/4 of no slot.
+At an ASSUMED capital cost 5,000,000 sompi per watcher and running cost 86,000,000 per slot, fee 91,000,000 covers expected cost
+exactly; the undrawn watcher's actual net is −5,000,000. Increasing the conditional fee cannot fix that path. `N=0` or `q=0` makes
+the idle loss certain. Reusing one epoch beacon across claims does not justify independent-claim averaging either.
+
+An each-epoch guarantee would need independent net collectible funding `H_lower` for idle capital and actual startup costs, plus
+running fees meeting the bound on all paid/unpaid paths. This is a **funding requirement, not an implemented retainer**. Any future
+contract must identify sponsor/source, class and frozen stake, bounded capital-time/service term, signed minimum receipt, funded
+reservation, collection/release conditions and journaled once-only settlement/refund/reorg. It must preserve Final/vesting rules,
+shared budget limits and the same allocation; an epoch clock creates no new entitlement or pre-Final payout. In the absence of an
+eligible independent funding source, positive idle cost remains unfinanceable under Final-only conditional fees. No idle guarantee
+or new issuance is authorised by this calculation. Flat income per identity would invite Sybil farming; capital funding must use
+the same distinct stake-time measure across split bonds, round down settlements without minting remainders, and never pay twice
+for the same term. Diligence and service eligibility still require T6 evidence; an idle payment alone would finance lazy watchers.
+
+**C11/C12 controls.** The collectible remaining reporter pool may be one sompi; a cap of 40 sompi with two sealing slots then pays
+each zero after rounding, not `B_cap/m=20`. Gross bounty of 20, with one more sompi needed to prosecute, yields net 19; it does not
+dominate an affordable bribe of 20. `G` must include the coalition's complete affordable gain. For a realised anti-bribe guarantee
+use net collectible receipts on every relevant path; expectation alone does not force truthful behaviour. First acquisition of
+5,000,000,000 sompi cannot be recovered by a one-slot acquisition allowance of 50,000,000 if future demand disappears.
+
+Reproduce `python3 -I scripts/misaka-palw-econ-verifier-model.py --section 15`. Exact Fraction arithmetic exhausts 48 one-claim
+distributions (`q` 0/0.5/1, four stake shares, `m` 1–4): 16 have zero demand; 28 of the 32 positive-volume cases allow a realised
+loss under an expected break-even fee. It checks conditional funding on every possible draw, startup abandonment, zero joint paid
+slots, collectible/rounded bounty bounds, missing inputs, one-sompi deficits and u64 overflow. These are financial model controls;
+they provide no node payout mechanism, measured class price, proven collection floor, external soundness approval or security PASS.
 
 ## 5a. The Round/EXEC ECON gate (`docs/palw-round-exec-additional-acceptance-2026-10-10.md` §4–§5)
 
@@ -1202,7 +1264,9 @@ No conclusion rests on ticket counts.
 
 ### 6.1 Implemented, verified, armable
 
-* **Implemented:** nothing in consensus. The PoCs and the model.
+* **Implemented:** the incentive PoCs/model, not M\*-49's funded watcher pool, fees or startup/standby contract. The separate
+  `palw_bond_budget_v1` engine and `A_m = S_m^α` allocation code exist dormant; their existence does not connect all kernel consumers
+  or provide actual watcher receipts.
 * **Verified:** the PoCs `econ_bounty.rs` (3 tests) and `econ_seal_veto.rs` (2 tests) passed on the merged tree (econ-m3, after
   `323ea161a`); before the merge, econ-m2 measured the 53.9% leak. The model holds every check.
 * **Armable:** nothing.
@@ -1212,8 +1276,8 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 * M\*-49 is not built;
 * T6 is open;
 * the I-D residual of F-C4R4-15 is open (D-hold);
-* BUDGET's `palw_bond_budget_v1` does not exist;
-* `palw_model_bond_allocation_v1` has no admissible `f` (§5.4).
+* standalone kernel budget hooks and all-consumer financial composition remain incomplete;
+* `palw_model_bond_allocation_v1` implements the revised power curve (§5d), but policy approval, class security and activation remain open.
 
 ### 6.2 Proved versus open
 
@@ -1223,7 +1287,7 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 | Y | `p` for any closed model |
 | C | `θ_h` and `σ` per model |
 | T0 | MEAS's costs per class |
-| H, under its assumptions | the OPV window holding `T_beacon` |
+| H's corrected conditional running bound (§3.3) | actual receipt minima, epoch/startup funding (§5f), and the OPV window holding `T_beacon` |
 | T2 | a bound on external and fork-choice gains `X` |
 | F1–F5 | — |
 | the B12 derivation (its inputs are labelled) | — |
@@ -1233,8 +1297,8 @@ Every reward, consensus-weight and Panel=0 fence stays refused:
 | Id | Decision | Recommendation |
 |---|---|---|
 | D-E1 | The default-before-conviction rule: O1, O2, O3 or O4 (§2.2), or keep today's leak | **O2**: demanders are credited only when no conviction comes, and a conviction pays one 49% pool. It keeps both the 49% bound and the honest accuser's bounty. O1 is acceptable once M\*-49 is adopted. Until a fix lands, add `D·(1 − β_d)` to the reservation relation |
-| D-M\* | Adopt M\*-49 as the direction for verifier pay: per-check fees from the user's escrow, and drawn sealers first inside the 49% | **Adopt.** It is the only design here that satisfies both halves of P0. Keep T6 open, and keep every reward fence refused until T6 is closed |
-| D-q | `q`, `m`, `F`, `B_cap = m·G` per class | Derive them from `p_min` (§3.3) and MEAS's costs. None is set now |
+| D-M\* | M\*-49 direction adopted: per-check fees from user's escrow, drawn sealers first inside 49% | Direction does not establish the actual funding/collection/diligence premises. Apply §3.3/§5f, keep T6 and every reward activation gate open/refused until evidence closes them |
+| D-q | `q`, `m`, `F`, `B_cap` per class | Derive from `p_min`, actual bounded costs and net collectible receipts (§3.3/§5f); `m·G` is only the former gross cap illustration. None is set now |
 | D-B12 | The seal deposit | `d_src = c_ab·T_w/T_ab` (28.6 at the interim terms and 49%) on an opt-in source seal (S3). Also S2 (vetoes do not count) and S4 as a concurrency cap `N_max`. `γ*` is set through `D`, not `d` |
 | D-F | Model coinbase (the goal revised in §3g) | **α = 1.5** (or α = 2 for stronger favour, saturating at about 10% of capital); pro-rata split; no per-model cap. `p = 0` is a separate open gate (§5d.5). The §5c attestation gate may stay dormant |
 | D-bar | The numeric bar for "overwhelmingly better" | Fix Φ\* (2 proposed), the `S_0` and `e` ranges, and λ and `r` before any curve is evaluated. Record that F2 and F4 make the bar unattainable by `f` alone |

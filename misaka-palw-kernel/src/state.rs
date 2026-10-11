@@ -237,8 +237,9 @@ impl KernelLedgerV1 {
                 &collection_root(&d("court-scope"), self.court_scope.len(), self.court_scope.iter()),
             )
         };
-        // RFC-0002 conformance candidates (table 29): an extension only once it holds a row, after table 28's.
-        if self.conformance_classes.is_empty() {
+        // The same fixed order as `rows::root_of_rows`: table 29 (RFC-02 conformance candidates), 30 (beacon sources), 31 (EXEC reward
+        // holds), each only once it holds a row.
+        let base = if self.conformance_classes.is_empty() {
             base
         } else {
             let records: std::collections::BTreeMap<Digest, (Digest, ClassRecordV1)> =
@@ -246,6 +247,22 @@ impl KernelLedgerV1 {
             crate::rows::conformance_root_extension_v1(
                 &base,
                 &collection_root(&d("conformance-classes"), records.len(), records.iter()),
+            )
+        };
+        let base = if self.beacon_sources.is_empty() {
+            base
+        } else {
+            crate::rows::beacon_source_root_extension_v1(
+                &base,
+                &collection_root(&d("beacon-sources"), self.beacon_sources.len(), self.beacon_sources.iter()),
+            )
+        };
+        if self.exec_reward_holds.is_empty() {
+            base
+        } else {
+            crate::rows::exec_reward_root_extension_v1(
+                &base,
+                &collection_root(&d("exec-reward-holds"), self.exec_reward_holds.len(), self.exec_reward_holds.iter()),
             )
         }
     }

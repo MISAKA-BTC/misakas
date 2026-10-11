@@ -17403,8 +17403,9 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle(&catalog);
-    // Validated WITHOUT the retirement, which is set afterwards: the release's validation requires `palw_fork_choice_rule_e_v1` armed
-    // at or below it (ADR-0178), a fence this fixture does not arm; the test is about the retirement's own behaviour.
+    // Validated WITHOUT the retirement by the builder, then again WITH it before constructing the node (codex RFC-12: the
+    // retirement's params are never bypassed); the one tolerated refusal is ADR-0178's ordering rule (rule E armed at or below the
+    // retirement), a fence this fixture does not arm and this binary refuses — `validate_palw_v2` checks it after every other refusal.
     let mut config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
@@ -17429,6 +17430,12 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
         },
         legacy_evidence_horizon_daa: 10,
     });
+    match config.params.validate_palw_v2() {
+        Ok(()) => {}
+        Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(why))
+            if why == kaspa_consensus_core::palw_fork_choice_rule_e_v1::PALW_DNS_RETIREMENT_NEEDS_RULE_E_V1 => {}
+        Err(other) => panic!("complete retirement params validate before creating the node (rule E's order aside): {other:?}"),
+    }
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..16 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
@@ -17508,6 +17515,8 @@ async fn rfc0012_retirement_uses_incumbent_and_ignores_opposed_dns_anchor() {
     };
     let publish = |s| {
         let mut batch = rocksdb::WriteBatch::default();
+        // This fixture has never published native finalized: persist that fact explicitly.
+        consensus.storage.evm_heads_store.write().set_native_finalized_publication_batch(&mut batch, None).unwrap();
         consensus.storage.evm_heads_store.write().set_native_batch(&mut batch, Some(s)).unwrap();
         vp.db.write(batch).unwrap();
     };

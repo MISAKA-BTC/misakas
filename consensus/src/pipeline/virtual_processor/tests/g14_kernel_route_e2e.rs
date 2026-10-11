@@ -383,12 +383,23 @@ impl Net {
         z
     }
 
-    /// Everything two nodes at one tip must agree on: the sink, the PALW root, the kernel route's rows (as served), every block's delta
-    /// root, and the chain's own UTXO commitment (the payout queue is paid through the coinbase).
+    /// The full virtual UTXO set of this small harness. Refuse a truncated read:
+    /// payout/reorg comparisons must not silently check only a prefix of it.
+    fn utxos_of(chain: &T12Chain) -> std::collections::HashMap<TransactionOutpoint, UtxoEntry> {
+        let pairs = chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false);
+        assert!(pairs.len() < 1_000_000, "the harness UTXO read must be complete");
+        pairs.into_iter().collect()
+    }
+
+    /// Compare the selected-chain state and delta roots. A common sink does not imply identical knowledge of competing DAG tips;
+    /// compare the full virtual UTXO set when virtual parents also agree. Recovery callers explicitly synchronize those tips.
     fn assert_same(&self, other: &T12Chain, what: &str) {
         assert_eq!(other.sink(), self.chain.sink(), "{what}: same sink");
         assert_eq!(other.tip_state().1.state_root(), self.chain.tip_state().1.state_root(), "{what}: same PALW state root");
         assert_eq!(other.ctx.consensus.palw_kernel_route_v1(), self.api(), "{what}: same kernel route rows");
+        if other.ctx.consensus.get_virtual_parents() == self.chain.ctx.consensus.get_virtual_parents() {
+            assert_eq!(Self::utxos_of(other), Self::utxos_of(&self.chain), "{what}: same complete virtual UTXO set");
+        }
         for b in chain_blocks(&self.chain, self.chain.sink()) {
             assert_eq!(root_at(other, b.header.hash), root_at(&self.chain, b.header.hash), "{what}: delta root of {}", b.header.hash);
         }
@@ -2004,7 +2015,7 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
     w.net.beat_to(view.final_floor_daa).await;
     let ClaimStateV1::Final { final_daa } = w.net.claim_state(&honest.id) else { panic!("{:?}", w.net.claim_state(&honest.id)) };
     assert!(final_daa >= view.final_floor_daa && final_daa <= view.hard_deadline_daa);
-    assert_eq!(w.net.owed(0), w.policy().claim_reward, "the Final reward is queued for the producer's payee (INTERIM, unfunded: GAP)");
+    assert_eq!(w.net.owed(0), w.policy().claim_reward, "the escrow-funded Final reward is queued for the producer's payee");
 
     // The beacon fact.
     let finals = w.net.api().unwrap().finals_read_v1().unwrap();
@@ -2014,6 +2025,11 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
     let attributed: misaka_palw_challenge::AttributedWorkV1 =
         borsh::from_slice(f.event.as_ref().expect("an OPV Final carries the beacon's event")).unwrap();
     assert_eq!(attributed.attribution.producer_id, w.net.kid(0), "attributed to the producer bond (the distinct source rule)");
+    assert_eq!(
+        attributed.attribution.consumer_id,
+        misaka_palw_challenge::RootV1::Present(w.net.kid(1)),
+        "the Final's payer is authenticated even after the job escrow was paid"
+    );
     let event: WorkFinalEventV1 = attributed.event;
     assert_eq!(event.final_path, FinalPathV1::PanelIndependent);
     assert_eq!(event.kind, WorkSourceKindV1::RealUsefulWork);
@@ -2023,6 +2039,136 @@ async fn g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_ind
     assert_eq!(event.canonical_work_id, misaka_palw_kernel::hash::object_id(CANONICAL_WORK_DOMAIN_V1, &(w.class, job.id())));
     let z = w.net.replay().await;
     w.net.assert_same(&z, "replay");
+}
+
+/// Authenticated job payers must reach both beacon adapters, including after
+/// escrow payment and a DB reopen. Two distinct producers funded by one payer
+/// cannot supply the distinct-consumer quorum; a third job funded by another
+/// authenticated payer supplies a positive control. The contexts are unapproved test policies,
+/// not an on-chain conformance pass or a proof of economic independence.
+#[tokio::test]
+async fn g14_opv_beacon_sources_keep_the_known_payer_and_refuse_shared_consumer_quorums() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    use misaka_palw_challenge::policy::{ImplementedV1, reference_policy_v1, sealed_source_policy_v3};
+    use misaka_palw_challenge::{
+        BeaconContextV1, RootV1, SealedBeaconStateV3, SubjectKindV1, WorkBeaconStateV1, collect_attributed_work_beacon_v1,
+        collect_sealed_work_beacon_v3,
+    };
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg(kernel_config_opv(opv_admitted()), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
+    net._keep.push(Box::new(receiver));
+    let mut w = World::on_opv(net).await;
+    let a = w.job().await;
+    let b = w.job().await;
+    w.jobs += 1;
+    let c = KernelJobV1 { nonce: [w.jobs; 64], ..a.clone() };
+    let post = w.net.route(2, &K::PostJob { job: c.clone() });
+    w.net.send(vec![(2, post)]).await;
+    let jobs = [a, b, c];
+    let actors = [0, 2, 3];
+    let payer = w.net.kid(1);
+    let other_payer = w.net.kid(2);
+    let commitment_position = w.net.daa();
+    let mut seals = Vec::new();
+    let mut reveals = Vec::new();
+    let mut claims = Vec::new();
+    let ledger = w.net.ledger();
+    for (job, actor) in jobs.iter().zip(actors) {
+        let generated = greedy(&w.fx, &ledger, &w.class, &job.prompt, job.max_new_tokens as usize);
+        let produced = produce(&w.fx, &ledger, &w.class, job, w.net.kid(actor), generated, |_| {});
+        let (seal, reveal) = seal_and_reveal(&ledger, w.net.kid(actor), &produced.object);
+        claims.push(produced.claim.id());
+        seals.push((actor, w.net.route(actor, &seal)));
+        reveals.push((actor, w.net.route(actor, &reveal)));
+    }
+    w.net.send(seals).await;
+    let candidate = [0xF7; 64];
+    assert_ne!(w.class, candidate);
+    let sealed_ctx = BeaconContextV1 {
+        chain_genesis: w.net.config.params.genesis.hash.as_bytes(),
+        ruleset_id: w.net.api().unwrap().header.policy.ruleset_digest,
+        policy: sealed_source_policy_v3(2, 1, 40, 1, 1),
+        subject_kind: SubjectKindV1::ModelConformance,
+        commitment_root: [0xF8; 64],
+        commitment_position,
+        challenge_epoch: 0,
+        eligible_profiles: [w.class].into_iter().collect(),
+        excluded_profiles: [candidate].into_iter().collect(),
+        candidate_profile_id: RootV1::Present(candidate),
+    };
+    let mut v2_ctx = sealed_ctx.clone();
+    v2_ctx.policy = reference_policy_v1(2, 1, 160, 1, 1);
+    v2_ctx.policy.source_eligibility_policy_id = ImplementedV1::source_eligibility_distinct();
+    let all = w.net.api().unwrap().beacon_sealed_sources_v1().unwrap();
+    assert_eq!(all.len(), 3);
+    assert!(all.iter().all(|s| s.seal_position >= sealed_ctx.start() && s.seal_position < sealed_ctx.window_end()));
+    // Reveals open in the fixed second window, not before the sealed entropy
+    // window closes. Sources become genuine OPV Finals on the real node.
+    w.net.beat_to(sealed_ctx.window_end()).await;
+    // The node reserves two of its four adjudications for prosecution. Carry
+    // at most two claim admissions per block; preserve the actual court room.
+    let last_reveal = reveals.split_off(2);
+    w.net.send(reveals).await;
+    w.net.send(last_reveal).await;
+    let ledger = w.net.ledger();
+    for id in &claims {
+        assert!(ledger.opv.claims.contains_key(id), "all three signed claims were admitted before their Finals are used");
+    }
+    let final_floor = claims.iter().map(|id| ledger.opv.claims[id].window_end_daa).max().unwrap();
+    w.net.beat_to((final_floor + 2).max(v2_ctx.window_end() + 1)).await;
+    let check = |w: &World| {
+        let api = w.net.api().unwrap();
+        let ledger = w.net.ledger();
+        for (i, job) in jobs.iter().enumerate() {
+            assert_eq!(ledger.job_poster(&job.id()), Some(if i < 2 { payer } else { other_payer }));
+            assert!(!ledger.job_escrows.contains_key(&job.id()), "the paid escrow is gone; its authenticated payer must remain");
+            assert!(matches!(ledger.claims[&claims[i]].life.state, ClaimStateV1::Final { .. }));
+        }
+        let events = api.beacon_events_v1().unwrap();
+        let sources = api.beacon_sealed_sources_v1().unwrap();
+        assert_eq!((events.len(), sources.len()), (3, 3));
+        let same_producers = [w.net.kid(0), w.net.kid(2)];
+        let shared_events: Vec<_> = events.iter().filter(|s| same_producers.contains(&s.attribution.producer_id)).cloned().collect();
+        let shared_sources: Vec<_> = sources.iter().filter(|s| same_producers.contains(&s.attribution.producer_id)).cloned().collect();
+        assert_eq!((shared_events.len(), shared_sources.len()), (2, 2));
+        let v2 = collect_attributed_work_beacon_v1(&v2_ctx, &shared_events, w.net.daa()).unwrap();
+        assert!(
+            matches!(v2, WorkBeaconStateV1::Unavailable { have: 1, need: 2 }),
+            "two actual Finals with the same payer cannot supply the distinct-consumer v2 quorum: {v2:?}"
+        );
+        let v3 = collect_sealed_work_beacon_v3(&sealed_ctx, &shared_sources, w.net.daa()).unwrap();
+        assert!(
+            matches!(v3, SealedBeaconStateV3::Unavailable { mixed: 1, need: 2 }),
+            "two actual salted sources with the same payer cannot supply the distinct-consumer v3 quorum: {v3:?}"
+        );
+        for s in &sources {
+            let expected = if same_producers.contains(&s.attribution.producer_id) { payer } else { other_payer };
+            assert_eq!(s.attribution.consumer_id, RootV1::Present(expected), "v3 exports the recorded job payer");
+        }
+        for s in &events {
+            let expected = if same_producers.contains(&s.attribution.producer_id) { payer } else { other_payer };
+            assert_eq!(s.attribution.consumer_id, RootV1::Present(expected), "v2/op 212 exports the recorded job payer");
+        }
+        assert!(
+            matches!(collect_attributed_work_beacon_v1(&v2_ctx, &events, w.net.daa()).unwrap(), WorkBeaconStateV1::Locked(_)),
+            "a distinct payer and producer supply the positive v2 control"
+        );
+        assert!(
+            matches!(collect_sealed_work_beacon_v3(&sealed_ctx, &sources, w.net.daa()).unwrap(), SealedBeaconStateV3::Locked(_)),
+            "a distinct payer and producer supply the positive v3 control"
+        );
+        (events, sources)
+    };
+    let before = check(&w);
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "payer attribution replay");
+    let replay = Net::on_chain(&w.net, z);
+    assert_eq!(replay.api().unwrap().beacon_events_v1().unwrap(), before.0);
+    assert_eq!(replay.api().unwrap().beacon_sealed_sources_v1().unwrap(), before.1);
+    let w = w.restart(db.clone());
+    assert_eq!(check(&w), before, "both attributed fact sets and quorum decisions survive an actual DB reopen");
 }
 
 /// A lying OPV claim — with no Panel to cover it — is convicted pre-Final by a fresh outsider built from the read API alone.
@@ -2141,6 +2287,11 @@ async fn g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a
     assert_kernel_conserved_v1(money0, money1, "the post, the reveal and the re-seal");
     let tables = |l: &KernelLedgerV1| (l.job_posters.clone(), l.claim_beacon_salts.clone(), l.forfeited_claim_seals.clone());
     let on_a = tables(&l);
+    let on_a_sources = w.net.api().unwrap().beacon_sealed_sources_v1().unwrap();
+    assert!(
+        on_a_sources.iter().all(|s| s.attribution.consumer_id == misaka_palw_challenge::RootV1::Present(w.net.kid(1))),
+        "the live, revealed and forfeited seal facts all retain their recorded payer"
+    );
 
     // A second node replays to the same route.
     let z = w.net.replay().await;
@@ -2174,6 +2325,11 @@ async fn g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a
     );
     let on_b = zn.api().expect("the route existed at the fork");
     assert_eq!((on_b.rows.clone(), on_b.aux.clone()), (at_fork.rows.clone(), at_fork.aux.clone()), "B's route is the fork's");
+    assert_eq!(
+        on_b.beacon_sealed_sources_v1().unwrap(),
+        at_fork.beacon_sealed_sources_v1().unwrap(),
+        "payer attribution rolls back with the actual seal rows"
+    );
     assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1(), "Z's route is B's own");
     let lz = zn.ledger();
     assert!(
@@ -2201,6 +2357,7 @@ async fn g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a
     }
     w.net.assert_same(&zn.chain, "Z back on A");
     assert_eq!(tables(&zn.ledger()), on_a, "tables 18, 25 and 26 re-applied identically");
+    assert_eq!(zn.api().unwrap().beacon_sealed_sources_v1().unwrap(), on_a_sources, "attributed source facts re-applied identically");
 
     // Z follows A to the claim's Final and the re-seal's own expiry (a second forfeited position); a fresh replay agrees.
     let resealed = w.net.ledger().seals[&(job2.id(), kid2)].daa;

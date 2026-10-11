@@ -14670,6 +14670,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => "MaterialDisclosedV2",
         PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => "PanelUnavailableQuorum",
         PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => "ExecWorkRootOpenedV2",
+        PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => "ExecOriginRecordedV1",
         PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",

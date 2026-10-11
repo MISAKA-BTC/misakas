@@ -186,7 +186,7 @@ fence `palw_kernel_chunk_inner` answers `None` (no gate judges it, the cap count
 `palw_fold_kind_in_force_v1` refuses it in int-12's words; isolation tolerates 150–153 at every height (their may-ride arm, unsigned →
 refused, runs only past the fence). The pin test carries a signed 152 directly, as a one-chunk group and as a two-chunk group. G14R's inner 20 `CommitClaimSalted` (the salted claim
 seal v2) is `palw_panel_free_v1`'s, beside the OPV registrations: below that fence the kernel refuses it and the gate drops it through
-the table (`PalwKernelInnerFenceV1::PanelFreeV1`), never through a hand-written arm. Inner kinds 21 and 22 are not allocated.
+the table (`PalwKernelInnerFenceV1::PanelFreeV1`), never through a hand-written arm. Inner kinds 21–37 are RFC-02's, 38/39 G14R's verifier pay (reserved); 40 is codex RFC-7's `OptInBeaconSource` under its own dormant fence `palw_beacon_source_opt_in_v1` (`PalwKernelInnerFenceV1::BeaconSourceOptInV1`, R6781 merge).
 
 ### 3.4 Inside the live build's own kinds: its wire types are frozen
 

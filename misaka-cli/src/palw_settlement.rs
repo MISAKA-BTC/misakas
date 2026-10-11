@@ -62,7 +62,7 @@ fn wait_clause(w: &kaspa_consensus_core::palw_native_readiness_v1::SafeWaitV1) -
             None => format!("claim {claim} is still {stage:?}"),
         },
         W::OpenDaSession { claim, claim_known, deadline_daa, wait_daa } => format!(
-            "data-availability court open on claim {claim}{} until DAA {deadline_daa} ({wait_daa} DAA)",
+            "dispute court open on claim {claim}{} until DAA {deadline_daa} ({wait_daa} DAA)",
             if *claim_known { "" } else { " (claim not in state)" }
         ),
         W::WaitingMaturity { facts, work, wait_daa, ready_daa, .. } => match ready_daa {

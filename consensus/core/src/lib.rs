@@ -277,6 +277,8 @@ pub mod palw_exec_v2;
 pub mod palw_exec_v2_anchor;
 /// RFC-0008 v2 amendment 1: the slice verification route — a slice is verified, convicted or defaulted through the G14 kernel route.
 pub mod palw_exec_v2_verify;
+/// RFC-0008 WORK: IR-derived continuation costs, bound by dormant EXEC root and slice admission.
+pub mod palw_exec_work_plan_v1;
 /// RFC-0008 v2: the work-slice ledgers (`WorkSliceUse`, `RootWorkBudget`, `JobWorkUse`), the canonical plan, the admission refusals and the root's one settlement; dormant behind `palw_exec_payload_v2`.
 pub mod palw_work_slice_v2;
 /// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.
@@ -508,6 +510,7 @@ pub mod palw_fork_choice_rule_e_leaf_v2;
 pub mod palw_typed_roots_v1;
 /// ECON's M*-49 verifier pay and the held default share: the fence `palw_verifier_pay_v1` — dormant, no height, refused when armed.
 pub mod palw_verifier_pay_v1;
+pub mod palw_beacon_source_opt_in_v1;
 /// G14 lane D: the kernel route's consensus state, messages and interim policy (fence `palw_probabilistic_constraints_v1`).
 pub mod palw_kernel_route_v1;
 /// G14 lane D phase 3: the onboarding objects (artifact binding and its refutation, the kernel binding, the conformance commitment,
@@ -826,3 +829,5 @@ mod tests {
         assert_eq!(hasher.finish(), 8);
     }
 }
+
+pub mod palw_reward_vesting_read_v2;

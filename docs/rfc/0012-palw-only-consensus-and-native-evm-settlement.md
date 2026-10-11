@@ -175,6 +175,29 @@ Execution-check error, Panel compromise, randomness grinding, DA failure and cha
 are separate failure events. A Freivalds/GKR error bound is **not** a bound on total chain-finality
 risk. Publish assumptions and composed risk accounting before choosing the policy parameters.
 
+### 3.1 Publication history is separate from the current certificate
+
+A recomputed `finalized` may retreat to `null` when evidence no longer certifies it. That MUST NOT erase
+which head the node previously published as finalized. Retain a versioned local publication record,
+including its ruleset, policy, retirement fence and generation, in the same durable batch as the native
+snapshot and EVM heads. Advance its conflict anchor only to an equal or descendant finalized head.
+This record is incident history: it cannot certify a head, supply useful work, or veto fork choice.
+
+Every post-retirement evaluation MUST check the selected sink against the retained publication, including
+after an ordinary withdrawal, restart, or rollback across the retirement fence. Abandoning that head
+produces sticky `FinalizedConflict`, with safe/finalized absent. A canonical withdrawal is named by
+`readiness.finalized.withdrawnFrom` after restart; a conflict has its own alarm. Current labels remain
+subject to root, provenance, generation and ordered-prefix checks, independently of this history.
+
+Only a validated pruning-point execution-state import/resync may clear both publication history and the
+sticky snapshot, atomically with imported execution state and absent safe/finalized heads. Invalid imports
+preserve them. The readiness memo MUST be invalidated even when the imported generation is unchanged.
+Corrupt or incompatible history is preserved and makes readers fail closed. An older positive snapshot
+can bootstrap a missing publication row; an older negative snapshot cannot distinguish no publication
+from a forgotten withdrawal and requires validated recovery. An upgrade must not silently assume that
+such a node never published a finalized head. The dormant public fence provides no deployed migration
+evidence; local store tests and in-process fork tests do not establish crash/P2P/pruned-IBD guarantees.
+
 ## 4. Native EVM bridge: one ledger transition, no validator approval
 
 ### 4.1 Deposit / withdrawal invariants
@@ -227,6 +250,44 @@ that low block latency equals external-payment finality.
 Recompute `safe` on legal reorgs and emit changed/removed logs and transaction status. Do not pin
 it by an RPC-local checkpoint. A conflict below `finalized`/pruned history requires the documented
 resync/safety-failure procedure and an explicit alarm, never a silent relabel or DNS veto revival.
+
+### 4.3 Pruning import authority and repeatable recovery
+
+An EVM header and account snapshot reproducing a block's commitments establish execution data for that
+block; they do not authorize resetting settlement incidents at an arbitrary block. EVM pruning import
+MUST target the node's established pruning point, installed by the existing validated headers-proof or
+catch-up path. Check that target before expensive validation, then recheck and hold it through the import
+batch. An unreadable target/header is an explicit error, not a panic or an assumed empty state. These
+checks do not replace proof validation or change branch selection.
+
+Retrying a committed import, including after restart before IBD's stable flag was set, MUST succeed for
+identical canonical execution headers, snapshots and checkpoints. Complete missing rows independently;
+do not treat an existing row as proof of success or overwrite contradictory/unreadable data. Verify all
+existing rows before staging flat-state/head changes or clearing publication history. A checkpoint's
+block, EVM number, root, payload and checksum must agree with the validated input. Current snapshot
+canonicality and code/hash checks remain required. Storage corruption requires validated recovery;
+ignoring a read error or deleting a conflicting row merely to make a retry succeed is forbidden.
+
+The pruning-history context import must also accept identical existing samples. Validate nonempty history,
+network genesis, uniqueness, monotonic blue score, immutable sample consistency and required header shapes
+before changing history. Keep its target/retention update coherent under the context lock. The durable EVM
+import batch and explicit IBD stable flag still form a recovery protocol; this subsection does not claim one
+transaction spanning all UTXO/PALW/EVM sidecars. Real transport, interrupted imports, proof adoption and
+cross-ledger recovery remain acceptance requirements under §§4.1 and 8.
+
+A checkpoint-only chain row has no delta evidence and MUST NOT be cached as an ordinary row keyed only
+by block hash. Evict previously ordinary evidence when that block becomes the current checkpoint;
+read its root-verified execution separately. If context later moves below it, require its own delta
+again and stop at missing history rather than inherit an empty contribution from the former boundary.
+Readiness memo reuse requires both sink and pruning point to match. A successful import still resets
+the memo after commit; context freshness is not permission to clear publication history or incidents.
+
+The RPC response combines committed settlement and a current advisory evaluation. Equality of sink
+alone does not establish agreement if pruning context moved between publications. Attach readiness only
+when its version, policy and shared certificate statements (generation, safe, finalized and stop) agree
+with the returned snapshot. Otherwise omit the explanation until a coherent publication exists; do not
+substitute optimistic heads or invent a certificate. This coherence filter verifies agreement between
+already validated local reads, not cryptographic soundness or a transaction across all sidecars.
 
 ## 5. Retire the overlay without erasing history or locking users' bonds
 

@@ -81,6 +81,14 @@ pub const TYPED_TABLES_V1: [u8; 3] = [TABLE_SPEC_CLASSES_V1, TABLE_SPEC_JOBS_V1,
 pub const TABLE_CLAIM_BEACON_SALTS_V1: u8 = 25;
 /// OPV-BOOT GAP-B1a: `(job, producer, sealed_daa) → a claim seal that expired unrevealed past `palw_panel_free_v1``.
 pub const TABLE_FORFEITED_CLAIM_SEALS_V1: u8 = 26;
+/// **Table 31**: EXEC consumer escrow holds, keyed by kernel claim (codex RFC-8, taken over by lane R6781). Empty below the EXEC
+/// fence. codex used 27, which is G14R's verifier pay (landed first); renumbered at the merge.
+pub const TABLE_EXEC_REWARD_HOLDS_V1: u8 = 31;
+/// **Table 30**: `(context, producer) → per-attempt source opt-in, reservation and permanent outcome` (codex RFC-7, lane R6781).
+/// codex used 28, which is G14-S's court scope (landed first); 29 is RFC-02's conformance classes. Renumbered at the merge.
+pub const TABLE_BEACON_SOURCES_V1: u8 = 30;
+pub const BEACON_SOURCE_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-sources-extension/v1";
+pub const EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-exec-reward-holds-extension/v1";
 /// The domain of the root extension tables 25, 26 and 18 add (absent while all are empty: every older root is unchanged).
 pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-beacon-seal-extension/v1";
 /// **Table 27** (`palw_verifier_pay_v1`, G14R round 3): check-fee escrows, claim draws and held default shares, key `(kind, digest)`.
@@ -143,6 +151,8 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_SPEC_CLASSES_V1 => "spec-classes",
         TABLE_SPEC_JOBS_V1 => "spec-jobs",
         TABLE_MEMORY_LINES_V1 => "memory-lines",
+        TABLE_EXEC_REWARD_HOLDS_V1 => "exec-reward-holds",
+        TABLE_BEACON_SOURCES_V1 => "beacon-sources",
         _ => "attested-artifacts",
     };
     format!("misaka-palw/kernel/ledger-collection/{name}/v1").into_bytes()
@@ -195,6 +205,12 @@ impl KernelLedgerV1 {
         }
         for (k, v) in &self.proof_seals {
             rows.insert((TABLE_PROOF_SEALS_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.beacon_sources {
+            rows.insert((TABLE_BEACON_SOURCES_V1, bytes_of(k)), bytes_of(v));
+        }
+        for (k, v) in &self.exec_reward_holds {
+            rows.insert((TABLE_EXEC_REWARD_HOLDS_V1, bytes_of(k)), bytes_of(v));
         }
         for (k, v) in &self.job_escrows {
             rows.insert((TABLE_JOB_ESCROWS_V1, bytes_of(k)), bytes_of(v));
@@ -351,6 +367,12 @@ impl KernelLedgerV1 {
                     l.court_scope
                         .insert(dec(key, "court scope key")?, dec::<crate::court_scope::CourtScopeRowV1>(row, "court scope row")?);
                 }
+                TABLE_BEACON_SOURCES_V1 => {
+                    l.beacon_sources.insert(dec(key, "beacon source key")?, dec(row, "beacon source")?);
+                }
+                TABLE_EXEC_REWARD_HOLDS_V1 => {
+                    l.exec_reward_holds.insert(dec(key, "EXEC reward claim")?, dec(row, "EXEC reward hold")?);
+                }
                 TABLE_JOB_ESCROWS_V1 => {
                     l.job_escrows.insert(dec(key, "job escrow key")?, dec::<crate::ledger::JobEscrowRowV1>(row, "job escrow")?);
                 }
@@ -387,6 +409,8 @@ impl KernelLedgerV1 {
         }
         // The live-claim index is derived (not committed): rebuilt from the rows, exactly as a restored ledger does.
         l.opv_rebuild_live();
+        l.validate_exec_reward_holds()?;
+        l.validate_beacon_sources()?;
         Ok(l)
     }
 }
@@ -406,6 +430,7 @@ impl KernelLedgerV1 {
         self.restore_budget(Default::default());
         // DA16's provider-liable set is consumer-derived (re-injected before every object), never a row: the rows' ledger has none.
         self.provider_liable = Default::default();
+        self.beacon_source_inputs = Default::default();
         self
     }
 }
@@ -617,9 +642,20 @@ pub fn root_of_rows(
     // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
     let base =
         if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
-    // RFC-0002 conformance candidates: table 29 extends the root only once it holds a row, always after table 28's extension.
-    if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
+    // Fixed order by table number, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's
+    // conformance classes), 30 beacon sources, 31 EXEC reward holds.
+    let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
         conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
+    } else {
+        base
+    };
+    let base = if by_table.contains_key(&TABLE_BEACON_SOURCES_V1) {
+        beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1))
+    } else {
+        base
+    };
+    if by_table.contains_key(&TABLE_EXEC_REWARD_HOLDS_V1) {
+        exec_reward_root_extension_v1(&base, &coll(TABLE_EXEC_REWARD_HOLDS_V1))
     } else {
         base
     }
@@ -643,6 +679,18 @@ pub fn conformance_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
 pub fn verifier_pay_root_extension_v1(base: &Digest, table: &Digest) -> Digest {
     let mut s = keyed(VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1);
     s.update(base).update(table);
+    finish(s)
+}
+
+pub fn beacon_source_root_extension_v1(base: &Digest, sources: &Digest) -> Digest {
+    let mut s = keyed(BEACON_SOURCE_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(sources);
+    finish(s)
+}
+
+pub fn exec_reward_root_extension_v1(base: &Digest, holds: &Digest) -> Digest {
+    let mut s = keyed(EXEC_REWARD_ROOT_EXTENSION_DOMAIN_V1);
+    s.update(base).update(holds);
     finish(s)
 }
 

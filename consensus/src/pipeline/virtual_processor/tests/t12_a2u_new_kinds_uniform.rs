@@ -114,6 +114,10 @@ fn arm_the_release(params: &mut Params) {
 fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     for fence in PalwLifecycleKindFenceV1::ALL {
         match fence {
+            PalwLifecycleKindFenceV1::ExecPayloadV2 => {
+                params.palw_exec_payload_v2 = Some(at);
+                params.sync_palw_exec_payload_v2();
+            }
             PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => params.palw_probabilistic_constraints_v1 = Some(at),
             PalwLifecycleKindFenceV1::SignedRegistrationV1 => params.palw_signed_registration_v1 = Some(at),
             PalwLifecycleKindFenceV1::PermissionlessPanelV1 => {
@@ -162,6 +166,10 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     }
     for form in PalwHeaderFormFenceV1::ALL {
         match form {
+            PalwHeaderFormFenceV1::ExecPayloadV2 => {
+                params.palw_exec_payload_v2 = Some(at);
+                params.sync_palw_exec_payload_v2();
+            }
             PalwHeaderFormFenceV1::ReceiptSpendV4 => params.palw_receipt_spend_v4 = Some(at),
             // The PXE2 header form shares the lifecycle kind's fence (armed above, the same field).
             PalwHeaderFormFenceV1::ExecPayloadV2 => params.palw_exec_payload_v2 = Some(at),
@@ -173,6 +181,7 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_panel_free_v1 =
                     Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::interim_v1(at, Vec::new()));
             }
+            PalwKernelInnerFenceV1::BeaconSourceOptInV1 => params.palw_beacon_source_opt_in_v1 = Some(at),
             PalwKernelInnerFenceV1::TypedRootsV1 | PalwKernelInnerFenceV1::PanelFreeAndTypedRootsV1 => {
                 params.palw_typed_roots_v1 = Some(at)
             }
@@ -188,12 +197,14 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_permissionless_panel_v1"
             | "palw_provider_court_v1"
             | "palw_model_bond_allocation_v1"
+            | "palw_exec_payload_v2"
             | "palw_receipt_spend_v4"
             | "palw_panel_free_v1"
             | "palw_typed_roots_v1"
             | "palw_legacy_held_da_v2"
             | "palw_task_heads_v1"
             | "palw_legacy_public_filer_v1"
+            | "palw_beacon_source_opt_in_v1"
             | "palw_exec_payload_v2"
             | "palw_model_refutation_seal_v1" => {} // armed above, through their enums
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
