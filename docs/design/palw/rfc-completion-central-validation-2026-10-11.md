@@ -32,7 +32,7 @@ The partial court metadata authenticator now checks actual carried prompt, token
 
 The feature-gated private node construction helper uses an explicitly salted test genesis, owned marked DB and loopback services; ordinary kaspad refuses its marked DB. It preserves public Args and activation refusals. Its build, guard tests and genuine process scenario are pending. The helper's D/W/concentration values are mechanics fixtures, not approved security/economic policy.
 
-The actual EVM-enabled node Final/reorg, Round collectible fee, durable import session, staged-table corruption, generation and OS crash suite is running on 740f7ca28. No PASS is assigned before terminal results. Source fee logical vesting-to-native-queue R transfer and an additional delayed wallet scan response fix are pending integration; the current native batch predates those changes.
+The actual EVM-enabled node Final/reorg, Round collectible fee, durable import session, staged-table corruption, generation and OS crash suite on 740f7ca28 stopped at compilation: merging the staged-table and session work duplicated the `MuHashExtensions` import in the virtual processor. No runtime test started. The duplicate import is removed for the next batch; no PASS is assigned before terminal results. Source fee logical vesting-to-native-queue R transfer and an additional delayed wallet scan response fix are pending integration; the current native batch predates those changes.
 
 ## Required continuation
 

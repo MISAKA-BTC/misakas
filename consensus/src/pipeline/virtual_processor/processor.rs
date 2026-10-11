@@ -1,4 +1,3 @@
-use kaspa_consensus_core::muhash::MuHashExtensions;
 use crate::{
     consensus::{
         services::{
