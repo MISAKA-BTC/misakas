@@ -261,7 +261,159 @@
       "source": "aafa9b234",
       "result": "2 PASS / 0 FAIL: real BASE0/Q36 producer, initial/inherited and honest/false named prefix in each; exact public old leaves and own job-bound execution roots",
       "sha256": "2de282d7943d4f7f83609ef98201ea4925f82d0d4549e9001cb039978f5e746a"
+    },
+    {
+      "name": "rooted-prefix-scheduler-build-7a",
+      "source": "7a124843d",
+      "result": "joint core/node build PASS; source7a contains unconnected tokenizer scheduler",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-rooted-prefix-scheduler-build-7a.log",
+      "sha256": "9ec1007dd62349c2a8a7c198ceddf7b2e57a1ee64dbb6d22e18684044b1527ed"
+    },
+    {
+      "name": "rooted-prefix-core-tests-7a",
+      "source": "7a124843d",
+      "result": "15 PASS / 2 FAIL: prefix8, rooted6, fence1 PASS; prefix test erroneously expected an exclusive exit hold at exit itself, and changed165/167 pins FAIL",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-rooted-prefix-core-tests-7a.log",
+      "sha256": "123dd1622dc2014b6cb41c9b4e621800ecbd5137f80bb8dee4f72c1e9ccdfbc6"
+    },
+    {
+      "name": "tokenizer-scheduler-node-tests-7a",
+      "source": "7a124843d",
+      "result": "2 PASS / 0 FAIL: real core scheduler restart/retry/wrong-input/resource refusals; source7a scheduler unconnected from service",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-tokenizer-scheduler-node-tests-7a.log",
+      "sha256": "ccea8d86990e3bdc3bbe47c86a1178ebdb6b1c6e30dd3c439c670a7e6da00dbc"
+    },
+    {
+      "name": "native-pruned-round-112-stack64",
+      "source": "11255b427",
+      "result": "0 PASS / 1 FAIL / 417.49s: actual automatic producer answers, but fixture missed partial accepted transport restart; 64MiB debug thread stack, no production RAM qualification",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-112-stack64.log",
+      "sha256": "cd278da90a15466387727128a96fefce352eb55480a99bf0d3a1bc1eccb4b513"
+    },
+    {
+      "name": "streamed-prefix-service-build-4260",
+      "source": "4260ce09b",
+      "result": "joint build FAIL: grpc-client/rpc-service archive ENOSPC; no runtime qualification",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-streamed-prefix-service-build-4260.log",
+      "sha256": "065d014f6561058bc9e3d4ba1abb717dfd6dbefda08141260e0a6eaa98703ea4"
+    },
+    {
+      "name": "public-source-streamed-nomination-build-ae656",
+      "source": "ae656354a",
+      "result": "joint build FAIL: isolated public-prefix test fixture addressed fields outside preimage.coord;4E0609 errors; corrected7fabac4e1",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-source-streamed-nomination-build-ae656.log",
+      "sha256": "f963afc086c0c08c137f668d26122eef68005629c1a7a7d616284ec9caf061a3"
+    },
+    {
+      "name": "public-source-streamed-nomination-build-7819",
+      "source": "7819b17ca",
+      "result": "joint core/node/base0 build PASS4m01s",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-source-streamed-nomination-build-7819.log",
+      "sha256": "8b9a06ad0b72084a24bb1419cf1c3fab26c1313c9df1634482cb0bedaa263b34"
+    },
+    {
+      "name": "public-prefix-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 3830 filtered out; finished in 0.56s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-prefix-core-tests-7819.log",
+      "sha256": "f4fef6181931d14d66fd4df8ad96a41760e3c0a96d063c4d35ea0e48e33a5bb3"
+    },
+    {
+      "name": "streamed-tokenizer-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 3827 filtered out; finished in 6.40s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-streamed-tokenizer-core-tests-7819.log",
+      "sha256": "8a8096637744f0b337c5a6920b58977a3baa728ae8d9496d80a1ecf345aa6e22"
+    },
+    {
+      "name": "rooted-paid-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3835 filtered out; finished in 0.93s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-rooted-paid-core-tests-7819.log",
+      "sha256": "4984c8fb3e75437f2702e90a9af6a3bd417dac9f8bc511ddf916043bead03c4e"
+    },
+    {
+      "name": "staged-carriage-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3838 filtered out; finished in 0.08s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-staged-carriage-core-tests-7819.log",
+      "sha256": "485a571df8f295f43dce3ab6d9499b527a39c805dcef5c1c32ff44414d736e72"
+    },
+    {
+      "name": "staged-pins-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 3826 filtered out; finished in 2.07s; exit=101",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-staged-pins-core-tests-7819.log",
+      "sha256": "8133880e8769a79850359fe361faa8d7ea54f7bd421d2b65caddfe45563b03ba"
+    },
+    {
+      "name": "streamed-tokenizer-scheduler-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 691 filtered out; finished in 1.63s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-streamed-tokenizer-scheduler-tests-7819.log",
+      "sha256": "2e1f347307896a9d05f80ab64ba47f9886396db03e0251a1d06c257d561ab3b5"
+    },
+    {
+      "name": "held-tokenizer-witness-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 1.01s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-held-tokenizer-witness-tests-7819.log",
+      "sha256": "f3b886ed3658d9074ee185788173f8c8ea5dddfa3c4fe48d370fa858306ae5a5"
+    },
+    {
+      "name": "public-filer-node-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 661 filtered out; finished in 7.02s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-filer-node-tests-7819.log",
+      "sha256": "6cac454e11ea5935062f703baaf62d40950919ce8481f2c68e8777a80616a10b"
+    },
+    {
+      "name": "native-base0-prefix-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 1.48s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-base0-prefix-tests-7819.log",
+      "sha256": "2ead2cf79b36fb414fa44cfdfd3e4787cc85680239698582321f1cd12778bd76"
+    },
+    {
+      "name": "native-q36-prefix-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 2.21s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-q36-prefix-tests-7819.log",
+      "sha256": "53f1ea048904249b571062ba17dd1d6ea126aee539b67c08a8baf0fc49e9de5e"
+    },
+    {
+      "name": "native-history-adapter-tests-7819",
+      "source": "7819b17ca",
+      "result": "11PASS0FAIL9.40s: native prune-hole/txid/branch-switch/strict-watermark history adapters",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-history-adapter-tests-7819.log",
+      "sha256": "0d6828c6f9164cee8ea5e02ed5d917dce7affab1f41355040658f50257a7f464"
+    },
+    {
+      "name": "held-tokenizer-mutation-tests-7819",
+      "source": "7819b17ca",
+      "result": "1PASS0FAIL0.01s: same-length own raw-file mutation after preauthentication refuses EOF verdict",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-held-tokenizer-mutation-tests-7819.log",
+      "sha256": "1bc285258f348be7c71dd1313c72a878070dfae90e55507059bdaabbd7c2f940"
+    },
+    {
+      "name": "native-pruned-round-7819-stack64",
+      "source": "7819b17ca",
+      "result": "actual one-pruned automatic producer service ABORT-6 during native header DB IO ENOSPC; no endpoint evidence;64MiB debug stack",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-7819-stack64.log",
+      "sha256": "673d8c2ddcf9111497b45ae334dbce92f32e119654261dbf6a453ce8b8772003"
+    },
+    {
+      "name": "native-pruned-round-7819-stack64-disk-retry",
+      "source": "7819b17ca",
+      "result": "0PASS1FAIL463.97s: actual accepted-partial producer restart, deleted input carrier, fresh public book, authenticated numbered input reacquisition, honest replay and Release reached DAA1379; final session-count assertion6!=4 remains unqualified;64MiB debug stack",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-7819-stack64-disk-retry.log",
+      "sha256": "728803632f7e464abcc58eef478a5d127ec90c68a7c116ab66bf46299b0d6010"
     }
   ],
-  "qualification": "Node11255b427 buildPASS and40 focused PASS (38 first log plus2 branch/mutation adapters). Real pruning service initial debug harness stack overflow;64MiB retry pending and is not production RAM qualification. Core/base0aafa9b234 joint buildPASS, core30PASS1FAIL only changed165/167 wire pins, host nativeBASE0/Q362PASS with own-context public false-prefix conviction. New source99c802af1 adds rooted prefix journal/cert tests, exact sealed progress, Q36 bounded68-byte contract and an unconnected node scheduler: compilation/actual execution pending. Previous failures and source-qualified logs retained. Max Q36 typed paging/input-leaf streaming, compact immutable profile seed, grouped reacquisition, full service/P2P/reorg/resource obligations remain open. No full G14 or activation PASS."
+  "qualification": "Per-record source qualification only. Source7819 joint core/node/base0 build PASS4m01s and104 focused PASS2FAIL:52core+50node+2actualnative; failures are stale165/167 wire pins and unclassified changed14..19 contradiction enum. Public prefix+raw tokenizer+rooted paid/hold boundary/carriage/history/refusal tests pass. Actual one-pruned automatic producer service aborted at native headerDB ENOSPC; disk retry FAIL0/1 after463.97s: recovery/replay/Release endpoint reached, but final session-count assertion6!=4 remains unresolved; not a recovery PASS. Source112417s restart timing FAIL and source7a exclusive-hold/pins FAIL are preserved; boundary assertion repaired without production weakening. New staged tokenizer service native fixture and separate own D7 file setup queued, not compiled/executed yet. Required-source Q36 quote reveals a large funding/horizon gap despite finite streaming/paging; canonicalk8192 is prospective and exceeds defaultcap. No full G14, latest-HEAD runtime or activation PASS.",
+  "executed_7819_binaries": {
+    "core": "ee6767407d69a9215f590d5532f19b58575da2fc434d0e413388c842d9ea0738",
+    "node": "6e0781cef8a4b4519acb8fa1588602d0f28ccef3b29f4bd896a6907203503233",
+    "base0": "990cba5e2b5d93e9d41485dbf956a2e0d948a952942a035483fad3029fcc63a9"
+  }
 }

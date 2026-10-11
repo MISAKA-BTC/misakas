@@ -1,0 +1,6 @@
+
+running 1 test
+test backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 1.48s
+
