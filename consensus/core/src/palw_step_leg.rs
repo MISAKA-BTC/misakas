@@ -1157,6 +1157,47 @@ pub fn step_opening_root_capped_v1(
 
 /// Produces the membership proof of `leaf_index` from the same ordered leaf hashes the root
 /// was built over. Commit / open / adjudicate are held together by the mirror test.
+/// Builds one exact opening from a repeatable leaf source with O(log(count)) auxiliary RAM.
+/// Odd nodes retain the existing promotion rule. No all-leaves/tree buffer is allocated.
+pub fn step_opening_from_leaf_source_capped_v1(
+    count: u64,
+    leaf_index: u64,
+    max_step_leaf_count: u64,
+    leaf: impl Fn(u64) -> Hash64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+    }
+    if leaf_index >= count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: leaf_index, count });
+    }
+    fn subtree(count: u64, height: u32, index: u64, leaf: &impl Fn(u64) -> Hash64) -> Hash64 {
+        if height == 0 {
+            return step_merkle_leaf(index, &leaf(index));
+        }
+        let left = subtree(count, height - 1, index * 2, leaf);
+        let right_index = index * 2 + 1;
+        if right_index >= count.div_ceil(1u64 << (height - 1)) {
+            return left;
+        }
+        let right = subtree(count, height - 1, right_index, leaf);
+        keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), right.as_byte_slice()])
+    }
+    let mut width = count;
+    let mut position = leaf_index;
+    let mut height = 0;
+    let mut siblings = Vec::new();
+    while width > 1 {
+        if (position ^ 1) < width {
+            siblings.push(subtree(count, height, position ^ 1, &leaf));
+        }
+        width = width.div_ceil(2);
+        position /= 2;
+        height += 1;
+    }
+    Ok(PalwStepOpeningV1 { leaf_index, leaf_hash: leaf(leaf_index), siblings })
+}
+
 pub fn step_opening_v1(ordered_leaf_hashes: &[Hash64], leaf_index: u64) -> Result<PalwStepOpeningV1, PalwStepLegError> {
     step_opening_capped_v1(ordered_leaf_hashes, leaf_index, PALW_STEP_LEG_MAX_LEAVES)
 }
@@ -2634,6 +2675,22 @@ fn checkpoint_fault(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bounded_leaf_source_opens_ragged_trees_without_a_whole_tree_buffer() {
+        for count in [1usize, 2, 3, 5, 8, 13, 31, 64, 100] {
+            let leaves: Vec<Hash64> = (0..count as u64).map(|i| Hash64::from_u64_word(0xA0 + i)).collect();
+            let root = step_merkle_root_v1(&leaves).unwrap();
+            for i in 0..count as u64 {
+                let actual = step_opening_from_leaf_source_capped_v1(count as u64, i, PALW_STEP_LEG_MAX_LEAVES, |j| leaves[j as usize]).unwrap();
+                assert_eq!(actual, step_opening_v1(&leaves, i).unwrap());
+                assert_eq!(step_opening_root_v1(count as u64, &actual).unwrap(), root);
+            }
+        }
+        assert!(step_opening_from_leaf_source_capped_v1(0, 0, 100, |_| unreachable!()).is_err());
+        assert!(step_opening_from_leaf_source_capped_v1(101, 0, 100, |_| unreachable!()).is_err());
+        assert!(step_opening_from_leaf_source_capped_v1(2, 2, 100, |_| unreachable!()).is_err());
+    }
+
     /// **The kept-levels tree is the rebuilt tree, path for path** — every leaf of trees whose
     /// sizes exercise the promote-odd shape at every level, and the root.
     #[test]
