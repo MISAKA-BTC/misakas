@@ -213,7 +213,7 @@ fn head_geometry(
     Ok((slot, node, widths))
 }
 
-fn authenticated_slice(
+pub(crate) fn authenticated_slice(
     binding: &PalwStepBindingV2,
     node_slot: u32,
     position: u32,
