@@ -4,12 +4,15 @@
 //! change commits beside the legacy three-hash EVM-head row. It reads nothing from the DNS overlay.
 //!
 //! **Cost.** The selected chain between the sink and the pruning point is walked on every virtual change
-//! (testnet-12's pruning point stays near genesis for a long time). Everything the walk needs from one block
-//! is a pure function of immutable rows keyed by that block's hash, so it is read once and kept in
+//! (testnet-12's pruning point stays near genesis for a long time). Above the pruning boundary, a row
+//! is a pure function of immutable data keyed by its block hash, so it is read once and kept in
 //! [`NativeRowCache`]; a virtual change then costs one cache lookup per chain block and one O(N + F) sweep
 //! ([`certify_native_prefix_v1`]) instead of a database read and a delta decode per block and an
 //! O(chain x claims) lifecycle scan. The cache is memory only and is rebuilt from the retained deltas after a
-//! restart: nothing in it is authoritative, and a block whose rows cannot be read again stops the snapshot at
+//! restart. The current pruning-point row is read separately on each walk and is never cached: its delta
+//! is not required at the checkpoint, but is required again if a later import moves the boundary below it.
+//! A cached ordinary row is evicted when it becomes the checkpoint. Nothing in memory is authoritative;
+//! rebuilding a required row whose data cannot be read stops the snapshot at
 //! `MissingHistory` rather than being skipped.
 //!
 //! **Evidence.** REAL work comes from the `Final` transitions in each chain block's PALW delta, free-prompt
@@ -21,7 +24,8 @@
 //! **Readiness (RFC-0012 D1).** [`VirtualStateProcessor::native_evaluate`] returns the snapshot AND the material it was weighed from
 //! (or the reason nothing was weighed); [`VirtualStateProcessor::native_safe_readiness`] turns that into the structured explanation
 //! `getPalwSettlement` serves as `nativeReadiness` (`palw_native_readiness_v1`). The snapshot path is `native_evaluate(..).snapshot`
-//! and pays nothing for the explanation; the explanation is advisory, never persisted, and memoized per sink.
+//! and pays nothing for the explanation; the explanation is advisory, never persisted, and memoized by
+//! sink plus the pruning point used by that evaluation.
 
 use super::VirtualStateProcessor;
 use crate::model::{
@@ -49,7 +53,8 @@ use std::{
     sync::Arc,
 };
 
-/// What one executed selected-chain block contributes to the snapshot, independent of the sink.
+/// What one executed selected-chain block contributes to the snapshot at the captured pruning boundary.
+/// Ordinary cached rows are independent of the sink/boundary; a checkpoint-only row is never cached.
 pub(super) struct NativeChainRow {
     hash: BlockHash,
     parent: BlockHash,
@@ -64,7 +69,7 @@ pub(super) struct NativeChainRow {
 }
 
 /// Memory-only, rebuildable index of [`NativeChainRow`]s by block hash. Only blocks that are executed, with
-/// a root-verified EVM result and a readable delta, are ever stored.
+/// a root-verified EVM result and their required delta, are stored. Checkpoint-only rows are excluded.
 #[derive(Default)]
 pub(super) struct NativeRowCache {
     rows: HashMap<BlockHash, Arc<NativeChainRow>>,
@@ -117,8 +122,15 @@ impl VirtualStateProcessor {
     /// Read (or load and remember) the row of `cursor` if it is executed with a root-verified EVM result.
     /// `Ok(None)`: not executed (yet). `Err`: an unreadable row, or a result that disagrees with the header.
     fn native_row(&self, cursor: BlockHash, pruning: BlockHash) -> Result<Result<Arc<NativeChainRow>, (u64, BlockHash)>, WalkFault> {
-        if let Some(row) = self.native_rows.lock().rows.get(&cursor) {
-            return Ok(Ok(row.clone()));
+        {
+            let mut cache = self.native_rows.lock();
+            if cursor == pruning {
+                // A checkpoint has no delta contribution. Its role is not a function of its hash:
+                // never reuse/store that incomplete row, or retain its formerly ordinary evidence.
+                cache.rows.remove(&cursor);
+            } else if let Some(row) = cache.rows.get(&cursor) {
+                return Ok(Ok(row.clone()));
+            }
         }
         let Ok(header) = self.headers_store.get_header(cursor) else {
             return Err(WalkFault(HistoryGapV1::HeaderUnreadable, Some(cursor)));
@@ -127,10 +139,8 @@ impl VirtualStateProcessor {
             Ok(execution) if execution.commitment_root() == header.evm_commitment_root => {}
             Ok(_) => return Err(WalkFault(HistoryGapV1::ExecutionDisagreesWithHeader, Some(cursor))),
             Err(StoreError::KeyNotFound(_)) => {
-                let parent = self
-                    .ghostdag_store
-                    .get_selected_parent(cursor)
-                    .map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
+                let parent =
+                    self.ghostdag_store.get_selected_parent(cursor).map_err(|_| WalkFault(HistoryGapV1::ParentUnreadable, Some(cursor)))?;
                 return Ok(Err((header.daa_score, parent)));
             }
             Err(_) => return Err(WalkFault(HistoryGapV1::ExecutionRowUnreadable, Some(cursor))),
@@ -163,7 +173,9 @@ impl VirtualStateProcessor {
             delta_root,
             evidence,
         });
-        self.native_rows.lock().rows.insert(cursor, row.clone());
+        if cursor != pruning {
+            self.native_rows.lock().rows.insert(cursor, row.clone());
+        }
         Ok(Ok(row))
     }
 
@@ -497,12 +509,14 @@ impl VirtualStateProcessor {
 
     /// **RFC-0012 D1: why `safe` stands where it does, at `sink`** — the structured reasons served on `getPalwSettlement`
     /// (`nativeReadiness`). Advisory and never persisted: it is derived from the same evaluation as the snapshot, decides nothing,
-    /// and is memoized per sink so repeated RPC calls cost one evaluation per virtual change, not one per call.
+    /// and is memoized by sink plus pruning point. Repeated calls reuse the evaluation while both agree;
+    /// context import/catch-up can move pruning without changing the sink.
     pub(crate) fn native_safe_readiness(&self, sink: BlockHash) -> Option<NativeSafeReadinessV1> {
         let retirement = self.palw_dns_retirement?;
         let mut memo = self.native_readiness_memo.lock();
+        let pruning = self.pruning_point_store.read().pruning_point().unwrap();
         if let Some((at, readiness)) = memo.as_ref() {
-            if *at == sink {
+            if *at == sink && readiness.finalized.pruning_point == pruning {
                 return Some(readiness.clone());
             }
         }
@@ -589,8 +603,7 @@ mod tests {
     /// that finalize or spend work.
     #[test]
     fn rfc0012_a_row_without_evidence_is_small() {
-        let bytes =
-            std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
+        let bytes = std::mem::size_of::<NativeChainRow>() + std::mem::size_of::<Arc<NativeChainRow>>() + std::mem::size_of::<BlockHash>();
         eprintln!(
             "[rfc0012-cost] NativeChainRow: {} bytes (+ map entry): about {bytes} bytes per chain block",
             std::mem::size_of::<NativeChainRow>()

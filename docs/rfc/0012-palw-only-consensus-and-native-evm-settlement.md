@@ -275,6 +275,20 @@ import batch and explicit IBD stable flag still form a recovery protocol; this s
 transaction spanning all UTXO/PALW/EVM sidecars. Real transport, interrupted imports, proof adoption and
 cross-ledger recovery remain acceptance requirements under §§4.1 and 8.
 
+A checkpoint-only chain row has no delta evidence and MUST NOT be cached as an ordinary row keyed only
+by block hash. Evict previously ordinary evidence when that block becomes the current checkpoint;
+read its root-verified execution separately. If context later moves below it, require its own delta
+again and stop at missing history rather than inherit an empty contribution from the former boundary.
+Readiness memo reuse requires both sink and pruning point to match. A successful import still resets
+the memo after commit; context freshness is not permission to clear publication history or incidents.
+
+The RPC response combines committed settlement and a current advisory evaluation. Equality of sink
+alone does not establish agreement if pruning context moved between publications. Attach readiness only
+when its version, policy and shared certificate statements (generation, safe, finalized and stop) agree
+with the returned snapshot. Otherwise omit the explanation until a coherent publication exists; do not
+substitute optimistic heads or invent a certificate. This coherence filter verifies agreement between
+already validated local reads, not cryptographic soundness or a transaction across all sidecars.
+
 ## 5. Retire the overlay without erasing history or locking users' bonds
 
 Introduce a proposed `palw_dns_retirement_v1` fence, scheduled only for a compatible PALW network.

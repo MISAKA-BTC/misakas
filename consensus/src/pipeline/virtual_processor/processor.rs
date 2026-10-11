@@ -536,8 +536,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
     pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
-    /// RFC-0012 D1: the last `safe`-readiness explanation served, keyed by the sink it stands at (memory only, advisory). Bounds the
-    /// cost of the RPC to one evaluation per virtual change; see `native_settlement::native_safe_readiness`.
+    /// RFC-0012 D1: the last `safe`-readiness explanation served (memory only, advisory). Reused only when both
+    /// sink and its contained pruning point agree, including context changes without a virtual change.
+    /// See `native_settlement::native_safe_readiness`.
     pub(super) native_readiness_memo:
         parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
     /// LIVE-R1 N3: the PALW state AT the committed virtual sink, for the `palw_*` readers

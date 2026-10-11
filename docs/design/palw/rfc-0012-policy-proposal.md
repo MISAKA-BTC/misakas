@@ -354,7 +354,11 @@ byte prefix of a v3 one); the reader accepts 1 to 3. gRPC: `optional string nati
 lines under the settlement line (`--json` carries the whole document). The explorer (`contrib/misakascan-t12`) does not render it (GAP, small).
 
 **Cost.** The snapshot path is `native_evaluate(..).snapshot` and pays nothing for the explanation (the material is moved out of the evaluation, not
-recomputed). The explanation is built on demand and memoized per sink: one evaluation per virtual change, however often the RPC is called.
+recomputed). The explanation is built on demand and memoized by sink plus the pruning point used by the evaluation: repeated calls reuse it
+while both agree. Context import/catch-up can move pruning without a sink change, so a sink-only memo is insufficient. The current checkpoint
+row is read separately and excluded from the ordinary immutable-row cache; moving the boundary below it requires its delta again.
+RPC includes the explanation only when version, policy and shared certificate statements agree with the committed snapshot. A same-sink
+context transition can require omitting readiness until the next coherent publication. See RFC §4.3 and the boundary-cache correction record.
 
 **Tests.** Core (`palw_native_readiness_v1`, 11 pass): the first stop-bearing wait of the blocking effect equals `certify_native_prefix_v1`'s stop on
 400 generated chains; a promised time is exact and tight (certifies at `+d`, not at `+d-1`); evidence is re-read at the moment the last clock stops

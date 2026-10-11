@@ -97,6 +97,12 @@ reset. The pruning-history context import also reuses identical samples and reje
 shape/sample errors before writing history. This strengthens the existing proof/catch-up caller contract;
 it supplies no new proof authority or branch-selection rule. See RFC §4.3 and the import-recovery record.
 
+Current checkpoint rows are excluded from the evidence cache and evict any prior ordinary row of the
+same block. Returning that block above a later boundary requires loading its delta. Readiness memo
+reuse also checks the pruning point carried by its evaluation. RPC attaches that advisory explanation
+only when its version, policy and shared head/stop statements agree with the returned committed snapshot;
+a context change at the same sink must not pair an old certificate with contradictory new advice.
+
 An absent ETH block tag returns `null`. State/call queries for unavailable executed
 heads return an error, rather than reading tip state or inventing an empty account.
 The evidence API also verifies endpoint roots and provenance. The legacy DAA-only

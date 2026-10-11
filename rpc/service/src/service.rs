@@ -2045,14 +2045,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
         let dns_retired_at = self.config.params.palw_dns_retirement.filter(|r| r.activation.is_active(sink_daa)).map(|r| r.activation.daa_score());
         let native_settlement = session.async_get_native_settlement_snapshot().await.map_err(|e| RpcError::General(e.to_string()))?;
-        // RFC-0012 D1: why `safe` stands where it does. Served only when it is about the SAME sink as the snapshot: a virtual change
-        // between the two reads would otherwise explain a certificate the response does not carry (the caller can simply ask again).
+        // RFC-0012 D1: pair validated local readings only when their shared certificate statements agree.
+        // A pruning context change at the same sink can change readiness before a new snapshot is published.
         let native_readiness = match (&native_settlement, dns_retired_at) {
             (Some(snapshot), Some(_)) => session
                 .async_get_native_safe_readiness()
                 .await
                 .map_err(|e| RpcError::General(e.to_string()))?
-                .filter(|r| r.generation == snapshot.generation),
+                .filter(|r| r.agrees_with_snapshot(snapshot)),
             _ => None,
         };
         // DAA alone cannot identify the last effect within an equal-DAA group. Only a strictly

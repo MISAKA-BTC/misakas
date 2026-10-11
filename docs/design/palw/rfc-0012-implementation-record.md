@@ -126,8 +126,8 @@ follow-up added. **Nothing here changes a shipped preset, a params / schedule / 
 | `palw_native_readiness_v1`: a **pure** explanation of the certificate (which effect holds `safe` back, every unmet condition, running clocks, named history gaps) | `consensus/core/src/palw_native_readiness_v1.rs` (new), `lib.rs` | item 4: the snapshot says one stop; a reader waiting on a transaction needs the reasons |
 | `native_facts_and_skips_v1`: the one fact conversion, now also counting what it skipped (`voided`, `baseClass`, `openDa`, `unpriced`, `bondNotHeld`); `native_facts_of_block_v1` is it with the counters dropped | `palw_native_settlement_v1.rs` | evidence seen and not counted must be visible, not silent |
 | `native_evaluate` returns the snapshot AND the material it was weighed from (or why nothing was); `native_evm_settlement_snapshot` is `native_evaluate(..).snapshot`; walk faults carry a cause and a block | `consensus/src/pipeline/virtual_processor/native_settlement.rs` | the explanation can never be about other evidence than the certificate; the snapshot path pays nothing for it |
-| `native_safe_readiness(sink)`, memoized per sink; `ConsensusApi::get_native_safe_readiness` (default `Ok(None)`), `Consensus` impl, `async_get_native_safe_readiness` | `native_settlement.rs`, `processor.rs` (the memo field), `consensus/src/consensus/mod.rs`, `consensus/core/src/api/mod.rs`, `components/consensusmanager/src/session.rs` | one evaluation per virtual change, however often the RPC is called |
-| `getPalwSettlement.nativeReadiness` (**no new op**): wRPC response v3 only when present, gRPC field 12, JSON/wasm key + TypeScript types; served only when its `generation` equals the snapshot's | `rpc/core/src/model/message.rs`, `rpc/core/src/wasm/message.rs`, `rpc/grpc/core/proto/rpc.proto`, `rpc/grpc/core/src/convert/message.rs`, `rpc/service/src/service.rs` | item 4 on the existing RFC-0012 RPC |
+| `native_safe_readiness(sink)`, memoized by sink plus its evaluated pruning point; `ConsensusApi::get_native_safe_readiness` (default `Ok(None)`), `Consensus` impl, `async_get_native_safe_readiness` | `native_settlement.rs`, `processor.rs` (the memo field), `consensus/src/consensus/mod.rs`, `consensus/core/src/api/mod.rs`, `components/consensusmanager/src/session.rs` | reuse while sink and pruning point both agree; context change requires a fresh evaluation |
+| `getPalwSettlement.nativeReadiness` (**no new op**): wRPC response v3 only when present, gRPC field 12, JSON/wasm key + TypeScript types; served only when version, policy and shared generation/head/stop statements agree with the snapshot | `rpc/core/src/model/message.rs`, `rpc/core/src/wasm/message.rs`, `rpc/grpc/core/proto/rpc.proto`, `rpc/grpc/core/src/convert/message.rs`, `rpc/service/src/service.rs` | item 4 on the existing RFC-0012 RPC |
 | `misaka palw settlement` prints the reasons | `misaka-cli/src/palw_settlement.rs` | operators read it in a terminal |
 | The real-fold fixture moves to a shared module; the existing fold test is unchanged in behaviour | `consensus/core/tests/rfc0012_fold_fixture/mod.rs` (new), `rfc0012_native_evidence_fold.rs` | two test files drive the same claim life |
 
@@ -456,3 +456,71 @@ all earlier failed/smoke runs. Scoped rustfmt and `git diff --check` pass. The n
 import errors; no wire codecs, network parameters, fingerprints, Round tickets, selection rule or public
 activation changed. Source logic was not edited after validation; only documentation was completed.
 No push or deployment. The four-RFC goal remains active with its recorded open acceptance gates.
+
+
+## Pruning-boundary cache and RPC coherence correction (2026-10-11 design audit)
+
+Two node regressions failed on the preceding import repair. A checkpoint-only row was cached under its
+block hash with no own delta. After context import moved the boundary below that block, a hot walk reused
+that row and reported a positive Safe head over the now-required but missing delta; a cold walk stopped
+at `MissingHistory`. Separately, a same-sink context advance reused the old readiness memo, still naming
+the earlier Finalized/checkpoint while a fresh evaluation withheld it. Log `/tmp/rfc12-cache-before.log`:
+**0 passed, 2 failed**, build 2m06s, runtime 0.30s, at the intended warm/cold and memo-equality assertions.
+
+The current checkpoint row now bypasses and evicts the ordinary row cache, is read/root-checked separately,
+and is never inserted as an ordinary row. Its missing delta is legitimate only at that boundary. Returning
+it above a later boundary loads its delta again; missing history stops certification, and restoration works
+without flushing all memory. Other required immutable rows retain their cache. Readiness memo reuse checks
+both the sink and the pruning point contained by the saved evaluation. Import's explicit post-commit reset
+and durable publication/incident history are unchanged. This adds constant checkpoint reads per walk rather
+than discarding the whole history cache on every virtual change; it is not a new release resource approval.
+
+Refreshing readiness exposed a companion RPC issue: `getPalwSettlement` paired readings by sink alone.
+A current evaluation at the same sink could contradict the still-committed snapshot before the next virtual
+publication. `NativeSafeReadinessV1::agrees_with_snapshot` now checks supported versions, the policy id derived
+from exact policy values, and shared generation/Safe/Finalized/stop statements. The RPC includes the advisory
+explanation only when that predicate holds; it omits contradictory advice and resumes after coherent
+publication. The predicate pairs already validated local readings; it is not a certificate/root verifier,
+a proof of complete context identity or a replacement for snapshot provenance. No wire fields change.
+
+The new tests use the actual context import API over fixture histories, normally executed node rows,
+synthetic frontier/useful-work facts and an intentionally removed checkpoint delta. They cover a same-sink
+advance, a context rewind, hot versus cold evaluation, restored data without memory flushing, coherent
+RPC-pairing eligibility before/after publication, and policy mismatch/u128 overflow. The pairing predicate
+is called by the production RPC filter, but these tests are not a live wRPC request or a full service
+transport drill. They do not validate the fixture history as a long-range proof, perform actual GC, crash
+an OS process, establish genuine Final-work soundness or close the external four-RFC gates. Existing
+publication/incident tests remain required; this cache repair must not erase an alarm or add selection weight.
+
+The core readiness comment claiming that restart forgets withdrawal is corrected to describe the durable
+publication row introduced earlier. RFC §4.3, the dormant implementation and the policy cost discussion now
+state the boundary/memo/RPC contracts. The first cache-only candidate passed 46 node/proof tests, but that
+smoke precedes RPC-pairing integration and is not counted again as final evidence.
+
+
+Final validation (Rust 1.93.0, macOS aarch64, jobs 2, dev/test debug 0, incremental 0):
+
+* `cargo test --locked -p kaspa-consensus --features evm --lib -- rfc12_ rfc0012_ t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225 hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof --test-threads=1`:
+  **46 passed, 0 failed, 1 ignored**, build 4m06s, runtime 18.12s; log
+  `/tmp/rfc12-cache-final-node.log`. Matrix 36, C-items 3, private-Final probe 1, store 2,
+  retirement unit 1, row-size unit 1, existing proof round trips 2. The ignored explicit 5,400-DAA
+  long probe is not a success. This final run includes the RPC-pairing/restoration assertions;
+  `/tmp/rfc12-cache-regression.log` was the earlier cache-only smoke (46 pass, 21.22s), not counted again.
+* `cargo test --locked -p kaspa-consensus-core --features evm --lib palw_native_readiness_v1 -- --test-threads=2`:
+  **11 passed, 0 failed, 0 ignored**, build 4m01s, runtime 0.00s as reported; log
+  `/tmp/rfc12-cache-core-readiness.log`. Includes generated-chain agreement and maturity/stop/wire properties.
+* `cargo test --locked -p kaspa-rpc-core -p kaspa-consensus-core --features kaspa-consensus-core/evm --lib rfc0012_response_v3_carries_the_readiness_and_older_wire_is_byte_identical_without_it -- --test-threads=1`:
+  RPC **1 passed, 0 failed, 0 ignored**, build 2m23s, runtime 0.00s as reported; log
+  `/tmp/rfc12-cache-wire.log`. Core matches zero tests in this command and adds no successes.
+  The existing codec test covers readiness present as v3 and absent with unchanged older bytes.
+* `cargo check --locked -p kaspad --features evm`: succeeded, 3m45s including artifact-lock wait;
+  log `/tmp/rfc12-cache-daemon.log`. This compiles the production service's coherence filter.
+
+The independent final passing total is **58**, excluding the long probe, zero-match selection and all
+smoke/failure runs. Serialized fields of ReadinessPolicyV1, FinalizedReadinessV1 and NativeSafeReadinessV1
+were mechanically compared to HEAD and are identical. Rustfmt for the modified small modules/new test
+block and `git diff --check` pass. Source logic was not edited after final validation. No network parameter,
+fingerprint, Round ticket, selection rule, public fence or deployment changed. The user requested a push;
+verified preceding commit `9f520f62a` was pushed and confirmed by ls-remote while this work was in flight,
+and this validated correction is then committed/pushed on the same audit branch. The four-RFC goal remains
+active; all previously recorded external soundness/economics/P2P/pruned/crash/resource gates remain open.

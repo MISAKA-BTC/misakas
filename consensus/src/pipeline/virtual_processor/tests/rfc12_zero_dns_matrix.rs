@@ -1711,6 +1711,76 @@ async fn certified(a: &mut Rig) -> (Block, Block, Vec<Block>) {
     (pre[0].clone(), e3, pre)
 }
 
+/// A checkpoint row has no delta evidence; moving that checkpoint backwards must require its retained
+/// delta again. Hot memory and a cold walk must agree even when that previously unnecessary row is gone.
+#[tokio::test]
+async fn rfc12_cache_a_former_pruning_boundary_cannot_hide_missing_delta_after_context_rewind() {
+    use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0c10_0000);
+    let (boundary, _, _) = certified(&mut a).await;
+    let sink = a.chain.sink();
+    a.vp().native_rows.lock().clear();
+    let baseline = a.vp().native_evaluate(sink);
+    assert_eq!(baseline.snapshot.safe, Some(boundary.header.hash));
+    let (root, delta) = a.vp().palw_state_v2_store.read().delta_of(boundary.header.hash).unwrap();
+    let record =
+        crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2 { state_root: root, delta_borsh: borsh::to_vec(&delta).unwrap() };
+    a.vp().palw_state_v2_store.write().delete_delta_for_tests(boundary.header.hash).unwrap();
+    assert_eq!(a.vp().native_evaluate(sink).snapshot, baseline.snapshot, "a checkpoint needs no own delta");
+    // Actual context entry with fixture history, not a full adopted pruning proof or real GC.
+    a.api().import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap()]).unwrap();
+    let warm = a.vp().native_evaluate(sink).snapshot;
+    a.vp().native_rows.lock().clear();
+    let cold = a.vp().native_evaluate(sink);
+    assert_eq!((cold.snapshot.safe, cold.snapshot.finalized, cold.snapshot.stop), (None, None, Some(SettlementStopV1::MissingHistory)));
+    assert!(matches!(cold.detail, super::super::native_settlement::NativeDetail::Stopped(
+        SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(hash) }
+    ) if hash == boundary.header.hash));
+    assert_eq!(warm, cold.snapshot, "a cached checkpoint must not supply an empty delta above the new boundary");
+    a.vp().palw_state_v2_store.write().set_delta_record_for_tests(boundary.header.hash, record).unwrap();
+    let restored = a.vp().native_evaluate(sink).snapshot;
+    assert_eq!(
+        (restored.safe, restored.finalized),
+        (Some(boundary.header.hash), None),
+        "restored evidence is read without flushing memory"
+    );
+}
+
+/// Pruning context can change without a virtual-sink change (IBD catch-up/context import). Readiness
+/// must derive from that context on the next call rather than reuse the old per-sink explanation.
+#[tokio::test]
+async fn rfc12_cache_readiness_observes_a_new_pruning_context_at_the_same_sink() {
+    let p = parts(Some(FENCE));
+    let mut a = Rig::new(&p, 0x12_0c20_0000);
+    let (boundary, _, pre) = certified(&mut a).await;
+    let before = readiness_of(&a);
+    let published = snapshot_of(&a).unwrap();
+    assert!(before.agrees_with_snapshot(&published), "stable RPC readings can be paired");
+    assert_eq!(before.finalized.finalized, Some(boundary.header.hash));
+    let next = pre[1].header.hash;
+    a.api()
+        .import_pruning_points(vec![a.api().get_header(a.config.params.genesis.hash).unwrap(), a.api().get_header(next).unwrap()])
+        .unwrap();
+    let warm = readiness_of(&a);
+    a.vp().native_readiness_memo.lock().take();
+    let cold = readiness_of(&a);
+    assert_eq!(cold.generation, before.generation, "the sink did not change");
+    assert_eq!(cold.finalized.pruning_point, next);
+    assert_eq!((cold.safe, cold.finalized.finalized), (None, None));
+    assert_eq!(warm, cold, "the memo key must include pruning context, not just the sink");
+    assert!(!warm.agrees_with_snapshot(&published), "RPC must omit the new advice beside an older same-sink certificate");
+    extend(&mut a, &[4]).await;
+    let committed = snapshot_of(&a).unwrap();
+    let current = readiness_of(&a);
+    assert!(current.agrees_with_snapshot(&committed), "the next coherent publication restores the explanation");
+    let mut another_policy = current.clone();
+    another_policy.policy.unique_mature_work = "340282366920938463463374607431768211456".into();
+    assert!(!another_policy.agrees_with_snapshot(&committed), "overflowing policy work cannot be paired");
+    another_policy.policy.unique_mature_work = "2".into();
+    assert!(!another_policy.agrees_with_snapshot(&committed), "different policy cannot explain this certificate");
+}
+
 /// **EXPECTED.** With a safe frontier at b0, one unit of matured work (10) placed after it, and b0 the pruning point:
 /// `safe` is b0 — the deepest executed effect whose lifecycle is closed (every claim accepted at or before it resolved) and which
 /// the frontier covers — with depth 1 and work 10; the prefix stops at e1 (`FrontierNotCovered`: the frontier is at b0, not past it);
