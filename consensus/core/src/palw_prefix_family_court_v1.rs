@@ -396,6 +396,57 @@ impl PalwPrefixFamilyCourtV1 {
             }
         }
     }
+    /// Adapt one complete original public leaf to the existing bounded actions. Validation
+    /// runs on a private copy through the same hash-EOF transition; failure leaves this row
+    /// untouched. The owned outer court must still charge and apply every returned action.
+    /// This adapter never accepts a challenger-owned recurrence page as a public source.
+    pub fn authenticated_public_source_actions_v1(
+        &self,
+        context: Hash64,
+        opening: &PalwStepOpeningV1,
+        bytes: &[u8],
+    ) -> Result<Vec<PalwPrefixCourtActionV1>, String> {
+        self.check()?;
+        let source = self.next_public_source_v1()?.ok_or("court has no mandatory public source")?;
+        if context != self.context
+            || !source.needs_opening
+            || source.offset != 0
+            || opening.leaf_index != source.leaf_index
+            || bytes.len() as u64 != u64::from(source.length)
+        {
+            return Err("answer changes the original complete next public source".into());
+        }
+        let kind = match self.cursor_v1()? {
+            PalwPrefixFamilyCursorV1::TileOpening { .. } => 0,
+            PalwPrefixFamilyCursorV1::HeadInputs { .. } | PalwPrefixFamilyCursorV1::HeadInputOpening { .. } => 1,
+            PalwPrefixFamilyCursorV1::PublicInputOpening { .. } => 2,
+            _ => return Err("answer is not an original source opening phase".into()),
+        };
+        let mut actions = Vec::with_capacity(2 + bytes.len().div_ceil(65_536));
+        actions.push(match kind {
+            0 => PalwPrefixCourtActionV1::BeginTile { opening: opening.clone() },
+            1 => PalwPrefixCourtActionV1::HeadInputOpening { opening: opening.clone() },
+            _ => PalwPrefixCourtActionV1::PublicInputOpening { opening: opening.clone() },
+        });
+        for (i, part) in bytes.chunks(65_536).enumerate() {
+            let offset = (i * 65_536) as u32;
+            actions.push(match kind {
+                0 => PalwPrefixCourtActionV1::TilePart { offset, bytes: part.to_vec() },
+                1 => PalwPrefixCourtActionV1::HeadInputPart { offset, bytes: part.to_vec() },
+                _ => PalwPrefixCourtActionV1::PublicInputPart { offset, bytes: part.to_vec() },
+            });
+        }
+        actions.push(match kind {
+            0 => PalwPrefixCourtActionV1::FinishTile,
+            1 => PalwPrefixCourtActionV1::HeadInputFinish,
+            _ => PalwPrefixCourtActionV1::PublicInputFinish,
+        });
+        let mut candidate = self.clone();
+        for action in &actions {
+            candidate.movement(context, action)?;
+        }
+        Ok(actions)
+    }
     pub fn next_public_source_v1(&self) -> Result<Option<PalwPrefixPublicSourceV1>, String> {
         self.check()?;
         let cursor = self.cursor_v1()?;

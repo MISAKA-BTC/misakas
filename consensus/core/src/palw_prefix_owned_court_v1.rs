@@ -138,6 +138,16 @@ impl PalwOwnedPrefixCourtV1 {
         self.check()?;
         self.court.next_public_source_v1()
     }
+    /// Returns only hash-EOF-validated original-source actions, without committing or
+    /// bypassing this owner's cumulative move, carrier, capital and clock accounting.
+    pub fn authenticated_public_source_actions_v1(
+        &self,
+        opening: &crate::palw_step_leg::PalwStepOpeningV1,
+        bytes: &[u8],
+    ) -> Result<Vec<PalwPrefixCourtActionV1>, String> {
+        self.check()?;
+        self.court.authenticated_public_source_actions_v1(self.seed_id, opening, bytes)
+    }
     pub fn check(&self) -> Result<(), String> {
         if self.moves_used == 0
             || self.moves_used > self.terms.plan.maximum_moves
