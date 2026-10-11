@@ -138,7 +138,14 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
 
 #[tokio::test]
 async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_cancels_all_unpaid_funds() {
-    let mut cw = active_world().await;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut cw = active_world_over(VerificationModeV1::OptimisticPublicVerification, |config| {
+        TestConsensus::with_db(db.clone(), config, sender)
+    })
+    .await;
+    cw.net._keep.push(Box::new(receiver));
     // Signed worker terms are fixed before any computation. The native trace
     // commitment remains the module's seam; only the prefix kernel matrix lies.
     let mut s = opened_with_lifetime(&mut cw, true, |_| false, |_, _, _| Vec::new(), 1_024).await;
@@ -183,6 +190,22 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     assert_eq!(poster_before - cw.net.collateral(REGISTRANT), fee_total, "every fee has the actual poster debit");
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     let counters = state.vesting_counters();
+    let final_root = state.state_root();
+    let final_sink = cw.net.chain.sink();
+    let final_utxos = Net::utxos_of(&cw.net.chain);
+    let final_route = cw.net.api();
+    // Stop Consensus and reopen the exact physical database. Compare stored
+    // funds and the complete UTXO set before a new block can recompute them.
+    cw.net = cw.net.restart(db.clone());
+    let reopened = cw.net.chain.tip_state().1;
+    assert_eq!(cw.net.chain.sink(), final_sink);
+    assert_eq!(reopened.state_root(), final_root);
+    assert_eq!(reopened.exec_v2_reward_vesting_v1(&s.real.claim), Some(&receipt));
+    assert_eq!(reopened.vesting_row(&s.real.claim), Some(&native));
+    assert_eq!(reopened.vesting_counters(), counters);
+    assert_eq!(cw.net.api(), final_route);
+    assert_eq!(Net::utxos_of(&cw.net.chain), final_utxos);
+    assert_eq!(cw.net.ledger().to_rows_v1(), ledger.to_rows_v1());
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     let repeated = cw.net.chain.tip_state().1;
     assert_eq!(repeated.exec_v2_reward_vesting_v1(&s.real.claim), Some(&receipt));
@@ -212,6 +235,18 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     assert_eq!(failed_counters.created, counters.created);
     assert_eq!(failed_counters.moved, counters.moved, "no composite leg paid before conviction");
     assert_eq!(failed_counters.burned - counters.burned, held_total);
+    let failed_root = failed.state_root();
+    let failed_sink = cw.net.chain.sink();
+    let failed_utxos = Net::utxos_of(&cw.net.chain);
+    let failed_route = cw.net.api();
+    cw.net = cw.net.restart(db);
+    assert_eq!(cw.net.chain.sink(), failed_sink);
+    assert_eq!(cw.net.chain.tip_state().1.state_root(), failed_root);
+    assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), failed_counters);
+    assert!(cw.net.chain.tip_state().1.exec_v2_reward_vesting_v1(&s.real.claim).is_none());
+    assert!(cw.net.chain.tip_state().1.vesting_row(&s.real.claim).is_none());
+    assert_eq!(cw.net.api(), failed_route);
+    assert_eq!(Net::utxos_of(&cw.net.chain), failed_utxos);
     cw.net.send(vec![(ACCUSER, objection)]).await;
     assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), failed_counters, "duplicate proof burns no second fund");
     let replay = replay_with_lane(&cw.net, &s.lane).await;
