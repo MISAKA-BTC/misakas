@@ -387,6 +387,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
     constraint_done: bool,
     pub(super) runs: u8,
     registered_preflight: bool,
+    arithmetic_matched: bool,
     replay_failures: u8,
     replay_turn: u64,
     deferred_public: Option<Arc<PalwFraudFilerDeferredPublicV1>>,
@@ -422,6 +423,7 @@ impl PalwFraudFilerCaseV1 {
             constraint_done: false,
             runs: 0,
             registered_preflight: false,
+            arithmetic_matched: false,
             replay_failures: 0,
             replay_turn: 0,
             deferred_public: None,
@@ -438,6 +440,17 @@ impl PalwFraudFilerCaseV1 {
             direct_handed: 0,
             direct_asked_at: None,
         }
+    }
+
+    fn preserve_semantic_refusal(&mut self) {
+        if let Some(input) = self.fp_bootstrap.take() {
+            self.fp_descriptor = Some(input.payload);
+            self._fp_job_reservation = input._reservation;
+        }
+        self.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+        self.arithmetic_matched = false;
+        self.fp_job_pending = true;
+        self.release_pending = false;
     }
 
     pub(super) fn pursued(&self) -> bool {
@@ -902,10 +915,17 @@ impl PalwFraudFilerBookV1 {
                     .take()
                     .map(|job| Arc::new(PalwFraudFilerDeferredPublicV1 { job, _reservation: run._job_reservation.take() }));
                 // Keep the row-zero obligation live without retaining an unnecessary matching replica.
+                case.arithmetic_matched = true;
                 case.fp_job_pending = true;
                 PalwFraudFilerVerdictV1::SemanticPending
             }
             Ok(_) => PalwFraudFilerVerdictV1::Honest,
+            Err(_) if case.registered_preflight => {
+                // A false named prefix can make the honest backend refuse execution. Its
+                // authenticated job/binding court must still convict without a producer cache.
+                case.preserve_semantic_refusal();
+                PalwFraudFilerVerdictV1::SemanticPending
+            }
             Err(_) if case.replay_failures < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 => PalwFraudFilerVerdictV1::Pending,
             Err(why) => PalwFraudFilerVerdictV1::Unjudged(format!("the replay failed twice: {why}")),
         };
@@ -2404,7 +2424,15 @@ impl PalwPanelService {
         let producer = candidate.producer;
         let unjudged = |book: &mut PalwFraudFilerBookV1, why: String| {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
-            book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
+            if book.cases.get(&claim).is_some_and(|case| case.registered_preflight) {
+                book.cases.get_mut(&claim).expect("selected case").preserve_semantic_refusal();
+                book.walked_from = None;
+                book.walked_to = None;
+                book.walk = None;
+                book.read_at = None;
+            } else {
+                book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged(why));
+            }
         };
         let metadata_only = !replay_room || book.running.is_some() || book.held_runs() >= PALW_FRAUD_FILER_HELD_RUNS_V1;
         let fp_payload = if job.free_prompt {
@@ -2457,6 +2485,13 @@ impl PalwPanelService {
             .spawn_blocking(move |c| c.palw_fraud_filer_target_v1(claim).is_none_or(|target| target.registered_semantics.is_some()))
             .await;
         book.cases.get_mut(&claim).expect("selected case").registered_preflight = preflight;
+        if preflight && let Some(payload) = fp_payload.as_ref() {
+            if !self.fraud_filer_hold_fp_input_v1(book, claim, payload.clone(), self.class_prompt_ids_form(job.class_id)) {
+                book.cases.get_mut(&claim).expect("selected case").input_retry_at =
+                    current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                return;
+            }
+        }
         // A probe selected while a replay/capture occupies the lane must not instantiate a
         // backend or reserve/start an extra replay. Missing-body binding pursuits were held above.
         if metadata_only {
@@ -2909,6 +2944,35 @@ pub(super) mod tests {
             ),
             PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Reserve)
         ));
+    }
+
+    #[test]
+    fn registered_replay_refusal_keeps_the_public_job_court_without_claiming_arithmetic_honesty() {
+        let c = candidate(0xC019, 300, false);
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        let payload = input::tests::payload();
+        let job = payload.commitment.job.clone();
+        let case = book.cases.get_mut(&c.claim_id).unwrap();
+        case.registered_preflight = true;
+        case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+            payload: Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(payload)),
+            form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            ids: Vec::new(),
+            chunk: 0,
+            _reservation: None,
+        });
+        assert!(matches!(
+            book.judge(c.claim_id, Err("named prefix differs from the recomputed checkpoint".into())),
+            Some(PalwFraudFilerVerdictV1::SemanticPending)
+        ));
+        let case = &book.cases[&c.claim_id];
+        assert!(case.pursued());
+        assert!(!case.release_pending);
+        assert!(!case.arithmetic_matched);
+        assert!(case.fp_bootstrap.is_none(), "a refusal keeps only the public descriptor rather than accumulated input ids");
+        assert_eq!(case.public_fp_job_v1(), Some(&job));
+        assert_eq!(book.next_replay_at(300), None, "a backend refusal pursues its public court without an infinite host retry");
     }
 
     #[test]
