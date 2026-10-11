@@ -2031,7 +2031,11 @@ fn adjudicate_against_claim_v1(
                     if reference.claim != target.claim_id || sessions != PalwSessionRuleV1::DirectProofFirst {
                         return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
                     }
-                    reference.resolve(state,target.execution_root).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                    if matches!(reference.resolve_fault_v1(state,target.execution_root)
+                        .map_err(|_|PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?,
+                        crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)) {
+                        return Ok((PalwForfeitScopeV1::ByClaim,None));
+                    }
                 }
                 PalwPanelContradictionV1::ConstrainedDecode { binding, accusation } => {
                     palw_constrained_job_target_v1(target, binding, &accusation.job)?;
@@ -2264,7 +2268,15 @@ pub fn palw_check_panel_false_valid_at_v2_with_budget_v1(
         sessions,
     )?;
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
-    let (site, step_leaf_count) = match palw_claim_proving_site_v1(&payload.contradiction, identity_fault) {
+    let staged_site=match &payload.contradiction {
+        PalwPanelContradictionV1::StagedCourt {reference} => match reference.resolve_fault_v1(state,target.execution_root)
+            .map_err(|_|PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)? {
+                crate::palw_staged_court_state_v1::PalwStagedFaultV1::Tokenizer(_)=>Some(PalwFaultSiteV1::AnyValid),
+                _=>None,
+            },
+        _=>None,
+    };
+    let (site, step_leaf_count) = match staged_site.or_else(||palw_claim_proving_site_v1(&payload.contradiction, identity_fault)) {
         Some(site) => (site, 0),
         None => palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?,
     };
@@ -2633,7 +2645,7 @@ pub fn palw_check_executor_refuted_at_v1_with_budget_v1(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_offence_v1::PalwOffenceVerifyError as E;
     use crate::palw_state_v2::{PalwClaimStateV2, PalwPanelSeatV2, PalwPanelStateV2};
@@ -4311,41 +4323,51 @@ mod tests {
             assert_eq!(direct.expect("the execution check must not panic"), Err(E::PanelFalseValidNeedsContradiction));
         }
     }
-    #[test]
-    fn qualified_rendering_court_requires_registered_raw_bytes_and_exact_table_opening() {
+    /// The same public bound job/table fixture used by the finite18 court. Raw bytes may be
+    /// malformed/duplicate: only the original raw hash decides whether that is evidence.
+    pub(crate) fn qualified_rendering_case_for_tests_v1(raw: &[u8], fault: bool, key_events: u64)
+        -> (PalwOffenceTargetV1, crate::palw_step_leg::PalwStepBindingV2,
+            crate::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<u8>,
+            crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1) {
         use crate::palw_tokenizer_rendering_v1::{palw_tokenizer_raw_commitment_v1, PalwTokenizerRenderingRuleV1};
         use crate::palw_fp_constraint_job_v1::PalwTokenTableV1;
+        let (base, accusation) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
+        let mut job = accusation.job;
+        job.tokenizer_id = palw_tokenizer_raw_commitment_v1(raw);
+        let mut entries = vec![None; base.shape_profile.vocab_size as usize];
+        entries[0] = Some(if fault { b"wrong".to_vec() } else { b"a".to_vec() });
+        entries[1] = Some(b"b".to_vec());
+        let table = PalwTokenTableV1 { entries, eog_token_ids: vec![1], tokenizer_id: job.tokenizer_id };
+        let Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &mut job.tail else { panic!("constraint fixture"); };
+        tail.table_root = table.root();
+        let facts = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: base.job_context.model_profile_id, runtime_manifest_hash: base.job_context.runtime_manifest_hash,
+            runtime_class_id: base.job_context.runtime_class_id, shape_profile_id: job.class_id,
+            cu_ruleset_id: base.job_context.cu_ruleset_id,
+        };
+        let context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &facts,
+            &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, base.job_context.exact_decode_tokens),
+            &base.job_context.network_id).unwrap();
+        let binding = moved(&base, |b| b.job_context = context);
+        let mut target = attempt_target(&binding, crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context));
+        target.lane = Some(PalwClaimSourceKindV1::FreePrompt);
+        target.executor_bond = PalwBondKeyV2(job.executor_bond);
+        let mut row = crate::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+            target.class_id, h64(0xA18), &binding.job_context, 0);
+        row.token_table_root = Some(table.root());
+        row.rendering_rule = Some(PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1);
+        row.raw_tokenizer_bytes = Some(raw.len() as u64);
+        row.tokenizer_key_events = Some(key_events);
+        target.registered_semantics = Some(row);
+        let opening = table.opening_of(0).unwrap();
+        (target, binding, job, raw.to_vec(), opening)
+    }
+
+    #[test]
+    fn qualified_rendering_court_requires_registered_raw_bytes_and_exact_table_opening() {
         let raw = br#"{"model":{"vocab":{"a":0,"b":1},"merges":[]}}"#;
         for fault in [false, true] {
-            let (base, accusation) = crate::palw_decode_constraint_v1::tests::public_constrained_case_for_tests_v1(false);
-            let mut job = accusation.job;
-            job.tokenizer_id = palw_tokenizer_raw_commitment_v1(raw);
-            let mut entries = vec![None; base.shape_profile.vocab_size as usize];
-            entries[0] = Some(if fault { b"wrong".to_vec() } else { b"a".to_vec() });
-            entries[1] = Some(b"b".to_vec());
-            let table = PalwTokenTableV1 { entries, eog_token_ids: vec![1], tokenizer_id: job.tokenizer_id };
-            let Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &mut job.tail else { panic!("constraint fixture"); };
-            tail.table_root = table.root();
-            let facts = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
-                model_profile_id: base.job_context.model_profile_id, runtime_manifest_hash: base.job_context.runtime_manifest_hash,
-                runtime_class_id: base.job_context.runtime_class_id, shape_profile_id: job.class_id,
-                cu_ruleset_id: base.job_context.cu_ruleset_id,
-            };
-            let context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &facts,
-                &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, base.job_context.exact_decode_tokens),
-                &base.job_context.network_id).unwrap();
-            let binding = moved(&base, |b| b.job_context = context);
-            let mut target = attempt_target(&binding, crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context));
-            target.lane = Some(PalwClaimSourceKindV1::FreePrompt);
-            target.executor_bond = PalwBondKeyV2(job.executor_bond);
-            let mut row = crate::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
-                target.class_id, h64(0xA18), &binding.job_context, 0);
-            row.token_table_root = Some(table.root());
-            row.rendering_rule = Some(PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1);
-            row.raw_tokenizer_bytes = Some(raw.len() as u64);
-            row.tokenizer_key_events = Some(64);
-            target.registered_semantics = Some(row);
-            let opening = table.opening_of(0).unwrap();
+            let (mut target, binding, job, _, opening) = qualified_rendering_case_for_tests_v1(raw, fault, 64);
             assert_eq!(palw_tokenizer_table_fault_v1(&target, &binding, &job, raw, &opening), Ok(fault));
             let contradiction = PalwPanelContradictionV1::TokenizerTableMismatch {
                 binding: binding.clone(), job: Box::new(job.clone()), tokenizer_bytes: raw.to_vec(), table_opening: opening.clone(),

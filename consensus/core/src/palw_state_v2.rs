@@ -4807,8 +4807,8 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
     courts.saturating_add(da).saturating_add(state.legacy_dispute_exposure_v1(bond))
         .saturating_add(state.staged_by_owner.range((*bond, ZERO_HASH64)..)
             .take_while(|(owner, _)| owner == bond)
-            .filter_map(|(_, claim)| state.staged_owned_constraint_v1(*claim, *bond))
-            .map(|row| u128::from(row.deposit_locked)).fold(0u128, u128::saturating_add))
+            .filter_map(|(_, claim)| state.staged_owned_row_v1(*claim, *bond))
+            .filter_map(|row|row.owner_accounting_v1()).map(|(_,_,deposit,_)|u128::from(deposit)).fold(0u128, u128::saturating_add))
 }
 
 /// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
@@ -17234,7 +17234,7 @@ pub enum PalwDeltaEntryV2 {
     TerminalEvidence { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, old: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, new: Option<crate::palw_terminal_carriage_v1::PalwPendingTerminalV1> } = 203,
     TerminalPart { key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, index: u8, old: Option<Vec<u8>>, new: Option<Vec<u8>> } = 212,
     StagedCourtSeed { key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, old: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>, new: Option<crate::palw_staged_court_state_v1::PalwStagedCourtRowV1> } = 210,
-    StagedCourtMove { key: crate::palw_constraint_stream_owned_v1::PalwConstraintStreamKeyV1, old: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1, new: crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1 } = 211,
+    StagedCourtMove { key: crate::palw_constraint_stream_owned_v1::PalwConstraintStreamKeyV1, old: crate::palw_staged_court_state_v1::PalwStagedCheckpointV1, new: crate::palw_staged_court_state_v1::PalwStagedCheckpointV1 } = 211,
     /// **Lane LG14-A (delta number 200, declared explicitly; 200–204 are the lane's): a claim's dispute record**
     /// was written, rewritten or dropped. Dormant: `palw_legacy_public_filer_v1` is armed on no network, so no stored delta carries it.
     LegacyDispute {
@@ -42556,11 +42556,11 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         },
         PalwDeltaEntryV2::StagedCourtMove { key, old, new } => {
             let lookup = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::Owner(key.0, key.1);
-            let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::Constraint(row)) = state.staged_courts.get_mut(&lookup) else {
+            let Some(row) = state.staged_courts.get_mut(&lookup) else {
                 return Err(PalwStateV2Error::DeltaMismatch("staged move lacks immutable owned seed"));
             };
             let (expected, install) = if revert { (new, old) } else { (old, new) };
-            if &row.checkpoint_v1() != expected { return Err(PalwStateV2Error::DeltaMismatch("staged move checkpoint mismatch")); }
+            if &row.checkpoint_v1().map_err(|_|PalwStateV2Error::DeltaMismatch("staged move is not an owned court"))? != expected { return Err(PalwStateV2Error::DeltaMismatch("staged move checkpoint mismatch")); }
             row.restore_checkpoint_v1(install).map_err(|_| PalwStateV2Error::DeltaMismatch("staged checkpoint exceeds immutable contract"))?;
         }
         PalwDeltaEntryV2::TerminalEvidence { key, old, new } => swap_write!(state.terminal_evidence, key, old, new),
@@ -79475,6 +79475,54 @@ mod audit_1004_a1_dissolved_line_carriage {
 mod staged_court_state_tests_v1 {
     use super::*;
     use crate::palw_staged_court_state_v1::*;
+
+    #[test]
+    fn tokenizer_owned_moves_root_reload_and_reorg_preserve_exact_certificate_and_capital() {
+        use crate::palw_tokenizer_owned_court_v1::tests::{admitted_case,complete};
+        for guilty in [false,true] {
+            let (row,raw,table)=admitted_case(guilty,64);
+            let owner_key=PalwStagedCourtKeyV1::Owner(row.claim,row.reserver);
+            let reference=PalwStagedCertificateRefV1 { claim:row.claim,reserver:row.reserver,
+                reserved_daa:row.reserved_daa,seed_id:row.seed_id() };
+            let mut finished=row.clone();let moves=complete(&mut finished,&raw,&table);
+            let execution_root=finished.certificate().unwrap().map(|c|c.execution_root);
+            let mut state=PalwChainStateV2::genesis();let empty_root=state.state_root();
+            let contract=PalwDeltaEntryV2::StagedCourtSeed { key:PalwStagedCourtKeyV1::Claim(row.claim),old:None,
+                new:Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {terms:row.terms,
+                    producer:PALW_BOND_KEY_V2_MIN,panel:BTreeSet::from([PALW_BOND_KEY_V2_MIN])})) };
+            let seed=PalwDeltaEntryV2::StagedCourtSeed {key:owner_key,old:None,new:Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row.clone())))};
+            apply_delta_entry(&mut state,&contract,false).unwrap();apply_delta_entry(&mut state,&seed,false).unwrap();
+            assert_eq!(palw_accuser_exposure_v1(&state,&row.reserver),u128::from(row.deposit_locked));
+            let mut entries=vec![];
+            for movement in moves {
+                let current=state.staged_courts.get(&owner_key).unwrap();
+                let old=current.checkpoint_v1().unwrap();let mut next=current.clone();
+                let PalwStagedCourtRowV1::Tokenizer(next_row)=&mut next else {unreachable!()};
+                next_row.movement(100,&movement).unwrap();
+                let entry=PalwDeltaEntryV2::StagedCourtMove {key:row.key(),old,new:next.checkpoint_v1().unwrap()};
+                let wire=borsh::to_vec(&entry).unwrap();assert_eq!(wire[0],211);assert!(wire.len()<140000);
+                apply_delta_entry(&mut state,&entry,false).unwrap();assert!(apply_delta_entry(&mut state,&entry,false).is_err());
+                entries.push(entry);
+            }
+            let PalwStagedCourtRowV1::Tokenizer(actual)=state.staged_courts.get(&owner_key).unwrap() else {unreachable!()};
+            assert_eq!(actual.as_ref(),&finished);
+            if let Some(root)=execution_root {
+                assert!(matches!(reference.resolve_fault_v1(&state,root),Ok(PalwStagedFaultV1::Tokenizer(_))));
+                assert!(reference.resolve_fault_v1(&state,Hash64::default()).is_err());
+                assert!(PalwStagedCertificateRefV1 {seed_id:Hash64::default(),..reference}.resolve_fault_v1(&state,root).is_err());
+            } else {assert!(reference.resolve_fault_v1(&state,Hash64::default()).is_err());}
+            let expected=state.state_root();
+            let restored=borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap())
+                .unwrap().into_state(&PalwStateParamsV2::new(100,10,40,20,500,1000,Hash64::from_u64_word(1),4,1000,100,1000,0).unwrap(),Some(expected)).unwrap();
+            assert_eq!(restored.staged_courts,state.staged_courts);
+            assert_eq!(palw_accuser_exposure_v1(&restored,&row.reserver),u128::from(row.deposit_locked));
+            if let Some(root)=execution_root {assert!(reference.resolve_fault_v1(&restored,root).is_ok());}
+            for entry in entries.iter().rev() {apply_delta_entry(&mut state,entry,true).unwrap();}
+            assert!(reference.resolve_fault_v1(&state,execution_root.unwrap_or_default()).is_err());
+            apply_delta_entry(&mut state,&seed,true).unwrap();apply_delta_entry(&mut state,&contract,true).unwrap();
+            assert_eq!(state.state_root(),empty_root);assert!(state.staged_by_owner.is_empty());assert!(state.staged_holds.is_empty());
+        }
+    }
     #[test]
     fn owner_exposure_and_holds_rebuild_and_revert_without_other_owner_scan() {
         let (row, _) = crate::palw_constraint_stream_owned_v1::tests::completed_row(true);

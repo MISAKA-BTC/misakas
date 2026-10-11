@@ -580,6 +580,56 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     /// The non-streaming verb IS the streaming one with a callback that does nothing — never the
     /// reverse (ADR-0077 Decision 2). One inference, one capture, one commitment.
+    /// Prospective Base0Int8KvV1, independent of a producer cache snapshot. The signed class
+    /// relation decides whether a public court may apply these bytes to a named prefix.
+    fn prefix_state_v1(
+        &self,
+        class_id: Hash64,
+        _tokenizer_id: Hash64,
+        prefix_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        self.artifact_read_probe_v1()?;
+        let k = u32::try_from(prefix_ids.len()).map_err(|_| "prefix length overflows")?;
+        if class_id != self.profile.shape_profile_id()
+            || k == 0
+            || k > self.profile.n_ctx
+            || prefix_ids.iter().any(|id| *id as usize >= self.artifact.shape.vocab)
+        {
+            return Err("the i8 prefix is not this registered class's nonempty in-context token sequence".into());
+        }
+        let engine = crate::engine::Base0Engine::new(&self.artifact);
+        let mut cache = crate::engine::KvCache::new(&self.artifact);
+        for (position, id) in prefix_ids.iter().enumerate() {
+            engine.forward_token(&mut cache, *id as usize, position).map_err(|e| format!("{e:?}"))?;
+        }
+        let plan = kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&self.profile, k)?;
+        let mut digest = kaspa_consensus_core::palw_prefix_base0_codec_v1::PalwBase0PrefixDigestV1::new(&self.profile, k)?;
+        while let Some((coordinate, count, offset)) = digest.next_coordinate(&self.profile)? {
+            if offset != 0 {
+                return Err("the native i8 cache omitted a tile suffix".into());
+            }
+            let (node, layer) = self.profile.resolve_node_slot(coordinate.node_slot).ok_or("the native i8 prefix slot is absent")?;
+            let value = node.role == kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::VCacheWrite;
+            let row = cache
+                .prefix_row_v1(value, layer.ok_or("the cache write is not a layer")? as usize, coordinate.position as usize)
+                .ok_or("the actual native i8 cache omits a declared row")?;
+            if row.len() != plan.width as usize {
+                return Err("the actual i8 cache width differs from the class graph".into());
+            }
+            let start = coordinate.tile_index as usize * node.tile_len as usize;
+            let selected = &row[start..start + count as usize];
+            for (part, words) in selected.chunks(16_384).enumerate() {
+                let bytes: Vec<_> = words.iter().flat_map(|v| i32::from(*v).to_le_bytes()).collect();
+                digest.push_values(&self.profile, coordinate, (part * 16_384) as u32, &bytes)?;
+            }
+        }
+        Ok(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+            state_root: digest.finish(&self.profile)?,
+            prefix_tokens: k,
+            class_id,
+        })
+    }
+
     fn execute_free_prompt(
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
@@ -1317,6 +1367,93 @@ mod tests {
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
             tail: None,
+        }
+    }
+
+    #[test]
+    fn registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{DecodeConfigV4, PalwFpJobTailV1, PalwFpPrefixStateV1};
+        use kaspa_consensus_core::palw_prefix_base0_codec_v1::{PALW_BASE0_PREFIX_I8_DIGEST_DOMAIN_V1, PalwBase0PrefixDigestV1};
+        use kaspa_consensus_core::palw_prefix_state_court_v1::{
+            PalwPrefixKvPlanV1, PalwPrefixKvTileV1, palw_prefix_kv_authenticated_bytes_v1,
+        };
+        use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
+        let backend = floor_backend();
+        let profile = &backend.profile;
+        let class = profile.shape_profile_id();
+        let ids = [1u32, 2, 3, 4];
+        let k = 2u32;
+        let named = backend.prefix_state_v1(class, Hash64::default(), &ids[..k as usize]).unwrap();
+        let engine = crate::engine::Base0Engine::new(&backend.artifact);
+        let mut cache = crate::engine::KvCache::new(&backend.artifact);
+        for (position, id) in ids[..k as usize].iter().enumerate() {
+            engine.forward_token(&mut cache, *id as usize, position).unwrap();
+        }
+        let mut direct = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_PREFIX_I8_DIGEST_DOMAIN_V1).to_state();
+        direct.update(&u64::from(profile.layer_count).to_le_bytes());
+        for layer in 0..profile.layer_count as usize {
+            for value in [false, true] {
+                for position in 0..k as usize {
+                    direct.update(&cache.prefix_row_v1(value, layer, position).unwrap().iter().map(|v| *v as u8).collect::<Vec<_>>());
+                }
+            }
+        }
+        let digest = Hash64::from_bytes(direct.finalize().as_bytes().try_into().unwrap());
+        assert_eq!(named.state_root, kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&class, k, &digest));
+        for inherited in [false, true] {
+            let mut job = free_prompt_job(&backend, ids.len() as u32, 1);
+            job.version = if inherited { 12 } else { 11 };
+            job.decode = Some(DecodeConfigV4::NOOP);
+            job.tail = Some(PalwFpJobTailV1::Prefix(named));
+            job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                &ids,
+            )
+            .unwrap();
+            backend.verify_prefix_state_v1(&job, &ids).unwrap();
+            let good = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
+            let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
+            let binding = retained.binding();
+            let raw = retained.tiles().unwrap();
+            let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
+            let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
+            for (i, t) in raw {
+                hashes[*i as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &class, t);
+            }
+            let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
+            assert_eq!(tree.root(), binding.step_merkle_root);
+            let plan = PalwPrefixKvPlanV1::of_profile(profile, k).unwrap();
+            let mut public = PalwBase0PrefixDigestV1::new(profile, k).unwrap();
+            for ordinal in 0..plan.tile_count {
+                let (coordinate, _) = plan.coordinate(profile, ordinal).unwrap();
+                let index =
+                    kaspa_consensus_core::palw_step::canonical_step_leaf_index(profile, &binding.job_context, &coordinate).unwrap();
+                let tile = PalwPrefixKvTileV1 {
+                    opening: PalwStepOpeningV1 {
+                        leaf_index: index,
+                        leaf_hash: hashes[index as usize],
+                        siblings: tree.path_v1(index as usize).unwrap(),
+                    },
+                    preimage: (**by_index.get(&index).unwrap()).clone(),
+                };
+                let values = palw_prefix_kv_authenticated_bytes_v1(binding, &plan, ordinal, &tile, 1 << 22).unwrap();
+                let before = borsh::to_vec(&public).unwrap();
+                assert!(public.push_values(profile, coordinate, 0, &128i32.to_le_bytes()).is_err());
+                assert_eq!(borsh::to_vec(&public).unwrap(), before);
+                for (offset, word) in values.chunks_exact(4).enumerate() {
+                    public.push_values(profile, coordinate, offset as u32, word).unwrap();
+                    public = borsh::from_slice(&borsh::to_vec(&public).unwrap()).unwrap();
+                }
+            }
+            assert_eq!(
+                public.finish(profile).unwrap(),
+                named.state_root,
+                "public i32 narrowing rows reproduce the actual i8 cache, inherited={inherited}"
+            );
+            job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }));
+            assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
+            let bad = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
+            assert_eq!(bad.outcome.output_root, good.outcome.output_root);
         }
     }
 

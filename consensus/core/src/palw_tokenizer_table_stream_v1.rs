@@ -157,6 +157,17 @@ impl PalwTokenizerTableStreamV1 {
             )?,
         })
     }
+    pub(crate) fn same_contract_v1(&self, other: &Self) -> bool {
+        (self.context, self.signed_key_bound, self.table.context, self.table.present, self.table.length, self.table.expected_leaf)
+            == (
+                other.context,
+                other.signed_key_bound,
+                other.table.context,
+                other.table.present,
+                other.table.length,
+                other.table.expected_leaf,
+            )
+    }
     pub fn check(&self) -> Result<(), String> {
         self.parser.check()?;
         self.table.check()
