@@ -2511,7 +2511,9 @@ impl IbdFlow {
             self.sync_pruning_point_evm_state(consensus, pruning_point).await?;
         }
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
-        consensus.async_set_pruning_utxoset_stable().await;
+        // The target may have changed after virtual/head commit released its pruning
+        // guard. Refuse completion unless UTXO and all sidecars share this generation.
+        consensus.async_complete_pruning_point_import(pruning_point).await?;
         // Once a new utxoset is stored, the utxoindex needs to be resynced as well. This happens through the reset handler mechanism.
         let consensus_manager = self.ctx.consensus_manager.clone();
         spawn_blocking(move || consensus_manager.invoke_consensus_reset_handlers()).await.unwrap();

@@ -1963,6 +1963,11 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Atomically finish an imported target only after checking its ledger generations.
+    fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
     fn set_pruning_utxoset_stable_flag(&self, val: bool) {
         unimplemented!()
     }

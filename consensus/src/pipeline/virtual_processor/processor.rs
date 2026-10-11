@@ -22036,7 +22036,16 @@ impl VirtualStateProcessor {
         mut imported_utxo_multiset: MuHash,
     ) -> PruningImportResult<()> {
         info!("Importing the UTXO set of the pruning point {}", new_pruning_point);
-        let new_pruning_point_header = self.headers_store.get_header(new_pruning_point).unwrap();
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, format!("UTXO {where_}: {e}"))
+        };
+        let require_target = |established: BlockHash| {
+            if new_pruning_point == established { Ok(()) } else {
+                Err(PruningImportError::ImportedUtxoPruningPointMismatch(new_pruning_point, established))
+            }
+        };
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        let new_pruning_point_header = self.headers_store.get_header(new_pruning_point).map_err(|e| unavailable("L1 header", e))?;
         let imported_utxo_multiset_hash = imported_utxo_multiset.finalize();
         if imported_utxo_multiset_hash != new_pruning_point_header.utxo_commitment {
             return Err(PruningImportError::ImportedMultisetHashMismatch(
@@ -22046,19 +22055,26 @@ impl VirtualStateProcessor {
         }
 
         {
-            // Set the pruning point utxoset position to the new point we just verified
+            // Persist incomplete recovery with the position BEFORE a virtual UTXO copy.
+            let pruning_point_read = self.pruning_point_store.read();
+            require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
             let mut batch = WriteBatch::default();
             let mut pruning_meta_write = self.pruning_meta_stores.write();
             pruning_meta_write.set_utxoset_position(&mut batch, new_pruning_point).unwrap();
+            pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
             self.db.write(batch).unwrap();
-            drop(pruning_meta_write);
         }
 
+        // Preserve the existing metadata -> virtual copy lock order. Never wait for a
+        // pruning writer while holding virtual: that writer may be waiting on virtual.
+        let pruning_meta_read = self.pruning_meta_stores.read();
+        let mut virtual_write = self.virtual_stores.write();
+        let pruning_point_read = self.pruning_point_store.try_read().ok_or_else(|| {
+            PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, "UTXO pruning target is changing; retry import".into())
+        })?;
+        require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
         {
-            // Copy the pruning-point UTXO set into virtual's UTXO set
-            let pruning_meta_read = self.pruning_meta_stores.read();
-            let mut virtual_write = self.virtual_stores.write();
-
+            // Copy the pruning-point UTXO set into virtual's UTXO set.
             virtual_write.utxo_set.clear().unwrap();
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
@@ -22067,13 +22083,13 @@ impl VirtualStateProcessor {
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
         }
 
-        let virtual_read = self.virtual_stores.upgradable_read();
+        drop(pruning_meta_read);
 
-        // Validate transactions of the pruning point itself
-        let new_pruning_point_transactions = self.block_transactions_store.get(new_pruning_point).unwrap();
+        // Validate transactions of the pruning point itself while its target stays pinned.
+        let new_pruning_point_transactions = self.block_transactions_store.get(new_pruning_point).map_err(|e| unavailable("block transactions", e))?;
         let validated_transactions = self.validate_transactions_in_parallel(
             &new_pruning_point_transactions,
-            &virtual_read.utxo_set,
+            &virtual_write.utxo_set,
             new_pruning_point_header.daa_score,
             TxValidationFlags::Full,
         );
@@ -22093,6 +22109,12 @@ impl VirtualStateProcessor {
             drop(statuses_write);
         }
 
+        // Head publication reads pruning again; release before that call to avoid
+        // a recursive read behind a waiting pruning writer. Completion rechecks the
+        // whole target/generation before it can expose this import as stable.
+        drop(pruning_point_read);
+        let virtual_read = parking_lot::RwLockWriteGuard::downgrade_to_upgradable(virtual_write);
+
         // Calculate the virtual state, treating the pruning point as the only virtual parent
         let virtual_parents = vec![new_pruning_point];
         let virtual_ghostdag_data = self.ghostdag_manager.ghostdag(&virtual_parents);
@@ -22110,6 +22132,63 @@ impl VirtualStateProcessor {
             &ChainPath::default(),
         )?;
 
+        // Genesis initialization imports its pinned premine directly, without a
+        // later IBD completion stage or non-genesis sidecars.
+        if new_pruning_point == self.genesis.hash {
+            self.complete_pruning_point_import(new_pruning_point)?;
+        }
+        Ok(())
+    }
+
+    /// Complete IBD only when the target, executed virtual generation and every
+    /// enabled sidecar still refer to the imported point. Readers cannot observe
+    /// a true marker for a mixed generation; transient lock contention is retryable.
+    pub fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(point, format!("completion {where_}: {e}"))
+        };
+        let mismatch = |what: &str| PruningImportError::PruningPointImportGenerationMismatch(point, what.into());
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().map_err(|e| unavailable("virtual state", e))?;
+        if virtual_state.ghostdag_data.selected_parent != point {
+            return Err(mismatch("virtual sink does not match the import target"));
+        }
+        // Use try guards below virtual: a writer may itself need virtual. A busy
+        // generation is incomplete, not permission to publish a stale import.
+        let pruning_read = self.pruning_point_store.try_read().ok_or_else(|| mismatch("pruning target is changing; retry"))?;
+        if pruning_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))? != point {
+            return Err(mismatch("established pruning target changed"));
+        }
+        let palw_read = self.palw_state_v2_store.try_read().ok_or_else(|| mismatch("PALW sidecar is changing; retry"))?;
+        if self.palw_state_params_v2.is_some()
+            && palw_read.tip_key().map_err(|e| unavailable("PALW tip", e))?.map(|(at, _)| at) != Some(point) {
+            return Err(mismatch("PALW tip does not match the import target"));
+        }
+        let overlay_read = self.pruning_overlay_snapshot_store.try_read().ok_or_else(|| mismatch("overlay sidecar is changing; retry"))?;
+        if point != self.genesis.hash && self.dns_params.is_some()
+            && overlay_read.get().optional().map_err(|e| unavailable("overlay snapshot", e))?.map(|row| row.pruning_point) != Some(point) {
+            return Err(mismatch("overlay snapshot does not match the import target"));
+        }
+        let heads_read = self.evm_heads_store.try_read().ok_or_else(|| mismatch("EVM heads are changing; retry"))?;
+        let header = self.headers_store.get_header(point).map_err(|e| unavailable("L1 header", e))?;
+        if point != self.genesis.hash && header.daa_score >= self.evm_activation_daa_score {
+            let execution = self.evm_header_store.get(point).map_err(|e| unavailable("EVM execution", e))?;
+            if execution.commitment_root() != header.evm_commitment_root
+                || heads_read.get().map_err(|e| unavailable("EVM heads", e))?.latest != point {
+                return Err(mismatch("EVM execution or latest head does not match the import target"));
+            }
+            self.evm_state_store.get(point).map_err(|e| unavailable("EVM snapshot", e))?;
+        }
+        let mut meta_write = self.pruning_meta_stores.try_write().ok_or_else(|| mismatch("UTXO import is changing; retry"))?;
+        if meta_write.utxoset_position().map_err(|e| unavailable("UTXO position", e))? != point {
+            return Err(mismatch("UTXO position does not match the import target"));
+        }
+        let mut batch = WriteBatch::default();
+        meta_write.set_pruning_utxoset_stable_flag(&mut batch, true).map_err(|e| unavailable("stable marker", e))?;
+        // Store writers update caches as they stage the batch. A failed durable
+        // commit is fatal, like the other consensus writes; returning would expose
+        // the cached true marker without its durable completion.
+        self.db.write(batch).expect("writing the verified import completion cannot fail");
         Ok(())
     }
 

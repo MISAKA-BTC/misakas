@@ -1193,6 +1193,9 @@ impl ConsensusSessionOwned {
     pub async fn async_set_pruning_utxoset_unstable(&self) {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(false)).await
     }
+    pub async fn async_complete_pruning_point_import(&self, point: BlockHash) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+        self.clone().spawn_blocking(move |c| c.complete_pruning_point_import(point)).await
+    }
     pub async fn async_set_pruning_utxoset_stable(&self) {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(true)).await
     }

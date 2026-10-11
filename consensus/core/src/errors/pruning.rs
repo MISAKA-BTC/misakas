@@ -119,6 +119,12 @@ pub enum PruningImportError {
     #[error("imported overlay state targets block {0}, but the established pruning point is {1}")]
     ImportedOverlayPruningPointMismatch(BlockHash, BlockHash),
 
+    #[error("imported UTXO state targets block {0}, but the established pruning point is {1}")]
+    ImportedUtxoPruningPointMismatch(BlockHash, BlockHash),
+
+    #[error("pruning import at {0} is not complete in one generation: {1}")]
+    PruningPointImportGenerationMismatch(BlockHash, String),
+
     #[error("existing EVM {1} for pruning point {0} disagrees with the root-verified imported state")]
     ImportedEvmExistingStateMismatch(BlockHash, String),
 

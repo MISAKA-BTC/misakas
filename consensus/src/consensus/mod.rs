@@ -3597,6 +3597,10 @@ impl ConsensusApi for Consensus {
         self.intrusive_pruning_point_store_writes(new_pruning_point, syncer_sink, pruning_points_to_add)
     }
 
+    fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
+        self.virtual_processor.complete_pruning_point_import(point)
+    }
+
     fn set_pruning_utxoset_stable_flag(&self, val: bool) {
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         let mut batch = rocksdb::WriteBatch::default();
