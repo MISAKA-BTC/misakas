@@ -105,6 +105,9 @@ impl PalwPrefixStateStreamV1 {
         let plan = PalwPrefixKvPlanV1::of_profile(&self.binding.shape_profile, self.prefix_tokens).map_err(str::to_string)?;
         let bytes =
             palw_prefix_kv_authenticated_bytes_v1(&self.binding, &plan, ordinal, tile, self.maximum_leaves).map_err(str::to_string)?;
+        if bytes.len() > PALW_PREFIX_STREAM_TILE_BYTES_V1 {
+            return Err("large legal prefix tile requires bounded byte moves".into());
+        }
         let total = self.value_bytes.checked_add(bytes.len() as u64).ok_or("prefix cumulative bytes overflow")?;
         self.digest.update(bytes);
         self.value_bytes = total;
@@ -210,6 +213,8 @@ impl PalwPrefixStateStreamV1 {
         }
         if cp.context != self.context
             || cp.next_tile > self.total_tiles
+            || cp.value_bytes as u128 > self.total_tiles as u128 * crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES as u128
+            || (cp.next_tile == self.total_tiles && cp.pending.is_some())
             || cp.digest.byte_count() != Some(136 + u128::from(cp.value_bytes))
         {
             return Err("prefix journal checkpoint changes seed/counter bounds".into());
@@ -219,5 +224,69 @@ impl PalwPrefixStateStreamV1 {
         self.digest = cp.digest.clone();
         self.pending = cp.pending.clone();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palw_prefix_state_court_v1::{palw_prefix_kv_state_root_v1, tests::fixture};
+    const CAP: u64 = 1 << 32;
+    #[test]
+    fn chunked_prefix_matches_full_authenticated_court_and_restores_each_move() {
+        for inherited in [false, true] {
+            let (binding, tiles, expected) = fixture(inherited);
+            let context = Hash64::from_u64_word(91);
+            let mut stream = PalwPrefixStateStreamV1::new(context, binding.committed_execution_root, &binding, 2, CAP).unwrap();
+            assert!(stream.finish().is_err());
+            for (ordinal, tile) in tiles.iter().enumerate() {
+                stream.begin_tile(context, ordinal as u64, &tile.opening).unwrap();
+                assert!(stream.finish_tile().is_err());
+                let mut offset = 0;
+                // Ragged moves exercise continuation compression boundaries independently of tile boundaries.
+                for bytes in tile.preimage.values_le.chunks(37) {
+                    stream.push_tile_bytes(context, ordinal as u64, offset, bytes).unwrap();
+                    offset += bytes.len() as u32;
+                    let cp = stream.checkpoint_v1();
+                    let serialized = borsh::to_vec(&cp).unwrap();
+                    assert!(serialized.len() < 1_024);
+                    let cp = borsh::from_slice(&serialized).unwrap();
+                    let mut restored =
+                        PalwPrefixStateStreamV1::new(context, binding.committed_execution_root, &binding, 2, CAP).unwrap();
+                    restored.restore_checkpoint_v1(&cp).unwrap();
+                    assert_eq!(restored, stream);
+                    stream = restored;
+                }
+                stream.finish_tile().unwrap();
+            }
+            assert_eq!(stream.finish(), Ok(expected));
+            assert_eq!(stream.finish(), palw_prefix_kv_state_root_v1(&binding, 2, &tiles, CAP).map_err(str::to_string));
+        }
+    }
+    #[test]
+    fn tentative_corrupt_leaf_or_wrong_seed_cannot_finalize_a_prefix() {
+        let (binding, tiles, _) = fixture(false);
+        let context = Hash64::from_u64_word(92);
+        let make = || PalwPrefixStateStreamV1::new(context, binding.committed_execution_root, &binding, 2, CAP).unwrap();
+        let mut stream = make();
+        assert!(stream.begin_tile(Hash64::default(), 0, &tiles[0].opening).is_err());
+        assert!(stream.begin_tile(context, 1, &tiles[1].opening).is_err());
+        assert_eq!(stream, make());
+        stream.begin_tile(context, 0, &tiles[0].opening).unwrap();
+        let before = stream.clone();
+        assert!(stream.push_tile_bytes(context, 0, 1, &[0]).is_err());
+        assert_eq!(stream, before);
+        let mut bytes = tiles[0].preimage.values_le.clone();
+        bytes[0] ^= 1;
+        for (i, chunk) in bytes.chunks(PALW_PREFIX_STREAM_TILE_BYTES_V1).enumerate() {
+            stream.push_tile_bytes(context, 0, (i * PALW_PREFIX_STREAM_TILE_BYTES_V1) as u32, chunk).unwrap();
+        }
+        assert!(stream.finish_tile().is_err());
+        assert!(stream.finish().is_err());
+        let mut forged = stream.checkpoint_v1();
+        forged.value_bytes = u64::MAX;
+        let before = stream.clone();
+        assert!(stream.restore_checkpoint_v1(&forged).is_err());
+        assert_eq!(stream, before);
     }
 }
