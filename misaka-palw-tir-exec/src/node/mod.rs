@@ -8,6 +8,7 @@ pub mod annex;
 pub mod artifact;
 pub mod backend;
 mod capture_codec;
+mod copies;
 pub mod cell;
 pub mod conformance;
 pub mod shardrows;

@@ -119,6 +119,11 @@ pub fn fetch_shard_params_v1(
 }
 
 impl TirParamOpenerV1 for TirShardHoldingV1 {
+    fn param_scratch_storage_v1(&self, _leaves: &[u32]) -> Option<u64> {
+        // The carried-copy envelope includes the temporary opening clones used to
+        // derive a multiproof. There is no whole tensor materialization here.
+        Some(0)
+    }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.openings.get(&leaf).cloned()
     }

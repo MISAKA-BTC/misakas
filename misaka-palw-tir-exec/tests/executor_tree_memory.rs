@@ -14,17 +14,38 @@ use misaka_palw_tir::interval::analyze_ranges;
 use misaka_palw_tir_exec::{
     TirParams, TirPlan,
     node::{
-        TirClassRunnerV1, TirEvidenceV1, TirHeldInventoryV1, TirParamsSourceV1, TirRetainedJobV1, set_tir_memory_reserver_v1,
-        tir_executor_storage_need_v1, tir_full_tree_storage_need_v1, tir_replay_position_cost_v1, tir_retained_storage_need_v1,
+        TirClassRunnerV1, TirEvidenceV1, TirHeldInventoryV1, TirParamOpenerV1, TirParamsSourceV1, TirRetainedJobV1,
+        set_tir_memory_reserver_v1, tir_executor_storage_need_v1, tir_full_tree_storage_need_v1, tir_replay_position_cost_v1,
+        tir_retained_storage_need_v1,
     },
 };
 use std::{
+    cell::Cell,
     collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
+
+struct ObservedOpener<'a> {
+    inner: &'a dyn TirParamOpenerV1,
+    calls: Cell<u64>,
+    report_scratch: bool,
+}
+impl TirParamOpenerV1 for ObservedOpener<'_> {
+    fn param_scratch_storage_v1(&self, leaves: &[u32]) -> Option<u64> {
+        self.report_scratch.then(|| self.inner.param_scratch_storage_v1(leaves)).flatten()
+    }
+    fn param_opening(&self, leaf: u32) -> Option<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1> {
+        self.calls.set(self.calls.get() + 1);
+        self.inner.param_opening(leaf)
+    }
+    fn param_multiproof(&self, leaves: &[u32]) -> Option<kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1> {
+        self.calls.set(self.calls.get() + 1);
+        self.inner.param_multiproof(leaves)
+    }
+}
 
 struct Held {
     role: &'static str,
@@ -64,17 +85,28 @@ fn actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models(
     let rows = Arc::new(Mutex::new(BTreeMap::<&'static str, u64>::new()));
     let refuse_executor = Arc::new(AtomicBool::new(false));
     let refuse_tree = Arc::new(AtomicBool::new(false));
+    let refuse_scratch = Arc::new(AtomicBool::new(false));
+    let refuse_copies = Arc::new(AtomicBool::new(false));
     let refuse_replay = Arc::new(AtomicBool::new(false));
     let request_log = Arc::new(Mutex::new(Vec::new()));
     assert!(set_tir_memory_reserver_v1({
-        let (rows, reject_exec, reject_tree, reject_replay, log) =
-            (rows.clone(), refuse_executor.clone(), refuse_tree.clone(), refuse_replay.clone(), request_log.clone());
+        let (rows, reject_exec, reject_tree, reject_replay, reject_copy, reject_scratch, log) = (
+            rows.clone(),
+            refuse_executor.clone(),
+            refuse_tree.clone(),
+            refuse_replay.clone(),
+            refuse_copies.clone(),
+            refuse_scratch.clone(),
+            request_log.clone(),
+        );
         Arc::new(move |role, class, ctx, bytes| {
             assert!(bytes > 0 && class != Hash64::from_bytes([0; 64]) && ctx != Hash64::from_bytes([0; 64]));
             log.lock().unwrap().push((role, bytes));
             if (role == "tir-executor" && reject_exec.load(Ordering::SeqCst))
                 || (role == "tir-full-tree" && reject_tree.load(Ordering::SeqCst))
                 || (role == "tir-replay-output" && reject_replay.load(Ordering::SeqCst))
+                || (role == "tir-carried-copies" && reject_copy.load(Ordering::SeqCst))
+                || (role == "tir-param-scratch" && reject_scratch.load(Ordering::SeqCst))
             {
                 return Err("probe refusal before allocation".into());
             }
@@ -132,10 +164,16 @@ fn actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models(
                 refuse_replay.store(false, Ordering::SeqCst);
                 store.begin_builder_move_v1();
                 assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_some());
-                assert_eq!(held(), tree_need + replay_need, "the target cache keeps admission after executor work releases");
+                assert_eq!(
+                    held(),
+                    tree_need + replay_need + store.carried_copy_reserved_bytes_v1(),
+                    "the target cache and carried copy keep admission after executor work releases"
+                );
                 let calls = request_log.lock().unwrap().len();
+                let copied_before = store.carried_copy_bytes_used_v1();
                 assert!(store.step_leaf(own.binding.step_leaf_count - 1).is_some());
-                assert_eq!(request_log.lock().unwrap().len(), calls, "cache hits preserve the same lease");
+                assert_eq!(request_log.lock().unwrap().len(), calls, "small cache-hit copies reuse already reserved capacity");
+                assert!(store.carried_copy_bytes_used_v1() > copied_before, "cache hits still charge each owned copy");
                 let symbolic = store.replay_requested_cost_v1(last).unwrap();
                 assert_eq!(store.replay_cost_used_v1(), symbolic);
                 store.begin_builder_move_v1();
@@ -144,6 +182,73 @@ fn actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models(
                 assert_eq!(store.replay_cost_used_v1(), Default::default(), "cache hits do not replay or reset a running meter");
             }
             assert_eq!(held(), 0, "dropping the evidence store releases its tree");
+            {
+                let make_store = || TirEvidenceV1::own(&runner, &own, &inventory, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+                let probe = make_store();
+                let leaf = probe.step_leaf(0).unwrap();
+                let need = probe.carried_copy_bytes_used_v1();
+                assert!(need >= leaf.values_le.capacity() as u64 + std::mem::size_of_val(&leaf) as u64);
+                drop(probe);
+                let exact = make_store().with_carried_copy_limits_v1(need, 2 * need);
+                let first_copy = exact.step_leaf(0).unwrap();
+                assert_eq!(first_copy, leaf);
+                assert_eq!(exact.carried_copy_bytes_used_v1(), need);
+                assert!(exact.step_leaf(0).is_none(), "a cache hit cannot bypass the same-move copy cap");
+                let copy_reserved = exact.carried_copy_reserved_bytes_v1();
+                exact.begin_builder_move_v1();
+                assert_eq!(exact.carried_copy_bytes_used_v1(), 0);
+                assert_eq!(exact.carried_copy_reserved_bytes_v1(), copy_reserved, "reset retains prior issued-copy guards");
+                assert_eq!(exact.step_leaf(0).unwrap(), first_copy);
+                exact.begin_builder_move_v1();
+                assert!(exact.step_leaf(0).is_none(), "reset cannot bypass the store-lifetime copy cap");
+                assert_eq!(exact.carried_copy_lifetime_bytes_v1(), 2 * need);
+                drop(exact);
+                let one_less = make_store().with_carried_copy_limits_v1(need - 1, need);
+                assert!(one_less.step_leaf(0).is_none());
+                assert_eq!(one_less.carried_copy_bytes_used_v1(), 0);
+                drop(one_less);
+                refuse_copies.store(true, Ordering::SeqCst);
+                let refused = make_store();
+                assert!(refused.step_leaf(0).is_none(), "copy host refusal returns no owned leaf");
+                assert_eq!(refused.carried_copy_bytes_used_v1(), 0);
+                assert_eq!(refused.carried_copy_reserved_bytes_v1(), 0);
+                drop(refused);
+                refuse_copies.store(false, Ordering::SeqCst);
+                let observed = ObservedOpener { inner: &inventory, calls: Cell::new(0), report_scratch: true };
+                let param_store = TirEvidenceV1::own(&runner, &own, &observed, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+                let opening = param_store.param_opening(0).unwrap();
+                assert_eq!(opening, inventory.param_opening(0).unwrap());
+                assert_eq!(observed.calls.get(), 1);
+                assert_eq!(
+                    rows.lock().unwrap().get("tir-param-scratch").copied().unwrap_or(0),
+                    0,
+                    "provider transient scratch releases after the opening"
+                );
+                refuse_scratch.store(true, Ordering::SeqCst);
+                assert!(param_store.param_opening(0).is_none());
+                assert_eq!(observed.calls.get(), 1, "scratch refusal precedes provider tensor materialization");
+                refuse_scratch.store(false, Ordering::SeqCst);
+                let param_need = param_store.carried_copy_bytes_used_v1() / 2; // successful + refused attempted copy
+                drop(param_store);
+                let param_exact = TirEvidenceV1::own(&runner, &own, &observed, PalwPromptIdsFormV1::Flat, 1 << 26)
+                    .unwrap()
+                    .with_carried_copy_limits_v1(param_need, param_need);
+                assert_eq!(param_exact.param_opening(0).unwrap(), opening);
+                assert!(param_exact.param_opening(0).is_none());
+                drop(param_exact);
+                let before = observed.calls.get();
+                let param_below = TirEvidenceV1::own(&runner, &own, &observed, PalwPromptIdsFormV1::Flat, 1 << 26)
+                    .unwrap()
+                    .with_carried_copy_limits_v1(param_need - 1, param_need);
+                assert!(param_below.param_opening(0).is_none());
+                assert_eq!(observed.calls.get(), before, "one-less copy cap precedes provider access");
+                drop(param_below);
+                let unknown = ObservedOpener { inner: &inventory, calls: Cell::new(0), report_scratch: false };
+                let unknown_store = TirEvidenceV1::own(&runner, &own, &unknown, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();
+                assert!(unknown_store.param_opening(0).is_none());
+                assert_eq!(unknown.calls.get(), 0, "unknown provider scratch is never assumed absent");
+            }
+            assert_eq!(held(), 0);
             {
                 let _position_cost = tir_replay_position_cost_v1(&space).unwrap();
                 let store = TirEvidenceV1::own(&runner, &own, &inventory, PalwPromptIdsFormV1::Flat, 1 << 26).unwrap();

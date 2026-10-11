@@ -661,6 +661,11 @@ impl TirByteSourceV1 for TirArtifactV1 {
 /// against one root is made for it. Every piece is read alone (a residency reads it through the file
 /// descriptor; a mapping copies it).
 impl TirParamOpenerV1 for TirArtifactV1 {
+    fn param_scratch_storage_v1(&self, _leaves: &[u32]) -> Option<u64> {
+        // open_with/operands_with read directly into the separately admitted pieces.
+        // The lazy persistent inventory tree has its own artifact lifetime.
+        Some(0)
+    }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
         self.inventory_tree().ok()?.open_with(&self.plan.program, self, leaf)
     }

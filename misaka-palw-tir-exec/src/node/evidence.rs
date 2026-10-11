@@ -38,7 +38,7 @@ use kaspa_consensus_core::palw_step_refute::{
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1,
-    PalwTirTraceLanesV1, build_tir_cone_refutation_bounded_v1, palw_tir_row_node_parts_v1,
+    PalwTirTraceLanesV1, PalwTirInventoryIndexV1, build_tir_cone_refutation_bounded_v1, palw_tir_row_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -207,6 +207,8 @@ pub struct TirEvidenceV1<'a> {
     max_replay_positions: u32,
     replay_positions_used: Cell<u64>,
     replay_cost: Option<super::cost::TirReplayCostBudgetV1>,
+    copies: super::copies::TirCarriedCopiesV1,
+    inventory: PalwTirInventoryIndexV1,
 }
 
 impl<'a> TirEvidenceV1<'a> {
@@ -239,6 +241,8 @@ impl<'a> TirEvidenceV1<'a> {
             max_replay_positions: 4096,
             replay_positions_used: Cell::new(0),
             replay_cost: Some(replay_cost),
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
         })
     }
 
@@ -280,6 +284,8 @@ impl<'a> TirEvidenceV1<'a> {
             max_replay_positions: 0,
             replay_positions_used: Cell::new(0),
             replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
         })
     }
 
@@ -301,6 +307,7 @@ impl<'a> TirEvidenceV1<'a> {
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
             tree: Box::new(tree), _tree_memory: None, leaves: Leaves::Sparse(inputs.preimages_v1()), params,
             prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_memory: RefCell::new(None), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0), replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(), inventory: Self::inventory_index(runner)?,
         })
     }
 
@@ -372,7 +379,84 @@ impl<'a> TirEvidenceV1<'a> {
             max_replay_positions: 4096,
             replay_positions_used: Cell::new(0),
             replay_cost: Some(replay_cost),
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
         })
+    }
+
+    fn inventory_index(runner: &TirClassRunnerV1<'_>) -> Result<PalwTirInventoryIndexV1, String> {
+        PalwTirInventoryIndexV1::new(&runner.space.program).ok_or_else(|| "the class has no inventory".into())
+    }
+
+    fn admit_copy(&self, bytes: u64) -> Option<()> {
+        self.copies.admit(self.runner.class_id, &self.binding.job_context, bytes)
+    }
+    fn copy_leaf(&self, leaf: &PalwStepTileLeafV1) -> Option<PalwStepTileLeafV1> {
+        let bytes = (leaf.values_le.len() as u64).checked_add(std::mem::size_of::<PalwStepTileLeafV1>() as u64)?
+            .checked_mul(2)?.checked_add(256)?;
+        self.admit_copy(bytes)?;
+        Some(leaf.clone())
+    }
+    /// Requested native copies over the entire current move and store life. These
+    /// counters include conservative proof/hash scratch; they are not measured RSS.
+    pub fn carried_copy_bytes_used_v1(&self) -> u64 { self.copies.used() }
+    pub fn carried_copy_lifetime_bytes_v1(&self) -> u64 { self.copies.lifetime_used() }
+    pub fn carried_copy_reserved_bytes_v1(&self) -> u64 { self.copies.reserved() }
+    /// Tool override only. Guards and prior lifetime usage survive tighter limits.
+    pub fn with_carried_copy_limits_v1(mut self, per_move: u64, lifetime: u64) -> Self {
+        self.copies.set_limits(per_move, lifetime);
+        self
+    }
+    fn param_copy_need(&self, leaves: &[u32]) -> Option<u64> {
+        let mut bytes = 1024u64;
+        for leaf in leaves {
+            let (j, _, _, len) = self.inventory.piece_of(*leaf)?;
+            let name = self.runner.space.program.params.get(j as usize)?.name.len() as u64;
+            // Operand data, intermediate openings, composite carriage/authentication
+            // copies, sorted leaf indices and at most 64 sibling hashes per path.
+            bytes = bytes.checked_add(u64::from(len).checked_add(name)?.checked_add(64 * 64 + 256)?.checked_mul(8)?)?;
+        }
+        Some(bytes)
+    }
+    fn param_scratch(&self, leaves: &[u32]) -> Option<Option<super::memory::TirMemoryLeaseV1>> {
+        let need = self.params.param_scratch_storage_v1(leaves)?;
+        self.copies.scratch(self.runner.class_id, &self.binding.job_context, need)
+    }
+    fn trace_scratch_need(&self) -> Option<u64> {
+        match self.trace {
+            TirTraceV1::Rows { rows, .. } => {
+                let tiles = rows.iter().map(|r| r.len().div_ceil(PALW_LOGITS_TILE_LANES)).max().unwrap_or(0) as u64;
+                (rows.len() as u64).checked_add(tiles)?.checked_mul(256)?.checked_add(16 << 10)
+            }
+            TirTraceV1::Summary { .. } | TirTraceV1::Absent => Some(0),
+        }
+    }
+    fn flat_trace_copy_need(&self) -> Option<u64> {
+        let TirTraceV1::Rows { rows, generated } = self.trace else { return None };
+        let mut bytes = (generated.len() as u64).checked_mul(4)?.checked_add(256)?;
+        for row in rows {
+            bytes = bytes.checked_add((row.len() as u64).checked_mul(4)?.checked_add(24)?)?;
+        }
+        bytes.checked_mul(2)
+    }
+    fn row_pin_copy_need(&self, row: u32, lane: u32) -> Option<u64> {
+        let bytes = match self.trace {
+            TirTraceV1::Rows { rows, generated } => {
+                let lanes = rows.get(row as usize)?;
+                if lane as usize >= lanes.len() || *generated.get(row as usize)? as usize >= lanes.len() { return None; }
+                (generated.len() as u64).checked_mul(4)?
+                    .checked_add(2 * PALW_LOGITS_TILE_LANES as u64 * 4 + 3 * 64 * 64 + 1024)?
+            }
+            TirTraceV1::Summary { pins, .. } => {
+                let p = pins.iter().find(|p| p.position == row && p.beat_lane as usize / PALW_LOGITS_TILE_LANES == lane as usize / PALW_LOGITS_TILE_LANES
+                    && lane as usize % PALW_LOGITS_TILE_LANES < p.beat_tile_lanes.len())?;
+                let values = p.generated_token_ids.len().checked_add(p.committed_tile_lanes.len())?.checked_add(p.beat_tile_lanes.len())? as u64;
+                let hashes = p.row_opening.siblings.len().checked_add(p.committed_opening.siblings.len())?.checked_add(p.beat_opening.siblings.len())? as u64;
+                values.checked_mul(4)?.checked_add(hashes.checked_mul(64)?)?.checked_add(1024)?
+            }
+            TirTraceV1::Absent => return None,
+        };
+        bytes.checked_mul(2)?.checked_add(self.trace_scratch_need()?)
     }
 
     fn check_binding(runner: &TirClassRunnerV1<'_>, binding: &PalwTirStepBindingV1) -> Result<(), String> {
@@ -431,10 +515,11 @@ impl<'a> TirEvidenceV1<'a> {
             let TirTraceV1::Rows { rows, generated } = self.trace else {
                 return Err("the flat scheme's door carries every row, and this store holds a summary".into());
             };
+            self.admit_copy(self.flat_trace_copy_need().ok_or("trace copy size overflow")?).ok_or("trace copy admission refused")?;
             PalwTirTraceLanesV1::Flat(PalwBase0DecodeTokensV1 { logits_rows: rows.to_vec(), generated_token_ids: generated.to_vec() })
         } else if scheme == tiled_logits_scheme_id_v1() {
             let beat = u32::try_from(first_element).map_err(|_| "a logits lane past u32")?;
-            let pin = self.trace.pin(ctx, row, beat).ok_or("the trace this store holds has no such row or lane")?;
+            let pin = self.row_pin(row, beat).ok_or("the trace this store holds has no such row or lane")?;
             debug_assert_eq!(beat as usize / PALW_LOGITS_TILE_LANES, pin.beat_lane as usize / PALW_LOGITS_TILE_LANES);
             PalwTirTraceLanesV1::Tiled {
                 generated_token_ids: pin.generated_token_ids,
@@ -448,7 +533,7 @@ impl<'a> TirEvidenceV1<'a> {
         };
         Ok(PalwTirLogitsConsistencyV1 {
             binding: self.binding.clone(),
-            step_opening: self.tree.opening(leaf).ok_or("the step tree does not open that leaf")?,
+            step_opening: self.step_opening(leaf).ok_or("the step tree does not open that leaf")?,
             step_preimage: self.step_leaf(leaf).ok_or("the store does not hold that leaf")?,
             trace,
         })
@@ -457,7 +542,7 @@ impl<'a> TirEvidenceV1<'a> {
     /// **The tiled decode-token pin** for decode row `row`, the lane `beat_lane` said to beat the
     /// committed token (the tiled scheme's door).
     pub fn decode_token_pin(&self, row: u32, beat_lane: u32) -> Option<PalwTiledDecodePinV1> {
-        self.trace.pin(&self.binding.job_context, row, beat_lane)
+        self.row_pin(row, beat_lane)
     }
 
     /// Override local replay admission for a tool/resource probe. Actual node stores
@@ -584,16 +669,17 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     fn begin_builder_move_v1(&self) {
         self.replay_positions_used.set(0);
         if let Some(cost) = self.replay_cost.as_ref() { cost.reset(); }
+        self.copies.reset_move();
     }
 
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
         match &self.leaves {
-            Leaves::Dense(all) => all.get(index as usize).cloned(),
-            Leaves::Sparse(all) => all.get(&index).cloned(),
+            Leaves::Dense(all) => self.copy_leaf(all.get(usize::try_from(index).ok()?)?),
+            Leaves::Sparse(all) => self.copy_leaf(all.get(&index)?),
             Leaves::Replay { points, disputed } => {
                 if let Some((i, accused)) = disputed {
                     if *i == index {
-                        return Some(accused.clone());
+                        return self.copy_leaf(accused);
                     }
                     if index > *i {
                         // Past the disputed leaf the challenger holds nothing of the accused's.
@@ -609,36 +695,45 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
                 }
                 let job = space.job_shape(ctx).ok()?;
                 let first = space.running_total(&job, a) as u64;
-                self.cache.borrow().get(&a)?.get((index - first) as usize).cloned()
+                self.copy_leaf(self.cache.borrow().get(&a)?.get(usize::try_from(index.checked_sub(first)?).ok()?)?)
             }
         }
     }
 
     fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
+        self.admit_copy(2 * 64 * 64 + 512)?;
         self.tree.opening(index)
     }
 
     fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
+        self.admit_copy(4 * 64 * 64 + 512)?;
         self.tree.range_siblings(first, count)
     }
 
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
+        self.admit_copy(self.param_copy_need(&[leaf])?)?;
+        let _scratch = self.param_scratch(&[leaf])?;
         self.params.param_opening(leaf)
     }
 
     /// One multiproof read off the held inventory's levels (the builder's bytes; see
     /// [`super::inventory::TirInventoryTreeV1::multiproof`]) — not assembled from a path per leaf.
     fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+        self.admit_copy(self.param_copy_need(leaves)?)?;
+        let _scratch = self.param_scratch(leaves)?;
         self.params.param_multiproof(leaves)
     }
 
     /// The carriage the class's artifact makes: one multiproof, or — a composite candidate's — the
     /// two sub-roots' (RFC-0004 §6.3).
     fn param_carriage(&self, leaves: &[u32]) -> Option<kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1> {
+        self.admit_copy(self.param_copy_need(leaves)?)?;
+        let _scratch = self.param_scratch(leaves)?;
         self.params.param_carriage(leaves)
     }
 
     fn prompt_token_ids(&self) -> Option<Vec<u32>> {
+        self.admit_copy((self.prompt.len() as u64).checked_mul(8)?.checked_add(256)?)?;
         Some(self.prompt.to_vec())
     }
 
@@ -646,6 +741,8 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
         if self.prompt_form != PalwPromptIdsFormV1::MerkleV1 {
             return None;
         }
+        let tiles = (self.prompt.len() as u64).div_ceil(u64::from(PALW_PROMPT_IDS_TILE_LEN));
+        self.admit_copy(tiles.checked_mul(256)?.checked_add(2 * PALW_PROMPT_IDS_TILE_LEN as u64 * 4 + 8192)?)?;
         prompt_ids_opening_v1(self.prompt, tile.checked_mul(PALW_PROMPT_IDS_TILE_LEN)?).ok()
     }
 
@@ -653,15 +750,18 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
         let scheme = Hash64::from_bytes(self.runner.space.program.logits_scheme_id);
         match (self.trace, scheme) {
             (TirTraceV1::Rows { rows, generated }, s) if s == tiled_logits_scheme_id_v1() => {
+                self.admit_copy((generated.len() as u64).checked_mul(8)?.checked_add(256)?.checked_add(self.trace_scratch_need()?)?)?;
                 Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 {
                     rows_root: tiled_logits_rows_root_v1(&self.binding.job_context, rows)?,
                     generated_token_ids: generated.to_vec(),
                 }))
             }
             (TirTraceV1::Summary { rows_root, generated, .. }, s) if s == tiled_logits_scheme_id_v1() => {
+                self.admit_copy((generated.len() as u64).checked_mul(8)?.checked_add(256)?)?;
                 Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.to_vec() }))
             }
             (TirTraceV1::Rows { rows, generated }, s) if s == flat_logits_scheme_id_v1() => {
+                self.admit_copy(self.flat_trace_copy_need()?)?;
                 Some(PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 {
                     logits_rows: rows.to_vec(),
                     generated_token_ids: generated.to_vec(),
@@ -675,6 +775,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     /// `TirStepLeaf` answer): from the rows (a capture's, or this node's own run), or from a held pin
     /// of that row whose beat tile holds the lane (a served annex's, an on-chain disclosure's).
     fn row_pin(&self, row: u32, lane: u32) -> Option<PalwTiledDecodePinV1> {
+        self.admit_copy(self.row_pin_copy_need(row, lane)?)?;
         self.trace.pin(&self.binding.job_context, row, lane)
     }
 
@@ -682,6 +783,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     /// unit), off this store's tree — whole for the executor's own capture or run; a challenger's
     /// partial tree answers only the nodes it holds.
     fn step_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
+        self.admit_copy(2 * ((1 << 10) + 64) * 64 + 512)?;
         self.tree.node_parts(level, index)
     }
 
@@ -690,7 +792,10 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     /// (`palw_tir_row_node_parts_v1`). A store holding only a summary of the trace answers none.
     fn row_node(&self, level: u8, index: u64) -> Option<(Vec<Hash64>, Vec<Hash64>)> {
         match self.trace {
-            TirTraceV1::Rows { rows, .. } => palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index),
+            TirTraceV1::Rows { rows, .. } => {
+                self.admit_copy(self.trace_scratch_need()?.checked_add(2 * ((1 << 10) + 64) * 64 + 512)?)?;
+                palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index)
+            },
             TirTraceV1::Summary { .. } | TirTraceV1::Absent => None,
         }
     }

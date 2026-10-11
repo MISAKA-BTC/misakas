@@ -585,3 +585,45 @@ A real node fixture checks one-less tree refusal, retained memo eviction with li
 pursuit clones, and an independent tree reader keeping the tree guard after the last
 pursuit drops. This latest actual-node follow-up has syntax/diff checks only; fresh
 central compilation/runtime (including cost controls) is still required.
+
+
+### Central host/cost/pursuit results and carried-copy candidate
+
+On parent `3970ffdb0`, `/tmp/rfc06-host-leases-symbolic-v3.log` records 15 library
+and 2 integration tests passing, including all 22 executable corpus cases with the
+checked symbolic §8 vector and executor/tree/cache lifetimes. The current CLI/node
+check also passes (`/tmp/rfc06-rfc07-rfc08-rfc12-cli-node-check-v17.log`). The next
+actual-node batch records 43 passes and one separate exporter-fixture failure; all
+court/shard/retention controls passed, including the annex retained-job/tree eviction,
+clone, one-less refusal and fetched-row/incomplete-pursuit lifetime controls. These
+results certify those controls, not native 100k/RSS/pruned joins or approved costs.
+
+A further source-store gap remained: cache hits cloned leaf preimages, and court
+source units and canonical carriage each requested owned copies. `TirEvidenceV1`
+now preflights checked native requested copies before step/path/range, parameter,
+prompt, decode/row pin and tree-node output construction. Ordinary node stores use a
+1 GiB operational copy budget, matching the scale of the existing replay-output
+budget; it changes no wire, consensus class limit, economic price or activation.
+A whole move shares its counter. A second lifetime counter and up-to-1-MiB growth
+reservations survive every move reset and cached hit until store drop: resets cannot
+release admission while previously issued copies may still exist. Refused growth
+returns no new owned copy. The ledger guard list is bounded by the lifetime budget.
+
+Parameter openers now separately report transient provider scratch before access.
+Mapped/resident artifact slices and held shard pieces need no whole-tensor scratch;
+the in-memory whole-tensor source reserves twice the largest requested instance,
+covering current-Cow replacement. Unknown reporting refuses before provider access.
+Failed scratch admission may consume attempted carried-copy allowance and retains its
+already admitted growth until store drop; it cannot create a parameter output.
+The lazy artifact inventory hash tree is separate persistent storage and still needs
+its own lifetime admission follow-up. The copied object's caller continues to own
+its outer duty admission after store drop; this source-store policy alone does not
+attach a lifetime guard to an arbitrary SDK proof returned to a tool.
+
+New candidate controls cover exact/one-less copy limits, repeated cache-hit charging,
+failed host growth, move resets retaining old guards, lifetime exhaustion, overflow,
+unwind release, exact canonical parameter output, scratch refusal before provider
+access and unknown-source refusal, across the existing executable corpus. Syntax
+and diff checks pass; this latest carried-copy patch awaits central compilation and
+runtime. Neither these envelopes nor existing symbolic work substitute for model
+RSS, elapsed-time, DA/court market costs, 100k or genuine pruning acceptance tests.
