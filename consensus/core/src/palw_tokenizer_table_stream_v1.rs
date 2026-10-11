@@ -288,6 +288,6 @@ mod tests {
         assert!(stream.finish().is_err());
         let mut changed = before;
         changed.length = 2;
-        assert!(changed.check().is_err());
+        assert!(changed.finish().is_err());
     }
 }
