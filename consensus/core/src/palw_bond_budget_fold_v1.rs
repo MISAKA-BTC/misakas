@@ -876,25 +876,54 @@ impl TransitionBuilder<'_> {
         actual: u64,
         origin: PalwBudgetOriginV1,
     ) -> Result<(), PalwStateV2Error> {
+        self.reserve_bond_income_for_queue_v1(ctx, bond, maximum, actual, origin, None)
+    }
+
+    /// Reserve the full collected fee before the fill and, when a positive
+    /// cash leg exists, retain it through that exact native queue's payment.
+    /// Pool-only owned income has no unpaid cash obligation and uses collection
+    /// plus W; a pool diversion is still counted once in the owner's full R.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reserve_bond_income_for_queue_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        maximum: u64,
+        actual: u64,
+        origin: PalwBudgetOriginV1,
+        queue: Option<Hash64>,
+    ) -> Result<(), PalwStateV2Error> {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(()) };
         if maximum == 0 && actual == 0 {
             return Ok(());
         }
-        let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
-        if self.state.bond_budget.is_none() {
-            self.create_bond_budget_v1(ctx, &mirror)?;
+        let checkpoint = self.checkpoint();
+        let reserved = (|| {
+            let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+            if self.state.bond_budget.is_none() {
+                self.create_bond_budget_v1(ctx, &mirror)?;
+            }
+            let mut hash = keyed(b"misaka-palw/bond-budget/income/v1");
+            hash.update(ctx.block.as_byte_slice());
+            hash.update(&borsh::to_vec(&bond).expect("a bond serializes"));
+            hash.update(&[origin as u8]);
+            hash.update(&(self.entries.len() as u64).to_le_bytes());
+            let id = finish(hash);
+            self.bond_budget_op(|budget, _, j| {
+                budget.reserve_income_v1(&mirror.policy, capital, id, bond, ctx.daa_score, maximum, actual, origin, j)?;
+                if let Some(queue) = queue {
+                    budget.queue_collected_income_v1(&id, native_queued_income_id_v1(queue, &bond), j)?;
+                }
+                Ok(())
+            })
+            .expect("created")
+            .map_err(|why| budget_refused(bond, why))
+        })();
+        if let Err(error) = reserved {
+            self.restore(checkpoint);
+            return Err(error);
         }
-        let mut hash = keyed(b"misaka-palw/bond-budget/income/v1");
-        hash.update(ctx.block.as_byte_slice());
-        hash.update(&borsh::to_vec(&bond).expect("a bond serializes"));
-        hash.update(&[origin as u8]);
-        hash.update(&(self.entries.len() as u64).to_le_bytes());
-        let id = finish(hash);
-        self.bond_budget_op(|budget, _, j| {
-            budget.reserve_income_v1(&mirror.policy, capital, id, bond, ctx.daa_score, maximum, actual, origin, j)
-        })
-        .expect("created")
-        .map_err(|why| budget_refused(bond, why))
+        Ok(())
     }
 
     /// Native paid-source admission reserves the signed fixed fee before its

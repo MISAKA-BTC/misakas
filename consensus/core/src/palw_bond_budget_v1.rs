@@ -1253,6 +1253,59 @@ impl PalwBondBudgetStateV1 {
         Ok(())
     }
 
+    /// Collected market income may still wait in a low-priority native queue.
+    /// Transfer its already consumed R receipt without freeing or charging R
+    /// again; the physical queue drain, not collection, starts the paid window.
+    /// A destination collision or overflow leaves every row and journal intact.
+    pub fn queue_collected_income_v1(
+        &mut self,
+        income_id: &Hash64,
+        queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self
+            .claims
+            .get(income_id)
+            .copied()
+            .filter(|row| {
+                matches!(row.origin, PalwBudgetOriginV1::MarketFee | PalwBudgetOriginV1::RoundFee)
+                    && row.in_window
+                    && !row.live
+                    && !row.open
+                    && row.consumed.reward_sompi > 0
+            })
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if queue_id == *income_id {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let old = self.claims.get(&queue_id).copied();
+        if old.is_some_and(|old| {
+            old.origin != PalwBudgetOriginV1::NativeIncomeQueued || old.bond != row.bond || !old.in_window || old.open
+        }) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let mut next = row;
+        next.origin = PalwBudgetOriginV1::NativeIncomeQueued;
+        next.live = true;
+        if let Some(old) = old {
+            next.reserved = next.reserved.checked_add(old.reserved).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            next.consumed = next.consumed.checked_add(old.consumed).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            next.accepted_daa = next.accepted_daa.min(old.accepted_daa);
+            next.reuse_not_before = next.reuse_not_before.max(old.reuse_not_before);
+        }
+        self.put_release((row.reuse_not_before, *income_id), false, j);
+        self.put_claim(income_id, None, j);
+        if let Some(old) = old {
+            self.put_release((old.reuse_not_before, queue_id), false, j);
+        }
+        self.put_claim(&queue_id, Some(next), j);
+        self.put_release((next.reuse_not_before, queue_id), true, j);
+        let mut bond = *self.bonds.get(&row.bond).expect("collected income bond");
+        bond.latest_release_daa = u64::MAX;
+        self.put_bond(&row.bond, bond, j);
+        Ok(())
+    }
+
     /// Hold the collectible maximum for an actual native recipient before
     /// accepting work. Same-bond unpaid kernel fee reservations may be moved
     /// into this hold: EXEC fees replace issuance, so reclassification must
@@ -2427,6 +2480,64 @@ mod tests {
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
         s.release_due(600, &mut j);
         assert!(s.bond_row(&bond(0)).is_none() && s.claim_row(&h(60)).is_none());
+        s.check_consistency().unwrap();
+    }
+
+    #[test]
+    fn collected_market_fee_waits_for_physical_queue_payment_without_second_r_or_claims() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        let empty = s.clone();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(94), bond(0), 10, 50 * BILI, 45 * BILI, PalwBudgetOriginV1::MarketFee, &mut j)
+            .unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_collected_income_v1(&h(94), h(94), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        s.queue_collected_income_v1(&h(94), h(95), &mut j).unwrap();
+        assert!(s.claim_row(&h(94)).is_none());
+        assert_eq!(s.claim_row(&h(95)).unwrap().origin, PalwBudgetOriginV1::NativeIncomeQueued);
+        s.release_due(1_000, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window, PalwBudgetVectorV1 { reward_sompi: 50 * BILI, ..PalwBudgetVectorV1::ZERO });
+        assert!(s.window_holds(&bond(0), 1_000));
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_collected_income_v1(&h(94), h(95), &mut j).is_err());
+        assert!(s.reserve_income_v1(&p, 1_000 * BILI, h(96), bond(0), 1_000, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "the queued full maximum still occupies R");
+        s.confirm_native_income_payment_v1(&p, &h(95), 2_000, &mut j).unwrap();
+        assert!(!s.claim_row(&h(95)).unwrap().live);
+        s.release_due(2_099, &mut j);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        s.release_due(2_100, &mut j);
+        assert!(s.claim_row(&h(95)).is_none() && s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
+        let mut replay = empty.clone();
+        for write in &j {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = write {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), s.root_parts());
+        for write in j.iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = write {
+                replay.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn collected_market_queue_collision_preserves_full_fee_and_journal() {
+        let p = policy(1, false);
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(97), bond(0), 10, 5, 5, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.reserve_income_v1(&p, 1_000 * BILI, h(98), bond(1), 10, 5, 5, PalwBudgetOriginV1::MarketFee, &mut j).unwrap();
+        s.queue_collected_income_v1(&h(98), h(99), &mut j).unwrap();
+        let before = (s.root_parts(), j.len());
+        assert!(s.queue_collected_income_v1(&h(97), h(99), &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before);
+        assert_eq!(s.claim_row(&h(97)).unwrap().consumed.reward_sompi, 5);
         s.check_consistency().unwrap();
     }
 

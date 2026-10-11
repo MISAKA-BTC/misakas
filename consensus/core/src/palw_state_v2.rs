@@ -27464,6 +27464,14 @@ impl<'a> TransitionBuilder<'a> {
             return 0;
         }
         let Some(payload) = payload else { return amount };
+        let key = self.model_fee_key_v1(ctx, class_id, holder, leg);
+        self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
+        0
+    }
+
+    /// Pure counterpart of the queue write: budget admission and payment use
+    /// exactly the same immutable move/leg key before either ledger is changed.
+    fn model_fee_key_v1(&self, ctx: &PalwBlockContextV2, class_id: &Hash64, holder: &Hash64, leg: &[u8]) -> Hash64 {
         let mut h = keyed(PALW_STATE_V2_DOMAIN_MODEL_PAYOUT);
         h.update(class_id.as_byte_slice());
         h.update(holder.as_byte_slice());
@@ -27472,9 +27480,7 @@ impl<'a> TransitionBuilder<'a> {
         h.update(leg);
         let mut key_bytes = finish(h).as_bytes();
         key_bytes[0] = PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX;
-        let key = Hash64::from_bytes(key_bytes);
-        self.write_payout(key, Some(PalwPayoutV2 { payload, amount }));
-        0
+        Hash64::from_bytes(key_bytes)
     }
 
     /// **How many payout rows a market move of this shape will write, at most** (audit M-10).
@@ -39774,6 +39780,13 @@ impl<'a> TransitionBuilder<'a> {
         let contributor = contributor_bond.and_then(|b| self.state.bonds.get(&b)).map(|b| b.payout_payload);
         let (to_contributor, to_owner) =
             crate::palw_model_lines_v1::split_owner_leg_v1(leg, line.contributor_permille_of_leg, contributor.is_some());
+        let mut owner_tag = tag.to_vec();
+        owner_tag.extend_from_slice(b"-owner");
+        let mut contributor_tag = tag.to_vec();
+        contributor_tag.extend_from_slice(b"-contributor");
+        let owner_cash = self.improvement_owner_cash_v1(line_id, to_owner, ctx.daa_score);
+        let owner_queue = (owner_cash > 0).then(|| self.model_fee_key_v1(ctx, line_id, holder, &owner_tag));
+        let contributor_queue = (to_contributor > 0).then(|| self.model_fee_key_v1(ctx, line_id, holder, &contributor_tag));
         // The accepted signed quote fixes the entire collectible fee. Reserve
         // both actual bond recipients before any payout, position or pool write;
         // the pool diversion remains the owner's income. Principal is separate.
@@ -39784,10 +39797,10 @@ impl<'a> TransitionBuilder<'a> {
             let reserve = (|| {
                 use crate::palw_bond_budget_v1::PalwBudgetOriginV1;
                 if let Some(bond) = owner_bond {
-                    self.reserve_bond_income_v1(ctx, bond, to_owner, to_owner, PalwBudgetOriginV1::MarketFee)?;
+                    self.reserve_bond_income_for_queue_v1(ctx, bond, to_owner, to_owner, PalwBudgetOriginV1::MarketFee, owner_queue)?;
                 }
                 if let Some(bond) = contributor_bond {
-                    self.reserve_bond_income_v1(ctx, bond, to_contributor, to_contributor, PalwBudgetOriginV1::MarketFee)?;
+                    self.reserve_bond_income_for_queue_v1(ctx, bond, to_contributor, to_contributor, PalwBudgetOriginV1::MarketFee, contributor_queue)?;
                 }
                 Ok(())
             })();
@@ -39802,11 +39815,8 @@ impl<'a> TransitionBuilder<'a> {
         let owner_part = to_owner;
         let to_owner = self.take_improvement_phi_v1(line_id, to_owner, ctx.daa_score);
         let to_pool = owner_part - to_owner;
-        let mut owner_tag = tag.to_vec();
-        owner_tag.extend_from_slice(b"-owner");
+        debug_assert_eq!(to_owner, owner_cash);
         let burned_owner = self.write_model_fee(ctx, line_id, holder, &owner_tag, owner, to_owner);
-        let mut contributor_tag = tag.to_vec();
-        contributor_tag.extend_from_slice(b"-contributor");
         let burned_contributor = self.write_model_fee(ctx, line_id, holder, &contributor_tag, contributor, to_contributor);
         after.burned_sompi = after.burned_sompi.saturating_add(burned_owner).saturating_add(burned_contributor);
         after.registrant_paid_sompi = after.registrant_paid_sompi.saturating_add(to_owner - burned_owner).saturating_add(to_pool);
@@ -72264,7 +72274,7 @@ pub(crate) mod tests {
                 assert_eq!(row.window, PalwBudgetVectorV1 { reward_sompi: amount, ..PalwBudgetVectorV1::ZERO });
                 assert_eq!(row.open_claims, 0, "a fee receipt creates no execution claim");
             }
-            assert!(budget.claims.values().all(|r| r.origin == PalwBudgetOriginV1::MarketFee && !r.open && !r.live));
+            assert!(budget.claims.values().all(|r| r.origin == PalwBudgetOriginV1::NativeIncomeQueued && !r.open && r.live));
             budget.check_consistency().unwrap();
             let delta = PalwStateDeltaV2 { point, entries: b.entries.clone() };
             assert_eq!(apply_delta_v2(&state, &delta, &p).unwrap().state_root(), b.state.state_root(), "the complete fee and market journals replay together");
@@ -72273,6 +72283,98 @@ pub(crate) mod tests {
             let mut legacy = TransitionBuilder::new(&state, &below, false, false, false, false, &e);
             assert!(model_buy_v1(&mut legacy, &point, &class, &holder, GROSS, 0).is_ok());
             assert!(legacy.state.bond_budget().is_none(), "the added consumer is dormant below its fence");
+        }
+
+        #[test]
+        fn rfc08_actual_market_queue_backlog_and_sparse_daa_retain_recipient_r_until_payment_plus_w() {
+            let fee_per_recipient = GROSS / 100 / 2;
+            let (p, state, class) = fixture(fee_per_recipient);
+            let e = extras();
+            let point = ctx(3, 251, 3);
+            let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+            model_buy_v1(&mut b, &point, &class, &h64(88), GROSS, 0).unwrap();
+            let receipts: Vec<_> = b.state.bond_budget().unwrap().claims.iter()
+                .map(|(id, row)| (*id, row.bond)).collect();
+            assert_eq!(receipts.len(), 2, "both actual fee recipients have pending cash R");
+            let cash: Vec<_> = b.state.pending_payouts_iter().map(|(key, row)| (*key, *row)).collect();
+            assert_eq!(cash.len(), 2);
+            // Explicit synthetic backlog fixture; the production pre-object
+            // consumer drains at most eight earlier queue rows and confirms
+            // only the exact monetary receipts whose cash actually left.
+            for i in 0..PALW_V2_MAX_PAYOUTS_PER_BLOCK {
+                b.state.pending_payouts.insert(h64(100 + i as u64), PalwPayoutV2 { payload: h64(0xB0), amount: 1 });
+            }
+            let delayed = palw_v2_pre_object_base_v1(&b.state, &p, &ctx(4, 1_000, 4), false, false, false, false, &e).unwrap();
+            for (id, bond) in &receipts {
+                let row = delayed.bond_budget().unwrap().claim_row(id).unwrap();
+                assert!(row.live && !row.open && row.in_window);
+                assert!(delayed.bond_budget_window_holds(bond, 1_000));
+                assert_eq!(delayed.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi, fee_per_recipient);
+            }
+            assert_eq!(delayed.pending_payouts_iter().map(|(key, row)| (*key, *row)).collect::<Vec<_>>(), cash);
+            let paid = palw_v2_pre_object_base_v1(&delayed, &p, &ctx(5, 2_000, 5), false, false, false, false, &e).unwrap();
+            assert_eq!(paid.pending_payouts_iter().count(), 0);
+            for (id, bond) in &receipts {
+                let row = paid.bond_budget().unwrap().claim_row(id).unwrap();
+                assert!(!row.live && !row.open && row.in_window);
+                assert_eq!(row.reuse_not_before, 2_300, "the exact native drain starts W=300");
+                assert_eq!(paid.bond_budget().unwrap().bond_row(bond).unwrap().window.reward_sompi, fee_per_recipient);
+            }
+            let mut blocked = TransitionBuilder::new(&paid, &p, false, false, false, false, &e);
+            let before = (blocked.state.clone(), blocked.entries.clone());
+            assert!(model_buy_v1(&mut blocked, &ctx(6, 2_299, 6), &class, &h64(88), GROSS, 0).is_err());
+            assert_eq!((blocked.state, blocked.entries), before, "even paid cash cannot admit new fees inside W");
+            let held = palw_v2_pre_object_base_v1(&paid, &p, &ctx(6, 2_299, 6), false, false, false, false, &e).unwrap();
+            for (id, _) in &receipts {
+                assert!(held.bond_budget().unwrap().claim_row(id).unwrap().in_window);
+            }
+            let released = palw_v2_pre_object_base_v1(&held, &p, &ctx(7, 2_300, 7), false, false, false, false, &e).unwrap();
+            for (id, bond) in &receipts {
+                assert!(released.bond_budget().unwrap().claim_row(id).is_none());
+                assert!(released.bond_budget().unwrap().bond_row(bond).is_none());
+            }
+            released.bond_budget().unwrap().check_consistency().unwrap();
+            let mut fresh = TransitionBuilder::new(&released, &p, false, false, false, false, &e);
+            assert!(model_buy_v1(&mut fresh, &ctx(8, 2_300, 8), &class, &h64(88), GROSS, 0).is_ok());
+        }
+
+        #[test]
+        fn rfc08_market_phi_is_one_owner_income_and_pool_only_fees_create_no_pending_cash_hold() {
+            use crate::palw_improve_state_v1::{PalwImprovementLineV1, PalwImprovementLineStatusV1, PalwImprovementPolicyRecordV1};
+            let fee_per_recipient = GROSS / 100 / 2;
+            for phi in [100, 1_000] {
+                let (p, mut state, class) = fixture(fee_per_recipient);
+                let p = p.with_improve_from_daa(Some(1));
+                let mut policy = crate::palw_improve_policy_v1::palw_improvement_policy_example_v1();
+                policy.phi_permille = phi;
+                state.improvement_policies.insert(class, PalwImprovementPolicyRecordV1 { policy, pending: None });
+                state.improvement_lines.insert(class, PalwImprovementLineV1 {
+                    line_id: class, class_id: class, policy_digest: h64(0xA0), policy_sequence: 1,
+                    status: PalwImprovementLineStatusV1::Governed, governed_from_daa: 250, head: class,
+                    head_seq: 1, next_epoch: 1, open_epoch: None, next_due_daa: 1_000, next_check_daa: 1_000,
+                    barred: vec![], last_promotion: None, regression_epoch: None, regression_check: None,
+                });
+                let e = extras();
+                let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
+                model_buy_v1(&mut b, &ctx(3, 251, 3), &class, &h64(88), GROSS, 0).unwrap();
+                let pool = fee_per_recipient * u64::from(phi) / 1_000;
+                assert_eq!(b.state.improvement_pool(&class).unwrap().balance, pool);
+                for bond in [bond_key(1), bond_key(2)] {
+                    assert_eq!(b.state.bond_budget().unwrap().bond_row(&bond).unwrap().window.reward_sompi, fee_per_recipient);
+                }
+                let rows: Vec<_> = b.state.bond_budget().unwrap().claims.values().filter(|row| row.bond == bond_key(1)).collect();
+                assert_eq!(rows.len(), 1, "routing the owner's money charges its full fee exactly once");
+                assert_eq!(rows[0].consumed.reward_sompi, fee_per_recipient);
+                if phi == 1_000 {
+                    assert_eq!(rows[0].origin, PalwBudgetOriginV1::MarketFee);
+                    assert!(!rows[0].live && !rows[0].open);
+                    assert_eq!(rows[0].reuse_not_before, 551, "owned pool income has no later cash obligation");
+                } else {
+                    assert_eq!(rows[0].origin, PalwBudgetOriginV1::NativeIncomeQueued);
+                    assert!(rows[0].live && !rows[0].open);
+                }
+                b.state.bond_budget().unwrap().check_consistency().unwrap();
+            }
         }
 
         #[test]

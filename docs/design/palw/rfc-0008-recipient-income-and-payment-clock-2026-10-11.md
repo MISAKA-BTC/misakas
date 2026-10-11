@@ -38,6 +38,22 @@ removes the final zero bond row, so the sentinel creates no permanent hold.
 Void, redraw, public conviction, dependency failure and zero-funded Final
 cancel only unpaid rights. Cancellation never returns quota early.
 
+## Collected model market fees
+
+Carrier and EVM fills share the same owner/contributor consumer. It pre-reserves
+both recipients' full collectible shares atomically, including the owner's phi
+pool diversion. A positive cash leg uses the exact native model payout key and
+reclassifies the same R into `NativeIncomeQueued`, without a second charge.
+Queue backlog and sparse DAA cannot free it before the actual drain plus W.
+Pool-only income is already owned at collection, has no unpaid cash leg and
+uses collection plus W. Returned market-position principal is excluded.
+
+Focused mechanics candidates cover the shared buy/sell consumers, exact
+journals, second-recipient refusal rollback, EVM full refund, native backlog
+across DAA 1,000/2,000, and partial/all-pool phi routing. Their synthetic admitted
+class/backlog seams are explicit; they are not native model soundness or a
+measured profitable market. Runtime results are still required.
+
 ## Paid source fees
 
 A SourceFee promise (origin 8) reserves its immutable signed subject before

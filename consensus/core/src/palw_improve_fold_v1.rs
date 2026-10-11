@@ -818,12 +818,16 @@ impl TransitionBuilder<'_> {
 
     /// **φ** (spec 17 §17.11.1): the pool's part of a governed line's owner leg. Returns what stays the
     /// owner's.
-    pub(super) fn take_improvement_phi_v1(&mut self, line_id: &Hash64, to_owner: u64, daa: u64) -> u64 {
+    pub(super) fn improvement_owner_cash_v1(&self, line_id: &Hash64, to_owner: u64, daa: u64) -> u64 {
         if !self.params.improve_active_at(daa) || !self.state.improvement_governed_at(line_id, daa) {
             return to_owner;
         }
         let Some(phi) = self.state.improvement_policy(line_id).map(|p| p.phi_permille) else { return to_owner };
-        let to_pool = ((to_owner as u128 * phi as u128) / 1000) as u64;
+        to_owner - ((to_owner as u128 * phi as u128) / 1000) as u64
+    }
+
+    pub(super) fn take_improvement_phi_v1(&mut self, line_id: &Hash64, to_owner: u64, daa: u64) -> u64 {
+        let to_pool = to_owner - self.improvement_owner_cash_v1(line_id, to_owner, daa);
         if to_pool == 0 {
             return to_owner;
         }
