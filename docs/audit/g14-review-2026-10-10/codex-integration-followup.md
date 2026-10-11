@@ -14,7 +14,7 @@ The old empty legacy-scope module is not evidence that the real kernel cumulativ
 
 Remaining concrete gaps prevent approving it as the G14-wide guarantee:
 
-- The kernel cumulative scope allowance is16 distinct requester units, while an L root round names36. Legacy scope must define an authoritative authenticated acquisition universe/allowance; the old empty helper does not supply that guarantee.
+- The kernel cumulative16-unit allowance applies to KernelLedger FileDemand; it is not called by native tag157. Native legacy rounds have their own R-core reservation and lane budget. A36-lane round is therefore not proven to violate the kernel quota. Keep the kernel guard and separately verify the authenticated native acquisition universe, privacy classification and bounded reservation contract.
 - `AwaitRound` remembers the round but does not follow `AwaitAnswer` into signed reacquisition when authenticated history bytes are unreadable after pruning. Tag156 reacquisition currently handles one unit and cannot join parallel lanes. Reacquiring a whole lost round is absent from the four-window schedule.
 - Round caches/frontiers may hold64 answers, while scratch accounting uses one answer-sized ceiling and has no retained ticket for all learned bytes/copies. Retained per-case tickets and refusal before admitting unfunded obligations are required.
 - Height>=30 and the2M profile are expressly refused. The8k fold fixture has a smaller actual tree than the canonical105.5M-leaf tree; full terminal dissection, fair carrier inclusion and actual replay/RAM still require evidence.
