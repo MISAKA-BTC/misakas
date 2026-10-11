@@ -811,6 +811,40 @@ enum SourceCmd {
 
 #[derive(Subcommand, Debug)]
 enum OnboardCmd {
+    /// Prepare a signed complete-check bootstrap object from the retained registration and exact public artifact.
+    BootstrapPrepare {
+        #[arg(value_enum)]
+        stage: operator::model_bootstrap::Stage,
+        /// Locally retained ClassRegisteredTirV1 object (Borsh); this file does not prove prior inclusion.
+        #[arg(long, value_name = "FILE")]
+        registration: std::path::PathBuf,
+        #[arg(long, value_name = "FILE")]
+        artifact: std::path::PathBuf,
+        #[arg(long)]
+        max_positions: u32,
+        #[arg(long)]
+        bond: String,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+        /// Maximum existing binding collateral reservation, fixed before preparation.
+        #[arg(long)]
+        maximum_binding_reservation_sompi: u64,
+        /// Maximum existing complete-check bond fee, fixed before preparation.
+        #[arg(long)]
+        maximum_check_fee_sompi: u64,
+        /// Required except artifact-bind: root from the caller's trusted chain view.
+        #[arg(long, value_name = "HASH")]
+        ledger_root: Option<String>,
+        #[arg(long, value_name = "HASH")]
+        aux_root: Option<String>,
+        #[arg(long, value_name = "DAA")]
+        tip_daa: Option<u64>,
+        /// Commit stage only: caller-supplied ConformanceCommitmentV1 including provenance/scope/resource roots.
+        #[arg(long, value_name = "FILE")]
+        commitment_borsh: Option<std::path::PathBuf>,
+    },
     /// Exhaustively execute a rooted complete-check attempt and prepare its signed tag-109 post locally.
     CompletePost {
         #[arg(long)]
@@ -3213,6 +3247,13 @@ async fn run_cli() -> std::process::ExitCode {
                     operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
                 }
                 OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
+                OnboardCmd::BootstrapPrepare { stage, registration, artifact, max_positions, bond, key, out,
+                    maximum_binding_reservation_sompi, maximum_check_fee_sompi, ledger_root, aux_root, tip_daa, commitment_borsh } => {
+                    operator::model_bootstrap::prepare(&ctx, operator::model_bootstrap::PrepareArgs {
+                        stage, registration, artifact, max_positions, bond, key: key.source(), out,
+                        maximum_binding_reservation_sompi, maximum_check_fee_sompi, ledger_root, aux_root, tip_daa, commitment: commitment_borsh,
+                    }).await
+                }
                 OnboardCmd::CompletePost { class, artifact, bond, key, out, ledger_root, aux_root, tip_daa } => {
                     operator::model_complete::post(&ctx, &class, &artifact, &bond, &key.source(), &out, &ledger_root, &aux_root, tip_daa).await
                 }

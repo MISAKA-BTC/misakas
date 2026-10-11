@@ -118,3 +118,36 @@ tick returns early when no claim, seal, demand or other busy ledger row exists;
 therefore the ledger-root-committed `header.scalars.daa` can lag and cannot
 substitute for an authenticated current chain clock. The new SDK control covers
 a stale advertised clock that would otherwise revive an expired open attempt.
+
+## File-derived signed bootstrap preparation
+
+`model onboard bootstrap-prepare` closes the previously harness-only construction
+of `ArtifactBoundV1` (104), a real `KernelRouteV1` registration (110/inner 1),
+`KernelBoundV1` (106), and `ConformanceCommittedV1` (107). Its SDK boundary reads a
+bounded complete-check PALWTIR1 file and the caller's locally retained
+`ClassRegisteredTirV1` object. It re-derives the class identity, exact program,
+layout/tokenizer declaration, complete artifact inventory, parameter commitments,
+canonical v2 kernel plan and exhaustive input/leaf reference. It enforces the
+existing complete domain/post/file bounds and caller-selected maxima for the
+100-BILI binding reservation and 1-BILI complete-check bond fee before signing.
+Carrier transaction fees remain separately checked by ordinary submission.
+
+`artifact-bind` exports a local statement and makes no claim that its retained
+native registration object has been included. The three later stages require
+`--ledger-root`, `--aux-root`, and `--tip-daa` from one independent trusted caller
+chain view. Before executing the file or loading the signing key, they authenticate
+every op-211 page as one complete inventory. They require the exact binding to
+be mature, unrefuted, owned by that registrant, and not from the future. Kernel
+registration runs the production plan, public-court/DA and carrier resource gates
+under the rooted policy. Later stages refuse any program/plan/parameter record
+substitution or a binding that already exists. Commitment uses caller-supplied
+bounded Borsh metadata, preserving its source/implementation/scope/resource
+statements, and verifies all chain/file roots and existing lifecycle retry rules.
+
+All four stages only write signed Borsh objects; they do not submit, modify chain
+state, inject classes/capabilities/Finals, or authorize public activation. Reports
+identify local-file or caller-pinned snapshot scope and retain native registration
+inclusion, mature useful work, trained-model provenance and security approval as
+unestablished. The three new SDK controls use a seeded typed code fixture for
+actual signatures and root/file/clock/cost/refutation/statement refusal. Central
+Cargo execution and actual process bootstrap remain separate acceptance evidence.

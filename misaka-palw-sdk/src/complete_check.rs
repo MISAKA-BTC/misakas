@@ -150,42 +150,7 @@ impl VerifiedCompleteCheckV1 {
         if container.header.program != self.reads.program {
             return Err(Refusal::new("PROGRAM_SUBSTITUTED", "the file contains a different program than the rooted class"));
         }
-        let ranges = ContainerRanges::open_with_window(&container, 32 << 10).map_err(unreadable)?;
-        let mut operands = Vec::with_capacity(self.domain.leaves as usize);
-        let mut failure = None;
-        let mut total = 0u64;
-        palw_tir_visit_inventory_rows_v1(&self.program, &mut |row| {
-            if failure.is_some() {
-                return;
-            }
-            total = match total.checked_add(row.len as u64) {
-                Some(bytes) if bytes <= self.domain.artifact_bytes => bytes,
-                _ => {
-                    failure = Some("inventory exceeds its admitted artifact byte limit".to_string());
-                    return;
-                }
-            };
-            let mut bytes = vec![0; row.len as usize];
-            let start = row.row_start as u64;
-            if let Err(e) = ranges.read_range(row.param, row.layer, start..start + row.len as u64, &mut bytes) {
-                failure = Some(e);
-                return;
-            }
-            operands.push(PalwArtifactOperandV1 {
-                tensor_name: self.program.params[row.param as usize].name.clone(),
-                layer: row.layer,
-                row_start: row.row_start,
-                bytes,
-            });
-        })
-        .map_err(|e| unreadable(e.to_string()))?;
-        if let Some(error) = failure {
-            return Err(unreadable(error));
-        }
-        if operands.len() != self.domain.leaves as usize || total != self.domain.artifact_bytes {
-            return Err(unreadable("inventory does not equal the admitted complete domain".to_string()));
-        }
-        Ok(operands)
+        complete_artifact_operands_v1(&container, &self.program, &self.domain)
     }
 
     pub fn verify_file(&self, path: &Path) -> Result<FreshCompleteReportV1, Refusal> {
@@ -230,4 +195,50 @@ impl VerifiedCompleteCheckV1 {
             signer,
         )
     }
+}
+
+/// One bounded inventory reader shared by complete verification and bootstrap.
+/// The caller first derives the admitted complete domain from this program.
+pub(crate) fn complete_artifact_operands_v1(
+    container: &misaka_palw_tir_artifact::PalwTirContainerV1,
+    program: &TirProgramV1,
+    domain: &CompleteCheckDomainV1,
+) -> Result<Vec<PalwArtifactOperandV1>, Refusal> {
+    let unreadable = |e| Refusal::new("ARTIFACT_UNREADABLE", e);
+    let ranges = ContainerRanges::open_with_window(&container, 32 << 10).map_err(unreadable)?;
+    let mut operands = Vec::with_capacity(domain.leaves as usize);
+    let mut failure = None;
+    let mut total = 0u64;
+    palw_tir_visit_inventory_rows_v1(program, &mut |row| {
+        if failure.is_some() {
+            return;
+        }
+        total = match total.checked_add(row.len as u64) {
+            Some(bytes) if bytes <= domain.artifact_bytes => bytes,
+            _ => {
+                failure = Some("inventory exceeds its admitted artifact byte limit".to_string());
+                return;
+            }
+        };
+        let mut bytes = vec![0; row.len as usize];
+        let start = row.row_start as u64;
+        if let Err(e) = ranges.read_range(row.param, row.layer, start..start + row.len as u64, &mut bytes) {
+            failure = Some(e);
+            return;
+        }
+        operands.push(PalwArtifactOperandV1 {
+            tensor_name: program.params[row.param as usize].name.clone(),
+            layer: row.layer,
+            row_start: row.row_start,
+            bytes,
+        });
+    })
+    .map_err(|e| unreadable(e.to_string()))?;
+    if let Some(error) = failure {
+        return Err(unreadable(error));
+    }
+    if operands.len() != domain.leaves as usize || total != domain.artifact_bytes {
+        return Err(unreadable("inventory does not equal the admitted complete domain".to_string()));
+    }
+    Ok(operands)
 }

@@ -78,6 +78,8 @@ pub mod tir_registration;
 pub mod onboarding_chain;
 /// Bounded complete-check builder and verifier over a rooted public snapshot.
 pub mod complete_check;
+/// File-derived bootstrap preparation with rooted public binding checks.
+pub mod bootstrap_check;
 /// Bounded, ordered collection of the public kernel-route inventory.
 pub mod kernel_rows;
 
