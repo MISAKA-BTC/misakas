@@ -1,6 +1,7 @@
 //! A normal bought A16 class, held from an independent file by the outside verifier.
 //! Small geometry is deliberate; no profile, price, admission or conviction callback is replaced.
 use super::*;
+use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
