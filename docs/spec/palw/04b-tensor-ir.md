@@ -3732,3 +3732,31 @@ reservation may use the remaining collected collateral and release the rest;
 new allocation MUST reject an existing reservation above collateral. Aggregate
 reference settlement is not job-specific native reward provenance. Persistent
 native policy/retention/quota/escrow integration remains a separate contract.
+
+### §18.12 — Opt-in bounded authenticated external inputs, component v12
+
+Bind the exact frozen-v2 stage, maximum canonical v1 view, real source-PC root,
+maximum positions and explicit token/patch/audio axis map in the template root.
+Every present modality MUST bind an external stage input axis. Refuse source
+weight or persistent-state resizing, random sources and post-write stages.
+Maximum and actual graphs MUST independently pass frozen validation, range
+analysis and full scope9. Actual lengths and positions become immutable job
+admission fields; zero/absent and over-maximum modalities MUST refuse.
+
+At most16 external inputs and16,384 real PC instances are allowed. Both maximum
+and actual raw payload MUST be at most16 MiB and i128 payload at most32 MiB.
+Authenticate exact real PC keys/root and job/admission/input-root counts before
+callbacks. Atomically reserve the entire local raw/i128/attempt allowance before
+acquisition. Refuse wrong dtype/shape/exact byte extent before expansion, then
+check external intervals and PC-v3 tensor commitments against exact job roots.
+Expensive failures retain the full allowance. Keep authenticated values and
+combined PC immutable; virtual input parameters follow real source parameters
+in the canonical view and MUST NOT substitute a source-weight namespace.
+
+The initial component authenticates job-constant tensors for all admitted
+positions and Rows/Final stages without post-write effects. Its local budget
+does not price scope preparation, PC/tree hashing, scratch or provider work.
+Native consumers MUST bind the job-root/admission/combined-PC contract and
+charge the independently derived full resource/quota envelope before those
+operations. Native wire/retention, per-position input sources, stage edges,
+escrow and media Final are not supplied by this component.

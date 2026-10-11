@@ -137,7 +137,7 @@ impl FlatLengthTemplateV7 {
     pub fn root(&self) -> Digest {
         object_id(b"misaka-palw/kernel/flat-length-template/v7", self)
     }
-    fn program(&self, actual: FlatJobLengthsV7) -> Result<TirProgramV1, String> {
+    pub(crate) fn program(&self, actual: FlatJobLengthsV7) -> Result<TirProgramV1, String> {
         if self.version != FLAT_LENGTH_VERSION_V7 || self.bindings.len() > FLAT_LENGTH_MAX_BINDINGS_V7 {
             return Err("unknown or oversized bounded-length template".into());
         }

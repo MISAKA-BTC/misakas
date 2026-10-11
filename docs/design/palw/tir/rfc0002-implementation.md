@@ -2573,3 +2573,40 @@ source, immutable executables/test binaries, commands, proof and all limits are
 in [the checkpoint observation](evidence/qwen25-real-courts9-observation.json).
 Native9/job11 integration, actual honest Final/redemption, complete tasks and
 long contexts, H/media continuity and A6/A8 remain open. The full goal is active.
+
+## Verified component — bounded authenticated external inputs, v12
+
+`flat_inputs12` specializes a frozen-v2 external-input stage through the exact
+canonical v1 view and the existing bounded T/P/A map. A present modality must
+bind a real external axis; source weights and persistent states cannot resize.
+Maximum and actual shapes independently pass validation, interval analysis
+and complete scope9. Template/admission/job-input roots bind actual counts,
+positions and real/virtual parameter namespaces. Both maxima and actuals are
+bounded at16 inputs,16 MiB raw/32 MiB i128 payload and16,384 real PC instances.
+
+The acquisition helper authenticates exact real PC keys/root and job/input
+counts before callbacks, then atomically reserves raw/expanded/attempt
+allowances. Returned dtype/shape/bytes are checked before expansion, followed
+by intervals and exact input roots; failed reads keep their spent allowance.
+Authenticated values and combined PC have private fields and readonly accessors.
+The length7 change is visibility-only for its existing exact specialization;
+its frozen public v7 behavior is unchanged.
+
+Five new synthetic tests pass. Patch3/audio5 produces16/32/48 at three positions
+under independent arithmetic, InterpreterV2 and the v1 trace. Complete court9
+authenticates patch/audio reductions, the preceding-position state read and
+its write under the same scope; honest output dismisses, wrong output convicts,
+and borrowed input/state openings refuse. Wrong identities/source/counts/scope
+and insufficient budgets refuse before callbacks; hostile images and intervals
+retain the full attempt. The protected component pool increases from302 to307;
+pending quota11/native9/new locator/SDK tests are counted in separate records.
+Exact source preimages, retained immutable test binary and command/log hashes
+are in [the component verdict](evidence/rfc02-typed-inputs12-verdict.json).
+
+This is job-constant external input acquisition, without per-position/random/
+earlier-stage sources or post-write effects. The local budget covers callback
+attempts/raw/i128 payload only, not scope preparation, PC/tree hashing, scratch,
+or provider-internal work. Native job binding/codec/transport/retention and the
+shared resource10/quota11 envelope remain required before media execution or
+Final. Source-PC namespace continuity grants no original BF16 fidelity, actual
+media task, network reward or A6/A8 credit. The full RFC02 goal remains active.

@@ -3897,3 +3897,40 @@ the exact proof and limitations. Scope metadata covers32 positions, whereas
 this prosecution executes one position. No model admission, real native
 execution Final, maximum-context or cohort/A6/A8 credit follows from these
 component results. Those acceptance steps remain open.
+
+### §14.44 — Bounded authenticated external stage inputs, component v12
+
+The opt-in `flat_inputs12` component binds a frozen program-v2 external stage,
+its exact maximum v1 view, the immutable real source-PC namespace and bounded
+token/patch/audio axis map. Every present modality must bind an actual external
+input axis. Job admission fixes actual lengths and positions; maximum and actual
+graphs independently pass validation, interval analysis and complete scope9.
+Source-weight and persistent-state axes cannot be resized by the input map.
+Both maximum and actual input payloads are bounded at16 MiB raw/32 MiB expanded
+i128, with at most16 inputs and16,384 real parameter instances.
+
+Acquisition checks job/admission/root counts and real source PC before provider
+calls. It atomically prepays a local input attempt and its complete raw/expanded
+payload. Dtype, shape and exact bytes are checked before expansion, followed by
+the declared interval and each exact job-input root. Failed expensive reads
+retain their complete allowance. Authenticated input values and combined PC
+are private, with immutable accessors; virtual input roots occupy the canonical
+v1-view parameter namespace after the real weights.
+
+Five synthetic tests pass. A three-position patch3/audio5 stage produces
+16/32/48 under independent arithmetic, the v2 interpreter and exact v1 trace.
+Patch/audio reductions, an explicit previous-position state read and its write
+use the same full scope9/court9: honest proofs dismiss, wrong committed outputs
+convict, and borrowed input/state openings refuse. Wrong job/source/scope/count
+and insufficient allowances refuse before callbacks. Immutable binary, exact
+dependency preimages and selected commands are retained in
+[the component verdict](../design/palw/tir/evidence/rfc02-typed-inputs12-verdict.json).
+
+This component serves job-constant external tensors across admitted positions.
+Per-position media inputs, random/earlier-stage sources, post-write stages,
+native transport/retention/codec, resource10/quota11 integration, job funding
+and media Final remain open. Its local allowance bounds input callbacks and
+raw/i128 payload only; metadata, PC/tree hashing, scratch and provider-internal
+work require the shared native resource contract. Real source-PC continuity is
+distinct from original-model fidelity. No real-media task or A6/A8 credit is
+added; RFC02 completion remains open.
