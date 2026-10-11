@@ -9463,7 +9463,7 @@ async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let mut genesis_ms = MuHash::new();
-    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms).expect("initial epoch-zero EVM genesis staging");
     consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
 
     // (1) the valid claim for the real lock; (2) a claim for a non-existent
@@ -13898,7 +13898,7 @@ fn consensus_with_deposit_locks(
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let mut genesis_ms = MuHash::new();
-    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms).expect("initial epoch-zero EVM genesis staging");
     consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
     (consensus, wait_handles, claims)
 }
