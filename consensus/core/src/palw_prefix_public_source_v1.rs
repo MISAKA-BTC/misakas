@@ -391,7 +391,7 @@ impl PalwPrefixPublicPendingV1 {
             return Err("public prefix signer has no live authenticated opening".into());
         };
         if bytes.is_empty()
-            || bytes.len() > PALW_PREFIX_PUBLIC_PART_BYTES_V1
+            || bytes.len() != (self.source.byte_length as usize - prior.len()).min(PALW_PREFIX_PUBLIC_PART_BYTES_V1)
             || prior.len() != offset as usize
             || prior.len() as u64 + bytes.len() as u64 > u64::from(self.source.byte_length)
         {
@@ -471,6 +471,11 @@ mod tests {
         pending.begin(bond(1), 100, &tile.opening).unwrap();
         let mut wrong = tile.preimage.values_le.clone();
         wrong[0] ^= 1;
+        let before_short = pending.clone();
+        if wrong.len() > 1 {
+            assert!(pending.part(bond(1), 101, 0, &wrong[..1]).is_err());
+            assert_eq!(pending, before_short);
+        }
         pending.part(bond(1), 101, 0, &wrong).unwrap();
         assert!(pending.authenticated_answer().is_none());
         assert!(!pending.finish(bond(1), 102).unwrap());
