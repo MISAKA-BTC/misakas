@@ -1557,12 +1557,22 @@ async fn g14_opv_bootstrap_v4_opted_in_withholding_vetoes_and_burns_its_own_rese
 // ---- Prepaid fees: independent dormant monetary fence, actual bond debits and coinbase payouts -----------------------------
 #[tokio::test]
 async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_verifies_the_complete_inventory() {
+    run_paid_v5_source_budget(1).await;
+}
+
+#[tokio::test]
+async fn g14_opv_bootstrap_paid_v5_pre_fence_promise_migrates_into_the_recipient_income_window() {
+    run_paid_v5_source_budget(500).await;
+}
+
+async fn run_paid_v5_source_budget(budget_activation: u64) {
     use misaka_palw_sdk::onboarding_chain::{
         PublicConformanceReadsV1, fresh_verify_from_reads_v1, fresh_verify_from_reads_v5, opt_in_sources_from_kernel_rows_v4,
         paid_opt_in_sources_from_kernel_rows_v5,
     };
     let (mut net, b, c) =
-        opt_in_world_with_policy(Net::over_cfg(source_fee_budget_config(), TestConsensus::new), 81, false, true).await;
+        opt_in_world_with_policy(Net::over_cfg(source_fee_budget_config_at(budget_activation), TestConsensus::new), 81, false, true)
+            .await;
     let a = net.attempt(c.v2);
     assert!(a.is_paid_opt_in_source());
     assert_ne!(a.policy().id(), kaspa_consensus_core::palw_conformance_evidence_v1::palw_onboarding_opt_in_policy_v4().id());
@@ -1611,6 +1621,21 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
     net.send(vec![(PRODUCERS[0], object)]).await;
     assert!(net.ledger().beacon_sources.is_empty(), "funding never retroactively awards an unsigned source promise");
     paid_sources(&mut net, terms, &jobs, &PRODUCERS[..2]).await;
+    if budget_activation > 1 {
+        assert!(
+            net.daa() < budget_activation,
+            "fixture must admit real paid promises before the declared budget fence: {} vs {}",
+            net.daa(),
+            budget_activation
+        );
+        assert!(net.chain.tip_state().1.bond_budget().is_none());
+        assert!(terms.source.hold_until >= budget_activation, "fixture migrates a still-pending fee right");
+    }
+    net.beat_to(terms.source.seal_end).await;
+    reveal_now(&mut net, &reveals).await;
+    net.beat_to(terms.source.final_by + a.policy().settlement_depth_d).await;
+    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Locked(_)));
+    net.beat_to(budget_activation).await;
     let admitted_state = net.chain.tip_state().1;
     let fee_rows: Vec<_> = admitted_state
         .bond_budget()
@@ -1630,10 +1655,6 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
         assert_eq!((row.reserved.reward_sompi, row.consumed.reward_sompi), (50, 0));
         assert!(row.reuse_not_before >= terms.source.hold_until + 280);
     }
-    net.beat_to(terms.source.seal_end).await;
-    reveal_now(&mut net, &reveals).await;
-    net.beat_to(terms.source.final_by + a.policy().settlement_depth_d).await;
-    assert!(matches!(beacon_of(&net, &c), AttemptBeaconV1::Locked(_)));
     let post = sampled_post(&net, &c);
     let object = net.evidence(CAND, c.v2, ConformanceEvidenceActionV1::Post(Box::new(post)));
     net.send(vec![(CAND, object)]).await;
@@ -1680,7 +1701,9 @@ async fn g14_opv_bootstrap_paid_v5_requires_prepaid_signed_fees_and_public_sdk_v
         let ledger = net.ledger();
         let Some(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeOutcomeV1::Paid { daa, .. }) =
             ledger.beacon_source_fee_promises[&(context, producer)].outcome
-        else { panic!("each source fee has an actual once-only payout receipt") };
+        else {
+            panic!("each source fee has an actual once-only payout receipt")
+        };
         assert!(row.reuse_not_before >= daa + 280);
     }
     let replay = net.replay().await;
@@ -1695,13 +1718,13 @@ fn source_fee_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     assert!(params.validate_palw_v2().is_err());
     (Config::new(params), bundle, premine, floats)
 }
-fn source_fee_budget_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+fn source_fee_budget_config_at(activation: u64) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwRoundRightsPolicyV1};
     let (mut cfg, _, premine, floats) = source_fee_config();
     // Ample mechanics-fixture rates, with the user-selected separate ticket cap.
     // No rate here is an approved economic policy.
     cfg.params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 {
-        activation: ForkActivation::new(1),
+        activation: ForkActivation::new(activation),
         policy: PalwBondBudgetPolicyV1 {
             window_daa: 280,
             capital_unit_sompi: 100_000_000,
