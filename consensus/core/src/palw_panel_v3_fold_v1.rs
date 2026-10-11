@@ -716,6 +716,14 @@ fn bind_v2(
         (PalwClaimPhaseV2::Provisional, false) | (PalwClaimPhaseV2::PanelBound { .. }, true) => {}
         _ => return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "PanelBoundV3" }),
     }
+    if builder.require_paid_consumer_bind_v1(*claim_id, &claim, ctx.daa_score).is_err() {
+        // Entropy/DA delays cannot buy a later service term. A nonfraud end
+        // returns reservations through the existing engine/native path.
+        if !builder.state.palw_accusation_pending_v1(claim_id) {
+            return end_claim(builder, ctx, claim_id, PalwVoidReasonV2::PanelUnavailable, true);
+        }
+        return Ok(());
+    }
     let mut seats = Vec::with_capacity(binding.seats.len());
     for seat in &binding.seats {
         let bond = panel_bond_key_v1(*seat);

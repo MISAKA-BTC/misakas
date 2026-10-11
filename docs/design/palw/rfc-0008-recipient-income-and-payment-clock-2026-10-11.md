@@ -301,3 +301,43 @@ Final criteria and exact cash assertions; its fresh runtime remains pending.
 Verification at this candidate: Rust parser and diff checks only; central compile/runtime
 is required. This does not complete all-model execution, measured economics, arbitrary
 H160 EVM ownership/gas-income caps, finite signed material lifecycle or pruned P2P evidence.
+
+## Finite native paid-consumer foundation (schema v4, table 8; dormant)
+
+`palw_paid_consumer_lifecycle_v1` is a separate typed fence; every shipped value is
+`None` and startup refuses public arming. Its policy freezes checked service,
+dispute-tail and material-tail spans for **new** native attempt and free-prompt
+admissions. Existing accepted claims acquire no retroactive contract. Table 8
+records the exact native claim ID, original accepted DAA, policy digest and
+absolute `service_until`, `backstop_until`, `material_until`. The terms digest
+commits the exact claim and all terms. Mutable lifecycle status is separate.
+V1/V2/V3 wire layouts and root preimages remain exactly their old forms; only v4
+appends table 8 and commits its root. Journal application/reversal and carriage
+rebuild the live-service and exhausted indexes.
+
+Admission requires the claim's already-authorized trace retention to cover the
+whole material term. It also checks the class's minimum bind/receipt/challenge
+path, including the first block after a strict final deadline. Legacy and
+permissionless Panel assignment, licensing and native Final check this same
+service cutoff. New native courts/DA need their whole deadline path inside the
+frozen backstop and open by the service cutoff. Existing accepted disputes remain
+adjudicable; reaching the service cutoff never neutrally closes an accusation.
+The existing court/DA clock first delivers its outcome; an exhausted claim with no
+pending accusation takes the existing uncharged `PanelUnavailable` Void path.
+Root retirement and both native material-file pruners also read the contract's
+material term. Monetary debt/queues retain the separate actual-payment-plus-W
+clock even if their cash drain is later than this service contract.
+
+The public getters are `paid_consumer_contract_v1(&Hash64)` and
+`paid_consumer_terms_v1(&Hash64)` on `PalwChainStateV2`; the immutable terms expose
+`digest_v1(claim: Hash64)`. Parent-owned kernel aux50 is reserved for authenticated
+Panel aggregate/sponsor bindings; this foundation consumes no kernel aux ID.
+Policy values in the private mechanics tests are not economic or safety approval.
+
+Residual activation conditions remain explicit: authenticated voluntary sponsor
+and actual paid Panel/claim adapters, finite physical payout scheduling, every
+signed provider's adequate consent/cost coverage, behavior through large DAA jumps
+and terminal adjudication/restart/pruned join, and all RFC08 native full-payout and
+security/economic acceptance criteria. Fixed service/backstop deadlines are not a
+proof of bounded physical cash arrival and do not authorize unilateral signed
+provider TTL extension. Public activation remains refused.

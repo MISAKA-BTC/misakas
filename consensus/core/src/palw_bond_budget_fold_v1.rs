@@ -25,6 +25,9 @@ use super::*;
 use crate::palw_bond_budget_v1::*;
 #[path = "palw_bond_budget_fold_v1/material.rs"]
 mod material;
+#[path = "palw_bond_budget_fold_v1/consumer.rs"]
+mod consumer;
+pub(super) use consumer::sweep_paid_consumers_v1;
 
 impl PalwChainStateV2 {
     /// UTXO validation and producer preflight use the same first-fence legacy
@@ -1589,6 +1592,12 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     if builder.params.material_income_active_at(now)
         && builder.state.bond_budget.as_ref().expect("created").header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 {
         builder.initialize_material_income_v3(ctx, &mirror.policy)?;
+    }
+    if builder.params.paid_consumer_lifecycle_active_at(now)
+        && builder.state.bond_budget.as_ref().expect("created").header.version < PALW_BOND_BUDGET_STATE_VERSION_V4 {
+        // Existing accepted claims keep their old terms. Only new admissions
+        // write a contract, never retroactive or synthetic readiness/Final.
+        builder.bond_budget_op(|budget, _, j| budget.activate_consumer_contract_v4(j));
     }
     // Step 1b drained these exact obligations into the validated coinbase.
     // Queued credits stay held through sparse DAA jumps until that payment.

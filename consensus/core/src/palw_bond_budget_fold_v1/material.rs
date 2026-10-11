@@ -19,7 +19,7 @@ impl PalwChainStateV2 {
             return None;
         }
         let old = self.claims.get(&root).is_some_and(|claim| claim.accepted_daa < params.material_income_from().unwrap_or(u64::MAX));
-        let mut until = book.material_hold_until_v1(root, old);
+        let mut until = book.material_hold_until_v1(root, old).max(self.paid_consumer_terms_v1(&root).map(|terms| terms.material_until));
         if let Some(work) = self.exec_v2.roots.get(&root) {
             for claim in std::iter::once(work.prefix_claim)
                 .chain(self.exec_v2.slices.range((root, 0)..=(root, u32::MAX)).map(|(_, slice)| slice.evidence_root))
@@ -33,7 +33,7 @@ impl PalwChainStateV2 {
             if work.prefix_claim == root
                 || self.exec_v2.slices.range((*native, 0)..=(*native, u32::MAX)).any(|(_, slice)| slice.evidence_root == root)
             {
-                until = until.max(book.material_hold_until_v1(*native, false));
+                until = until.max(book.material_hold_until_v1(*native, false)).max(self.paid_consumer_terms_v1(native).map(|terms| terms.material_until));
             }
         }
         until

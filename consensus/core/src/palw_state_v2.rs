@@ -1792,6 +1792,8 @@ pub struct PalwStateParamsV2 {
     reporter_income_from_daa: Option<u64>,
     #[borsh(skip)]
     material_income_from_daa: Option<u64>,
+    #[borsh(skip)]
+    paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
     /// 2026-10-04 audit's fixes read it). `None` on every shipped preset.
     #[borsh(skip)]
@@ -2042,6 +2044,7 @@ impl PalwStateParamsV2 {
             bond_budget: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
+            paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
         })
@@ -2490,6 +2493,10 @@ impl PalwStateParamsV2 {
     pub fn material_income_active_at(&self, daa: u64) -> bool {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
     }
+
+    pub fn with_paid_consumer_lifecycle(mut self, mirror: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>) -> Self { self.paid_consumer_lifecycle = mirror; self }
+    pub fn paid_consumer_lifecycle(&self) -> Option<&crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1> { self.paid_consumer_lifecycle.as_ref() }
+    pub fn paid_consumer_lifecycle_active_at(&self, daa: u64) -> bool { self.material_income_active_at(daa) && self.paid_consumer_lifecycle.as_ref().is_some_and(|f| daa >= f.from_daa) }
 
     pub fn bond_budget(&self) -> Option<&crate::palw_bond_budget_v1::PalwBondBudgetMirrorV1> {
         self.bond_budget.as_ref()
@@ -15020,6 +15027,28 @@ impl PalwChainStateV2 {
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
         if let Some(budget) = &self.bond_budget {
             budget.check_consistency().map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("bond budget: {why}")))?;
+            for (id, contract) in &budget.consumer_contracts {
+                let claim = self.claims.get(id).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("paid consumer contract has no native claim".into()))?;
+                if contract.terms.accepted_daa != claim.accepted_daa || contract.terms.material_until > claim.trace_retention_daa
+                    || match contract.status {
+                        crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1::Exhausted { daa } | crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1::Terminal { daa } => self.last_point.as_ref().is_none_or(|point| daa > point.daa_score),
+                        _ => false,
+                    }
+                    || match contract.status {
+                        crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1::Terminal { daa } => terminal_daa_of(claim).is_none_or(|at| at < daa),
+                        _ => claim.phase.is_terminal(),
+                    } {
+                    return Err(PalwStateV2Error::CarriageInconsistent("paid consumer contract differs from accepted native claim".into()));
+                }
+
+            }
+            if budget.header.version >= crate::palw_bond_budget_v1::PALW_BOND_BUDGET_STATE_VERSION_V4 {
+                for (id, claim) in &self.claims {
+                    if params.paid_consumer_lifecycle_active_at(claim.accepted_daa) && !budget.consumer_contracts.contains_key(id) {
+                        return Err(PalwStateV2Error::CarriageInconsistent("new accepted paid consumer has no immutable contract".into()));
+                    }
+                }
+            }
         }
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
@@ -27569,6 +27598,12 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
+        if let Some(record) = &new {
+            self.state.require_paid_consumer_backstop_v1(&record.claim, record.deadline_daa)?;
+            if !self.state.court_sessions.contains_key(&key) {
+                self.state.require_paid_consumer_dispute_v1(&record.claim, record.opened_daa, record.deadline_daa)?;
+            }
+        }
         let old = match &new {
             Some(record) => self.state.court_sessions.insert(key, record.clone()),
             None => self.state.court_sessions.remove(&key),
@@ -28157,6 +28192,13 @@ impl<'a> TransitionBuilder<'a> {
     /// attempt whose licence set recounted to `basis_k ≥ 2` — an S2 licence and every free-prompt
     /// licence never tick. The deadline is DL-1's ([`palw_rcore_deadline_v1`]).
     fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        if self.state.paid_consumer_contract_v1(&claim_id).is_some() {
+            let through = daa_score.checked_add(self.params.window_challenge_at(daa_score)).and_then(|daa| daa.checked_add(1))
+                .ok_or(PalwStateV2Error::Overflow("paid consumer licence path"))?;
+            if !self.state.paid_consumer_service_fits_v1(&claim_id, daa_score, through) {
+                return Err(PalwStateV2Error::ExecV2Refused("licence exceeds immutable paid consumer service".into()));
+            }
+        }
         let rcore = self.params.rcore_plus_active_at(daa_score);
         // **The second clock ticks HERE past `palw_audit_2026_09_23`** (2026-09-24 DoS audit,
         // §4b): a licence needs a quorum's live signatures in the very block that carries it, so
@@ -28413,6 +28455,10 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+        if !self.state.paid_consumer_service_fits_v1(&id, final_daa, final_daa) {
+            return Err(PalwStateV2Error::ExecV2Refused("Final exceeds immutable paid consumer service".into()));
+        }
+        self.mark_paid_consumer_terminal_v1(id, final_daa)?;
         self.note_model_probe(claim, true, final_daa);
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
@@ -28669,6 +28715,7 @@ impl<'a> TransitionBuilder<'a> {
         voided_daa: u64,
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
+        self.mark_paid_consumer_terminal_v1(id, voided_daa)?;
         // **ADR-0164 F-K (K3, K4): a void for want of a quorum receipt or of a panel is a claim reaching its deadline and failing** —
         // counted once, here, where every such void is written. The reasons that carry a conviction are the conviction funnel's (K2).
         match reason {
@@ -28810,6 +28857,7 @@ impl<'a> TransitionBuilder<'a> {
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
     fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        self.forget_paid_consumer_v1(id)?;
         // A `Final` attempt claim folded its `pwu` into `safe_weight` when it finalized. The
         // running total does not move here — the claim's contribution is simply carried by a
         // different name, so the consistency identity stays an equality rather than degrading to
@@ -29733,6 +29781,7 @@ pub fn palw_v2_pre_object_base_v1(
     // EXEC expiry is checked before REAL Final deadlines, including after a DAA jump.
     // Mirrored in the pre-object base: an expired ready root refunds escrow instead of settling.
     palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the fold's step 2 closes the reveal windows here, right after the claim
     // sweep; mirrored so the acceptance rehearsal judges every object on the state step 3 sees.
@@ -29741,6 +29790,7 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_da_sessions(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     // Lane F2-lock (post-launch): the crossing block's re-date, right after the court sweeps as in the
     // fold's step 2, so the draw and the acceptance rehearsal read the locks the fold's step 3 reads.
     apply_final_lock_life_retro(&mut builder, parent, ctx);
@@ -30129,6 +30179,7 @@ pub fn apply_palw_transition_v7(
     // EXEC expiry is checked before REAL Final deadlines, including after a DAA jump.
     // Mirrored in the pre-object base: an expired ready root refunds escrow instead of settling.
     palw_exec_v2_fold::sweep_expired_roots_v2(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     sweep_deadlines(&mut builder, ctx)?;
     // ADR-0152 R-4 (S-7): the reveal windows this block is past close here, after the claim sweep
     // (whose convictions, if any, open windows that run from this block) and before the court
@@ -30146,6 +30197,7 @@ pub fn apply_palw_transition_v7(
     // the whole prosecution did.
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
+    palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, ctx)?;
     // 2a′. Lane F2-lock (post-launch, `Params::palw_final_lock_life_retro`): the crossing block re-dates
     //      the long post-`Final` seat locks to `max(F + 1,000, H)`, once — after the sweeps (a claim this
     //      block finalizes is dated past `H` already) and before anything reads a bond's room. Mirrored in
@@ -31001,6 +31053,7 @@ fn open_da_session_v2(
     // question: the producer was already allowed to delete what it is being asked to open.
     let disclose = palw_da_disclose_window_daa_v1(builder.params);
     let deadline_daa = ctx.daa_score.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
+    builder.state.require_paid_consumer_dispute_v1(&claim_id, ctx.daa_score, deadline_daa)?;
     palw_exec_v2_rewards_v1::require_native_session_window(&builder.state, builder.params, &claim_id, deadline_daa)?;
     if ctx.daa_score < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
         return Err(PalwStateV2Error::DaOutsideRetention {
@@ -37058,6 +37111,7 @@ fn apply_object(
             let PalwClaimPhaseV2::Provisional = claim.phase else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
             };
+            builder.require_paid_consumer_bind_v1(*claim_id, &claim, ctx.daa_score)?;
             // **ADR-0147: the outsider is placed by the DRAW, and the draw is checked where it can
             // be.** A bought class's panel carries its outsider at position zero, and whether the
             // seat there is the one the anchor's lottery names over the network's base-class
@@ -38747,8 +38801,10 @@ fn apply_object(
             };
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
+            let consumer_plan = builder.plan_paid_consumer_v1(*claim_id, &claim)?;
             let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
             builder.reserve_for_claim(&claim)?;
+            if let Some(contract) = consumer_plan { builder.commit_paid_consumer_v1(*claim_id, contract)?; }
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
             if let Some(plan) = budget_plan {
@@ -41516,6 +41572,7 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
+    let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
     let claim = match &budget_plan {
         Some(plan) => {
@@ -41524,6 +41581,7 @@ fn apply_attempt(
         None => claim,
     };
     builder.reserve_for_claim(&claim)?;
+    if let Some(contract) = consumer_plan { builder.commit_paid_consumer_v1(claim_id, contract)?; }
     // **ADR-0165: a REAL attempt BLOCK's attempt (any class but the base) FULLY ACCEPTED is one event of the floor state
     // machine** — every check above passed and the claim is written below, inside the checkpoint a merged attempt's refusal
     // restores. Its colour: BLUE for the block's own attempt (a chain block), the mergeset's for a merged one. **A rider is no

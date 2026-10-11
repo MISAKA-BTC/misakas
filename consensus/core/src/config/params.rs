@@ -3012,6 +3012,8 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// Immutable paid native consumer service/backstop/material contract. Dormant.
+    pub palw_paid_consumer_lifecycle_v1: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1>,
     /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
     /// assignment (tag 140) counts toward `S_m`, and a claim's reward reservation is also bounded by its model's share
     /// `R_PALW · f(S_m) / Σ f(S_j)` of the realized PALW carve. Needs `palw_bond_budget_v1` at or below it. **Dormant**, as the budget
@@ -4238,6 +4240,7 @@ impl Params {
         self.validate_palw_bond_budget_v1()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
+        self.validate_palw_paid_consumer_lifecycle_v1()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.
         self.validate_palw_reporter_share_v2()?;
@@ -6632,6 +6635,7 @@ impl Params {
         if self.palw_reporter_income_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_income_v2 = None;
         }
+        if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_paid_consumer_lifecycle_v1 = None; }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
@@ -10382,6 +10386,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
@@ -10667,6 +10672,7 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_material_income_v3", *palw_material_income_v3),
+            ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
@@ -11003,6 +11009,11 @@ impl Params {
         if let Some(at) = self.palw_reporter_income_v2 {
             h.write(b"palw_reporter_income_v2");
             h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(f) = &self.palw_paid_consumer_lifecycle_v1 {
+            h.write(b"palw_paid_consumer_lifecycle_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.digest().as_bytes());
         }
         if let Some(at) = self.palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
@@ -11725,6 +11736,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
@@ -12517,6 +12529,7 @@ impl Params {
         if let Some(at) = palw_reporter_income_v2.as_mut() {
             fork(at, visit);
         }
+        if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() { fork(&mut f.activation, visit); }
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }
@@ -13083,6 +13096,7 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_fp_prefix_inherit,
@@ -13926,6 +13940,11 @@ impl Params {
         if let Some(at) = palw_reporter_income_v2 {
             h.write(b"palw_reporter_income_v2");
             h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(f) = &palw_paid_consumer_lifecycle_v1 {
+            h.write(b"palw_paid_consumer_lifecycle_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.digest().as_bytes());
         }
         if let Some(at) = palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
@@ -14772,6 +14791,7 @@ impl Params {
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_paid_consumer_lifecycle_v1: self.palw_paid_consumer_lifecycle_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
@@ -15881,6 +15901,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
@@ -16186,6 +16207,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
@@ -16473,6 +16495,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,
@@ -24102,6 +24125,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_fp_prefix_inherit: None,

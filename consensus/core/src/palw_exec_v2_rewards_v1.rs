@@ -47,6 +47,7 @@ pub(super) fn require_native_session_window(
     root_id: &Hash64,
     required_until: u64,
 ) -> Result<(), PalwStateV2Error> {
+    state.require_paid_consumer_backstop_v1(root_id, required_until)?;
     let root = state.exec_v2.roots.get(root_id);
     let mut bound = match root {
         Some(root) => match &state.kernel_route {
@@ -93,6 +94,11 @@ pub(super) fn require_native_da_window(
     deadline: u64,
     opened_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
+    if state.paid_consumer_contract_v1(root_id).is_some() {
+        let through = deadline.checked_add(params.window_challenge_at(opened_daa))
+            .ok_or(PalwStateV2Error::Overflow("paid consumer DA whole path"))?;
+        state.require_paid_consumer_dispute_v1(root_id, opened_daa, through)?;
+    }
     // Preserve ordinary native admission, including its saturation behavior.
     if !state.exec_v2.roots.contains_key(root_id) && !state.exec_v2_rewards.contains_key(root_id) {
         return Ok(());
@@ -531,7 +537,8 @@ pub(super) fn retirement(
         return Ok(at);
     }
     let ordinary = terminal_daa_of(claim).and_then(|daa| daa.checked_add(params.claim_retirement_daa));
-    let monetary = state.material_income_hold_until_v1(params, *id);
+    let monetary = state.material_income_hold_until_v1(params, *id)
+        .max(state.paid_consumer_terms_v1(id).map(|terms| terms.material_until));
     let held = at.map(|at| monetary.map_or(at, |until| at.max(if until == u64::MAX { u64::MAX } else { until.saturating_sub(1) })));
     if at != ordinary {
         return Ok(held);

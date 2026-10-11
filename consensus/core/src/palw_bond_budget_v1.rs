@@ -65,6 +65,9 @@ pub const PALW_BUDGET_TABLE_ASSIGNMENTS_V1: u8 = 4;
 pub const PALW_BUDGET_TABLE_MODELS_V1: u8 = 5;
 pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 6;
 
+mod consumer;
+pub use consumer::*;
+
 mod material;
 pub use material::{PalwMaterialIncomeV1, PalwMaterialPaymentV1, PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, material_pending_id_v1};
 
@@ -640,7 +643,8 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_bond_budget(mirror).with_reporter_income_from(
                 self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()))
-                .with_material_income_from(self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()));
+                .with_material_income_from(self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()))
+                .with_paid_consumer_lifecycle(self.palw_paid_consumer_lifecycle_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| PalwPaidConsumerLifecycleMirrorV1 { from_daa: f.activation.daa_score(), policy: f.policy }));
         }
     }
 }
@@ -996,6 +1000,9 @@ pub struct PalwBondBudgetStateV1 {
     pub models: BTreeMap<Hash64, PalwModelBudgetRowV1>,
     pub reporter_income: BTreeMap<Hash64, PalwReporterIncomeBindingV1>,
     pub material_income: BTreeMap<Hash64, PalwMaterialIncomeV1>,
+    pub consumer_contracts: BTreeMap<Hash64, PalwPaidConsumerContractV1>,
+    consumer_service_due: BTreeSet<(u64, Hash64)>,
+    consumer_exhausted: BTreeSet<Hash64>,
     material_roots: BTreeMap<Option<Hash64>, BTreeSet<Hash64>>,
     material_sources: BTreeMap<Hash64, BTreeSet<Hash64>>,
     material_due: BTreeSet<(u64, Hash64)>,
@@ -1015,9 +1022,10 @@ impl BorshSerialize for PalwBondBudgetStateV1 {
         self.assignments.serialize(writer)?;
         self.models.serialize(writer)?;
         match self.header.version {
-            PALW_BOND_BUDGET_STATE_VERSION_V1 if self.reporter_income.is_empty() && self.material_income.is_empty() => Ok(()),
-            PALW_BOND_BUDGET_STATE_VERSION_V2 if self.material_income.is_empty() => self.reporter_income.serialize(writer),
-            PALW_BOND_BUDGET_STATE_VERSION_V3 => { self.reporter_income.serialize(writer)?; self.material_income.serialize(writer) },
+            PALW_BOND_BUDGET_STATE_VERSION_V1 if self.reporter_income.is_empty() && self.material_income.is_empty() && self.consumer_contracts.is_empty() => Ok(()),
+            PALW_BOND_BUDGET_STATE_VERSION_V2 if self.material_income.is_empty() && self.consumer_contracts.is_empty() => self.reporter_income.serialize(writer),
+            PALW_BOND_BUDGET_STATE_VERSION_V3 if self.consumer_contracts.is_empty() => { self.reporter_income.serialize(writer)?; self.material_income.serialize(writer) },
+            PALW_BOND_BUDGET_STATE_VERSION_V4 => { self.reporter_income.serialize(writer)?; self.material_income.serialize(writer)?; self.consumer_contracts.serialize(writer) },
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version")),
         }
     }
@@ -1026,7 +1034,7 @@ impl BorshSerialize for PalwBondBudgetStateV1 {
 impl BorshDeserialize for PalwBondBudgetStateV1 {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let header: PalwBondBudgetHeaderV1 = BorshDeserialize::deserialize_reader(reader)?;
-        if !matches!(header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3) {
+        if !matches!(header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3 | PALW_BOND_BUDGET_STATE_VERSION_V4) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid budget monetary state version"));
         }
         let version = header.version;
@@ -1041,12 +1049,16 @@ impl BorshDeserialize for PalwBondBudgetStateV1 {
                 BorshDeserialize::deserialize_reader(reader)?
             } else { BTreeMap::new() },
             material_income: if version >= PALW_BOND_BUDGET_STATE_VERSION_V3 { BorshDeserialize::deserialize_reader(reader)? } else { BTreeMap::new() },
+            consumer_contracts: if version >= PALW_BOND_BUDGET_STATE_VERSION_V4 { BorshDeserialize::deserialize_reader(reader)? } else { BTreeMap::new() },
+            consumer_service_due: BTreeSet::new(), consumer_exhausted: BTreeSet::new(),
             material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
             unattributed_income: 0,
             pending_reporters: BTreeMap::new(),
         };
+        let consumers: Vec<_> = state.consumer_contracts.iter().map(|(id, row)| (*id, *row)).collect();
+        for (id, row) in consumers { state.consumer_index_replace_v1(id, None, Some(&row)); }
         let materials: Vec<_> = state.material_income.iter().map(|(id, row)| (*id, *row)).collect();
         for (id, row) in materials { state.material_index_replace_v1(id, None, Some(&row)); }
         for (id, row) in &state.claims {
@@ -1127,6 +1139,7 @@ impl PalwBondBudgetStateV1 {
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
             reporter_income: BTreeMap::new(),
+            consumer_contracts: BTreeMap::new(), consumer_service_due: BTreeSet::new(), consumer_exhausted: BTreeSet::new(),
             material_income: BTreeMap::new(), material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
@@ -1145,6 +1158,7 @@ impl PalwBondBudgetStateV1 {
             assignments: BTreeMap::new(),
             models: BTreeMap::new(),
             reporter_income: BTreeMap::new(),
+            consumer_contracts: BTreeMap::new(), consumer_service_due: BTreeSet::new(), consumer_exhausted: BTreeSet::new(),
             material_income: BTreeMap::new(), material_roots: BTreeMap::new(), material_sources: BTreeMap::new(), material_due: BTreeSet::new(),
             deferred_by_bond: BTreeMap::new(),
             deferred_awards: BTreeSet::new(),
@@ -1198,9 +1212,12 @@ impl PalwBondBudgetStateV1 {
         let header = if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
             let income = root(b"bond_budget_reporter_income/v1", self.reporter_income.len(),
                 self.reporter_income.iter().map(|(k, v)| (enc(k), enc(v))));
-            if self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V3 {
+            if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V3 {
                 let material = root(b"bond_budget_material_income/v1", self.material_income.len(), self.material_income.iter().map(|(k, v)| (enc(k), enc(v))));
-                keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice(), b"material_income/v1", material.as_byte_slice()])
+                if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V4 {
+                    let consumers = root(b"bond_budget_consumer_contract/v1", self.consumer_contracts.len(), self.consumer_contracts.iter().map(|(k, v)| (enc(k), enc(v))));
+                    keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice(), b"material_income/v1", material.as_byte_slice(), b"consumer_contract/v1", consumers.as_byte_slice()])
+                } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice(), b"material_income/v1", material.as_byte_slice()]) }
             } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice()]) }
         } else { keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)]) };
         (
@@ -1261,12 +1278,20 @@ impl PalwBondBudgetStateV1 {
                 Ok(())
             }
             PALW_BUDGET_TABLE_MATERIAL_INCOME_V1 => {
-                if self.header.version != PALW_BOND_BUDGET_STATE_VERSION_V3 { return Err("material income needs monetary state v3"); }
+                if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 { return Err("material income needs monetary state v3"); }
                 let id: Hash64 = borsh::from_slice(key).map_err(|_| "material income key does not decode")?;
                 let old = self.material_income.get(&id).copied();
                 swap_row(&mut self.material_income, key, expected, install)?;
                 let new = self.material_income.get(&id).copied();
                 self.material_index_replace_v1(id, old.as_ref(), new.as_ref()); Ok(())
+            }
+            PALW_BUDGET_TABLE_CONSUMER_CONTRACT_V1 => {
+                if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V4 { return Err("consumer contract needs monetary state v4"); }
+                let id: Hash64 = borsh::from_slice(key).map_err(|_| "consumer contract key does not decode")?;
+                let old = self.consumer_contracts.get(&id).copied();
+                swap_row(&mut self.consumer_contracts, key, expected, install)?;
+                let new = self.consumer_contracts.get(&id).copied();
+                self.consumer_index_replace_v1(id, old.as_ref(), new.as_ref()); Ok(())
             }
             _ => Err("a budget row names an unknown table"),
         }
@@ -1279,7 +1304,7 @@ impl PalwBondBudgetStateV1 {
             && self.releases.is_empty()
             && self.assignments.is_empty()
             && self.models.is_empty()
-            && self.reporter_income.is_empty() && self.material_income.is_empty()
+            && self.reporter_income.is_empty() && self.material_income.is_empty() && self.consumer_contracts.is_empty()
     }
 
     // ---- journaled writers ----
@@ -2322,7 +2347,8 @@ impl PalwBondBudgetStateV1 {
     /// exists; consumption within reservation; a model's reservations this epoch within its availability base.
     pub fn check_consistency(&self) -> Result<(), &'static str> {
         self.material_consistent_v1()?;
-        if !matches!(self.header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3)
+        self.consumer_consistent_v1()?;
+        if !matches!(self.header.version, PALW_BOND_BUDGET_STATE_VERSION_V1 | PALW_BOND_BUDGET_STATE_VERSION_V2 | PALW_BOND_BUDGET_STATE_VERSION_V3 | PALW_BOND_BUDGET_STATE_VERSION_V4)
             || (self.header.version == PALW_BOND_BUDGET_STATE_VERSION_V1 && !self.reporter_income.is_empty()) {
             return Err("invalid reporter monetary state version");
         }

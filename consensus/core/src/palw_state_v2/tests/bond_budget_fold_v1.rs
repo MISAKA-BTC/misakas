@@ -1077,3 +1077,110 @@ fn material_v3_preserves_abandonment_and_obligation_release_before_retirement() 
         assert_eq!(retired.reserved_exposure(&bond_key(1)), 0, "retirement never repeats the collateral release");
     }
 }
+
+fn finite_consumer_params(from: u64) -> PalwStateParamsV2 {
+    params().with_worker_carve_permille(620).unwrap().with_claim_retirement_daa(50).unwrap()
+        .with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 100,
+            policy: PalwBondBudgetPolicyV1 { window_daa: 280, ..test_policy(1) }, allocation: None }))
+        .with_reporter_income_from(Some(100)).with_material_income_from(Some(100))
+        .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 { from_daa: from,
+            policy: PalwPaidConsumerLifecyclePolicyV1 { version: 1, service_span_daa: 60, dispute_tail_daa: 700, material_tail_daa: 500 } }))
+}
+
+/// Existing toy execution/receipt seams, real admission/Final/queue/import APIs.
+#[test]
+fn paid_consumer_v4_freezes_exact_accepted_terms_and_preserves_future_fence_wire() {
+    let active = finite_consumer_params(100);
+    let old = active.clone().with_paid_consumer_lifecycle(None);
+    let future = active.clone().with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
+        from_daa: 10_000, policy: active.paid_consumer_lifecycle().unwrap().policy,
+    }));
+    for ((a, da), (b, db)) in walk(&old).iter().zip(walk(&future).iter()) {
+        assert_eq!(da, db); assert_eq!(a.state_root(), b.state_root()); assert_eq!(carriage_bytes(a), carriage_bytes(b));
+        assert_eq!(a.bond_budget().unwrap().header.version, PALW_BOND_BUDGET_STATE_VERSION_V3);
+    }
+    let steps = walk(&active);
+    let id = attempt_id_v2(&attempt(40, 1).attempt);
+    let terms = steps[1].0.paid_consumer_terms_v1(&id).unwrap();
+    assert_eq!((terms.accepted_daa, terms.service_until, terms.backstop_until, terms.material_until), (101, 161, 861, 1361));
+    assert_eq!(terms.policy, active.paid_consumer_lifecycle().unwrap().policy.digest());
+    assert_ne!(terms.digest_v1(id), terms.digest_v1(h64(0xBAD)));
+    for pair in steps.windows(2) {
+        assert_replayable(&active, &pair[0].0, &pair[1].0, &pair[1].1);
+        assert_eq!(pair[1].0.paid_consumer_terms_v1(&id), Some(terms));
+    }
+    let finalized = &steps[4].0;
+    assert!(matches!(finalized.paid_consumer_contract_v1(&id).unwrap().status, PalwPaidConsumerStatusV1::Terminal { daa: 124 }));
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(finalized, &active, false, false, false, false, &extras);
+    let mut changed = *finalized.paid_consumer_contract_v1(&id).unwrap(); changed.terms.service_until += 1;
+    assert!(builder.commit_paid_consumer_v1(id, changed).is_err(), "DA/Panel clocks never rewrite signed terms");
+    assert_eq!(builder.state, *finalized);
+    let (held, delta) = apply(&steps[6].0, &active, &ctx(8, 1360, 8), &[], None);
+    assert_replayable(&active, &steps[6].0, &held, &delta); assert!(held.claim(&id).is_some());
+    let (retired, delta) = apply(&held, &active, &ctx(9, 1361, 9), &[], None);
+    assert_replayable(&active, &held, &retired, &delta);
+    assert!(retired.claim(&id).is_none()); assert!(retired.paid_consumer_contract_v1(&id).is_none());
+}
+
+#[test]
+fn paid_consumer_v4_refuses_unsigned_material_extension_and_closes_service_neutrally() {
+    let p = finite_consumer_params(100);
+    let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    let mut short = attempt(40, 1); short.attempt.trace_retention_daa = 1360;
+    let before = carriage_bytes(&base);
+    let result = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[], Some(&short));
+    assert!(result.is_err(), "the full already-authorized term is required before monetary writes");
+    assert_eq!(carriage_bytes(&base), before);
+    let env = attempt(40, 2); let id = attempt_id_v2(&env.attempt);
+    let (accepted, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
+    let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+    let (bound, _) = apply(&accepted, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h64(77), seats }], None);
+    let terms = bound.paid_consumer_terms_v1(&id).unwrap();
+    assert!(bound.paid_consumer_service_fits_v1(&id, 161, 161));
+    assert!(!bound.paid_consumer_service_fits_v1(&id, 162, 162));
+    assert!(bound.require_paid_consumer_dispute_v1(&id, 161, 861).is_ok());
+    assert!(bound.require_paid_consumer_dispute_v1(&id, 162, 861).is_err());
+    assert!(bound.require_paid_consumer_dispute_v1(&id, 161, 862).is_err());
+    let (expired, delta) = apply(&bound, &p, &ctx(4, 162, 4), &[], None);
+    assert_replayable(&p, &bound, &expired, &delta);
+    assert!(matches!(expired.claim(&id).unwrap().phase,
+        PalwClaimPhaseV2::Voided { voided_daa: 162, reason: PalwVoidReasonV2::PanelUnavailable }));
+    assert_eq!(expired.paid_consumer_terms_v1(&id), Some(terms));
+    assert_eq!(expired.bond(&bond_key(1)).unwrap().slashed, 0);
+    assert!(expired.pending_payouts.is_empty());
+    assert_eq!(revert_delta_v2(&expired, &delta, &p).unwrap(), bound);
+}
+
+/// A private prevalidated native CourtOpened seam, not native court soundness.
+/// The real fold must preserve its accepted accusation at service exhaustion
+/// until the existing court clock delivers its verdict/backstop.
+#[test]
+fn paid_consumer_v4_exhaustion_preserves_accepted_court_and_refuses_late_new_sessions() {
+    let p = finite_consumer_params(100);
+    let steps = walk(&p); let licensed = &steps[3].0;
+    let id = attempt_id_v2(&attempt(40, 1).attempt);
+    let open = court_open(id, h64(31), bond_key(1), bond_key(1));
+    let (courted, delta) = apply(licensed, &p, &ctx(5, 104, 5), &[open], None);
+    assert_replayable(&p, licensed, &courted, &delta);
+    let sid = court_session_of(id, h64(31), bond_key(1), bond_key(1));
+    assert!(courted.court_session(&sid).is_some());
+    let terms = courted.paid_consumer_terms_v1(&id).unwrap();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&courted, &p, false, false, false, false, &extras);
+    super::super::palw_bond_budget_fold_v1::sweep_paid_consumers_v1(&mut builder, &ctx(6, 162, 6)).unwrap();
+    assert!(builder.state.court_session(&sid).is_some(), "a neutral service expiry never cancels an accepted accusation");
+    assert!(!builder.state.claim(&id).unwrap().phase.is_terminal());
+    assert!(matches!(builder.state.paid_consumer_contract_v1(&id).unwrap().status, PalwPaidConsumerStatusV1::Exhausted { daa: 162 }));
+    let mut late = courted.court_session(&sid).unwrap().clone(); late.opened_daa = 162; late.deadline_daa = 662;
+    assert!(builder.write_court(h64(0xBAD), Some(late)).is_err());
+    assert!(builder.state.court_session(&h64(0xBAD)).is_none());
+    // Run the whole block from the untouched actual parent. Its court is
+    // adjudicated by the existing rung/backstop path before the deferred neutral end.
+    let settle_daa = 162.max(court_next_deadline_v2(&courted, courted.court_session(&sid).unwrap()) + 1);
+    let (settled, delta) = apply(&courted, &p, &ctx(6, settle_daa, 6), &[], None);
+    assert_replayable(&p, &courted, &settled, &delta);
+    assert!(settled.court_session(&sid).is_none());
+    assert!(settled.claim(&id).unwrap().phase.is_terminal());
+    assert_eq!(settled.paid_consumer_terms_v1(&id), Some(terms));
+}
