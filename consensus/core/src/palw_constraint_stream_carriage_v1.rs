@@ -9,6 +9,9 @@ use crate::palw_step_refute::PalwTiledDecodePinV1;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub const PALW_CONSTRAINT_STREAM_CONTEXT_V1: &[u8] = b"misaka-palw/constraint-stream/v1/mldsa87";
 pub const PALW_CONSTRAINT_STREAM_TAIL_V1: u8 = 0xF8;
+pub const PALW_PREFIX_BATCH_MAX_ACTIONS_V1: usize = 64;
+pub const PALW_PREFIX_BATCH_ENVELOPE_BYTES_V1: usize = 16_384;
+pub const PALW_PREFIX_BATCH_CARRIER_BYTES_V1: usize = 90_000;
 /// Seed transport is independent of a legacy direct objective offence cap. It is still bounded
 /// by the admitted court carrier ceiling, never a limit chosen by the challenger.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -84,17 +87,29 @@ pub struct PalwConstraintStreamLeafV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwConstraintStreamActionV1 {
-    EogPart { offset: u32, ids: Vec<u32> },
+    EogPart {
+        offset: u32,
+        ids: Vec<u32>,
+    },
     EogFinish,
-    RenderingPart { offset: u32, bytes: Vec<u8> },
+    RenderingPart {
+        offset: u32,
+        bytes: Vec<u8>,
+    },
     RenderingFinish,
     EogTokenFinish,
     TokenizerPacket(crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1),
     TokenizerSeal,
-    TokenizerRenderingPart { offset: u32, bytes: Vec<u8> },
+    TokenizerRenderingPart {
+        offset: u32,
+        bytes: Vec<u8>,
+    },
     Prefix(crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1),
     PrefixPublicDemand(crate::palw_prefix_public_source_v1::PalwPrefixPublicDemandV1),
     PrefixPublicAnswer(crate::palw_prefix_public_source_v1::PalwPrefixPublicAnswerV1),
+    /// Flat normal actions only. The inner family enum has no Batch variant, so arbitrary
+    /// nested recursive deserialization is impossible. Work remains charged per action.
+    PrefixBatch(Vec<crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1>),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -120,6 +135,25 @@ fn message(label: &[u8], fields: &[&[u8]]) -> Vec<u8> {
 }
 fn encode<T: BorshSerialize>(t: &T) -> Vec<u8> {
     borsh::to_vec(t).expect("stream types serialize")
+}
+fn bounded_encoded_len<T: BorshSerialize>(value: &T, cap: usize) -> Result<usize, String> {
+    struct Counter {
+        used: usize,
+        cap: usize,
+    }
+    impl std::io::Write for Counter {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            let n = self.used.checked_add(b.len()).filter(|n| *n <= self.cap).ok_or(std::io::ErrorKind::InvalidData)?;
+            self.used = n;
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter { used: 0, cap };
+    value.serialize(&mut counter).map_err(|_| "staged signed carrier/body exceeds its fixed bound".to_string())?;
+    Ok(counter.used)
 }
 fn check_signature_shape(version: u16, signature: &[u8]) -> Result<(), String> {
     if version != 1 || signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
@@ -304,10 +338,19 @@ impl PalwConstraintStreamMoveV1 {
         }
         if matches!(
             &self.action,
-            PalwConstraintStreamActionV1::PrefixPublicDemand(_) | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
+            PalwConstraintStreamActionV1::PrefixPublicDemand(_)
+                | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
+                | PalwConstraintStreamActionV1::PrefixBatch(_)
         ) && self.phase != PalwConstraintStreamPhaseV1::PrefixCourt
         {
             return Err("public prefix acquisition changes typed prefix phase".into());
+        }
+        if let PalwConstraintStreamActionV1::PrefixBatch(actions) = &self.action {
+            if actions.is_empty() || actions.len() > PALW_PREFIX_BATCH_MAX_ACTIONS_V1 {
+                return Err("prefix batch has no actions or exceeds fixed nonrecursive logical bound".into());
+            }
+            bounded_encoded_len(actions, PALW_PREFIX_BATCH_CARRIER_BYTES_V1 - PALW_PREFIX_BATCH_ENVELOPE_BYTES_V1)?;
+            bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
         }
         match &self.action {
             PalwConstraintStreamActionV1::EogPart { ids, .. }
@@ -351,6 +394,7 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::Prefix(_)
             | PalwConstraintStreamActionV1::PrefixPublicDemand(_)
             | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
+            | PalwConstraintStreamActionV1::PrefixBatch(_)
             | PalwConstraintStreamActionV1::TokenizerPacket(_)
             | PalwConstraintStreamActionV1::TokenizerSeal
             | PalwConstraintStreamActionV1::TokenizerRenderingPart { .. } => {
@@ -407,6 +451,40 @@ mod tests {
         }
         let owner_move = movement();
         assert_eq!(owner_move.authorization_bond_v1(), owner_move.reserver);
+    }
+    #[test]
+    fn flat_prefix_batch_has_measured_signed_headroom_and_independent_body_action_bounds() {
+        use crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1 as A;
+        let mut packet = movement();
+        packet.phase = PalwConstraintStreamPhaseV1::PrefixCourt;
+        packet.action = PalwConstraintStreamActionV1::PrefixBatch(vec![A::FinishTile; 64]);
+        packet.check().unwrap();
+        let PalwConstraintStreamActionV1::PrefixBatch(actions) = &packet.action else { unreachable!() };
+        let body = borsh::to_vec(actions).unwrap().len();
+        let carrier = borsh::to_vec(&packet).unwrap().len();
+        eprintln!(
+            "prefix batch signed envelope exact_bytes={} signature_bytes={}",
+            carrier - body,
+            crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
+        );
+        assert!(carrier - body < PALW_PREFIX_BATCH_ENVELOPE_BYTES_V1);
+        let mut answer = packet.clone();
+        answer.action =
+            PalwConstraintStreamActionV1::PrefixPublicAnswer(crate::palw_prefix_public_source_v1::PalwPrefixPublicAnswerV1 {
+                answerer: packet.reserver,
+                cursor_id: Hash64::from_u64_word(1),
+                demand_id: Hash64::from_u64_word(2),
+                action: crate::palw_prefix_public_source_v1::PalwPrefixPublicAnswerActionV1::Finish,
+            });
+        assert!(borsh::to_vec(&answer).unwrap().len() < PALW_PREFIX_BATCH_ENVELOPE_BYTES_V1);
+        packet.action = PalwConstraintStreamActionV1::PrefixBatch(vec![]);
+        assert!(packet.check().is_err());
+        packet.action = PalwConstraintStreamActionV1::PrefixBatch(vec![A::FinishTile; 65]);
+        assert!(packet.check().is_err());
+        packet.action = PalwConstraintStreamActionV1::PrefixBatch(vec![A::TilePart { offset: 0, bytes: vec![0; 65_536] }]);
+        packet.check().unwrap();
+        packet.action = PalwConstraintStreamActionV1::PrefixBatch(vec![A::TilePart { offset: 0, bytes: vec![0; 73_616] }]);
+        assert!(packet.check().is_err());
     }
     #[test]
     fn signed_move_binds_literal_owner_claim_reservation_phase_offset_and_bytes() {

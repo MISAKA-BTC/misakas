@@ -521,18 +521,29 @@ pub(super) fn movement(
             if movement.phase != crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt {
                 return Err(stage_refused(movement.claim, "prefix movement changes typed phase"));
             }
-            let crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::Prefix(action) = &movement.action else {
-                return Err(stage_refused(movement.claim, "prefix movement changes owned court action"));
-            };
-            c.movement(
-                ctx.daa_score,
-                movement.claim,
-                movement.reserver,
-                movement.reserved_daa,
-                movement.seed_id,
-                action,
-                borsh::to_vec(movement).map_err(|e| stage_refused(movement.claim, e.to_string()))?.len() as u64,
-            )
+            let carrier_len = borsh::to_vec(movement).map_err(|e| stage_refused(movement.claim, e.to_string()))?.len() as u64;
+            movement.check().map_err(|e| stage_refused(movement.claim, e))?;
+            match &movement.action {
+                crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::Prefix(action) => c.movement(
+                    ctx.daa_score,
+                    movement.claim,
+                    movement.reserver,
+                    movement.reserved_daa,
+                    movement.seed_id,
+                    action,
+                    carrier_len,
+                ),
+                crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::PrefixBatch(actions) => c.movement_batch_v1(
+                    ctx.daa_score,
+                    movement.claim,
+                    movement.reserver,
+                    movement.reserved_daa,
+                    movement.seed_id,
+                    actions,
+                    carrier_len,
+                ),
+                _ => Err("prefix movement changes owned court action".into()),
+            }
         }
         _ => Err("claim contract alone cannot accept an owned move".into()),
     };
