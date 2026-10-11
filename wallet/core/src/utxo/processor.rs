@@ -279,27 +279,30 @@ impl UtxoProcessor {
     /// `get_dns_confirmation` — the input [`UtxoEntryReferenceExtension::dns_settled`] reads to
     /// keep a coinbase Pending until the anchor passes it. Throttled to ~once per 100 DAA (the
     /// attestation-epoch cadence the anchor itself moves at) and inert on networks whose params
-    /// carry no settlement. A poll failure keeps the last value: settlement then errs toward
-    /// Pending, which is the conservative direction for a display of spendability.
+    /// carry no settlement. A failed or disconnected poll clears the DNS shortcut:
+    /// only the long DAA maturity remains when the node no longer vouches for an anchor.
     async fn refresh_dns_anchor(&self, current_daa_score: u64) {
         let Ok(params) = self.network_params() else { return };
         if params.coinbase_settlement_long_maturity_daa() == 0 {
             return;
         }
+        let Some(rpc) = self.try_rpc_api() else {
+            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(None));
+            return;
+        };
         let last = self.inner.dns_anchor_polled_at_daa.load(Ordering::Relaxed);
         if current_daa_score < last.saturating_add(100) && last != 0 {
             return;
         }
-        let Some(rpc) = self.try_rpc_api() else { return };
         self.inner.dns_anchor_polled_at_daa.store(current_daa_score, Ordering::Relaxed);
-        if let Ok(confirmation) = rpc.get_dns_confirmation().await {
-            // Retirement/unavailability must clear a cached DNS shortcut. The long maturity
-            // fallback remains available without a validator observation.
-            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(
-                confirmation.available,
-                confirmation.last_dns_confirmed_anchor_daa_score,
-            ));
-        }
+        let observation = rpc
+            .get_dns_confirmation()
+            .await
+            .ok()
+            .map(|confirmation| (confirmation.available, confirmation.last_dns_confirmed_anchor_daa_score));
+        // Retirement, disconnected transport and failed polls revoke the cached
+        // shortcut together. They never revoke the ordinary long DAA maturity.
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(observation));
     }
 
     #[allow(clippy::mutable_key_type)]
@@ -629,6 +632,10 @@ impl UtxoProcessor {
         let _ = self.inner.connect_disconnect_guard.lock().await;
 
         self.inner.is_connected.store(false, Ordering::SeqCst);
+        if let Ok(params) = self.network_params() {
+            params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(None));
+        }
+        self.inner.dns_anchor_polled_at_daa.store(0, Ordering::Relaxed);
         // self.stop_metrics();
 
         self.inner.metrics.unregister_sink();
@@ -882,9 +889,12 @@ pub(crate) mod mock {
 }
 
 /// **RFC-0012: what the wallet keeps of the DNS coinbase shortcut after polling `get_dns_confirmation`.** The anchor the node
-/// reports while its DNS overlay is live; `0` — no shortcut — when the node reports none (the overlay is retired, or has no state),
+/// reports while its DNS overlay is live; `0` — no shortcut — when the node reports none or cannot be reached,
 /// so a previously cached anchor can never keep accelerating coinbases after the node stopped vouching for it. The long maturity
 /// fallback (`coinbase_settlement_long_maturity_daa`) needs no observation and still applies.
-pub(crate) fn dns_shortcut_after_poll(available: bool, last_confirmed_anchor_daa: u64) -> u64 {
-    if available { last_confirmed_anchor_daa } else { 0 }
+pub(crate) fn dns_shortcut_after_poll(observation: Option<(bool, u64)>) -> u64 {
+    match observation {
+        Some((true, last_confirmed_anchor_daa)) => last_confirmed_anchor_daa,
+        Some((false, _)) | None => 0,
+    }
 }

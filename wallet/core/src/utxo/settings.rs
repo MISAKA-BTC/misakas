@@ -262,11 +262,16 @@ mod tests {
             coinbase_spend_settled(coinbase_daa, pov, 0, Some(&s))
         };
         assert!(!settled(&params), "no anchor and 100 DAA old: held");
-        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(true, 1_050));
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((true, 1_050))));
         assert!(settled(&params), "a live anchor past the coinbase accelerates it");
-        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(false, 1_050));
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((false, 1_050))));
         assert_eq!(params.dns_confirmed_anchor_daa(), 0, "a retired/unavailable confirmation clears the shortcut, whatever the stale value");
         assert!(!settled(&params), "and the coinbase is held again");
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((true, 1_050))));
+        assert!(settled(&params), "a fresh authoritative observation can restore the shortcut");
+        params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(None));
+        assert_eq!(params.dns_confirmed_anchor_daa(), 0, "failed RPC or disconnected node revokes a stale anchor too");
+        assert!(!settled(&params), "transport failure cannot retain early spendability across retirement or reorg");
         // The long fallback still frees it by the DAA clock alone.
         let s = DnsCoinbaseSettlement { long_maturity_daa: 600, confirmed_anchor_daa: None };
         assert!(coinbase_spend_settled(coinbase_daa, coinbase_daa + 600, 0, Some(&s)));
