@@ -10,7 +10,7 @@ use crate::{
 };
 use kaspa_consensus_core::config::{
     Config,
-    drill::{palw_drill_network_v1, palw_t12_drill_genesis_block_v1},
+    drill::{PalwDrillKeyringV1, palw_drill_network_v1, palw_t12_drill_genesis_block_v1, palw_t12_public_genesis_txid_v1},
 };
 use kaspa_core::core::Core;
 use kaspa_rpc_service::service::RpcCoreService;
@@ -63,6 +63,16 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     }
     if config.params.skip_proof_of_work {
         return Err("the process/P2P probe must validate work; skip_proof_of_work is refused".into());
+    }
+    // Normal Args validation sees no public drill flag in this construction
+    // path. Reuse its actual key checks against the Config's salt anyway.
+    crate::palw_drill::palw_drill_keys_are_drill_only_v1(args, &PalwDrillKeyringV1::new(*salt))
+        .map_err(|error| error.to_string())?;
+    for outpoint in [&args.palw_producer_bond, &args.palw_fee_outpoint, &args.stake_bond].into_iter().flatten() {
+        let outpoint = crate::palw_producer::parse_outpoint(outpoint).map_err(|error| error.to_string())?;
+        if palw_t12_public_genesis_txid_v1(&outpoint.transaction_id) {
+            return Err("a private probe must never name a public genesis monetary outpoint".into());
+        }
     }
     config.params.validate_palw_v1().map_err(|error| error.to_string())?;
     config.params.validate_palw_v2().map_err(|error| error.to_string())?;
@@ -169,6 +179,11 @@ mod tests {
         let mut uncontrolled = args.clone();
         uncontrolled.outbound_target = 1;
         assert!(validate_private_probe(&uncontrolled, &config).unwrap_err().contains("controlled"));
+        let mut public_payout = args.clone();
+        public_payout.palw_heartbeat_miner_address = Some(kaspa_addresses::Address::new(
+            kaspa_addresses::Prefix::Testnet, kaspa_addresses::Version::PubKeyHashMlDsa87, &[0; 64],
+        ).to_string());
+        assert!(validate_private_probe(&public_payout, &config).unwrap_err().contains("not an address of drill"));
         let mut public = config.clone();
         public.palw_drill_genesis_salt = None;
         assert!(validate_private_probe(&args, &public).unwrap_err().contains("salted"));
