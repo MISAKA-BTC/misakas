@@ -12329,6 +12329,13 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
+                    if let Some(reference) = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_reference_v1(*kind, evidence) {
+                        if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score))
+                            || !kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_collection_open_v1(state, &reference, point.daa_score)
+                        {
+                            return Err("rooted staged conviction is outside its accepting-block fence or collection clock".into());
+                        }
+                    }
                     if !self.palw_objective_offence_at(point.daa_score) {
                         return Err("an objective offence is not armed on this network (ADR-0144 §9)".into());
                     }

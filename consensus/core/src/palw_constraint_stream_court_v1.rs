@@ -19,6 +19,7 @@ pub enum PalwConstraintStreamPhaseV1 {
     Committed,
     Auxiliary,
     Complete,
+    Tokenizer,
 }
 /// Immutable certificate DERIVED by the rooted court, reusable against only an attestation
 /// whose authenticated duty contains this position. Producer liability still names the claim.
@@ -239,7 +240,7 @@ impl PalwConstraintStreamCourtV1 {
         self.phase = if self.position == 0 { PalwConstraintStreamPhaseV1::Committed } else { PalwConstraintStreamPhaseV1::Prefix(0) };
         Ok(())
     }
-    fn is_eog(&self, id: u32) -> bool {
+    pub(crate) fn is_eog(&self, id: u32) -> bool {
         self.eog_members.binary_search(&id).is_ok()
     }
     pub fn next_rendering_id(&self) -> Result<u32, String> {

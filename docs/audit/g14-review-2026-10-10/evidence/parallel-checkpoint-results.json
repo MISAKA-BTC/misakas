@@ -69,7 +69,85 @@
       "source": "72ce1c4aaf411110ee9f44e4f1d17acdedffb723",
       "result": "build FAIL: two public module path errors in CLI/tokenizer tests",
       "sha256": "a7d51a974650a3958014e1b6e5e367c56e8d03d2f6303ccd8bd024fc7b7bdf84"
+    },
+    {
+      "name": "node-build-501a",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "build PASS",
+      "sha256": "1da01343878e50e1d5085e7f8eeaec4dae4fc7b64b9cd64ecb35c0932a566316"
+    },
+    {
+      "name": "node-unit-501a",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "38 filer/tokenizer + 1 CLI + 2 normal registered-class/jury PASS",
+      "sha256": "0ce535cd8c3d497e73cbb1d4c20db8bf4750851371acacc009476e44e3b86e53"
+    },
+    {
+      "name": "core-build-staged-parser",
+      "source": "9cc8c87ac",
+      "result": "build FAIL: two exhaustive classifiers and one test array conversion",
+      "sha256": "03667695816f2668e3cf1b19026f4671d9debbdaaea589e8c014bcece0050992"
+    },
+    {
+      "name": "core-build-staged-parser-repair",
+      "source": "ae7ec4d02",
+      "result": "build PASS",
+      "sha256": "efe3b09a1c5c86a51a8a3e060ebc8ea0a1f9e223d03d095e5c5309d985d1629b"
+    },
+    {
+      "name": "core-staged-parser-tests",
+      "source": "ae7ec4d02",
+      "result": "26 PASS / 4 FAIL (registered attempt fixture, two terminal licence fixtures, missing new wire pins)",
+      "sha256": "bff7870f41faad2babf6700da1938411d6635b99688c8eec4ea4a1917f553c14"
+    },
+    {
+      "name": "registered-tiled-501a",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "ABORT exit134: ENOSPC in first of 4 service cases, no completion results",
+      "sha256": "557e7401f34b15096257738fdb489b4668396f49a9ec57673978c6fc795c2a22"
+    },
+    {
+      "name": "core-build-qualified-work",
+      "source": "226a8ddbe",
+      "result": "build FAIL: private tokenizer test method",
+      "sha256": "a91ffa40c5f10203efe566643e79bf0a69d03ce82484fa7e3960d2522a03f387"
+    },
+    {
+      "name": "core-build-qualified-work-repair",
+      "source": "0bbbfbee3",
+      "result": "build PASS",
+      "sha256": "a6b9a13e7a5216f38c2bd406b3ec396a8c6337ff6287bf570a32a018ad0a8f1e"
+    },
+    {
+      "name": "core-qualified-work-tests",
+      "source": "0bbbfbee3",
+      "result": "22 PASS / 3 FAIL: two panel funding fixtures and one old delta expectation",
+      "sha256": "816ccca14c44db37c0f7441f8cbf5f834faa61d6dc39cf7c3617778377658ec8"
+    },
+    {
+      "name": "core-build-fixture-floor",
+      "source": "32829dfa4",
+      "result": "build FAIL: ENOSPC",
+      "sha256": "2788bb7c4313ad74b1c0feb4511265fdbd779ed691fcd1ff3bdff7ed5adf929c"
+    },
+    {
+      "name": "core-build-fixture-floor-retry",
+      "source": "47008ccfde89c66af8aaf4a63fec03680baba941",
+      "result": "build PASS",
+      "sha256": "1f966b95bab904d5708cef9c7a6872f7f4977e83813283ebad2324854d51fc02"
+    },
+    {
+      "name": "core-fixture-floor-tests",
+      "source": "47008ccfde89c66af8aaf4a63fec03680baba941",
+      "result": "13 PASS / 0 FAIL: terminal2, staged3, pins2, tokenizer5, immutable semantics1",
+      "sha256": "eb0706682d293474cb31d18ce28a85b98970b2ac03c658373bf0ecf5cd3910f3"
+    },
+    {
+      "name": "recovery-501a-automatic-restart",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "0 PASS / 1 FAIL: two services competed for one gossip inbox; repair47008ccfd awaits node rerun",
+      "sha256": "407239f4946951740dda0508ab37710a2e53f7b544b262c143b4c20eafecea55"
     }
   ],
-  "qualification": "Latest node build on 72ce1c4aaf411110ee9f44e4f1d17acdedffb723 failed on two public module paths; source repairs await compilation. Earlier core/kernel PASS results apply only to their recorded sources. Four repaired core failures require rerun. Actual registered tiled service round2 remains 0 PASS / 4 FAIL; fairness fixes and new native/tokenizer/recovery/staged integration await execution. Full G14 guarantee and activation remain pending/refused."
+  "qualification": "Node source501a builds and41 focused tests pass; tiled services abort ENOSPC and automatic restart fails shared inbox. Core source47008ccfd builds and13 focused tests pass, including the previously failing fixtures. These results do not qualify the latest whole source, the isolated integration merge, new native prefix/sole-receiver P2P paths, or full G14. New node runtime reruns remain required. Activation remains refused."
 }

@@ -1,0 +1,55 @@
+source=47008ccfde89c66af8aaf4a63fec03680baba941
+binary_sha256=86877afdaecd498cf8f4aaf125bb7f5dc96b11c838b503c05b5a535fdaf58bfb
+FILTER=owned_terminal_fold_
+
+running 2 tests
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation ... ok
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3678 filtered out; finished in 0.01s
+
+FILTER=staged_court_state_tests_v1::
+
+running 3 tests
+test palw_state_v2::staged_court_state_tests_v1::owner_exposure_and_holds_rebuild_and_revert_without_other_owner_scan ... ok
+test palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes ... ok
+test palw_state_v2::staged_court_state_tests_v1::certificate_reference_requires_completed_rooted_court_and_exact_identity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3677 filtered out; finished in 0.08s
+
+FILTER=every_landed_kind_
+
+running 2 tests
+[a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read))
+  Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended))
+  FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" } → palw_task_heads_v1 (HFX task heads)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3678 filtered out; finished in 0.99s
+
+FILTER=palw_tokenizer_json_stream_v1::
+
+running 5 tests
+test palw_tokenizer_json_stream_v1::tests::decimal_overflow_boundary_and_integer_ids_are_feature_independent ... ok
+test palw_tokenizer_json_stream_v1::tests::normative_container_depth_and_malformed_delimiters_are_exact ... ok
+test palw_tokenizer_json_stream_v1::tests::understated_work_bound_only_convicts_after_the_original_exact_raw_hash ... ok
+test palw_tokenizer_json_stream_v1::tests::unknown_large_strings_keep_the_serialized_parser_bounded_and_false_raw_hash_never_verdicts ... ok
+test palw_tokenizer_json_stream_v1::tests::exact_json_grammar_and_renderer_agree_across_every_cursor_boundary_and_restart ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3675 filtered out; finished in 3.68s
+
+FILTER=immutable_registered_semantics_refute
+
+running 1 test
+test palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3679 filtered out; finished in 0.00s
+
+[{"filter": "owned_terminal_fold_", "exit": 0}, {"filter": "staged_court_state_tests_v1::", "exit": 0}, {"filter": "every_landed_kind_", "exit": 0}, {"filter": "palw_tokenizer_json_stream_v1::", "exit": 0}, {"filter": "immutable_registered_semantics_refute", "exit": 0}]

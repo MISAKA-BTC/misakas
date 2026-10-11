@@ -70,6 +70,24 @@ impl PalwOwnedConstraintStreamV1 {
         producer_exit_after: u64,
         panel_exit_after: &[u64],
     ) -> Result<Self, String> {
+        let job=seed.job.as_deref().ok_or("unrooted admission cannot resolve public job reference")?;
+        Self::admit_with_rooted_job(seed,job,expected_claim_root,terms,now_daa,available_owner_capital,
+            carrier_maximum,ladder,material_until,producer_exit_after,panel_exit_after)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_with_rooted_job(
+        seed: &PalwConstraintStreamSeedV1,
+        actual_job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        expected_claim_root: Hash64,
+        terms: PalwRenderingClaimTermsV1,
+        now_daa: u64,
+        available_owner_capital: u64,
+        carrier_maximum: u64,
+        ladder: u64,
+        material_until: u64,
+        producer_exit_after: u64,
+        panel_exit_after: &[u64],
+    ) -> Result<Self, String> {
         seed.check(carrier_maximum)?;
         if now_daa < terms.accepted_daa
             || now_daa > terms.open_until_daa
@@ -85,7 +103,7 @@ impl PalwOwnedConstraintStreamV1 {
         if available_owner_capital < required {
             return Err("owner lacks unencumbered capital for complete admitted staged work".into());
         }
-        let court = seed.court(expected_claim_root, ladder)?;
+        let court = seed.court_with_rooted_job(expected_claim_root, ladder, actual_job)?;
         let row = Self {
             claim: seed.claim,
             reserver: seed.reserver,
@@ -196,11 +214,12 @@ pub(crate) mod tests {
             reserver: PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(2), index: 0 }),
             reserved_daa: 100,
             binding,
-            job: a.job,
+            job: Some(Box::new(a.job)),
             pin: a.pin,
             witness: a.witness,
             eog_count: a.eog.ids.len() as u32,
             eog_opening: a.eog.opening,
+            auxiliary: None,
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }, copy)
     }

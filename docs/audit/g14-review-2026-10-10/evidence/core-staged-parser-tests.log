@@ -1,0 +1,187 @@
+source=ae7ec4d02
+binary_sha256=15caf971de81545153b79339702a07b6a2c06e87e220f3fe40e3efc6e1f8ce11
+FILTER=palw_constraint_stream_
+
+running 6 tests
+test palw_constraint_stream_carriage_v1::tests::signed_move_binds_literal_owner_claim_reservation_phase_offset_and_bytes ... ok
+test palw_constraint_stream_court_v1::tests::wrong_seed_root_skip_corrupt_prefix_and_incomplete_leaf_never_convict ... ok
+test palw_constraint_stream_court_v1::tests::ordered_public_stream_matches_direct_court_fault_and_honest_refusal ... ok
+test palw_constraint_stream_owned_v1::tests::foreign_owner_and_over_budget_moves_cannot_mutate_or_poison_continuation ... ok
+test palw_constraint_stream_owned_v1::tests::admission_requires_entire_capital_and_retention_contract_before_owned_work ... ok
+test palw_constraint_stream_owned_v1::tests::small_mutable_checkpoint_reverts_and_restores_without_grammar_or_prior_bytes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3671 filtered out; finished in 0.22s
+
+FILTER=palw_prefix_state_stream_v1::
+
+running 2 tests
+test palw_prefix_state_stream_v1::tests::tentative_corrupt_leaf_or_wrong_seed_cannot_finalize_a_prefix ... ok
+test palw_prefix_state_stream_v1::tests::chunked_prefix_matches_full_authenticated_court_and_restores_each_move ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3675 filtered out; finished in 0.07s
+
+FILTER=palw_rendering_stream_v1::
+
+running 3 tests
+test palw_rendering_stream_v1::tests::incomplete_corrupted_and_foreign_chunks_never_expose_a_transition ... ok
+test palw_rendering_stream_v1::tests::continuation_matches_upstream_keyed_hash_for_every_short_length_and_split ... ok
+test palw_rendering_stream_v1::tests::legacy_leaf_hash_matches_library_at_all_block_boundaries_and_restart ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3674 filtered out; finished in 0.36s
+
+FILTER=palw_eog_stream_v1::
+
+running 2 tests
+test palw_eog_stream_v1::tests::foreign_order_replays_and_incomplete_or_wrong_digest_cannot_expose_membership ... ok
+test palw_eog_stream_v1::tests::huge_legacy_list_restarts_without_retaining_all_ids_and_matches_original_leaf ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3675 filtered out; finished in 0.18s
+
+FILTER=palw_tokenizer_json_stream_v1::
+
+running 4 tests
+test palw_tokenizer_json_stream_v1::tests::decimal_overflow_boundary_and_integer_ids_are_feature_independent ... ok
+test palw_tokenizer_json_stream_v1::tests::normative_container_depth_and_malformed_delimiters_are_exact ... ok
+test palw_tokenizer_json_stream_v1::tests::unknown_large_strings_keep_the_serialized_parser_bounded_and_false_raw_hash_never_verdicts ... ok
+test palw_tokenizer_json_stream_v1::tests::exact_json_grammar_and_renderer_agree_across_every_cursor_boundary_and_restart ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3673 filtered out; finished in 3.92s
+
+FILTER=palw_rendering_resources_v1::
+
+running 4 tests
+test palw_rendering_resources_v1::tests::maximum_active_format_produces_quantitative_work_deadline_and_capital ... ok
+test palw_rendering_resources_v1::claim_terms_tests::long_stream_contract_refuses_any_shorter_liability_or_material_clock_and_overflow ... ok
+test palw_rendering_resources_v1::tests::plan_is_monotone_checked_and_cannot_certify_owner_asserted_small_sizes ... ok
+test palw_rendering_resources_v1::tokenizer_resource_tests::raw_flat_hash_is_not_assigned_an_invented_file_cap_and_all_key_carriers_are_priced ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3673 filtered out; finished in 0.00s
+
+FILTER=staged_court_state_tests_v1::
+
+running 1 test
+test palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3676 filtered out; finished in 0.00s
+
+FILTER=staged_public_court_has_independent
+
+running 1 test
+test config::params::consensus_params_id_tests::staged_public_court_has_independent_dormant_schedule_and_block_clock ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3676 filtered out; finished in 0.03s
+
+FILTER=bounded_leaf_source_opens
+
+running 1 test
+test palw_step_leg::tests::bounded_leaf_source_opens_ragged_trees_without_a_whole_tree_buffer ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3676 filtered out; finished in 0.02s
+
+FILTER=immutable_registered_semantics_refute
+
+running 1 test
+
+thread 'palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts' (4179151) panicked at consensus/core/src/palw_offence_attribution_v1.rs:4366:9:
+assertion `left == right` failed: the FP descriptor never overrides an honest CoreV1 attempt's canonical context
+  left: Err(IdentityNotDerivable)
+ right: Ok(None)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts ... FAILED
+
+failures:
+
+failures:
+    palw_offence_attribution_v1::tests::immutable_registered_semantics_refute_only_authenticated_claim_contexts
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3676 filtered out; finished in 0.00s
+
+FILTER=registered_semantics_are_independently
+
+running 1 test
+test palw_state_v2::tests::registered_semantics_are_independently_fenced_rooted_and_stamped_before_job_retention ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3676 filtered out; finished in 0.00s
+
+FILTER=owned_terminal_fold_
+
+running 2 tests
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts' (4179158) panicked at consensus/core/src/palw_state_v2.rs:73726:46:
+internal consistency after an F2 apply: CarriageInconsistent("licensed claim a7589e87b9cbd6eb572d6175014b6b70bce0dc8591f525721c368fc0ad7de09ef996e00fc69f7733e5e6daac981dffdd53f9b4686ea94004a1bdb59b0f5fbcce records no licence door")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation' (4179157) panicked at consensus/core/src/palw_state_v2.rs:73726:46:
+internal consistency after an F2 apply: CarriageInconsistent("licensed claim a7589e87b9cbd6eb572d6175014b6b70bce0dc8591f525721c368fc0ad7de09ef996e00fc69f7733e5e6daac981dffdd53f9b4686ea94004a1bdb59b0f5fbcce records no licence door")
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts ... FAILED
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 3675 filtered out; finished in 0.00s
+
+FILTER=every_landed_kind_
+
+running 2 tests
+[a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read))
+  Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended))
+  FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" } → palw_task_heads_v1 (HFX task heads)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... ok
+
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form' (4179161) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:4367:13:
+[a2u-pins] A-2 wire pins differ (A-2 uniformity).
+* PALW_A2_INT12_VARIANTS_WIRE_V1 (pinned 0xd1982421da455cca, now 0xd1982421da455cca): a variant the live build decodes changed its declaration — classify it (an Int12Inner row and a guarded owner arm, or a re-read and its probe), never by re-pinning alone.
+* PALW_A2_NEW_KIND_WIRE_V1: a lane that creates or changes a post-int-12 kind re-pins it here and keeps the change under its row's fence. Current pins:
+[a2u-pins-begin]
+    (104, 0x98d7608e0a24ad99),
+    (105, 0xdaed6c0cfaf81e2f),
+    (106, 0x888f101d106c24bc),
+    (107, 0x0081a402000ddbf4),
+    (108, 0xac8ecc3ff97ec415),
+    (109, 0xcd35f41524be4a4f),
+    (110, 0x7da0346d0633de78),
+    (111, 0x2d490db20d075bfe),
+    (113, 0xca1188bcd2f663d2),
+    (120, 0xcbb24fb8f993e5c6),
+    (130, 0x5774ef35c9a3fdaa),
+    (140, 0xa4ab9f7696775588),
+    (150, 0x5fb8c8b2822f8386),
+    (151, 0x6a81242ebaeba7fd),
+    (152, 0xc48f175fa3456d1e),
+    (153, 0x74bac59d2cf50cd4),
+    (154, 0x047359d4d8ba0a7b),
+    (155, 0x6d9c4e7671a9cac7),
+    (156, 0xfd9ad539eab02a3c),
+    (157, 0xa5ca85bb4a3be200),
+    (158, 0x1bbcf34fe919b8c4),
+    (159, 0x0395636b651f74fa),
+    (160, 0x730c4ce9aa0ff75e),
+    (161, 0xec0447b18452362b),
+    (162, 0x16fdc18dd12bd954),
+    (163, 0x51ac8be8e6561cbd),
+    (164, 0x7f4f1e3238339d70),
+    (165, 0x701596c369327a70),
+    (166, 0xe436b43fd3c3e30b),
+    (167, 0x4d8ea73690aec50b),
+[a2u-pins-end]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... FAILED
+
+failures:
+
+failures:
+    palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 3675 filtered out; finished in 1.14s
+
+[{"filter": "palw_constraint_stream_", "exit": 0}, {"filter": "palw_prefix_state_stream_v1::", "exit": 0}, {"filter": "palw_rendering_stream_v1::", "exit": 0}, {"filter": "palw_eog_stream_v1::", "exit": 0}, {"filter": "palw_tokenizer_json_stream_v1::", "exit": 0}, {"filter": "palw_rendering_resources_v1::", "exit": 0}, {"filter": "staged_court_state_tests_v1::", "exit": 0}, {"filter": "staged_public_court_has_independent", "exit": 0}, {"filter": "bounded_leaf_source_opens", "exit": 0}, {"filter": "immutable_registered_semantics_refute", "exit": 101}, {"filter": "registered_semantics_are_independently", "exit": 0}, {"filter": "owned_terminal_fold_", "exit": 101}, {"filter": "every_landed_kind_", "exit": 101}]

@@ -1,0 +1,107 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: unused import: `crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict`
+  --> consensus/core/src/palw_state_v2/tests/mesh_fold_v1.rs:10:5
+   |
+10 | use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0277]: the trait bound `[u8; 64]: TryFrom<&[u8; 64]>` is not satisfied
+   --> consensus/core/src/palw_tokenizer_json_stream_v1.rs:921:56
+    |
+921 |         let mut bytes: [u8; 64] = path.as_byte_slice().try_into().unwrap();
+    |                                                        ^^^^^^^^ the trait `From<&[u8; 64]>` is not implemented for `[u8; 64]`
+    |
+    = help: the following other types implement trait `From<T>`:
+              `[T; 1]` implements `From<(T,)>`
+              `[T; 1]` implements `From<GenericArray<T, UInt<UTerm, B1>>>`
+              `[T; 2]` implements `From<(T, T)>`
+              `[T; 2]` implements `From<GenericArray<T, UInt<UInt<UTerm, B1>, B0>>>`
+              `[u64; 2]` implements `From<ppv_lite86::generic::vec128_storage>`
+              `[u8; 2]` implements `From<zerocopy::byteorder::I16<O>>`
+              `[u8; 2]` implements `From<zerocopy::byteorder::U16<O>>`
+              `[T; 3]` implements `From<(T, T, T)>`
+            and 96 others
+    = note: required for `&[u8; 64]` to implement `Into<[u8; 64]>`
+    = note: required for `[u8; 64]` to implement `TryFrom<&[u8; 64]>`
+    = note: required for `&[u8; 64]` to implement `TryInto<[u8; 64]>`
+    = note: the full name for the type has been written to '/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-5ebb322af90d8e68.long-type-9434622843977153802.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0004]: non-exhaustive patterns: `&palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. }`, `&palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }` and `&palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. }` not covered
+    --> consensus/core/src/palw_heartbeat_carriers_v1.rs:72:11
+     |
+  72 |     match object {
+     |           ^^^^^^ patterns `&palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. }`, `&palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. }` and `&palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. }` not covered
+     |
+note: `palw_state_v2::PalwConsensusObjectV2` defined here
+    --> consensus/core/src/palw_state_v2.rs:7279:10
+     |
+7279 | pub enum PalwConsensusObjectV2 {
+     |          ^^^^^^^^^^^^^^^^^^^^^
+...
+8788 |     PublicCourtStreamOpenedV1 { seed: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1> } = 165,
+     |     ------------------------- not covered
+8789 |     PublicCourtStreamLeafV1 { leaf: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamLeafV1> } = 166,
+     |     ----------------------- not covered
+8790 |     PublicCourtStreamMoveV1 { movement: Box<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1> } = 167,
+     |     ----------------------- not covered
+     = note: the matched value is of type `&palw_state_v2::PalwConsensusObjectV2`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern, a match arm with multiple or-patterns as shown, or multiple match arms
+     |
+ 244 ~         | O::PanelBeaconProofV3 { .. } => false,
+ 245 ~         &palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } | &palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } | &palw_state_v2::PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => todo!(),
+     |
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_pipeline_da_fold_v1.rs:472:14
+    |
+472 |         let (mut run, claim_id) = claimed(&binding, false);
+    |              ----^^^
+    |              |
+    |              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+error[E0004]: non-exhaustive patterns: `palw_lifecycle_objects_v2::PalwLifecycleKindOwnerV1::Fence(palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::StagedPublicCourtV1)` not covered
+     --> consensus/core/src/palw_state_v2.rs:35498:11
+      |
+35498 |     match palw_lifecycle_kind_owner_v1(object) {
+      |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ pattern `palw_lifecycle_objects_v2::PalwLifecycleKindOwnerV1::Fence(palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::StagedPublicCourtV1)` not covered
+      |
+note: `palw_lifecycle_objects_v2::PalwLifecycleKindOwnerV1` defined here
+     --> consensus/core/src/palw_lifecycle_objects_v2.rs:1182:10
+      |
+ 1182 | pub enum PalwLifecycleKindOwnerV1 {
+      |          ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 1186 |     Fence(PalwLifecycleKindFenceV1),
+      |     ----- not covered
+      = note: the matched value is of type `palw_lifecycle_objects_v2::PalwLifecycleKindOwnerV1`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+      |
+35513 ~         K::Fence(F::ClassSemanticsV1) => builder.extras.class_semantics_active,
+35514 ~         palw_lifecycle_objects_v2::PalwLifecycleKindOwnerV1::Fence(palw_lifecycle_objects_v2::PalwLifecycleKindFenceV1::StagedPublicCourtV1) => todo!(),
+      |
+
+warning: unused variable: `seed`
+   --> consensus/core/src/palw_improve_state_v1.rs:960:29
+    |
+960 |     pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_seed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+
+Some errors have detailed explanations: E0004, E0277.
+For more information about an error, try `rustc --explain E0004`.
+warning: `kaspa-consensus-core` (lib test) generated 4 warnings
+error: could not compile `kaspa-consensus-core` (lib test) due to 3 previous errors; 4 warnings emitted

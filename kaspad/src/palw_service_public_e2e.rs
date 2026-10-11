@@ -1187,6 +1187,9 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
             assert_eq!(class_id, chain.bundle.base_class_id);
         }
         certify_fp_lane(&mut chain, &mut floats, profile, case.tiled()).await;
+        if let Some(fixture) = &tiled {
+            fixture.declare_semantics(&mut chain, &mut floats).await;
+        }
     }
     let signed_bond = PalwBondKeyV2(TransactionOutpoint::new(Default::default(), 0));
     let public_key = card_pubkey(OUTSIDER);

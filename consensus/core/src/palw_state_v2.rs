@@ -9720,8 +9720,20 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // chunk that pays (a chunk carries no `count`, chunks arrive in any order, and this ceiling
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
-        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
-            .claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX),
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } => {
+            let config=crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+            match &seed.auxiliary {
+                Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+                    raw_tokenizer_bytes,tokenizer_key_events,..}) => {
+                    crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+                        *raw_tokenizer_bytes,*tokenizer_key_events,config.prices)
+                        .and_then(|p|p.court_envelope(seed.binding.shape_profile.vocab_size,config.prices))
+                        .map(|p|p.rent_sompi).unwrap_or(u64::MAX)
+                }
+                None=>config.claim_terms(0,4095,seed.binding.shape_profile.vocab_size)
+                    .map(|t|t.plan.rent_sompi).unwrap_or(u64::MAX),
+            }
+        },
         PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } => palw_court_close_min_fee_v1(declaration.part_digests.len() as u64)
             .saturating_add(if declaration.heavy_prompt_ids>0 { palw_relay_fee_for_mass_v1(u64::from(declaration.heavy_prompt_ids).saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)) } else { 0 }),
         // RFC-0003 decision 22: a held leaf challenge IS a declaration (it writes the group `CourtCloseDeclared`
@@ -23950,6 +23962,15 @@ impl<'a> TransitionBuilder<'a> {
                 crate::palw_offence_v1::PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()).to_string(),
             ));
         }
+        if let Some(reference) = crate::palw_staged_court_state_v1::palw_staged_reference_v1(kind, evidence) {
+            if self.extras.staged_public_court.is_none() {
+                return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+            }
+            if !crate::palw_staged_court_state_v1::palw_staged_collection_open_v1(&self.state, &reference, ctx.daa_score) {
+                return Err(PalwStateV2Error::ObjectiveOffenceRefused(evidence_id,
+                    "staged certificate collection is outside its claim-stamped accepting clock".into()));
+            }
+        }
         // **ADR-0152 v2 F2: past `palw_offence_attribution` a false `Valid` has ONE route.** The V1
         // kind is refused by name — its evidence convicts on `job_id == claim_id`, a fixed point no
         // real claim reaches, while a hand-signed V2 receipt still clears it for the state-bound
@@ -35694,6 +35715,8 @@ fn apply_class_registration_v1(
             registered.token_table_root = previous.token_table_root;
             registered.rendering_rule = previous.rendering_rule;
             registered.raw_tokenizer_bytes = previous.raw_tokenizer_bytes;
+            registered.tokenizer_key_events = previous.tokenizer_key_events;
+            registered.prefix_state_relation = previous.prefix_state_relation;
             registered.bound_from_daa = previous.bound_from_daa;
             if *previous != registered {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
@@ -37222,6 +37245,12 @@ fn apply_object(
             if class.artifact_root != declaration.artifact_root || class.registrant_bond.is_none() {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("semantic declaration must name the originally registered artifact and registrant"));
             }
+            if let Some(relation) = declaration.prefix_state_relation {
+                let profile = builder.state.fp_work_profile_of(&declaration.class_id)
+                    .filter(|p|p.shape_profile_id()==declaration.class_id)
+                    .ok_or(PalwStateV2Error::ImmutableModelUpdate("a family state relation needs the publicly certified canonical class graph"))?;
+                relation.check_profile(profile).map_err(PalwStateV2Error::ImmutableModelUpdate)?;
+            }
             let mut next = declaration.as_bound_row(ctx.daa_score);
             if let Some(previous) = builder.state.class_semantics.get(&declaration.class_id) {
                 next.bound_from_daa = previous.bound_from_daa;
@@ -37229,6 +37258,8 @@ fn apply_object(
                 if expected.token_table_root.is_none() { expected.token_table_root = next.token_table_root; }
                 if expected.rendering_rule.is_none() { expected.rendering_rule = next.rendering_rule; }
                 if expected.raw_tokenizer_bytes.is_none() { expected.raw_tokenizer_bytes = next.raw_tokenizer_bytes; }
+                if expected.tokenizer_key_events.is_none() { expected.tokenizer_key_events = next.tokenizer_key_events; }
+                if expected.prefix_state_relation.is_none() { expected.prefix_state_relation = next.prefix_state_relation; }
                 if expected != next {
                     return Err(PalwStateV2Error::ImmutableModelUpdate("registered semantic identities and a filled table root are immutable"));
                 }
@@ -44684,6 +44715,8 @@ impl PalwStateCarriageV2 {
                 || row.token_table_root.is_some_and(|root| Some(root) != class_row.token_table_root)
                 || row.rendering_rule.is_some_and(|rule| Some(rule) != class_row.rendering_rule)
                 || row.raw_tokenizer_bytes.is_some_and(|bytes| Some(bytes) != class_row.raw_tokenizer_bytes)
+                || row.tokenizer_key_events.is_some_and(|events| Some(events) != class_row.tokenizer_key_events)
+                || row.prefix_state_relation.is_some_and(|relation| Some(relation) != class_row.prefix_state_relation)
             {
                 return Err(PalwStateV2Error::CarriageInconsistent("malformed immutable claim semantics".into()));
             }
@@ -57785,6 +57818,8 @@ pub(crate) mod tests {
             cu_ruleset_id: row.cu_ruleset_id, token_table_root: h64(888),
             rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
             raw_tokenizer_bytes: 16,
+            tokenizer_key_events: 8,
+            prefix_state_relation: None,
         };
         let declare = |d: crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
             declaration: Box::new(d), signature: vec![],
@@ -57804,6 +57839,13 @@ pub(crate) mod tests {
         assert!(fold_declaration(&state, changed, &on).is_err());
         let mut changed = declaration.clone(); changed.token_table_root = h64(999);
         assert!(fold_declaration(&filled, changed, &on).is_err());
+        let mut changed = declaration.clone(); changed.tokenizer_key_events += 1;
+        assert!(fold_declaration(&filled, changed, &on).is_err(), "a filled tokenizer work bound is immutable");
+        let mut changed = declaration.clone(); changed.prefix_state_relation = Some(
+            crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::Qwen36HybridCacheV1);
+        assert!(fold_declaration(&filled, changed, &on).is_err(), "a filled family state relation is immutable");
+        assert_eq!(filled.claim_semantics_v1(&h64(0xFC)).unwrap().prefix_state_relation, None,
+            "a prospective family state relation never changes an accepted claim");
         let (prospective, _) = fold_declaration(&historical, declaration, &on).unwrap();
         assert_eq!(prospective.class_semantics_v1(&h64(1)).unwrap().bound_from_daa, 102);
         assert!(prospective.claim_semantics.is_empty(), "migration cannot stamp already accepted historical claims");
@@ -74211,7 +74253,14 @@ pub(crate) mod tests {
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
-        let posted = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts).max(p.min_collateral_sompi() as u128) as u64;
+        let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        let posted = required.max(p.min_collateral_sompi() as u128)
+            .max(if p.rcore_plus_active_at(100) {
+                // A real R-core panel seat must qualify at its panel floor and have its
+                // work half fund the lock. Additional ordinary collateral, not a gate bypass.
+                u128::from(crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(p.min_collateral_sompi()))
+                    .max(required.checked_mul(2).unwrap())
+            } else {0}) as u64;
         let (s0, _) = apply_armed(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
         let mut env = attempt(40, 1);
         env.attempt.execution_root = binding.committed_execution_root;
@@ -79481,6 +79530,10 @@ mod staged_court_state_tests_v1 {
                 new: Some(PalwStagedCourtRowV1::Constraint(Box::new(row))) };
             apply_delta_entry(&mut state, &owner_entry, false).unwrap();
             assert_eq!(reference.resolve(&state, root).is_ok(), guilty);
+            let terms = state.staged_claim_contract_v1(&reference.claim).unwrap().terms;
+            assert!(palw_staged_collection_open_v1(&state, &reference, terms.collect_until_daa - 1));
+            assert!(!palw_staged_collection_open_v1(&state, &reference, terms.collect_until_daa));
+            assert!(!palw_staged_collection_open_v1(&state, &reference, terms.accepted_daa - 1));
             assert!(reference.resolve(&state, Hash64::from_u64_word(999)).is_err());
             for foreign in [
                 PalwStagedCertificateRefV1 { claim: Hash64::from_u64_word(99), ..reference },
@@ -79510,7 +79563,7 @@ mod staged_court_state_tests_v1 {
             .claim_terms(100, 4, 4099).unwrap();
         let key = PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(107));
         let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms, producer: PALW_BOND_KEY_V2_MIN, panel: BTreeSet::new() })) };
-        assert_eq!(borsh::to_vec(&entry).unwrap()[0], 207);
+        assert_eq!(borsh::to_vec(&entry).unwrap()[0], 210);
         apply_delta_entry(&mut state, &entry, false).unwrap();
         assert_ne!(state.state_root(), empty_root);
         let wire = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
