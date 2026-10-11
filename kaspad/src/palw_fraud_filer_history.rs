@@ -4,10 +4,11 @@
 use kaspa_consensus_core::{
     Hash64,
     api::ConsensusApi,
-    palw_state_v2::{PalwConsensusObjectV2, PalwLifecycleTxPayloadV2},
+    palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2,
+    palw_state_v2::PalwConsensusObjectV2,
 };
 
-pub(super) fn walk_available_v1(
+pub(in crate::palw_panel) fn walk_available_v1(
     consensus: &dyn ConsensusApi,
     start: Hash64,
     floor: u64,
