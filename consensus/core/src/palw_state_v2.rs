@@ -35382,6 +35382,7 @@ fn apply_class_registration_v1(
             let mut registered = next.clone();
             registered.token_table_root = previous.token_table_root;
             registered.rendering_rule = previous.rendering_rule;
+            registered.raw_tokenizer_bytes = previous.raw_tokenizer_bytes;
             registered.bound_from_daa = previous.bound_from_daa;
             if *previous != registered {
                 return Err(PalwStateV2Error::ImmutableModelUpdate("class canonical semantic identities changed"));
@@ -36859,6 +36860,7 @@ fn apply_object(
                 let mut expected = previous.clone();
                 if expected.token_table_root.is_none() { expected.token_table_root = next.token_table_root; }
                 if expected.rendering_rule.is_none() { expected.rendering_rule = next.rendering_rule; }
+                if expected.raw_tokenizer_bytes.is_none() { expected.raw_tokenizer_bytes = next.raw_tokenizer_bytes; }
                 if expected != next {
                     return Err(PalwStateV2Error::ImmutableModelUpdate("registered semantic identities and a filled table root are immutable"));
                 }
@@ -44188,6 +44190,7 @@ impl PalwStateCarriageV2 {
                 || row.bound_from_daa != class_row.bound_from_daa
                 || row.token_table_root.is_some_and(|root| Some(root) != class_row.token_table_root)
                 || row.rendering_rule.is_some_and(|rule| Some(rule) != class_row.rendering_rule)
+                || row.raw_tokenizer_bytes.is_some_and(|bytes| Some(bytes) != class_row.raw_tokenizer_bytes)
             {
                 return Err(PalwStateV2Error::CarriageInconsistent("malformed immutable claim semantics".into()));
             }
@@ -57277,6 +57280,7 @@ pub(crate) mod tests {
             runtime_class_id: row.runtime_class_id, tokenizer_id: row.tokenizer_id,
             cu_ruleset_id: row.cu_ruleset_id, token_table_root: h64(888),
             rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
+            raw_tokenizer_bytes: 16,
         };
         let declare = |d: crate::palw_class_semantics_v1::PalwClassSemanticsDeclarationV1| PalwConsensusObjectV2::ClassSemanticsDeclaredV1 {
             declaration: Box::new(d), signature: vec![],

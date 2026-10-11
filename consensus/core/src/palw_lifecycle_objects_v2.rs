@@ -4247,7 +4247,7 @@ pub(crate) mod tests {
             (161, 0xec0447b18452362b),
             (162, 0x16fdc18dd12bd954),
             (163, 0x51ac8be8e6561cbd),
-            (164, 0x5a76e53094e12967),
+            (164, 0x7f4f1e3238339d70),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline

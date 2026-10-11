@@ -26,6 +26,8 @@ pub struct PalwClassSemanticsV1 {
     pub token_table_root: Option<Hash64>,
     /// A prospective canonical rendering rule; None is an unqualified historical statement.
     pub rendering_rule: Option<crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1>,
+    /// Exact prospective raw-file length, authenticated only when its legacy hash completes.
+    pub raw_tokenizer_bytes: Option<u64>,
 }
 
 impl PalwClassSemanticsV1 {
@@ -42,6 +44,7 @@ impl PalwClassSemanticsV1 {
             cu_ruleset_id: canonical.cu_ruleset_id,
             token_table_root: None,
             rendering_rule: None,
+            raw_tokenizer_bytes: None,
         }
     }
 
@@ -50,6 +53,7 @@ impl PalwClassSemanticsV1 {
             && self.class_id == *class_id && self.artifact_root == *artifact_root
             && self.token_table_root != Some(Hash64::default())
             && (self.rendering_rule.is_none() || self.token_table_root.is_some())
+            && (self.rendering_rule.is_some() == self.raw_tokenizer_bytes.is_some())
     }
 
     /// Each stored value is the registration's exact statement, including zero; a caller
@@ -85,6 +89,7 @@ pub struct PalwClassSemanticsDeclarationV1 {
     pub cu_ruleset_id: Hash64,
     pub token_table_root: Hash64,
     pub rendering_rule: crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1,
+    pub raw_tokenizer_bytes: u64,
 }
 
 pub const PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka/palw/class-semantics/v1";
@@ -98,6 +103,7 @@ impl PalwClassSemanticsDeclarationV1 {
             tokenizer_id: self.tokenizer_id, cu_ruleset_id: self.cu_ruleset_id,
             token_table_root: Some(self.token_table_root),
             rendering_rule: Some(self.rendering_rule),
+            raw_tokenizer_bytes: Some(self.raw_tokenizer_bytes),
         }
     }
 

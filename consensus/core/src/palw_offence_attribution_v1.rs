@@ -1381,13 +1381,14 @@ pub fn palw_tokenizer_table_fault_v1(
     palw_constrained_job_target_v1(target, binding, job)?;
     let row = target.registered_semantics.as_ref().filter(|row| row.matches_context(&binding.job_context))
         .ok_or(PalwOffenceVerifyError::ContradictionNotAdmitted("the claim has no matching immutable tokenizer statement"))?;
-    let (Some(table_root), Some(rule)) = (row.token_table_root, row.rendering_rule) else {
+    let (Some(table_root), Some(rule), Some(length)) = (row.token_table_root, row.rendering_rule, row.raw_tokenizer_bytes) else {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("the historical claim has no prospective rendering rule"));
     };
     if crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job) != Some(table_root)
         || !table_opening.verifies(&table_root, binding.shape_profile.vocab_size)
         || crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(tokenizer_bytes) != row.tokenizer_id
     { return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch); }
+    if tokenizer_bytes.len() as u64 != length { return Ok(true); }
     match rule {
         crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => {
             Ok(match crate::palw_tokenizer_rendering_v1::PalwQwenRenderingMapV1::parse(tokenizer_bytes) {
@@ -4323,6 +4324,7 @@ mod tests {
                 target.class_id, h64(0xA18), &binding.job_context, 0);
             row.token_table_root = Some(table.root());
             row.rendering_rule = Some(PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1);
+            row.raw_tokenizer_bytes = Some(raw.len() as u64);
             target.registered_semantics = Some(row);
             let opening = table.opening_of(0).unwrap();
             assert_eq!(palw_tokenizer_table_fault_v1(&target, &binding, &job, raw, &opening), Ok(fault));
@@ -4342,6 +4344,9 @@ mod tests {
             assert!(palw_tokenizer_table_fault_v1(&target, &binding, &job, raw, &forged).is_err());
             let mut other_job = job.clone(); other_job.job_nonce[0] ^= 1;
             assert!(palw_tokenizer_table_fault_v1(&target, &binding, &other_job, raw, &opening).is_err());
+            target.registered_semantics.as_mut().unwrap().raw_tokenizer_bytes = Some(raw.len() as u64 - 1);
+            assert_eq!(palw_tokenizer_table_fault_v1(&target, &binding, &job, raw, &opening), Ok(true),
+                "an authenticated full preimage can refute an understated length contract");
             target.registered_semantics.as_mut().unwrap().rendering_rule = None;
             assert!(matches!(palw_tokenizer_table_fault_v1(&target, &binding, &job, raw, &opening), Err(E::ContradictionNotAdmitted(_))));
         }
