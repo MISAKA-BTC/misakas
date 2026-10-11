@@ -11,7 +11,7 @@ use crate::result::Result;
 use crate::storage::TransactionRecord;
 use crate::tx::PendingTransaction;
 use crate::utxo::{
-    Maturity, NetworkParams, OutgoingTransaction, PendingUtxoEntryReference, UtxoContextBinding, UtxoEntryId, UtxoEntryReference,
+    Maturity, OutgoingTransaction, PendingUtxoEntryReference, UtxoContextBinding, UtxoEntryId, UtxoEntryReference,
     UtxoEntryReferenceExtension, UtxoProcessor,
 };
 use kaspa_consensus_client::UtxoEntry;
@@ -199,16 +199,75 @@ impl UtxoContext {
         &self.inner.id
     }
 
+    /// Recheck coinbase authority at each input consumer. Non-coinbase change and
+    /// relay entries retain the existing explicit force-maturity behavior.
+    pub(crate) fn is_entry_spendable(&self, entry: &UtxoEntryReference) -> bool {
+        if !entry.is_coinbase() {
+            return true;
+        }
+        match (self.processor().network_params(), self.processor().current_daa_score()) {
+            (Ok(params), Some(daa)) => matches!(entry.maturity(&params, daa), Maturity::Confirmed),
+            _ => false,
+        }
+    }
+
+    /// A DNS shortcut can disappear after a coinbase was put in the mature list.
+    /// Move that existing entry back into the normal pending/stasis machinery;
+    /// keep the output and its money so a fresh confirmation or long maturity
+    /// can promote it again. No mutex is held across an RPC or notification.
+    pub(crate) fn refresh_mature_coinbases(&self) -> bool {
+        let params = self.processor().network_params().ok();
+        let daa = self.processor().current_daa_score();
+        let mut context = self.context();
+        let mut demoted = Vec::new();
+        context.mature.retain(|entry| {
+            if !entry.is_coinbase() {
+                return true;
+            }
+            let maturity = match (&params, daa) {
+                (Some(params), Some(daa)) => entry.maturity(params, daa),
+                _ => Maturity::Pending,
+            };
+            match maturity {
+                Maturity::Confirmed => true,
+                other => { demoted.push((entry.clone(), other)); false }
+            }
+        });
+        let changed = !demoted.is_empty();
+        for (entry, maturity) in demoted {
+            let pending = PendingUtxoEntryReference::new(entry.clone(), self.clone());
+            match maturity {
+                Maturity::Stasis => {
+                    context.stasis.insert(entry.id(), entry.clone());
+                    self.processor().stasis().insert(entry.id(), pending);
+                }
+                Maturity::Pending => {
+                    context.pending.insert(entry.id(), entry.clone());
+                    self.processor().pending().insert(entry.id(), pending);
+                }
+                Maturity::Confirmed => unreachable!(),
+            }
+        }
+        changed
+    }
+
     pub fn mature_utxo_size(&self) -> usize {
+        self.refresh_mature_coinbases();
         self.context().mature.len()
     }
 
     pub fn pending_utxo_size(&self) -> usize {
+        self.refresh_mature_coinbases();
         self.context().pending.len()
     }
 
     pub fn balance(&self) -> Option<Balance> {
-        self.context().balance.clone()
+        let previous = self.context().balance.clone()?;
+        self.refresh_mature_coinbases();
+        let mut current = self.calculate_balance_now();
+        current.delta(&Some(previous));
+        self.context().balance.replace(current.clone());
+        Some(current)
     }
 
     pub fn addresses(&self) -> Arc<DashSet<Arc<Address>>> {
@@ -230,7 +289,7 @@ impl UtxoContext {
 
     pub async fn update_balance(&self) -> Result<Balance> {
         let balance = {
-            let previous_balance = self.balance();
+            let previous_balance = self.context().balance.clone();
             let mut balance = self.calculate_balance().await;
             balance.delta(&previous_balance);
             let mut context = self.context();
@@ -299,8 +358,8 @@ impl UtxoContext {
             if force_maturity {
                 context.mature.sorted_insert_binary_asc_by_key(utxo_entry.clone(), |entry| entry.amount_as_ref());
             } else {
-                let params = NetworkParams::from(self.processor().network_id()?);
-                match utxo_entry.maturity(params, current_daa_score) {
+                let params = self.processor().network_params()?;
+                match utxo_entry.maturity(&params, current_daa_score) {
                     Maturity::Stasis => {
                         context.stasis.insert(utxo_entry.id().clone(), utxo_entry.clone());
                         self.processor()
@@ -451,12 +510,12 @@ impl UtxoContext {
             let mut pending = vec![];
             let mut mature = Vec::with_capacity(utxo_entries.len());
 
-            let params = NetworkParams::from(self.processor().network_id()?);
+            let params = self.processor().network_params()?;
 
             for utxo_entry in utxo_entries.into_iter() {
                 if let std::collections::hash_map::Entry::Vacant(e) = context.map.entry(utxo_entry.id()) {
                     e.insert(utxo_entry.clone());
-                    match utxo_entry.maturity(params, current_daa_score) {
+                    match utxo_entry.maturity(&params, current_daa_score) {
                         Maturity::Stasis => {
                             context.stasis.insert(utxo_entry.id().clone(), utxo_entry.clone());
                             self.processor()
@@ -504,6 +563,11 @@ impl UtxoContext {
     }
 
     pub async fn calculate_balance(&self) -> Balance {
+        self.refresh_mature_coinbases();
+        self.calculate_balance_now()
+    }
+
+    fn calculate_balance_now(&self) -> Balance {
         let context = self.context();
         let mature: u64 = context.mature.iter().map(|e| e.as_ref().amount).sum();
         let pending: u64 = context.pending.values().map(|e| e.as_ref().amount).sum();
@@ -577,7 +641,7 @@ impl UtxoContext {
     pub(crate) async fn handle_utxo_added(&self, utxos: Vec<UtxoEntryReference>, current_daa_score: u64) -> Result<()> {
         // add UTXOs to account set
 
-        let params = NetworkParams::from(self.processor().network_id()?);
+        let params = self.processor().network_params()?;
 
         let mut accepted_outgoing_transactions = AHashSet::new();
 
@@ -589,7 +653,7 @@ impl UtxoContext {
 
             let force_maturity_if_outgoing = outgoing_transaction.is_some();
             let is_coinbase_stasis =
-                utxos.first().map(|utxo| matches!(utxo.maturity(params, current_daa_score), Maturity::Stasis)).unwrap_or_default();
+                utxos.first().map(|utxo| matches!(utxo.maturity(&params, current_daa_score), Maturity::Stasis)).unwrap_or_default();
             let is_batch = outgoing_transaction.as_ref().map_or_else(|| false, |tx| tx.is_batch());
             if !is_batch {
                 for utxo in utxos.iter() {
@@ -755,7 +819,8 @@ impl UtxoContext {
     }
 
     pub async fn get_utxos(&self, addresses: Option<Vec<Address>>, min_amount_sompi: Option<u64>) -> Result<Vec<UtxoEntry>> {
-        let utxos = &self.context().mature;
+        self.refresh_mature_coinbases();
+        let utxos: Vec<_> = crate::utxo::UtxoIterator::new(self).collect();
         let mut amount = 0;
         if let Some(addresses) = &addresses {
             if let Some(min_amount_sompi) = min_amount_sompi {
