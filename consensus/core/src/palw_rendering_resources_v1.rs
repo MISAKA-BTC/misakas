@@ -98,6 +98,22 @@ impl PalwRenderingResourcePlanV1 {
             resident_ram_bytes: narrow(resident_ram_bytes)?,
         })
     }
+    /// One owner chooses one court. Every component covers the worst of each eligible
+    /// predicate; this does not price many independent owners as a single shared deposit.
+    pub fn cover(mut self, other: Self) -> Self {
+        self.prefix_tokens=self.prefix_tokens.max(other.prefix_tokens); self.vocab=self.vocab.max(other.vocab);
+        self.maximum_stream_bytes=self.maximum_stream_bytes.max(other.maximum_stream_bytes);
+        self.maximum_stream_leaves=self.maximum_stream_leaves.max(other.maximum_stream_leaves);
+        self.maximum_eog_bytes=self.maximum_eog_bytes.max(other.maximum_eog_bytes);
+        self.maximum_moves=self.maximum_moves.max(other.maximum_moves);
+        self.maximum_parser_steps=self.maximum_parser_steps.max(other.maximum_parser_steps);
+        self.maximum_blake_blocks=self.maximum_blake_blocks.max(other.maximum_blake_blocks);
+        self.inclusion_daa=self.inclusion_daa.max(other.inclusion_daa);
+        self.rent_sompi=self.rent_sompi.max(other.rent_sompi);
+        self.deposit_sompi=self.deposit_sompi.max(other.deposit_sompi);
+        self.row_bytes=self.row_bytes.max(other.row_bytes);
+        self.resident_ram_bytes=self.resident_ram_bytes.max(other.resident_ram_bytes); self
+    }
     /// Exact prospective duration from this accepted claim, with an explicitly retained reorg
     /// envelope. Saturation is a refusal, never a silently shorter lifetime.
     pub fn deadline(&self, accepted_daa: u64) -> Result<u64, String> {
@@ -290,6 +306,24 @@ pub struct PalwTokenizerResourcePlanV1 {
     pub resident_ram_bytes: u64,
 }
 impl PalwTokenizerResourcePlanV1 {
+    /// Complete raw derivation plus one largest legal ORIGINAL table rendering. The declared
+    /// table length is not trusted to reduce this envelope before its old flat leaf authenticates.
+    pub fn court_envelope(self, vocab:u32, p:PalwRenderingResourcePricesV1)->Result<PalwRenderingResourcePlanV1,String> {
+        let table=crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128;
+        let table_moves=table.div_ceil(65536)+2;
+        let moves=u128::from(self.maximum_moves)+table_moves;
+        let row=65536u128+2048;
+        Ok(PalwRenderingResourcePlanV1 {prefix_tokens:0,vocab,
+            maximum_stream_bytes:narrow(u128::from(self.exact_raw_bytes)+table)?, maximum_stream_leaves:1,
+            maximum_eog_bytes:0, maximum_moves:narrow(moves)?,
+            maximum_parser_steps:self.maximum_parser_steps,
+            maximum_blake_blocks:narrow(u128::from(self.maximum_blake_blocks)+table.div_ceil(128)*2+8)?,
+            inclusion_daa:narrow(moves*u128::from(p.inclusion_margin_daa))?,
+            rent_sompi:narrow(u128::from(self.rent_sompi)+table*u128::from(p.rent_per_stream_byte)
+                +row*u128::from(p.rent_per_row_byte))?,
+            deposit_sompi:narrow(moves*u128::from(p.deposit_per_move))?, row_bytes:narrow(row)?,
+            resident_ram_bytes:self.resident_ram_bytes.checked_add(2048).ok_or("tokenizer RAM overflow")?})
+    }
     pub fn derive(exact_raw_bytes: u64, p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
         Self::derive_with_key_bound(exact_raw_bytes, exact_raw_bytes, p)
     }

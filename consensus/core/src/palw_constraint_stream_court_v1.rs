@@ -19,6 +19,7 @@ pub enum PalwConstraintStreamPhaseV1 {
     Committed,
     Auxiliary,
     Complete,
+    Tokenizer,
 }
 /// Immutable certificate DERIVED by the rooted court, reusable against only an attestation
 /// whose authenticated duty contains this position. Producer liability still names the claim.

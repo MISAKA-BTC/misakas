@@ -12,6 +12,11 @@ pub const PALW_CONSTRAINT_STREAM_TAIL_V1: u8 = 0xF8;
 /// Seed transport is independent of a legacy direct objective offence cap. It is still bounded
 /// by the admitted court carrier ceiling, never a limit chosen by the challenger.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwAuxiliaryPublicCourtSeedV1 {
+    /// The original registered table leaf; its complete bytes authenticate only at EOF.
+    Tokenizer { id: u32, present: bool, length: u32, opening: PalwStepOpeningV1 },
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamSeedV1 {
     pub version: u16,
     pub claim: Hash64,
@@ -23,6 +28,8 @@ pub struct PalwConstraintStreamSeedV1 {
     pub witness: Option<u32>,
     pub eog_count: u32,
     pub eog_opening: PalwStepOpeningV1,
+    /// Prospective typed court selection. None preserves constrained-selection behavior.
+    pub auxiliary: Option<PalwAuxiliaryPublicCourtSeedV1>,
     pub signature: Vec<u8>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -45,6 +52,9 @@ pub enum PalwConstraintStreamActionV1 {
     RenderingPart { offset: u32, bytes: Vec<u8> },
     RenderingFinish,
     EogTokenFinish,
+    TokenizerPacket(crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1),
+    TokenizerSeal,
+    TokenizerRenderingPart { offset: u32, bytes: Vec<u8> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -92,6 +102,7 @@ impl PalwConstraintStreamSeedV1 {
                 &encode(&self.witness),
                 &encode(&self.eog_count),
                 &encode(&self.eog_opening),
+                &encode(&self.auxiliary),
             ],
         )
     }
@@ -115,6 +126,7 @@ impl PalwConstraintStreamSeedV1 {
         Ok(())
     }
     pub fn court(&self, expected_claim_root: Hash64, ladder: u64) -> Result<PalwConstraintStreamCourtV1, String> {
+        if self.auxiliary.is_some() { return Err("auxiliary seed is not a constrained-selection court".into()); }
         PalwConstraintStreamCourtV1::new(
             self.claim,
             self.reserver,
@@ -183,6 +195,13 @@ impl PalwConstraintStreamMoveV1 {
             {
                 Err("stream rendering move exceeds fixed bounded work".into())
             }
+            PalwConstraintStreamActionV1::TokenizerPacket(packet) if packet.bytes.len()>65536
+                || packet.proofs.len()>64 || borsh::to_vec(packet).map_err(|e|e.to_string())?.len()>90000 => {
+                    Err("tokenizer packet exceeds admitted bounded carrier".into())
+            }
+            PalwConstraintStreamActionV1::TokenizerRenderingPart { bytes, .. } if bytes.is_empty() || bytes.len()>65536 => {
+                Err("tokenizer rendering part exceeds bounded work".into())
+            }
             _ => Ok(()),
         }
     }
@@ -198,6 +217,8 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::RenderingPart { offset, bytes } => court.push_rendering(self.seed_id, *offset, bytes),
             PalwConstraintStreamActionV1::RenderingFinish => court.finish_rendering(),
             PalwConstraintStreamActionV1::EogTokenFinish => court.finish_eog_token(self.seed_id),
+            PalwConstraintStreamActionV1::TokenizerPacket(_)|PalwConstraintStreamActionV1::TokenizerSeal
+                |PalwConstraintStreamActionV1::TokenizerRenderingPart {..} => Err("typed tokenizer move is not a constrained court action".into()),
         }
     }
 }

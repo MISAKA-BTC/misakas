@@ -201,6 +201,7 @@ pub(crate) mod tests {
             witness: a.witness,
             eog_count: a.eog.ids.len() as u32,
             eog_opening: a.eog.opening,
+            auxiliary: None,
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }, copy)
     }
