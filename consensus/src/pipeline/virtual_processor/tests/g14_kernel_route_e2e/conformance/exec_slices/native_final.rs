@@ -161,13 +161,30 @@ async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_canc
     assert!(receipt.liability_until >= native.final_daa + cw.net.bundle.state.window_court());
     assert!(native.expiry_daa > receipt.liability_until);
     let ledger = cw.net.ledger();
+    eprintln!(
+        "[x8-native-final] funded allocation={}, native producer={}, escrow={}, receipt={:?}, root={:?}",
+        receipt.allocation_sompi,
+        native.producer.amount,
+        state.claim(&s.real.claim).unwrap().escrowed_reward,
+        receipt.legs,
+        state.exec_v2_root_v1(&s.real.claim)
+    );
     let fee_total: u64 = std::iter::once(&s.prefix)
         .chain(s.slices.iter())
         .map(|claim| {
             assert!(!ledger.exec_reward_holds.contains_key(&claim.claim.id));
             assert!(!ledger.job_escrows.contains_key(&claim.job.id()));
             let row = &ledger.claims[&claim.claim.id];
-            assert!(row.rewarded, "root Final settles the worker right");
+            assert!(
+                row.rewarded,
+                "root Final settles worker {:?}: producer {}, reserved {}, root allocation {}, native producer {}, prefix {:?}",
+                claim.claim.id,
+                claim.claim.producer,
+                row.reserved,
+                receipt.allocation_sompi,
+                native.producer.amount,
+                state.exec_v2_root_v1(&s.real.claim).unwrap().prefix
+            );
             let native_root = state.exec_v2_root_v1(&s.real.claim).unwrap();
             if claim.claim.id == s.prefix.claim.id {
                 match native_root.prefix {
