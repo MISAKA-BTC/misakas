@@ -226,3 +226,16 @@ Remaining RFC08 work includes complete native all-positive Final validation,
 all reporter pre-work maxima and material/liability lifecycle, bounded completed
 award history, EVM H160 ownership and gas-income reservation, and full external
 pruned-join/profitability evidence. No economic/security approval is implied.
+
+## Material pruning while an accepted obligation remains
+
+The node janitor previously deleted own Attempt captures by age regardless of an accepted DA duty,
+and could delete owed foreign copies under its disk-space rule. The janitor now pins every capture
+whose chain read reports `da_owed`, under both age and space rules, and returns the remaining space
+deficit. It cannot treat a possible later replay as discharge of the accepted retention duty.
+The regression covers own old Attempt captures, foreign Attempt and free-prompt copies, and release
+after the obligation ends. This local repair does not extend a signed provider TTL, prove material
+availability, or yet connect root-exact physical monetary payment+W to that chain read.
+
+Verification at commit: Rust parser and `git diff --check` passed; runtime tests await the parent's
+central build.
