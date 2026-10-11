@@ -84,3 +84,43 @@ close this gap. Required remaining work includes:
 Original GDN parameters are one68-byte production inventory leaf per head. The
 previous concern about streaming an entire containing GDN parameter table was
 incorrect for this relation; other artifact matrices retain their own bounds.
+
+## Flat packed checkpoint — source95428bf46
+
+[Packed quote provenance](public-prefix-packed-quote-provenance.json) and
+[six executed source/resource unit tests](public-prefix-packed-unit-provenance.json)
+retain the same standalone dependency qualification. The earlier table remains
+before-packing evidence. The new outer packet is a flat1..64-action vector,
+serialized body at most73,616 bytes and whole signed carrier at most90,000.
+Each original opening/part/finish still runs in canonical order and authenticates
+the original whole leaf at EOF. The owner applies a packet on a copied baseline,
+charges every logical action and commits state and counters only if all succeed.
+Physical carriers have an independent counter and ceiling.
+
+The deterministic next-fit upper bound uses total raw bytes, actual old-step proof
+depth, fixed action headers, original parameter identities/proofs and64-action
+capacity. It does not divide arbitrary logical work by64. A byte-closed packet
+and its successor together exceed the body budget, bounding byte closures by
+ceil(2×total action wire/body); count closures add ceil(logical actions/64).
+The64-packet reorg allowance now includes up to4,096 logical replays plus raw
+hash and proof work. Logical CPU/profile/job validation charges remain intact.
+
+| Quantity | k2 native class | k8192 prospective class |
+|---|---:|---:|
+| Logical action ceiling |226,139|142,348,277|
+| Physical carrier ceiling |7,606|5,931,012|
+| Inclusion DAA |30,424|23,724,048|
+| Signed carrier bytes |684,540,000|533,791,080,000|
+| Rent sompi |998,235,953,058|632,908,833,633,762|
+| Rent KAS |9,982.35953058|6,329,088.33633762|
+
+This reduces the k2 inclusion bound from888,428 to30,424 DAA. It still does not
+fit ordinary legacy clocks and still requires far more capital than merely one
+minimum public bond. Actual packing execution, all accepted claim/retention/exit
+clock holds and funded custodian attempt budgets remain required. No activation
+or active-profile guarantee follows from these arithmetic improvements.
+
+A single original parameter identity too large for the bounded packet now returns
+an explicit unsupported streamed-identity-contract error instead of quoting an
+unusable carrier. This records a full-scope gap for that admitted geometry; it is
+not a profile removal or permission to call G14 complete.
