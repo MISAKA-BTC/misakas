@@ -31,6 +31,14 @@ impl PalwBeaconSourcePolicyV1 {
         if !context.policy.is_opt_in_source() {
             return Err("native source target needs opt-in v4".into());
         }
+        // This horizon belongs to the authenticated onboarding attempt. A
+        // different consumer must derive and enforce its own complete liability
+        // bound before admitting any source or charging a sponsor.
+        if context.subject_kind != misaka_palw_challenge::SubjectKindV1::ModelConformance
+            || context.candidate_profile_id == misaka_palw_challenge::RootV1::Absent
+        {
+            return Err("onboarding source timing cannot authorize a Panel, claim, slice or prosecution target".into());
+        }
         let source_floor = ledger_policy
             .challenge_window_daa
             .checked_add(ledger_policy.court_deadline_daa)
@@ -102,6 +110,35 @@ impl Params {
 mod tests {
     use super::*;
     use crate::config::params::{MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
+
+    #[test]
+    fn source_opt_in_onboarding_horizon_refuses_other_consumer_subjects_before_monetary_admission() {
+        use misaka_palw_challenge::{BeaconContextV1, RootV1, SubjectKindV1};
+        let policy = crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5();
+        let ledger = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(
+            kaspa_hashes::Hash64::from_u64_word(1), kaspa_hashes::Hash64::from_u64_word(2),
+        );
+        let source = PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1));
+        let context = BeaconContextV1 {
+            chain_genesis: [1; 64], ruleset_id: [2; 64], policy,
+            subject_kind: SubjectKindV1::ModelConformance, commitment_root: [3; 64],
+            commitment_position: 100, challenge_epoch: 0,
+            eligible_profiles: std::collections::BTreeSet::from([[4; 64]]),
+            excluded_profiles: std::collections::BTreeSet::from([[5; 64]]),
+            candidate_profile_id: RootV1::Present([5; 64]),
+        };
+        let original = source.policy.target(context.clone(), &ledger).unwrap();
+        original.validate().unwrap();
+        for subject in SubjectKindV1::ALL {
+            if subject == SubjectKindV1::ModelConformance { continue; }
+            let mut changed = context.clone(); changed.subject_kind = subject;
+            assert!(source.policy.target(changed.clone(), &ledger).is_err(), "{subject:?}");
+            changed.candidate_profile_id = RootV1::Absent;
+            assert!(source.policy.target(changed, &ledger).is_err(), "typed absence does not authorize {subject:?}");
+        }
+        let mut missing = context; missing.candidate_profile_id = RootV1::Absent;
+        assert!(source.policy.target(missing, &ledger).is_err());
+    }
 
     #[test]
     fn source_opt_in_has_its_own_dormant_fence_and_none_is_fingerprint_neutral() {
