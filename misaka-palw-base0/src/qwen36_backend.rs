@@ -3164,7 +3164,11 @@ mod tests {
             use kaspa_consensus_core::palw_step_leg::{PalwStepMerkleTreeV1, PalwStepOpeningV1, step_tile_leaf_hash_ctx_v1};
             let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
             let binding = retained.binding();
-            let raw = retained.tiles().unwrap();
+            // Public answers are assembled by the producer from its normal folded retention.
+            // The production conversion checks the reproduced execution root before exposing
+            // these tiles; the outsider below receives only their authenticated openings.
+            let producer_tiles = backend.tiles_from_material_v1(&retained).unwrap();
+            let raw = &producer_tiles.tiles;
             let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
             let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
             for (i, t) in raw {

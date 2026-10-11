@@ -1372,7 +1372,8 @@ mod tests {
 
     #[test]
     fn registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names() {
-        use kaspa_consensus_core::palw_freeprompt_v3::{DecodeConfigV4, PalwFpJobTailV1, PalwFpPrefixStateV1};
+        use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
         use kaspa_consensus_core::palw_prefix_base0_codec_v1::{PALW_BASE0_PREFIX_I8_DIGEST_DOMAIN_V1, PalwBase0PrefixDigestV1};
         use kaspa_consensus_core::palw_prefix_state_court_v1::{
             PalwPrefixKvPlanV1, PalwPrefixKvTileV1, palw_prefix_kv_authenticated_bytes_v1,
@@ -1414,7 +1415,7 @@ mod tests {
             let good = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
             let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
             let binding = retained.binding();
-            let raw = retained.tiles().unwrap();
+            let raw = retained.tiles().expect("BASE0 production capture retains dense public answer tiles");
             let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
             let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
             for (i, t) in raw {
