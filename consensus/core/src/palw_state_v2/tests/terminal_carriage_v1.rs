@@ -5,17 +5,15 @@ use crate::palw_legacy_public_filer_v1::*;
 use crate::palw_offence_v1::PalwOffenceKindV1;
 use crate::palw_terminal_carriage_v1::*;
 fn fixture() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, PalwConsensusObjectV2, Vec<PalwTerminalPartV1>, PalwTransitionExtrasV1) {
-    let historic = params();
-    // Ordinary 500permille work/accuser split is part of the public filer's supported
-    // R-core contract. The historic1000permille test setup leaves zero accuser room
-    // regardless of additional collateral; preserve its pre-upgrade claim history.
-    let p = historic
-        .clone()
+    // Build the actual licence under the same R-core contract that will later consume
+    // its evidence. Enabling the mirror only after licensing produces a historical row
+    // without a normative licence door and correctly fails the production loader.
+    let p = params()
         .with_fp_exposure_ceiling(500)
         .unwrap()
-        .with_rcore_plus_mirrors(Some(104), 12_900, vec![h64(0x2B)])
+        .with_rcore_plus_mirrors(Some(0), 12_900, vec![h64(0x2B)])
         .with_legacy_public_filer_from_daa(Some(104));
-    let (licensed, claim, c, _) = f2_licensed_false_execution(&historic);
+    let (licensed, claim, c, _) = f2_licensed_false_execution(&p);
     let x = PalwTransitionExtrasV1 { terminal_evidence_max_bytes: Some(PALW_TERMINAL_MAX_BYTES_V1), ..f2_extras() };
     let row = licensed.claim(&claim).unwrap();
     let reserve = PalwConsensusObjectV2::DisputeReservedV1 {
