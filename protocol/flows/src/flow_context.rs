@@ -59,7 +59,7 @@ use std::{
     iter::once,
     ops::Deref,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -576,10 +576,19 @@ pub struct ResyncReport {
 /// LIVE-R1: called once when a verified resync is confirmed.
 pub type ResyncReporter = Arc<dyn Fn(&ResyncReport) + Send + Sync>;
 
+struct BootConsensusIdsV1 {
+    params: BlockHash,
+    identity: BlockHash,
+    schedule: BlockHash,
+}
+
 pub struct FlowContextInner {
     pub node_id: PeerId,
     pub consensus_manager: Arc<ConsensusManager>,
     pub config: Arc<Config>,
+    // The final Config is immutable. Its Params hashes include the full genesis registry;
+    // neither reconnecting a peer nor reviewing an IBD candidate should serialize it again.
+    boot_consensus_ids: OnceLock<BootConsensusIdsV1>,
     hub: Hub,
     orphans_pool: AsyncRwLock<OrphanBlocksPool>,
     shared_block_requests: Arc<Mutex<HashMap<BlockHash, RequestScopeMetadata>>>,
@@ -987,6 +996,7 @@ impl FlowContext {
                 orphan_resolution_range,
                 max_orphans,
                 config,
+                boot_consensus_ids: OnceLock::new(),
                 mining_rule_engine,
             }),
         }
@@ -1024,6 +1034,18 @@ impl FlowContext {
 
     pub fn consensus(&self) -> ConsensusInstance {
         self.consensus_manager.consensus()
+    }
+
+    fn boot_consensus_ids(&self) -> &BootConsensusIdsV1 {
+        self.inner.boot_consensus_ids.get_or_init(|| BootConsensusIdsV1 {
+            params: self.config.params.consensus_params_id(),
+            identity: self.config.params.consensus_identity_id(),
+            schedule: self.config.params.consensus_schedule_id(),
+        })
+    }
+
+    pub(crate) fn boot_consensus_params_id(&self) -> BlockHash {
+        self.boot_consensus_ids().params
     }
 
     pub fn palw_gossip(&self) -> &crate::palw_gossip::PalwGossipCenter {
@@ -2378,9 +2400,9 @@ impl ConnectionInitializer for FlowContext {
             None,
             PROTOCOL_VERSION,
             self.config.genesis.hash.as_bytes().to_vec(),
-            self.config.params.consensus_params_id().as_bytes().to_vec(),
-            self.config.params.consensus_identity_id().as_bytes().to_vec(),
-            self.config.params.consensus_schedule_id().as_bytes().to_vec(),
+            self.boot_consensus_ids().params.as_bytes().to_vec(),
+            self.boot_consensus_ids().identity.as_bytes().to_vec(),
+            self.boot_consensus_ids().schedule.as_bytes().to_vec(),
             local_fork_id.fired.as_bytes().to_vec(),
             local_fork_id.next,
         );
@@ -2412,14 +2434,20 @@ impl ConnectionInitializer for FlowContext {
         // then the rules (`handshake_rules_verdict_v1`, whose doc carries the reasons). `Ok(true)`
         // is a peer that agrees on every rule in force now and schedules a future fence
         // differently — kept, and reported here.
-        if handshake_rules_verdict_v1(&network_name, self.config.genesis.hash, &self.config.params, &peer_version)? {
+        if handshake_rule_ids_verdict_v1(
+            &network_name,
+            self.config.genesis.hash,
+            self.boot_consensus_ids().params,
+            self.boot_consensus_ids().identity,
+            &peer_version,
+        )? {
             warn!(
                 "peer {} agrees on every rule in force now and schedules a FUTURE fence differently (local {}, \
                  peer {}); keeping the peer — the two builds agree on every block either can produce today and \
                  diverge at the earliest height they disagree about. If that height is already behind this chain, \
                  they are diverging NOW: compare the two builds' fence values before trusting this peer's tip",
                 peer_version.id,
-                self.config.params.consensus_schedule_id(),
+                self.boot_consensus_ids().schedule,
                 describe_fingerprint(&peer_version.consensus_schedule_id),
             );
         }
@@ -2614,10 +2642,27 @@ impl ConnectionInitializer for FlowContext {
 ///
 /// A pure function of the local chain and the peer's version message, so the refusal is tested on
 /// the handshake's own comparison and not on a restatement of it.
+#[cfg(test)]
 fn handshake_rules_verdict_v1(
     network_name: &str,
     local_genesis: BlockHash,
     local_params: &kaspa_consensus_core::config::params::Params,
+    peer_version: &Version,
+) -> Result<bool, ProtocolError> {
+    handshake_rule_ids_verdict_v1(
+        network_name,
+        local_genesis,
+        local_params.consensus_params_id(),
+        local_params.consensus_identity_id(),
+        peer_version,
+    )
+}
+
+fn handshake_rule_ids_verdict_v1(
+    network_name: &str,
+    local_genesis: BlockHash,
+    local_params_id: BlockHash,
+    local_identity: BlockHash,
     peer_version: &Version,
 ) -> Result<bool, ProtocolError> {
     if peer_version.genesis_hash != local_genesis.as_bytes().to_vec() {
@@ -2627,11 +2672,9 @@ fn handshake_rules_verdict_v1(
             describe_fingerprint(&peer_version.genesis_hash),
         ));
     }
-    let local_params_id = local_params.consensus_params_id();
     if peer_version.consensus_params_id == local_params_id.as_bytes().to_vec() {
         return Ok(false);
     }
-    let local_identity = local_params.consensus_identity_id();
     let identity_agrees =
         !peer_version.consensus_identity_id.is_empty() && peer_version.consensus_identity_id == local_identity.as_bytes();
     if !identity_agrees {

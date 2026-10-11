@@ -60,7 +60,7 @@ impl RequestIbdCandidateSummaryFlow {
                         // Repeated from the handshake so the asker can reject on rules alone,
                         // without having to trust that the connection was checked elsewhere.
                         genesis_hash: self.ctx.config.genesis.hash.as_bytes().to_vec(),
-                        consensus_params_id: self.ctx.config.params.consensus_params_id().as_bytes().to_vec(),
+                        consensus_params_id: self.ctx.boot_consensus_params_id().as_bytes().to_vec(),
                     },
                     request_id
                 ))

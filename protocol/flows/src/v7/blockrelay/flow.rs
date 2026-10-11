@@ -521,7 +521,7 @@ impl HandleRelayInvsFlow {
         // Rules first: a chain built under different consensus params or a different genesis is not
         // a candidate at all, whatever it claims about its weight.
         if summary.genesis_hash != self.ctx.config.genesis.hash.as_bytes()
-            || summary.consensus_params_id != self.ctx.config.params.consensus_params_id().as_bytes()
+            || summary.consensus_params_id != self.ctx.boot_consensus_params_id().as_bytes()
         {
             record_stage(
                 RecoveryStage::Rejected,

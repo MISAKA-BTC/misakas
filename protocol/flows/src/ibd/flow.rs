@@ -741,7 +741,7 @@ impl IbdFlow {
             claimed_tip_blue_work,
             proof_hash,
             genesis_hash: self.ctx.config.genesis.hash,
-            consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            consensus_params_id: self.ctx.boot_consensus_params_id(),
             descends_from_checkpoint,
         };
         match authorize_candidate_validation(RecoveryRequest {
@@ -749,7 +749,7 @@ impl IbdFlow {
             candidate,
             provisional_blue_work,
             local_genesis: self.ctx.config.genesis.hash,
-            local_consensus_params_id: self.ctx.config.params.consensus_params_id(),
+            local_consensus_params_id: self.ctx.boot_consensus_params_id(),
             checkpoint: self.ctx.config.trusted_checkpoint.as_ref(),
             reserved_candidate: Some(reserved.candidate_id),
             switch_limit: MAX_CHAIN_SWITCHES,
@@ -1223,7 +1223,7 @@ impl IbdFlow {
         let (descends_from_checkpoint, checkpoint_params_match) = match self.ctx.config.trusted_checkpoint {
             Some(cp) => (
                 Some(staging.async_is_chain_ancestor_of(cp.block_hash, tip).await.unwrap_or(false)),
-                Some(cp.consensus_params_id == self.ctx.config.params.consensus_params_id()),
+                Some(cp.consensus_params_id == self.ctx.boot_consensus_params_id()),
             ),
             None => (None, None),
         };
@@ -1490,7 +1490,7 @@ impl IbdFlow {
                     "--trusted-checkpoint was taken under consensus params {} but this node runs {}. A block hash means \
                      nothing without the rules it was validated under, so this node cannot act on that checkpoint.",
                     cp.consensus_params_id,
-                    self.ctx.config.params.consensus_params_id()
+                    self.ctx.boot_consensus_params_id()
                 )
             }
             CommitVerdict::RefuseCheckpointMissing => {

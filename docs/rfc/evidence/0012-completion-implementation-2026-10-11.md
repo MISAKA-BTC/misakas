@@ -56,3 +56,7 @@ bundle and its genesis registrations; subsequent reads reuse that value instead 
 registry-sized allocation. Import epoch, active point, phase, stable state and live authority
 continue to come from the current consensus session on every request. This bounds repeated
 status reads during a population probe; it does not establish a measured 100k latency gate.
+The P2P context similarly caches the immutable params/identity/schedule hashes for handshake and
+candidate summaries, checkpoint checks and recovery authorization. Their comparison algorithms
+and messages are unchanged. Height-dependent fired/next fork IDs and peer re-judgment still use
+the current DAA score, and live participation, headers, roots and import state remain uncached.
