@@ -159,6 +159,50 @@ impl TirShardHoldingV1 {
         f(&store)
     }
 
+    /// Reduction totals over the capture's committed inputs. Dense evidence never replays
+    /// the model prefix: any required parameter outside this holding is refused by the store.
+    pub fn root_claim(
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        index: u64,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1, String> {
+        self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_root_claim_v1(&capture.binding, index, store, rules)
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    /// The constraint's true child partials against the phase's pinned root totals. A
+    /// challenger compares these with the filed children, using the accused's authenticated
+    /// committed inputs, rather than substituting inputs from a different execution.
+    pub fn dissect_round(
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
+        self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_v1(
+                &capture.binding, phase, self.space.layout.h_tile, store, rules,
+            ).map_err(|e| e.to_string())
+        })
+    }
+
+    /// Canonical bottom carriage over the accused's committed leaf and the held proven rows.
+    /// The validator decides the verdict; constructing this object does not assert guilt.
+    pub fn dissect_bottom(
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirConeRefutationV1, String> {
+        self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_v1(&capture.binding, phase, store, rules)
+                .map_err(|e| e.to_string())
+        })
+    }
+
     /// **The cone close of step leaf `index`**, program stripped as a close rides — built from the capture and the held rows.
     pub fn cone_close(
         &self,
