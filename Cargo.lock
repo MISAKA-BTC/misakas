@@ -5272,6 +5272,7 @@ dependencies = [
  "kaspa-database",
  "kaspa-eth-rpc",
  "kaspa-evm",
+ "kaspa-grpc-client",
  "kaspa-grpc-server",
  "kaspa-hashes",
  "kaspa-index-processor",

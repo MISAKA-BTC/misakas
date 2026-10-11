@@ -5,6 +5,8 @@ use super::*;
 use kaspa_consensus::model::stores::acceptance_data::AcceptanceDataStore;
 use kaspa_consensus::model::stores::block_transactions::BlockTransactionsStore;
 use kaspa_p2p_lib::{Adaptor, pb};
+#[path = "palw_service_rpc_e2e.rs"]
+mod rpc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_relay() {
@@ -14,6 +16,7 @@ async fn automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_
 pub(super) struct NetworkRun {
     receiver: Chain,
     _flow: Arc<FlowContext>,
+    rules: Arc<MiningRuleEngine>,
     primary: Arc<Adaptor>,
     client: Arc<Adaptor>,
     relayed: usize,
@@ -81,8 +84,16 @@ impl NetworkRun {
             Default::default(),
             Arc::new(kaspa_core::chain_participation::ChainParticipationGate::new(true)),
         ));
-        let flow =
-            Arc::new(FlowContext::new(manager, addresses, config, pool, tick, receiver.tc.notification_root(), hub.clone(), rules));
+        let flow = Arc::new(FlowContext::new(
+            manager,
+            addresses,
+            config,
+            pool,
+            tick,
+            receiver.tc.notification_root(),
+            hub.clone(),
+            rules.clone(),
+        ));
         // Select a loopback ephemeral port, then let the actual P2P adaptor own the listener.
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -94,7 +105,7 @@ impl NetworkRun {
             .expect("loopback connection has a bounded deadline")
             .expect("actual P2P handshake accepts the same rules");
         eprintln!("[service-network] actual socket P2P handshake completed at DAA {}", chain.daa());
-        Self { receiver, _metadata: metadata, _flow: flow, primary, client, relayed: chain.history.len() }
+        Self { receiver, _metadata: metadata, _flow: flow, rules, primary, client, relayed: chain.history.len() }
     }
 
     pub(super) async fn relay(&mut self, chain: &Chain) {
@@ -161,6 +172,7 @@ impl NetworkRun {
             "[service-network] independently validated socket blocks authenticated the multipart public job at DAA {}",
             self.receiver.daa()
         );
+        rpc::verify_socket_evidence(&self.receiver, self._flow.clone(), self.rules.clone(), claim, floor).await;
         self.client.close().await;
         self.primary.close().await;
     }
