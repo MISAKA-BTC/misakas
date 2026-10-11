@@ -826,6 +826,15 @@ fn evaluate_leaf(
     source: &mut TirSource<'_, '_>,
     limits: &DemandLimits,
 ) -> Result<Vec<i128>, DemandError> {
+    evaluate_leaf_with_work(space, leaf, source, limits).map(|(values, _)| values)
+}
+
+fn evaluate_leaf_with_work(
+    space: &PalwTirStepSpaceV1,
+    leaf: &PalwTirLeafV1,
+    source: &mut TirSource<'_, '_>,
+    limits: &DemandLimits,
+) -> Result<(Vec<i128>, DemandWork), DemandError> {
     let count = leaf.value_count as u64;
     let range = |first: u64| -> Vec<usize> { (first..first + count).map(|e| e as usize).collect() };
     match leaf.kind {
@@ -835,12 +844,12 @@ fn evaluate_leaf(
                 target: DemandTarget::Node { ctx: DemandContext { pos: leaf.position, occurrence: occurrence as u16 }, node },
                 elements: &elements,
             };
-            Ok(eval_demanded(&space.program, &space.info, &request, source, limits)?.0)
+            eval_demanded(&space.program, &space.info, &request, source, limits)
         }
         PalwTirLeafKindV1::State { state, layer, first_element, .. } => {
             let elements = range(first_element);
             let request = DemandRequest { target: DemandTarget::StateAfter { pos: leaf.position, state, layer }, elements: &elements };
-            Ok(eval_demanded(&space.program, &space.info, &request, source, limits)?.0)
+            eval_demanded(&space.program, &space.info, &request, source, limits)
         }
         PalwTirLeafKindV1::HistTile { state, layer, first_lane, row_lanes, first_position, .. } => {
             // A history tile is the committed rows it concatenates, read from their commit points.
@@ -852,7 +861,7 @@ fn evaluate_leaf(
                     out.push(source.node(ctx, node, l as usize)?);
                 }
             }
-            Ok(out)
+            Ok((out, DemandWork::default()))
         }
     }
 }
@@ -1369,9 +1378,38 @@ pub fn build_tir_cone_refutation_v1(
     store: &dyn PalwTirEvidenceStoreV1,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
+    build_tir_cone_refutation_with_budget(binding, output_leaf, store, rules, None)
+}
+
+/// One node cone move with the same shared evaluation, target and logical source budgets
+/// as a dissected move. In particular a history tile's source-only copy is bounded too.
+pub fn build_tir_cone_refutation_bounded_v1(
+    binding: &PalwTirStepBindingV1,
+    output_leaf: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+    limit: PalwTirBuilderWorkLimitsV1,
+) -> Result<(PalwTirConeRefutationV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
+    let mut budget = BuilderBudget::new(limit);
+    let built = build_tir_cone_refutation_with_budget(binding, output_leaf, store, rules, Some(&mut budget))?;
+    Ok((built, budget.meter()))
+}
+
+fn build_tir_cone_refutation_with_budget(
+    binding: &PalwTirStepBindingV1,
+    output_leaf: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+    mut budget: Option<&mut BuilderBudget>,
+) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
     let (v, leaf, inventory) = builder_prelude(binding, output_leaf)?;
+    let eval_err = |e: DemandError| PalwTirEvidenceErrorV1::Evaluation(e.to_string());
+    if let Some(budget) = budget.as_deref_mut() { budget.targets(u64::from(leaf.value_count)).map_err(eval_err)?; }
     let mut source = store_source(&v, &binding.job_context, &inventory, store, output_leaf, rules);
-    evaluate_leaf(&v.space, &leaf, &mut source, &rules.limits).map_err(|e| PalwTirEvidenceErrorV1::Evaluation(e.to_string()))?;
+    source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
+    let remaining = budget.as_ref().map_or(rules.limits, |budget| budget.remaining(&rules.limits));
+    let (_, work) = evaluate_leaf_with_work(&v.space, &leaf, &mut source, &remaining).map_err(eval_err)?;
+    if let Some(budget) = budget { budget.charge(work).map_err(eval_err)?; }
     assemble_carriage(&v, binding, output_leaf, &source.used, store, rules)
 }
 

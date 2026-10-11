@@ -451,3 +451,11 @@ same prelude for evaluation and carriage assembly. Historical builders and valid
 original entry points and acceptance. These counters do **not** count class decode/analysis time,
 carriage serialization/copies, full fold replay, retained preimages or peak RSS; those costs and
 actual 100k/pruned throughput remain separate unapproved gates.
+
+The node's ordinary cone-close builder also uses the same bounded construction entry point.
+A history tile's direct committed-row copy, which performs zero computed-element/reduction-term
+work, is charged by target and logical-read limits before allocation/lookup. The core historical
+cone API and validators remain unchanged; actual full, shard and sparse public node consumers
+enter through the bounded evidence-store method. The focused all-model court corpus selects the
+last commit/checkpoint/history leaf of each applicable model and compares legacy canonical wire,
+exact-budget acceptance and one-less refusal. Runtime evidence is pending the central batch.

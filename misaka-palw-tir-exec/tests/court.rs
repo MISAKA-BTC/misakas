@@ -394,3 +394,59 @@ fn the_inventory_tree_opens_as_the_consensus_inventory() {
     }
     assert!(opened > 100, "{opened}");
 }
+
+#[test]
+fn bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary() {
+    use kaspa_consensus_core::palw_tir_court_v1::{
+        PalwTirBuilderWorkLimitsV1, build_tir_cone_refutation_bounded_v1, build_tir_cone_refutation_v1,
+    };
+    let mut kinds = std::collections::BTreeSet::new();
+    let (mut moves, mut maximum_reads) = (0, 0);
+    for case in cases() {
+        let f = fixture(&case);
+        let rules = rules(case.form);
+        let tparams = TirParams::from_map(&f.plan, &case.params).unwrap();
+        let inventory = TirHeldInventoryV1::build(&case.program, &TirParamsSourceV1(&tparams)).unwrap();
+        let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
+        let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
+        let own = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap();
+        // Last of each kind covers its largest reached history/checkpoint while avoiding a
+        // second exhaustive replay of every leaf performed by the existing conformance test.
+        let mut selected = BTreeMap::new();
+        for index in 0..honest.binding.step_leaf_count {
+            let leaf = f.space.leaf_at(&f.ctx, index).unwrap();
+            let kind = match leaf.kind {
+                PalwTirLeafKindV1::Commit { .. } => "commit",
+                PalwTirLeafKindV1::State { .. } => "checkpoint",
+                PalwTirLeafKindV1::HistTile { .. } => "history tile",
+            };
+            selected.insert(kind, index);
+        }
+        for (kind, index) in selected {
+            kinds.insert(kind);
+            let expected = build_tir_cone_refutation_v1(&honest.binding, index, &own, &rules).unwrap();
+            let (actual, meter) = build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules,
+                misaka_palw_tir_exec::node::tir_court_builder_limits_v1(&rules)).unwrap();
+            assert_eq!(actual, expected, "{} {kind}: bounded cone retains canonical wire", case.name);
+            let mut exact = PalwTirBuilderWorkLimitsV1 {
+                evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: meter.work.elements, max_terms: meter.work.terms },
+                max_target_requests: meter.target_requests,
+                max_source_reads: meter.source_reads,
+            };
+            assert_eq!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).unwrap().0, actual);
+            assert!(meter.target_requests > 0);
+            exact.max_target_requests -= 1;
+            assert!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).is_err());
+            exact.max_target_requests += 1;
+            if meter.source_reads > 0 {
+                exact.max_source_reads -= 1;
+                assert!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).is_err(),
+                    "{} {kind}: source-only history copies and zero states are bounded too", case.name);
+            }
+            maximum_reads = maximum_reads.max(meter.source_reads);
+            moves += 1;
+        }
+    }
+    assert_eq!(kinds.len(), 3, "commit, Fixed checkpoint and Hist tile all exercise bounds");
+    println!("RFC06 bounded cones: {moves} model/kind moves; maximum logical source reads {maximum_reads}");
+}

@@ -38,7 +38,7 @@ use kaspa_consensus_core::palw_step_refute::{
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
     PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1,
-    PalwTirTraceLanesV1, build_tir_cone_refutation_v1, palw_tir_row_node_parts_v1,
+    PalwTirTraceLanesV1, build_tir_cone_refutation_bounded_v1, palw_tir_row_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -373,7 +373,8 @@ impl<'a> TirEvidenceV1<'a> {
 
     /// **The canonical cone refutation of step leaf `leaf`** (F5's builder over this store).
     pub fn cone_refutation(&self, leaf: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
-        build_tir_cone_refutation_v1(self.binding, leaf, self, rules)
+        build_tir_cone_refutation_bounded_v1(self.binding, leaf, self, rules,
+            super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object)
     }
 
     /// **The logits-consistency accusation over logits step leaf `leaf`**: the step tile and the
