@@ -235,32 +235,54 @@ pub(crate) fn eval_prim(
         Prim::TopK { axis, k } => {
             let x = ins[0];
             let a = *axis as usize;
-            let ist = strides(&x.shape);
-            let ost = strides(out_shape);
             let mut out = vec![0i128; n_out];
             // One selection per row of the axis: rank by (value descending, index ascending), keep
             // the first k, emit them in ascending index order.
-            let mut rows_done = std::collections::BTreeSet::new();
-            for i in 0..n_out {
-                let mut o = unravel(i, &ost);
-                o[a] = 0;
-                let row_key = ravel(&o, &ost);
-                if !rows_done.insert(row_key) {
+            let suffix: usize = out_shape[a + 1..].iter().product();
+            for row in 0..n_out / *k as usize {
+                let (before, after) = (row / suffix, row % suffix);
+                let at = |t: usize| x.data[(before * x.shape[a] + t) * suffix + after];
+                let k = *k as usize;
+                if k == x.shape[a] {
+                    for slot in 0..k {
+                        out[(before * k + slot) * suffix + after] = slot as i128;
+                    }
                     continue;
                 }
-                let at = |t: usize| {
-                    let mut j = o.clone();
-                    j[a] = t;
-                    x.data[ravel(&j, &ist)]
+                let mut chosen: Vec<usize> = if k <= 64 {
+                    // Retain k candidates. Reverse, never negate, the score:
+                    // i128::MIN is an ordinary integer in the total rank order.
+                    let mut kept = std::collections::BinaryHeap::with_capacity(k);
+                    for idx in 0..x.shape[a] {
+                        let candidate = (std::cmp::Reverse(at(idx)), idx);
+                        if kept.len() < k {
+                            kept.push(candidate);
+                        } else if candidate < *kept.peek().expect("validated positive k") {
+                            *kept.peek_mut().unwrap() = candidate;
+                        }
+                    }
+                    kept.into_iter().map(|(_, idx)| idx).collect()
+                } else {
+                    // Keep at most 2k indices into immutable score storage.
+                    // Each linear partition folds k new candidates into the
+                    // retained k; total partition work is linear in the axis.
+                    let mut ids = Vec::with_capacity((2 * k).min(x.shape[a]));
+                    for idx in 0..x.shape[a] {
+                        ids.push(idx);
+                        if ids.len() == 2 * k {
+                            ids.select_nth_unstable_by(k - 1, |p, q| at(*q).cmp(&at(*p)).then(p.cmp(q)));
+                            ids.truncate(k);
+                        }
+                    }
+                    if ids.len() > k {
+                        ids.select_nth_unstable_by(k - 1, |p, q| at(*q).cmp(&at(*p)).then(p.cmp(q)));
+                        ids.truncate(k);
+                    }
+                    ids
                 };
-                let mut order: Vec<usize> = (0..x.shape[a]).collect();
-                order.sort_by(|p, q| at(*q).cmp(&at(*p)).then(p.cmp(q)));
-                let mut chosen: Vec<usize> = order[..*k as usize].to_vec();
                 chosen.sort_unstable();
                 for (slot, idx) in chosen.iter().enumerate() {
-                    let mut j = o.clone();
-                    j[a] = slot;
-                    out[ravel(&j, &ost)] = *idx as i128;
+                    out[(before * k + slot) * suffix + after] = *idx as i128;
                 }
             }
             out

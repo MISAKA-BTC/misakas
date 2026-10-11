@@ -3443,3 +3443,67 @@ Synthetic/offline fixture roots establish reader behavior, not chain admission o
 actual-checkpoint/full-task acceptance. Public network transport, automatic local
 anchor/state-proof acquisition, retention/pruning, whole-job deadline/liveness,
 shared aggregate resources and the rest of §II.14 remain completion requirements.
+
+
+### §14.34 — Bounded TopK point counterexamples and native-storage selection (2026-10-11)
+
+The frozen v1 rule remains score descending with lower index first on a tie,
+followed by ascending selected indices. The reference evaluator now uses a
+K-candidate heap for K <= 64 and at most 2K indices in bounded partition blocks for larger K. Selecting the whole axis
+emits its known index set directly. The typed execution backend uses the same
+bounded-memory strategy and reads the original storage through offset/strides,
+including transpose, slice and broadcast views. It does not widen or gather the whole score
+source for TopK. Both changes preserve primitive identities, canonical work,
+existing program/job limits and exact results; they are backend improvements.
+Repeated bounded partitions retain the best K indices of each prefix and cost
+O(N) in total before the O(K log K) index ordering. The implementation uses the
+in-place linear-time contract in the pinned
+[Rust 1.93.0 slice implementation](https://raw.githubusercontent.com/rust-lang/rust/1.93.0/library/core/src/slice/mod.rs).
+The ordinary callback-based verifier below retains its separately priced heap
+scan; it does not assume cheap repeated reads of remote score material.
+
+An explicitly selected `topk-point-court/v7` adds a separate bounded fault codec
+over the unchanged flat-v5 internal/v3 parameter commitments. It is **not**
+selected by an existing class, vector, protected reveal, descriptor or default
+proof decoder. Its context must bind the exact new court id and the ordinary
+program/job/segment/parameter context. Registered parameters or authenticated
+node scores are supported; uncommitted/public full-tensor sources retain the
+existing court and are refused by this point contract.
+
+Range faults open one selected id outside N; order faults open an adjacent
+non-increasing pair, including duplicates. A dominance fault opens a selected
+member, a rival score at the same axis row, and the adjacent selected members
+around the rival's claimed insertion gap. Those neighbors authenticate omission
+from a correct ascending set. A larger rival score, or an equal score with a
+smaller rival index, convicts. Every wrong set either has a range/order defect or
+excludes a true TopK member that outranks one of its members. A correct set cannot
+produce any of these authentic counterexamples. All requested points are bound
+to their exact typed roots, coordinates and source wiring; missing, borrowed or
+malformed material dismisses. The court opens at most three output and two score
+leaves and never reconstructs the N-element axis.
+
+The versioned relation scope derives selection work/auxiliary memory separately
+from proof bytes, court work and scratch. The local checker precharges a complete
+scan attempt before any score callback; missing acquisition consumes that attempt.
+Its 32-MiB selection auxiliary ceiling is a local ordinary-verifier limit, not a
+producer memory limit. The 128-KiB filing cap bounds legal parameter and
+internal-node score widths; byte, nested-count, shape and path bounds precede allocations. Frozen v1
+continues to forbid i128 parameters; i64 parameters and i128 internal-node scores
+retain their existing types. Selection/source residency, hashing, evidence acquisition/retention and aggregate
+load remain separate prices. A consumer must bind the complete all-relation
+scope, normal verification, DA and reserved transport before selecting this court
+in a node/reward route.
+
+Missing score material does not convict or default the producer in this court.
+Conditional external-verification mode A remains unchanged; this component adds
+no consensus availability obligation.
+
+The synthetic 10,485,760-score, K=2 trial executes the reference/backend and scans
+an incorrect committed selection. Its terminal filing is 17,485 bytes, below the
+independently derived 37,744-byte envelope. This proves a large **fixed axis**
+component, not a ten-million-token checkpoint or maximum-length job. Frozen
+flat-v5 whole-axis admission still refuses that relation, and existing native
+proof routes still refuse v7 bytes. Bounded token/patch/audio lengths, H-axis
+selection, all-plan/shared network budgets, full model/task/fidelity/performance,
+independent execution Final/redemption and A6/A8 remain required. No shipping
+fence or full RFC02 acceptance is activated by this increment.

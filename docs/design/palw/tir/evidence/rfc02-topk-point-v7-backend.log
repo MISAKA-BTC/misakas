@@ -1,0 +1,35 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-tir-exec)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.80s
+     Running tests/differential.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/differential-6d5f1379fb36432e)
+
+running 3 tests
+post writes: 194 of 300 programs refused by both
+test programs_with_post_writes_are_refused_by_both ... ok
+random programs from mid-run states: 600 programs (0 refused by both), 638 steps ok, 1491 steps failed in both, 9020 commit points, 2847 node values; 0 steps failed with different classes
+test random_programs_agree_from_random_mid_run_states ... ok
+random programs: 2000 programs (0 refused by both), 4058 steps ok, 4893 steps failed in both, 58825 commit points, 21653 node values; 0 steps failed with different classes
+test random_programs_agree_step_for_step ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s
+
+     Running tests/golden.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/golden-782b8ae3f0b4c0eb)
+
+running 4 tests
+test every_encoding_vector ... ok
+primitive vectors: 96 succeed, 42 fail, each run with const and with param operands
+test every_primitive_vector ... ok
+program vectors: 34 steps, 238 commit points, 15 cones, 38 refusals
+test every_program_vector ... ok
+demand vectors: 579 node cases and 38 state cases hold the executor's values
+test every_demand_vector_value ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/topk_stream.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/topk_stream-07ab556f6da0cc47)
+
+running 2 tests
+TopK native synthetic axis=10485760 K=2 source_bytes=41943040 output_bytes=8 no widening/axis scratch elapsed_ms=222; no checkpoint/maximum job/native/Final acceptance
+test actual_ten_million_native_scores_keep_exact_ties_without_axis_scratch ... ok
+test all_native_widths_axes_and_offset_transpose_slice_broadcast_views_match_full_sort_without_widening ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s

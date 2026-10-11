@@ -2132,3 +2132,73 @@ retention/pruning, whole-job honest inclusion/deadlines, all shared aggregate
 resources/economics, versioned long/sparse/state semantics, actual checkpoint/
 task/context/fidelity/performance, execution Final and A6/A8 remain open.
 Shipping fences stay dormant; full RFC02 remains active.
+
+## Verified increment — bounded TopK selection and point counterexamples, 2026-10-11
+
+The v1 reference and typed backend preserve the same score-descending, lower-id
+on tie and ascending-output-set rule. Small K uses a K-candidate heap; growing K
+uses repeated at-most-2K-index partitions, with a direct known set for K=N. The
+backend reads original native storage through its layout without whole-source
+widening/gather. This preserves O(K) selection memory and O(N+K log K) execution
+comparison growth for resident scores, rather than introducing an N log K
+regression when K grows. It changes no primitive id, canonical work or v1 limit.
+The pinned [Rust 1.93.0 partition contract](https://raw.githubusercontent.com/rust-lang/rust/1.93.0/library/core/src/slice/mod.rs)
+supplies the in-place linear partition bound. Remote callback acquisition uses
+the separately priced local checker heap; repeated score reads are not assumed.
+
+Add explicit `topk-point-court/v7`, its 128-KiB bounded exact fault codec, an
+independently derived relation scope and a prepaid ordinary scan session. Range,
+adjacent non-increasing order (including duplicates), and an authenticated omitted
+rival that dominates a selected member cover the complete frozen TopK set rule.
+At most three selected-output and two score leaves authenticate to exact node/
+parameter roots and the same axis row. Missing/borrowed/wrong-profile/changed-root/
+malformed/over-budget material dismisses; no axis reconstruction occurs in court.
+Registered i64 parameters stay legal, i128 parameters stay forbidden, and computed
+i128 node scores use the existing flat-v5 typed grammar. No type rule is relaxed.
+
+The scanner checks complete work and auxiliary limits before callbacks and spends
+an attempted acquisition even when a read fails. Its 32-MiB auxiliary ceiling and
+64K temporary-memory price exclude source/output residency and all whole-job/
+network material. Filing, metadata/hash court work and scratch are separately
+bounded and a cheap declaration cannot replace independent derivation. This is
+not the required unified all-plan/aggregate resource vector.
+
+**200 distinct selected tests pass:** 153 existing kernel tests plus six new point
+court tests, 13 TIR tests, nine backend tests, one independent-reference
+40,000-case differential test, and 18 actual-node model-conformance regressions.
+The existing hardware microbenchmark remains ignored. Ten new tests cover all
+native widths, axes/ranks, offset/transpose/slice/broadcast views, K=64/65,
+partition tails and K=N, 2,268 exhaustive small score/set combinations, codec/
+root/coordinate/dtype/scope refusal, acquisition precharging and an actual large
+synthetic fixed axis. Golden vectors reproduce byte for byte; 2,000 backend
+programs, 600 mid-run programs and 300 post-write cases agree with the reference.
+Independent ref2 includes 1,786 TopK cases. Targeted seven-file formatting and
+whitespace checks pass. Exact commands, names, source/binary/log hashes, measured
+material, corrected development fixture failures and limits are in
+[the verdict](evidence/rfc02-topk-point-v7-verdict.json).
+
+The synthetic N=10,485,760, K=2, one-position source has 41,943,040 logical i32
+bytes (167,772,160 bytes in the reference's i128 Tensor representation). The
+native typed kernel reads 41,943,040 bytes without widening scratch. Its single
+debug measurement is 222 ms, not end-to-end/checkpoint throughput. The wrong
+selection's authentic terminal filing is 17,485 bytes, with independently derived
+ceilings of 37,744 filing bytes, 4,934,017 court work, 617,312 court scratch bytes,
+251,658,288 ordinary scan work and 128 selection auxiliary bytes. Whole-source
+acquisition/hash/retention/delivery costs are not replaced by that small filing.
+
+Existing native tests rerun candidate admission, protected seal/chunk/public
+snapshot, reserved proof processing, actor capital/payout and independent replay
+on the updated v1 implementation. They do not exercise a v7 node route: no current
+post, reveal, descriptor, default decoder or economic/Final lane opts in. Frozen
+flat-v5 whole-axis scope still rejects the large relation. The prior protected
+component pool plus these new/updated groups records 222 distinct component
+passes; this is not RFC02 acceptance or checkpoint/task coverage.
+
+Full RFC02 remains active. The next consumer must bind all relations and normal
+verification, the explicit court id, public acquisition/localization and admitted
+resources/transport. Versioned token/patch/audio lengths and H-axis sparse/state
+semantics, shared per-block/per-bond/network resources and economics, full public
+retention/inclusion/deadlines, real checkpoint/task/context/fidelity/performance,
+fresh outsiders, independent execution Final/redemption and A6/A8 remain required.
+Missing score material adds no availability default: conditional external mode A
+and all dormant shipping fences remain unchanged.

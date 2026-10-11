@@ -3365,3 +3365,79 @@ Actual op-211 builder/JSON component evidence and synthetic SDK fixtures remain
 separate. Automatic local chain/state-proof anchor acquisition, live public
 transport, retention/pruning and whole-job honest inclusion/deadline guarantees
 remain required by RFC02; no dormant activation fence is armed by this reader.
+
+
+### 18.4 Explicit v7 TopK point court component (not a node route)
+
+The v1 TopK semantic rule, shape/type rules, primitive/program identity, canonical
+work and history/job limits MUST remain unchanged. The current reference and
+native backend use a heap for K <= 64, or repeated at-most-2K-index partitions for larger K. Full-axis selection
+emits its known index set directly. Source scores stay in their original
+storage. The native-storage implementation compares the stored integer values
+directly through the source layout; view offsets, transpose/slice strides,
+zero broadcast strides and i128 extrema MUST preserve exact selection and tie
+rules. An implementation may optimize work without changing economic credit.
+
+`TopKContextV7` MUST carry `topk_court_id_v7()` and the unchanged flat-v5 bound
+claim context. The selected relation MUST be TopK with a registered parameter or
+authenticated node as its score source. Fixed-axis N and K follow v1 validation.
+This component does not extend H, job lengths, public full-tensor source courts
+or existing network descriptors. Existing flat-v5 scope and proof grammars MUST
+retain their previous admission and refusal behavior.
+
+`TopKFaultV7` encodes `version:u16 = 7`, `row:u64`, a fault kind, and separate
+output/score operands. The fault discriminants are `Range = 0 {slot:u32}`,
+`Order = 1 {left:u32}` and `Dominance = 2 {selected:u32,rival:u32,gap:u32}`.
+Output requires the exact selected node opening. At most three output and two
+score leaves are accepted in total across flat/legacy lists; lists are strictly
+ordered and duplicate-free. Range and Order carry no score operand. The bounded
+exact decoder rejects oversized counts before reserving vectors, invalid shapes,
+paths, typed values, unsupported versions, truncated objects and trailing bytes.
+The filing maximum is 128 KiB. Registered parameters retain the frozen v1
+parameter rule: i128 parameters are forbidden, i64 parameters remain legal, and
+i128 scores are legal as computed internal nodes.
+
+Coordinates use the same axis row for output and score points. With trailing
+product S, an extent A and row r, the flat index of slot t is
+`((r / S) * A + t) * S + r % S`; both r and t MUST be in range. The output grammar
+is IDX, with flat-v5 leaves for a node of at least 64 elements and v3 row leaves
+otherwise. Parameters retain v3 row leaves; internal score nodes use their exact
+flat-v5/small-v3 grammar. Every opening MUST authenticate to the bound source,
+segment and parameter roots with the declared dtype/shape.
+
+Range convicts an emitted id >= N. Order convicts `id[left] >= id[left+1]`.
+Dominance requires in-range distinct a=`id[selected]` and b=`rival`, and
+`0 <= gap <= K`. When present, `id[gap-1] < b < id[gap]` authenticates the omitted
+member gap. Its score at that row convicts iff `score[b] > score[a]`, or equal
+scores with b < a. A correct ascending set cannot convict; range/order defects
+cover malformed sets, and any different valid-size set has a dominated member.
+No whole-axis allocation or evaluation is permitted in the terminal court.
+
+For `L = bit_length(K)`, derive per-row selection work
+`(N+K) * (4L+16)` and auxiliary bytes `64K`. Multiply work by the derived row count;
+source/output residency is excluded from this temporary-memory price. The local
+scanner checks shape, selected count, remaining work and auxiliary ceiling
+(including its 32-MiB ceiling) before its first callback, then debits the complete
+attempt. An incomplete acquisition consumes that work. Caller acquisition must
+authenticate score/set reads to the same roots; terminal authentication remains
+independent.
+
+For bounded program bytes B, unrolled node count M and derived node/source/output
+opening ceilings U/V/W, derive filing ceiling `F = 1024+2U+2V+3W`, court work
+`B^2+64B+128F+1024M`, and scratch `16F+32B+64M+4096`. Require F <= 128 KiB, work
+<= 2^30 and scratch <= 32 MiB. Derivation validates metadata without allocating
+axis tensors or trees. A declaration MUST equal the independent derivation in
+all fields; its root uses the separate v7 scope domain. These are relation
+component prices, not a whole-program/network/retention/transport guarantee.
+
+Missing source material MUST dismiss the point proof; it grants no producer
+default or availability conviction. Existing conditional external-verification
+mode A is unchanged. This court introduces no consensus availability obligation.
+
+No current node route or protected-v6 reveal decoder accepts this codec. Before
+activation, a new consumer must explicitly bind the court id, derive all-relation
+normal-verifier/court/resource bounds, provide authenticated public acquisition
+and localization, preserve actor-cost/capital/aggregate liveness rules and test
+honest execution Final independently. Synthetic fixed-axis trials do not satisfy
+checkpoint/task/context/fidelity/performance or A6/A8 requirements. All existing
+shipping fences stay dormant.

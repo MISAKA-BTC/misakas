@@ -108,6 +108,9 @@ pub mod flat_replay6;
 pub mod flat_seal6;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
+/// Explicit opt-in point-counterexample TopK courts over the frozen flat-v5 commitments.
+/// No consensus route implicitly accepts the new v7 proof grammar.
+pub mod flat_topk7;
 /// Bounded raw-width producer hashing of the unchanged v3 tensor commitments.
 pub mod merkle3_stream;
 pub mod mode;
