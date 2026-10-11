@@ -2914,7 +2914,9 @@ struct SidecarCrashManifest {
     evm_header: kaspa_consensus_core::evm::EvmExecutionHeader,
     evm_state: kaspa_consensus_core::evm::EvmStateSnapshot,
     overlay: Option<kaspa_consensus_core::dns_finality::OverlaySnapshot>,
-    carriage: Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>,
+    // The carriage has versioned EOF tails: frame its standalone serving bytes
+    // rather than nesting its EOF decoder ahead of another manifest field.
+    carriage: Option<Vec<u8>>,
     raw_heads: CanonicalEvmHeads,
 }
 
@@ -2980,7 +2982,7 @@ async fn rfc12_process_sidecar_crash_worker() {
             "palw" => {
                 let imported = pending_carriage.unwrap();
                 vp.import_pruning_point_palw_state(point, imported.clone()).unwrap();
-                carriage = Some(imported);
+                carriage = Some(borsh::to_vec(&imported).unwrap());
             }
             "overlay" => {
                 let imported = pending_overlay.unwrap();
@@ -3040,7 +3042,10 @@ async fn rfc12_process_sidecar_crash_worker() {
             let checkpoint = vp.evm_state_checkpoint_store.get(manifest.point).unwrap().unwrap();
             assert_eq!(checkpoint.decode_snapshot().unwrap(), manifest.evm_state);
         }
-        "palw" => consensus.import_pruning_point_palw_state(manifest.point, manifest.carriage.unwrap()).unwrap(),
+        "palw" => {
+            let carriage = borsh::from_slice(&manifest.carriage.unwrap()).expect("standalone served carriage bytes");
+            consensus.import_pruning_point_palw_state(manifest.point, carriage).unwrap();
+        }
         "overlay" => consensus.import_pruning_point_overlay_snapshot(manifest.point, manifest.overlay.unwrap()).unwrap(),
         _ => unreachable!(),
     }
