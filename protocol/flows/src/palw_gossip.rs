@@ -2516,7 +2516,9 @@ mod tests {
         assert!(center.reserve_sidecar_serve(peer(1)), "first floor must admit a legal maximal snapshot");
         center.charge_sidecar_serve(peer(1), total);
         let charged = center.serve_budget.lock().unwrap().per_peer[&peer(1)];
-        assert_eq!(charged, SERVE_ATTEMPT_FLOOR_BYTES + total);
+        // The floor prepays the first bytes; charge_sidecar_serve adds only
+        // the excess, so a successful traversal pays max(floor, total).
+        assert_eq!(charged, total.max(SERVE_ATTEMPT_FLOOR_BYTES));
         let chunks = total.div_ceil(crate::palw_snapshot_chunks::CHUNK_BYTES as u64);
         assert_eq!(chunks, 96);
         // No further ledger reservation is needed while a live monotone sender
