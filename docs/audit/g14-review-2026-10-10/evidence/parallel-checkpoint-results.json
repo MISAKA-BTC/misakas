@@ -159,7 +159,49 @@
       "source": "151e6050b",
       "result": "23 PASS / 1 FAIL: planned changed typed165/167 wire pins; prefix codec module has0 direct tests",
       "sha256": "140f07474a549d97292edec55c971e66891503d77dd4a216a371b484e7c10d6c"
+    },
+    {
+      "name": "q36-public-prefix-build",
+      "source": "c3982b2c5",
+      "result": "build FAIL: private DecodeConfigV4 test import",
+      "sha256": "3f4ded544acffe8897f666142774c7127e2dcf83f84ab46c2687911f97260b82"
+    },
+    {
+      "name": "q36-public-prefix-build-repair",
+      "source": "d6a578b8e",
+      "result": "build PASS",
+      "sha256": "9248c05b9489e24193aa5a082968dd2ab125a4fd2e5b80c2e4375200bc881eea"
+    },
+    {
+      "name": "q36-public-prefix-tests",
+      "source": "d6a578b8e",
+      "result": "0 PASS / 1 FAIL: fixture expected dense tiles but production retained folded material; repaired780e2fce1, rerun pending",
+      "sha256": "2e9efd817d38fdf9c91a94f3086546cdeb353d3a16670600b283a11defffdd5e"
+    },
+    {
+      "name": "integrated-kernel-scope-build",
+      "source": "f01699022",
+      "result": "build PASS",
+      "sha256": "db2af57a6d569dd449dd057df776b65f373c1bd312966a42bab8ed312a274755"
+    },
+    {
+      "name": "integrated-kernel-scope-tests",
+      "source": "f01699022",
+      "result": "7 PASS / 0 FAIL: combined commitment-only/cumulative scope plus historical regressions",
+      "sha256": "b9975283bacf195524c5cb37038c668ef543c981750bd88354491507fe5fd0d4"
+    },
+    {
+      "name": "integrated-core-owned-courts-build",
+      "source": "14c3c6f9",
+      "result": "build PASS",
+      "sha256": "e45feb0027ffe643761f27bf1165757c28220c10e5da411654d146e5c35a0020"
+    },
+    {
+      "name": "integrated-core-owned-courts-tests",
+      "source": "14c3c6f9",
+      "result": "30 PASS / 0 FAIL: prefixes4, tokenizer11, class2, resources5, rooted courts4, terminal2, wire2",
+      "sha256": "40e01ab273eecae468618afd2256ab52f8fae372aa09b01acb3ca3fdb0519317"
     }
   ],
-  "qualification": "Node source501a builds and41 focused tests pass; tiled services abort ENOSPC and automatic restart fails shared inbox. Core source47008ccfd builds and13 focused tests pass, including the previously failing fixtures. These results do not qualify the latest whole source, the isolated integration merge, new native prefix/sole-receiver P2P paths, or full G14. New node runtime reruns remain required. Activation remains refused. Public-family/tokenizer core source151e6050b builds with23 focused PASS and1 wire-pin FAIL; typed165/167 pins corrected from actual output atc3982b2c5, rerun pending. Native Q36 whole-cache proof differential is not yet executed."
+  "qualification": "Integrated kernel sourcef01699022 passes7 scope tests and integrated core source14c3c6f9 passes30 focused tests. Primary ce6e64ce merges integration105e with public family/state, paid tokenizer owner, retained round tickets and signed reacquisition. Actual-length operand and newer recovery fixtures are subsequent source changes: next node/core/native builds and runtimes must qualify them. Q36 native run d6 failed a folded-material fixture assumption, repaired780 but unexecuted. Registered tiled/recovery service failures remain unsuperseded. Large raw-length misstatement financing, prefix max geometry, maximal-profile reacquisition, actual P2P/prune and full G14 remain pending. Activation remains refused."
 }

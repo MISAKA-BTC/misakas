@@ -1,6 +1,6 @@
 # G14 integration follow-up — 2026-10-11
 
-Integration reference: `claude/g14-public-prosecution-integration-9bee39` at `105e2ab8bd596bbca0cee4974a40d8eca8c10f5c`. Local reconciliation is `codex/g14-integration-reconcile` at `6b7356f19c7e7c925f830940d634494804fc50d3`; it is not yet compiled or runtime-qualified and is not an activation decision.
+Integration reference: `claude/g14-public-prosecution-integration-9bee39` at `105e2ab8bd596bbca0cee4974a40d8eca8c10f5c`. The reconciliation is merged into `codex/g14-prosecution-bounds` at `ce6e64ce`. Kernel sourcef01699022 builds and passes7 scope tests; core source14c3c6f9 builds and passes30 focused tests. Subsequent source changes and the combined node/native runtime remain unqualified; this is not an activation decision.
 
 ## Scope reconciliation
 
@@ -15,8 +15,8 @@ The old empty legacy-scope module is not evidence that the real kernel cumulativ
 Remaining concrete gaps prevent approving it as the G14-wide guarantee:
 
 - The kernel cumulative16-unit allowance applies to KernelLedger FileDemand; it is not called by native tag157. Native legacy rounds have their own R-core reservation and lane budget. A36-lane round is therefore not proven to violate the kernel quota. Keep the kernel guard and separately verify the authenticated native acquisition universe, privacy classification and bounded reservation contract.
-- `AwaitRound` remembers the round but does not follow `AwaitAnswer` into signed reacquisition when authenticated history bytes are unreadable after pruning. Tag156 reacquisition currently handles one unit and cannot join parallel lanes. Reacquiring a whole lost round is absent from the four-window schedule.
-- Round caches/frontiers may hold64 answers, while scratch accounting uses one answer-sized ceiling and has no retained ticket for all learned bytes/copies. Retained per-case tickets and refusal before admitting unfunded obligations are required.
+- AwaitRound now follows genuinely needed answered-but-unread material into existing signed priced tag156 reacquisition. The actual one-input-lane prune fixture awaits node execution. Tag156 handles one unit and cannot join parallel lanes; reacquiring a whole lost round is still absent from the four-window schedule.
+- Round caches/frontiers now retain typed per-unit shared RAII ledger tickets through reads, learning, worker clones and retirement. Atomic refusal precedes unfunded new demand/read. Two local-ledger tests await the combined node build, and actual maximal replay/RAM still need measurement.
 - Height>=30 and the2M profile are expressly refused. The8k fold fixture has a smaller actual tree than the canonical105.5M-leaf tree; full terminal dissection, fair carrier inclusion and actual replay/RAM still require evidence.
 
 Keep activation refused. A local finite planner or source merge does not close these obligations.
@@ -30,3 +30,11 @@ Source0bb: core build PASS; focused run22 PASS /3 FAIL. Registered semantics, to
 ## Numbering
 
 Registry is reconciled from105e. G14 terminal/semantics/staged tails move toF6/F7/F8; EXEC keepsF2–F5. Staged seed/move use210/211, terminal part212, class/claim semantics213/214. Object tags162–167 keep their distinct owners. No new kernel table or kernel-inner number is allocated here. Check the shared registry before future additions and periodically reconcile the integration branch.
+
+## Later integrated checkpoint
+
+Source14c3c6f9: integrated core build PASS and30 focused tests PASS, including the tokenizer owned-row journal/restart/certificate, terminal fixture and typed wire pins. Sourcef01699022: kernel build PASS and7 scope tests PASS, including simultaneous commitment-only disclosure and cumulative requester quotas, another bond's retained allowance, public-row conviction and genesis replay.
+
+The actual Q36 host fixture on d6a578b8e failed0/1 because normal retention is folded; production tiles_from_material_v1 now constructs authenticated published rows and verifies the regenerated execution root (780e2fce1). Rerun pending. BASE0 i8 native fixture and one-pruned-input automatic producer/reacquisition fixtures are also unexecuted.
+
+Tokenizer actual operand length is now independent of signed declaredL and is authenticated at the original whole-preimage EOF before judging a length misstatement. A small signedL cannot be allowed to prevent authenticating a longer held preimage. The current immutable funding/hold envelope can still refuse that larger operand, so a timely fully paid prospective contract extension is being implemented. No tokenizer/model bytes are compelled from the producer under ADR-0177 D2/D7. Arbitrarily large historical preimages and the quantitative economic bound remain unresolved.
