@@ -489,3 +489,45 @@ bounded core entry point begins that store budget once; nested child/reduction/c
 never resets it. Failed replay consumes admitted work. A focused actual store test accepts the
 first one-position miss, refuses a second under a shared limit of one, and accepts it only after
 starting a new move. This is a replay-position limit, not a MAC/time bound on executor tensors.
+
+### Central bounded-court/replay evidence
+
+At parent integration `96a589379`, the central node-feature SDK batch passed all 25 selected
+tests (`/tmp/rfc06-bounded-court-replay-node-v10.log`): capture 4, cell 12, court 7, drill 1,
+and all-corpus partial shard court 1. The court run covers 22 cases / 4,056 honest leaf
+acquittals / 582 mismatch convictions / 526 PALW-TIR-33 convictions / 1,108 identical
+challenger objects. The separate drill covers 11 classes, 162 units and 25 primitive kinds.
+The new cone controls cover 38 moves with at most 841 logical reads; bounded replay covers
+132 positions with at most 558,700 requested replay bytes; the reduction corpus covers
+five models / 62 sites / 174 forgeries with at most 3,257 logical reads. The aggregate
+one-position replay refusal/reset control also passed. These are scoped executable corpus
+results, not all-model public soundness or worst-case time/RSS/pricing approval.
+
+### Shared retained/tree/executor admission (candidate; central run pending)
+
+Concrete and generic actual daemon backend resolution install the existing host ledger as
+the executor library's process-wide reservation callback. Retained job memo and persistent
+fold-hash memo reserve their requested storage **before** re-execution/hash allocation.
+An Arc owner holds both data and guard; replacement and explicit eviction release only idle
+data. In-flight readers keep their reservation until the last Arc drops. Callback identity
+also remains alive with the memo, preventing an unreserved or differently admitted tool memo
+from being reused under a newly armed daemon callback. Concurrent memo misses each reserve.
+
+Full own/dense/challenger proof trees and direct single-leaf opening trees reserve before
+construction, after checking the class/job capped leaf count and dense preimage count. The
+evidence store holds its tree guard throughout its lifetime. Every actual runner drive
+(including replay) also reserves an executor working envelope before constructing an executor
+and holds that guard through root/trace construction and unwinding. The bounds use checked
+arithmetic for checkpoint prefixes, all global/per-layer fixed/history copies and tensor
+working scratch. They are deliberately conservative operational admission values; they do
+not define consensus limits, approved prices or an exact process RSS bound.
+
+The new process-isolated corpus test exercises executor/tree refusal before execution,
+normal/drop/unwind release, and checks actual retained native Vec capacities against the
+requested retained envelope under both logits schemes. A real artifact/backend test checks
+memo sharing, replacement, eviction with live readers and refusal before re-execution.
+These tests have only passed syntax/diff checks here; central compile/runtime is pending.
+Standalone historical SDK APIs returning owned jobs/captures remain tool APIs: output data,
+artifact residency, encoded capture storage and whole-process allocator/OS overhead require
+their existing consumer admission or separate measurement. No whole-process resource,
+100k throughput, four-seal carriage, genuine pruned join or economic approval gate is advanced.

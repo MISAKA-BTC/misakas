@@ -194,6 +194,7 @@ pub struct TirEvidenceV1<'a> {
     prompt: &'a [u32],
     trace: TirTraceV1<'a>,
     tree: Box<dyn super::sparse_tree::TirProofTreeV1>,
+    _tree_memory: Option<super::memory::TirMemoryLeaseV1>,
     leaves: Leaves<'a>,
     params: &'a dyn TirParamOpenerV1,
     prompt_form: PalwPromptIdsFormV1,
@@ -216,6 +217,7 @@ impl<'a> TirEvidenceV1<'a> {
         prompt_form: PalwPromptIdsFormV1,
         cap: u64,
     ) -> Result<Self, String> {
+        let tree_memory = Self::reserve_tree(runner, &job.binding, cap)?;
         let tree = Self::check(runner, &job.binding, &job.leaf_hashes)?;
         Ok(Self {
             runner,
@@ -223,6 +225,7 @@ impl<'a> TirEvidenceV1<'a> {
             prompt: &job.prompt,
             trace: TirTraceV1::Rows { rows: &job.logits_rows, generated: &job.generated },
             tree: Box::new(tree),
+            _tree_memory: tree_memory,
             leaves: Leaves::Replay { points: &job.points, disputed: None },
             params,
             prompt_form,
@@ -249,6 +252,10 @@ impl<'a> TirEvidenceV1<'a> {
         cap: u64,
     ) -> Result<Self, String> {
         let ctx_hash = binding.job_context.context_hash();
+        if preimages.len() as u64 != binding.step_leaf_count {
+            return Err("the dense preimage count is not its binding".into());
+        }
+        let tree_memory = Self::reserve_tree(runner, binding, cap)?;
         let hashes: Vec<Hash64> = preimages.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &runner.class_id, p)).collect();
         let tree = Self::check(runner, binding, &hashes)?;
         Ok(Self {
@@ -257,6 +264,7 @@ impl<'a> TirEvidenceV1<'a> {
             prompt,
             trace: TirTraceV1::Rows { rows: logits_rows, generated },
             tree: Box::new(tree),
+            _tree_memory: tree_memory,
             leaves: Leaves::Dense(preimages),
             params,
             prompt_form,
@@ -284,7 +292,7 @@ impl<'a> TirEvidenceV1<'a> {
         Ok(Self {
             runner, binding: &capture.binding, prompt: &capture.prompt,
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
-            tree: Box::new(tree), leaves: Leaves::Sparse(inputs.preimages_v1()), params,
+            tree: Box::new(tree), _tree_memory: None, leaves: Leaves::Sparse(inputs.preimages_v1()), params,
             prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0),
         })
     }
@@ -333,6 +341,7 @@ impl<'a> TirEvidenceV1<'a> {
         if step_tile_leaf_hash_v1(&ctx_hash, &runner.class_id, &disputed_preimage) != disputed_opening.leaf_hash {
             return Err("the disputed preimage is not the opened leaf".into());
         }
+        let tree_memory = Self::reserve_tree(runner, accused, cap)?;
         let tree = TirStepTreeV1::prefix_with_opening(&own.leaf_hashes, accused.step_leaf_count, disputed_opening)?;
         if tree.root() != Some(accused.step_merkle_root) {
             return Err("the prefix and the accused's opening do not produce the accused's step root".into());
@@ -344,6 +353,7 @@ impl<'a> TirEvidenceV1<'a> {
             prompt: &own.prompt,
             trace,
             tree: Box::new(tree),
+            _tree_memory: tree_memory,
             leaves: Leaves::Replay { points: &own.points, disputed: Some((disputed_opening.leaf_index, disputed_preimage)) },
             params,
             prompt_form,
@@ -361,6 +371,15 @@ impl<'a> TirEvidenceV1<'a> {
             return Err("the binding is of another class than this runner's".into());
         }
         Ok(())
+    }
+
+    fn reserve_tree(runner: &TirClassRunnerV1<'_>, binding: &PalwTirStepBindingV1, cap: u64) -> Result<Option<super::memory::TirMemoryLeaseV1>, String> {
+        Self::check_binding(runner, binding)?;
+        if runner.space.leaf_count_capped(&binding.job_context, cap).map_err(|e| e.to_string())? != binding.step_leaf_count {
+            return Err("the tree leaf count is not its capped job".into());
+        }
+        let need = super::memory::tir_full_tree_storage_need_v1(binding.step_leaf_count)?;
+        super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-full-tree", runner.class_id, &binding.job_context, need)
     }
 
     /// The held leaves' tree, refused unless it is the binding's.

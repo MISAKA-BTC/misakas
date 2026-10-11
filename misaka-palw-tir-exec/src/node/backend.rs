@@ -106,9 +106,10 @@ pub fn tir_fused_kernels_default_v1() -> bool {
 /// **One retained job, kept process-wide** — keyed by the class and the job's context hash. A fold's
 /// every evidence build (an annex asked, a dissection's round) re-derives the execution it opens
 /// ([`TirBackendV1::retain`], a whole run); a backend is built per request, so the memo lives here.
-/// One entry: the retention is a class's leaf hashes, trace and resume points (≈ 180 MB for a 1.5B
-/// class at 512 positions), and one pursuit or one serve at a time is what a node runs.
-static TIR_RETAINED_MEMO: std::sync::Mutex<Option<(Hash64, Hash64, Arc<TirRetainedJobV1>)>> = std::sync::Mutex::new(None);
+/// One memo entry holds its reservation with the retained hashes/trace/resume points. Requests
+/// still using an evicted entry keep its reservation until the last owner drops it; concurrent
+/// re-executions must each pass admission. Byte envelopes are operational, not measured RSS.
+static TIR_RETAINED_MEMO: std::sync::Mutex<Option<(Hash64, Hash64, Arc<super::memory::TirRetainedJobLeaseV1>)>> = std::sync::Mutex::new(None);
 
 /// **Why an IR class takes no free prompt** (RFC-0002): its free-prompt lane stays closed until
 /// Phase H. The node's backend, the RPC's pricing and the CLI refuse with these words.
@@ -256,11 +257,12 @@ pub struct TirBackendV1 {
     attempt_rules: PalwAttemptRulesV1,
     /// The leaf hashes of the last fold re-executed, by job context — the ladder asks a fold's
     /// prefix state at every rung, and each answer would otherwise be a whole re-execution.
-    fold_hashes: std::sync::Mutex<Option<(Hash64, Arc<Vec<Hash64>>)>>,
+    fold_hashes: std::sync::Mutex<Option<(Hash64, Arc<super::memory::TirFoldHashesLeaseV1>)>>,
     /// The lane bytes up to which a capture is dense ([`TIR_DENSE_CAPTURE_BYTES_V1`] by default).
     dense_capture_bytes: usize,
     /// Run the fused kernels ([`set_tir_fused_kernels_default_v1`], [`Self::with_fused_kernels`]).
     fused: bool,
+    memory_reserver: Option<super::memory::TirMemoryReserverV1>,
 }
 
 impl TirBackendV1 {
@@ -301,7 +303,15 @@ impl TirBackendV1 {
             fold_hashes: std::sync::Mutex::new(None),
             dense_capture_bytes: TIR_DENSE_CAPTURE_BYTES_V1,
             fused: tir_fused_kernels_default_v1(),
+            memory_reserver: None,
         })
+    }
+
+    /// A scoped retained/fold-memo ledger probe. Executor/evidence-store working
+    /// reservations use the daemon's process-wide callback.
+    pub fn with_memory_reserver_v1(mut self, reserver: super::memory::TirMemoryReserverV1) -> Self {
+        self.memory_reserver = Some(reserver);
+        self
     }
 
     /// Run the fused kernels (or not), whatever the process default says.
@@ -362,23 +372,39 @@ impl TirBackendV1 {
         self.runner().retain(&self.class, self.artifact_root, job, prompt, self.ladder)
     }
 
-    /// [`Self::retain`], through the process-wide memo ([`TIR_RETAINED_MEMO`]): the same job of the same
-    /// class is run once, however many evidence builds read it.
-    pub fn retain_memo(&self, job: &PalwJobContextV2, prompt: &[u32]) -> Result<Arc<TirRetainedJobV1>, String> {
+    /// [`Self::retain`], through the process-wide memo ([`TIR_RETAINED_MEMO`]): evidence
+    /// builds can share a held job and its reservation. Concurrent misses each require admission.
+    pub fn retain_memo(&self, job: &PalwJobContextV2, prompt: &[u32]) -> Result<Arc<super::memory::TirRetainedJobLeaseV1>, String> {
         let ctx_hash = job.context_hash();
-        if let Ok(memo) = TIR_RETAINED_MEMO.lock()
-            && let Some((class, ctx, held)) = memo.as_ref()
-            && *class == self.class_id
-            && *ctx == ctx_hash
-            && held.prompt == prompt
-        {
-            return Ok(held.clone());
-        }
-        let job = Arc::new(self.retain(job, prompt)?);
+        let reserver = self.memory_reserver.clone().or_else(super::memory::memory_reserver_v1);
+        let admission_id = super::memory::reserver_id_v1(&reserver);
+        // A tool's previously unreserved memo must not bypass a newly armed daemon ledger.
         if let Ok(mut memo) = TIR_RETAINED_MEMO.lock() {
-            *memo = Some((self.class_id, ctx_hash, job.clone()));
+            if let Some((class, ctx, held)) = memo.as_ref()
+                && *class == self.class_id && *ctx == ctx_hash && held.prompt == prompt
+                && held.admission_id == admission_id {
+                return Ok(held.clone());
+            }
+            // Release idle memo data before asking admission; in-flight Arcs keep theirs.
+            *memo = None;
         }
-        Ok(job)
+        let need = super::memory::tir_retained_storage_need_v1(&self.space, &self.class, job, self.ladder)?;
+        let lease = super::memory::reserve_v1(&reserver, "tir-retained-job", self.class_id, job, need)?;
+        let retained = self.retain(job, prompt)?;
+        let held = Arc::new(super::memory::TirRetainedJobLeaseV1::new(retained, reserver, lease, need));
+        if let Ok(mut memo) = TIR_RETAINED_MEMO.lock() { *memo = Some((self.class_id, ctx_hash, held.clone())); }
+        Ok(held)
+    }
+
+    /// Evict this backend's idle memo; in-flight requests retain both data and reservation.
+    pub fn evict_retained_memo_v1(&self) {
+        let reserver = self.memory_reserver.clone().or_else(super::memory::memory_reserver_v1);
+        let admission = super::memory::reserver_id_v1(&reserver);
+        if let Ok(mut memo) = TIR_RETAINED_MEMO.lock()
+            && memo.as_ref().is_some_and(|(class, _, held)| *class == self.class_id && held.admission_id == admission) {
+            *memo = None;
+        }
+        if let Ok(mut memo) = self.fold_hashes.lock() { *memo = None; }
     }
 
     /// Run a job into a capture — dense while its lanes fit the dense-capture bytes —
@@ -518,11 +544,20 @@ impl TirBackendV1 {
 
     /// The leaf hashes a capture answers with: a dense capture's own; a fold's, replayed (which
     /// is its producer's execution when that execution was honest).
-    fn capture_leaf_hashes(&self, capture: &TirCaptureV1) -> Result<Arc<Vec<Hash64>>, String> {
+    fn capture_leaf_hashes(&self, capture: &TirCaptureV1) -> Result<Arc<super::memory::TirFoldHashesLeaseV1>, String> {
         let ctx = &capture.binding.job_context;
         let ctx_hash = ctx.context_hash();
+        let count = self.space.leaf_count_capped(ctx, self.ladder).map_err(|e| e.to_string())?;
+        if count != capture.binding.step_leaf_count || (capture.is_dense() && capture.leaves.len() as u64 != count) {
+            return Err("the capture hash count is not its capped job".into());
+        }
+        let reserver = self.memory_reserver.clone().or_else(super::memory::memory_reserver_v1);
+        let admission_id = super::memory::reserver_id_v1(&reserver);
+        let need = super::memory::tir_fold_hash_storage_need_v1(count)?;
         if capture.is_dense() {
-            return Ok(Arc::new(capture.leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect()));
+            let lease = super::memory::reserve_v1(&reserver, "tir-fold-hashes", self.class_id, ctx, need)?;
+            let hashes = capture.leaves.iter().map(|p| step_tile_leaf_hash_v1(&ctx_hash, &self.class_id, p)).collect();
+            return Ok(Arc::new(super::memory::TirFoldHashesLeaseV1 { hashes, admission_id, _lease: lease, _reserver: reserver }));
         }
         // The context commits to the prompt, so a re-execution is a function of the context once
         // the prompt is checked against it — which is what makes the context a sound memo key.
@@ -531,12 +566,16 @@ impl TirBackendV1 {
         }
         let mut memo = self.fold_hashes.lock().map_err(|_| "the fold memo is poisoned")?;
         if let Some((key, hashes)) = memo.as_ref()
-            && *key == ctx_hash
+            && *key == ctx_hash && hashes.admission_id == admission_id
         {
             return Ok(hashes.clone());
         }
+        // Drop only idle old data before admission. Arcs held by other requests
+        // continue to own the old reservation; failed admission publishes nothing.
+        *memo = None;
+        let lease = super::memory::reserve_v1(&reserver, "tir-fold-hashes", self.class_id, ctx, need)?;
         let run = self.runner().run(ctx, &capture.prompt, self.ladder, false, &mut |_| {})?;
-        let hashes = Arc::new(run.leaf_hashes);
+        let hashes = Arc::new(super::memory::TirFoldHashesLeaseV1 { hashes: run.leaf_hashes, admission_id, _lease: lease, _reserver: reserver });
         *memo = Some((ctx_hash, hashes.clone()));
         Ok(hashes)
     }
@@ -899,7 +938,7 @@ impl TirBackendV1 {
         accused_generated: &[u32],
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwTirConeRefutationV1, String> {
-        let own = self.retain(&accused.job_context, prompt)?;
+        let own = self.retain_memo(&accused.job_context, prompt)?;
         let runner = self.runner();
         let store = TirEvidenceV1::challenger(
             &runner,
@@ -1100,6 +1139,9 @@ impl TirBackendV1 {
             return Err("a fold discloses by replay: open its leaves with a node's own retention".into());
         }
         let hashes = self.capture_leaf_hashes(&capture)?;
+        let tree_need = super::memory::tir_full_tree_storage_need_v1(hashes.len() as u64)?;
+        let _tree_memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
+            "tir-full-tree", self.class_id, &capture.binding.job_context, tree_need)?;
         let opening = super::tree::TirStepTreeV1::full(&hashes).opening(index).ok_or("no such leaf")?;
         Ok((opening, capture.leaves[index as usize].clone()))
     }

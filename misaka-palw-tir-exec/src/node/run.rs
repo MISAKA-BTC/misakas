@@ -274,6 +274,9 @@ impl<'a> TirClassRunnerV1<'a> {
             return Err("the program names no logits scheme this build commits under".into());
         };
         let h_tile = space.layout.h_tile as usize;
+        let memory_need = super::memory::tir_executor_storage_need_v1(space, self.plan, ctx)?;
+        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
+            "tir-executor", self.class_id, ctx, memory_need)?;
         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
         exec.set_hist_tail(h_tile);
         if self.fused {
@@ -417,7 +420,7 @@ impl<'a> TirClassRunnerV1<'a> {
         if end == job.positions && emit.first_index + emit.hashes.len() as u64 != total {
             return Err(format!("{} leaves produced, the step space counts {total}", emit.first_index + emit.hashes.len() as u64));
         }
-        Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled })
+        Ok(Driven { first_index, hashes: emit.hashes, rows, generated, tiled, _memory: memory })
     }
 
     /// The resume point after position `a` of a running executor.
@@ -495,6 +498,8 @@ struct Driven {
     rows: Vec<Vec<i32>>,
     generated: Vec<u32>,
     tiled: bool,
+    // Keep executor/working reservation through whole-job root/trace construction.
+    _memory: Option<super::memory::TirMemoryLeaseV1>,
 }
 
 /// A resumed run's part of the job: the leaves from `first_index` on, the logits rows it produced,

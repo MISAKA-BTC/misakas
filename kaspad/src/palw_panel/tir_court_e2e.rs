@@ -2002,7 +2002,7 @@ fn as_filed_c(built: Result<PalwCourtVerdictProofV2, String>) -> Result<PalwCour
 }
 
 /// The seat's own run of `claim`'s job.
-fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobV1> {
+fn own_run(tir: &TirBackendV1, claim: &Claim) -> std::sync::Arc<misaka_palw_sdk::lineages::tir::TirRetainedJobLeaseV1> {
     let prompt: Vec<u32> = claim.prompt.iter().map(|t| *t as u32).collect();
     tir.retain_memo(&claim.job, &prompt).expect("the seat's own run")
 }
