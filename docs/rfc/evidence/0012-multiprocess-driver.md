@@ -79,3 +79,44 @@ observations have no active import and a true marker. A fresh pruned JOIN must
 complete epoch > 0, and that epoch must persist after the owned forced kill and
 cold restart. These are additional coherence checks within the pinned plan; they
 do not supply a retirement policy, signed-work fixture or security approval.
+
+## Unpublished private process helper
+
+`misaka-rfc12-private-node` is an opt-in binary of the unpublished integration
+package (`--features private-probe`); ordinary `kaspad` has no corresponding Args
+flag. Its feature-gated library constructor injects a complete private `Config`
+while retaining normal Args validation. It requires an explicit salted testnet-12
+genesis, actual proof-of-work validation, controlled loopback peers/endpoints,
+no DNS discovery or UPnP, and an absolute owned app directory. A directory must
+be empty on first use; cold reopen requires its exact stored private fingerprint.
+Ordinary `kaspad` refuses a directory carrying the private probe marker.
+
+Build centrally, after the active shared-target jobs finish:
+
+```sh
+cargo build --locked -p kaspa-testing-integration --features private-probe --bin misaka-rfc12-private-node
+```
+
+The helper recognizes its own explicit arguments before calling the unchanged
+public Args parser: `--private-probe-profile=native-v1`, a nonzero 32-byte
+`--private-probe-salt=<64 hex characters>`, and optional
+`--print-private-probe-profile` (prints identity without constructing a node or
+opening a DB). Every process in one plan must use the same salt/profile. Its
+normal arguments include `--testnet --netsuffix=12 --nodnsseed --outpeers=0
+--disable-upnp`, explicit `127.0.0.1` P2P/gRPC/wRPC/ETH ports and its role's owned
+app directory. Driver-owned links add peers through RPC after startup; argv does
+not contain addpeer/connect routes.
+
+`native-v1` has **test** retirement DAA 1, D=1, unique work=1, concentration
+limits=1000 permille, and legacy-evidence horizon=5. These values exercise
+transport and recovery mechanics. They are printed with the exact ruleset,
+policy and genesis IDs before services begin, and are never release policy or
+128-bit/common-prefix/economic approval. The Config's normal PALW validation
+still runs. Existing post-launch rules are preserved; no synthetic class,
+measured cost, conviction floor or eligible native market fill is manufactured.
+
+This construction patch is a compile/runtime candidate. It supplies a compatible
+private-process entry point, not the finite signed useful-work/100k plan or a
+successful P2P run. Native useful-work, public market/bridge, forced-kill/pruned
+join and release-scale acceptance remain pending until the actual logs and
+commitments exist.

@@ -2,6 +2,8 @@
 pub mod args;
 pub mod chain_participation_store;
 pub mod daemon;
+#[cfg(feature = "private-integration-config")]
+pub mod private_integration;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
 pub mod palw_agent;

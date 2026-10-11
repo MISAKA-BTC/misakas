@@ -89,6 +89,9 @@ toml = "0.8.10"
 serde_with = "3.7.0"
 
 [features]
+# Library construction boundary used only by the unpublished private integration
+# helper. No public Args flag selects it; ordinary kaspad always uses its presets.
+private-integration-config = []
 # The EVM lane is part of the node, not a bolt-on (user decision 2026-08-21). testnet-11 and
 # testnet-12 activate the lane at DAA 0, so a binary built without it refuses to start there
 # (`EvmLaneRequiresEvmBuild`) — which turned "forgot the flag" into a fleet-wide operational trap.
