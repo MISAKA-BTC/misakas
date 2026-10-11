@@ -14,11 +14,13 @@ use kaspa_consensus_core::{
     palw_staged_court_state_v1::{PalwStagedCertificateRefV1, PalwStagedOwnedCursorV1, PalwStagedOwnedProgressV1},
     palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1, step_opening_from_leaf_source_capped_v1, step_opening_root_capped_v1},
     palw_step_refute::PalwTiledDecodePinV1,
-    palw_tokenizer_rendering_v1::{PalwQwenRenderingMapV1, palw_tokenizer_raw_commitment_v1},
+    palw_tokenizer_json_stream_v1::{
+        PALW_TOKENIZER_RENDERING_DIGEST_DOMAIN_V1, PalwTokenizerJsonVerdictV1, PalwTokenizerRenderingDigestV1,
+        PalwTokenizerRenderingEventV1,
+    },
     palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1,
 };
 use std::{
-    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -32,6 +34,93 @@ pub(crate) struct TokenizerCursorV1 {
     pub sealed: bool,
     pub rendering_offset: u32,
 }
+/// One byte per PROFILE vocabulary id records ordinary/added observations and whether
+/// they disagree with the existing authenticated table. No raw JSON/string/digest map is
+/// retained. Added-token overrides win regardless of field order. An out-of-vocab ID only
+/// changes the scalar highest-ID marker, never allocates an ID-sized sparse array.
+#[allow(clippy::too_many_arguments)]
+fn nominate_v1(
+    path: &Path,
+    tokenizer: Hash64,
+    length: u64,
+    bound: u64,
+    table: &PalwTokenTableV1,
+    class: Hash64,
+    claim: Hash64,
+    ledger: &Arc<PalwMemoryLedgerV1>,
+) -> Result<u32, String> {
+    let need =
+        (table.entries.len() as u64).checked_mul(2).and_then(|n| n.checked_add(65536)).ok_or("nomination flag bound overflow")?;
+    let _reserved = ledger
+        .reserve(PalwMemoryReservationKeyV1 { role: "public-tokenizer-nomination", class_id: class, job: claim }, need)
+        .map_err(|e| e.to_string())?;
+    let mut flags = Vec::new();
+    flags.try_reserve_exact(table.entries.len()).map_err(|_| "nomination flag allocation refused")?;
+    flags.resize(table.entries.len(), 0u8);
+    let digest = |bytes: &[u8]| PalwTokenizerRenderingDigestV1 {
+        length: bytes.len() as u64,
+        digest: Hash64::from_bytes(
+            blake2b_simd::Params::new()
+                .hash_length(64)
+                .key(PALW_TOKENIZER_RENDERING_DIGEST_DOMAIN_V1)
+                .hash(bytes)
+                .as_bytes()
+                .try_into()
+                .expect("64"),
+        ),
+    };
+    let mut highest = 0u32;
+    let context = claim;
+    let mut witness = TokenizerWitnessV1::open(path, context, tokenizer, length, bound, 0, class, claim, ledger)?;
+    // A complete packet consumes raw bytes or at least one bounded proof. This bound is
+    // conservative, checked, and independent of a producer's understated signed raw L.
+    let maximum = length.checked_add(bound.min(length)).and_then(|n| n.checked_add(3)).ok_or("nomination move envelope overflow")?;
+    for _ in 0..maximum {
+        let movement = witness.next_with_observer_v1(|event| {
+            let (id, rendering, seen, different) = match event {
+                PalwTokenizerRenderingEventV1::Ordinary { id, rendering } => (id, rendering, 1u8, 2u8),
+                PalwTokenizerRenderingEventV1::Added { id, rendering } => (id, Some(rendering), 4u8, 8u8),
+            };
+            highest = highest.max(id);
+            if let (Some(flag), Some(entry)) = (flags.get_mut(id as usize), table.entries.get(id as usize)) {
+                let expected = entry.as_deref().map(digest);
+                *flag |= seen;
+                if rendering != expected {
+                    *flag |= different;
+                } else {
+                    *flag &= !different;
+                }
+            }
+        })?;
+        if matches!(movement, TokenizerWitnessMoveV1::Seal) {
+            // Observer notifications are tentative until BOTH all grammar/proofs and the
+            // original whole-file tokenizer hash authenticate at exact actual EOF.
+            match witness.verdict()? {
+                PalwTokenizerJsonVerdictV1::Invalid | PalwTokenizerJsonVerdictV1::WorkBoundExceeded => return Ok(0),
+                PalwTokenizerJsonVerdictV1::Rendering(_) => {
+                    let empty = digest(&[]);
+                    return Ok(flags
+                        .iter()
+                        .enumerate()
+                        .position(|(id, flag)| {
+                            if flag & 4 != 0 {
+                                flag & 8 != 0
+                            } else if flag & 1 != 0 {
+                                flag & 2 != 0
+                            } else {
+                                let expected = table.entries[id].as_deref().map(digest);
+                                let hole = (id as u64 <= u64::from(highest)).then(|| empty.clone());
+                                expected != hole
+                            }
+                        })
+                        .unwrap_or(0) as u32);
+                }
+            }
+        }
+    }
+    Err("nomination exceeded its finite actual-operand/proof envelope".into())
+}
+
 struct Candidate {
     path: PathBuf,
     table: Arc<PalwTokenTableV1>,
@@ -71,32 +160,7 @@ impl Candidate {
         }
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let actual_length = file.metadata().map_err(|e| e.to_string())?.len();
-        // All JSON value/string copies, map nodes and temporary renderings precede allocation.
-        // Capped Merkle traversal has O(log vocab) live hashes; table bytes are the registry's
-        // existing immutable holding, not a second table copy in this worker.
-        let scratch = actual_length.checked_mul(128).and_then(|n| n.checked_add(1_048_576)).ok_or("selection RAM overflow")?;
-        let _scratch = ledger
-            .reserve(
-                PalwMemoryReservationKeyV1 { role: "public-tokenizer-selection", class_id: target.class_id, job: target.claim_id },
-                scratch,
-            )
-            .map_err(|e| e.to_string())?;
-        let capacity = usize::try_from(actual_length).map_err(|_| "held tokenizer exceeds platform address space")?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(capacity).map_err(|_| "held tokenizer allocation refused")?;
-        file.take(actual_length.checked_add(1).ok_or("held tokenizer length overflow")?)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() as u64 != actual_length || palw_tokenizer_raw_commitment_v1(&bytes) != row.tokenizer_id {
-            return Err("own tokenizer operand does not authenticate to the registered file".into());
-        }
-        let map = PalwQwenRenderingMapV1::parse(&bytes);
-        let id = match &map {
-            Ok(map) => {
-                table.entries.iter().enumerate().position(|(i, e)| map.rendering(i as u32).as_ref() != e.as_ref()).unwrap_or(0) as u32
-            }
-            Err(_) => 0,
-        };
+        let id = nominate_v1(path, row.tokenizer_id, actual_length, bound, &table, target.class_id, target.claim_id, ledger)?;
         let count = table.entries.len() as u64 + 1;
         let leaf = |j: u64| {
             if j == table.entries.len() as u64 {
@@ -536,6 +600,73 @@ mod tests {
         assert!(TokenizerSchedulerV1::open(&path, &target, &binding, &changed, table.clone(), &progress, &ledger).is_err());
         std::fs::write(&path, b"wrong held model file").unwrap();
         assert!(TokenizerSchedulerV1::open(&path, &target, &binding, &job, table, &progress, &ledger).is_err());
+        assert_eq!(ledger.reserved_bytes(), 0);
+    }
+    #[test]
+    fn streamed_nomination_uses_fixed_raw_scratch_and_respects_added_override_and_sparse_ids() {
+        use kaspa_consensus_core::palw_tokenizer_rendering_v1::{PalwQwenRenderingMapV1, palw_tokenizer_raw_commitment_v1};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokenizer.json");
+        // >100k ignored string proves the nominee does not allocate rawL*128 JSON/map RAM.
+        // A maximal u32 id changes only a scalar, while added token0 precedes ordinary vocab0.
+        let raw=format!(r#"{{"added_tokens":[{{"content":"override","id":0}}],"padding":"{}","model":{{"vocab":{{"a":0,"b":2,"c":4294967295}},"merges":[]}}}}"#,"x".repeat(100_000)).into_bytes();
+        std::fs::write(&path, &raw).unwrap();
+        let tokenizer = palw_tokenizer_raw_commitment_v1(&raw);
+        let map = PalwQwenRenderingMapV1::parse(&raw).unwrap();
+        let mut table = PalwTokenTableV1 {
+            entries: (0..4).map(|id| map.rendering(id)).collect(),
+            eog_token_ids: vec![2],
+            tokenizer_id: tokenizer,
+        };
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(2_000_000), || None);
+        for expected in [0, 3] {
+            if expected == 3 {
+                table.entries[3] = Some(b"forged hole".to_vec());
+            }
+            assert_eq!(
+                nominate_v1(&path, tokenizer, raw.len() as u64, 100, &table, Hash64::default(), Hash64::from_u64_word(19), &ledger)
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(ledger.reserved_bytes(), 0);
+        }
+        // An overstated signed B cannot require an enormous keybook: one event consumes at
+        // least one actual raw byte. Rooted work pricing makes the identical min(B,actualL) cut.
+        let tiny = br#"{"model":{"vocab":{"a":0},"merges":[]}}"#;
+        std::fs::write(&path, tiny).unwrap();
+        table.tokenizer_id = palw_tokenizer_raw_commitment_v1(tiny);
+        assert_eq!(
+            nominate_v1(
+                &path,
+                table.tokenizer_id,
+                tiny.len() as u64,
+                u64::MAX - 100,
+                &table,
+                Hash64::default(),
+                Hash64::default(),
+                &ledger
+            )
+            .unwrap(),
+            0
+        );
+        let incomplete = br#"{"model":{"vocab":{"a":0"#;
+        std::fs::write(&path, incomplete).unwrap();
+        table.tokenizer_id = palw_tokenizer_raw_commitment_v1(incomplete);
+        assert_eq!(
+            nominate_v1(
+                &path,
+                table.tokenizer_id,
+                incomplete.len() as u64,
+                100,
+                &table,
+                Hash64::default(),
+                Hash64::default(),
+                &ledger
+            )
+            .unwrap(),
+            0,
+            "authenticated malformed EOF is a nominee for actual Invalid court, not a stuck key proof"
+        );
         assert_eq!(ledger.reserved_bytes(), 0);
     }
 }

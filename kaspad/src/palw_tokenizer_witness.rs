@@ -5,7 +5,7 @@
 use kaspa_consensus_core::{
     Hash64,
     palw_json_key_set_v1::{PalwJsonKeyCompactProofV1, PalwJsonKeyInsertProofV1, palw_json_key_path_v1},
-    palw_tokenizer_json_stream_v1::{PalwTokenizerJsonStreamV1, PalwTokenizerJsonVerdictV1},
+    palw_tokenizer_json_stream_v1::{PalwTokenizerJsonStreamV1, PalwTokenizerJsonVerdictV1, PalwTokenizerRenderingEventV1},
     palw_tokenizer_rendering_v1::PALW_TOKENIZER_RAW_DOMAIN_V1,
     palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1,
 };
@@ -178,7 +178,8 @@ impl TokenizerWitnessV1 {
         claim: Hash64,
         ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
     ) -> Result<Self, String> {
-        let node_bytes = signed_keys
+        let retained_keys = signed_keys.min(actual_length);
+        let node_bytes = retained_keys
             .checked_mul(4)
             .and_then(|n| n.checked_mul(std::mem::size_of::<Node>() as u64))
             .ok_or("tokenizer book byte bound overflows")?;
@@ -223,7 +224,7 @@ impl TokenizerWitnessV1 {
         Ok(Self {
             file,
             parser: PalwTokenizerJsonStreamV1::new(context, tokenizer, actual_length, token),
-            book: Book::new(signed_keys)?,
+            book: Book::new(retained_keys)?,
             context,
             length: actual_length,
             signed_keys,
@@ -239,6 +240,12 @@ impl TokenizerWitnessV1 {
     /// Deterministic packets permit a fresh worker to replay this own file up to the rooted
     /// cursor. The caller must publish/acknowledge one move before asking for another.
     pub(crate) fn next(&mut self) -> Result<TokenizerWitnessMoveV1, String> {
+        self.next_with_observer_v1(|_| {})
+    }
+    pub(crate) fn next_with_observer_v1(
+        &mut self,
+        mut observer: impl FnMut(PalwTokenizerRenderingEventV1),
+    ) -> Result<TokenizerWitnessMoveV1, String> {
         let offset = self.parser.offset();
         self.file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let mut raw = vec![0; usize::try_from((self.length - offset).min(65536)).unwrap()];
@@ -270,7 +277,7 @@ impl TokenizerWitnessV1 {
                     break;
                 }
                 let end = raw.len().min(used + 90000 - encoded);
-                let count = self.parser.push(self.context, self.parser.offset(), &raw[used..end])?;
+                let count = self.parser.push_with_observer_v1(self.context, self.parser.offset(), &raw[used..end], &mut observer)?;
                 if count == 0 {
                     return Err("tokenizer witness made no bounded progress".into());
                 }
