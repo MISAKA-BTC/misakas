@@ -200,6 +200,15 @@ pub(crate) const PALW_FILER_HAND_OFFS_PER_OFFENCE_V1: u8 = 2;
 /// is being flooded, and a filing refused here is logged, never silently dropped.
 pub(crate) const PALW_FILER_MAX_ENTRIES_V1: usize =
     4 * kaspa_consensus_core::palw_state_v2::PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1 as usize;
+/// Total original proof bytes held by the node's book, before cloning or persistence.
+/// A single maximum court proof fits; further filings backpressure until earlier convictions finish.
+const PALW_FILER_MAX_EVIDENCE_RAM_V2: u64 = 64 * 1024 * 1024;
+fn palw_filer_evidence_bytes_v2(object: &PalwConsensusObjectV2) -> u64 {
+    match object {
+        PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } => evidence.len() as u64,
+        _ => 0,
+    }
+}
 
 /// **J1 auto's probes a tick** (each two capture verifications and one event opening, reserved and
 /// off the tick) — one, so a pool of stranger material cannot turn the probe into a replay storm.
@@ -230,15 +239,24 @@ pub(crate) const PALW_FILER_ROUND_REVEAL_V1: u32 = u32::MAX - 1;
 /// **Whether a court-queue entry is one of this filer's**: one of its three rounds on the accusing
 /// side, carrying one of its three objects. The round alone is not enough: P2-7's answers key their
 /// round by a 32-bit fold of the unit (`palw_disclosure_queue_key_v1`), which may land on any value.
+pub(crate) const PALW_FILER_ROUND_TERMINAL_FIRST_V1: u32 = u32::MAX - 64;
+pub(crate) const PALW_FILER_ROUND_TERMINAL_LAST_V1: u32 = PALW_FILER_ROUND_TERMINAL_FIRST_V1 + 32;
 pub(crate) fn palw_filer_queued_v1(round: u32, responder: bool, object: &PalwConsensusObjectV2) -> bool {
-    matches!(round, PALW_FILER_ROUND_COMMIT_V1 | PALW_FILER_ROUND_EVIDENCE_V1 | PALW_FILER_ROUND_REVEAL_V1)
-        && !responder
+    if responder {
+        return false;
+    }
+    (matches!(round, PALW_FILER_ROUND_COMMIT_V1 | PALW_FILER_ROUND_EVIDENCE_V1 | PALW_FILER_ROUND_REVEAL_V1)
         && matches!(
             object,
             PalwConsensusObjectV2::ReporterCommitted { .. }
                 | PalwConsensusObjectV2::ReporterRevealed { .. }
                 | PalwConsensusObjectV2::ObjectiveOffence { .. }
-        )
+        ))
+        || ((PALW_FILER_ROUND_TERMINAL_FIRST_V1..=PALW_FILER_ROUND_TERMINAL_LAST_V1).contains(&round)
+            && matches!(
+                object,
+                PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } | PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. }
+            ))
 }
 
 /// Where a filing came from — for the log, the hand-back of a stalled filing, and the tests that pin
@@ -579,9 +597,21 @@ impl PalwReporterFilerV1 {
     pub(crate) fn load(state_dir: &Path) -> Self {
         let path = state_dir.join("palw-reporter-filer.v1");
         let mut book = Self { path: Some(path.clone()), probes_left: PALW_J1_PROBES_PER_TICK_V1, ..Self::default() };
+        // Refuse oversized persisted files before reading them into RAM.
+        let Ok(meta) = std::fs::metadata(&path) else { return book };
+        let maximum = PALW_FILER_MAX_EVIDENCE_RAM_V2 + PALW_FILER_MAX_ENTRIES_V1 as u64 * 65_536;
+        if meta.len() > maximum {
+            warn!("[{PALW_PANEL}] reporter book exceeds its bounded restore envelope");
+            return book;
+        }
         let Ok(bytes) = std::fs::read(&path) else { return book };
-        let parsed =
-            bytes.strip_prefix(PALW_FILER_FILE_MAGIC_V1).and_then(|body| borsh::from_slice::<Vec<PalwFilerEntryV1>>(body).ok());
+        let parsed = bytes
+            .strip_prefix(PALW_FILER_FILE_MAGIC_V1)
+            .and_then(|body| borsh::from_slice::<Vec<PalwFilerEntryV1>>(body).ok())
+            .filter(|entries| {
+                entries.len() <= PALW_FILER_MAX_ENTRIES_V1
+                    && entries.iter().map(|e| palw_filer_evidence_bytes_v2(&e.object)).sum::<u64>() <= PALW_FILER_MAX_EVIDENCE_RAM_V2
+            });
         match parsed {
             Some(entries) => {
                 book.entries = entries.into_iter().map(|entry| (entry.offence_key, entry)).collect();
@@ -708,7 +738,15 @@ impl PalwReporterFilerV1 {
             Some(Err(why)) => return PalwFileOutcomeV1::NotAdmitted(why.clone()),
             None => return PalwFileOutcomeV1::Unreadable,
         }
-        if self.entries.len() >= PALW_FILER_MAX_ENTRIES_V1 {
+        if self.entries.len() >= PALW_FILER_MAX_ENTRIES_V1
+            || self
+                .entries
+                .values()
+                .map(|e| palw_filer_evidence_bytes_v2(&e.object))
+                .sum::<u64>()
+                .saturating_add(palw_filer_evidence_bytes_v2(&filing.object))
+                > PALW_FILER_MAX_EVIDENCE_RAM_V2
+        {
             return PalwFileOutcomeV1::Full;
         }
         let built = (read.rcore_plus && read.reporter_may_commit)
@@ -777,7 +815,20 @@ impl PalwReporterFilerV1 {
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         accused: &mut HashSet<Hash64>,
+        read: impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
+    ) -> Vec<(PalwFilerEntryV1, PalwFilerEndV1)> {
+        self.tick_with_terminal_v2(court_pending, court_moved, accused, read, |_, _| Ok(None))
+    }
+
+    /// The accepted tip chooses every multipart move. The original persisted book remains
+    /// compatible; no local bitmap can falsely claim progress after a reorg or restart.
+    pub(crate) fn tick_with_terminal_v2(
+        &mut self,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        accused: &mut HashSet<Hash64>,
         mut read: impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
+        mut terminal: impl FnMut(&PalwFilerEntryV1, &PalwReporterFilingReadV1) -> Result<Option<(u32, PalwConsensusObjectV2)>, String>,
     ) -> Vec<(PalwFilerEntryV1, PalwFilerEndV1)> {
         use PalwFilerStepV1 as Step;
         self.probes_left = PALW_J1_PROBES_PER_TICK_V1;
@@ -819,7 +870,17 @@ impl PalwReporterFilerV1 {
                 self.dirty = true;
             }
             let now = chain.now_daa;
-            let mut step = palw_filer_step_v1(self.entries.get(&key).expect("live"), &chain);
+            let multipart = matches!(&entry.object,PalwConsensusObjectV2::ObjectiveOffence {evidence,..}
+                if evidence.len() as u64 > kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
+            let mut policy_entry = entry.clone();
+            if multipart && chain.consumed.is_none() {
+                // Three direct-evidence retries are not a 32-part transfer budget. Each part's
+                // own carried timestamp controls retries, and the original deadline bounds them.
+                policy_entry.evidence_sent = None;
+                policy_entry.evidence_sends = 0;
+                policy_entry.in_queue.evidence = false;
+            }
+            let mut step = palw_filer_step_v1(&policy_entry, &chain);
             match step {
                 Step::Wait => continue,
                 Step::Done(end) => {
@@ -830,6 +891,43 @@ impl PalwReporterFilerV1 {
                     continue;
                 }
                 Step::Commit | Step::File | Step::Reveal => {}
+            }
+            if multipart && step == Step::File {
+                if entry.gate_refused_at.is_some_and(|at| now < at.saturating_add(PALW_FILER_GATE_RETRY_DAA_V1)) {
+                    continue;
+                }
+                let carrier = match terminal(&entry, &chain) {
+                    Ok(Some(move_)) => move_,
+                    Ok(None) => continue,
+                    Err(why) => {
+                        crate::palw_backends::note_throttled_v1("panel-terminal-filer", || {
+                            format!("[{PALW_PANEL}] terminal filing {key} waits: {why}")
+                        });
+                        self.entries.get_mut(&key).expect("live").gate_refused_at = Some(now);
+                        continue;
+                    }
+                };
+                let (round, object) = carrier;
+                if court_pending.iter().any(|(k, r, side, _)| (*k, *r, *side) == (key, round, false))
+                    || court_moved.get(&(key, round, false)).is_some_and(|at| now < at.saturating_add(PALW_FILER_RESEND_DAA_V1))
+                {
+                    continue;
+                }
+                match palw_filer_gate_v1(&mut read, &entry, &object) {
+                    Some(Ok(())) => {}
+                    Some(Err(_)) => {
+                        self.entries.get_mut(&key).expect("live").gate_refused_at = Some(now);
+                        continue;
+                    }
+                    None => continue,
+                }
+                let live = self.entries.get_mut(&key).expect("live");
+                live.gate_refused_at = None;
+                live.evidence_sends = live.evidence_sends.saturating_add(1);
+                self.queued_due.insert((key, round, false), entry.file_by.unwrap_or(u64::MAX));
+                court_pending.push((key, round, false, object));
+                self.dirty = true;
+                continue;
             }
             // Nothing is spent on evidence the chain refuses: the commitment and the evidence each
             // wait for the gate's word at the tip (a court opened on the claim meanwhile, say) —
@@ -945,6 +1043,9 @@ impl PalwReporterFilerV1 {
         read: &mut impl FnMut(&PalwFilerEntryV1, Option<&PalwConsensusObjectV2>) -> Option<PalwReporterFilingReadV1>,
     ) {
         for round in [PALW_FILER_ROUND_COMMIT_V1, PALW_FILER_ROUND_EVIDENCE_V1, PALW_FILER_ROUND_REVEAL_V1] {
+            court_moved.remove(&(entry.offence_key, round, false));
+        }
+        for round in PALW_FILER_ROUND_TERMINAL_FIRST_V1..=PALW_FILER_ROUND_TERMINAL_LAST_V1 {
             court_moved.remove(&(entry.offence_key, round, false));
         }
         if !matches!(end, PalwFilerEndV1::Expired | PalwFilerEndV1::Stalled) {
@@ -1378,6 +1479,83 @@ pub(crate) fn palw_executor_refuted_file_by_v1(duty: &PalwSeatDutyV2, now_daa: u
     palw_kind4_file_by_v1(duty.receipt_deadline, now_daa)
 }
 
+/// One move from authenticated accepted-tip progress. Parts reuse the original offence bytes;
+/// no proof or rendering is re-encoded, and the manifest cannot be replaced by another filing.
+fn palw_filer_terminal_next_v1(
+    entry: &PalwFilerEntryV1,
+    progress: &kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1,
+    network: Hash64,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<Option<(u32, PalwConsensusObjectV2)>, String> {
+    use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
+    let PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } = &entry.object else {
+        return Err("terminal entry has no original offence".into());
+    };
+    let deadline = entry.file_by.unwrap_or(progress.hard_deadline_daa).min(progress.hard_deadline_daa);
+    let base = t::PalwTerminalDeclarationV1 {
+        version: 1,
+        claim: entry.claim_id,
+        reserver: entry.reporter,
+        reserved_daa: progress.reserved_daa,
+        kind: *kind,
+        accused: *accused,
+        evidence_id: *evidence_id,
+        heavy_prompt_ids: 0,
+        total_bytes: 0,
+        part_bytes: t::PALW_TERMINAL_PART_BYTES_V1,
+        part_digests: Vec::new(),
+        signature: Vec::new(),
+    };
+    let Some(d) = progress.declaration.as_ref() else {
+        let d = t::palw_terminal_declaration_v1(base, evidence, progress.court_maximum, |d| {
+            let msg = t::palw_terminal_message_v1(network, d)?;
+            sign(msg.as_byte_slice(), t::PALW_TERMINAL_CONTEXT_V1).ok_or_else(|| "terminal manifest signing unavailable".into())
+        })?;
+        d.check_window(progress.now_daa, deadline)?;
+        return Ok(Some((
+            PALW_FILER_ROUND_TERMINAL_FIRST_V1,
+            PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration: Box::new(d) },
+        )));
+    };
+    d.check(progress.court_maximum)?;
+    if (d.claim, d.reserver, d.reserved_daa, d.kind, d.accused, d.evidence_id, d.total_bytes)
+        != (entry.claim_id, entry.reporter, progress.reserved_daa, *kind, *accused, *evidence_id, evidence.len() as u64)
+    {
+        return Err("this reservation's immutable manifest belongs to another filing".into());
+    }
+    let mask = if d.part_digests.len() == 32 { u32::MAX } else { (1u32 << d.part_digests.len()) - 1 };
+    if progress.accepted_parts & !mask != 0 {
+        return Err("terminal progress bitmap exceeds the manifest".into());
+    }
+    let remaining = d.part_digests.len() - progress.accepted_parts.count_ones() as usize;
+    if progress
+        .now_daa
+        .saturating_add(kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_INCLUSION_MARGIN.saturating_mul(remaining as u64))
+        >= deadline
+    {
+        return Err("terminal transfer cannot finish before its original deadline".into());
+    }
+    let Some(index) = (0..d.part_digests.len()).find(|i| progress.accepted_parts & (1u32 << i) == 0) else { return Ok(None) };
+    let first = index * d.part_bytes as usize;
+    let bytes =
+        evidence.get(first..(first + d.part_bytes as usize).min(evidence.len())).ok_or("terminal bytes exceed original proof")?;
+    if t::palw_terminal_part_digest_v1(index as u8, bytes) != d.part_digests[index] {
+        return Err("terminal part differs from immutable manifest".into());
+    }
+    Ok(Some((
+        PALW_FILER_ROUND_TERMINAL_FIRST_V1 + 1 + index as u32,
+        PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 {
+            part: Box::new(t::PalwTerminalPartV1 {
+                claim: d.claim,
+                reserver: d.reserver,
+                evidence_id: d.evidence_id,
+                index: index as u8,
+                bytes: bytes.to_vec(),
+            }),
+        },
+    )))
+}
+
 impl PalwPanelService {
     /// **The panel's [`PalwConvictionDoorV1`]** over the loop's book, for this node's `reporter` bond.
     pub(crate) fn conviction_door_v1<'a>(
@@ -1445,9 +1623,21 @@ impl PalwPanelService {
         court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         accused: &mut HashSet<Hash64>,
     ) {
-        let ended = filer.tick(court_pending, court_moved, accused, |entry, gated| {
-            session.palw_reporter_filing_read_v1(entry.offence_key, entry.commitment, entry.reporter, gated.cloned())
-        });
+        let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        let ended = filer.tick_with_terminal_v2(
+            court_pending,
+            court_moved,
+            accused,
+            |entry, gated| session.palw_reporter_filing_read_v1(entry.offence_key, entry.commitment, entry.reporter, gated.cloned()),
+            |entry, _| {
+                let progress = session.palw_terminal_progress_v1((entry.claim_id, entry.reporter))?;
+                let Some(progress) = progress else { return Err("terminal filing has no live owned reservation".into()) };
+                palw_filer_terminal_next_v1(entry, &progress, network, |message, context| self.sign(message, context))
+            },
+        );
         for (entry, end) in ended {
             info!(
                 "[{PALW_PANEL}] claim {}: the filing of offence {} ({:?}) ends: {end:?} (P2-8)",
@@ -1708,6 +1898,132 @@ mod tests {
 
     fn ours(entry: &PalwFilerEntryV1, committed_daa: u64) -> PalwRewardWinnerV1 {
         PalwRewardWinnerV1 { committed_daa, commitment: entry.commitment, reporter: entry.reporter, payload: h(0xFA) }
+    }
+
+    // These fixtures test transport scheduling over opaque bytes. They do not assert the
+    // bytes are an admissible court proof; actual preflight/fold tests exercise that separately.
+    fn terminal_entry() -> (PalwFilerEntryV1, kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1) {
+        use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
+        let mut book = PalwReporterFilerV1::default();
+        let mut entry = filed(&mut book, filing(71, Some(10_000)), &chain(100));
+        let bytes = vec![7u8; t::PALW_TERMINAL_MAX_BYTES_V1 as usize];
+        let id = kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(&bytes);
+        entry.evidence_id = id;
+        entry.object = PalwConsensusObjectV2::ObjectiveOffence {
+            kind: PalwOffenceKindV1::ExecutorRefuted,
+            accused: entry.accused,
+            evidence_id: id,
+            evidence: bytes,
+        };
+        entry.commit_object = None;
+        (
+            entry,
+            t::PalwTerminalProgressV1 {
+                now_daa: 100,
+                court_maximum: t::PALW_TERMINAL_MAX_BYTES_V1,
+                reserved_daa: 90,
+                hard_deadline_daa: 10_000,
+                declaration: None,
+                accepted_parts: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn terminal_scheduler_uses_tip_bitmap_exact_bytes_and_original_identity() {
+        use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
+        let (entry, mut progress) = terminal_entry();
+        let sign = |_: &[u8], _: &[u8]| Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]);
+        let (round, obj) = palw_filer_terminal_next_v1(&entry, &progress, h(DOMAIN), sign).unwrap().unwrap();
+        assert_eq!(round, PALW_FILER_ROUND_TERMINAL_FIRST_V1);
+        let PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } = obj else { panic!("manifest first") };
+        assert_eq!(declaration.part_digests.len(), 32);
+        progress.declaration = Some(*declaration);
+        let mut collected = Vec::new();
+        for i in 0..32 {
+            let (round, obj) = palw_filer_terminal_next_v1(&entry, &progress, h(DOMAIN), sign).unwrap().unwrap();
+            assert_eq!(round, PALW_FILER_ROUND_TERMINAL_FIRST_V1 + 1 + i);
+            assert!(palw_filer_queued_v1(round, false, &obj));
+            let PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = obj else { panic!("part") };
+            assert_eq!((part.index, part.evidence_id), (i as u8, entry.evidence_id));
+            assert_eq!(part.bytes.len(), t::PALW_TERMINAL_PART_BYTES_V1 as usize);
+            collected.extend(part.bytes);
+            progress.accepted_parts |= 1u32 << i;
+        }
+        assert!(palw_filer_terminal_next_v1(&entry, &progress, h(DOMAIN), sign).unwrap().is_none());
+        assert_eq!(kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(&collected), entry.evidence_id);
+        progress.accepted_parts &= !(1 << 9); // Accepted progress reverted: the exact missing part resumes.
+        let (_, obj) = palw_filer_terminal_next_v1(&entry, &progress, h(DOMAIN), sign).unwrap().unwrap();
+        assert!(matches!(obj,PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 {part} if part.index==9));
+        progress.declaration = None;
+        progress.accepted_parts = 0; // Reorg also removed the manifest.
+        assert!(matches!(
+            palw_filer_terminal_next_v1(&entry, &progress, h(DOMAIN), sign).unwrap().unwrap().1,
+            PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. }
+        ));
+        progress.now_daa = progress.hard_deadline_daa;
+        assert!(palw_filer_terminal_next_v1(&entry, &progress, h(DOMAIN), sign).is_err());
+    }
+
+    #[test]
+    fn terminal_scheduler_advances_beyond_three_carriers_and_debounces_each_stage() {
+        let (entry, mut progress) = terminal_entry();
+        let mut book = PalwReporterFilerV1::default();
+        book.entries.insert(entry.offence_key, entry.clone());
+        let mut queue = Vec::new();
+        let mut moved = HashMap::new();
+        let mut accused = HashSet::new();
+        for stage in 0..8u32 {
+            let ended = book.tick_with_terminal_v2(
+                &mut queue,
+                &mut moved,
+                &mut accused,
+                |_, _| Some(chain(100)),
+                |e, _| {
+                    palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
+                        Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+                    })
+                },
+            );
+            assert!(ended.is_empty());
+            assert_eq!(queue.len(), 1);
+            // A queued stage is not copied again even if many ticks pass.
+            book.tick_with_terminal_v2(
+                &mut queue,
+                &mut moved,
+                &mut accused,
+                |_, _| Some(chain(100)),
+                |e, _| {
+                    palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
+                        Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+                    })
+                },
+            );
+            assert_eq!(queue.len(), 1);
+            let (_, round, _, obj) = queue.pop().unwrap();
+            moved.insert((entry.offence_key, round, false), 100);
+            if stage == 0 {
+                let PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } = obj else { panic!("manifest") };
+                progress.declaration = Some(*declaration);
+            } else {
+                progress.accepted_parts |= 1u32 << (stage - 1);
+            }
+        }
+        assert!(book.entry(&entry.offence_key).unwrap().evidence_sends > PALW_FILER_MAX_SENDS_V1);
+        // Losing accepted progress cannot cause an immediate duplicate of a just-carried part.
+        progress.accepted_parts &= !(1 << 6);
+        book.tick_with_terminal_v2(
+            &mut queue,
+            &mut moved,
+            &mut accused,
+            |_, _| Some(chain(100)),
+            |e, _| {
+                palw_filer_terminal_next_v1(e, &progress, h(DOMAIN), |_, _| {
+                    Some(vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+                })
+            },
+        );
+        assert!(queue.is_empty());
     }
 
     /// **T54c's node half, the whole order on the rule:** commit → (depth) → evidence → reveal →

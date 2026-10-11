@@ -631,25 +631,47 @@ pub fn palw_replay_executor_refuted_object_v1(
     contradiction: PalwPanelContradictionV1,
     prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
 ) -> Result<PalwReplayRefutedObjectV1, PalwReplayObjectErrorV1> {
+    palw_replay_executor_refuted_object_with_budget_v2(
+        claim_id,
+        executor,
+        contradiction,
+        prompt_ids_opening,
+        PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES,
+    )
+}
+
+/// Builds the original proof bytes for reservation-owned carriage. The caller supplies the
+/// current court's admitted envelope; direct builders retain their existing one-carrier bound.
+pub fn palw_replay_executor_refuted_object_with_budget_v2(
+    claim_id: Hash64,
+    executor: PalwBondKeyV2,
+    contradiction: PalwPanelContradictionV1,
+    prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+    maximum: u64,
+) -> Result<PalwReplayRefutedObjectV1, PalwReplayObjectErrorV1> {
     palw_executor_refuted_admission_v1(&contradiction).map_err(PalwReplayObjectErrorV1::NotARefutation)?;
     if prompt_ids_opening.is_some() && !matches!(contradiction, PalwPanelContradictionV1::StepArithmetic { .. }) {
         return Err(PalwReplayObjectErrorV1::StrayOpening);
     }
-    let evidence = borsh::to_vec(&PalwExecutorRefutedEvidenceV1 {
+    let payload = PalwExecutorRefutedEvidenceV1 {
         version: PALW_EXECUTOR_REFUTED_VERSION_V1,
         claim_id,
         contradiction,
         prompt_ids_opening,
         reporter_reveal: Vec::new(),
-    })
-    .expect("the evidence serializes");
-    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
-        return Err(PalwReplayObjectErrorV1::TooLarge { bytes: evidence.len() as u64, cap: PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES });
+    };
+    let maximum = maximum.min(crate::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1);
+    let bytes = borsh::object_length(&payload).expect("the evidence has a length") as u64;
+    if bytes > maximum {
+        return Err(PalwReplayObjectErrorV1::TooLarge { bytes, cap: maximum });
     }
+    let evidence = borsh::to_vec(&payload).expect("the evidence serializes");
     let evidence_id = palw_offence_evidence_digest_v1(&evidence);
     let object =
         PalwConsensusObjectV2::ObjectiveOffence { kind: PalwOffenceKindV1::ExecutorRefuted, accused: executor, evidence_id, evidence };
-    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(PalwReplayObjectErrorV1::CannotRide)?;
+    if bytes <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+        crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(PalwReplayObjectErrorV1::CannotRide)?;
+    }
     Ok(PalwReplayRefutedObjectV1 { offence_id: palw_executor_refuted_offence_id_v1(&executor.0, &claim_id), evidence_id, object })
 }
 

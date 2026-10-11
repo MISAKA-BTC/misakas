@@ -4959,6 +4959,26 @@ impl VirtualStateProcessor {
         state.palw_legacy_dispute_view_v1(state_params, &claim)
     }
 
+    pub fn palw_terminal_progress_v1_impl(
+        &self,
+        key: &kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e|e.to_string())?.ok_or("PALW V2 tip unavailable")?;
+        let now = self.virtual_stores.read().state.get().map_err(|e|e.to_string())?.daa_score;
+        if !self.palw_legacy_public_filer_at(now) { return Ok(None); }
+        let court = self.palw_court_params_v2.as_ref().ok_or("terminal evidence needs V2 court parameters")?;
+        let Some(reservation) = state.legacy_dispute_reservation_v1(&key.0,&key.1) else { return Ok(None) };
+        let record = state.legacy_dispute_v1(&key.0).ok_or("reservation has no dispute record")?;
+        let row = state.terminal_pending_v1(key);
+        Ok(Some(kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1 {
+            now_daa:now,court_maximum:court.max_close_bytes(),reserved_daa:reservation.reserved_daa,
+            hard_deadline_daa:record.hard_deadline_daa,
+            declaration:row.map(|r|r.declaration.clone()),
+            accepted_parts:row.map_or(0,|r|r.parts.keys().fold(0u32,|bits,i|bits | (1u32 << *i))),
+        }))
+    }
+
     pub fn palw_legacy_answer_progress_v2_impl(
         &self,
         key: &kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
@@ -5136,9 +5156,53 @@ impl VirtualStateProcessor {
                 blue_score: 0,
                 subsidy: 0,
             };
-            read.object_gate = Some(self.palw_v2_validate_objects(state, state_params, &point, std::slice::from_ref(object)));
+            // This is a local filing preflight, not a direct-carrier admission exemption.
+            // The actual declaration and every carrier still pass the ordinary signed object gate.
+            read.object_gate = Some(match object {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {kind,accused,evidence_id,evidence}
+                    if evidence.len() as u64 > kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES =>
+                    self.palw_terminal_filing_preflight_v1(state,state_params,&point,reporter,*kind,*accused,*evidence_id,evidence),
+                _ => self.palw_v2_validate_objects(state, state_params, &point, std::slice::from_ref(object)),
+            });
         }
         Some(read)
+    }
+
+    fn palw_terminal_filing_preflight_v1(
+        &self,state:&kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params:&kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point:&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        reporter:&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        kind:kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1,
+        accused:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        evidence_id:kaspa_consensus_core::Hash64,evidence:&[u8],
+    ) -> Result<(),String> {
+        use kaspa_consensus_core::palw_terminal_carriage_v1 as t;
+        if !self.palw_legacy_public_filer_at(point.daa_score) || !self.palw_objective_offence_at(point.daa_score)
+            || !self.palw_offence_attribution_at(point.daa_score) {return Err("terminal public-filer court is dormant".into());}
+        let court=self.palw_court_params_v2.as_ref().ok_or("terminal evidence needs V2 court parameters")?;
+        if evidence.len() as u64 > court.max_close_bytes().min(t::PALW_TERMINAL_MAX_BYTES_V1) {return Err("terminal proof exceeds the court envelope".into());}
+        let claim=t::palw_terminal_claim_v1(kind,evidence)?;
+        let reservation=state.legacy_dispute_reservation_v1(&claim,reporter).ok_or("terminal filer has no live reservation")?;
+        let record=state.legacy_dispute_v1(&claim).ok_or("terminal reservation lacks its record")?;
+        let owner=state.bond(reporter).ok_or("terminal filer has no registered bond")?;
+        if !matches!(owner.status,kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active){return Err("terminal filer is not active".into());}
+        let placeholder=t::PalwTerminalDeclarationV1 {version:1,claim,reserver:*reporter,reserved_daa:reservation.reserved_daa,
+            kind,accused,evidence_id,heavy_prompt_ids:0,total_bytes:0,part_bytes:t::PALW_TERMINAL_PART_BYTES_V1,part_digests:Vec::new(),signature:Vec::new()};
+        let d=t::palw_terminal_declaration_v1(placeholder,evidence,court.max_close_bytes(),|_|Ok(vec![0;kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]))?;
+        d.check_window(point.daa_score,record.hard_deadline_daa)?;
+        if matches!(kind,kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch) && !self.palw_tir_at(point.daa_score){return Err("terminal identity court is dormant".into());}
+        if t::palw_terminal_is_constraint_v1(kind,evidence) && !params.fp_decode_constraint_active_at(point.daa_score){return Err("terminal constraint court is dormant".into());}
+        if !params.capacity_batch_active_at(point.daa_score) && kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_evidence_is_windowed_v1(evidence){return Err("terminal Windowed court is dormant".into());}
+        let bond=state.bond(&accused).ok_or("terminal accused has no registered bond")?;
+        t::palw_terminal_adjudicate_v1(state,&d,evidence,court.max_close_bytes(),params.fp_decode_rules_at(point.daa_score),
+            self.palw_identity_rules_v1(point.daa_score),self.palw_session_rule_at(point.daa_score),
+            Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
+                chain_domain:self.palw_network_domain_v2(),seat_pubkey:&bond.pubkey,
+                seat_active:matches!(bond.status,kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring{..}),
+                verify:&Self::verify_mldsa87_with_context_bool,
+            }))?;
+        Ok(())
     }
 
     /// **ADR-0152 DA-3 / J-6 (Phase 2, P2-8d): what a `StepLeaf` demand of `claim` by `accuser`
@@ -9000,6 +9064,16 @@ impl VirtualStateProcessor {
                     heavy_prompt_claims.insert(charge.claim_id);
                 }
             }
+            let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
+                || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
+            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
+                info!(
+                    "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
+                     stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
+                    kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+                );
+                continue;
+            }
             // A completing owned terminal carries the same heavy-prompt budget as a direct offence.
             // Its rent was bought by the signed declaration; partial chunks never consume this slot.
             if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = &object {
@@ -9019,16 +9093,6 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-            }
-            let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
-                || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
-            if spends_the_court_slot && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK {
-                info!(
-                    "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
-                     stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
-                    kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
-                );
-                continue;
             }
             // RFC-0002 Phase F: the IR registration handed to the gate takes the block's one place at
             // admission v10. One the slot accounting above did not see (a network without the

@@ -45,6 +45,29 @@ pub struct PalwPendingTerminalV1 {
     pub deadline_daa: u64,
     pub parts: BTreeMap<u8, Vec<u8>>,
 }
+/// Accepted-tip progress copies only the small immutable manifest and a 32-bit bitmap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTerminalProgressV1 {
+    pub now_daa: u64,
+    pub court_maximum: u64,
+    pub reserved_daa: u64,
+    pub hard_deadline_daa: u64,
+    pub declaration: Option<PalwTerminalDeclarationV1>,
+    pub accepted_parts: u32,
+}
+
+/// Extracts the claim without changing the offence's original byte identity. Callers bound bytes first.
+pub fn palw_terminal_claim_v1(kind: PalwOffenceKindV1, evidence: &[u8]) -> Result<Hash64, String> {
+    use crate::palw_offence_attribution_v1::*;
+    match kind {
+        PalwOffenceKindV1::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).map(|p| p.claim_id),
+        PalwOffenceKindV1::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).map(|p| p.claim_id),
+        PalwOffenceKindV1::TirIdentityMismatch => borsh::from_slice::<PalwTirIdentityEvidenceV1>(evidence).map(|p| p.claim_id),
+        _ => return Err("this offence is not reservation-owned terminal evidence".into()),
+    }
+    .map_err(|e| e.to_string())
+}
+
 impl PalwTerminalDeclarationV1 {
     pub fn key(&self) -> PalwTerminalKeyV1 {
         (self.claim, self.reserver)
@@ -97,12 +120,12 @@ pub fn palw_terminal_part_digest_v1(index: u8, bytes: &[u8]) -> Hash64 {
 }
 /// Counts evidence before allocating any parts or asking the caller to sign. The owner and
 /// original offence identity survive transport unchanged.
-pub fn palw_terminal_split_v1(
+pub fn palw_terminal_declaration_v1(
     mut d: PalwTerminalDeclarationV1,
     evidence: &[u8],
     maximum: u64,
     sign: impl FnOnce(&PalwTerminalDeclarationV1) -> Result<Vec<u8>, String>,
-) -> Result<(PalwTerminalDeclarationV1, Vec<PalwTerminalPartV1>), String> {
+) -> Result<PalwTerminalDeclarationV1, String> {
     d.total_bytes = evidence.len() as u64;
     if d.part_bytes == 0
         || d.part_bytes > PALW_TERMINAL_PART_BYTES_V1
@@ -123,6 +146,15 @@ pub fn palw_terminal_split_v1(
     d.check(maximum)?;
     d.signature = sign(&d)?;
     d.check(maximum)?;
+    Ok(d)
+}
+pub fn palw_terminal_split_v1(
+    d: PalwTerminalDeclarationV1,
+    evidence: &[u8],
+    maximum: u64,
+    sign: impl FnOnce(&PalwTerminalDeclarationV1) -> Result<Vec<u8>, String>,
+) -> Result<(PalwTerminalDeclarationV1, Vec<PalwTerminalPartV1>), String> {
+    let d = palw_terminal_declaration_v1(d, evidence, maximum, sign)?;
     let parts = evidence
         .chunks(d.part_bytes as usize)
         .enumerate()

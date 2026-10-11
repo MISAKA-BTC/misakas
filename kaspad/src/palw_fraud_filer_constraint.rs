@@ -16,12 +16,23 @@ pub(super) fn flat_contradiction_v1(
     pin: &PalwBase0DecodeTokensV1,
     table: Arc<PalwTokenTableV1>,
 ) -> Result<Option<PalwPanelContradictionV1>, String> {
+    flat_contradiction_with_budget_v2(target, binding, job, pin, table, PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES)
+}
+
+pub(super) fn flat_contradiction_with_budget_v2(
+    target: &PalwOffenceTargetV1,
+    binding: &PalwStepBindingV2,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    pin: &PalwBase0DecodeTokensV1,
+    table: Arc<PalwTokenTableV1>,
+    maximum: u64,
+) -> Result<Option<PalwPanelContradictionV1>, String> {
     kaspa_consensus_core::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job)
         .map_err(|e| e.to_string())?;
     if table.vocab() != binding.shape_profile.vocab_size {
         return Err("the held token table is not the registered vocabulary wide".into());
     }
-    let ceiling = PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES as usize;
+    let ceiling = maximum.min(kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1) as usize;
     // Bound before cloning the potentially large job/pin into an offence. Multipart terminal
     // carriage is required when even these mandatory fields exceed the direct evidence ceiling.
     let base_bytes = borsh::object_length(job)
@@ -179,6 +190,17 @@ pub(super) fn tiled_contradiction_v1(
     events: &[kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1],
     table: Arc<PalwTokenTableV1>,
 ) -> Result<Option<PalwPanelContradictionV1>, String> {
+    tiled_contradiction_with_budget_v2(target, job, plan, events, table, PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES)
+}
+
+pub(super) fn tiled_contradiction_with_budget_v2(
+    target: &PalwOffenceTargetV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    plan: TiledPlanV1,
+    events: &[kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1],
+    table: Arc<PalwTokenTableV1>,
+    maximum: u64,
+) -> Result<Option<PalwPanelContradictionV1>, String> {
     use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
     use kaspa_consensus_core::palw_step_refute::*;
     let units = plan.units();
@@ -212,7 +234,7 @@ pub(super) fn tiled_contradiction_v1(
         .map_err(|e| e.to_string())?
         .saturating_add(borsh::object_length(binding).map_err(|e| e.to_string())?)
         .saturating_add(events.iter().map(|e| borsh::object_length(e).unwrap_or(usize::MAX)).fold(0usize, usize::saturating_add));
-    let ceiling = PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES as usize;
+    let ceiling = maximum.min(kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1) as usize;
     if base > ceiling {
         return Err("the constrained proof requires multipart terminal carriage".into());
     }
@@ -375,9 +397,7 @@ mod tests {
                     &pin.generated_token_ids,
                 ),
             };
-            let proof = if case == 4 { None } else {
-                flat_contradiction_v1(&target, &binding, &job, &pin, table.clone()).unwrap()
-            };
+            let proof = if case == 4 { None } else { flat_contradiction_v1(&target, &binding, &job, &pin, table.clone()).unwrap() };
             let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
                 PalwTraceEventDisclosureV1::Flat { binding: Box::new(binding.clone()), pin: pin.clone() },
             ));
@@ -389,7 +409,8 @@ mod tests {
             }
             if case == 4 {
                 let filing = filing.expect("out-of-vocab pin files directly without rendering an invalid ID");
-                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &filing.object else {
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &filing.object
+                else {
                     panic!("offence")
                 };
                 let decoded: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).unwrap();
@@ -521,9 +542,13 @@ mod tests {
                 // An automaton accepting only the empty string has no admitted rendering.
                 // Its first EOG is a real stop; the authenticated suffix is nevertheless fraud.
                 let terminal = PalwDecodeConstraintV1 {
-                    version: 1, compiler_id: Hash64::from_u64_word(0xC016), start_frame: 0,
-                    frames: vec![PalwConstraintFrameV1 { start: 0,
-                        nodes: vec![PalwConstraintNodeV1 { accepting: true, edges: vec![] }] }],
+                    version: 1,
+                    compiler_id: Hash64::from_u64_word(0xC016),
+                    start_frame: 0,
+                    frames: vec![PalwConstraintFrameV1 {
+                        start: 0,
+                        nodes: vec![PalwConstraintNodeV1 { accepting: true, edges: vec![] }],
+                    }],
                 };
                 let mut stopped_job = job.clone();
                 let Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &mut stopped_job.tail else {
@@ -535,21 +560,36 @@ mod tests {
                     let stopped_rows = &rows[..stopped_ids.len()];
                     let mut stopped_binding = template.clone();
                     stopped_binding.job_context = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_context_v3(
-                        &stopped_job, &class,
+                        &stopped_job,
+                        &class,
                         &kaspa_consensus_core::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(
-                            &stopped_job, stopped_ids.len() as u32), &template.job_context.network_id).unwrap();
-                    stopped_binding.full_logits_trace_root = tiled_logits_trace_root_v1(
-                        &stopped_binding.job_context, stopped_rows, &stopped_ids).unwrap();
-                    stopped_binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&stopped_binding);
+                            &stopped_job,
+                            stopped_ids.len() as u32,
+                        ),
+                        &template.job_context.network_id,
+                    )
+                    .unwrap();
+                    stopped_binding.full_logits_trace_root =
+                        tiled_logits_trace_root_v1(&stopped_binding.job_context, stopped_rows, &stopped_ids).unwrap();
+                    stopped_binding.committed_execution_root =
+                        kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&stopped_binding);
                     let stopped_target = PalwOffenceTargetV1 {
-                        claim_id: Hash64::from_u64_word(0xC016), class_id: job.class_id, artifact_root: Hash64::default(),
+                        claim_id: Hash64::from_u64_word(0xC016),
+                        class_id: job.class_id,
+                        artifact_root: Hash64::default(),
                         executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
                         execution_root: stopped_binding.committed_execution_root,
                         lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
-                        segment_count: Some(4), phase: None,
-                        job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&stopped_binding.job_context),
+                        segment_count: Some(4),
+                        phase: None,
+                        job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(
+                            &stopped_binding.job_context,
+                        ),
                         trace_root: stopped_binding.full_logits_trace_root,
-                        output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&stopped_binding.job_context, &stopped_ids),
+                        output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(
+                            &stopped_binding.job_context,
+                            &stopped_ids,
+                        ),
                         registered_semantics: None,
                     };
                     let stopped_event = logits_event_disclosure_v1(&stopped_binding, stopped_rows, &stopped_ids, 0, 0).unwrap();
@@ -560,9 +600,12 @@ mod tests {
                         assert_eq!(plan.witness, None);
                         assert_eq!(plan.units().len(), 1);
                         let proof = tiled_contradiction_v1(&stopped_target, &stopped_job, plan, &[stopped_event], table.clone())
-                            .unwrap().expect("public EOG and IDs suffice without a selection witness");
+                            .unwrap()
+                            .expect("public EOG and IDs suffice without a selection witness");
                         assert!(matches!(proof, PalwPanelContradictionV1::ConstrainedDecode { .. }));
-                    } else { assert!(planned.is_none(), "an honest terminal EOG clears"); }
+                    } else {
+                        assert!(planned.is_none(), "an honest terminal EOG clears");
+                    }
                 }
                 continue;
             }
@@ -587,20 +630,29 @@ mod tests {
             let initial = logits_event_disclosure_v1(&binding, &rows, &ids, 0, 0).unwrap();
             if fault == 5 {
                 let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(
-                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(initial.clone()));
+                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(initial.clone()),
+                );
                 let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
-                    prompt_ids_form: backend.prompt_ids_form(), base_class_id: Hash64::default(), da_signer_liability: false,
+                    prompt_ids_form: backend.prompt_ids_form(),
+                    base_class_id: Hash64::default(),
+                    da_signer_liability: false,
                 };
                 let filing = super::super::palw_fraud_filer_public_filing_with_fp_v2(&target, rules, &answer, None, Some(&job))
-                    .unwrap().expect("invalid tiled ID requires no selected tile or table opening");
-                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = filing.object else {
+                    .unwrap()
+                    .expect("invalid tiled ID requires no selected tile or table opening");
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = filing.object
+                else {
                     panic!("offence")
                 };
                 let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
                     borsh::from_slice(&evidence).unwrap();
-                assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::ForgedOutputTiled {
-                    proof: kaspa_consensus_core::palw_offence_v1::PalwForgedOutputTiledProofV1::OutOfVocab { position: 2, .. }, ..
-                }));
+                assert!(matches!(
+                    decoded.contradiction,
+                    PalwPanelContradictionV1::ForgedOutputTiled {
+                        proof: kaspa_consensus_core::palw_offence_v1::PalwForgedOutputTiledProofV1::OutOfVocab { position: 2, .. },
+                        ..
+                    }
+                ));
                 continue;
             }
             let plan = tiled_plan_v1(&target, &job, &initial, &nominee, table.clone()).unwrap();

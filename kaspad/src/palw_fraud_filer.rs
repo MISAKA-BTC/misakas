@@ -1159,6 +1159,24 @@ pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
     file_by: Option<u64>,
     fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
 ) -> Result<Option<PalwConvictionFilingV1>, String> {
+    palw_fraud_filer_public_filing_with_budget_v3(
+        target,
+        rules,
+        answer,
+        file_by,
+        fp_job,
+        kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES,
+    )
+}
+
+pub(super) fn palw_fraud_filer_public_filing_with_budget_v3(
+    target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
+    answer: &PalwDaBuiltAnswerV1,
+    file_by: Option<u64>,
+    fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
+    maximum: u64,
+) -> Result<Option<PalwConvictionFilingV1>, String> {
     use kaspa_consensus_core::palw_offence_attribution_v1::{
         palw_binding_identity_fault_v1, palw_fp_canonical_prompt_admit_v1, palw_output_fault_v1, palw_prompt_not_anchored_admit_v1,
         palw_prompt_not_anchored_fault_v1,
@@ -1166,6 +1184,10 @@ pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
     use kaspa_consensus_core::palw_offence_v1::{PalwPanelContradictionV1, PalwPromptProofV1};
     use kaspa_consensus_core::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
     let PalwDaBuiltAnswerV1::Rcore(PalwDaAnswerV1::Event(event)) = answer else { return Ok(None) };
+    let event_bytes = borsh::object_length(event).map_err(|e| e.to_string())? as u64;
+    if event_bytes > maximum.min(kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1) {
+        return Err("the public event exceeds its admitted terminal evidence envelope".into());
+    }
     let binding = event.binding();
     if !kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(
         &PalwDaUnitV1::Event { row: 0, tile: 0 },
@@ -1242,17 +1264,20 @@ pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
         } else if let (Some(job), PalwTraceEventDisclosureV1::Flat { pin, .. }) = (fp_job.filter(|j| j.is_constraint()), event) {
             let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
                 .ok_or("the public verifier does not hold this job's tokenizer table")?;
-            let Some(proof) = constraint::flat_contradiction_v1(target, binding, job, pin, table)? else { return Ok(None) };
+            let Some(proof) = constraint::flat_contradiction_with_budget_v2(target, binding, job, pin, table, maximum)? else {
+                return Ok(None);
+            };
             proof
         } else {
             return Ok(None);
         }
     };
-    let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
+    let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
         target.claim_id,
         target.executor_bond,
         contradiction,
         None,
+        maximum,
     )
     .map_err(|e| e.to_string())?;
     let filing = PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
@@ -1640,6 +1665,13 @@ impl PalwPanelService {
                     da_signer_liability: params.palw_rcore_plus_active_at(current_daa),
                 };
                 let file_by = view.as_ref().map(|v| v.hard_deadline_daa.saturating_sub(2));
+                let maximum = match session.palw_terminal_progress_v1((claim, bond_key)) {
+                    Ok(Some(progress)) => {
+                        progress.court_maximum.min(kaspa_consensus_core::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1)
+                    }
+                    Ok(None) => kaspa_consensus_core::palw_offence_attribution_v1::PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES,
+                    Err(_) => continue,
+                };
                 let fp_job = book.cases.get(&claim).and_then(|c| c.public_fp_job_v1().cloned());
                 // The longest canonical prompt needs a whole-root recompute. Reserve its temporary ids/tree and proof buffers,
                 // then do all direct-proof hashing off the service loop. Pressure delays this pursuit rather than settling it.
@@ -1721,7 +1753,8 @@ impl PalwPanelService {
                 let answer = answer.clone();
                 let proof = tokio::task::spawn_blocking(move || {
                     let _reserved = reserved;
-                    let direct = palw_fraud_filer_public_filing_with_fp_v2(&target, rules, &answer, file_by, fp_job.as_ref())?;
+                    let direct =
+                        palw_fraud_filer_public_filing_with_budget_v3(&target, rules, &answer, file_by, fp_job.as_ref(), maximum)?;
                     if direct.is_some() || constraint_done {
                         return Ok((direct, previous_plan, constraint_done));
                     }
@@ -1739,16 +1772,19 @@ impl PalwPanelService {
                     let Some(plan) = plan else { return Ok((None, None, false)) };
                     let selected: Option<Vec<_>> = plan.units().iter().map(|unit| events.get(unit).cloned()).collect();
                     let Some(selected) = selected else { return Ok((None, Some(plan), false)) };
-                    let contradiction = constraint::tiled_contradiction_v1(&target, &job, plan, &selected, table)?;
+                    let contradiction =
+                        constraint::tiled_contradiction_with_budget_v2(&target, &job, plan, &selected, table, maximum)?;
                     let filing = contradiction
                         .map(|contradiction| {
-                            let built = kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_v1(
-                                target.claim_id,
-                                target.executor_bond,
-                                contradiction,
-                                None,
-                            )
-                            .map_err(|e| e.to_string())?;
+                            let built =
+                                kaspa_consensus_core::palw_replay_refute_v1::palw_replay_executor_refuted_object_with_budget_v2(
+                                    target.claim_id,
+                                    target.executor_bond,
+                                    contradiction,
+                                    None,
+                                    maximum,
+                                )
+                                .map_err(|e| e.to_string())?;
                             PalwConvictionFilingV1::of_offence(built.object, target.claim_id, file_by, PalwFilingOriginV1::Replay)
                                 .filter(|f| (f.offence_key, f.evidence_id) == (built.offence_id, built.evidence_id))
                                 .ok_or_else(|| "the reporter key differs from the public proof builder".to_string())

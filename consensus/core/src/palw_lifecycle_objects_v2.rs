@@ -2051,7 +2051,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "LG14-B multipart answers",
         true,
     ),
-    a2_row(PalwA2SlotV1::StateEncoding { what: "reservation-owned terminal evidence (delta 203, tail 0xF2, root terminal_evidence/v1)" }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
+    a2_row(PalwA2SlotV1::StateEncoding { what: "reservation-owned terminal evidence (deltas 203/205, tail 0xF2, root terminal_evidence/v1)" }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {

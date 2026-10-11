@@ -2310,6 +2310,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_terminal_progress_v1(
+        &self,
+        key: kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        self.virtual_processor.palw_terminal_progress_v1_impl(&key)
+    }
+
     fn palw_legacy_answer_progress_v2(
         &self,
         key: kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,

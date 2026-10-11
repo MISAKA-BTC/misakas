@@ -1066,6 +1066,15 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// Terminal evidence progress of this verifier's own live reservation at the accepted tip.
+    /// Unavailable readers are errors; absent/closed reservations are distinct successful reads.
+    fn palw_terminal_progress_v1(
+        &self,
+        _key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<crate::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        Err("terminal evidence progress reader unavailable".into())
+    }
+
     /// Accepted session-owned answer progress at the local tip. An unavailable reader is an
     /// error, distinct from a successfully read tip with no assembly. No retained part bytes are copied.
     fn palw_legacy_answer_progress_v2(
