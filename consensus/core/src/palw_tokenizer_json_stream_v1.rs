@@ -462,6 +462,11 @@ impl PalwTokenizerJsonStreamV1 {
     pub fn offset(&self) -> u64 {
         self.offset
     }
+    /// Public progress needs to distinguish raw EOF from its authenticated seal.
+    /// This exposes only the phase, never a tentative parser verdict.
+    pub fn is_sealed_v1(&self) -> bool {
+        self.sealed
+    }
     pub fn pending_key(&self) -> Option<(u64, Hash64)> {
         self.pending
     }
