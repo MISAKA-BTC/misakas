@@ -81,6 +81,7 @@ pub const TAG_POST_FLAT_MODEL_VECTOR_V6: u8 = 36;
 pub const TAG_SEAL_FLAT_MODEL_PROOF_V6: u8 = 37;
 pub const TAG_REVEAL_FLAT_MODEL_PROOF_V6: u8 = 38;
 pub const TAG_EXPIRE_FLAT_MODEL_SEAL_V6: u8 = 39;
+pub const TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7: u8 = 40;
 /// OPV-BOOT GAP-B1a: a claim reveal that carries its seal's salt (claim seal v2), past `palw_panel_free_v1`.
 pub const TAG_COMMIT_CLAIM_SALTED_V1: u8 = 20;
 
@@ -186,6 +187,15 @@ impl SaltedCommitV1 {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum KernelRouteObjectV1 {
+    RegisterFlatModelCandidateV7 {
+        binding: Digest,
+        descriptor: Digest,
+        program_bytes: Vec<u8>,
+        param_commitments: ParamCommitmentsV1,
+        max_positions: u32,
+        scope_root: Digest,
+        replay_root: Digest,
+    } = 40,
     /// Protected statement: the unsealed v3 refutation cannot target its identity.
     PostFlatModelVectorV6 {
         class: Digest,
@@ -525,6 +535,7 @@ impl KernelRouteObjectV1 {
     /// The variant's declared discriminant.
     pub const fn tag(&self) -> u8 {
         match self {
+            Self::RegisterFlatModelCandidateV7 { .. } => TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7,
             Self::PostFlatModelVectorV6 { .. } => TAG_POST_FLAT_MODEL_VECTOR_V6,
             Self::SealFlatModelProofV6 { .. } => TAG_SEAL_FLAT_MODEL_PROOF_V6,
             Self::RevealFlatModelProofV6 { .. } => TAG_REVEAL_FLAT_MODEL_PROOF_V6,
@@ -617,6 +628,9 @@ impl KernelRouteObjectV1 {
                 format!("{} bytes past the {limit}-byte ceiling", bytes.len()),
             ));
         }
+        if tag == TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 {
+            bounded_flat_candidate_v7(rest).map_err(|e| bad(RefusalKindV1::Malformed, e))?;
+        }
         let object: Self =
             borsh::from_slice(rest).map_err(|e| KernelRefusalV1::new(name_of_tag(tag), RefusalKindV1::Malformed, e.to_string()))?;
         // A variant whose ceiling depends on what it carries (a salted reveal: its commit's own) is held to it once parsed.
@@ -634,8 +648,52 @@ impl KernelRouteObjectV1 {
     }
 }
 
+/// Inspect all v7 allocation counts against the actual carrier before the
+/// derived Borsh decoder can allocate a program or parameter map. Old kinds
+/// retain their frozen decoder. This does not execute or hash model material.
+fn bounded_flat_candidate_v7(mut bytes: &[u8]) -> Result<(), String> {
+    fn take<'a>(b: &mut &'a [u8], n: usize) -> Result<&'a [u8], String> {
+        if b.len() < n {
+            return Err("truncated flat-v7 candidate".into());
+        }
+        let (head, tail) = b.split_at(n);
+        *b = tail;
+        Ok(head)
+    }
+    fn count(b: &mut &[u8]) -> Result<usize, String> {
+        Ok(u32::from_le_bytes(take(b, 4)?.try_into().unwrap()) as usize)
+    }
+    take(&mut bytes, 1 + 64 + 64)?;
+    let n = count(&mut bytes)?;
+    if n > misaka_palw_tir::program::MAX_PROGRAM_BYTES {
+        return Err("oversized flat-v7 canonical program".into());
+    }
+    take(&mut bytes, n)?;
+    let instances = count(&mut bytes)?;
+    if instances > bytes.len().saturating_sub(4 + 64 + 64) / 67 {
+        return Err("flat-v7 parameter count exceeds its actual carrier".into());
+    }
+    for _ in 0..instances {
+        take(&mut bytes, 2)?;
+        match take(&mut bytes, 1)?[0] {
+            0 => {}
+            1 => {
+                take(&mut bytes, 2)?;
+            }
+            _ => return Err("invalid flat-v7 parameter layer option".into()),
+        }
+        take(&mut bytes, 64)?;
+    }
+    take(&mut bytes, 4 + 64 + 64)?;
+    if !bytes.is_empty() {
+        return Err("trailing flat-v7 candidate bytes".into());
+    }
+    Ok(())
+}
+
 pub const fn name_of_tag(tag: u8) -> &'static str {
     match tag {
+        TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 => "RegisterFlatModelCandidateV7",
         TAG_POST_FLAT_MODEL_VECTOR_V6 => "PostFlatModelVectorV6",
         TAG_SEAL_FLAT_MODEL_PROOF_V6 => "SealFlatModelProofV6",
         TAG_REVEAL_FLAT_MODEL_PROOF_V6 => "RevealFlatModelProofV6",
@@ -682,6 +740,7 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
 /// The ceiling of a declared tag (`None`: not a declared tag).
 pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
     Some(match tag {
+        TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 => 1_583_616,
         TAG_POST_FLAT_MODEL_VECTOR_V6 => 1_583_616,
         TAG_SEAL_FLAT_MODEL_PROOF_V6 | TAG_EXPIRE_FLAT_MODEL_SEAL_V6 => 130,
         TAG_REVEAL_FLAT_MODEL_PROOF_V6 => (1 << 20) + 134,
@@ -756,6 +815,15 @@ mod tests {
                 },
             },
             demand(),
+            KernelRouteObjectV1::RegisterFlatModelCandidateV7 {
+                binding: [1; 64],
+                descriptor: [2; 64],
+                program_bytes: vec![7],
+                param_commitments: ParamCommitmentsV1::default(),
+                max_positions: 1,
+                scope_root: [3; 64],
+                replay_root: [4; 64],
+            },
             KernelRouteObjectV1::Respond { claim: [1; 64], stage: 0, position: 0, bytes: vec![1, 2, 3] },
             KernelRouteObjectV1::RequestExit { bond: [7; 64] },
             KernelRouteObjectV1::Withdraw { bond: [7; 64] },
@@ -778,8 +846,8 @@ mod tests {
         let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1]).collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!(max_encoded_bytes_of_tag(40).is_none(), "40 is not allocated");
-        for tag in 22..=39 {
+        assert!(max_encoded_bytes_of_tag(41).is_none(), "41 is not allocated");
+        for tag in 22..=40 {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         let complete = KernelRouteObjectV1::CompleteModelConformanceV2 { class: [1; 64], binding: [2; 64], proof: vec![0; 90_000] };

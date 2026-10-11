@@ -3518,3 +3518,108 @@ reveal, chunk, DA, activation or Final route accepts this contract. A consumer
 must explicitly bind it and complete the remaining RFC02 acceptance requirements.
 Conditional external mode A and dormant fences remain unchanged; no consensus
 availability obligation or reward/ExecutionFinal right is introduced.
+
+### §18.6 — Explicit native mixed-court candidate registration, v7
+
+Object tag 40 MUST carry the model binding, artifact/job role descriptor,
+canonical program bytes, complete parameter commitments, maximum positions
+and declared scope/replay roots. The artifact descriptor MUST be the known v4
+decoder or v5 encoder role. This does not select its historical court: the plan
+MUST independently bind version 7, program root, v7 court set/profile, extent,
+exact encoder binding and complete v7 scope/replay roots. Use distinct
+`flat-candidate-plan/v7` and `flat-candidate-class/v7` hash domains. The class
+id binds the model binding, complete plan root, parameter root and OPV mode.
+
+Canonical decode MUST bound the entire native object to 1,583,616 bytes, program
+bytes to 256 KiB and parameter-entry counts by the remaining byte payload
+before allocating either variable collection. Refuse invalid option tags,
+truncation, surplus bytes and noncanonical reencoding. Native authentication
+MUST require a Matured/Final binding with the exact descriptor, canonical
+program root and submitted parameter-instance root. A legacy or borrowed
+binding/scope, an official compiler label and synthetic attestation do not
+satisfy these checks.
+
+Native binding work MUST be reserved before parameter-root hashing/binding
+checks: 64B + 8,832P + 1,024, where B is program bytes and P is parameter
+instances. The actor MUST have the admission fee in free original collateral;
+accepted and inauthentic attempts both consume ordinary work and that fee.
+Kernel preparation MUST independently check/charge
+B² + (B+2)*512*1,024 + 8,832P + 16,384 before canonical decode/range/scope work.
+Both prices are structural admission charges, not PWU or reward weight. Neither
+charge may enter the protected proof-reserved budget.
+
+Require exact ranges, complete declared real parameter instances and equality
+of every derived plan/scope/replay field. Require worst court work within
+guaranteed proof allowance and each priced reference position/operand/history/
+selection component within consumer memory policy. These component checks do
+not certify total RSS, all primitive CPU/deadlines or shared network resources.
+
+Store candidates in table 29 (`flat-conformance-v7`). Add the conditional
+`ledger-flat-conformance-extension/v7` root domain only when that collection is
+nonempty, after the existing conformance extension; row-root and live-state
+root MUST agree. Restore MUST rederive the complete plan/policy and check the
+class key/owner. Share the existing eight-entry conformance-owner quota across
+old and new candidates in both admission orders. Withdrawal MUST remove both
+catalogs. These candidates MUST NOT appear in the execution-class table or
+create execution eligibility, jobs, rewards or ExecutionFinal rights.
+
+### §18.7 — Bounded token/patch/audio specialization contract, v7
+
+The declarative length wire is version u16=7, three maximum u32 counts, a
+canonical maximum-shape v1 program and strictly ordered shape-slot bindings.
+Bound the entire wire to 320 KiB, program to 256 KiB and binding count to 4,096;
+check counts against remaining bytes before allocation. A shape slot selects
+one fixed axis of a parameter, state, block carry or block node. Duplicate,
+unordered, unknown, absent or non-fixed slots MUST fail. Attributes, constant
+bytes, scheduling and frozen H MUST NOT change.
+
+Each actual count MUST be nonzero iff its maximum is nonzero and MUST NOT
+exceed that maximum or 2^24. Independently derive canonical type/ranges and
+complete scope/replay for the maximum and requested graph. Bind version,
+template root, actual counts, specialized program root, positions, scope root
+and replay root in `flat-length-admission/v7`; compare the entire derivation
+when restoring/checking an admission. Text decoder token count MUST equal
+prompt count + generated count - 1 and the execution positions. One-position
+encoder token count MUST equal its prompt count. Text admission MUST reject
+nonzero patch/audio counts until their typed input count/root contract exists.
+
+All trace artifact and stage-input parameter reads MUST check exact declared
+dtype, shape, payload length and representable values before node evaluation.
+Artifact reads MUST additionally match the declared per-layer namespace.
+Reject a larger provider tensor even if the primitive could evaluate it; it
+would invalidate the admitted semantics and resource envelope. Preserve the
+frozen interpreter's valid results and commitment grammar.
+
+### §18.8 — Bounded history-selection relation component, v8
+
+This section defines an isolated extension relation, not a complete v8 TIR
+graph, registered class or native activation. Frozen v1 H-axis TopK remains
+invalid. Bind version 8, outer graph root, exact source/output occurrence,
+node/slot coordinates, nodes per position, source dtype, rank<=3 row shape,
+window, selection cap and maximum positions. Refuse maximum positions above
+10,485,760, zero/out-of-range window or selection cap, source after output,
+invalid node slots and source element products above 2^28.
+
+At p, source shape MUST be [min(p+1,window),..row_shape]; output MUST be IDX
+[min(Kcap,H),..row_shape]. Select by descending score and ascending window-local
+id for ties. An id's absolute position is p+1-H+id; id MUST be less than H.
+Check source/output i128 reference payloads, work and auxiliary limits before
+output allocation. Reserve O(N log K) work and 64K auxiliary bytes<=32 MiB.
+Metadata scope derivation MUST allocate no position arrays or tensor images.
+
+Fault version 8 MUST bind the plan/job roots, row and range/order/dominance kind
+to the exact authenticated source/output nodes and segmented roots. Bound its
+plan wire to 256 bytes, terminal filing to 128 KiB, work to 2^30 and scratch to
+32 MiB. Authenticate at most two source leaves and three output leaves;
+reconstruction of an N-element source MUST NOT be required by the court.
+Reject unknown versions/kinds/counts, truncation and surplus bytes before
+variable allocation. Historical v7 decoders MUST NOT implicitly accept v8.
+
+The relation's session MUST precharge source hashing and complete reference
+selection work before public callbacks. Every selected-value reply is bounded
+at 16 KiB and charged before acquisition, including authentication hashing;
+failed callbacks and retries MUST NOT restore allowance. A source HistAppend,
+state reset or history-continuity fault remains a separate graph relation:
+the selection proof alone MUST NOT claim that continuity was established.
+Complete typed v8 execution/checker/graph admission/native court integration,
+shared resources/economics and RFC02 checkpoint/Final acceptance remain open.

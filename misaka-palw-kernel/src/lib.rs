@@ -105,6 +105,8 @@ pub mod flat_court5;
 pub mod flat_court7;
 pub mod flat_detect5;
 pub mod flat_detect7;
+pub mod flat_history8;
+pub mod flat_lengths7;
 pub mod flat_replay6;
 pub mod flat_replay7;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.

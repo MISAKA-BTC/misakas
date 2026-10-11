@@ -1,0 +1,129 @@
+{
+  "schema": "misaka.rfc02.acceptance-checkpoint-cohort-audit.v1",
+  "observed_at_utc": "2026-10-11T08:36:36.915949+00:00",
+  "mode": "conditional-external-verification-A; no distribution-consensus requirement",
+  "user_current_target": {
+    "A6_minimum_percent": 90,
+    "A8_minimum_percent": 90,
+    "relax_rfc_denominators": false
+  },
+  "rfc_original_targets": {
+    "A6": "registration-ready and Final-capable over D_all, one-sided95% lower bound above50%, sustained independent participation over2receipt windows",
+    "A8": "active-kernel complete-task passes over L_files>=90%, one-sided95% lower bound>=90% when probability-sampled, actualindependentFinal and fullresidualtable"
+  },
+  "dated_census_evidence": {
+    "file": "docs/rfc/evidence/0011-hf-census-coverage-2026-10-08.json",
+    "sha256": "4841a3f7091c4a399b6b7feb0f339c9e0c47c9c071b8fddc1cdc9ec3baba735d",
+    "snapshot": {
+      "id": "2026-10-03T131904Z",
+      "t0_utc": "2026-10-03T13:19:04+00:00",
+      "d_all": 3117871,
+      "manifest_sha256": "6451856de1e052fa3c0d187e42408b509886f481a4b1de41f24d26f876b8f319",
+      "sample_design_sha256": "f66a49d4d29c3a9c964fe06524ebd50d91ec9e12436f7c1c254c7536bc2aa920"
+    },
+    "depth": "headers and shape; not weight import/fidelity/registration/Final",
+    "D_all": 3117871,
+    "D_files_listing": 2247414,
+    "shape_ready_D_all": {
+      "total": 518705.8,
+      "share": 0.16636536929693468,
+      "se": 0.0055481321720914035,
+      "lb95": 0.15729024392935054
+    },
+    "shape_ready_D_files": {
+      "total": 518705.8,
+      "share": 0.23080116094996428,
+      "se": 0.00769700660560573,
+      "lb95": 0.21817208484282807
+    },
+    "listed_weight_accessible_fraction": 0.7208168650980108,
+    "actual_end_to_end_covered_share": null,
+    "final_capable_probability_cohort_available": false,
+    "ninety_percent_D_all_ceiling_issue": "At this historical frame, the listed-file subset is below90% of D_all. Retain absent/inaccessible/gated entries and nonresponses as failures; do not replace D_all withD_files."
+  },
+  "actual_checkpoint_diagnostics": [
+    {
+      "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "source_storage": "BF16 safetensors",
+      "integer_storage": "PALWTIR1 typed integer params",
+      "arithmetic": "frozen deterministic TIR25; scale2^-24; source referencefloat32 Transformers",
+      "complete_task": false,
+      "task": "causal-next-token-logit-diagnostic",
+      "source_declared_maximum_context": 32768,
+      "tested_context_maximum": 32,
+      "new_source_sequences": [
+        30,
+        31,
+        32,
+        30
+      ],
+      "new_source_positions": 123,
+      "structure_and_real_weight_import_evidence": "qwen25-real-params-v3-verdict.json",
+      "integer_reference_node_bit_match_evidence": "qwen25-real-node-execution-verdict.json; only2positions",
+      "previous_source_fidelity_evidence": "qwen25-real-pilot-verdict.json; localHL reference, notindependentHF",
+      "new_source_reference_evidence": "qwen25-independent-source-reference.json",
+      "new_integer_source_fidelity_result": {
+        "file": "qwen25-independent-source-fidelity-result.json",
+        "sha256": "9ce403e7580b93ac4999ad82e0197912261bc0fce8b3a659ef448f8254c953f5",
+        "predeclared_diagnostic_fidelity_passed": true,
+        "metrics": {
+          "correlation": 0.999847941173826,
+          "intercept": 0.001049844032464204,
+          "kl_mean": 0.0013678781683224284,
+          "max_abs": 1.5065925121307355,
+          "rmse": 0.07012278508053019,
+          "slope": 0.9986822487563126,
+          "top1": 0.967479674796748
+        },
+        "scope": "same fixed four 30/31/32/30-position jobs; full source weights, built-in independent Qwen2ForCausalLM; empirical fidelity distinct from bit equality and full task support"
+      },
+      "full_statement_ordinary_public_check_in_native_v7": "NOT_RUN",
+      "real_node_final_and_redemption": "NOT_PROVEN_NO_HOOK; previousdeliverymechanics has3cfg(test)seams",
+      "legacy_final_mechanics_evidence": {
+        "file": "qwen25-real-node-delivery-verdict.json",
+        "sha256": "80f9a21219b70be27bcf60c3a870bc24651e74ed226e788dce732cfe2e34d09a",
+        "independent_replay_and_redemption_passed": true,
+        "full_model_onboarding_without_hooks": false,
+        "no_hook_verdict": "NotOnboarded",
+        "seams": [
+          "activation validation bypass in parent harness",
+          "cfg(test) parameter-root attestation",
+          "cfg(test) OPV eligibility, fixed from beginning onbothnodes"
+        ]
+      },
+      "flat_v7_metadata_admission": {
+        "file": "qwen25-flat7-metadata-audit.json",
+        "sha256": "42b6c77a08d795a5fe473f4cf12b951297a5a74c06c4860aa7305d903925adde",
+        "registration_tariff_fits_interim_consumer": false,
+        "registration_work": 7557621401,
+        "interim_consumer_admission_work_limit": 536870912,
+        "scope_derivation_passed": false,
+        "scope_refusal": "NotAuthentic(\"flat relation exceeds court resource caps\")",
+        "network_activation_or_state_admission_tested": false
+      }
+    }
+  ],
+  "full_task_checkpoint_revision_task_context_storage_arithmetic_kernel_plan_records": 0,
+  "A6_satisfied": false,
+  "A8_satisfied": false,
+  "A8_L_listed_L_files_dated_end_to_end_cohort_available": false,
+  "whole_goal_complete": false,
+  "remaining": [
+    "actual v7 metadata registration tariff and ordinary flat relation cap refusal; diagnostic independent float-source fidelity passed",
+    "full tasks and original contexts across pinned dense/hybrid/MoE/sparse/multimodal actualcheckpoints",
+    "independent source fidelity, routing agreement, state saturation/continuity and complete taskquality",
+    "actualkernel eligibility without hooks plus fresh outsider whole-claim prosecution and honest independentFinal/redemption",
+    "retained full A6/A8 denominators, real-size activecohort, confidence and sustainedissuance evidence",
+    "complete shared resources/economics and v7native integration owned byotheragents"
+  ],
+  "new_preallocation_validation": {
+    "tests_passed": 4,
+    "tests_failed": 0,
+    "tests_import_torch_or_load_weights": false,
+    "test_log": "qwen25-independent-source-preallocation-tests.log",
+    "test_log_sha256": "53ad629ddeb7a90dbe1f62449a4af93ad7d0ac799f7d3389969b73043b3a6999",
+    "source_tool": "misaka-palw-tir-lower/tools/hf_checkpoint_reference.py",
+    "source_tool_sha256": "b76a7afc0a23386e8923f83a73f9cb6f76549c8dc9e268456045007d6d767253"
+  }
+}

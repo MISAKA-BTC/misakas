@@ -106,6 +106,68 @@ fn verify(key: &ValidatorKey, domain: Hash64, object: &O) -> bool {
         _ => false,
     }
 }
+fn mixed_candidate_program() -> (misaka_palw_tir::TirProgramV1, misaka_palw_kernel::trace::ParamCommitmentsV1) {
+    use misaka_palw_tir::{DType, MapParams, Ref, Tensor, TensorType, builder::ProgramBuilder, program::HISTORY_BOUND_V1_HELD};
+    let mut b = ProgramBuilder::new(256, HISTORY_BOUND_V1_HELD);
+    let scores = b.param("independent.scores", DType::I32, &[65], false);
+    let mut pre = b.block("topk", vec![]);
+    let y = pre.topk(scores, 0, 2);
+    let y = pre.cast(y, DType::I32);
+    let pre = pre.finish(&[y]);
+    let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[2])]);
+    let y = post.cast(Ref::CarryIn(0), DType::I32);
+    post.commit(y);
+    let post = post.finish(&[]);
+    let p = b.finish(pre, vec![], post, 0);
+    let values = MapParams { tensors: [((0, None), Tensor::new(DType::I32, vec![65], (0..65).collect()).unwrap())].into() };
+    (p, misaka_palw_kernel::trace::ParamCommitmentsV1::of_v3(&values))
+}
+#[test]
+fn mixed_candidate7_sdk_rederives_identity_and_whole_scope_before_signing() {
+    use misaka_palw_sdk::flat_candidate_v7::*;
+    let (p, pc) = mixed_candidate_program();
+    let d = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor().digest();
+    let prepared = prepare_flat_candidate_v7(h(1).as_bytes(), d, &p.encode(), &pc, 128).unwrap();
+    assert_eq!(prepared.plan.version, 7);
+    assert_eq!(&prepared.object.encode()[..2], &[1, 40]);
+    assert_eq!(K::decode(&prepared.object.encode()).unwrap(), prepared.object);
+    assert_ne!(prepared.class, prepare_flat_candidate_v7(h(2).as_bytes(), d, &p.encode(), &pc, 128).unwrap().class);
+    assert_ne!(prepared.class, prepare_flat_candidate_v7(h(1).as_bytes(), d, &p.encode(), &pc, 127).unwrap().class);
+    assert_ne!(prepared.plan.scope_root, misaka_palw_kernel::flat_scope5::flat_resource_scope_v5(&p, 128, None).unwrap().root());
+    let key = ValidatorKey::from_seed([7; 32]);
+    let signed = sign_flat_candidate_v7(&key, h(9), bond(3), &prepared.object).unwrap();
+    assert!(verify(&key, h(9), &signed));
+    assert!(!verify(&key, h(8), &signed));
+    if let O::KernelRouteV1 { bytes, signer, .. } = &signed {
+        assert_eq!(*signer, bond(3));
+        assert_eq!(K::decode(bytes).unwrap(), prepared.object);
+    } else {
+        panic!()
+    }
+    let mut forged = prepared.object.clone();
+    let K::RegisterFlatModelCandidateV7 { replay_root, .. } = &mut forged else { unreachable!() };
+    replay_root[0] ^= 1;
+    assert!(sign_flat_candidate_v7(&key, h(9), bond(3), &forged).is_err());
+    assert!(sign_flat_object_v6(&key, h(9), bond(3), &prepared.object).is_err());
+    assert!(sign_flat_candidate_v7(&key, h(9), bond(3), &K::SealFlatModelProofV6 { vector: [1; 64], seal: [2; 64] }).is_err());
+}
+#[test]
+fn mixed_candidate7_sdk_refuses_inexact_ranges_missing_params_and_bad_extent() {
+    use misaka_palw_sdk::flat_candidate_v7::*;
+    let (p, pc) = mixed_candidate_program();
+    let d = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor().digest();
+    for max in [0, misaka_palw_tir::program::HISTORY_BOUND_V1_HELD + 1] {
+        assert!(prepare_flat_candidate_v7([1; 64], d, &p.encode(), &pc, max).is_err());
+    }
+    assert!(prepare_flat_candidate_v7([1; 64], [0; 64], &p.encode(), &pc, 1).is_err());
+    assert!(prepare_flat_candidate_v7([1; 64], d, &p.encode(), &Default::default(), 1).is_err());
+    let mut bytes = p.encode();
+    bytes.push(0);
+    assert!(prepare_flat_candidate_v7([1; 64], d, &bytes, &pc, 1).is_err());
+    let mut p = p;
+    p.blocks[0].nodes[1].out.dtype = misaka_palw_tir::DType::I8;
+    assert!(prepare_flat_candidate_v7([1; 64], d, &p.encode(), &pc, 1).is_err());
+}
 #[test]
 fn protected_sdk_post_binds_distinct_identity_and_all_implementation_records() {
     let original = body();

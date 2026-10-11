@@ -1880,3 +1880,149 @@ async fn flat_v6_native_own_sealed_chunks_survive_generic_saturation_and_refuse_
     let other = net.replay().await;
     net.assert_same(&other, "sealed actor-owned chunks bypass the saturated generic table, settle once and replay");
 }
+
+#[tokio::test]
+async fn flat_candidate7_native_mature_binding_independent_plan_paid_refusals_and_replay() {
+    use misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7;
+    for encoder in [false, true] {
+        let f = fixture(encoder);
+        let mut net = Net::over_cfg(config(), TestConsensus::new);
+        net.beat_to(1).await;
+        let (b, id) = binding(&f, f.r);
+        send(&mut net, 1, &b).await;
+        let prepared =
+            prepare_flat_candidate_v7(id.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, if encoder { 1 } else { 3 }).unwrap();
+        let before = net.slashed(0);
+        send(&mut net, 0, &prepared.object).await;
+        assert!(net.ledger().flat_conformance_classes_v7.is_empty(), "pending binding grants no preparation");
+        assert!(net.slashed(0) > before, "invalid metadata consumes its own fee");
+        net.beat_to(net.api().unwrap().model_artifact_binding_v2(&id).unwrap().matures_daa).await;
+        let mut old_scope = prepared.object.clone();
+        let K::RegisterFlatModelCandidateV7 { scope_root, .. } = &mut old_scope else { unreachable!() };
+        let e = if encoder { Some(misaka_palw_kernel::seg_encoder::encoder_binding_v1(&f.p).unwrap()) } else { None };
+        *scope_root =
+            misaka_palw_kernel::flat_scope5::flat_resource_scope_v5(&f.p, if encoder { 1 } else { 3 }, e.as_ref()).unwrap().root();
+        let before = net.slashed(0);
+        send(&mut net, 0, &old_scope).await;
+        assert!(net.ledger().flat_conformance_classes_v7.is_empty());
+        assert!(net.slashed(0) > before);
+        send(&mut net, 0, &prepared.object).await;
+        let ledger = net.ledger();
+        let (owner, record) = &ledger.flat_conformance_classes_v7[&prepared.class];
+        assert_eq!(*owner, net.kid(0));
+        assert_eq!(record.binding, id.as_bytes());
+        assert_eq!(record.plan, prepared.plan);
+        record.checked().unwrap();
+        assert_eq!(net.api().unwrap().model_artifact_candidate_binding_v2(&Hash64::from_bytes(prepared.class)), Some(id));
+        assert!(
+            net.api().unwrap().kernel_class_record_v1(&Hash64::from_bytes(prepared.class)).is_none(),
+            "old execution/candidate reader never adopts7"
+        );
+        assert!(!ledger.attested_artifacts.contains(&f.pc.root()), "native scope is temporary");
+        assert!(ledger.classes.is_empty() && ledger.opv.classes.is_empty() && ledger.claims.is_empty());
+        let job = TiledJobV1 {
+            class_binding_id: prepared.class,
+            prompt_len: 1,
+            prompt_root: prompt_root_of_ids_v1(&[0]),
+            max_new_tokens: 1,
+            decode: DecodeRuleV1::Greedy,
+            nonce: [3; 64],
+        };
+        send(&mut net, 2, &K::PostTiledJob { job }).await;
+        assert!(net.ledger().tiled_jobs.is_empty());
+        let mut borrowed = prepared.object.clone();
+        let K::RegisterFlatModelCandidateV7 { binding, .. } = &mut borrowed else { unreachable!() };
+        *binding = [0; 64];
+        let before = net.slashed(2);
+        send(&mut net, 2, &borrowed).await;
+        assert!(net.slashed(2) > before);
+        assert_eq!(net.ledger().flat_conformance_classes_v7.len(), 1);
+        let replay = net.replay().await;
+        net.assert_same(&replay, "native v7 candidate paid refusal, scoped identity and no execution rights");
+    }
+}
+
+#[tokio::test]
+async fn flat_candidate7_native_long_topk_is_registered_as_metadata_without_legacy_execution_rights() {
+    use misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7;
+    let n = 10_485_760;
+    let max = misaka_palw_tir::program::HISTORY_BOUND_V1_HELD;
+    let mut b = ProgramBuilder::new(256, max);
+    let scores = b.param("independent.scores", DType::I32, &[n], false);
+    let mut pre = b.block("topk", vec![]);
+    let x = pre.topk(scores, 0, 2);
+    let x = pre.cast(x, DType::I32);
+    let pre = pre.finish(&[x]);
+    let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[2])]);
+    let x = post.cast(Ref::CarryIn(0), DType::I32);
+    post.commit(x);
+    let post = post.finish(&[]);
+    let p = b.finish(pre, vec![], post, 0);
+    let d = k2_tir_v4_descriptor();
+    // Deliberately metadata only: no checkpoint or parameter values are read.
+    let pc = ParamCommitmentsV1 { by_instance: [((0, None), [8; 64])].into() };
+    let r = Hash64::from_bytes([9; 64]);
+    let id = model_artifact_binding_id_v2(d.digest(), program_root_v1(&p.encode()), r, Hash64::from_bytes(pc.root()));
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    net.beat_to(1).await;
+    send(
+        &mut net,
+        1,
+        &K::BindModelArtifactV2 {
+            descriptor: d.digest(),
+            program_bytes: p.encode(),
+            model_inventory_root: r.as_bytes(),
+            param_commitments: pc.clone(),
+        },
+    )
+    .await;
+    net.beat_to(net.api().unwrap().model_artifact_binding_header_v2(&id).unwrap().matures_daa).await;
+    let prepared = prepare_flat_candidate_v7(id.as_bytes(), d.digest(), &p.encode(), &pc, max).unwrap();
+    send(&mut net, 0, &prepared.object).await;
+    let ledger = net.ledger();
+    let v = ledger.flat_conformance_classes_v7[&prepared.class].1.checked().unwrap();
+    assert_eq!(v.scope.max_positions, max);
+    assert_eq!(v.replay.topk_auxiliary_bytes, 128);
+    assert!(v.scope.worst_court_bytes < 1 << 20);
+    assert!(ledger.classes.is_empty() && ledger.claims.is_empty() && ledger.opv.admitted.is_empty());
+    eprintln!(
+        "FLAT_CANDIDATE7_NATIVE_METADATA N={n} max_positions={max} court_bytes={} court_work={} auxiliary_bytes=128 no_weights_or_job_executed=true",
+        v.scope.worst_court_bytes, v.scope.worst_court_work
+    );
+    let replay = net.replay().await;
+    net.assert_same(&replay, "long TopK explicitly registered metadata, not legacy execution");
+}
+
+#[tokio::test]
+async fn flat_candidate7_native_shares_legacy_catalog_and_cannot_spend_reserved_proof_budget() {
+    use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1;
+    use misaka_palw_sdk::flat_candidate_v7::prepare_flat_candidate_v7;
+    let f = fixture(false);
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    let id = prepare(&mut net, &f).await;
+    for max in 1..=7 {
+        let p = prepare_flat_candidate_v7(id.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, max).unwrap();
+        send(&mut net, 0, &p.object).await;
+    }
+    assert_eq!(net.ledger().conformance_classes.len(), 1);
+    assert_eq!(net.ledger().flat_conformance_classes_v7.len(), 7);
+    let extra = prepare_flat_candidate_v7(id.as_bytes(), f.d.digest(), &f.p.encode(), &f.pc, 8).unwrap();
+    let before = net.slashed(0);
+    send(&mut net, 0, &extra.object).await;
+    assert!(net.slashed(0) > before);
+    assert!(!net.ledger().flat_conformance_classes_v7.contains_key(&extra.class));
+    let mut bad = extra.object.clone();
+    let K::RegisterFlatModelCandidateV7 { scope_root, .. } = &mut bad else { unreachable!() };
+    scope_root[0] ^= 1;
+    let mut objects = Vec::new();
+    for _ in 0..8 {
+        objects.push((2, net.route(2, &bad)));
+    }
+    net.send(objects).await;
+    let (_, _, work): (u64, u32, u64) = net.api().unwrap().aux_row(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]).unwrap();
+    assert!(work <= net.ledger().policy.admission_work_limit_v1());
+    assert!(!net.ledger().flat_conformance_classes_v7.contains_key(&extra.class));
+    assert!(net.ledger().classes.is_empty());
+    let replay = net.replay().await;
+    net.assert_same(&replay, "old/new shared catalog and registration flood preserves proof reserve");
+}

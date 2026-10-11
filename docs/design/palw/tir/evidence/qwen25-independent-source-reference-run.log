@@ -1,0 +1,25 @@
+You are offline and the cache for model files in Transformers v4.22.0 has been updated while your local cache seems to be the one of a previous version. It is very likely that all your calls to any `from_pretrained()` method will fail. Remove the offline mode and enable internet connection to have your cache be updated automatically, then you can go back to offline mode.
+0it [00:00, ?it/s]0it [00:00, ?it/s]
+source sequence 1/4: 30 positions
+source sequence 2/4: 31 positions
+source sequence 3/4: 32 positions
+source sequence 4/4: 30 positions
+{"positions": 123, "elapsed_seconds": 24.207328124990454, "max_rss_bytes": 6366314496, "logits_sha256": "de1fde7a666bb7c926641a301dc659a8771ea19144e871de129bb0ba83b22df8"}
+       26.67 real         7.28 user         9.46 sys
+          6366314496  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              916976  page reclaims
+              142977  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                3830  voluntary context switches
+              600348  involuntary context switches
+         96107812072  instructions retired
+         58031852922  cycles elapsed
+          6550509256  peak memory footprint

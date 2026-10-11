@@ -1667,6 +1667,7 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         | K::BindModelArtifactV2 { .. }
         | K::RefuteModelArtifactV2 { .. }
         | K::RegisterModelConformanceClassV2 { .. }
+        | K::RegisterFlatModelCandidateV7 { .. }
         | K::RegisterConformanceClass { .. }
         | K::RegisterClassV2 { .. }
         | K::RegisterPipelineClassV2 { .. } => Some(PalwKernelInnerFenceV1::PanelFreeV1),
@@ -1715,6 +1716,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (37, "SealFlatModelProofV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (38, "RevealFlatModelProofV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
     (39, "ExpireFlatModelSealV6", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
+    (40, "RegisterFlatModelCandidateV7", Some(PalwKernelInnerFenceV1::PanelFreeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of

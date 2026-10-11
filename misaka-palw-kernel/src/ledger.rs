@@ -98,6 +98,8 @@ use crate::pipeline_public::{
     StageCommitmentsV1,
 };
 use crate::plan::VerificationPlanV1;
+#[path = "flat_candidate7.rs"]
+pub mod flat_candidate7;
 use crate::public::{
     FreshVerifierV1, ProfileMaterialV1, PublicClaimRecordV1, ServedPositionV1, TensorWireV1, classify_position_response_v1,
     program_root_v1,
@@ -511,6 +513,9 @@ pub enum LedgerEventV1 {
     ConformanceClassRegistered {
         class: Digest,
     } = 32,
+    FlatConformanceClassRegisteredV7 {
+        class: Digest,
+    } = 33,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -776,6 +781,7 @@ pub const MAX_CONFORMANCE_CLASSES_PER_BOND_V1: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct KernelLedgerV1 {
+    pub flat_conformance_classes_v7: BTreeMap<Digest, (Digest, flat_candidate7::FlatCandidateRecordV7)>,
     pub policy: LedgerPolicyV1,
     pub schedule: KernelScheduleV1,
     /// Descriptors this binary implements (never bytes from a transaction).
@@ -895,6 +901,7 @@ impl KernelLedgerV1 {
             bonds: BTreeMap::new(),
             classes: BTreeMap::new(),
             conformance_classes: BTreeMap::new(),
+            flat_conformance_classes_v7: BTreeMap::new(),
             conformance_class_owners: BTreeMap::new(),
             pipeline_classes: BTreeMap::new(),
             jobs: BTreeMap::new(),
@@ -1039,6 +1046,27 @@ impl KernelLedgerV1 {
             | KernelRouteObjectV1::RefuteModelArtifactV2 { .. }
             | KernelRouteObjectV1::RegisterModelConformanceClassV2 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "model artifact statements require the authenticated consensus consumer"));
+            }
+            KernelRouteObjectV1::RegisterFlatModelCandidateV7 {
+                binding,
+                descriptor,
+                program_bytes,
+                param_commitments,
+                max_positions,
+                scope_root,
+                replay_root,
+            } => {
+                let class = self.register_flat_candidate_v7(
+                    *binding,
+                    *descriptor,
+                    program_bytes,
+                    param_commitments,
+                    *max_positions,
+                    *scope_root,
+                    *replay_root,
+                    auth.signer_bond,
+                )?;
+                out.push(LedgerEventV1::FlatConformanceClassRegisteredV7 { class });
             }
             KernelRouteObjectV1::RegisterConformanceClass { descriptor, program_bytes, plan, param_commitments } => {
                 let class = self.register_class_impl(
@@ -1272,6 +1300,7 @@ impl KernelLedgerV1 {
                         if let Some(classes) = self.conformance_class_owners.remove(bond) {
                             for class in classes {
                                 self.conformance_classes.remove(&class);
+                                self.flat_conformance_classes_v7.remove(&class);
                             }
                         }
                         out.push(LedgerEventV1::Withdrawn { bond: *bond, amount });

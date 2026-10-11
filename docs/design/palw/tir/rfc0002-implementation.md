@@ -2279,3 +2279,105 @@ fidelity/performance, fresh outsider execution, independent Final/redemption and
 A6/A8 remain open. Full RFC02 stays active. Conditional external mode A and
 dormant shipping fences remain unchanged; no model-availability consensus
 obligation is introduced.
+
+## Verified increment — explicit native candidate, bounded lengths and history relation, 2026-10-11
+
+Native tag 40 and SDK preparation/signing now bind a non-reward v7 candidate
+to a Matured/Final model binding, exact descriptor/program/parameter roots and
+complete independently derived mixed-court plan. Role descriptors remain v4
+decoder/v5 encoder; the separate v7 court-set and scope/replay identities carry
+the new semantics. The bounded manual decoder checks program and parameter
+counts before allocation. Native binding checks consume ordinary work and
+original actor collateral on accepted and invalid attempts; kernel canonical
+preparation is separately prepaid. The proof-reserved allowance remains
+protected. Table 29 has its own conditional root extension and restoration
+rederives every declaration. Old/new candidates share eight owner slots and
+withdrawal cleanup; no execution class, eligibility, job or Final right is
+created.
+
+The bounded length API binds a maximum-shape canonical v1 program and at most
+4,096 ordered fixed-axis substitutions for token/patch/audio. Both maximum and
+actual graphs pass type/range/complete-scope derivation; the immutable admission
+binds actual counts/program/positions/scope/replay. Text decoder and encoder
+counts are exact; unbound media is refused. Adversarial execution found a real
+production trace parameter-validation omission. Buffered, streamed and stage
+paths now enforce declared shape/dtype/payload/value and per-layer namespaces
+before evaluation, matching the frozen interpreter without changing valid
+results or roots.
+
+An isolated v8 history-selection relation adds output extent min(Kcap,H),
+H=min(p+1,window), exact deterministic ties and window-local/absolute position
+mapping. Its O(N log K) own scan and O(K) selection memory are bounded before
+allocation. A separately authenticating point court checks range/order/dominance
+faults against exact graph/job/source/output roots with at most two source and
+three output leaves. Sessions precharge scan/hash and every 16-KiB value reply;
+missing/bad acquisition and retries consume allowance. The source HistAppend's
+correctness remains a separate graph constraint, and v1 H-axis TopK is not
+relaxed. This is not a complete typed v8 graph or native consumer.
+
+**220 selected component tests pass:** 153 kernel library tests, five candidate
+tests, ten mixed-graph tests, six point-court tests, five length tests, three
+typed-trace tests, eight history tests, 21 actual-node conformance tests and
+nine SDK candidate tests. One existing hardware benchmark is ignored. The
+final kernel build/run rechecks the shared trace fix. Native/SDK candidate
+registration binaries were built before that later trace fix and isolated
+history module declaration; their tested registration code is unchanged, and
+the next native-consumer integration must reverify the final shared runtime.
+Do not imply one uniform native build of all parallel work from these separate
+runs. The protected component pool gains 26 new tests to 258; this is not
+checkpoint/task/Final coverage. Source preimages, build/run commands, logs and
+binary hashes are preserved in
+[the candidate/length verdict](evidence/rfc02-candidate-length-v7-verdict.json).
+
+Candidate registration metadata accepts a synthetic N=10,485,760, K=2 program
+at 2,097,152 maximum positions. It contains 307 program bytes, costs 162,124,457
+registration work and derives a 37,875-byte worst filing / 4,964,969 court work
+envelope. No weights, tokens or maximum-length trace are executed for this
+registration test. History metadata reaches 10,485,760 positions, but its
+executed tests use bounded synthetic windows, including all six dtypes,
+warmup/rollover/flat thresholds and 966 exhaustive small selection tuples.
+
+Actual Qwen metadata separately refuses both the 7,557,621,401 preparation
+tariff against the 536,870,912 allowance and an ordinary relation's terminal
+court caps. Do not count the synthetic candidate as real Qwen acceptance.
+Native v7 posts/prosecution/chunks/DA are being integrated separately. Complete
+media input bindings, typed v8 graph/state continuity, all-primitive and total
+RSS/public-storage/deadline/per-block/per-bond/network resources, original
+capital/reward conservation, actual tasks/contexts and independent hook-free
+Final/redemption remain open. Mode A and dormant shipping fences are preserved;
+the full RFC02 goal stays active.
+
+## Verified diagnostic — independent actual Qwen source fidelity, 2026-10-11
+
+The actual pinned Qwen2.5-1.5B BF16 source was executed offline through built-in
+HF Transformers/Torch float32 eager CPU, rather than the local HL frontend.
+Source/model/output bounds and exact token/job pins are checked before model
+construction, and file bytes are checked before/after execution. These bounds
+cover declared tensor payloads, not total Torch construction/allocator/RSS.
+Four Python adversarial preallocation tests and six actual-reference protocol/
+pin/token/threshold refusal checks pass. The latter enter no integer execution
+and report no fabricated result. The frozen 123-position,
+four-sequence context-32 protocol meets every predeclared source-fidelity
+threshold: top1 96.747967%, mean KL 0.001367878, slope 0.998682249, correlation
+0.999847941, maxabs 1.506592512, RMSE 0.070122785. The exact source and integer
+commands, protocol/artifact/source/logit hashes and measured code/binary
+identities are in [the source observation](evidence/qwen25-independent-source-reference.json)
+and [the result](evidence/qwen25-independent-source-fidelity-result.json).
+
+Whole-process time/RSS: HF source 26.67s / 6,366,314,496B; integer comparison
+242.18s / 2,151,088,128B. Import/load/hash and concurrent builds may affect these
+separate process observations. They do not certify practical service throughput
+or execution/proof/hash/store/delivery economics. This run establishes empirical
+fidelity for diagnostic next-token logits only, not integer bit equality,
+original 32K context or a complete chat/code/translation task. Its actual v7
+metadata refusal is retained in
+[the admission audit](evidence/qwen25-flat7-metadata-audit.json).
+
+[The checkpoint/cohort audit](evidence/rfc02-checkpoint-cohort-acceptance-audit.json)
+retains D_all=3,117,871, D_files_listing=2,247,414 (72.081687%) and all missing/
+gated/nonresponding failures. Shape-ready figures cannot become admission/Final
+passes. Original A6 confidence/sustained participation conditions and A8's
+complete-task active cohort remain required, alongside the user's >=90% A6/A8
+goal. The older delivery experiment's cfg(test) activation/attestation/eligibility
+seams are explicit: no-hook onboarding is NotOnboarded. Complete-task support
+records remain zero, and full RFC02 acceptance remains incomplete.

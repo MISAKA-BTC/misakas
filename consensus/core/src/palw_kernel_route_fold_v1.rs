@@ -609,7 +609,14 @@ pub(super) fn apply_kernel_route_object_v1(
         }
         _ => {}
     }
-    let scoped = super::palw_model_artifact_fold_v2::candidate(builder, ctx, &object)?;
+    let scoped = if matches!(object, KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. }) {
+        let Some(scoped) = super::palw_model_artifact_fold_v2::flat_candidate_v7(builder, ctx, signer, &object)? else {
+            return Ok(());
+        };
+        Some(scoped)
+    } else {
+        super::palw_model_artifact_fold_v2::candidate(builder, ctx, &object)?
+    };
     let mut ledger = load_ledger(builder, ctx)?;
     let original_attested = ledger.attested_artifacts.clone();
     if let Some((_, id)) = &scoped {
@@ -686,6 +693,17 @@ pub(super) fn apply_kernel_route_object_v1(
     };
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
+        if let LedgerEventV1::FlatConformanceClassRegisteredV7 { class } = event {
+            let fits = ledger
+                .flat_conformance_classes_v7
+                .get(class)
+                .and_then(|(_, r)| r.checked().ok())
+                .is_some_and(|v| v.scope.worst_court_bytes as usize + 134 <= PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1);
+            if !fits {
+                persist_budget(builder, ctx, &ledger);
+                return Ok(());
+            }
+        }
         if let LedgerEventV1::ClassRegistered { class } | LedgerEventV1::ConformanceClassRegistered { class } = event {
             // Every kind's bounds: single program, pipeline, typed (RFC-0004 Part II).
             let bounds = ledger.bounds_of(class).or_else(|| ledger.conformance_classes.get(class).map(|(_, row)| row.bounds));
@@ -706,7 +724,9 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     if let Some((_, binding)) = &scoped {
         for event in &events {
-            if let LedgerEventV1::ConformanceClassRegistered { class } = event {
+            if let LedgerEventV1::ConformanceClassRegistered { class } | LedgerEventV1::FlatConformanceClassRegisteredV7 { class } =
+                event
+            {
                 builder.write_kernel_row(
                     crate::palw_model_artifact_v2::PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
                     borsh::to_vec(&Hash64::from_bytes(*class)).unwrap(),

@@ -228,7 +228,7 @@ impl KernelLedgerV1 {
                 &collection_root(&d("verifier-pay"), self.verifier_pay.len(), self.verifier_pay.iter()),
             )
         };
-        if self.conformance_classes.is_empty() {
+        let base = if self.conformance_classes.is_empty() {
             base
         } else {
             let records: std::collections::BTreeMap<Digest, (Digest, ClassRecordV1)> =
@@ -236,6 +236,18 @@ impl KernelLedgerV1 {
             crate::rows::conformance_root_extension_v1(
                 &base,
                 &collection_root(&d("conformance-classes"), records.len(), records.iter()),
+            )
+        };
+        if self.flat_conformance_classes_v7.is_empty() {
+            base
+        } else {
+            crate::rows::flat_conformance_root_extension_v7(
+                &base,
+                &collection_root(
+                    &d("flat-conformance-v7"),
+                    self.flat_conformance_classes_v7.len(),
+                    self.flat_conformance_classes_v7.iter(),
+                ),
             )
         }
     }

@@ -87,6 +87,9 @@ pub const BEACON_SEAL_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/led
 pub const TABLE_VERIFIER_PAY_V1: u8 = 27;
 /// RFC-0002: class id → (preparing bond, ClassRecordV1), separate from reward registrations.
 pub const TABLE_CONFORMANCE_CLASSES_V1: u8 = 28;
+/// Explicit mixed-court v7 preparation; absent on historical ledgers.
+pub const TABLE_FLAT_CONFORMANCE_CLASSES_V7: u8 = 29;
+pub const FLAT_CONFORMANCE_ROOT_EXTENSION_DOMAIN_V7: &[u8] = b"misaka-palw/kernel/ledger-flat-conformance-extension/v7";
 /// The root extension table 27 adds once it holds a row (every older root unchanged).
 pub const VERIFIER_PAY_ROOT_EXTENSION_DOMAIN_V1: &[u8] = b"misaka-palw/kernel/ledger-verifier-pay-extension/v1";
 
@@ -110,6 +113,7 @@ fn collection_domain(table: u8) -> Vec<u8> {
         TABLE_BONDS_V1 => "bonds",
         TABLE_CLASSES_V1 => "classes",
         TABLE_CONFORMANCE_CLASSES_V1 => "conformance-classes",
+        TABLE_FLAT_CONFORMANCE_CLASSES_V7 => "flat-conformance-v7",
         TABLE_PIPELINE_CLASSES_V1 => "pipeline-classes",
         TABLE_JOBS_V1 => "jobs",
         TABLE_PIPELINE_JOBS_V1 => "pipeline-jobs",
@@ -152,6 +156,9 @@ impl KernelLedgerV1 {
         }
         for (k, (owner, c)) in &self.conformance_classes {
             rows.insert((TABLE_CONFORMANCE_CLASSES_V1, bytes_of(k)), bytes_of(&(*owner, c.record())));
+        }
+        for (k, row) in &self.flat_conformance_classes_v7 {
+            rows.insert((TABLE_FLAT_CONFORMANCE_CLASSES_V7, bytes_of(k)), bytes_of(row));
         }
         for (k, c) in &self.classes {
             rows.insert((TABLE_CLASSES_V1, bytes_of(k)), bytes_of(&c.record()));
@@ -254,6 +261,25 @@ impl KernelLedgerV1 {
                 TABLE_CLASSES_V1 => {
                     let record: ClassRecordV1 = dec(row, "class")?;
                     l.classes.insert(dec(key, "class key")?, class_row_of(&l, &record)?);
+                }
+                TABLE_FLAT_CONFORMANCE_CLASSES_V7 => {
+                    let (owner, record): (Digest, crate::ledger::flat_candidate7::FlatCandidateRecordV7) =
+                        dec(row, "flat-v7 conformance class")?;
+                    let class: Digest = dec(key, "flat-v7 class key")?;
+                    if record.id() != class
+                        || l.opv.policy.is_none()
+                        || !l.bonds.contains_key(&owner)
+                        || l.classes.contains_key(&class)
+                    {
+                        return Err("flat-v7 preparation lacks exact identity/policy/bond or duplicates execution".into());
+                    }
+                    record.checked()?.check_policy(&l)?;
+                    let owned = l.conformance_class_owners.entry(owner).or_default();
+                    if owned.len() >= crate::ledger::MAX_CONFORMANCE_CLASSES_PER_BOND_V1 {
+                        return Err("mixed preparation rows exceed the shared bond catalog".into());
+                    }
+                    owned.insert(class);
+                    l.flat_conformance_classes_v7.insert(class, (owner, record));
                 }
                 TABLE_CONFORMANCE_CLASSES_V1 => {
                     let (owner, record): (Digest, ClassRecordV1) = dec(row, "conformance class")?;
@@ -576,11 +602,22 @@ pub fn root_of_rows(
     } else {
         base
     };
-    if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
+    let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
         conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
     } else {
         base
+    };
+    if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V7) {
+        flat_conformance_root_extension_v7(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V7))
+    } else {
+        base
     }
+}
+
+pub fn flat_conformance_root_extension_v7(base: &Digest, table: &Digest) -> Digest {
+    let mut h = keyed(FLAT_CONFORMANCE_ROOT_EXTENSION_DOMAIN_V7);
+    h.update(base).update(table);
+    finish(h)
 }
 
 /// Versioned, conditional extension: historical roots remain identical with no candidates.

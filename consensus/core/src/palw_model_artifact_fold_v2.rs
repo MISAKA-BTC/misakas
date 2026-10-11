@@ -197,9 +197,12 @@ pub(super) fn candidate(
     ctx: &PalwBlockContextV2,
     object: &KernelRouteObjectV1,
 ) -> Result<Option<(KernelRouteObjectV1, Hash64)>, PalwStateV2Error> {
-    let KernelRouteObjectV1::RegisterModelConformanceClassV2 { binding, descriptor, program_bytes, plan, param_commitments } = object
-    else {
-        return Ok(None);
+    let (binding, descriptor, program_bytes, param_commitments) = match object {
+        KernelRouteObjectV1::RegisterModelConformanceClassV2 { binding, descriptor, program_bytes, param_commitments, .. }
+        | KernelRouteObjectV1::RegisterFlatModelCandidateV7 { binding, descriptor, program_bytes, param_commitments, .. } => {
+            (binding, descriptor, program_bytes, param_commitments)
+        }
+        _ => return Ok(None),
     };
     let id = Hash64::from_bytes(*binding);
     let row = builder
@@ -215,13 +218,37 @@ pub(super) fn candidate(
     {
         return Err(refused("candidate does not match a matured model artifact scope"));
     }
-    Ok(Some((
-        KernelRouteObjectV1::RegisterConformanceClass {
+    let candidate = match object {
+        KernelRouteObjectV1::RegisterModelConformanceClassV2 { plan, .. } => KernelRouteObjectV1::RegisterConformanceClass {
             descriptor: *descriptor,
             program_bytes: program_bytes.clone(),
             plan: plan.clone(),
             param_commitments: param_commitments.clone(),
         },
-        id,
-    )))
+        KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. } => object.clone(),
+        _ => unreachable!(),
+    };
+    Ok(Some((candidate, id)))
+}
+
+/// New tag 40 pays its binding hash/check before reading variable metadata.
+/// Accepted preparation and invalid metadata consume the actor's fee. Invalid
+/// requests retain their paid budget without creating candidate rows.
+pub(super) fn flat_candidate_v7(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    object: &KernelRouteObjectV1,
+) -> Result<Option<(KernelRouteObjectV1, Hash64)>, PalwStateV2Error> {
+    let KernelRouteObjectV1::RegisterFlatModelCandidateV7 { program_bytes, param_commitments, .. } = object else {
+        return Err(refused("wrong flat-v7 candidate kind"));
+    };
+    let work = misaka_palw_kernel::ledger::flat_candidate7::flat_candidate_binding_work_v7(
+        program_bytes.len(),
+        param_commitments.by_instance.len(),
+    )
+    .ok_or_else(|| refused("flat-v7 binding work overflow"))?;
+    let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(None) };
+    builder.slash_bond(*signer, fee)?;
+    Ok(candidate(builder, ctx, object).ok().flatten())
 }

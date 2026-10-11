@@ -1,0 +1,57 @@
+{
+  "schema": "misaka.rfc02.independent-fidelity-adversarial-verdict.v1",
+  "actual_reference_used": true,
+  "integer_execution_entered": false,
+  "cases": [
+    {
+      "case": "wrong artifact byte identity",
+      "exit_code": 1,
+      "expected_refusal": "artifact byte identity",
+      "stderr": "Error: \"artifact byte identity\"",
+      "no_result_reported": true,
+      "passed": true
+    },
+    {
+      "case": "wrong exact job tokens",
+      "exit_code": 1,
+      "expected_refusal": "source reference scope or byte pins",
+      "stderr": "Error: \"source reference scope or byte pins differ from policy\"",
+      "no_result_reported": true,
+      "passed": true
+    },
+    {
+      "case": "wrong source byte pins",
+      "exit_code": 1,
+      "expected_refusal": "source reference scope or byte pins",
+      "stderr": "Error: \"source reference scope or byte pins differ from policy\"",
+      "no_result_reported": true,
+      "passed": true
+    },
+    {
+      "case": "wrong aggregate positions",
+      "exit_code": 1,
+      "expected_refusal": "invalid predeclared policy or coverage",
+      "stderr": "Error: \"invalid predeclared policy or coverage\"",
+      "no_result_reported": true,
+      "passed": true
+    },
+    {
+      "case": "invalid predeclared threshold",
+      "exit_code": 1,
+      "expected_refusal": "invalid predeclared policy or coverage",
+      "stderr": "Error: \"invalid predeclared policy or coverage\"",
+      "no_result_reported": true,
+      "passed": true
+    },
+    {
+      "case": "unknown policy field",
+      "exit_code": 1,
+      "expected_refusal": "unknown field",
+      "stderr": "Error: Error(\"unknown field `relax_semantics`, expected one of `schema`, `repository`, `revision`, `artifact_sha256`, `source_manifest_sha256`, `tokens_sha256`, `task`, `context`, `sequences`, `positions`, `vocab`, `fed_tokens`, `logits_scale`, `top1_min`, `kl_mean_max`, `slope_min`, `slope_max`, `correlation_min`, `max_abs`, `rmse_max`\", line: 1, column: 1514)",
+      "no_result_reported": true,
+      "passed": true
+    }
+  ],
+  "passed": 6,
+  "failed": 0
+}

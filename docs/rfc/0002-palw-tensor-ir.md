@@ -3578,3 +3578,141 @@ performance, fresh outsiders, independent execution Final/redemption and A6/A8
 remain required. Conditional external-verification mode A remains unchanged;
 this increment adds no consensus model-availability obligation. Full RFC02 stays
 active and shipping fences stay dormant.
+
+### §14.36 — Explicit v7 native candidate registration (2026-10-11)
+
+Native object 40, `RegisterFlatModelCandidateV7`, now registers a **non-reward
+conformance candidate** for the complete mixed-court contract. The v4 decoder
+or v5 encoder descriptor identifies the artifact/job role; the independently
+derived v7 court-set, profile, maximum positions, encoder binding, resource
+scope and replay envelope identify its verification semantics. The consumer
+requires a Matured/Final model binding with exactly the submitted descriptor,
+canonical program root and complete registered parameter-instance root. Neither
+an official compiler nor a model-family name substitutes for that binding.
+
+The kernel independently validates canonical normal form, exact range proof,
+every real parameter instance and the complete scope/replay declaration. It
+checks guaranteed court work and component reference-memory policy. Table 29,
+`flat-conformance-v7`, stores the binding and complete derived plan separately
+from execution classes. Its conditional state-root extension preserves the
+historical root when empty; row restoration rederives the stored contract.
+Old and new candidates share the same eight-entry bonded-owner catalog and
+withdrawal cleanup. Registration creates no execution class, OPV eligibility,
+job, reward weight or execution Final right.
+
+The bounded canonical object decoder checks the program and parameter counts
+before allocation. Native binding hashing is charged to ordinary block budget
+and the actor's original collateral before checking authenticity, including
+failed attempts. Canonical preparation has its own conservative metadata debit
+before decode/range/unrolling. It cannot consume proof-reserved work. The SDK
+prepares the exact plan and signs object 40 under its actual network/lifecycle
+signature domain; historical v6 preparation and signing do not silently opt in.
+
+Five kernel candidate tests, three new actual-node tests and two new SDK tests
+cover identity/codec, complete declarations, rows/root/rollback/withdrawal,
+shared old/new quotas, paid refusals and protected proof-budget headroom. The
+actual-node suite includes all 18 prior conformance regressions and replays its
+resulting state on an independent node. A synthetic 10,485,760-score candidate
+at 2,097,152 maximum positions is accepted from bounded metadata. Its source
+weights, tokens and maximum-length trace are not materialized; this is not an
+executed long-context checkpoint.
+
+The actual pinned Qwen2.5-1.5B checkpoint's 14,011-byte program and 1,636
+parameter instances still fail this candidate contract: the present admission
+tariff is 7,557,621,401 against the 536,870,912 ordinary allowance, and complete
+scope derivation independently refuses an ordinary relation exceeding terminal
+court caps. These are recorded refusal results, not model admission passes.
+Pricing and bounded ordinary-relation court refinement must be completed
+without raising the caps merely to admit this model.
+
+This registration increment does not yet connect v7 posts, actor-owned
+seal/reveal, chunk transport or selected-value DA. Those consumers, complete
+shared resources/economics, real tasks and independent source fidelity, fresh
+outsiders and honest execution Final/redemption remain required. Keep the
+original A6 denominator and confidence/participation conditions and A8 complete
+task cohort. The user's current goal additionally requires A6/A8 at least 90%;
+no inaccessible checkpoint or failure is removed to manufacture that rate.
+Conditional external mode A and dormant shipping fences remain unchanged.
+
+### §14.37 — Frozen bounded job lengths and history-selection component (2026-10-11)
+
+`FlatLengthTemplateV7` adds a bounded declarative specialization contract for
+token, patch and audio counts. It binds a canonical maximum-shape v1 program
+and a strictly ordered map of fixed parameter/state/carry/node axes. Both the
+maximum graph and every requested actual specialization independently pass
+normal form, exact ranges and complete scope/replay derivation. The immutable
+admission binds the template, actual counts, specialized program, positions and
+scope/replay roots; enlarged/rebound declarations fail. Zero means an absent
+modality. Existing H, primitive attributes, constant bytes and state roles are
+not rewritten. Text decoder counts include the prompt and all fed-back tokens;
+the final delivered token is excluded. Encoder counts bind its prompt at one
+position. Patch/audio inputs still require their separate typed stage/root
+binding and are refused on the text-only route.
+
+Adversarial length execution exposed a production trace bug: a provider's
+larger or differently typed parameter could reach evaluation despite a smaller
+declaration. Buffered, streaming and stage traces now check exact declared
+shape, dtype, payload length, representable values and layer namespace before
+evaluation. The frozen interpreter already required this contract. Correct
+executions, roots and tie semantics remain unchanged. Five length tests and
+three trace regressions exercise the actual shared runtime, not a substitute
+executor.
+
+`flat_history8` separately implements a **version 8 history-selection
+relation**, without relaxing the frozen v1 prohibition on H-axis TopK. At
+position p, its source has H=min(p+1,window) rows and its IDX output has
+min(Kcap,H) selected rows. Selection is score-descending with lower local id
+breaking ties. Explicit window-local-to-absolute coordinates prevent treating
+rolled-window ids as global token positions. Work is O(N log K), selection
+auxiliary memory is O(K), and exact source/output node coordinates and roots
+bind bounded range/order/dominance counterexamples. Its independent court
+authenticates at most two source leaves and three output leaves. The session
+precharges reference scan/hash and every bounded selected-value callback;
+failed acquisitions and retries consume their shared allowance.
+
+Eight history-component tests cover all six dtypes, warmup H=1 with Kcap>H,
+flat layout thresholds, window rollovers, i128 extrema, prepaid failures,
+hostile codecs, coordinate substitutions and 966 exhaustively enumerated small
+selection tuples. Metadata reaches 10,485,760 maximum positions without
+allocating position arrays or history images. This does not execute a
+ten-million-token checkpoint. It does not prove the source HistAppend/state
+continuity, define a complete typed v8 model graph, register/execute that graph
+in a node, bind media stages, or close the shared economic/resource vector.
+Those obligations remain open alongside full RFC02 acceptance.
+
+### §14.38 — Independent actual-checkpoint source diagnostic (2026-10-11)
+
+Qwen/Qwen2.5-1.5B-Instruct revision
+`989aa7980e4cf806f80c7fef2b1adb7bc71aa306` now has an independent Hugging Face
+Transformers 4.48.3 / Torch 2.5.1 float32 eager-CPU reference from its actual
+BF16 safetensors. Source file bytes are pinned and checked before and after
+execution. The reference uses the installed built-in model class, offline
+loading and no remote code. The diagnostic protocol fixes exact artifact,
+source manifest, tokens, arithmetic units, jobs and thresholds before the
+integer comparison. Revision labels are informational to this tool; chain
+authentication and checkpoint provenance remain separate obligations.
+
+For four fed-token sequences of lengths 30/31/32/30, all 123 next-token-logit
+positions meet the predeclared thresholds. Top1 agreement is 96.747967%, mean
+KL 0.001367878, slope 0.998682249, correlation 0.999847941, maximum absolute
+logit difference 1.506592512 and RMSE 0.070122785. This is empirical original
+source fidelity, separately from bit equality between integer implementations.
+It supersedes the need to treat the previous local HL comparison as an
+independent HF reference; it does not extend its diagnostic scope.
+
+Measured whole-process wall time/RSS are 26.67 seconds/6,366,314,496 bytes for
+the source reference and 242.18 seconds/2,151,088,128 bytes for the integer
+comparison. These separate processes include import/load/hash overhead and
+may be affected by concurrent builds. They are observations, not a service
+throughput guarantee or complete execution/evidence/hash/store/delivery cost
+certificate. The diagnostic's context is 32; original context 32,768,
+complete chat/code/translation tasks, routing/state fidelity and public native
+verification/Final remain untested by this run.
+
+The dated census frame still has D_all=3,117,871 and D_files_listing=2,247,414
+(72.081687%). These are listing/shape observations, not registration/Final
+coverage. On that historical frame, the listed subset alone cannot supply
+90% of D_all. Keep inaccessible/gated/missing entries and nonresponses in the
+denominator; obtain new admissible evidence rather than reducing it. There is
+no measured complete-task active-kernel A8 cohort or hook-free independent
+Final/redemption result. A6/A8 and the full RFC02 goal remain unmet.
