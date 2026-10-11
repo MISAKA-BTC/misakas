@@ -149,6 +149,8 @@ mod palw_legacy_public_filer_fold_v1;
 mod palw_legacy_answer_chunks_fold_v2;
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
+#[path = "palw_staged_court_fold_v1.rs"]
+mod palw_staged_court_fold_v1;
 pub use palw_legacy_public_filer_fold_v1::{
     PALW_FILER_EXPLICIT_TARGETS_V1, PalwFraudFilerCandidateV1, PalwFraudFilerReservationStatusV1, PalwFraudFilerStatusV1, PalwLegacyDisputeObservationV1,
     PalwLegacyDisputeViewV1, palw_bond_text_v1, palw_legacy_dispute_reservation_check_v1,
@@ -4860,6 +4862,7 @@ pub fn palw_bond_collateral_is_locked_v6(
         // ADR-0160 lane liab (AG-3): a frozen bond's exit is held — for good once forfeited, until the
         // freeze lifts otherwise. The map is empty below `Params::palw_capacity_aggregate_liability`.
         || crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key)
+        || state.staged_bond_exit_held_v1(key, now_daa)
 }
 
 /// L-1's escrow term, in permille of the vested-but-unbought escrow per load-bearing signer.
@@ -27671,6 +27674,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) {
+        if let Some(panel) = &new { self.record_staged_panel_v1(key, panel); }
         let old = match &new {
             Some(record) => self.state.panels.insert(key, record.clone()),
             None => self.state.panels.remove(&key),
@@ -38898,6 +38902,8 @@ fn apply_object(
                 job_identity: if builder.extras.offence_attribution_active { *job_pin } else { Hash64::default() },
                 rcore: PalwClaimRcoreV1::default(),
             };
+            let mut claim = claim;
+            let staged_contract = builder.prepare_staged_claim_v1(&mut claim)?;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
@@ -38905,6 +38911,7 @@ fn apply_object(
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
+            builder.stamp_staged_claim_v1(*claim_id, staged_contract);
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire));
             }
@@ -39822,6 +39829,8 @@ pub struct PalwTransitionExtrasV1 {
     pub objective_offence_daa: Option<u64>,
     /// Public-filer owned terminal budget resolved from the accepting block court.
     pub terminal_evidence_max_bytes: Option<u64>,
+    /// None preserves all historic deadlines/holds; Some stamps newly accepted claims only.
+    pub staged_public_court: Option<crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>,
     /// **ADR-0133 §7: `Params::palw_seat_gate_possession`'s HEIGHT.** Past it
     /// `required_ready_seats` is the possession question alone — the panel plus the spare — and a
     /// class heavier than its fleet is admitted RARELY (one claim in flight, the smallest
@@ -41540,6 +41549,8 @@ fn apply_attempt(
         },
         rcore: PalwClaimRcoreV1::default(),
     };
+    let mut claim = claim;
+    let staged_contract = builder.prepare_staged_claim_v1(&mut claim)?;
     // **2026-09-23 audit, finding 17: the ceiling holds on the state the claim actually joins.**
     //
     // The processor admits a block's own attempt against the PARENT state, and this block's own
@@ -41655,6 +41666,7 @@ fn apply_attempt(
         builder.note_real_accepted(ctx.daa_score, blue);
     }
     builder.write_claim(claim_id, Some(claim));
+    builder.stamp_staged_claim_v1(claim_id, staged_contract);
     // Lane BUDGET: the reservation planned above, and the claim's block consumed at once (the block exists).
     if let Some(plan) = budget_plan {
         builder.commit_bond_budget_v1(ctx, claim_id, plan)?;
@@ -72786,6 +72798,7 @@ pub(crate) mod tests {
                 offence_attribution_active: false,
                 legacy_held_da_v2_active: false,
                 terminal_evidence_max_bytes: None,
+                staged_public_court: None,
                 activation_pool: None,
                 seat_da_answer_landed: false,
                 share_growth_final_active: false,
@@ -73054,6 +73067,7 @@ pub(crate) mod tests {
                 offence_attribution_active: false,
                 legacy_held_da_v2_active: false,
                 terminal_evidence_max_bytes: None,
+                staged_public_court: None,
                 activation_pool: None,
                 seat_da_answer_landed: false,
                 share_growth_final_active: false,
@@ -78955,7 +78969,7 @@ mod staged_court_state_tests_v1 {
         let terms = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
             .claim_terms(100, 4, 4099).unwrap();
         let key = PalwStagedCourtKeyV1::Claim(Hash64::from_u64_word(107));
-        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(terms)) };
+        let entry = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms, producer: PALW_BOND_KEY_V2_MIN, panel: BTreeSet::new() })) };
         assert_eq!(borsh::to_vec(&entry).unwrap()[0], 207);
         apply_delta_entry(&mut state, &entry, false).unwrap();
         assert_ne!(state.state_root(), empty_root);

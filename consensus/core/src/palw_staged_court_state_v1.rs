@@ -10,19 +10,26 @@ pub enum PalwStagedCourtKeyV1 {
     Owner(Hash64, PalwBondKeyV2),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStagedClaimContractV1 {
+    pub terms: PalwRenderingClaimTermsV1,
+    pub producer: PalwBondKeyV2,
+    /// All bound seats remain held even after their panel/claim rows retire.
+    pub panel: std::collections::BTreeSet<PalwBondKeyV2>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwStagedCourtRowV1 {
-    Claim(PalwRenderingClaimTermsV1),
+    Claim(PalwStagedClaimContractV1),
     Constraint(Box<PalwOwnedConstraintStreamV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn check(&self, key: &PalwStagedCourtKeyV1) -> Result<(), String> {
         match (key, self) {
-            (PalwStagedCourtKeyV1::Claim(_), Self::Claim(t))
-                if t.accepted_daa < t.open_until_daa
-                    && t.open_until_daa < t.stream_until_daa
-                    && t.stream_until_daa < t.collect_until_daa
-                    && t.collect_until_daa <= t.material_until_daa
-                    && t.material_until_daa <= t.bond_exit_after_daa =>
+            (PalwStagedCourtKeyV1::Claim(_), Self::Claim(c))
+                if c.terms.accepted_daa < c.terms.open_until_daa
+                    && c.terms.open_until_daa < c.terms.stream_until_daa
+                    && c.terms.stream_until_daa < c.terms.collect_until_daa
+                    && c.terms.collect_until_daa <= c.terms.material_until_daa
+                    && c.terms.material_until_daa <= c.terms.bond_exit_after_daa =>
             {
                 Ok(())
             }

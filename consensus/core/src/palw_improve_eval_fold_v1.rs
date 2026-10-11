@@ -713,9 +713,12 @@ pub(super) fn apply_improvement_eval_commitment_v1(
         job_identity: if builder.extras.offence_attribution_active { *c.job_pin } else { Hash64::default() },
         rcore: PalwClaimRcoreV1::default(),
     };
+    let mut claim = claim;
+    let staged_contract = builder.prepare_staged_claim_v1(&mut claim)?;
     let public_job_wire = builder.public_fp_job_wire_v1(c.claim_id, &claim, c.public_job)?;
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(*c.claim_id, Some(claim));
+    builder.stamp_staged_claim_v1(*c.claim_id, staged_contract);
     if let Some(wire) = public_job_wire {
         builder.write_public_fp_job_v1(*c.claim_id, Some(wire));
     }
