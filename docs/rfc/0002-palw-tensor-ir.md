@@ -3796,3 +3796,32 @@ a synthetic 65-axis TopK/Gather/state program, not the actual checkpoint. Honest
 execution Final, complete typed H/media jobs, shared resources/economics and
 actual-model A6/A8 acceptance remain open. Mode A and dormant shipping fences
 remain unchanged.
+
+### §14.41 — Independent free-running task diagnostic failure (2026-10-11)
+
+An additional frozen context-32 protocol runs the actual pinned Qwen source
+and integer artifact on three arithmetic/translation/code prompts, each with
+eight requested output tokens. Each implementation feeds its own generated
+tokens. All 75 fed positions and 24 generated outputs remain in the denominator;
+EOS affects answer display/scoring only, not the fixed execution count.
+
+The generated-token agreement is 22/24 (91.666667%), below the predeclared 95%
+threshold. Exact generated jobs are 2/3, meeting only that separate threshold.
+Both source and integer task-answer fractions are 1/3, below the predeclared
+100% answer threshold. Arithmetic differs at two positions after EOS; translation
+outputs `Hello.` instead of the exact frozen `Hello`; the eight-token code job
+does not finish its fenced answer or emit EOS. These failures are retained;
+output formatting, thresholds and job membership are not revised after scoring.
+
+The source process completes in 15.62s at 6,367,248,384B maximum RSS; the integer
+process completes its computation in 206.33s at 1,974,124,544B RSS and returns
+failure for the unmet threshold. The independent tokenizer-based scorer also
+returns failure. These are separate diagnostic observations, not service
+throughput or task/cohort acceptance. Four bounded-protocol/scoring refusal
+tests pass, but do not turn the measured result into a pass. Frozen protocol,
+all source/integer/scorer outputs, process logs, tool/binary identities and
+limitations are recorded in
+[the failed generation verdict](../design/palw/tir/evidence/qwen25-independent-greedy-task-verdict.json).
+The earlier 123-position teacher-forced logit diagnostic remains a distinct
+passing result. Neither result establishes complete task benchmarks, maximum
+context, native execution Final or A6/A8 coverage.

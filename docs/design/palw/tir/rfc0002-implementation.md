@@ -2470,3 +2470,30 @@ maximum/actual jobs, typed H/media graph continuity, persisted unified
 resource/economic ceilings, complete checkpoint/task/context fidelity and
 A6/A8>=90% remain open. The full goal stays active; source R remains externally
 acquired under mode A and shipping fences remain dormant.
+
+## Retained failure — independent free-running task diagnostic, 2026-10-11
+
+The actual pinned Qwen BF16 source and integer artifact each feed their own
+outputs for three frozen arithmetic/translation/code prompts at context32.
+Eight outputs per job and 75 total fed positions are executed even after EOS,
+as specified before measurement. All three jobs are retained. Raw token
+agreement22/24=91.666667% fails the frozen95% threshold; exact jobs2/3 meet only
+their separate threshold. Source and integer exact-answer fractions are both
+1/3, failing the frozen100% requirement. Arithmetic differs after EOS;
+translation emits `Hello.` rather than exact `Hello`; code exhausts eight
+tokens before completing its fenced answer or emitting EOS. The integer and
+independent pinned-tokenizer scorer both return exit1 and preserve their output.
+
+Whole-process source time/RSS is15.62s/6,367,248,384B; integer time/RSS is
+206.33s/1,974,124,544B. Four adversarial protocol/scoring tests pass (0.001s),
+covering output-feedback context accounting, exact schema/pins/bounds, EOS/token/
+job identity and independent aggregate/answer recomputation. They add no native
+component-pool or checkpoint-task acceptance credit. The four new tool sources,
+protocol and immutable binary were frozen; raw failure outputs, commands,
+source/binary/input SHA pins and concurrent-build limits are in
+[the failed generation verdict](evidence/qwen25-independent-greedy-task-verdict.json).
+The passing 123-position source-logit diagnostic remains independent evidence
+for a different teacher-forced test. This free-running failure cannot be
+substituted for A6/A8, relabeled as a90% cohort pass or removed from later
+acceptance records. Actual task/maximum-context/native Final and complete
+RFC02 acceptance remain open; the goal stays active.
