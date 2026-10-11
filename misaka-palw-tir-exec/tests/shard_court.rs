@@ -92,16 +92,16 @@ fn public_court_inputs(holding: &TirShardHoldingV1, capture: &TirCaptureV1, name
         let range = PalwStepRangeOpeningV1 {
             first_leaf_index: first as u64,
             leaf_hashes: hashes[first..end].to_vec(),
-            siblings: step_merkle_range_siblings_v1(&hashes, first as u64, u64::from(count)).unwrap(),
+            siblings: step_merkle_range_siblings_v1(&hashes, first, count as usize).unwrap(),
         };
         inputs
             .add_run(
-                &capture.binding.job_context,
-                &holding.class_id,
                 capture.binding.step_leaf_count,
                 &capture.binding.step_merkle_root,
                 &range,
                 &capture.leaves[first..end],
+                &capture.binding.job_context,
+                &holding.class_id,
                 1 << 26,
             )
             .unwrap();
