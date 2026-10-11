@@ -459,9 +459,17 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
                 let forged_material = forged.encode();
                 let (forged_fold, forged_inputs, _) = public_court_inputs(&partial, &forged, index);
                 let mut phase = PalwTirDissectPhaseV1::open(SESSION, index, &site, &lie, 2, 0, 10).unwrap();
+                // A lying reduction can round to the same committed output tile, hence
+                // the same step root. Construct a guaranteed different authenticated root
+                // for this negative control while preserving those admissible lie cases.
+                let mut foreign = capture.clone();
+                foreign.leaves[index as usize].values_le[0] ^= 1;
+                reroot(&mut foreign, partial.class_id);
+                assert_ne!(foreign.binding.step_merkle_root, capture.binding.step_merkle_root);
+                foreign.leaves.clear();
                 assert!(
-                    partial.dissect_round_from_runs(&forged_fold, &inputs, &phase, &rules).is_err(),
-                    "honest inputs under another step root cannot be reused for a re-rooted lie"
+                    partial.dissect_round_from_runs(&foreign, &inputs, &phase, &rules).is_err(),
+                    "honest inputs under another step root cannot be reused for a re-rooted capture"
                 );
                 let mut daa = 1;
                 while phase.turn() == PalwBisectTurnV1::AwaitDisclosure {
