@@ -2369,7 +2369,7 @@ impl ConsensusApi for Consensus {
     fn palw_fraud_filer_candidates_for_claims_v1(
         &self,
         me: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        claims: Vec<Hash64>,
+        claims: Vec<kaspa_consensus_core::Hash64>,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1> {
         self.virtual_processor.palw_fraud_filer_candidates_for_claims_v1_impl(&me, &claims)
     }
