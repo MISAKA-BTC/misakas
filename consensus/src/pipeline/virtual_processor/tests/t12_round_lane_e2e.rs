@@ -1211,6 +1211,10 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
     };
     use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1;
     const LIMIT: u64 = 500_000;
+    // Fixed before either run: this fixture's shipped 320,084,650,080 escrow
+    // leaves exactly 80% with its issuer, pending through the native H. The
+    // migration must count that actual unpaid money before accepting fee R.
+    const OLD_ISSUER_INCOME: u64 = 256_067_720_064;
     for actual_fee in [LIMIT, LIMIT + 1] {
         // The real original floor Final predates the fence; its signed rights
         // survive. Its ticket is drawn after the new dedicated T cap opens.
@@ -1220,7 +1224,7 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
             policy.capital_unit_sompi = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
             policy.claims_per_unit = 1_000_000;
             policy.block_units_per_unit = 1_000_000 * PALW_BUDGET_BLOCK_UNIT_V1;
-            policy.reward_per_unit_sompi = LIMIT;
+            policy.reward_per_unit_sompi = OLD_ISSUER_INCOME + LIMIT;
             policy.final_weight_per_unit = 1_000_000;
             policy.max_open_claims_per_bond = 1_000_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
@@ -1233,7 +1237,11 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         .await;
         let (_, before_state) = at.chain.tip_state();
         let before = *before_state.bond_budget().unwrap().bond_row(&at.executor).expect("ticket recipient has a T reservation");
-        assert_eq!(before.window.reward_sompi, 0, "old settled Final is not charged a second time");
+        let old_income = before_state.vesting_row(&at.claim_id).expect("old Final still holds its actual native payout");
+        assert_eq!(old_income.producer.amount, OLD_ISSUER_INCOME, "the predeclared cap uses the actual unpaid producer right");
+        assert_eq!(before.window.reward_sompi, OLD_ISSUER_INCOME, "migration counts unpaid issuance exactly once");
+        assert_eq!(before_state.bond(&at.executor).unwrap().collateral, kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI);
+        assert_eq!((OLD_ISSUER_INCOME + LIMIT) - before.window.reward_sompi, LIMIT, "the fee boundary is fixed after actual issuance holds");
         assert_eq!(before.window.block_units, 0, "fee-only ticket does not reserve reward blocks");
         assert_eq!(before.window.round_rights, 1, "dedicated execution cap is occupied before the Round");
         let ticket = at.schedule.quanta.iter().filter(|q| q.final_id == at.claim_id).min_by_key(|q| q.scheduled_round).unwrap();
@@ -1256,7 +1264,7 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         assert_eq!(after.window.round_rights, before.window.round_rights);
         assert_eq!(after.open_claims, before.open_claims);
         if accepted {
-            assert_eq!(after.window.reward_sompi, LIMIT);
+            assert_eq!(after.window.reward_sompi, OLD_ISSUER_INCOME + LIMIT);
             let id = kaspa_consensus_core::palw_bond_budget_v1::palw_round_income_id_v1(block.header.hash, &at.executor);
             let income = book.claim_row(&id).expect("actual native fee collection is journaled");
             assert_eq!(income.origin, PalwBudgetOriginV1::RoundFee);

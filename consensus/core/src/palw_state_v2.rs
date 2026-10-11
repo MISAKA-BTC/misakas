@@ -22072,6 +22072,7 @@ impl<'a> TransitionBuilder<'a> {
         for (key, _) in self.claim_locks_v1(&claim_id) {
             self.write_slashable_lock(key, None);
         }
+        self.cancel_panel_recipients_v1(claim_id);
         self.release_seat_duties(&claim_id)?;
         let mut revived = claim.clone();
         revived.phase = PalwClaimPhaseV2::Provisional;
@@ -26830,6 +26831,7 @@ impl<'a> TransitionBuilder<'a> {
         seat_exposure: u128,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        self.hold_panel_recipients_v1(claim_id, seats, now_daa)?;
         let on_duty: BTreeMap<PalwBondKeyV2, u64> = seats.iter().map(|seat| (seat.bond, 0)).collect();
         // Reserved in the panel's own order, each bond once — the journal order the row was always
         // reserved in.
@@ -28502,6 +28504,17 @@ impl<'a> TransitionBuilder<'a> {
                             buyback: slice,
                         });
                     } else {
+                        let finished = !self.state.exec_v2_rewards.get(&id)
+                            .is_some_and(|row| row.legs.keys().any(|(bond, _)| *bond == claim.bond));
+                        self.pay_native_recipient_v1(id, claim.bond, 0, final_daa, producer_amount, id, finished)?;
+                        let mut recipient_amounts: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+                        for (seat, amount) in &seat_legs {
+                            let total = recipient_amounts.entry(*seat).or_default();
+                            *total = total.checked_add(*amount).ok_or(PalwStateV2Error::Overflow("Panel recipient income"))?;
+                        }
+                        for (seat, amount) in recipient_amounts {
+                            self.pay_native_recipient_v1(id, seat, 1, final_daa, amount, palw_panel_payout_key_v1(&self.state.bonds[&seat].payout_payload), true)?;
+                        }
                         if producer_amount > 0 {
                             self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: producer_amount }));
                         }
@@ -28532,6 +28545,9 @@ impl<'a> TransitionBuilder<'a> {
                     let (reward, legs) = palw_exec_v2_fold::settle_at_final_v2(self, &id, reward, final_daa)?;
                     exec_legs = legs;
                     exec_settled = true;
+                    let finished = !self.state.exec_v2_rewards.get(&id)
+                        .is_some_and(|row| row.legs.keys().any(|(bond, _)| *bond == claim.bond));
+                    self.pay_native_recipient_v1(id, claim.bond, 0, final_daa, reward, id, finished)?;
                     if reward > 0 {
                         self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: reward }));
                     }
@@ -28550,6 +28566,13 @@ impl<'a> TransitionBuilder<'a> {
         // Lane BUDGET: an attempt's Final is terminal for its budget (a free-prompt claim's spends come after its Final).
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
             self.bond_budget_close_v1(&id);
+        }
+        if let Some(duties) = self.state.panel_duties.get(&id).map(|row| row.seats.clone()) {
+            for (seat, _) in duties {
+                let future = vested.as_ref().is_some_and(|reward| reward.seats.iter()
+                    .any(|(payee, payout)| *payee == seat && payout.amount > 0));
+                if !future { self.cancel_native_recipient_v1(id, seat, 1); }
+            }
         }
         // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
         self.write_claim_economics(id, None);
@@ -28666,6 +28689,8 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0124 Decision 3: every seat on duty leaves it with its exposure, whatever voided the
         // claim — before the phase write drops the row this reads. A seat's fault is the court's
         // and the quorum's business, charged where it is proven, never here.
+        self.cancel_panel_recipients_v1(id);
+        self.cancel_native_recipient_v1(id, claim.bond, 0);
         self.release_seat_duties(&id)?;
         // RFC-0008 v2: a work session on the claim goes void with it and its extra executors' exposure returns (a no-op for a claim
         // with no root, which is every claim below the fence).
@@ -29274,6 +29299,8 @@ impl<'a> TransitionBuilder<'a> {
             palw_exec_v2_rewards_v1::burn(self, claim_id)?;
             return Ok(None);
         };
+        for (bond, _) in &row.seats { self.cancel_native_recipient_v1(claim_id, *bond, 1); }
+        self.cancel_native_recipient_v1(claim_id, row.producer_bond, 0);
         let mut counters = self.state.vesting_counters;
         counters.burned = counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
         self.write_vesting(claim_id, None);
@@ -29401,10 +29428,27 @@ impl<'a> TransitionBuilder<'a> {
     /// (or the reporter entry) leaves; counters `moved`; notes `Moved` and, for a positive reserve,
     /// `ReserveCredited`. Maturity inserts are exempt from `PALW_V2_MAX_PENDING_PAYOUTS` (M-10):
     /// the budget, not the cap, bounds them.
-    fn apply_vesting_move(&mut self, next: &crate::palw_vesting_v1::PalwVestingMoveV1) -> Result<(), PalwStateV2Error> {
+    fn apply_vesting_move(&mut self, next: &crate::palw_vesting_v1::PalwVestingMoveV1, now: u64) -> Result<(), PalwStateV2Error> {
         use crate::palw_vesting_v1::{
             PalwVestingLegKindV1, PalwVestingNoteV1, PalwVestingSourceV1, palw_reporter_payout_key_v1, palw_vesting_payout_key_v1,
         };
+        if let PalwVestingSourceV1::Row { claim_id } = &next.source {
+            let row = self.state.vesting.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+            let mut recipients: BTreeMap<PalwBondKeyV2, PalwPayoutV2> = BTreeMap::new();
+            for (bond, payout) in &row.seats {
+                let total = recipients.entry(*bond).or_insert(PalwPayoutV2 { payload: payout.payload, amount: 0 });
+                if total.payload != payout.payload {
+                    return Err(PalwStateV2Error::BondBudgetRefused("one Panel recipient has inconsistent frozen payloads".into()));
+                }
+                total.amount = total.amount.checked_add(payout.amount).ok_or(PalwStateV2Error::Overflow("Panel recipient income"))?;
+            }
+            for (bond, payout) in recipients {
+                self.pay_native_recipient_v1(*claim_id, bond, 1, now, payout.amount, palw_panel_payout_key_v1(&payout.payload), true)?;
+            }
+            let finished = !self.state.exec_v2_rewards.get(claim_id)
+                .is_some_and(|receipt| receipt.legs.keys().any(|(bond, _)| *bond == row.producer_bond));
+            self.pay_native_recipient_v1(*claim_id, row.producer_bond, 0, now, row.producer.amount, palw_vesting_payout_key_v1(claim_id), finished)?;
+        }
         let own_key = match &next.source {
             PalwVestingSourceV1::Row { claim_id } => palw_vesting_payout_key_v1(claim_id),
             PalwVestingSourceV1::Reporter { offence_id } => palw_reporter_payout_key_v1(offence_id),
@@ -29487,7 +29531,7 @@ fn apply_vesting_maturity(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCo
     let budget_new_keys = PALW_V2_VESTING_LEGS_PER_BLOCK.saturating_sub(palw_vesting_non_market_rows_waiting_v1(&builder.state));
     let plan = palw_vesting_mint_plan_v1(&builder.state, budget_new_keys, palw_vesting_market_rows_waiting_v1(&builder.state));
     for next in &plan.moves {
-        builder.apply_vesting_move(next)?;
+        builder.apply_vesting_move(next, ctx.daa_score)?;
     }
     debug_assert!(
         crate::palw_vesting_v1::palw_vesting_counters_consistent_v1(&builder.state).is_ok(),
@@ -34419,6 +34463,7 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 if claim.rebound_daa.is_none() {
                     // ADR-0124 Decision 3: the first panel's seats leave duty with their exposure
                     // — the redraw deals different seats, who go on duty when it binds.
+                    builder.cancel_panel_recipients_v1(claim_id);
                     builder.release_seat_duties(&claim_id)?;
                     let mut revived = claim.clone();
                     revived.phase = PalwClaimPhaseV2::Provisional;

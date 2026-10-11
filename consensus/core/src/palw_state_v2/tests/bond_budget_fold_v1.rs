@@ -126,8 +126,8 @@ fn the_fences_first_block_creates_the_engine_and_it_rides_delta_root_and_carriag
 }
 
 /// **Migration (design §2.9): the fence's first block seeds every live old claim** into its bond's window at its OWN acceptance DAA, as a
-/// Legacy reservation — counted, never consumed: the old claim is paid by the rule it was accepted under, and the bond's window frees only
-/// at `accepted + W`.
+/// Legacy Q/B/F reservation plus a reclassified actual issuer income hold. Old signed money is preserved; Q/B/F use accepted+W,
+/// while unpaid R stays held through actual payment+W.
 #[test]
 fn old_live_claims_seed_the_window_at_the_fence_and_leave_it_at_their_own_accepted_plus_w() {
     let base = params().with_worker_carve_permille(620).unwrap();
@@ -143,19 +143,51 @@ fn old_live_claims_seed_the_window_at_the_fence_and_leave_it_at_their_own_accept
     let row = budget.claim_row(&claim_id).expect("the old claim is seeded");
     assert_eq!(row.origin, PalwBudgetOriginV1::Legacy);
     assert_eq!((row.accepted_daa, row.reuse_not_before), (101, 151));
-    assert_eq!(row.reserved.reward_sompi, 620);
+    assert_eq!(row.reserved.reward_sompi, 0, "R is reclassified into the unpaid actual issuer hold");
+    let income = budget.claim_row(&super::super::palw_bond_budget_fold_v1::native_income_id_v1(claim_id, &bond_key(1), 0)).unwrap();
+    assert_eq!(income.reserved.reward_sompi, 620);
+    assert!(income.live && !income.open);
     assert_eq!(row.reserved.block_units, PALW_BUDGET_BLOCK_UNIT_V1);
     assert!(budget.window_holds(&bond_key(1), 150));
     assert!(d3.entries.iter().any(is_budget_entry));
     // Old rules pay it whole (the walk's Final at 124).
     let (s5, _) = &walked[4];
     assert_eq!(s5.pending_payouts_iter().map(|(_, pay)| pay.amount).sum::<u64>(), 620, "an old claim is paid by its old rule");
-    // The window frees at 151, not before (the walk's last block is at 200).
+    // Q/B/F free at 151, R at actual payment 125 + W = 175. Both have left by 200.
     let (s6, _) = &walked[5];
     assert!(s6.bond_budget().unwrap().window_holds(&bond_key(1), 125));
     let (s7, _) = &walked[6];
     assert!(!s7.bond_budget().unwrap().window_holds(&bond_key(1), 200));
     assert!(s7.bond_budget().unwrap().bond_row(&bond_key(1)).is_none_or(|row| row.window.is_zero()));
+}
+
+/// This is a core fold/queue test, not an execution soundness proof. It uses the
+/// same fixture admission seam as `walk`, then only production transition,
+/// queue-drain, carriage and delta APIs for the monetary clock.
+#[test]
+fn unpaid_issuer_r_survives_sparse_daa_until_actual_payment_then_uses_payment_plus_w() {
+    let p = armed_with(test_policy(1), None);
+    let walked = walk(&p);
+    let queued = &walked[4].0;
+    let claim = attempt_id_v2(&attempt(40, 1).attempt);
+    let budget = queued.bond_budget().unwrap();
+    assert_eq!(budget.bond_row(&bond_key(1)).unwrap().window.reward_sompi, 620);
+    assert_eq!(queued.pending_payouts_iter().map(|(_, pay)| pay.amount).sum::<u64>(), 620);
+    let (paid, delta) = apply(queued, &p, &ctx(6, 1_000, 6), &[], None);
+    assert_replayable(&p, queued, &paid, &delta);
+    assert_eq!(paid.pending_payouts_iter().count(), 0);
+    let id = super::super::palw_bond_budget_fold_v1::native_queued_income_id_v1(claim, &bond_key(1));
+    let paid_row = paid.bond_budget().unwrap().claim_row(&id).expect("same durable monetary hold");
+    assert_eq!(paid_row.origin, PalwBudgetOriginV1::NativeIncomeQueued);
+    assert_eq!((paid_row.reserved.reward_sompi, paid_row.consumed.reward_sompi), (620, 620));
+    assert_eq!(paid_row.reuse_not_before, 1_050);
+    assert!(!paid_row.live && !paid_row.open && paid_row.in_window);
+    let (before_release, delta) = apply(&paid, &p, &ctx(7, 1_049, 7), &[], None);
+    assert_replayable(&p, &paid, &before_release, &delta);
+    assert_eq!(before_release.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, 620);
+    let (released, delta) = apply(&before_release, &p, &ctx(8, 1_050, 8), &[], None);
+    assert_replayable(&p, &before_release, &released, &delta);
+    assert!(released.bond_budget().unwrap().bond_row(&bond_key(1)).is_none());
 }
 
 fn assignment(bond: PalwBondKeyV2, assignments: Vec<(Hash64, u64)>, sequence: u64) -> PalwConsensusObjectV2 {
@@ -273,9 +305,16 @@ fn an_attempts_reservation_bounds_its_immature_weight_its_final_weight_and_its_p
     let row = *s2.bond_budget().unwrap().claim_row(&claim_id).expect("a budgeted claim");
     assert_eq!(
         row.reserved,
-        PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 4, final_weight: 2, round_rights: 0 }
+        PalwBudgetVectorV1 { claims: 1, block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 0, final_weight: 2, round_rights: 0 }
     );
     assert_eq!(row.consumed.block_units, PALW_BUDGET_BLOCK_UNIT_V1, "its block was consumed at acceptance");
+    let income = s2
+        .bond_budget()
+        .unwrap()
+        .claim_row(&super::super::palw_bond_budget_fold_v1::native_income_id_v1(claim_id, &claim.bond, 0))
+        .unwrap();
+    assert_eq!(income.reserved.reward_sompi, 4, "the one original R cap funds the actual issuer's delayed income");
+
     assert_eq!((row.accepted_daa, row.reuse_not_before), (101, 151));
     let (s5, _) = &walked[4];
     assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
