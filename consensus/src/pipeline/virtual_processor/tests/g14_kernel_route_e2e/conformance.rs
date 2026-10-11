@@ -273,8 +273,9 @@ impl Cw {
         self.net.api().expect("the route").conformance_attempt_v1(&self.v2_class).expect("a conformance record")
     }
 
-    /// **`n` honest OPV claims of the SOURCE class**, committed now (after the attempt's start): each a job by the registrant, sealed
-    /// and revealed by a rotating producer. They reach Final with no Panel when their window closes.
+    /// **`n` honest OPV claims of the SOURCE class**, committed now (after the attempt's start): jobs funded by distinct real
+    /// consumers and sealed/revealed by rotating producers. The DISTINCT beacon authenticates both identities from ledger rows.
+    /// They reach Final with no Panel when their window closes.
     async fn source_claims(&mut self, n: usize) -> Vec<Digest> {
         let mut jobs = Vec::new();
         for _ in 0..n {
@@ -287,8 +288,13 @@ impl Cw {
                 nonce: [self.jobs; 64],
             });
         }
-        let posts: Vec<(usize, Obj)> =
-            jobs.iter().map(|j| (REGISTRANT, self.net.route(REGISTRANT, &K::PostJob { job: j.clone() }))).collect();
+        let consumers = [REGISTRANT, OUTSIDER, 0, 2, 4, 5, 6, 7];
+        assert!(n <= consumers.len(), "the fixture must fund independent source consumers");
+        let posts: Vec<(usize, Obj)> = jobs
+            .iter()
+            .zip(consumers)
+            .map(|(job, card)| (card, self.net.route(card, &K::PostJob { job: job.clone() })))
+            .collect();
         self.net.send(posts).await;
         let src = self.src.clone_fixture();
         let class = self.src_class;
