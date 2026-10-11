@@ -190,6 +190,70 @@ fn unpaid_issuer_r_survives_sparse_daa_until_actual_payment_then_uses_payment_pl
     assert!(released.bond_budget().unwrap().bond_row(&bond_key(1)).is_none());
 }
 
+/// Exact production recipient/queue/drain APIs; the admitted bond and queued
+/// low-key backlog are private mechanics seams, not a native Final or court proof.
+#[test]
+fn partial_native_fd_fe_funds_use_individual_physical_payment_clocks_with_exact_delta_replay() {
+    use super::super::palw_bond_budget_fold_v1::{native_income_id_v1, native_queued_income_id_v1};
+    for kernel_first in [false, true] {
+        let p = armed_with(test_policy(1), None);
+        let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let extras = PalwTransitionExtrasV1::default();
+        let payload = registered.bond(&bond_key(1)).unwrap().payout_payload;
+        let kernel = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+        let native = palw_panel_payout_key_v1(&payload);
+        assert!(kernel < native, "FD drains before FE under the actual pre-object ordering");
+        let (first, last) = if kernel_first { (kernel, native) } else { (native, kernel) };
+        let root = h64(0x8891);
+        let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
+        b.hold_native_recipient_v1(root, bond_key(1), 2, 100, 500, 50, &[]).unwrap();
+        b.pay_native_recipient_v1(root, bond_key(1), 2, 501, 10, first, false).unwrap();
+        b.write_payout(first, Some(PalwPayoutV2 { payload, amount: 10 }));
+        b.pay_native_recipient_v1(root, bond_key(1), 2, 502, 20, last, true).unwrap();
+        b.write_payout(last, Some(PalwPayoutV2 { payload, amount: 20 }));
+        for n in 0..7 {
+            b.write_payout(h64(n), Some(PalwPayoutV2 { payload: h64(0x1234), amount: 1 }));
+        }
+        let queued = b.state.clone();
+        let delta = PalwStateDeltaV2 { point: ctx(2, 502, 2), entries: b.entries };
+        assert_replayable(&p, &registered, &queued, &delta);
+        assert!(queued.bond_budget().unwrap().claim_row(&native_income_id_v1(root, &bond_key(1), 2)).is_none());
+        assert_eq!(queued.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, 50);
+        let (paid_fd, delta) = apply(&queued, &p, &ctx(3, 1_000, 3), &[], None);
+        assert_replayable(&p, &queued, &paid_fd, &delta);
+        assert!(paid_fd.pending_payout(&kernel).is_none());
+        assert!(paid_fd.pending_payout(&native).is_some());
+        let fd = native_queued_income_id_v1(kernel, &bond_key(1));
+        let fe = native_queued_income_id_v1(native, &bond_key(1));
+        assert!(!paid_fd.bond_budget().unwrap().claim_row(&fd).unwrap().live);
+        assert!(paid_fd.bond_budget().unwrap().claim_row(&fe).unwrap().live);
+        let unpaid_r = if kernel_first { 40 } else { 10 };
+        assert_eq!(paid_fd.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, 50);
+        // A second exact backlog keeps FE unpaid beyond FD's physical W.
+        let mut b = TransitionBuilder::new(&paid_fd, &p, false, false, false, false, &extras);
+        for n in 10..18 {
+            b.write_payout(h64(n), Some(PalwPayoutV2 { payload: h64(0x1234), amount: 1 }));
+        }
+        let backlogged = b.state.clone();
+        let delta = PalwStateDeltaV2 { point: ctx(4, 1_000, 4), entries: b.entries };
+        assert_replayable(&p, &paid_fd, &backlogged, &delta);
+        let (fd_released, delta) = apply(&backlogged, &p, &ctx(5, 1_050, 5), &[], None);
+        assert_replayable(&p, &backlogged, &fd_released, &delta);
+        assert!(fd_released.bond_budget().unwrap().claim_row(&fd).is_none());
+        assert!(fd_released.pending_payout(&native).is_some());
+        assert_eq!(fd_released.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window.reward_sompi, unpaid_r);
+        let (paid_fe, delta) = apply(&fd_released, &p, &ctx(6, 2_000, 6), &[], None);
+        assert_replayable(&p, &fd_released, &paid_fe, &delta);
+        assert!(paid_fe.pending_payout(&native).is_none());
+        let fe_row = paid_fe.bond_budget().unwrap().claim_row(&fe).unwrap();
+        assert_eq!((fe_row.live, fe_row.reuse_not_before), (false, 2_050));
+        let (released, delta) = apply(&paid_fe, &p, &ctx(7, 2_050, 7), &[], None);
+        assert_replayable(&p, &paid_fe, &released, &delta);
+        assert!(released.bond_budget().unwrap().bond_row(&bond_key(1)).is_none());
+        assert_eq!(released.pending_payouts_iter().count(), 0, "each physical cash leg drains once");
+    }
+}
+
 fn assignment(bond: PalwBondKeyV2, assignments: Vec<(Hash64, u64)>, sequence: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::BondCapitalAssignedV1 { bond, assignments, sequence, signature: vec![1] }
 }

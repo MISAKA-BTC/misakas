@@ -194,6 +194,8 @@ pub enum PalwBudgetOriginV1 {
     NativeIncome = 9,
     /// Irrevocable native queue credit awaiting its actual coinbase payment.
     NativeIncomeQueued = 10,
+    /// Unpaid remainder after one or more exact native queue credits; never transferable.
+    NativeIncomePartial = 11,
 }
 
 /// Why the engine refused.
@@ -1135,7 +1137,10 @@ impl PalwBondBudgetStateV1 {
             if self.claims.get(&claim_id).is_some_and(|claim| {
                 matches!(
                     claim.origin,
-                    PalwBudgetOriginV1::SourceFee | PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomeQueued
+                    PalwBudgetOriginV1::SourceFee
+                        | PalwBudgetOriginV1::NativeIncome
+                        | PalwBudgetOriginV1::NativeIncomeQueued
+                        | PalwBudgetOriginV1::NativeIncomePartial
                 ) && claim.live
             }) {
                 continue;
@@ -1419,20 +1424,64 @@ impl PalwBondBudgetStateV1 {
         Ok(())
     }
 
-    /// Consume exactly what actually moves to the native payout queue. A
-    /// recipient with several funds may move them on separate blocks; the
-    /// consumer finishes only after its last unpaid fund has left. The paid
-    /// maximum remains in the common R window through actual payment + W.
+    /// Give every positive fund its exact queue receipt, including partial
+    /// payments. Each receipt starts its W clock only when that queue actually
+    /// drains. Splitting a hold never adds or releases aggregate R. The unpaid
+    /// remainder cannot be transferred to another work or resurrected after
+    /// cancellation; previously queued cash remains irrevocable.
+    #[allow(clippy::too_many_arguments)]
     pub fn pay_native_income_v1(
         &mut self,
         policy: &PalwBondBudgetPolicyV1,
         income_id: &Hash64,
         now: u64,
         amount: u64,
-        queue_id: Option<Hash64>,
+        queue_id: Hash64,
+        finished: bool,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
-        self.pay_native_income_inner_v1(policy, income_id, now, amount, queue_id, false, j)
+        if amount == 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("native queue credit must be positive"));
+        }
+        if finished {
+            return self.pay_native_income_inner_v1(policy, income_id, now, amount, Some(queue_id), false, j);
+        }
+        let release = now.checked_add(policy.window_daa).ok_or(PalwBudgetRefusalV1::Overflow)?;
+        let mut remaining = self.claims.get(income_id).copied().filter(|row| {
+            matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial)
+                && row.live && row.in_window && !row.open && row.consumed.reward_sompi == 0
+        }).ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if queue_id == *income_id {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let left = remaining.reserved.reward_sompi.checked_sub(amount)
+            .ok_or(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward })?;
+        let old = self.claims.get(&queue_id).copied();
+        if old.is_some_and(|row| row.origin != PalwBudgetOriginV1::NativeIncomeQueued
+            || row.bond != remaining.bond || !row.in_window || row.open) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let mut queued = remaining;
+        queued.origin = PalwBudgetOriginV1::NativeIncomeQueued;
+        queued.reserved.reward_sompi = amount;
+        queued.consumed.reward_sompi = amount;
+        queued.reuse_not_before = queued.reuse_not_before.max(release);
+        if let Some(old) = old {
+            queued.reserved = queued.reserved.checked_add(old.reserved).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            queued.consumed = queued.consumed.checked_add(old.consumed).ok_or(PalwBudgetRefusalV1::Overflow)?;
+            queued.accepted_daa = queued.accepted_daa.min(old.accepted_daa);
+            queued.reuse_not_before = queued.reuse_not_before.max(old.reuse_not_before);
+        }
+        // Every destination and arithmetic check precedes the first journal write.
+        remaining.origin = PalwBudgetOriginV1::NativeIncomePartial;
+        remaining.reserved.reward_sompi = left;
+        self.put_claim(income_id, Some(remaining), j);
+        if let Some(old) = old {
+            self.put_release((old.reuse_not_before, queue_id), false, j);
+        }
+        self.put_claim(&queue_id, Some(queued), j);
+        self.put_release((queued.reuse_not_before, queue_id), true, j);
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1452,7 +1501,8 @@ impl PalwBondBudgetStateV1 {
             .get(income_id)
             .copied()
             .filter(|row| {
-                (row.origin == PalwBudgetOriginV1::NativeIncome || (source && row.origin == PalwBudgetOriginV1::SourceFee))
+                (matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial)
+                    || (source && row.origin == PalwBudgetOriginV1::SourceFee))
                     && row.live
                     && row.in_window
                     && !row.open
@@ -1529,7 +1579,7 @@ impl PalwBondBudgetStateV1 {
     pub fn cancel_native_income_v1(&mut self, income_id: &Hash64, j: &mut Vec<PalwBudgetWriteV1>) -> Result<(), PalwBudgetRefusalV1> {
         self.claims
             .get(income_id)
-            .filter(|row| row.origin == PalwBudgetOriginV1::NativeIncome && row.live && !row.open)
+            .filter(|row| matches!(row.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial) && row.live && !row.open)
             .ok_or(PalwBudgetRefusalV1::NotOpen)?;
         self.forget(income_id, j);
         Ok(())
@@ -2209,8 +2259,8 @@ mod tests {
         let before = (s.root_parts(), j.len());
         assert!(s.hold_native_income_v1(&p, capital, h(71), bond(0), 900, 1_000, 51 * BILI, &[], true, &mut j).is_err());
         assert_eq!((s.root_parts(), j.len()), before, "refusal reclassifies and reserves nothing");
-        s.pay_native_income_v1(&p, &h(71), 901, 5 * BILI, None, &mut j).unwrap();
-        s.pay_native_income_v1(&p, &h(71), 902, 35 * BILI, Some(h(72)), &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(71), 901, 5 * BILI, h(72), false, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(71), 902, 35 * BILI, h(72), true, &mut j).unwrap();
         assert!(s.claim_row(&h(71)).is_none());
         assert_eq!(s.claim_row(&h(72)).unwrap().origin, PalwBudgetOriginV1::NativeIncomeQueued);
         s.release_due(2_000, &mut j);
@@ -2218,7 +2268,7 @@ mod tests {
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 45 * BILI, "queued money cannot expire before actual payment");
         s.confirm_native_income_payment_v1(&p, &h(72), 2_000, &mut j).unwrap();
         assert_eq!(s.claim_row(&h(72)).unwrap().reuse_not_before, 2_100);
-        assert!(s.pay_native_income_v1(&p, &h(71), 2_000, 1, None, &mut j).is_err());
+        assert!(s.pay_native_income_v1(&p, &h(71), 2_000, 1, h(72), false, &mut j).is_err());
         assert!(s.confirm_native_income_payment_v1(&p, &h(72), 2_001, &mut j).is_err());
         s.check_consistency().unwrap();
         s.release_due(2_100, &mut j);
@@ -2236,6 +2286,105 @@ mod tests {
             }
         }
         assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn partial_native_funds_keep_each_fd_fe_queue_until_its_own_payment_clock_in_both_orders() {
+        // The core engine receives exact native queue identities. These prefix
+        // variants model FD kernel fees and FE native funds in either sort order;
+        // actual pre-object draining is covered separately by the fold fixture.
+        for (first, last) in [(h(0xfe), h(0xfd)), (h(0xfd), h(0xfe))] {
+            let p = policy(1, false);
+            let capital = 1_000 * BILI;
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let initial = s.clone();
+            let mut j = Vec::new();
+            s.hold_native_income_v1(&p, capital, h(68), bond(0), 10, 500, 50 * BILI, &[], true, &mut j).unwrap();
+            s.pay_native_income_v1(&p, &h(68), 501, 10 * BILI, first, false, &mut j).unwrap();
+            let remainder = s.claim_row(&h(68)).unwrap();
+            assert_eq!((remainder.origin, remainder.reserved.reward_sompi, remainder.consumed.reward_sompi),
+                (PalwBudgetOriginV1::NativeIncomePartial, 40 * BILI, 0));
+            assert_eq!(s.claim_row(&first).unwrap().reserved.reward_sompi, 10 * BILI);
+            let before = (s.root_parts(), j.len());
+            assert!(s.hold_native_income_v1(&p, capital, h(69), bond(0), 502, 600, 40 * BILI, &[h(68)], true, &mut j).is_err());
+            assert_eq!((s.root_parts(), j.len()), before, "a partly paid right cannot become another EXEC entitlement");
+            s.pay_native_income_v1(&p, &h(68), 503, 20 * BILI, last, true, &mut j).unwrap();
+            assert!(s.claim_row(&h(68)).is_none());
+            assert_eq!((s.claim_row(&last).unwrap().reserved.reward_sompi, s.claim_row(&last).unwrap().consumed.reward_sompi),
+                (40 * BILI, 20 * BILI));
+            assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+            // The last-created queue drains first. Its W must not free the
+            // earlier queue that is still actual unpaid money.
+            s.confirm_native_income_payment_v1(&p, &last, 1_000, &mut j).unwrap();
+            s.release_due(1_100, &mut j);
+            assert!(s.claim_row(&last).is_none());
+            assert!(s.claim_row(&first).unwrap().live);
+            assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 10 * BILI);
+            s.release_due(2_000, &mut j);
+            assert!(s.window_holds(&bond(0), 2_000));
+            s.confirm_native_income_payment_v1(&p, &first, 3_000, &mut j).unwrap();
+            s.release_due(3_099, &mut j);
+            assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 10 * BILI);
+            s.release_due(3_100, &mut j);
+            assert!(s.bond_row(&bond(0)).is_none());
+            s.check_consistency().unwrap();
+            let mut replay = initial.clone();
+            for entry in &j {
+                if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                    replay.apply_row(*table, key, old, new, false).unwrap();
+                }
+            }
+            assert_eq!(replay.root_parts(), s.root_parts());
+            for entry in j.iter().rev() {
+                if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                    replay.apply_row(*table, key, old, new, true).unwrap();
+                }
+            }
+            assert_eq!(replay.root_parts(), initial.root_parts());
+        }
+    }
+
+    #[test]
+    fn partial_native_cash_survives_remainder_cancellation_and_branch_replay_without_second_payment() {
+        let p = policy(1, false);
+        let capital = 1_000 * BILI;
+        let mut s = PalwBondBudgetStateV1::new(10, &p);
+        let mut j = Vec::new();
+        s.hold_native_income_v1(&p, capital, h(65), bond(0), 10, 500, 50 * BILI, &[], true, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(65), 501, 10 * BILI, h(66), false, &mut j).unwrap();
+        s.confirm_native_income_payment_v1(&p, &h(66), 600, &mut j).unwrap();
+        let paid_branch = s.clone();
+        let start = j.len();
+        // This is the monetary cancellation primitive used by post-Final
+        // conviction. It may cancel only the unpaid 40, not the 10 actual cash.
+        s.cancel_native_income_v1(&h(65), &mut j).unwrap();
+        assert!(!s.claim_row(&h(65)).unwrap().live);
+        assert!(!s.claim_row(&h(66)).unwrap().live);
+        assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 50 * BILI);
+        let cancelled = s.root_parts();
+        let before = (cancelled, j.len());
+        assert!(s.pay_native_income_v1(&p, &h(65), 601, 40 * BILI, h(67), true, &mut j).is_err());
+        assert!(s.hold_native_income_v1(&p, capital, h(65), bond(0), 601, 900, 40 * BILI, &[], true, &mut j).is_err());
+        assert!(s.confirm_native_income_payment_v1(&p, &h(66), 601, &mut j).is_err());
+        assert_eq!((s.root_parts(), j.len()), before, "neither unpaid revival nor duplicate paid cash is admitted");
+        // A reorg that keeps the actual payment but removes the later
+        // conviction restores only its legitimate remaining entitlement.
+        for entry in j[start..].iter().rev() {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                s.apply_row(*table, key, old, new, true).unwrap();
+            }
+        }
+        assert_eq!(s.root_parts(), paid_branch.root_parts());
+        assert!(!s.claim_row(&h(66)).unwrap().live, "the retained physical payment never becomes unpaid again");
+        for entry in &j[start..] {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = entry {
+                s.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(s.root_parts(), cancelled);
+        s.release_due(700, &mut j);
+        assert!(s.bond_row(&bond(0)).is_none());
+        s.check_consistency().unwrap();
     }
 
     #[test]
@@ -2265,8 +2414,8 @@ mod tests {
         assert!(s.claim_row(&h(79)).is_none(), "no remaining standalone payment identity");
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 25 * BILI);
         assert_eq!(s.bond_row(&bond(0)).unwrap().open_claims, 1, "only the actual claim owns Q");
-        assert!(s.pay_native_income_v1(&p, &h(79), 1_001, 20 * BILI, Some(h(81)), &mut j).is_err());
-        s.pay_native_income_v1(&p, &h(80), 1_001, 25 * BILI, Some(h(81)), &mut j).unwrap();
+        assert!(s.pay_native_income_v1(&p, &h(79), 1_001, 20 * BILI, h(81), true, &mut j).is_err());
+        s.pay_native_income_v1(&p, &h(80), 1_001, 25 * BILI, h(81), true, &mut j).unwrap();
         s.confirm_native_income_payment_v1(&p, &h(81), 1_002, &mut j).unwrap();
         s.close(&h(78), &mut j);
         s.forget(&h(78), &mut j);
@@ -2293,10 +2442,10 @@ mod tests {
         let mut s = PalwBondBudgetStateV1::new(10, &p);
         let mut j = Vec::new();
         s.hold_native_income_v1(&p, capital, h(75), bond(0), 10, 20, 10 * BILI, &[], true, &mut j).unwrap();
-        s.pay_native_income_v1(&p, &h(75), 21, 8 * BILI, Some(h(76)), &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(75), 21, 8 * BILI, h(76), true, &mut j).unwrap();
         s.confirm_native_income_payment_v1(&p, &h(76), 22, &mut j).unwrap();
         s.hold_native_income_v1(&p, capital, h(77), bond(0), 23, 30, 20 * BILI, &[], true, &mut j).unwrap();
-        s.pay_native_income_v1(&p, &h(77), 31, 17 * BILI, Some(h(76)), &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(77), 31, 17 * BILI, h(76), true, &mut j).unwrap();
         let coalesced = s.claim_row(&h(76)).unwrap();
         assert_eq!((coalesced.reserved.reward_sompi, coalesced.consumed.reward_sompi), (30 * BILI, 25 * BILI));
         assert!(coalesced.live);
@@ -2328,7 +2477,7 @@ mod tests {
         // no additional quota or second payment entitlement is created.
         s.hold_native_income_v1(&p, capital, h(74), bond(0), 30, 500, 20 * BILI, &[], true, &mut j).unwrap();
         assert_eq!(s.bond_row(&bond(0)).unwrap().window.reward_sompi, 20 * BILI);
-        s.pay_native_income_v1(&p, &h(74), 501, 1, None, &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(74), 501, 1, h(72), false, &mut j).unwrap();
         let before = (s.root_parts(), j.len());
         assert!(s.hold_native_income_v1(&p, capital, h(74), bond(0), 502, 700, 20 * BILI, &[], true, &mut j).is_err());
         assert_eq!((s.root_parts(), j.len()), before);
@@ -2390,7 +2539,7 @@ mod tests {
         let mut j = Vec::new();
         s.reserve_source_income_v1(&p, capital, h(84), bond(0), 10, 500, 20 * BILI, &mut j).unwrap();
         s.hold_native_income_v1(&p, capital, h(85), bond(1), 10, 500, 10 * BILI, &[], true, &mut j).unwrap();
-        s.pay_native_income_v1(&p, &h(85), 501, 10 * BILI, Some(h(86)), &mut j).unwrap();
+        s.pay_native_income_v1(&p, &h(85), 501, 10 * BILI, h(86), true, &mut j).unwrap();
         let before = (s.root_parts(), j.len());
         assert!(s.queue_source_income_v1(&p, &h(84), 500, 501, 20 * BILI, h(86), &mut j).is_err());
         assert_eq!((s.root_parts(), j.len()), before);

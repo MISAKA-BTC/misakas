@@ -261,7 +261,8 @@ impl TransitionBuilder<'_> {
                 &native_income_id_v1(root, &bond, kind),
                 now,
                 amount,
-                finished.then(|| native_queued_income_id_v1(queue_key, &bond)),
+                native_queued_income_id_v1(queue_key, &bond),
+                finished,
                 j,
             )
         })
@@ -276,7 +277,7 @@ impl TransitionBuilder<'_> {
             .bond_budget
             .as_ref()
             .and_then(|b| b.claim_row(&id))
-            .is_some_and(|r| r.live && r.origin == PalwBudgetOriginV1::NativeIncome)
+            .is_some_and(|r| r.live && matches!(r.origin, PalwBudgetOriginV1::NativeIncome | PalwBudgetOriginV1::NativeIncomePartial))
         {
             self.bond_budget_op(|budget, _, j| budget.cancel_native_income_v1(&id, j)).expect("checked engine").expect("native hold");
         }

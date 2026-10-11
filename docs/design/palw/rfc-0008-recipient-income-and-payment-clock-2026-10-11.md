@@ -28,9 +28,12 @@ binding cancels its separate standalone entitlement without enlarging the
 issuer allocation, and keeps already occupied quota through its window.
 
 Positive native funds consume the hold when they become queue credits. Several
-funds for the same recipient can mature separately. The finished hold moves to
-a queue-key/bond identity and can coalesce with other funds using that exact
-native key. The pre-object fold's actual Payout removal confirms the coinbase
+funds for the same recipient can mature separately. Each positive partial fund
+immediately splits off its own exact queue-key/bond receipt, preserving the
+aggregate R. The unpaid remainder uses origin 11 and cannot transfer into a new
+work entitlement or revive after cancellation. The last fund carries the
+remaining maximum; receipts can coalesce only under the same exact native key.
+One queue draining cannot start another unpaid queue's W clock. The pre-object fold's actual Payout removal confirms the coinbase
 payment. Its reservation then lasts through actual payment DAA + W. A sparse
 DAA jump cannot release an unpaid or still queued hold. Pending money keeps
 `latest_release_daa = u64::MAX` as a withdrawal sentinel; ordinary release
