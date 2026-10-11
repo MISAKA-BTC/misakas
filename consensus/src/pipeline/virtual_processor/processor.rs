@@ -105,6 +105,7 @@ use kaspa_consensusmanager::SessionLock;
 use kaspa_core::{debug, error, info, time::unix_now, trace, warn};
 use kaspa_database::prelude::{StoreError, StoreResultExt, StoreResultUnitExt};
 use kaspa_hashes::ZERO_HASH64;
+use kaspa_consensus_core::muhash::MuHashExtensions;
 use kaspa_muhash::MuHash;
 use kaspa_notify::{events::EventType, notifier::Notify};
 use once_cell::unsync::Lazy;
@@ -542,6 +543,9 @@ pub struct VirtualStateProcessor {
     /// See `native_settlement::native_safe_readiness`.
     pub(super) native_readiness_memo:
         parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
+    /// Serializes session begin and every pruning-import mutation. No network
+    /// wait holds this lock; durable epochs reject delayed/reopened callers.
+    pub(crate) pruning_import_session_lock: parking_lot::Mutex<()>,
     /// LIVE-R1 N3: the PALW state AT the committed virtual sink, for the `palw_*` readers
     /// ([`Self::palw_v2_reader_state`]). Memory only, keyed by the sink it was derived at.
     pub(super) palw_reader_snapshot: parking_lot::Mutex<Option<(BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>)>>,
@@ -1311,6 +1315,7 @@ impl VirtualStateProcessor {
             palw_dns_retirement: params.palw_dns_retirement,
             native_rows: Default::default(),
             native_readiness_memo: Default::default(),
+            pruning_import_session_lock: Default::default(),
             palw_reader_snapshot: Default::default(),
             palw_refusal_streak: Default::default(),
             #[cfg(test)]
@@ -22030,6 +22035,131 @@ impl VirtualStateProcessor {
         );
     }
 
+    pub fn pruning_import_session(&self) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
+        self.pruning_meta_stores.read().import_session().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
+        })
+    }
+
+    pub fn begin_pruning_point_import(
+        &self,
+        point: BlockHash,
+    ) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionV1> {
+        use kaspa_consensus_core::pruning::{PruningImportSessionStateV1, PruningImportSessionV1};
+        let _mutation = self.pruning_import_session_lock.lock();
+        let unavailable = |e: StoreError| PruningImportError::PruningPointImportContextUnavailable(point, format!("begin session: {e}"));
+        let pruning = self.pruning_point_store.read();
+        if pruning.pruning_point().map_err(unavailable)? != point {
+            return Err(PruningImportError::PruningImportSessionRefused { point, epoch: 0, reason: "target is not the established pruning point".into() });
+        }
+        self.headers_store.get_header(point).map_err(unavailable)?;
+        let mut meta = self.pruning_meta_stores.write();
+        let old = meta.import_session().map_err(unavailable)?;
+        let epoch = old.epoch.checked_add(1).ok_or_else(|| PruningImportError::PruningImportSessionRefused {
+            point, epoch: old.epoch, reason: "durable import epoch exhausted".into(),
+        })?;
+        let token = PruningImportSessionV1 { point, epoch };
+        let state = PruningImportSessionStateV1 { epoch, active: Some(token), utxos_started: false, utxos_imported: false };
+        let mut batch = WriteBatch::default();
+        meta.set_import_session(&mut batch, &state).map_err(unavailable)?;
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(unavailable)?;
+        self.db.write(batch).expect("writing pruning import authority cannot fail");
+        Ok(token)
+    }
+
+    /// A legacy mutation is accepted only before this DB has issued a session.
+    /// Once session-aware IBD starts, old public callers cannot bypass its token.
+    pub(crate) fn with_pruning_import_session<T>(
+        &self,
+        token: Option<kaspa_consensus_core::pruning::PruningImportSessionV1>,
+        operation: impl FnOnce(&kaspa_consensus_core::pruning::PruningImportSessionStateV1) -> PruningImportResult<T>,
+    ) -> PruningImportResult<T> {
+        let _mutation = self.pruning_import_session_lock.lock();
+        let state = self.pruning_import_session()?;
+        let point = token.map(|t| t.point).unwrap_or_default();
+        let epoch = token.map(|t| t.epoch).unwrap_or(0);
+        let valid = match token {
+            Some(token) => state.active == Some(token) && state.epoch == token.epoch,
+            None => state.epoch == 0 && state.active.is_none(),
+        };
+        if !valid {
+            return Err(PruningImportError::PruningImportSessionRefused {
+                point, epoch, reason: "caller does not own the current durable import session".into(),
+            });
+        }
+        if let Some(token) = token {
+            let target = self.pruning_point_store.read().pruning_point().map_err(|e| {
+                PruningImportError::PruningPointImportContextUnavailable(point, format!("session pruning point: {e}"))
+            })?;
+            if target != point {
+                return Err(PruningImportError::PruningImportSessionRefused {
+                    point, epoch: token.epoch, reason: "established target changed after this session began".into(),
+                });
+            }
+        }
+        operation(&state)
+    }
+
+    pub(crate) fn set_pruning_import_phase(
+        &self,
+        state: &kaspa_consensus_core::pruning::PruningImportSessionStateV1,
+    ) -> PruningImportResult<()> {
+        let point = state.active.map(|t| t.point).unwrap_or_default();
+        let mut meta = self.pruning_meta_stores.write();
+        let mut batch = WriteBatch::default();
+        meta.set_import_session(&mut batch, state).map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(point, format!("import phase: {e}"))
+        })?;
+        self.db.write(batch).expect("writing pruning import phase cannot fail");
+        Ok(())
+    }
+
+    pub(crate) fn append_pruning_import_utxos(
+        &self,
+        point: Option<BlockHash>,
+        chunk: &[(TransactionOutpoint, UtxoEntry)],
+        multiset: &mut MuHash,
+    ) -> PruningImportResult<()> {
+        use crate::model::stores::utxo_set::UtxoSetStore;
+        let pruning = self.pruning_point_store.read();
+        if let Some(point) = point {
+            if pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, e.to_string()))? != point {
+                return Err(PruningImportError::PruningImportSessionRefused { point, epoch: 0, reason: "target changed before UTXO append".into() });
+            }
+        }
+        let mut meta = self.pruning_meta_stores.write();
+        meta.utxo_set.write_many(chunk).expect("writing an authorized UTXO import chunk cannot fail");
+        let inner = self.install(|| {
+            chunk.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
+                a.combine(&b);
+                a
+            })
+        });
+        multiset.combine(&inner);
+        Ok(())
+    }
+
+    pub(crate) fn clear_pruning_import_utxos(
+        &self,
+        state: Option<&kaspa_consensus_core::pruning::PruningImportSessionStateV1>,
+    ) -> PruningImportResult<()> {
+        let pruning = self.pruning_point_store.read();
+        if let Some(token) = state.and_then(|s| s.active) {
+            if pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(token.point, e.to_string()))? != token.point {
+                return Err(PruningImportError::PruningImportSessionRefused { point: token.point, epoch: token.epoch, reason: "target changed before UTXO clear".into() });
+            }
+        }
+        let mut meta = self.pruning_meta_stores.write();
+        let mut batch = WriteBatch::default();
+        if let Some(state) = state {
+            meta.set_import_session(&mut batch, state).expect("staging the UTXO import phase cannot fail");
+        }
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
+        self.db.write(batch).expect("writing an incomplete UTXO import cannot fail");
+        meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
+        Ok(())
+    }
+
     /// Finalizes the pruning point utxoset state and imports the pruning point utxoset *to* virtual utxoset
     pub fn import_pruning_point_utxo_set(
         &self,
@@ -22156,7 +22286,7 @@ impl VirtualStateProcessor {
 
         // Genesis initialization imports its pinned premine directly, without a
         // later IBD completion stage or non-genesis sidecars.
-        if new_pruning_point == self.genesis.hash {
+        if new_pruning_point == self.genesis.hash && self.pruning_import_session()?.active.is_none() {
             self.complete_pruning_point_import(new_pruning_point)?;
         }
         Ok(())
@@ -22206,6 +22336,16 @@ impl VirtualStateProcessor {
             return Err(mismatch("UTXO position does not match the import target"));
         }
         let mut batch = WriteBatch::default();
+        let mut session = meta_write.import_session().map_err(|e| unavailable("import session", e))?;
+        if let Some(token) = session.active {
+            if token.point != point || !session.utxos_started || !session.utxos_imported {
+                return Err(mismatch("session has not finalized this UTXO import"));
+            }
+            session.active = None;
+            session.utxos_started = false;
+            session.utxos_imported = false;
+            meta_write.set_import_session(&mut batch, &session).map_err(|e| unavailable("closing import session", e))?;
+        }
         meta_write.set_pruning_utxoset_stable_flag(&mut batch, true).map_err(|e| unavailable("stable marker", e))?;
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose

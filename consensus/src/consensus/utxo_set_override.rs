@@ -115,7 +115,7 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
 pub fn set_initial_utxo_set(config: &Config, consensus: Arc<Consensus>, genesis_hash: BlockHash) {
     let utxo_set = genesis_initial_utxo_set(config);
     let mut genesis_multiset = MuHash::new();
-    consensus.append_imported_pruning_point_utxos(&utxo_set, &mut genesis_multiset);
+    consensus.append_imported_pruning_point_utxos(&utxo_set, &mut genesis_multiset).unwrap();
     consensus.import_pruning_point_utxo_set(genesis_hash, genesis_multiset).unwrap();
 }
 

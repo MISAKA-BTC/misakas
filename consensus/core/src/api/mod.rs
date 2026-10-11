@@ -25,7 +25,7 @@ use crate::{
     },
     header::Header,
     mass::{ContextualMasses, NonContextualMasses},
-    pruning::{PruningPointProof, PruningPointTrustedData, PruningPointsList, PruningProofMetadata},
+    pruning::{PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList, PruningProofMetadata},
     trusted::{ExternalGhostdagData, TrustedBlock},
     tx::{
         MutableTransaction, Transaction, TransactionId, TransactionIndexType, TransactionOutpoint, TransactionQueryResult,
@@ -802,7 +802,51 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn append_imported_pruning_point_utxos(&self, utxoset_chunk: &[(TransactionOutpoint, UtxoEntry)], current_multiset: &mut MuHash) {
+    fn append_imported_pruning_point_utxos(&self, utxoset_chunk: &[(TransactionOutpoint, UtxoEntry)], current_multiset: &mut MuHash) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn begin_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<PruningImportSessionV1> {
+        unimplemented!()
+    }
+
+    fn pruning_import_session(&self) -> PruningImportResult<PruningImportSessionStateV1> {
+        unimplemented!()
+    }
+
+    fn clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn append_imported_pruning_point_utxos_for_session(
+        &self, session: PruningImportSessionV1, chunk: &[(TransactionOutpoint, UtxoEntry)], multiset: &mut MuHash,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_utxo_set_for_session(&self, session: PruningImportSessionV1, multiset: MuHash) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_evm_state_for_session(
+        &self, session: PruningImportSessionV1, header: crate::evm::EvmExecutionHeader, snapshot: crate::evm::EvmStateSnapshot,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_palw_state_for_session(
+        &self, session: PruningImportSessionV1, carriage: crate::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_overlay_snapshot_for_session(
+        &self, session: PruningImportSessionV1, snapshot: crate::dns_finality::OverlaySnapshot,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn complete_pruning_point_import_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
         unimplemented!()
     }
 
@@ -1959,7 +2003,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn clear_pruning_utxo_set(&self) {
+    fn clear_pruning_utxo_set(&self) -> PruningImportResult<()> {
         unimplemented!()
     }
 
@@ -1968,7 +2012,7 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn set_pruning_utxoset_stable_flag(&self, val: bool) {
+    fn set_pruning_utxoset_stable_flag(&self, val: bool) -> PruningImportResult<()> {
         unimplemented!()
     }
 

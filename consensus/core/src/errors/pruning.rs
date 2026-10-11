@@ -125,6 +125,9 @@ pub enum PruningImportError {
     #[error("pruning import at {0} is not complete in one generation: {1}")]
     PruningPointImportGenerationMismatch(BlockHash, String),
 
+    #[error("pruning import session {epoch} at {point} is stale, absent, or out of phase: {reason}")]
+    PruningImportSessionRefused { point: BlockHash, epoch: u64, reason: String },
+
     #[error("existing EVM {1} for pruning point {0} disagrees with the root-verified imported state")]
     ImportedEvmExistingStateMismatch(BlockHash, String),
 

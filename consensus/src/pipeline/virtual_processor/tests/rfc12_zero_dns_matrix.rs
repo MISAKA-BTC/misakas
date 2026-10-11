@@ -2922,6 +2922,7 @@ async fn rfc12_c3_a_market_orders_cross_the_fence_with_the_virtual_market_armed_
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct SidecarCrashManifest {
     point: BlockHash,
+    import_epoch: u64,
     utxos: Vec<(TransactionOutpoint, UtxoEntry)>,
     palw_at: BlockHash,
     palw_root: Hash64,
@@ -2991,16 +2992,17 @@ async fn rfc12_process_sidecar_crash_worker() {
         let evm_state = rig.api().get_evm_state_snapshot_of(point).unwrap().unwrap();
         let mut overlay = None;
         let mut carriage = None;
+        let import_session = rig.api().begin_pruning_point_import(point).unwrap();
         match kind.as_str() {
-            "evm" => vp.import_pruning_point_evm_state(point, evm_header.clone(), evm_state.clone()).unwrap(),
+            "evm" => rig.api().import_pruning_point_evm_state_for_session(import_session, evm_header.clone(), evm_state.clone()).unwrap(),
             "palw" => {
                 let imported = pending_carriage.unwrap();
-                vp.import_pruning_point_palw_state(point, imported.clone()).unwrap();
+                rig.api().import_pruning_point_palw_state_for_session(import_session, imported.clone()).unwrap();
                 carriage = Some(borsh::to_vec(&imported).unwrap());
             }
             "overlay" => {
                 let imported = pending_overlay.unwrap();
-                vp.import_pruning_point_overlay_snapshot(point, imported.clone()).unwrap();
+                rig.api().import_pruning_point_overlay_snapshot_for_session(import_session, imported.clone()).unwrap();
                 overlay = Some(imported);
             }
             _ => panic!("unknown sidecar"),
@@ -3008,6 +3010,7 @@ async fn rfc12_process_sidecar_crash_worker() {
         let tip = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap();
         let manifest = SidecarCrashManifest {
             point,
+            import_epoch: import_session.epoch,
             utxos: sorted_process_utxos(rig.api()),
             palw_at: tip.block,
             palw_root: tip.state_root,
@@ -3048,19 +3051,35 @@ async fn rfc12_process_sidecar_crash_worker() {
             })
         );
     }
-    // Retry actual root-verified import in a cold process. It cannot double credit,
-    // erase recovery state, or mark the OTHER ledgers complete.
+    // The session survived the actual kill. A new attempt at the SAME point
+    // increments its durable epoch before any network retry can mutate a ledger.
+    let stale = kaspa_consensus_core::pruning::PruningImportSessionV1 { point: manifest.point, epoch: manifest.import_epoch };
+    assert_eq!(consensus.pruning_import_session().unwrap().active, Some(stale));
+    let retry = consensus.begin_pruning_point_import(manifest.point).unwrap();
+    assert!(retry.epoch > stale.epoch);
+    let refused = |result: kaspa_consensus_core::errors::pruning::PruningImportResult<()>| {
+        assert!(matches!(result, Err(kaspa_consensus_core::errors::pruning::PruningImportError::PruningImportSessionRefused { .. })),
+            "a delayed previous-process operation is refused before any ledger write: {result:?}");
+    };
+    // Root-verified serving/import bytes are the same as the successful seed.
     match kind.as_str() {
         "evm" => {
-            consensus.import_pruning_point_evm_state(manifest.point, manifest.evm_header.clone(), manifest.evm_state.clone()).unwrap();
+            refused(consensus.import_pruning_point_evm_state_for_session(stale, manifest.evm_header.clone(), manifest.evm_state.clone()));
+            consensus.import_pruning_point_evm_state_for_session(retry, manifest.evm_header.clone(), manifest.evm_state.clone()).unwrap();
             let checkpoint = vp.evm_state_checkpoint_store.get(manifest.point).unwrap().unwrap();
             assert_eq!(checkpoint.decode_snapshot().unwrap(), manifest.evm_state);
         }
         "palw" => {
-            let carriage = borsh::from_slice(&manifest.carriage.unwrap()).expect("standalone served carriage bytes");
-            consensus.import_pruning_point_palw_state(manifest.point, carriage).unwrap();
+            let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 =
+                borsh::from_slice(&manifest.carriage.unwrap()).expect("standalone served carriage bytes");
+            refused(consensus.import_pruning_point_palw_state_for_session(stale, carriage.clone()));
+            consensus.import_pruning_point_palw_state_for_session(retry, carriage).unwrap();
         }
-        "overlay" => consensus.import_pruning_point_overlay_snapshot(manifest.point, manifest.overlay.unwrap()).unwrap(),
+        "overlay" => {
+            let snapshot = manifest.overlay.unwrap();
+            refused(consensus.import_pruning_point_overlay_snapshot_for_session(stale, snapshot.clone()));
+            consensus.import_pruning_point_overlay_snapshot_for_session(retry, snapshot).unwrap();
+        }
         _ => unreachable!(),
     }
     assert!(!consensus.is_pruning_utxoset_stable(), "only the whole IBD completion may clear this marker");
@@ -3162,4 +3181,63 @@ async fn rfc12_utxo_import_verifies_the_actual_staged_table_before_replacing_vir
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_virtual,
         "the authentic argument cannot authorize copying a different staged balance");
     assert!(!rig.api().is_pruning_utxoset_stable(), "the inconsistent stream remains incomplete");
+}
+
+/// Actual public import callers, with a deliberately delayed old append on a
+/// second OS thread. This is a session/ledger control, not a P2P security claim.
+#[tokio::test]
+async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legacy_bypass() {
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    use kaspa_muhash::MuHash;
+    let p = parts(None);
+    let rig = Rig::new(&p, 0x12_ee21_0000);
+    let point = rig.config.params.genesis.hash;
+    let original: Vec<_> = rig.vp().pruning_meta_stores.read().utxo_set.iterator()
+        .map(|row| { let (outpoint, entry) = row.unwrap(); (outpoint, (*entry).clone()) }).collect();
+    let before = sorted_process_utxos(rig.api());
+    let stale = rig.api().begin_pruning_point_import(point).unwrap();
+    let is_refused = |result: kaspa_consensus_core::errors::pruning::PruningImportResult<()>| {
+        assert!(matches!(result, Err(PruningImportError::PruningImportSessionRefused { .. })), "typed session refusal: {result:?}");
+    };
+    let mut stale_hash = MuHash::new();
+    is_refused(rig.api().append_imported_pruning_point_utxos_for_session(stale, &original[..1], &mut stale_hash));
+    rig.api().clear_pruning_utxo_set_for_session(stale).unwrap();
+    rig.api().append_imported_pruning_point_utxos_for_session(stale, &original[..1], &mut stale_hash).unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let consensus = rig.api().consensus_clone();
+    let delayed_row = original[..1].to_vec();
+    let delayed = std::thread::spawn(move || {
+        release_rx.recv().unwrap();
+        let mut hash = MuHash::new();
+        consensus.append_imported_pruning_point_utxos_for_session(stale, &delayed_row, &mut hash)
+    });
+    let current = rig.api().begin_pruning_point_import(point).unwrap();
+    assert!(current.epoch > stale.epoch, "same target still receives a new durable authority");
+    release_tx.send(()).unwrap();
+    is_refused(delayed.join().unwrap());
+    is_refused(rig.api().clear_pruning_utxo_set_for_session(stale));
+    is_refused(rig.api().import_pruning_point_utxo_set_for_session(stale, stale_hash));
+    is_refused(rig.api().complete_pruning_point_import_for_session(stale));
+    is_refused(rig.api().append_imported_pruning_point_utxos(&original[..1], &mut MuHash::new()));
+    is_refused(rig.api().clear_pruning_utxo_set());
+    is_refused(rig.api().set_pruning_utxoset_stable_flag(true));
+    assert_eq!(sorted_process_utxos(rig.api()), before, "none of the stale public calls moved virtual money");
+    assert!(!rig.api().is_pruning_utxoset_stable());
+    rig.api().clear_pruning_utxo_set_for_session(current).unwrap();
+    is_refused(rig.api().clear_pruning_utxo_set_for_session(current));
+    is_refused(rig.api().complete_pruning_point_import_for_session(current));
+    let mut hash = MuHash::new();
+    rig.api().append_imported_pruning_point_utxos_for_session(current, &original, &mut hash).unwrap();
+    rig.api().import_pruning_point_utxo_set_for_session(current, hash).unwrap();
+    is_refused(rig.api().append_imported_pruning_point_utxos_for_session(current, &original[..1], &mut MuHash::new()));
+    assert!(!rig.api().is_pruning_utxoset_stable(), "UTXO finalize alone cannot complete enabled sidecars");
+    rig.api().complete_pruning_point_import_for_session(current).unwrap();
+    let closed = rig.api().pruning_import_session().unwrap();
+    assert_eq!(closed.epoch, current.epoch);
+    assert_eq!(closed.active, None);
+    assert!(rig.api().is_pruning_utxoset_stable());
+    assert_eq!(sorted_process_utxos(rig.api()), before, "the current exact premine stream completed once");
+    is_refused(rig.api().clear_pruning_utxo_set_for_session(current));
+    is_refused(rig.api().complete_pruning_point_import_for_session(current));
+    is_refused(rig.api().set_pruning_utxoset_stable_flag(true));
 }
