@@ -189,6 +189,12 @@ impl VirtualStateProcessor {
         self.native_evaluate(sink).snapshot
     }
 
+    /// The exact boot Params identity, already pinned when this processor was constructed.
+    /// Reading confidence labels must not hash every genesis registration again.
+    pub(crate) fn native_boot_ruleset_id(&self) -> kaspa_consensus_core::Hash {
+        self.palw_native_ruleset_id
+    }
+
     /// The deepest head this node published as finalized, retained through absent labels and restart.
     /// This is incident history, never a certificate or an input to fork choice. Old positive snapshots
     /// bootstrap the local row; an already-withdrawn pre-upgrade snapshot cannot reconstruct lost history.

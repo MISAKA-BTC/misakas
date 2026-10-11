@@ -3071,7 +3071,7 @@ impl ConsensusApi for Consensus {
             if s.version != 1
                 || s.generation != sink
                 || s.policy_id != retirement.settlement.id()
-                || s.ruleset_id != self.config.params.consensus_params_id()
+                || s.ruleset_id != self.virtual_processor.native_boot_ruleset_id()
                 || s.retirement_daa != retirement.activation.daa_score()
             {
                 return Err(ConsensusError::General("native settlement generation/ruleset mismatch; reconstruct or resync"));

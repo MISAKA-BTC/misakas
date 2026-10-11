@@ -60,3 +60,8 @@ The P2P context similarly caches the immutable params/identity/schedule hashes f
 candidate summaries, checkpoint checks and recovery authorization. Their comparison algorithms
 and messages are unchanged. Height-dependent fired/next fork IDs and peer re-judgment still use
 the current DAA score, and live participation, headers, roots and import state remain uncached.
+Native snapshot consistency checks reuse the processor's existing constructor-pinned ruleset
+hash while still checking current generation, policy, execution roots and canonical provenance.
+The capacity shadow's `limit=1` bounds the wire output, not computation: its existing full-network
+accounting remains O(claims + bonds + locks + rows) before truncation. The construction script
+records that actual read cost; no bounded-cost or 100k latency approval follows from the limit.
