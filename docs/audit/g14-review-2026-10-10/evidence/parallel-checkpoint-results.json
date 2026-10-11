@@ -1,0 +1,27 @@
+{
+  "core_source": "d886ad719",
+  "kernel_source": "23965f086",
+  "results": [
+    {
+      "name": "typed-scope-tests",
+      "result": "16 PASS",
+      "sha256": "f13e24b2814ab6e07eb70483d35c502cf08133529d40a3a1b7ef1663ae2c6d0e"
+    },
+    {
+      "name": "kernel-scope-regressions",
+      "result": "4 + 3 + 6 PASS",
+      "sha256": "f41cdde2babeeaf5888811039c38063fb4bf4d6d9749170bc7e76edf1030d2fc"
+    },
+    {
+      "name": "core-focused-d886",
+      "result": "68 PASS / 1 FAIL",
+      "sha256": "e5adb760c91c77b4c21d5f22b9eb8058a78c16427508d5c18298347aba8c52bb"
+    },
+    {
+      "name": "core-terminal-d886",
+      "result": "19 PASS / 2 FAIL",
+      "sha256": "475bd4cb159d2f1c2e00c95fb405b1d2d0c51daad40986f15acfe278f3e416de"
+    }
+  ],
+  "qualification": "Core pin and ordinary reservation fixture repairs ed4d402ce are not rerun yet. Native service on latest source not yet executed. Prefix/resource new source not yet compiled. Full G14 activation refused."
+}

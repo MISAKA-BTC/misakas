@@ -1,0 +1,33 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.36s
+     Running tests/court_scope.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/court_scope-dcfebe5900c92cda)
+
+running 4 tests
+test f_c4r4_17_class_serves_no_clear_activation_of_a_weight_relation ... ok
+test commitment_scope_preserves_old_claim_contracts_and_clears_consumer_policy_on_cache_rebuild ... ok
+test scoped_honest_replay_refuses_a_wrong_verifier_model_and_does_not_excuse_missing_claim_material ... ok
+test scoped_ledger_serves_every_position_without_model_values_and_replay_convicts_the_hidden_lie ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+     Running tests/g14_reexecution.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/g14_reexecution-68a85b14cdf1c509)
+
+running 3 tests
+test admission_prices_exact_localization_even_when_the_probabilistic_plan_fits ... ok
+test local_artifact_aliases_and_false_commitment_filings_cannot_convict ... ok
+test an_unannounced_fault_past_sixteen_positions_is_convicted_with_zero_demands_and_zero_disclosures ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+     Running tests/k2_ledger_pipeline.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_ledger_pipeline-2bbb46a037d06c42)
+
+running 6 tests
+test a_pipeline_class_needs_its_decode_rule_and_the_media_pipeline_kernel_and_a_job_is_checked_at_posting ... ok
+test a_trace_drawn_from_another_seed_or_of_another_job_is_refused_and_an_r_that_is_not_the_jobs_seed_is_convicted ... ok
+test a_vision_language_claim_with_a_substituted_id_is_convicted_by_the_decode_court_and_withheld_stages_are_demanded ... ok
+test a_text_to_image_pipeline_with_r_finalizes_honest_and_a_stage_lie_an_edge_lie_or_a_false_draw_of_r_is_convicted ... ok
+test f_b1_a_pipeline_prefix_cannot_complete_a_fixed_reward_job ... ok
+test pipeline_replay_localizes_stage_edge_random_image_and_decode_without_any_producer_values ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
