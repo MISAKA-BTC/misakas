@@ -993,43 +993,21 @@ impl super::PalwPanelService {
             }
             let (task_tir, task_duty, task_material) = (tir.clone(), duty.clone(), material.clone());
             let outcome = tokio::task::spawn_blocking(move || {
-                // **The ledger's slots.** The cells' scratch is the host's (the capture's rows and their hashes); a device
-                // backend's shard bytes are reserved on its own pool, and a device that cannot take them is not used: the
-                // CPU runs the cells (the verdict is the same).
-                let key = crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                    role: PALW_TIR_SHARD_CELL_ROLE_V1,
-                    class_id: task_duty.class_id,
-                    job: task_duty.claim_id,
-                };
-                let _host = crate::palw_memory_ledger::host_ledger_v1()
-                    .reserve(
-                        key.clone(),
-                        (task_material.len() as u64).saturating_mul(3).saturating_add(PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1),
-                    )
-                    .map_err(|refusal| format!("the cells' scratch is not free ({refusal})"))?;
-                let (mut device, mut on_device) = tir_kernel_backend_v1(want_device);
-                let mut _device_hold = None;
-                if on_device {
-                    if let Some(capacity) = device.device_capacity_bytes() {
-                        crate::palw_memory_ledger::arm_device_share_v1(0, capacity);
-                    }
-                    let place = task_duty.tir_shard.ok_or("the duty is a flat panel's")?;
-                    let shard_bytes = tir_shard_weight_bytes_v1(&task_tir, place.shard, place.s_l)?;
-                    match crate::palw_memory_ledger::device_ledger_v1(0)
-                        .map(|l| l.reserve(key, u64::try_from(shard_bytes).unwrap_or(u64::MAX)))
-                    {
-                        Some(Ok(held)) => _device_hold = Some(held),
-                        _ => {
-                            on_device = false;
-                            device = Box::new(misaka_palw_sdk::lineages::tir::CpuKernelBackendV1);
-                        }
-                    }
-                }
-                let _ = on_device;
-                palw_tir_shard_outcome_v1(&task_tir, &task_material, &task_duty, device.as_mut())
+                let place = task_duty.tir_shard.ok_or("the duty is a flat panel's")?;
+                let shard_bytes = tir_shard_weight_bytes_v1(&task_tir, place.shard, place.s_l)?;
+                let mut admitted = resource::reserve_v1(
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    resource::key_v1(PALW_TIR_SHARD_CELL_ROLE_V1, &task_duty),
+                    u64::try_from(task_material.len()).map_err(|_| "the capture exceeds u64")?,
+                    u64::try_from(shard_bytes).unwrap_or(u64::MAX),
+                    want_device,
+                )?;
+                let outcome = palw_tir_shard_outcome_v1(&task_tir, &task_material, &task_duty, admitted.backend.as_mut())?;
+                Ok::<_, String>((outcome, admitted))
             })
             .await;
-            let outcome = match outcome {
+            // Keep the admission through exact accusation construction, not only replay.
+            let (outcome, _admission) = match outcome {
                 Ok(Ok(outcome)) => outcome,
                 Ok(Err(why)) => {
                     crate::palw_backends::note_throttled_v1(&format!("tir-shard-cells-{}", duty.claim_id), || {
@@ -1220,12 +1198,35 @@ impl super::PalwPanelService {
         let task_duty = duty.clone();
         let (accuse_holding, accuse_capture) = (holding.clone(), capture.clone());
         let outcome = tokio::task::spawn_blocking(move || {
-            let (mut device, _) = tir_kernel_backend_v1(want_device);
-            palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, device.as_mut())
+            let (parts, _) = misaka_palw_tir_exec::node::tir_shard_geometry_over_v1(&holding.space, place.s_l)?;
+            let part = parts.get(usize::from(place.shard)).ok_or("the holder's shard is out of range")?;
+            let weights = kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_weights_v1(
+                &holding.space.program,
+                holding.space.layout.max_context,
+            );
+            let mut admitted = resource::reserve_v1(
+                &crate::palw_memory_ledger::host_ledger_v1(),
+                resource::key_v1(PALW_TIR_SHARD_CELL_ROLE_V1, &task_duty),
+                resource::capture_bytes_v1(&capture)?,
+                u64::try_from(weights.of_range(part.start, part.end)).unwrap_or(u64::MAX),
+                want_device,
+            )?;
+            let outcome = palw_tir_shard_outcome_over_v1(&holding, &capture, &task_duty, admitted.backend.as_mut())?;
+            Ok::<_, String>((outcome, admitted))
         })
         .await;
+        let (outcome, _admission) = match outcome {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(why)) => {
+                crate::palw_backends::note_throttled_v1(&format!("tir-shard-holder-{}", duty.claim_id), || {
+                    format!("[{PALW_PANEL}] claim {} shard {}: the cells are not run ({why})", duty.claim_id, place.shard)
+                });
+                return;
+            }
+            Err(_) => return,
+        };
         match outcome {
-            Ok(Ok(PalwTirShardOutcomeV1::Valid { leaves, positions })) => {
+            PalwTirShardOutcomeV1::Valid { leaves, positions } => {
                 books.cells_verified += 1;
                 books.leaves_recomputed += leaves;
                 info!(
@@ -1243,7 +1244,7 @@ impl super::PalwPanelService {
                 }
                 books.answered.insert(key);
             }
-            Ok(Ok(PalwTirShardOutcomeV1::Fault { leaf, row, position })) => {
+            PalwTirShardOutcomeV1::Fault { leaf, row, position } => {
                 warn!(
                     "[{PALW_PANEL}] claim {} shard {}/{}: a cell finds the executor's commitment false (leaf {leaf:?}, token row {row:?}, \
                      position {position}) — no receipt{}",
@@ -1304,12 +1305,11 @@ impl super::PalwPanelService {
                 }
                 books.answered.insert(key);
             }
-            Ok(Ok(PalwTirShardOutcomeV1::Abstain(why))) | Ok(Err(why)) => {
+            PalwTirShardOutcomeV1::Abstain(why) => {
                 crate::palw_backends::note_throttled_v1(&format!("tir-shard-holder-{}", duty.claim_id), || {
                     format!("[{PALW_PANEL}] claim {} shard {}: the cells are not run ({why})", duty.claim_id, place.shard)
                 });
             }
-            Err(_) => {}
         }
     }
 
@@ -1356,7 +1356,18 @@ impl super::PalwPanelService {
                 .unwrap_or(PALW_TIR_SHADOW_DEFAULT_PLAN_V1);
             let tir = std::sync::Arc::new(tir);
             let claim = duty.claim_id;
-            let ran = tokio::task::spawn_blocking(move || palw_tir_shard_shadow_run_v1(&tir, &capture, whole_valid, s_l, s_p)).await;
+            let task_duty = duty.clone();
+            let ran = tokio::task::spawn_blocking(move || {
+                let _admitted = resource::reserve_v1(
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    resource::key_v1(PALW_TIR_SHARD_CELL_ROLE_V1, &task_duty),
+                    u64::try_from(capture.len()).map_err(|_| "the capture exceeds u64")?,
+                    0,
+                    false,
+                )?;
+                palw_tir_shard_shadow_run_v1(&tir, &capture, whole_valid, s_l, s_p)
+            })
+            .await;
             match ran {
                 Ok(Ok(run)) => {
                     shadow.record(claim, &run);
@@ -1880,3 +1891,7 @@ pub(crate) fn tir_shard_readiness_object_v1(
 /// **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`, agent SHARD).
 #[path = "tir_shard_watch.rs"]
 pub(super) mod watch;
+
+// One admission policy for seats, shard-only holders, public watchers and shadow runs.
+#[path = "tir_shard_resource.rs"]
+pub(super) mod resource;

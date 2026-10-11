@@ -158,8 +158,24 @@ impl super::super::PalwPanelService {
             rules.max_step_leaf_count = ladder;
             let (task_tir, task_duty) = (tir.clone(), duty.clone());
             let found = tokio::task::spawn_blocking(move || {
-                let mut cpu = misaka_palw_sdk::lineages::tir::CpuKernelBackendV1;
-                palw_tir_shard_watch_finding_v1(&task_tir, &material, &task_duty, bond_key, &court, &rules, ladder, form, &mut cpu)
+                let mut admitted = super::resource::reserve_v1(
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                    super::resource::key_v1(super::resource::PALW_TIR_SHARD_WATCH_ROLE_V1, &task_duty),
+                    u64::try_from(material.len()).map_err(|_| "the capture exceeds u64")?,
+                    0,
+                    false,
+                )?;
+                palw_tir_shard_watch_finding_v1(
+                    &task_tir,
+                    &material,
+                    &task_duty,
+                    bond_key,
+                    &court,
+                    &rules,
+                    ladder,
+                    form,
+                    admitted.backend.as_mut(),
+                )
             })
             .await;
             let found = match found {
