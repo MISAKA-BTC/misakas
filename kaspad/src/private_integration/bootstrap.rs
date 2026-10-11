@@ -90,7 +90,12 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
         .ok_or("private factory has no exact base-class genesis pricing")?;
     let card = palw_t12_drill_cards_v1(salt).into_iter().next().ok_or("private factory has no funded bond")?;
     let bond = PalwBondKeyV2(palw_t12_drill_premine_outpoint_v1(salt, card.premine_index));
-    let fixture = misaka_palw_tir_sketch::fixture::wide128_v1(37);
+    let mut fixture = misaka_palw_tir_sketch::fixture::wide128_v1(37);
+    // Sketches leave the consumer-specific metadata unset. Author the actual
+    // native class with this network's public primitive descriptor and the
+    // shipped flat-logit semantics before deriving any file or class root.
+    fixture.program.prim_set_id = kaspa_consensus_core::palw_tir_v1::palw_tir_prim_set_id_v1().as_bytes();
+    fixture.program.logits_scheme_id = kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1().as_bytes();
     let class = PalwTirClassV1 {
         version: PALW_TIR_CLASS_VERSION_V1,
         program: fixture.program.encode(),
