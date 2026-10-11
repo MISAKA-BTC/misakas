@@ -2,6 +2,13 @@
 use super::*;
 use crate::palw_staged_court_state_v1::*;
 impl PalwChainStateV2 {
+    pub(super) fn staged_retirement_floor_v1(&self, claim: &Hash64, ordinary: u64) -> u64 {
+        if self.claims.get(claim).is_some_and(|c| c.phase.is_terminal()) {
+            self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary)
+        } else {
+            ordinary
+        }
+    }
     pub fn staged_claim_contract_v1(&self, claim: &Hash64) -> Option<&PalwStagedClaimContractV1> {
         match self.staged_courts.get(&PalwStagedCourtKeyV1::Claim(*claim)) {
             Some(PalwStagedCourtRowV1::Claim(c)) => Some(c),
@@ -19,9 +26,8 @@ impl PalwChainStateV2 {
         }
     }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
-        self.staged_courts.values().any(|row| match row {
-            PalwStagedCourtRowV1::Claim(c) => now < c.terms.bond_exit_after_daa && (c.producer == *bond || c.panel.contains(bond)),
-            PalwStagedCourtRowV1::Constraint(c) => now < c.terms.stream_until_daa && c.reserver == *bond,
+        now.checked_add(1).is_some_and(|after| {
+            self.staged_holds.range((*bond, after, ZERO_HASH64)..).next().is_some_and(|(held, _, _)| held == bond)
         })
     }
 }
@@ -46,6 +52,7 @@ impl TransitionBuilder<'_> {
             Some(row) => self.state.staged_courts.insert(key, row.clone()),
             None => self.state.staged_courts.remove(&key),
         };
+        update_indices(&mut self.state, key, old.as_ref(), new.as_ref());
         if old != new {
             self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
         }
@@ -204,4 +211,56 @@ pub(super) fn movement(
     let new = row.checkpoint_v1();
     b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
     Ok(())
+}
+
+/// Pure derived indexes; no additional rooted copy of a signer list or clock.
+fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Vec<(PalwBondKeyV2, u64, Hash64)>) {
+    match row {
+        PalwStagedCourtRowV1::Claim(c) => {
+            let PalwStagedCourtKeyV1::Claim(claim) = key else {
+                return (0, Vec::new());
+            };
+            let rows = std::iter::once(c.producer)
+                .chain(c.panel.iter().copied())
+                .map(|bond| (bond, c.terms.bond_exit_after_daa, claim))
+                .collect();
+            (c.terms.material_until_daa, rows)
+        }
+        PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, c.claim)]),
+    }
+}
+pub(super) fn update_indices(
+    state: &mut PalwChainStateV2,
+    key: PalwStagedCourtKeyV1,
+    old: Option<&PalwStagedCourtRowV1>,
+    new: Option<&PalwStagedCourtRowV1>,
+) {
+    if let Some(row) = old {
+        let (due, holds) = index_rows(key, row);
+        state.staged_due.remove(&(due, key));
+        for hold in holds {
+            state.staged_holds.remove(&hold);
+        }
+    }
+    if let Some(row) = new {
+        let (due, holds) = index_rows(key, row);
+        state.staged_due.insert((due, key));
+        state.staged_holds.extend(holds);
+    }
+}
+pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
+    state.staged_holds.clear();
+    state.staged_due.clear();
+    for (key, row) in &state.staged_courts {
+        let (due, holds) = index_rows(*key, row);
+        state.staged_due.insert((due, *key));
+        state.staged_holds.extend(holds);
+    }
+}
+pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+    // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
+    let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).take(64).map(|(_, key)| *key).collect();
+    for key in due {
+        b.write_staged_row_v1(key, None);
+    }
 }

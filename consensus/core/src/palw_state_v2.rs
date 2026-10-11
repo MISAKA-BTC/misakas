@@ -4297,6 +4297,7 @@ pub fn palw_lock_is_committed_v1(
 ) -> bool {
     lock.is_live_v3(now_daa, state.settled_attempt_finals, escaped_depth, window_court)
         || state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal())
+        || state.staged_claim_contract_v1(claim_id).is_some_and(|c| now_daa < c.terms.collect_until_daa)
 }
 
 /// **Lane V02 (post-launch; the user's 2026-09-26 decision): may a false-`Valid` conviction in a
@@ -5510,7 +5511,7 @@ pub fn palw_rcore_deadline_v1(
                 .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
         ),
         PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-            palw_da_terminal_deadline_v1(terminal_deadline_at_v1(claim, params, last_daa)?, da)
+            palw_da_terminal_deadline_v1(terminal_deadline_at_v1(claim, params, last_daa)?.map(|at| state.staged_retirement_floor_v1(claim_id,at)), da)
         }
     })
 }
@@ -12067,6 +12068,8 @@ pub struct PalwChainStateV2 {
     terminal_evidence: BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
+    staged_holds: BTreeSet<(PalwBondKeyV2, u64, Hash64)>,
+    staged_due: BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
     /// in (spec 17 §17.5.2).
     improvement_due: BTreeSet<(u64, Hash64)>,
@@ -12302,6 +12305,8 @@ impl PalwChainStateV2 {
             legacy_answers: BTreeMap::new(),
             terminal_evidence: BTreeMap::new(),
             staged_courts: BTreeMap::new(),
+            staged_holds: BTreeSet::new(),
+            staged_due: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -16160,7 +16165,7 @@ impl PalwChainStateV2 {
                 // record that is still here owes at most one.
                 PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
                     if let Some(at) = terminal_deadline_of(claim, params, self.last_point.as_ref())? {
-                        expected.insert((at, *id));
+                        expected.insert((self.staged_retirement_floor_v1(id,at), *id));
                     }
                 }
             }
@@ -27860,6 +27865,7 @@ impl<'a> TransitionBuilder<'a> {
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 
     fn arm_deadline(&mut self, deadline: u64, claim: Hash64) {
+        let deadline = self.state.staged_retirement_floor_v1(&claim,deadline);
         // **ADR-0152 DL-1's DA rows (M3), at the one primitive every arm site calls**: a live claim a
         // seat session pauses owes no deadline, a terminal claim with a session open owes none (its
         // retirement waits), and a retirement arms no earlier than one DAA after the last close —
@@ -29808,6 +29814,7 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_da_sessions(&mut builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
+    palw_staged_court_fold_v1::sweep(&mut builder,ctx);
     // Lane LG14-A: the dispute reservations' lapse, as the fold's step 2 runs it.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
@@ -30235,6 +30242,7 @@ fn apply_palw_transition_v7_inner(
     sweep_da_sessions(&mut builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
+    palw_staged_court_fold_v1::sweep(&mut builder,ctx);
     // Lane LG14-A: every dispute reservation whose claim's hard deadline is behind this block lapses, right after the DA sweep.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(&mut builder, ctx)?;
     // A declared close is swept at ITS OWN window before the session's backstop is read (audit
@@ -30770,6 +30778,7 @@ fn apply_palw_transition_v7_inner(
     apply_rho_breaker_epoch_v1(&mut builder, ctx);
     palw_legacy_answer_chunks_fold_v2::sweep(&mut builder, ctx);
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
+    palw_staged_court_fold_v1::sweep(&mut builder,ctx);
 
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -34076,14 +34085,15 @@ fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwCha
     let mut pruned_locks: Vec<(PalwBondKeyV2, Hash64)> = Vec::new();
     for (claim_id, row) in &builder.state.panel_liabilities {
         let locks = locks_by_claim.remove(claim_id).unwrap_or_default();
-        if prunable(row.expiry_daa, row.settled_at_final) && locks.iter().all(|(_, gone)| *gone) {
+        if !builder.state.staged_claim_contract_v1(claim_id).is_some_and(|c| now < c.terms.material_until_daa)
+            && prunable(row.expiry_daa, row.settled_at_final) && locks.iter().all(|(_, gone)| *gone) {
             pruned_liabilities.push(*claim_id);
             pruned_locks.extend(locks.into_iter().map(|(key, _)| key));
         }
     }
     for (claim_id, locks) in locks_by_claim {
         let settled = builder.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal());
-        if settled {
+        if settled && !builder.state.staged_claim_contract_v1(&claim_id).is_some_and(|c| now < c.terms.material_until_daa) {
             pruned_locks.extend(locks.into_iter().filter(|(_, gone)| *gone).map(|(key, _)| key));
         }
     }
@@ -42149,7 +42159,12 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ClassSemantics { key, old, new } => swap_write!(state.class_semantics, key, old, new),
         PalwDeltaEntryV2::ClaimSemantics { key, old, new } => swap_write!(state.claim_semantics, key, old, new),
         PalwDeltaEntryV2::LegacyAnswer { key, old, new } => swap_write!(state.legacy_answers, key, old, new),
-        PalwDeltaEntryV2::StagedCourtSeed { key, old, new } => swap_write!(state.staged_courts, key, old, new),
+        PalwDeltaEntryV2::StagedCourtSeed { key, old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            expect_matches(&state.staged_courts.get(key).cloned(), expected)?;
+            palw_staged_court_fold_v1::update_indices(state, *key, expected.as_ref(), install.as_ref());
+            match install { Some(row) => { state.staged_courts.insert(*key,row.clone()); }, None => { state.staged_courts.remove(key); } }
+        },
         PalwDeltaEntryV2::StagedCourtMove { key, old, new } => {
             let lookup = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::Owner(key.0, key.1);
             let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::Constraint(row)) = state.staged_courts.get_mut(&lookup) else {
@@ -42350,6 +42365,7 @@ fn palw_improvement_live_results_of_v1(epoch: &crate::palw_improve_state_v1::Pal
 }
 
 fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
+    palw_staged_court_fold_v1::rebuild_indices(state);
     state.unresolved = state
         .claims
         .iter()
@@ -44378,6 +44394,8 @@ impl PalwStateCarriageV2 {
             improvement_licences: self.improvement_licences,
             improvement_composite_classes: self.improvement_composite_classes,
             improvement_eval_jobs: self.improvement_eval_jobs,
+            staged_holds: BTreeSet::new(),
+            staged_due: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),

@@ -383,7 +383,7 @@ pub(super) fn palw_final_public_dispute_open_v1(
         && state
             .panel_liabilities
             .get(claim_id)
-            .is_some_and(|row| row.free_prompt && row.voided_daa.is_none() && row.void_reason.is_none() && now_daa < row.expiry_daa)
+            .is_some_and(|row| row.free_prompt && row.voided_daa.is_none() && row.void_reason.is_none() && (now_daa < row.expiry_daa || state.staged_claim_contract_v1(claim_id).is_some_and(|c| now_daa < c.terms.collect_until_daa)))
         && now_daa.checked_add(palw_da_disclose_window_daa_v1(params)).is_some_and(|deadline| deadline <= claim.trace_retention_daa)
 }
 
