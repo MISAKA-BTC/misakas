@@ -597,6 +597,7 @@ async fn p2_t49_a_node_that_imports_its_pruning_point_inside_a_backlog_mints_wha
             store.delete_delta_for_tests(block).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the served carriage installs against T's committed root");
     let (at, imported) = importer.tip_state();
     assert_eq!((at, imported.state_root()), (p, planted.state_root()), "the imported state is P's, root for root");

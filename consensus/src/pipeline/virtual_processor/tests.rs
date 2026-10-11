@@ -4284,6 +4284,22 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     assert_eq!(served, PalwStateCarriageV2::from_state(&vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap().1));
     assert!(vp.pruning_point_palw_state(kaspa_consensus_core::BlockHash::from_u64_word(0xBAD)).is_none(), "and nothing else");
 
+    // An authentic historical state is still not an authorized replacement of
+    // the live tip. The established import target is genesis until history is installed.
+    let before_tip = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
+    let before_stable = ctx.consensus.is_pruning_utxoset_stable();
+    let err = vp.import_pruning_point_palw_state(point, honest.clone()).expect_err("a different established target refuses even the real root");
+    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwPruningPointMismatch(incoming, established)
+        if incoming == point && established == config.params.genesis.hash), "the target is refused by name: {err}");
+    let after_tip = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
+    assert_eq!((after_tip.0, after_tip.1.state_root()), (before_tip.0, before_tip.1.state_root()), "refusal leaves the live tip intact");
+    assert_eq!(vp.pruning_point_palw_state(tip).unwrap(), served, "refusal leaves the serving snapshot intact");
+    assert_eq!(ctx.consensus.is_pruning_utxoset_stable(), before_stable, "refusal leaves completion intact");
+    ctx.consensus.import_pruning_points(vec![
+        ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
+        ctx.consensus.get_header(point).unwrap(),
+    ]).expect("the history API authorizes this import target");
+
     // Empty the store the way a pruned join leaves it, then import what the peer served.
     {
         let mut store = vp.palw_state_v2_store.write();
@@ -4486,6 +4502,11 @@ async fn the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block(
         st
     };
     let honest = PalwStateCarriageV2::from_state(&state);
+
+    ctx.consensus.import_pruning_points(vec![
+        ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
+        ctx.consensus.get_header(point).unwrap(),
+    ]).expect("the history API authorizes this import target");
 
     // Empty the store the way a pruned join leaves it, then import.
     {

@@ -1034,6 +1034,7 @@ async fn g14_conformance_rows_survive_reorg_restart_and_pruned_import() {
             store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the carriage installs");
     assert_eq!(importer.tip_state().1.state_root(), root_at(&cw.net.chain, p), "the imported state is P's");
     assert!(

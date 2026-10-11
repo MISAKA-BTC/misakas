@@ -841,6 +841,7 @@ async fn pruned_join(mut rig: Rig, at_p: PalwFloorStateV1, expires_at: u64, what
             store.delete_delta_for_tests(block).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the served carriage installs against T's committed root");
     let (at, imported) = importer.tip_state();
     assert_eq!((at, imported.state_root()), (p, p_root), "{what}: the imported state is P's, root for root");

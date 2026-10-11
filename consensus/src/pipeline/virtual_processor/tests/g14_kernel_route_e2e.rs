@@ -1491,6 +1491,7 @@ async fn g14_kernel_route_survives_a_pruned_import() {
             store.delete_delta_for_tests(blk).expect("no delta row at or below the pruning point");
         }
     }
+    importer.establish_pruning_import_target(p);
     importer.vp().import_pruning_point_palw_state(p, carriage).expect("the served carriage installs against T's committed root");
     let (at, imported) = importer.tip_state();
     assert_eq!(at, p);

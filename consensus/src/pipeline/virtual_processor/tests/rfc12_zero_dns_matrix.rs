@@ -1998,6 +1998,19 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     // retry. The selected child commits the real snapshot; no peer-supplied root
     // or synthetic money is treated as authoritative here.
     let vp = rig.vp();
+    let before_snapshot = vp.pruning_point_overlay_snapshot();
+    let before_stable = rig.api().is_pruning_utxoset_stable();
+    let err = vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone())
+        .expect_err("a valid historic snapshot cannot authorize its own target");
+    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedOverlayPruningPointMismatch(incoming, established)
+        if incoming == overlay_anchor.header.hash && established == rig.config.params.genesis.hash), "unauthorized target is refused by name: {err}");
+    assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record), "unauthorized replacement cannot erase the exit");
+    assert_eq!(vp.pruning_point_overlay_snapshot(), before_snapshot, "unauthorized replacement cannot change the stored snapshot");
+    assert_eq!(rig.api().is_pruning_utxoset_stable(), before_stable, "unauthorized replacement cannot change the marker");
+    rig.api().import_pruning_points(vec![
+        rig.api().get_header(rig.config.params.genesis.hash).unwrap(),
+        rig.api().get_header(overlay_anchor.header.hash).unwrap(),
+    ]).expect("history authorizes the historic retry target");
     vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).expect("verified historic import");
     assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record), "historic import cannot erase the later exit");
     vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).expect("same verified import is idempotent");

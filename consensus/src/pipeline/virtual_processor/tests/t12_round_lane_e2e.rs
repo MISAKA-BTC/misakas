@@ -271,6 +271,16 @@ impl T12Chain {
         self.ctx.consensus.virtual_processor().clone()
     }
 
+    /// Establish an import target through the production history API. Bodies/deltas
+    /// removed by the caller remain a private fixture, not a P2P pruning proof.
+    pub(super) fn establish_pruning_import_target(&self, point: BlockHash) {
+        let consensus = &self.ctx.consensus;
+        consensus.import_pruning_points(vec![
+            consensus.get_header(self.config.params.genesis.hash).unwrap(),
+            consensus.get_header(point).unwrap(),
+        ]).expect("the verified local headers establish the sidecar import target");
+    }
+
     pub(super) fn tip_state(&self) -> (BlockHash, PalwChainStateV2) {
         self.vp().palw_state_v2_store.read().load_tip(&self.bundle.state).unwrap().expect("the tip loads")
     }

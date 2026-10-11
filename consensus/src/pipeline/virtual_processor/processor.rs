@@ -22373,6 +22373,19 @@ impl VirtualStateProcessor {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
         };
+        let context_error = |e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {e}"))
+        };
+        let require_target = |established: BlockHash| {
+            if pruning_point == established {
+                Ok(())
+            } else {
+                Err(PruningImportError::ImportedPalwPruningPointMismatch(pruning_point, established))
+            }
+        };
+        // A valid historic root is not permission to replace the live PALW tip.
+        // Every IBD caller establishes this target through its pruning history first.
+        require_target(self.pruning_point_store.read().pruning_point().map_err(context_error)?)?;
         // **Which header commits this state.** `Header::palw_state_root` commits the root of the
         // state as-of the block's SELECTED PARENT — the chain walk compares exactly that
         // (`header.palw_state_root != parent_root` disqualifies). This carriage is the state as-of
@@ -22438,6 +22451,10 @@ impl VirtualStateProcessor {
             // built under, or it refuses a state for having obeyed it.
             .into_state_v3(params, Some(expected_root), self.palw_uncertified_weightless_at(witness_daa), self.palw_canonical_work_daa)
             .map_err(|e| PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, e.to_string()))?;
+        // Pin the established target after validation and through the durable batch.
+        // Pruning -> PALW -> metadata matches pruning advancement's lock order.
+        let pruning_point_read = self.pruning_point_store.read();
+        require_target(pruning_point_read.pruning_point().map_err(context_error)?)?;
         // Written through `set_tip_batch`, which RE-DERIVES the root from the state it is handed —
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
@@ -22631,6 +22648,17 @@ impl VirtualStateProcessor {
         if self.dns_params.is_none() {
             return Ok(()); // overlay dormant — the snapshot is empty and nothing reads it
         }
+        let unavailable = |where_: &str, e: StoreError| {
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("legacy overlay {where_}: {e}"))
+        };
+        let require_target = |established: BlockHash| {
+            if pruning_point == established {
+                Ok(())
+            } else {
+                Err(PruningImportError::ImportedOverlayPruningPointMismatch(pruning_point, established))
+            }
+        };
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
 
         // TRUSTLESS GATE — this runs BEFORE the write, and the write is to the LIVE consensus
         // store (all three IBD call sites hand this a live session; the headers-proof one
@@ -22680,9 +22708,10 @@ impl VirtualStateProcessor {
             snapshot.window.len(),
             snapshot.reserve_balance
         );
-        let unavailable = |where_: &str, e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("legacy overlay {where_}: {e}"))
-        };
+        // Historic monetary state is installed only for the authorized import target.
+        // Recheck and hold that target before acquiring any monetary store write lock.
+        let pruning_point_read = self.pruning_point_store.read();
+        require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
         let mismatch = |what: String| PruningImportError::ImportedOverlayExistingStateMismatch(pruning_point, what);
         let anchor_daa = self.headers_store.get_daa_score(pruning_point)
             .map_err(|e| unavailable("anchor header", e))?;

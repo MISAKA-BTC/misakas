@@ -113,6 +113,12 @@ pub enum PruningImportError {
     #[error("imported EVM state targets block {0}, but the established pruning point is {1}")]
     ImportedEvmPruningPointMismatch(BlockHash, BlockHash),
 
+    #[error("imported PALW state targets block {0}, but the established pruning point is {1}")]
+    ImportedPalwPruningPointMismatch(BlockHash, BlockHash),
+
+    #[error("imported overlay state targets block {0}, but the established pruning point is {1}")]
+    ImportedOverlayPruningPointMismatch(BlockHash, BlockHash),
+
     #[error("existing EVM {1} for pruning point {0} disagrees with the root-verified imported state")]
     ImportedEvmExistingStateMismatch(BlockHash, String),
 
