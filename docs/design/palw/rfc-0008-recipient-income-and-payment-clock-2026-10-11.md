@@ -104,3 +104,18 @@ history migration; all-path B/R/F/Q validation; W/material/pruned join evidence;
 actual all-model court correctness; and fixed-criteria measured small/large
 profitability and neutrality evidence. Dormant activation is not substitute
 acceptance evidence for those conditions.
+
+## Round boundary preparation
+
+Candidate ticket counts and reservations both check the full migrated cap
+vector. An overfull accepted legacy window issues no new ticket. A reservation
+failure rolls back the whole draw and clears its tickets; it cannot panic the
+virtual processor or keep a partially reserved permit.
+
+The native fee boundary fixture first prepares the same genuine signed floor
+Final/anchor with a generous, unapproved R cap and no tested fee body. It records
+every actual recipient migration row and their common R total. Baseline plus
+the fixed 500,000 fee limit is then frozen in genesis Params before both actual
+fee runs. Both must match the same baseline before carrying either fee; the
+criterion never changes after a tested fee outcome. This is mechanics evidence,
+not an economic profitability or soundness approval.

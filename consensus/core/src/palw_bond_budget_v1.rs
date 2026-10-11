@@ -652,6 +652,11 @@ pub fn palw_round_rights_vector_v1(policy: &PalwBondBudgetPolicyV1, n: u64) -> P
 pub fn palw_round_rights_remaining_v1(policy: &PalwBondBudgetPolicyV1, capital: u64, row: Option<&PalwBudgetBondRowV1>) -> u64 {
     let caps = palw_bond_budget_caps_v1(policy, capital);
     let window = row.map(|r| r.window).unwrap_or_default();
+    // Boundary migration can preserve accepted rights above a new cap. The
+    // reservation checks the full vector, so its candidate set must do so too.
+    if window.first_excess(&caps).is_some() {
+        return 0;
+    }
     match policy.round_rights {
         PalwRoundRightsPolicyV1::CountAgainstBlocks => (caps.block_units.saturating_sub(window.block_units)
             / PALW_BUDGET_BLOCK_UNIT_V1)
@@ -2286,6 +2291,35 @@ mod tests {
             }
         }
         assert_eq!(replay.root_parts(), empty.root_parts());
+    }
+
+    #[test]
+    fn round_candidates_and_reservations_agree_when_legacy_money_exceeds_the_new_cap() {
+        let mut p = policy(1, false);
+        p.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
+        let capital = 1_000 * BILI;
+        let caps = palw_bond_budget_caps_v1(&p, capital);
+        for dim in [PalwBudgetDimV1::Claims, PalwBudgetDimV1::BlockUnits, PalwBudgetDimV1::Reward,
+            PalwBudgetDimV1::FinalWeight, PalwBudgetDimV1::RoundRights] {
+            let mut s = PalwBondBudgetStateV1::new(10, &p);
+            let mut j = Vec::new();
+            let mut old = PalwBudgetVectorV1::ZERO;
+            match dim {
+                PalwBudgetDimV1::Claims => old.claims = caps.claims + 1,
+                PalwBudgetDimV1::BlockUnits => old.block_units = caps.block_units + 1,
+                PalwBudgetDimV1::Reward => old.reward_sompi = caps.reward_sompi + 1,
+                PalwBudgetDimV1::FinalWeight => old.final_weight = caps.final_weight + 1,
+                PalwBudgetDimV1::RoundRights => old.round_rights = caps.round_rights + 1,
+            }
+            s.reserve(&p, capital, h(64), bond(0), None, 10, old, PalwBudgetOriginV1::Legacy, false, &mut j).unwrap();
+            assert_eq!(palw_round_rights_remaining_v1(&p, capital, s.bond_row(&bond(0))), 0, "overfull {dim:?}");
+            let before = (s.root_parts(), j.len());
+            assert!(matches!(s.reserve_round_rights_v1(&p, capital, 1, bond(0), 11, 1, &mut j),
+                Err(PalwBudgetRefusalV1::Exhausted { .. })));
+            assert_eq!((s.root_parts(), j.len()), before);
+            s.reserve_round_rights_v1(&p, capital, 1, bond(0), 11, 0, &mut j).unwrap();
+            assert_eq!((s.root_parts(), j.len()), before, "the zero candidate draw preserves accepted old rights");
+        }
     }
 
     #[test]

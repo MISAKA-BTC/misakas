@@ -305,11 +305,14 @@ impl T12Chain {
         kaspa_consensus_core::palw_execution_lane_v1::palw_execution_round_v1(timestamp_ms, self.config.params.genesis.timestamp)
     }
 
-    /// **Make the template builder read the harness's simulated clock** — on an EVM-active network only (an inert lane is
-    /// re-stamped after the build, as it always was, and no existing test sees a change). The builder takes
+    /// **Make the template builder read the harness's simulated clock** on an EVM-active network or after an explicit test
+    /// clock opt-in. Once opted in, every heartbeat advances that same clock; a REAL attempt must not leave it stale.
+    /// An ordinary inert lane still re-stamps after the build. The builder takes
     /// `max(past median + 1, clock)` as its stamp and the lane executes against it.
     fn arm_clock(&self) {
-        if self.config.params.is_evm_active(self.sink_daa()) {
+        if self.config.params.is_evm_active(self.sink_daa())
+            || self.vp().template_clock.load(std::sync::atomic::Ordering::Relaxed) != 0
+        {
             self.vp().template_clock.store(self.ctx.simulated_time, std::sync::atomic::Ordering::Relaxed);
         }
     }
@@ -1211,37 +1214,47 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
     };
     use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1;
     const LIMIT: u64 = 500_000;
-    // Fixed before either run: this fixture's shipped 320,084,650,080 escrow
-    // leaves exactly 80% with its issuer, pending through the native H. The
-    // migration must count that actual unpaid money before accepting fee R.
-    const OLD_ISSUER_INCOME: u64 = 256_067_720_064;
+    let preparation = |total_reward: u64| move |params: &mut kaspa_consensus_core::config::params::Params| {
+        let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        policy.window_daa = 280;
+        policy.capital_unit_sompi = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+        policy.claims_per_unit = 1_000_000;
+        policy.block_units_per_unit = 1_000_000 * PALW_BUDGET_BLOCK_UNIT_V1;
+        policy.reward_per_unit_sompi = total_reward;
+        policy.final_weight_per_unit = 1_000_000;
+        policy.max_open_claims_per_bond = 1_000_000;
+        policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
+        // The real seed anchor is accepted at 263 and its ticket draws at 264.
+        // All parameters are fixed before this node's genesis; accepted native
+        // rights retain their original terms through initial migration.
+        params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(264), policy });
+        params.sync_palw_bond_budget_v1();
+    };
+    // Prepare actual outstanding recipient money before either tested fee
+    // body exists. This includes issuer and any other already accepted native
+    // duties, not just the original producer leg. The fee limit is fixed; the
+    // generously capped preparation is an unapproved mechanics fixture.
+    let prepared = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, preparation(u64::MAX / 2)).await;
+    let (_, prepared_state) = prepared.chain.tip_state();
+    let old_issuer = prepared_state.vesting_row(&prepared.claim_id).expect("actual old producer right").producer.amount;
+    let old_income = prepared_state.bond_budget().unwrap().bond_row(&prepared.executor).unwrap().window.reward_sompi;
+    assert!(old_income >= old_issuer);
+    let prior_rows: Vec<_> = prepared_state.bond_budget().unwrap().claims.iter()
+        .filter(|(_, row)| row.bond == prepared.executor && row.in_window)
+        .map(|(id, row)| (*id, row.origin, row.reserved, row.consumed))
+        .collect();
+    eprintln!("[t12-round-r] before tested fee bodies: issuer={old_issuer}, full-recipient-R={old_income}, fixed-fee-limit={LIMIT}, rows={prior_rows:?}");
+    let total_cap = old_income.checked_add(LIMIT).unwrap();
+    drop(prepared);
     for actual_fee in [LIMIT, LIMIT + 1] {
-        // The real original floor Final predates the fence; its signed rights
-        // survive. Its ticket is drawn after the new dedicated T cap opens.
-        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, |params| {
-            let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
-            policy.window_daa = 280;
-            policy.capital_unit_sompi = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
-            policy.claims_per_unit = 1_000_000;
-            policy.block_units_per_unit = 1_000_000 * PALW_BUDGET_BLOCK_UNIT_V1;
-            policy.reward_per_unit_sompi = OLD_ISSUER_INCOME + LIMIT;
-            policy.final_weight_per_unit = 1_000_000;
-            policy.max_open_claims_per_bond = 1_000_000;
-            policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1 };
-            // The fixture's real seed anchor is accepted at 263; its target
-            // draw is at 264. Both existing reward-bearing attempts keep their
-            // pre-fence admission, while the fee-only ticket uses the new cap.
-            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(264), policy });
-            params.sync_palw_bond_budget_v1();
-        })
-        .await;
+        let mut at = a_floor_final_scheduled_with_edit(SeedDraw::MintsATicket, None, preparation(total_cap)).await;
         let (_, before_state) = at.chain.tip_state();
         let before = *before_state.bond_budget().unwrap().bond_row(&at.executor).expect("ticket recipient has a T reservation");
-        let old_income = before_state.vesting_row(&at.claim_id).expect("old Final still holds its actual native payout");
-        assert_eq!(old_income.producer.amount, OLD_ISSUER_INCOME, "the predeclared cap uses the actual unpaid producer right");
-        assert_eq!(before.window.reward_sompi, OLD_ISSUER_INCOME, "migration counts unpaid issuance exactly once");
+        let producer = before_state.vesting_row(&at.claim_id).expect("old Final still holds its actual native payout");
+        assert_eq!(producer.producer.amount, old_issuer, "the original signed producer income is conserved");
+        assert_eq!(before.window.reward_sompi, old_income, "every prior recipient hold matches the predeclared baseline");
         assert_eq!(before_state.bond(&at.executor).unwrap().collateral, kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI);
-        assert_eq!((OLD_ISSUER_INCOME + LIMIT) - before.window.reward_sompi, LIMIT, "the fee boundary is fixed after actual issuance holds");
+        assert_eq!(total_cap - before.window.reward_sompi, LIMIT, "the fee boundary is fixed after actual issuance holds");
         assert_eq!(before.window.block_units, 0, "fee-only ticket does not reserve reward blocks");
         assert_eq!(before.window.round_rights, 1, "dedicated execution cap is occupied before the Round");
         let ticket = at.schedule.quanta.iter().filter(|q| q.final_id == at.claim_id).min_by_key(|q| q.scheduled_round).unwrap();
@@ -1264,7 +1277,7 @@ async fn t12_round_collectible_fee_boundary_is_atomic_and_uses_r_not_reward_bloc
         assert_eq!(after.window.round_rights, before.window.round_rights);
         assert_eq!(after.open_claims, before.open_claims);
         if accepted {
-            assert_eq!(after.window.reward_sompi, OLD_ISSUER_INCOME + LIMIT);
+            assert_eq!(after.window.reward_sompi, total_cap);
             let id = kaspa_consensus_core::palw_bond_budget_v1::palw_round_income_id_v1(block.header.hash, &at.executor);
             let income = book.claim_row(&id).expect("actual native fee collection is journaled");
             assert_eq!(income.origin, PalwBudgetOriginV1::RoundFee);

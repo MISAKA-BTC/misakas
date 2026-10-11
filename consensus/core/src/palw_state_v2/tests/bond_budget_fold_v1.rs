@@ -254,6 +254,40 @@ fn partial_native_fd_fe_funds_use_individual_physical_payment_clocks_with_exact_
     }
 }
 
+/// Synthetic snapshot metadata tests the production draw's refusal transaction;
+/// native signed Final/lottery correctness remains a separate acceptance test.
+#[test]
+fn round_draw_handles_overfull_migration_and_duplicate_span_without_partial_tickets_or_panic() {
+    use crate::palw_execution_lane_v1::{PalwExecFinalV1, PalwExecScheduleV1};
+    let mut policy = test_policy(1);
+    policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 10 };
+    let p = armed_with(policy, None);
+    let (registered, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    let capital = registered.bond(&bond_key(1)).unwrap().collateral;
+    for overfull in [false, true] {
+        let mut parent = registered.clone();
+        let budget = parent.bond_budget.as_mut().unwrap();
+        let mut fixture = Vec::new();
+        if overfull {
+            let cap = palw_bond_budget_caps_v1(&policy, capital).reward_sompi;
+            budget.hold_native_income_v1(&policy, capital, h64(0x7771), bond_key(1), 100, 500, cap + 1, &[], false, &mut fixture).unwrap();
+        } else {
+            budget.reserve_round_rights_v1(&policy, capital, 7, bond_key(1), 100, 1, &mut fixture).unwrap();
+        }
+        let mut schedule = PalwExecScheduleV1 {
+            span_index: 7, seed: h64(0x7772), domains: Vec::new(), quanta: Vec::new(),
+            finals: vec![PalwExecFinalV1 { domain: h64(1), bond: bond_key(1), operator_id: op_id(21),
+                claim_id: h64(0x7773), execution_root: h64(0x7774), credit: 4, accepted_blue_score: 1 }],
+        };
+        let extras = PalwTransitionExtrasV1::default();
+        let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+        assert!(b.bond_budget_round_draw_v1(&ctx(2, 200, 2), &mut schedule, 1, 100, 10, &BTreeSet::new()));
+        assert!(schedule.quanta.is_empty(), "unavailable {overfull} draw creates no uncapped permit");
+        assert_eq!(b.state, parent, "accepted old income and earlier tickets are unchanged");
+        assert!(b.entries.is_empty(), "no partial recipient reservation journal");
+    }
+}
+
 fn assignment(bond: PalwBondKeyV2, assignments: Vec<(Hash64, u64)>, sequence: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::BondCapitalAssignedV1 { bond, assignments, sequence, signature: vec![1] }
 }

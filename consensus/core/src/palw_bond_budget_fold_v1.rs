@@ -1351,13 +1351,21 @@ impl TransitionBuilder<'_> {
         }
         let span = schedule.span_index;
         let now = ctx.daa_score;
-        self.bond_budget_op(|budget, state, j| {
+        let checkpoint = self.checkpoint();
+        let reserved = self.bond_budget_op(|budget, state, j| {
             for (bond, n) in allocated {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
-                let fitted = budget.reserve_round_rights_v1(&policy, capital, span, bond, now, n, j);
-                debug_assert!(fitted.is_ok(), "the candidates were capped at the remaining rights of this same state: {fitted:?}");
+                budget.reserve_round_rights_v1(&policy, capital, span, bond, now, n, j)?;
             }
+            Ok::<(), PalwBudgetRefusalV1>(())
         });
+        if !matches!(reserved, Some(Ok(()))) {
+            // Refuse the whole draw atomically if migration, duplicate span
+            // identity or an arithmetic limit makes a reservation unavailable.
+            // No partially allocated ticket or virtual-processor panic survives.
+            self.restore(checkpoint);
+            schedule.quanta.clear();
+        }
         true
     }
 
