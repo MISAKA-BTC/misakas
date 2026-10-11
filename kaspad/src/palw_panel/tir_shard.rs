@@ -1383,7 +1383,10 @@ impl super::PalwPanelService {
             return Ok(Some(inputs));
         }
         let asks = p.asks_due(std::time::Instant::now());
-        for (first, count) in asks { self.request_tir_run_v1(network_domain, key.0, first, count, current_daa).await; }
+        for (first, count) in asks {
+            let first = u32::try_from(first).map_err(|_| "a requested cell run exceeds the signed address space")?;
+            self.request_tir_run_v1(network_domain, key.0, first, count, current_daa).await;
+        }
         Ok(None)
     }
 

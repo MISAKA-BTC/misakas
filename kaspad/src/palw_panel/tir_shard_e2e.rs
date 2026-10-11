@@ -859,7 +859,7 @@ fn a_partial_public_challenger_plays_the_actual_choice_and_close_consumers_witho
     else {
         panic!("commit")
     };
-    let shard = parts.iter().position(|p| p.contains(&(occurrence as usize))).unwrap() as u16;
+    let shard = parts.iter().position(|p| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_occurrences_v1(p, tir.space().program.schedule.layers.len()).contains(&(occurrence as usize))).unwrap() as u16;
     let rows =
         fetch_shard_params_v1(&capture.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(ir.dir.join("tiny.palwtir")))
             .unwrap();
