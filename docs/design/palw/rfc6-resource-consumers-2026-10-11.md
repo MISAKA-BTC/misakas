@@ -77,8 +77,22 @@ request. A rotating duty cursor prevents an unavailable early shard from monopol
 the two verification/fetch attempts per tick; abstention leaves the duty retryable.
 
 A planted lie with a one-move held-row close can accuse as the watcher's own bond.
-A dissected leaf stays explicitly Unconvictable for this partial holder because the
-interactive accuser playback still requires full execution. Without a public capture,
+A history fault now files a named-leaf challenge. The actual partial challenger branch
+runs before full-model backend resolution and builds child partials and the terminal
+carriage from the accused's Merkle-authenticated committed inputs and proven rows.
+Choices use the pinned phase/root totals; the ordinary chain dry run decides whether
+the bottom wins the challenger before it can be filed. This closes a local relation,
+not a proof that every whole-model error is covered by those local relations.
+
+Pending accusations keep their row reservation to filing due plus the court window;
+actual duties extend it to the session deadline. The node bounds these retained
+`(claim, leaf)` interests at 128 and refuses additional prosecution before filing;
+expiry releases the cache/pursuit, while an in-flight builder's Arc still owns its guard.
+After restart the narrowed occurrence selects rows from a valid current partition of
+the immutable registered class. This is off-chain evidence acquisition and does not
+change the frozen panel, priced mask, or receipt entitlement. No fictitious consensus
+seat duty is created. Corpus/root/round/bottom and node-choice/close/lifetime test
+candidates have been added and await the central build. Without a public capture,
 the shard-only watcher cannot yet assemble bounded cell runs directly from the native
 service; the existing full-holder run pursuit remains available. Neither this connection
 nor the fixture establishes an unconditional acquisition/detection floor, all-model
@@ -285,3 +299,14 @@ assignments across 64 seeds, binding-room reduction, malformed/missing/unnormali
 cells, unchanged equal tables and the existing core pipeline's actual bound-seat
 prices. The pipeline candidate also crosses the fence between acceptance and binding
 to verify old claims are never repriced. These additions await the central core build.
+
+## Central protocol106 evidence
+
+Parent integration `07eb36f78` compiled and passed all 10 focused protocol106 tests
+(9 framing/reassembly/spill/resume/permit cases and 1 prepay of the whole traversal),
+with zero failures or ignored tests. Log:
+`/tmp/rfc06-chunked-pruned-snapshot-protocol106-v3.log`. The ledger replaces its
+reserved minimum floor with actual charged bytes; the assertion counts
+`max(total_bytes, floor)`, not `total_bytes + floor`. This result contains no real
+multiple-process P2P/pruning run, native 100k acceptance, peak decoded RSS, or
+four-seal long-running liveness. Those acceptance conditions remain open.

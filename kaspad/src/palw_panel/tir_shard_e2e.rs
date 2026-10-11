@@ -365,12 +365,10 @@ fn a_shard_only_seat_files_the_accusation_a_full_holder_would_and_the_gate_convi
                     assert_eq!(label, flabel, "leaf {leaf} shard {shard}");
                     assert_eq!(borsh::to_vec(&accusation).unwrap(), borsh::to_vec(&faccusation).unwrap(), "the same bytes");
                     accused += 1;
+                    dissected += usize::from(label == super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1);
                 }
                 Ok(None) => panic!("leaf {leaf} shard {shard}: the finding convicts at a full holder and not here"),
-                Err(why) => {
-                    assert!(why.contains("dissected"), "refused by name: {why}");
-                    dissected += 1;
-                }
+                Err(why) => panic!("leaf {leaf} shard {shard}: the partial accusation must build: {why}"),
             }
         }
     }
@@ -693,6 +691,21 @@ fn fetched_rows_and_incomplete_pursuits_follow_live_duties_and_keep_their_memory
     assert!(resource::reserve_rows_v1(&ledger, &seat, class).is_err());
     books.retain_row_interests_v1(std::slice::from_ref(&seat), std::slice::from_ref(&watch), 700);
     assert_eq!((books.holdings.len(), books.row_fetches.len()), (1, 1));
+    books.keep_public_court_rows_v1(seat.claim_id, 37, seat_key, 900).unwrap();
+    books.retain_row_interests_v1(&[], std::slice::from_ref(&watch), 701);
+    assert_eq!(books.holdings.len(), 1, "the partial court outlives the receipt window");
+    assert!(books.row_fetches.is_empty());
+    assert_eq!(ledger.reserved_bytes(), seat_need, "expired unfinished watch fetch releases separately");
+    books.retain_row_interests_v1(&[], &[], 900);
+    assert_eq!(books.holdings.len(), 1, "court deadline is inclusive");
+    books.retain_row_interests_v1(&[], &[], 901);
+    assert!(books.holdings.is_empty());
+    assert_eq!(ledger.reserved_bytes(), seat_need, "in-flight court builder still owns the Arc");
+    // Refill only the watch pursuit for the existing replan/expiry assertions.
+    let watch_memory = resource::reserve_rows_v1(&ledger, &watch, class).unwrap();
+    let pursuit = TirRowPursuitV1::new(class, ir.class_id, ir.root, 2, 1).unwrap();
+    books.row_fetches.insert(watch_key, PalwTirRowFetchV1::new(pursuit, watch_memory));
+    books.holdings.insert(seat_key, inflight.clone());
     // A different partition of the same class/shard must not keep the old partition's rows.
     let replanned = duty(&ir, 0, 1, 1, PalwSegmentMaskV2::full(1), false);
     books.retain_row_interests_v1(std::slice::from_ref(&replanned), std::slice::from_ref(&watch), 700);
@@ -778,4 +791,185 @@ fn a_public_watcher_with_only_proven_shard_rows_convicts_and_refuses_a_borrowed_
         assert!(found > 0, "the owning shard finds every planted lie");
     }
     assert!(accused > 0, "at least one planted lie must reach the public court from held rows alone");
+}
+
+fn partial_court_duty_v1(
+    seat: &PalwSeatDutyV2,
+    phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
+) -> kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2 {
+    kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2 {
+        accepted_block: seat.accepted_block,
+        session_id: phase.session_id(),
+        claim_id: seat.claim_id,
+        class_id: seat.class_id,
+        artifact_root: seat.artifact_root,
+        executor_bond: seat.executor_bond,
+        challenger_bond: seat.seat_bond,
+        i_am_responder: false,
+        round: phase.round(),
+        interval: (phase.leaf_index(), phase.leaf_index() + 1),
+        midpoint: None,
+        terminal_index: Some(phase.leaf_index()),
+        last_disclosure: None,
+        turn: phase.turn(),
+        rung_deadline_daa: 800,
+        session_deadline_daa: 1_000,
+        trace_root: seat.trace_root,
+        execution_root: seat.execution_root,
+        free_prompt: false,
+        fused_class: true,
+        dissection: None,
+        tir_dissection: Some(Box::new(phase.clone())),
+        panel_seat_count: 0,
+    }
+}
+
+#[test]
+fn a_partial_public_challenger_plays_the_actual_choice_and_close_consumers_without_a_model_backend() {
+    use super::tir_dissect::{
+        PalwTirDissectBuiltV1, PalwTirDissectMoveV1, palw_tir_dissect_object_v1, palw_tir_partial_dissect_build_v1,
+    };
+    use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwCourtVerdictV2};
+    use kaspa_consensus_core::palw_tir_court_v1::{check_tir_dissect_bottom_v1, check_tir_root_claim_v1};
+    use kaspa_consensus_core::palw_tir_dissect_v1::{PalwTirDissectPhaseV1, PalwTirFoldV1};
+    use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirFileMirrorV1, fetch_shard_params_v1, tir_shard_geometry_over_v1};
+    let ir = shard_class("partial-court-consumer");
+    let tir = ir.tir();
+    let (job, prompt) = tir.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let honest = tir.execute(&job, &prompt).unwrap();
+    let capture = TirCaptureV1::decode(&honest.material).unwrap();
+    let rules = tir.court_rules(&PalwCourtParamsV2::new(LADDER, 20, 2).unwrap());
+    let (parts, _) = tir_shard_geometry_over_v1(tir.space(), 2).unwrap();
+    let last = tir.space().job_shape(&job).unwrap().positions - 1;
+    let (index, root, site) = (0..capture.binding.step_leaf_count)
+        .rev()
+        .find_map(|index| {
+            let leaf = tir.space().leaf_at(&job, index)?;
+            if leaf.position != last {
+                return None;
+            }
+            let root = tir.root_claim(&honest.material, index, &rules).ok()?;
+            let site = check_tir_root_claim_v1(&root, index, &rules).ok()?;
+            site.folds.contains(&PalwTirFoldV1::Sum).then_some((index, root, site))
+        })
+        .expect("a corpus history sum site");
+    let kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { occurrence, .. } =
+        tir.space().leaf_at(&job, index).unwrap().kind
+    else {
+        panic!("commit")
+    };
+    let shard = parts.iter().position(|p| p.contains(&(occurrence as usize))).unwrap() as u16;
+    let rows =
+        fetch_shard_params_v1(&capture.binding.class, ir.class_id, ir.root, 2, shard, &TirFileMirrorV1(ir.dir.join("tiny.palwtir")))
+            .unwrap();
+    let mut seat = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
+    seat.execution_root = honest.execution_root;
+    seat.trace_root = honest.trace_root;
+    let mut phase = PalwTirDissectPhaseV1::open(Hash64::from_u64_word(71), index, &site, &root, 2, 0, 20).unwrap();
+    let truth = rows.dissect_round(&capture, &phase, &rules).unwrap();
+    let mut admitted = phase.clone();
+    admitted.apply_round(&truth, 1, 20).unwrap();
+    let honest_duty = partial_court_duty_v1(&seat, &admitted);
+    assert!(
+        palw_tir_partial_dissect_build_v1(&rows, &capture, &honest_duty, PalwTirDissectMoveV1::Choice, &rules).is_err(),
+        "an honest round yields no allegation"
+    );
+    // A lying disclosure whose children fold to the honest root. Both children stay in
+    // the proven intervals; the challenger must localize the false disclosed child.
+    let mut forged = None;
+    for (k, fold) in site.folds.iter().enumerate() {
+        if *fold != PalwTirFoldV1::Sum {
+            continue;
+        }
+        for e in 0..truth.children[0].partials[k].len() {
+            let mut pushed = truth.clone();
+            pushed.children[0].partials[k][e] += 1;
+            pushed.children[1].partials[k][e] -= 1;
+            let mut trial = phase.clone();
+            if trial.apply_round(&pushed, 1, 20).is_ok() {
+                forged = Some(trial);
+                break;
+            }
+        }
+        if forged.is_some() {
+            break;
+        }
+    }
+    phase = forged.expect("a protocol-legal false disclosure");
+    let mut daa = 2;
+    loop {
+        let court_duty = partial_court_duty_v1(&seat, &phase);
+        let built = palw_tir_partial_dissect_build_v1(&rows, &capture, &court_duty, PalwTirDissectMoveV1::Choice, &rules).unwrap();
+        let object = palw_tir_dissect_object_v1(
+            built,
+            &court_duty,
+            2,
+            &|_, context| {
+                assert_eq!(context, kaspa_consensus_core::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT);
+                Some(vec![1; 8])
+            },
+            &|_, _| None,
+        )
+        .unwrap()
+        .unwrap();
+        let PalwConsensusObjectV2::CourtTirChildChosen { session_id, choice, .. } = object else { panic!("choice consumer") };
+        assert_eq!(session_id, phase.session_id());
+        phase.apply_choice(&choice, daa, 20).unwrap();
+        daa += 1;
+        if phase.turn() == PalwBisectTurnV1::Terminal {
+            break;
+        }
+        let truth = rows.dissect_round(&capture, &phase, &rules).unwrap();
+        let mut pushed = truth.clone();
+        for (k, fold) in site.folds.iter().enumerate() {
+            for e in 0..phase.elements()[k].len() {
+                let claim = phase.claim().partials[k][e];
+                match fold {
+                    PalwTirFoldV1::Sum => {
+                        let sum: i128 = pushed.children.iter().map(|c| c.partials[k][e]).sum();
+                        pushed.children[0].partials[k][e] += claim - sum;
+                    }
+                    PalwTirFoldV1::Max => {
+                        let max = pushed.children.iter().map(|c| c.partials[k][e]).max().unwrap();
+                        if claim > max {
+                            pushed.children[0].partials[k][e] = claim;
+                        } else {
+                            for c in &mut pushed.children {
+                                c.partials[k][e] = c.partials[k][e].min(claim);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        phase.apply_round(&pushed, daa, 20).unwrap();
+        daa += 1;
+    }
+    let court_duty = partial_court_duty_v1(&seat, &phase);
+    let built = palw_tir_partial_dissect_build_v1(&rows, &capture, &court_duty, PalwTirDissectMoveV1::Close, &rules).unwrap();
+    let PalwTirDissectBuiltV1::Close(proof) = &built else { panic!("bottom consumer") };
+    let kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirDissection { bottom } = proof else { panic!("IR bottom") };
+    let mut restored = *bottom.clone();
+    assert!(restored.binding.class.program.is_empty(), "filed program stripped");
+    restored.binding.class.program = tir.class().program.clone();
+    assert!(check_tir_dissect_bottom_v1(&phase, &restored, index, &rules).is_ok(), "validator convicts the legally disclosed lie");
+    assert!(matches!(
+        palw_tir_dissect_object_v1(built.clone(), &court_duty, 2, &|_, _| None, &|_, _| Some(PalwCourtVerdictV2::ExecutorGuilty))
+            .unwrap(),
+        Some(PalwConsensusObjectV2::CourtClosed { verdict: PalwCourtVerdictV2::ExecutorGuilty, .. })
+    ));
+    assert!(
+        palw_tir_dissect_object_v1(built, &court_duty, 2, &|_, _| None, &|_, _| Some(PalwCourtVerdictV2::ChallengerDefeated))
+            .unwrap()
+            .is_none(),
+        "wrong-side close is not filed"
+    );
+    let mut borrowed = court_duty.clone();
+    borrowed.execution_root = Hash64::from_u64_word(0xBAD);
+    assert!(palw_tir_partial_dissect_build_v1(&rows, &capture, &borrowed, PalwTirDissectMoveV1::Close, &rules).is_err());
+    borrowed = court_duty.clone();
+    borrowed.i_am_responder = true;
+    assert!(palw_tir_partial_dissect_build_v1(&rows, &capture, &borrowed, PalwTirDissectMoveV1::Close, &rules).is_err());
+    assert!(palw_tir_partial_dissect_build_v1(&rows, &capture, &court_duty, PalwTirDissectMoveV1::Round, &rules).is_err());
 }

@@ -1072,9 +1072,15 @@ impl super::PalwPanelService {
     /// `None` on a network with no V2 bundle.
     pub(super) fn tir_dissection_rules_v1(
         &self,
-        tir: &TirBackendV1,
+        _tir: &TirBackendV1,
         class_id: Hash64,
         current_daa: u64,
+    ) -> Option<(PalwTirCourtRulesV1, u8)> {
+        self.tir_dissection_rules_for_class_v1(class_id, current_daa)
+    }
+
+    pub(super) fn tir_dissection_rules_for_class_v1(
+        &self, class_id: Hash64, current_daa: u64,
     ) -> Option<(PalwTirCourtRulesV1, u8)> {
         let params = &self.consensus_config.params;
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
@@ -1092,9 +1098,11 @@ impl super::PalwPanelService {
             &court,
             params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
         );
-        let mut rules = tir.court_rules(&court);
-        rules.max_step_leaf_count = self.seat_refutation_ladder_v1(class_id, network_ladder, current_daa);
-        rules.prompt_form = self.config.prompt_ids_form;
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: self.seat_refutation_ladder_v1(class_id, network_ladder, current_daa),
+            prompt_form: self.config.prompt_ids_form,
+            limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&court),
+        };
         Some((rules, arity))
     }
 

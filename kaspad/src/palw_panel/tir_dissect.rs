@@ -163,6 +163,52 @@ pub(crate) fn palw_tir_dissect_build_v1(
     }
 }
 
+/// A partial public holder prosecutes the local history constraint from the accused's
+/// authenticated dense inputs. It owes no root or responder round and never substitutes
+/// a separately executed prefix. The bottom is still adjudicated by the chain's dry run.
+pub(crate) fn palw_tir_partial_dissect_build_v1(
+    holding: &misaka_palw_sdk::lineages::tir::TirShardHoldingV1,
+    capture: &TirCaptureV1,
+    duty: &PalwCourtDutyV2,
+    mv: PalwTirDissectMoveV1,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwTirDissectBuiltV1, String> {
+    if duty.i_am_responder || palw_tir_dissect_move_of_duty_v1(duty) != Some(mv) {
+        return Err("the partial public holder owes no move on this turn".into());
+    }
+    if holding.class_id != duty.class_id
+        || capture.binding.class.class_id(&capture.binding.artifact_root) != duty.class_id
+        || capture.binding.artifact_root != duty.artifact_root
+        || capture.binding.committed_execution_root != duty.execution_root
+        || capture.binding.full_logits_trace_root != duty.trace_root
+    {
+        return Err("the public evidence does not bind this court's class and roots".into());
+    }
+    let phase = duty.tir_dissection.as_deref().ok_or("the public court has no IR phase")?;
+    if phase.session_id() != duty.session_id || duty.terminal_index != Some(phase.leaf_index()) {
+        return Err("the public court phase does not bind this session and leaf".into());
+    }
+    match mv {
+        PalwTirDissectMoveV1::Choice => {
+            let truth = holding.dissect_round(capture, phase, rules)?;
+            let child = tir_dissect_choice_v1(phase, &truth).ok_or("all filed children equal the local constraint")?;
+            Ok(PalwTirDissectBuiltV1::Choice(PalwTirDissectChoiceV1 {
+                version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                session_id: duty.session_id,
+                round: phase.round(),
+                child,
+            }))
+        }
+        PalwTirDissectMoveV1::Close => {
+            let bottom = holding.dissect_bottom(capture, phase, rules)?;
+            let mut proof = PalwCourtVerdictProofV2::TirDissection { bottom: Box::new(bottom) };
+            proof.tir_strip_program_v1();
+            Ok(PalwTirDissectBuiltV1::Close(proof))
+        }
+        _ => Err("a partial public challenger files only choices and a bottom".into()),
+    }
+}
+
 /// **The move's object**: signed by the party that owes it — the claim's bond under the ADR-0082
 /// responder context over the IR root and round messages, the session's challenger under the
 /// challenger context over the choice — and a close only where the chain's dry run of it

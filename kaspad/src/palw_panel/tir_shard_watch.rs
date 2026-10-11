@@ -81,8 +81,8 @@ pub(crate) fn palw_tir_shard_watch_finding_v1(
     })
 }
 
-/// The public watcher over proven shard rows alone. A dissected leaf remains an explicit
-/// limitation of this partial holder: it is recorded without filing an accusation it cannot play.
+/// The public watcher over proven shard rows alone. A history fault names its leaf and
+/// opens the same interactive court the partial challenger consumer continues.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn palw_tir_shard_watch_finding_over_v1(
     holding: &TirShardHoldingV1,
@@ -110,18 +110,10 @@ pub(crate) fn palw_tir_shard_watch_finding_over_v1(
         PalwTirShardOutcomeV1::Valid { .. } => PalwTirShardWatchFindingV1::Valid,
         PalwTirShardOutcomeV1::Abstain(why) => PalwTirShardWatchFindingV1::Abstain(why),
         PalwTirShardOutcomeV1::Fault { leaf, row, .. } => {
-            if leaf.is_some_and(|l| {
-                super::super::tir_court::palw_tir_space_leaf_is_dissected_v1(&holding.space, &capture.binding.job_context, l)
-            }) {
-                PalwTirShardWatchFindingV1::Unconvictable { leaf, row }
-            } else {
-                let target = palw_tir_duty_target_v1(duty);
-                match palw_tir_shard_accusation_over_v1(holding, capture, leaf, row, &target, watcher, court, rules, ladder, form)? {
-                    Some((label, accusation)) => {
-                        PalwTirShardWatchFindingV1::Accuse { label, leaf, row, accusation: Box::new(accusation) }
-                    }
-                    None => PalwTirShardWatchFindingV1::Unconvictable { leaf, row },
-                }
+            let target = palw_tir_duty_target_v1(duty);
+            match palw_tir_shard_accusation_over_v1(holding, capture, leaf, row, &target, watcher, court, rules, ladder, form)? {
+                Some((label, accusation)) => PalwTirShardWatchFindingV1::Accuse { label, leaf, row, accusation: Box::new(accusation) },
+                None => PalwTirShardWatchFindingV1::Unconvictable { leaf, row },
             }
         }
     })
@@ -287,6 +279,19 @@ impl super::super::PalwPanelService {
                     );
                 }
                 PalwTirShardWatchFindingV1::Accuse { label, leaf, row, accusation } => {
+                    if tir.is_none() && label == super::super::tir_court::PALW_TIR_NAMED_LEAF_LABEL_V1 {
+                        let earliest_final =
+                            super::super::palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
+                        let due = super::super::palw_seat_court_filing_due_v1(duty.receipt_deadline, earliest_final, current_daa);
+                        let Some(until) = self.tir_shard_public_court_until_v1(due) else { continue };
+                        let Some(index) = leaf else { continue };
+                        if books
+                            .keep_public_court_rows_v1(duty.claim_id, index, (duty.class_id, place.s_l, place.shard), until)
+                            .is_err()
+                        {
+                            continue;
+                        }
+                    }
                     warn!(
                         "[{PALW_PANEL}] watch: claim {} shard {}/{}: a cell finds the executor's commitment false (leaf {leaf:?}, token row \
                          {row:?}) — accusing as a non-seat bond ({label})",

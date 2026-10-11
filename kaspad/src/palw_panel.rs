@@ -8913,6 +8913,7 @@ impl PalwPanelService {
             // ADR-0085 Decision 3: the intervals a close needs and this node does not hold, asked after the loop.
             let mut intervals_for_close: Vec<(Hash64, Vec<u32>)> = Vec::new();
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
+            shard_books.retain_public_court_rows_v1(&court_duties, current_daa);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
@@ -8954,6 +8955,30 @@ impl PalwPanelService {
                 // held route's, whose windowed builders an IR program has none of.
                 if session.palw_tir_class_record_v1(duty.class_id).is_none() && held_court.routes_v1(&held_host, duty, current_daa) {
                     held_duties.push(duty.clone());
+                    continue;
+                }
+                // A partial public challenger continues its local history court before the
+                // full-model resolver. This consumer never needs a whole-model backend.
+                if !duty.i_am_responder && !self.config.tir_shard_shadow
+                    && (self.config.tir_shard_fetch || self.config.tir_shard_mirror.is_some())
+                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
+                    && duty.tir_dissection.is_some()
+                    && let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
+                {
+                    match self.tir_shard_public_court_move_v1(&session, network_domain, current_daa, duty, mv,
+                        &materials, &mut interval_openings, &mut shard_books).await {
+                        Ok(Some(object)) => {
+                            court_due.insert((duty.session_id, move_round, false), palw_court_move_due_v1(duty));
+                            court_pending.push((duty.session_id, move_round, false, object));
+                        }
+                        Ok(None) => { *court_stalls.entry("the partial public bottom does not win").or_default() += 1; }
+                        Err(why) => {
+                            *court_stalls.entry("the partial public court waits for evidence").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1(&format!("tir-partial-court-{}", duty.session_id), || {
+                                format!("[{PALW_PANEL}] session {}: partial public court waits ({why})", duty.session_id)
+                            });
+                        }
+                    }
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
