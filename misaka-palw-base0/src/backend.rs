@@ -1423,6 +1423,21 @@ mod tests {
             }
             let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
             assert_eq!(tree.root(), binding.step_merkle_root);
+            use kaspa_consensus_core::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as Action, PalwPrefixFamilyCourtV1};
+            let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).unwrap();
+            let mut semantic = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+                class, inventory.root(), &binding.job_context, 0);
+            semantic.prefix_state_relation = Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1);
+            let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
+                claim_id: Hash64::from_u64_word(0xc19), class_id:class, artifact_root:inventory.root(),
+                executor_bond:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond), execution_root:binding.committed_execution_root,
+                lane:Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt), segment_count:None,phase:None,
+                job_identity:kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+                trace_root:binding.full_logits_trace_root, output_root:good.outcome.output_root, registered_semantics:Some(semantic),
+            };
+            let context = Hash64::from_u64_word(0x170019);
+            let mut court = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
+            assert!(court.finish().is_err());
             let plan = PalwPrefixKvPlanV1::of_profile(profile, k).unwrap();
             let mut public = PalwBase0PrefixDigestV1::new(profile, k).unwrap();
             for ordinal in 0..plan.tile_count {
@@ -1437,6 +1452,13 @@ mod tests {
                     },
                     preimage: (**by_index.get(&index).unwrap()).clone(),
                 };
+                court.movement(context, &Action::BeginTile { opening:tile.opening.clone() }).unwrap();
+                for (i, bytes) in tile.preimage.values_le.chunks(65_536).enumerate() {
+                    court.movement(context, &Action::TilePart {offset:(i * 65_536) as u32, bytes:bytes.to_vec()}).unwrap();
+                    court = borsh::from_slice(&borsh::to_vec(&court).unwrap()).unwrap();
+                }
+                assert!(court.finish().is_err(), "whole old leaf must authenticate before a verdict");
+                court.movement(context, &Action::FinishTile).unwrap();
                 let values = palw_prefix_kv_authenticated_bytes_v1(binding, &plan, ordinal, &tile, 1 << 22).unwrap();
                 let before = borsh::to_vec(&public).unwrap();
                 assert!(public.push_values(profile, coordinate, 0, &128i32.to_le_bytes()).is_err());
@@ -1451,6 +1473,7 @@ mod tests {
                 named.state_root,
                 "public i32 narrowing rows reproduce the actual i8 cache, inherited={inherited}"
             );
+            assert_eq!(court.finish(), Ok(false));
             job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }));
             assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
             let bad = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();

@@ -528,6 +528,8 @@ pub mod palw_opv_bootstrap_v1;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_prefix_v1;
 pub mod palw_prefix_family_state_v1;
+pub mod palw_prefix_family_court_v1;
+pub mod palw_prefix_resources_v1;
 pub mod palw_prefix_base0_codec_v1;
 pub mod palw_prefix_q36_public_rows_v1;
 pub mod palw_prefix_gdn_replay_v1;

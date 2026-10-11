@@ -3286,14 +3286,33 @@ mod tests {
                     );
                 }
             }
+            let context = Hash64::from_u64_word(0x170019);
+            use kaspa_consensus_core::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as Action, PalwPrefixFamilyCourtV1};
+            let mut court = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
+            assert!(court.finish().is_err());
             let mut public_digest = PalwQwen36PrefixCacheDigestV1::new(&profile, k).unwrap();
             while let Some((unit, length, offset)) = public_digest.next_unit() {
                 match unit {
                     PalwPrefixCacheUnitV1::GdnHead { layer, head } => {
-                        // Matrices above have independently completed authenticated genesis replay.
+                        // The actual court owns its own zero-state replay; no producer cache
+                        // matrix enters its actions or checkpoint.
+                        court.movement(context, &Action::BeginHead { parameters: operands.clone() }).unwrap();
+                        let ranges = kaspa_consensus_core::palw_step_refute::qwen36_gdn_slice_v1(&profile, gdn, &widths, head).unwrap();
+                        for position in 0..k {
+                            let inputs = gdn.input_refs.iter().enumerate().map(|(i, r)| {
+                                let n = &profile.gdn_nodes[*r as usize];
+                                rows_for(profile.global_node_slot(PalwStepTableV1::Gdn, layer, *r as usize).unwrap(),
+                                    position, widths[i], n.tile_len, ranges[i].0, ranges[i].1)
+                            }).collect();
+                            court.movement(context, &Action::HeadPosition { inputs }).unwrap();
+                            court = borsh::from_slice(&borsh::to_vec(&court).unwrap()).unwrap();
+                        }
                         let words = &cache.gdn[layer as usize][head as usize].s;
                         let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
                         public_digest.push(unit, offset, &bytes).unwrap();
+                        for chunk in bytes.chunks(65_536) {
+                            court.movement(context, &Action::HeadDigest { length: chunk.len() as u32 }).unwrap();
+                        }
                     }
                     _ => {
                         let plan = kaspa_consensus_core::palw_prefix_q36_public_rows_v1::PalwQ36PrefixPublicRowV1::new(
@@ -3315,6 +3334,10 @@ mod tests {
                             })
                             .collect();
                         public_digest.push(unit, offset, &plan.authenticate(binding, k, &inputs, 1 << 22).unwrap()).unwrap();
+                        let before = borsh::to_vec(&court).unwrap();
+                        assert!(court.movement(Hash64::default(), &Action::PublicRow { length: length as u32, inputs: inputs.clone() }).is_err());
+                        assert_eq!(borsh::to_vec(&court).unwrap(), before);
+                        court.movement(context, &Action::PublicRow { length: length as u32, inputs }).unwrap();
                     }
                 }
             }
@@ -3323,6 +3346,7 @@ mod tests {
                 named.state_root,
                 "all public component relations reproduce the native prefix root"
             );
+            assert_eq!(court.finish(), Ok(false), "the complete typed court clears the honest public prefix");
             job.tail = Some(PalwFpJobTailV1::Prefix(kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1 {
                 state_root: Hash64::from_u64_word(0xbad17),
                 ..named
