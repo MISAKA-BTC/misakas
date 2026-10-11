@@ -278,7 +278,10 @@ class Drill:
         link.enabled.set()
         rpc = self.rpc(role)
         try:
-            rpc.call('addPeer', {'peerAddress': link.address, 'isPermanent': True})
+            peer_ip, peer_port = link.address.rsplit(':', 1)
+            # JSON wRPC uses ContextualNetAddress's native serde object, while
+            # the command-line flags and link logs use the socket string.
+            rpc.call('addPeer', {'peerAddress': {'ip': peer_ip, 'port': int(peer_port)}, 'isPermanent': True})
         finally:
             rpc.close()
         return link
