@@ -135,6 +135,9 @@ impl PalwOwnedPrefixCourtV1 {
     pub fn key(&self) -> (Hash64, PalwBondKeyV2, u64) {
         (self.claim, self.reserver, self.reserved_daa)
     }
+    pub fn execution_root_v1(&self) -> Hash64 {
+        self.execution_root
+    }
     pub fn seed_id(&self) -> Hash64 {
         self.seed_id
     }

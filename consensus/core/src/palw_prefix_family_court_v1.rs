@@ -78,6 +78,47 @@ pub enum PalwPrefixCourtActionV1 {
     },
     PublicInputFinish,
 }
+/// Incremental outsider-side deterministic next-fit packing. This is not a wire object
+/// or a court credential: the rooted owner independently checks every action/body/clock.
+/// It keeps only one bounded packet, never a complete maximum-profile action history.
+#[derive(Clone, Debug)]
+pub struct PalwPrefixPacketBuilderV1 {
+    maximum_body_bytes: u64,
+    encoded_bytes: u64,
+    actions: Vec<PalwPrefixCourtActionV1>,
+}
+impl PalwPrefixPacketBuilderV1 {
+    pub fn new(maximum_body_bytes: u64) -> Result<Self, String> {
+        if maximum_body_bytes < 4 || maximum_body_bytes > 90_000 - 16_384 {
+            return Err("prefix packet builder needs the admitted bounded encoded body".into());
+        }
+        Ok(Self { maximum_body_bytes, encoded_bytes: 4, actions: Vec::new() })
+    }
+    /// A flush returns the preceding packet and retains this action as the next packet's
+    /// first action. Oversized actions fail without changing any queued earlier action.
+    pub fn push(&mut self, action: PalwPrefixCourtActionV1) -> Result<Option<Vec<PalwPrefixCourtActionV1>>, String> {
+        let length = borsh::object_length(&action).map_err(|e| e.to_string())? as u64;
+        if length > self.maximum_body_bytes - 4 {
+            return Err("one prefix action needs a streamed source instead of an oversized packet".into());
+        }
+        let previous = if self.actions.len() == 64 || self.encoded_bytes + length > self.maximum_body_bytes {
+            self.encoded_bytes = 4;
+            Some(std::mem::take(&mut self.actions))
+        } else {
+            None
+        };
+        self.encoded_bytes += length;
+        self.actions.push(action);
+        Ok(previous)
+    }
+    pub fn finish(&mut self) -> Option<Vec<PalwPrefixCourtActionV1>> {
+        if self.actions.is_empty() {
+            return None;
+        }
+        self.encoded_bytes = 4;
+        Some(std::mem::take(&mut self.actions))
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PalwPrefixFamilyCursorV1 {
     TileOpening { ordinal: u64 },
@@ -1087,6 +1128,36 @@ impl PalwPrefixFamilyCourtV1 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn flat_packet_builder_preserves_order_boundaries_and_rejects_oversized_action_without_losing_history() {
+        let mut builder = PalwPrefixPacketBuilderV1::new(73_616).unwrap();
+        let mut packets = Vec::new();
+        let mut expected = Vec::new();
+        for offset in 0..129 {
+            let action =
+                PalwPrefixCourtActionV1::TilePart { offset, bytes: vec![offset as u8; if offset % 31 == 0 { 65_536 } else { 128 }] };
+            expected.push(action.clone());
+            if let Some(packet) = builder.push(action).unwrap() {
+                packets.push(packet);
+            }
+        }
+        assert!(builder.push(PalwPrefixCourtActionV1::TilePart { offset: 0, bytes: vec![0; 73_616] }).is_err());
+        if let Some(packet) = builder.finish() {
+            packets.push(packet);
+        }
+        assert!(builder.finish().is_none());
+        assert_eq!(packets.iter().flatten().cloned().collect::<Vec<_>>(), expected);
+        for packet in packets {
+            assert!(!packet.is_empty() && packet.len() <= 64);
+            assert!(borsh::object_length(&packet).unwrap() <= 73_616);
+        }
+        let mut counts = PalwPrefixPacketBuilderV1::new(73_616).unwrap();
+        for _ in 0..64 {
+            assert!(counts.push(PalwPrefixCourtActionV1::FinishTile).unwrap().is_none());
+        }
+        assert_eq!(counts.push(PalwPrefixCourtActionV1::FinishTile).unwrap().unwrap().len(), 64);
+        assert_eq!(counts.finish().unwrap().len(), 1);
+    }
     /// Complete public grammar fixture for rooted staged-court tests. The registered graph
     /// is the canonical BASE0 i8 family, not an A16 alias; native family goldens are separate.
     pub(crate) fn qualified_prefix_case_for_tests_v1(
