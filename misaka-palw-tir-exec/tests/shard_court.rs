@@ -241,6 +241,7 @@ fn exact_builder_limit(meter: PalwTirBuilderMeterV1) -> PalwTirBuilderWorkLimits
     PalwTirBuilderWorkLimitsV1 {
         evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: meter.work.elements, max_terms: meter.work.terms },
         max_target_requests: meter.target_requests,
+        max_source_reads: meter.source_reads,
     }
 }
 
@@ -248,6 +249,7 @@ fn record_builder_maximum(maximum: &mut PalwTirBuilderMeterV1, meter: PalwTirBui
     maximum.work.elements = maximum.work.elements.max(meter.work.elements);
     maximum.work.terms = maximum.work.terms.max(meter.work.terms);
     maximum.target_requests = maximum.target_requests.max(meter.target_requests);
+    maximum.source_reads = maximum.source_reads.max(meter.source_reads);
 }
 
 #[test]
@@ -329,6 +331,12 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
             let (metered_root, meter) =
                 build_tir_root_claim_bounded_v1(&capture.binding, index, &store, &rules, tir_court_builder_limits_v1(&rules)).unwrap();
             assert_eq!(metered_root, root);
+            if meter.source_reads > 0 {
+                let mut insufficient = exact_builder_limit(meter);
+                insufficient.max_source_reads -= 1;
+                assert!(build_tir_root_claim_bounded_v1(&capture.binding, index, &store, &rules, insufficient).is_err(),
+                    "root source reads are shared across reductions, finalize and every closure pass");
+            }
             record_builder_maximum(&mut maximum_builder, meter);
             assert_eq!(
                 build_tir_root_claim_bounded_v1(&capture.binding, index, &store, &rules, exact_builder_limit(meter)).unwrap().0,
@@ -357,6 +365,13 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
                 )
                 .unwrap();
                 assert_eq!(metered, round);
+                if meter.source_reads > 0 {
+                    let mut insufficient = exact_builder_limit(meter);
+                    insufficient.max_source_reads -= 1;
+                    assert!(build_tir_dissect_round_bounded_v1(&capture.binding, &phase,
+                        partial.space.layout.h_tile, &store, &rules, insufficient).is_err(),
+                        "source read ceiling includes every child and reduction, with supplied/cache hits charged");
+                }
                 assert_eq!(
                     build_tir_dissect_round_v1(&capture.binding, &phase, partial.space.layout.h_tile, &store, &rules).unwrap(),
                     round
@@ -432,6 +447,14 @@ fn proven_partial_rows_play_honest_and_forged_history_courts_for_every_corpus_si
                 build_tir_dissect_bottom_bounded_v1(&capture.binding, &phase, &store, &rules, tir_court_builder_limits_v1(&rules))
                     .unwrap();
             assert_eq!(metered, bottom);
+            assert_eq!(build_tir_dissect_bottom_bounded_v1(&capture.binding, &phase, &store, &rules,
+                exact_builder_limit(meter)).unwrap().0, bottom);
+            if meter.source_reads > 0 {
+                let mut insufficient = exact_builder_limit(meter);
+                insufficient.max_source_reads -= 1;
+                assert!(build_tir_dissect_bottom_bounded_v1(&capture.binding, &phase, &store, &rules, insufficient).is_err(),
+                    "bottom source reads refuse at the exact whole-move boundary");
+            }
             assert_eq!(build_tir_dissect_bottom_v1(&capture.binding, &phase, &store, &rules).unwrap(), bottom);
             record_builder_maximum(&mut maximum_builder, meter);
             assert_eq!(bottom, full.dissect_bottom(&honest.material, &phase, &rules).unwrap());

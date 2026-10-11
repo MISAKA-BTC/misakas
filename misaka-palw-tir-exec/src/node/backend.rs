@@ -66,7 +66,14 @@ pub const TIR_DENSE_CAPTURE_BYTES_V1: usize = 64 << 20;
 /// materialization even when the values are supplied directly by committed leaves.
 /// A refusal means no move is built and certifies no verdict, soundness or fee.
 pub fn tir_court_builder_limits_v1(rules: &PalwTirCourtRulesV1) -> kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {
-    kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 { evaluation: rules.limits, max_target_requests: 65_536 }
+    kaspa_consensus_core::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1 {
+        evaluation: rules.limits,
+        max_target_requests: 65_536,
+        // Explicit node policy, not a proof that the rule's element/term counters include
+        // all reads: eight input edges per computed item plus source-only target requests.
+        max_source_reads: rules.limits.max_elements.saturating_add(rules.limits.max_terms)
+            .saturating_mul(8).saturating_add(65_536),
+    }
 }
 
 /// Whether a new [`TirBackendV1`] runs the fused kernels ([`set_tir_fused_kernels_default_v1`]).

@@ -53,7 +53,7 @@
 //! **The check order is normative** (the verdict and its evidence id must be the same on every
 //! implementation): see [`check_tir_cone_refutation_v1`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{cell::Cell, collections::{BTreeMap, BTreeSet}, rc::Rc};
 
 use crate::Hash64;
 use crate::palw_artifact::{
@@ -117,20 +117,32 @@ pub struct PalwTirCourtRulesV1 {
 pub struct PalwTirBuilderWorkLimitsV1 {
     pub evaluation: DemandLimits,
     pub max_target_requests: u64,
+    /// Logical DemandSource calls, including cached/supplied values and nested history reads.
+    pub max_source_reads: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwTirBuilderMeterV1 {
     pub work: DemandWork,
     pub target_requests: u64,
+    pub source_reads: u64,
 }
 
 struct BuilderBudget {
     limit: PalwTirBuilderWorkLimitsV1,
     meter: PalwTirBuilderMeterV1,
+    reads: Rc<Cell<u64>>,
 }
 impl BuilderBudget {
-    fn new(limit: PalwTirBuilderWorkLimitsV1) -> Self { Self { limit, meter: PalwTirBuilderMeterV1::default() } }
+    fn new(limit: PalwTirBuilderWorkLimitsV1) -> Self {
+        Self { limit, meter: PalwTirBuilderMeterV1::default(), reads: Rc::new(Cell::new(0)) }
+    }
+    fn meter(&self) -> PalwTirBuilderMeterV1 {
+        PalwTirBuilderMeterV1 { source_reads: self.reads.get(), ..self.meter }
+    }
+    fn source_read_budget(&self) -> Option<(Rc<Cell<u64>>, u64)> {
+        Some((self.reads.clone(), self.limit.max_source_reads))
+    }
     fn remaining(&self, per_evaluation: &DemandLimits) -> DemandLimits {
         DemandLimits {
             max_elements: per_evaluation.max_elements.min(self.limit.evaluation.max_elements.saturating_sub(self.meter.work.elements)),
@@ -633,6 +645,8 @@ struct TirSource<'a, 's> {
     supplied_ctx: Option<DemandContext>,
     supplied: BTreeMap<(u16, usize), i128>,
     used_supplied: BTreeSet<(u16, usize)>,
+    /// Node construction only; historical validators and builders leave this absent.
+    read_budget: Option<(Rc<Cell<u64>>, u64)>,
 }
 
 fn tir_err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
@@ -640,6 +654,19 @@ fn tir_err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
 }
 
 impl TirSource<'_, '_> {
+    fn source_read(&self) -> TirResult<()> {
+        if let Some((reads, limit)) = &self.read_budget {
+            let next = reads.get().checked_add(1).ok_or_else(||
+                TirError::new(TirErrorKind::Missing, "builder source read count overflows"))?;
+            if next > *limit {
+                return tir_err(TirErrorKind::Missing, "builder source read budget is full");
+            }
+            // Charged before any value lookup, store fetch or allocation, including cache hits.
+            reads.set(next);
+        }
+        Ok(())
+    }
+
     /// Serve lane `lane` of step leaf `coord`, decoded as `dtype`, recording the leaf.
     fn step_lane(&mut self, coord: PalwStepCoordinateV1, dtype: DType, lane_index: usize) -> TirResult<i128> {
         let Some(index) = self.space.leaf_index(self.ctx, &coord) else {
@@ -690,6 +717,7 @@ impl TirSource<'_, '_> {
 
 impl DemandSource for TirSource<'_, '_> {
     fn node(&mut self, ctx: DemandContext, node: u16, index: usize) -> TirResult<i128> {
+        self.source_read()?;
         if self.supplied_ctx == Some(ctx) && self.supplied.range((node, 0)..=(node, usize::MAX)).next().is_some() {
             let Some(v) = self.supplied.get(&(node, index)).copied() else {
                 return tir_err(TirErrorKind::Missing, format!("the claim has no value for element {index} of node {node}"));
@@ -710,6 +738,7 @@ impl DemandSource for TirSource<'_, '_> {
     }
 
     fn param(&mut self, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
+        self.source_read()?;
         let Some(d) = self.space.program.params.get(param as usize) else {
             return tir_err(TirErrorKind::Malformed, "no such param");
         };
@@ -732,6 +761,7 @@ impl DemandSource for TirSource<'_, '_> {
     }
 
     fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
+        self.source_read()?;
         if pos == 0 {
             return Ok(StateSupply::Value(0));
         }
@@ -748,6 +778,7 @@ impl DemandSource for TirSource<'_, '_> {
     }
 
     fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128> {
+        self.source_read()?;
         let h_tile = self.space.layout.h_tile;
         let tile_start = row_pos - row_pos % h_tile;
         let tile_end = tile_start + (h_tile - 1);
@@ -771,6 +802,7 @@ impl DemandSource for TirSource<'_, '_> {
     }
 
     fn token(&mut self, pos: u32) -> TirResult<u32> {
+        self.source_read()?;
         if pos < self.job.prefill {
             let Some(id) = self.units.prompt_id(pos) else {
                 return tir_err(TirErrorKind::Missing, format!("the prompt id at {pos}"));
@@ -1281,6 +1313,7 @@ impl CheckedCarriage<'_> {
             supplied_ctx: None,
             supplied: BTreeMap::new(),
             used_supplied: BTreeSet::new(),
+            read_budget: None,
         }
     }
 
@@ -1388,6 +1421,7 @@ fn store_source<'a, 's>(
         supplied_ctx: None,
         supplied: BTreeMap::new(),
         used_supplied: BTreeSet::new(),
+        read_budget: None,
     }
 }
 
@@ -1771,7 +1805,7 @@ pub fn build_tir_root_claim_bounded_v1(
 ) -> Result<(PalwTirRootClaimV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_root_claim_with_budget(binding, narrowed, store, rules, Some(&mut budget))?;
-    Ok((built, budget.meter))
+    Ok((built, budget.meter()))
 }
 
 fn build_tir_root_claim_with_budget(
@@ -1788,6 +1822,7 @@ fn build_tir_root_claim_with_budget(
     let mut all = BTreeMap::new();
     for (node, count) in site.reductions.iter().zip(&site.counts) {
         let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
+        source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
         if let Some(budget) = budget.as_deref_mut() { budget.targets(u64::from(*count)).map_err(eval_err)?; }
         let elements: Vec<usize> = (0..*count as usize).collect();
         let request = DemandRequest { target: DemandTarget::Node { ctx: site.ctx, node: *node }, elements: &elements };
@@ -1800,6 +1835,7 @@ fn build_tir_root_claim_with_budget(
     }
     // The finalize and its closure, with every total supplied: what they read is the claim's element set.
     let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
+    source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
     source.supplied_ctx = Some(site.ctx);
     source.supplied = all;
     finalize_and_closure_with_budget(&v.space, &site, &leaf, &mut source, &rules.limits, budget).map_err(eval_err)?;
@@ -1847,11 +1883,27 @@ fn builder_partials(
     range: (usize, usize),
     store: &dyn PalwTirEvidenceStoreV1,
     rules: &PalwTirCourtRulesV1,
-    mut budget: Option<&mut BuilderBudget>,
+    budget: Option<&mut BuilderBudget>,
 ) -> Result<(PalwTirRangeClaimV1, Requests), PalwTirEvidenceErrorV1> {
     let (v, leaf, inventory) = builder_prelude(binding, phase.leaf_index())?;
     let site = builder_site(&v, &leaf)?;
-    let mut source = store_source(&v, &binding.job_context, &inventory, store, phase.leaf_index(), rules);
+    builder_partials_verified(&v, &inventory, &site, binding, phase, range, store, rules, budget)
+}
+
+/// The bounded move verifies its immutable class/site once, then shares it across all children.
+fn builder_partials_verified(
+    v: &PalwTirVerifiedBindingV1,
+    inventory: &PalwTirInventoryIndexV1,
+    site: &PalwTirDissectSiteV1,
+    binding: &PalwTirStepBindingV1,
+    phase: &PalwTirDissectPhaseV1,
+    range: (usize, usize),
+    store: &dyn PalwTirEvidenceStoreV1,
+    rules: &PalwTirCourtRulesV1,
+    mut budget: Option<&mut BuilderBudget>,
+) -> Result<(PalwTirRangeClaimV1, Requests), PalwTirEvidenceErrorV1> {
+    let mut source = store_source(v, &binding.job_context, inventory, store, phase.leaf_index(), rules);
+    source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
     source.supplied_ctx = Some(site.ctx);
     let mut partials = Vec::with_capacity(site.reductions.len());
     for (i, node) in site.reductions.iter().enumerate() {
@@ -1896,7 +1948,7 @@ pub fn build_tir_dissect_round_bounded_v1(
 ) -> Result<(PalwTirDissectRoundV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_dissect_round_with_budget(binding, phase, tile_positions, store, rules, Some(&mut budget))?;
-    Ok((built, budget.meter))
+    Ok((built, budget.meter()))
 }
 
 fn build_tir_dissect_round_with_budget(
@@ -1907,12 +1959,22 @@ fn build_tir_dissect_round_with_budget(
     rules: &PalwTirCourtRulesV1,
     mut budget: Option<&mut BuilderBudget>,
 ) -> Result<PalwTirDissectRoundV1, PalwTirEvidenceErrorV1> {
+    let verified = if budget.is_some() {
+        let (v, leaf, inventory) = builder_prelude(binding, phase.leaf_index())?;
+        let site = builder_site(&v, &leaf)?;
+        Some((v, inventory, site))
+    } else { None };
     let h = phase.history_positions() as u64;
     let mut children = Vec::new();
     for (first, count) in phase.child_ranges() {
         let from = first * tile_positions as u64;
         let to = ((first + count) * tile_positions as u64).min(h);
-        children.push(builder_partials(binding, phase, (from as usize, to as usize), store, rules, budget.as_deref_mut())?.0);
+        let child = if let Some((v, inventory, site)) = &verified {
+            builder_partials_verified(v, inventory, site, binding, phase, (from as usize, to as usize), store, rules, budget.as_deref_mut())?
+        } else {
+            builder_partials(binding, phase, (from as usize, to as usize), store, rules, None)?
+        };
+        children.push(child.0);
     }
     Ok(PalwTirDissectRoundV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, children })
 }
@@ -1936,7 +1998,7 @@ pub fn build_tir_dissect_bottom_bounded_v1(
 ) -> Result<(PalwTirConeRefutationV1, PalwTirBuilderMeterV1), PalwTirEvidenceErrorV1> {
     let mut budget = BuilderBudget::new(limit);
     let built = build_tir_dissect_bottom_with_budget(binding, phase, store, rules, Some(&mut budget))?;
-    Ok((built, budget.meter))
+    Ok((built, budget.meter()))
 }
 
 fn build_tir_dissect_bottom_with_budget(
@@ -1947,9 +2009,16 @@ fn build_tir_dissect_bottom_with_budget(
     budget: Option<&mut BuilderBudget>,
 ) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
     let range = phase.terminal_range().ok_or_else(|| PalwTirEvidenceErrorV1::Binding("the dissection has no bottom yet".into()))?;
-    let (_, used) = builder_partials(binding, phase, range, store, rules, budget)?;
-    let (v, _, _) = builder_prelude(binding, phase.leaf_index())?;
-    assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
+    if budget.is_some() {
+        let (v, leaf, inventory) = builder_prelude(binding, phase.leaf_index())?;
+        let site = builder_site(&v, &leaf)?;
+        let (_, used) = builder_partials_verified(&v, &inventory, &site, binding, phase, range, store, rules, budget)?;
+        assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
+    } else {
+        let (_, used) = builder_partials(binding, phase, range, store, rules, None)?;
+        let (v, _, _) = builder_prelude(binding, phase.leaf_index())?;
+        assemble_carriage(&v, binding, phase.leaf_index(), &used, store, rules)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

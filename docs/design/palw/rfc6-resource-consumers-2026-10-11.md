@@ -432,3 +432,22 @@ only the named retirement test, not the entire combined invocation.
 None of these results certifies all-model whole-claim probabilistic soundness, an
 approved cost/capital fee, actual 100k native throughput/peak RSS, four-100k-seal
 native-carriage acceptance, permanent archive liveness or a real pruned P2P join.
+
+### Shared logical reads and class prelude (candidate; central run pending)
+
+The bounded node root/round/bottom now share a logical `DemandSource` read counter across
+all reductions, all children and every finalize/closure pass. Each node/parameter/state/history/token
+call is charged before lookup or store fetch, including supplied values and cache hits; a history
+read that calls `node` charges both calls. A limit refusal returns no constructed move. The node
+policy is explicitly finite at `8 × (rules.max_elements + rules.max_terms) + 65,536` using checked
+counter updates (policy arithmetic saturates); this is an operational limit, not a proof that
+primitive work accounts for all reads or an approved fee. The returned meter includes the exact
+logical calls. All executable corpus sites retain legacy wire equivalence and now exercise exact
+read limit acceptance plus one-less refusal for root, round and bottom.
+
+One bounded round verifies its immutable binding/program, builds its inventory index and analyzes
+its disputed site once, reusing that result across children. One bounded bottom also reuses the
+same prelude for evaluation and carriage assembly. Historical builders and validators keep their
+original entry points and acceptance. These counters do **not** count class decode/analysis time,
+carriage serialization/copies, full fold replay, retained preimages or peak RSS; those costs and
+actual 100k/pruned throughput remain separate unapproved gates.
