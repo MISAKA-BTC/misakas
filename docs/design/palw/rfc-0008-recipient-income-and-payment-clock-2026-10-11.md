@@ -119,3 +119,21 @@ the fixed 500,000 fee limit is then frozen in genesis Params before both actual
 fee runs. Both must match the same baseline before carrying either fee; the
 criterion never changes after a tested fee outcome. This is mechanics evidence,
 not an economic profitability or soundness approval.
+
+## Positive all-fund native settlement fixture
+
+The private happy-path candidate fixes W=436, settled depth=1, and the existing
+work-pricing fence at DAA 10,000 before genesis. Before that pricing fence the
+actual accepted escrow supplies positive issuer, Panel, NativeSlice and
+KernelFee legs in the toy class. This counterfactual mechanics profile is not
+shipped pricing, D=30 evidence, economic approval or model soundness evidence.
+It retains the existing REAL trace admission seam, real signed readiness,
+Panel/assembler, genuine native Final, actual funding and all cryptographic
+acceptance gates. A second genuine native Final supplies the configured depth.
+
+The candidate checks actual poster debits and allocation conservation, every
+positive queue's coinbase payment, separate physical R clocks, DB reopen,
+duplicate licence, each actual payment+W boundary, and full chain/lane replay.
+Its runtime result remains pending. Central integration f22a37d46 meanwhile
+passed 89 focused core tests and 5 wallet tests, including the partial FD/FE
+clock, collected market queue/phi and frozen Panel collector candidates.

@@ -374,3 +374,150 @@ async fn x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_r
     assert_eq!(failed_again.vesting_counters().moved, counters.moved);
     assert_eq!(cw.net.collateral(REGISTRANT), poster);
 }
+
+/// Full positive native/Panel/EXEC funds through actual signed Final, second
+/// actual Final, maturity and coinbase. REAL trace admission remains the named
+/// seam. Private pre-genesis pricing/D1/W436 are unapproved mechanics values;
+/// this is not the shipped D30 or an economics/soundness acceptance proof.
+#[tokio::test]
+async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w() {
+    use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwRoundRightsPolicyV1};
+    use kaspa_consensus_core::palw_vesting_v1::palw_vesting_payout_key_v1;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    const W: u64 = 436;
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut cw = active_world_over_with_params(
+        VerificationModeV1::OptimisticPublicVerification,
+        |config| TestConsensus::with_db(db.clone(), config, sender),
+        |params| {
+            let mut policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+            policy.window_daa = W;
+            policy.capital_unit_sompi = 100_000_000;
+            policy.claims_per_unit = 100;
+            policy.block_units_per_unit = 100_000_000;
+            policy.reward_per_unit_sompi = 100_000_000;
+            policy.final_weight_per_unit = 1_000_000_000;
+            policy.max_open_claims_per_bond = 1_000;
+            policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
+            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy });
+            params.sync_palw_bond_budget_v1();
+            // Counterfactual legacy whole-escrow pricing creates positive native
+            // legs in the toy class. All parameters precede genesis and work;
+            // funding/collateral/admission/cryptographic gates are unchanged.
+            params.palw_work_priced_reward = Some(ForkActivation::new(10_000));
+            params.palw_settled_anchor_depth = Some(1);
+            assert!(params.validate_palw_bond_budget_v1().is_err(), "public activation remains refused");
+        },
+    ).await;
+    cw.net._keep.push(Box::new(receiver));
+    let mut first = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    for (index, slice) in first.slices.iter().enumerate() {
+        first.lane.push(carry_slice(&mut cw, first.real.claim, index as u32, &slice.claim).await);
+    }
+    let poster_before = cw.net.collateral(REGISTRANT);
+    let (final_daa, licence) = finalize_native_root(&mut cw, &first).await;
+    let state = cw.net.chain.tip_state().1;
+    let native = state.vesting_row(&first.real.claim).unwrap().clone();
+    let receipt = state.exec_v2_reward_vesting_v1(&first.real.claim).unwrap().clone();
+    assert!(native.producer.amount > 0 && native.seats.iter().any(|(_, leg)| leg.amount > 0));
+    assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::NativeSlice && leg.amount > 0));
+    assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::KernelFee && leg.amount > 0));
+    let actual_fees: u64 = receipt.legs.iter().filter(|((_, fund), _)| *fund == PalwExecV2RewardFundV1::KernelFee).map(|(_, leg)| leg.amount).sum();
+    assert_eq!(poster_before - cw.net.collateral(REGISTRANT), actual_fees);
+    assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
+    assert_eq!(state.settled_attempt_finals(), native.settled_at_final);
+    assert!(native.expiry_daa > receipt.liability_until && native.final_daa == final_daa);
+    // Supply the private depth1 with another genuine signed/assembled native
+    // Final. No clock/Final setter supplies the maturity condition.
+    let mut second = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), 1_024).await;
+    for (index, slice) in second.slices.iter().enumerate() {
+        second.lane.push(carry_slice(&mut cw, second.real.claim, index as u32, &slice.claim).await);
+    }
+    finalize_native_root(&mut cw, &second).await;
+    let state = cw.net.chain.tip_state().1;
+    assert_eq!(state.settled_attempt_finals(), native.settled_at_final + 1);
+    assert!(cw.net.daa() < native.expiry_daa);
+    let second_native = state.vesting_row(&second.real.claim).unwrap().clone();
+    assert!(second_native.expiry_daa > native.expiry_daa + W, "the second root cannot pay during the first root's window");
+    let mut queues = std::collections::BTreeMap::new();
+    let mut add = |key: Hash64, bond: PalwBondKeyV2, amount: u64| {
+        if amount > 0 {
+            let slot = queues.entry(key).or_insert((bond, 0u64));
+            assert_eq!(slot.0, bond, "an exact queue has one authenticated recipient");
+            slot.1 = slot.1.checked_add(amount).unwrap();
+        }
+    };
+    add(palw_vesting_payout_key_v1(&first.real.claim), native.producer_bond, native.producer.amount);
+    for (bond, leg) in &native.seats { add(kaspa_consensus_core::palw_state_v2::palw_panel_payout_key_v1(&leg.payload), *bond, leg.amount); }
+    for ((bond, fund), leg) in &receipt.legs {
+        let key = match fund {
+            PalwExecV2RewardFundV1::NativeSlice => kaspa_consensus_core::palw_state_v2::palw_panel_payout_key_v1(&leg.payload),
+            PalwExecV2RewardFundV1::KernelFee => kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_payout_key_v1(&leg.payload),
+        };
+        add(key, *bond, leg.amount);
+    }
+    drop(add);
+    cw.net.beat_to(native.expiry_daa - 1).await;
+    let before = cw.net.chain.tip_state().1;
+    assert!(before.vesting_row(&first.real.claim).is_some());
+    assert!(before.exec_v2_reward_vesting_v1(&first.real.claim).is_some());
+    let expected: std::collections::BTreeMap<usize, u64> = queues.values().fold(std::collections::BTreeMap::new(), |mut amounts, (bond, amount)| {
+        let card = cw.net.chain.bonds.iter().position(|candidate| candidate == bond).unwrap();
+        *amounts.entry(card).or_default() += *amount;
+        amounts
+    });
+    let prior_cash: std::collections::BTreeMap<_, _> = expected.keys().map(|card| (*card, minted_and_owed(&cw.net, &cw.net.chain, *card).0)).collect();
+    let mut paid_rows = std::collections::BTreeMap::new();
+    while paid_rows.len() < queues.len() {
+        assert!(cw.net.daa() < native.expiry_daa + 32, "all actual first-root funds must settle without a synthetic clock");
+        cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+        let state = cw.net.chain.tip_state().1;
+        for (key, (bond, amount)) in &queues {
+            if let Some(row) = state.bond_budget_native_queue_income_v1(*key, bond) {
+                assert_eq!(row.consumed.reward_sompi, *amount, "each actual positive leg consumes R once");
+                if !row.live && !paid_rows.contains_key(key) {
+                    assert!(state.pending_payout(key).is_none(), "R payment clock follows actual physical drain");
+                    assert_eq!(row.reuse_not_before, cw.net.daa() + W, "actual sparse/zero-DAA payment plus W");
+                    paid_rows.entry(*key).or_insert(*row);
+                }
+            }
+        }
+    }
+    let paid = cw.net.chain.tip_state().1;
+    assert!(paid.vesting_row(&first.real.claim).is_none());
+    assert!(paid.exec_v2_reward_vesting_v1(&first.real.claim).is_none());
+    assert_eq!(paid.vesting_row(&second.real.claim), Some(&second_native));
+    for (card, amount) in &expected {
+        assert_eq!(minted_and_owed(&cw.net, &cw.net.chain, *card).0, prior_cash[card] + amount, "actual coinbase pays every fund exactly once");
+    }
+    let counters = paid.vesting_counters();
+    let sink = cw.net.chain.sink();
+    let utxos = Net::utxos_of(&cw.net.chain);
+    let root = paid.state_root();
+    cw.net = cw.net.restart(db);
+    assert_eq!(cw.net.chain.sink(), sink);
+    assert_eq!(cw.net.chain.tip_state().1.state_root(), root);
+    assert_eq!(Net::utxos_of(&cw.net.chain), utxos);
+    cw.net.send(vec![(REGISTRANT, licence)]).await;
+    assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), counters, "duplicate licence never creates/moves a second fund");
+    let latest = paid_rows.values().map(|row| row.reuse_not_before).max().unwrap();
+    cw.net.beat_to(latest - 1).await;
+    let state = cw.net.chain.tip_state().1;
+    for (key, row) in &paid_rows {
+        if row.reuse_not_before == latest {
+            assert!(state.bond_budget_native_queue_income_v1(*key, &row.bond).is_some(), "the final physical W has not ended");
+        }
+    }
+    cw.net.beat_to(latest).await;
+    let released = cw.net.chain.tip_state().1;
+    for (key, row) in &paid_rows {
+        assert!(released.bond_budget_native_queue_income_v1(*key, &row.bond).is_none());
+    }
+    for (card, amount) in &expected {
+        assert_eq!(minted_and_owed(&cw.net, &cw.net.chain, *card).0, prior_cash[card] + amount, "window release mints no second cash");
+    }
+    let lane: Vec<_> = first.lane.into_iter().chain(second.lane).collect();
+    let replay = replay_with_lane(&cw.net, &lane).await;
+    cw.net.assert_same(&replay, "actual full happy native settlement/queue-window replay");
+}

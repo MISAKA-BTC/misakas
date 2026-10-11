@@ -95,6 +95,15 @@ async fn active_world_with_kernel_mode(kernel_mode: VerificationModeV1) -> Cw {
 }
 
 async fn active_world_over(kernel_mode: VerificationModeV1, make: impl FnOnce(&Config) -> TestConsensus) -> Cw {
+    active_world_over_with_params(kernel_mode, make, |_| {}).await
+}
+
+/// Private mechanics Params are frozen before genesis, not installed into a live state.
+async fn active_world_over_with_params(
+    kernel_mode: VerificationModeV1,
+    make: impl FnOnce(&Config) -> TestConsensus,
+    modify: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
+) -> Cw {
     kaspa_core::log::try_init_logger("warn");
     let mut cw = Cw::over_with_floor_and_kernel_mode(
         SEED,
@@ -102,6 +111,7 @@ async fn active_world_over(kernel_mode: VerificationModeV1, make: impl FnOnce(&C
             params.palw_exec_payload_v2 = Some(ForkActivation::new(EXEC_FENCE));
             params.sync_palw_exec_payload_v2();
             assert!(params.validate_palw_exec_payload_v2().is_err(), "validation refuses the payload fence: the harness arms past it");
+            modify(params);
         },
         make,
         0,
