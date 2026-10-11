@@ -313,13 +313,15 @@ impl PalwTokenizerResourcePlanV1 {
         let table_moves=table.div_ceil(65536)+2;
         let moves=u128::from(self.maximum_moves)+table_moves;
         let row=65536u128+2048;
+        let seed=crate::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1 as u128;
+        let table_carriers=table+table_moves*5632+seed;
         Ok(PalwRenderingResourcePlanV1 {prefix_tokens:0,vocab,
             maximum_stream_bytes:narrow(u128::from(self.exact_raw_bytes)+table)?, maximum_stream_leaves:1,
             maximum_eog_bytes:0, maximum_moves:narrow(moves)?,
             maximum_parser_steps:self.maximum_parser_steps,
             maximum_blake_blocks:narrow(u128::from(self.maximum_blake_blocks)+table.div_ceil(128)*2+8)?,
             inclusion_daa:narrow(moves*u128::from(p.inclusion_margin_daa))?,
-            rent_sompi:narrow(u128::from(self.rent_sompi)+table*u128::from(p.rent_per_stream_byte)
+            rent_sompi:narrow(u128::from(self.rent_sompi)+table_carriers*u128::from(p.rent_per_stream_byte)
                 +row*u128::from(p.rent_per_row_byte))?,
             deposit_sompi:narrow(moves*u128::from(p.deposit_per_move))?, row_bytes:narrow(row)?,
             resident_ram_bytes:self.resident_ram_bytes.checked_add(2048).ok_or("tokenizer RAM overflow")?})
