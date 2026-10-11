@@ -12,9 +12,9 @@
 //! The wire and the pool are tested beside it: a V4 receipt queues and nothing else decodes as one.
 
 use super::tir_shard::{
-    PalwTirRowFetchV1, PalwTirRunPursuitV1, PalwTirShardOutcomeV1, PalwTirShardShadowV1, palw_tir_shard_accusation_over_v1,
-    palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1, palw_tir_shard_outcome_v1,
-    palw_tir_shard_shadow_run_v1,
+    PalwTirRowFetchV1, PalwTirRunPursuitV1, PalwTirShardBooksV1, PalwTirShardOutcomeV1, PalwTirShardShadowV1,
+    palw_tir_shard_accusation_over_v1, palw_tir_shard_accusation_v1, palw_tir_shard_arrival_push_v1, palw_tir_shard_outcome_over_v1,
+    palw_tir_shard_outcome_v1, palw_tir_shard_shadow_run_v1, resource,
 };
 use crate::palw_backends::PalwBackendRegistry;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
@@ -392,7 +392,14 @@ fn a_seat_with_no_copy_fetches_its_shard_from_peers_through_the_interval_lanes_p
     let claim = Hash64::from_bytes([0x77; 64]);
     for shard in 0..2u16 {
         let pursuit = TirRowPursuitV1::new(&capture.binding.class, ir.class_id, ir.root, 2, shard).unwrap();
-        let mut fetch = PalwTirRowFetchV1::new(pursuit);
+        let ledger = crate::palw_memory_ledger::PalwMemoryLedgerV1::new(
+            crate::palw_memory_ledger::PalwMemoryPoolV1::Host,
+            Some(1 << 30),
+            || None,
+        );
+        let d = duty(&ir, shard, 2, 1, PalwSegmentMaskV2::full(1), false);
+        let memory = resource::reserve_rows_v1(&ledger, &d, &capture.binding.class).unwrap();
+        let mut fetch = PalwTirRowFetchV1::new(pursuit, memory);
         let mut pool: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
         let mut now = Instant::now();
         let (mut refused_total, mut ticks) = (0usize, 0u32);
@@ -654,4 +661,47 @@ fn a_non_seat_watcher_verifies_whole_shards_and_accuses_a_lie_as_itself() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn fetched_rows_and_incomplete_pursuits_follow_live_duties_and_keep_their_memory_until_last_use() {
+    use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
+    use misaka_palw_sdk::lineages::tir::{TirFileMirrorV1, TirRowPursuitV1, fetch_shard_params_v1};
+    let ir = shard_class("row-memory");
+    let tir = ir.tir();
+    let class = tir.class();
+    let seat = duty(&ir, 0, 2, 1, PalwSegmentMaskV2::full(1), false);
+    let watch = duty(&ir, 1, 2, 1, PalwSegmentMaskV2::full(1), true);
+    let seat_key = (ir.class_id, 2, 0);
+    let watch_key = (ir.class_id, 2, 1);
+    let seat_need = resource::row_cache_need_v1(class, 2, 0).unwrap();
+    let watch_need = resource::row_cache_need_v1(class, 2, 1).unwrap();
+    let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(seat_need + watch_need), || None);
+    let seat_memory = resource::reserve_rows_v1(&ledger, &seat, class).unwrap();
+    let h = fetch_shard_params_v1(class, ir.class_id, ir.root, 2, 0, &TirFileMirrorV1(ir.dir.join("tiny.palwtir"))).unwrap();
+    assert_eq!(
+        seat_need,
+        h.bytes * 32 + h.leaves * 8192 + class.program.len() as u64 * 64 + super::tir_shard::PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1
+    );
+    let inflight = std::sync::Arc::new(resource::ReservedRowsV1::new(h, seat_memory));
+    let mut books = PalwTirShardBooksV1::default();
+    books.holdings.insert(seat_key, inflight.clone());
+    let watch_memory = resource::reserve_rows_v1(&ledger, &watch, class).unwrap();
+    let pursuit = TirRowPursuitV1::new(class, ir.class_id, ir.root, 2, 1).unwrap();
+    books.row_fetches.insert(watch_key, PalwTirRowFetchV1::new(pursuit, watch_memory));
+    assert_eq!(ledger.reserved_bytes(), seat_need + watch_need);
+    assert!(resource::reserve_rows_v1(&ledger, &seat, class).is_err());
+    books.retain_row_interests_v1(std::slice::from_ref(&seat), std::slice::from_ref(&watch), 700);
+    assert_eq!((books.holdings.len(), books.row_fetches.len()), (1, 1));
+    // A different partition of the same class/shard must not keep the old partition's rows.
+    let replanned = duty(&ir, 0, 1, 1, PalwSegmentMaskV2::full(1), false);
+    books.retain_row_interests_v1(std::slice::from_ref(&replanned), std::slice::from_ref(&watch), 700);
+    assert!(books.holdings.is_empty());
+    assert_eq!(ledger.reserved_bytes(), seat_need + watch_need, "the verifier still holds the old rows");
+    books.retain_row_interests_v1(&[], std::slice::from_ref(&watch), 701);
+    assert!(books.row_fetches.is_empty());
+    assert_eq!(ledger.reserved_bytes(), seat_need, "an expired unfinished pursuit releases its budget");
+    drop(inflight);
+    assert_eq!(ledger.reserved_bytes(), 0);
+    assert!(resource::reserve_rows_v1(&ledger, &seat, class).is_ok());
 }

@@ -14,6 +14,81 @@ use super::{PALW_TIR_SHARD_CELL_ROLE_V1, PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1};
 
 pub(super) const PALW_TIR_SHARD_WATCH_ROLE_V1: &str = "tir-shard-watch";
 pub(super) const PALW_TIR_SHARD_CLOSE_ROLE_V1: &str = "tir-shard-close";
+pub(super) const PALW_TIR_SHARD_ROWS_ROLE_V1: &str = "tir-shard-rows";
+
+/// Data and its reservation share one owner. Evicting a cache entry must not release a
+/// reservation while an in-flight verifier/proof still owns an Arc to the same rows.
+pub(in crate::palw_panel) struct ReservedRowsV1<T> {
+    data: T,
+    _memory: PalwMemoryReservationV1,
+}
+
+impl<T> ReservedRowsV1<T> {
+    pub(in crate::palw_panel) fn new(data: T, memory: PalwMemoryReservationV1) -> Self {
+        Self { data, _memory: memory }
+    }
+}
+
+impl<T> std::ops::Deref for ReservedRowsV1<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.data
+    }
+}
+
+/// Node-policy envelope for fetching and constructing one shard's held rows. It includes
+/// the i128 MapParams construction, duplicate encoded rows/openings and native params,
+/// per-leaf paths/collection overhead, and program/plan metadata. This estimate is held
+/// for the cache's entire lifetime; it is not a measured RAM certificate or a consensus price.
+/// Geometry and inventory spans are computed without allocating a list of every leaf.
+pub(in crate::palw_panel) fn row_cache_need_v1(
+    class: &kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+    s_l: u16,
+    shard: u16,
+) -> Result<u64, String> {
+    use kaspa_consensus_core::palw_tir_artifact_v1::{
+        palw_tir_instance_leaves_v1, palw_tir_inventory_leaf_count_v1, palw_tir_param_instances_v1, palw_tir_tensor_bytes_v1,
+    };
+    use kaspa_consensus_core::palw_tir_shard_v1::palw_tir_shard_inventory_ranges_v1;
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(class).map_err(|e| e.to_string())?;
+    let p = &space.program;
+    palw_tir_inventory_leaf_count_v1(p).map_err(|e| e.to_string())?;
+    let (parts, _) = misaka_palw_sdk::lineages::tir::tir_shard_geometry_over_v1(&space, s_l)?;
+    let layers = parts.get(usize::from(shard)).cloned().ok_or_else(|| format!("shard {shard} of {s_l}"))?;
+    let ranges = palw_tir_shard_inventory_ranges_v1(p, layers, shard == 0, shard + 1 == s_l);
+    let (mut cursor, mut raw, mut leaves) = (0u64, 0u64, 0u64);
+    for (j, instances) in palw_tir_param_instances_v1(p).iter().enumerate() {
+        let count = palw_tir_instance_leaves_v1(p, j as u16);
+        for _ in instances {
+            let end = cursor.checked_add(count).ok_or("the row inventory size exceeds u64")?;
+            if ranges.iter().any(|r| u64::from(r.start) <= cursor && end <= u64::from(r.end)) {
+                raw = raw.checked_add(palw_tir_tensor_bytes_v1(p, j as u16)).ok_or("the row byte size exceeds u64")?;
+                leaves = leaves.checked_add(count).ok_or("the row inventory size exceeds u64")?;
+            }
+            cursor = end;
+        }
+    }
+    row_cache_envelope_v1(raw, leaves, class.program.len() as u64)
+}
+
+fn row_cache_envelope_v1(raw: u64, leaves: u64, program: u64) -> Result<u64, String> {
+    raw.checked_mul(32)
+        .and_then(|n| leaves.checked_mul(8192).and_then(|x| n.checked_add(x)))
+        .and_then(|n| program.checked_mul(64).and_then(|x| n.checked_add(x)))
+        .and_then(|n| n.checked_add(PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1))
+        .ok_or_else(|| "the rows' construction size overflows the memory ledger".into())
+}
+
+pub(in crate::palw_panel) fn reserve_rows_v1(
+    host: &Arc<PalwMemoryLedgerV1>,
+    duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+    class: &kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+) -> Result<PalwMemoryReservationV1, String> {
+    let place = duty.tir_shard.ok_or("the row fetch has no shard duty")?;
+    let need = row_cache_need_v1(class, place.s_l, place.shard)?;
+    let key = PalwMemoryReservationKeyV1 { role: PALW_TIR_SHARD_ROWS_ROLE_V1, class_id: duty.class_id, job: duty.claim_id };
+    host.reserve(key, need).map_err(|r| format!("the rows' construction/cache is not free ({r})"))
+}
 
 pub(super) fn scratch_need_v1(capture_bytes: u64) -> Result<u64, String> {
     capture_bytes
@@ -96,6 +171,28 @@ mod tests {
     }
     fn pool(bytes: u64) -> Arc<PalwMemoryLedgerV1> {
         PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(bytes), || None)
+    }
+
+    #[test]
+    fn cache_eviction_retains_memory_until_the_last_verifier_releases_the_rows() {
+        let ledger = pool(4096);
+        let held = ledger.reserve(key(PALW_TIR_SHARD_ROWS_ROLE_V1), 4096).unwrap();
+        let cache = Arc::new(ReservedRowsV1::new(7u32, held));
+        let verifier = cache.clone();
+        drop(cache);
+        assert_eq!(**verifier, 7);
+        assert_eq!(ledger.reserved_bytes(), 4096);
+        assert!(ledger.reserve(key(PALW_TIR_SHARD_ROWS_ROLE_V1), 1).is_err());
+        drop(verifier);
+        assert_eq!(ledger.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn row_profile_overflow_refuses_instead_of_saturating() {
+        for (raw, leaves, program) in [(u64::MAX, 0, 0), (0, u64::MAX, 0), (0, 0, u64::MAX)] {
+            assert!(row_cache_envelope_v1(raw, leaves, program).is_err());
+        }
+        assert_eq!(row_cache_envelope_v1(0, 0, 0).unwrap(), PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1);
     }
 
     #[test]

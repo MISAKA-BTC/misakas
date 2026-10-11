@@ -468,11 +468,15 @@ pub(crate) struct PalwTirRowFetchV1 {
     pub pursuit: misaka_palw_sdk::lineages::tir::TirRowPursuitV1,
     asked: Option<((u32, u32), std::time::Instant)>,
     pub asks: u32,
+    memory: crate::palw_memory_ledger::PalwMemoryReservationV1,
 }
 
 impl PalwTirRowFetchV1 {
-    pub(crate) fn new(pursuit: misaka_palw_sdk::lineages::tir::TirRowPursuitV1) -> Self {
-        Self { pursuit, asked: None, asks: 0 }
+    pub(crate) fn new(
+        pursuit: misaka_palw_sdk::lineages::tir::TirRowPursuitV1,
+        memory: crate::palw_memory_ledger::PalwMemoryReservationV1,
+    ) -> Self {
+        Self { pursuit, asked: None, asks: 0, memory }
     }
 
     /// **Take the replies the lane pooled for the outstanding ask** (and clear the slot, so the pool does not carry them again):
@@ -701,9 +705,9 @@ pub(crate) struct PalwTirShardBooksV1 {
     /// Captures reassembled from answered runs: this seat's material for a claim whose executor served none.
     synthesised: HashMap<Hash64, Vec<u8>>,
     /// The shards this node holds the rows of without holding the class: fetched once, proven, kept.
-    holdings: HashMap<(Hash64, u16), std::sync::Arc<TirShardHoldingV1>>,
+    pub(super) holdings: HashMap<(Hash64, u16, u16), std::sync::Arc<resource::ReservedRowsV1<TirShardHoldingV1>>>,
     /// The fetches of shard rows from peers in flight (`--palw-tir-shard-fetch`), by `(class, shard)`.
-    row_fetches: HashMap<(Hash64, u16), PalwTirRowFetchV1>,
+    pub(super) row_fetches: HashMap<(Hash64, u16, u16), PalwTirRowFetchV1>,
     /// Claims whose cells this seat refuted (or could not accuse): never answered `Valid`.
     pub refuted: HashSet<Hash64>,
     /// The `(claim, shard)`s the non-seat watcher has verified (`--palw-tir-shard-watch`): each once.
@@ -723,6 +727,20 @@ pub(crate) struct PalwTirShardBooksV1 {
 }
 
 impl PalwTirShardBooksV1 {
+    /// Keep rows only for this tip's actual seat and public watcher interests. Geometry is
+    /// part of the cache key: replanning a class must not reuse another partition's params.
+    /// Arc owners running a proof/verifier retain their own row reservation after eviction.
+    pub(crate) fn retain_row_interests_v1(&mut self, seats: &[PalwSeatDutyV2], watch: &[PalwSeatDutyV2], daa: u64) {
+        let keep: HashSet<_> = seats
+            .iter()
+            .chain(watch)
+            .filter(|d| daa <= d.receipt_deadline)
+            .filter_map(|d| d.tir_shard.map(|p| (d.class_id, p.s_l, p.shard)))
+            .collect();
+        self.holdings.retain(|k, _| keep.contains(k));
+        self.row_fetches.retain(|k, _| keep.contains(k));
+    }
+
     /// This seat's own receipt, kept apart from what can be evicted by an arrival: put straight in the pool and the re-send table.
     pub(crate) fn insert_own(&mut self, receipt: PalwSeatReceiptV4, seat_index: u8, now: std::time::Instant) {
         self.filed.insert(
@@ -1134,7 +1152,7 @@ impl super::PalwPanelService {
             self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
             return;
         };
-        let hold_key = (duty.class_id, place.shard);
+        let hold_key = (duty.class_id, place.s_l, place.shard);
         if !books.holdings.contains_key(&hold_key) {
             let Some(mirror) = mirror else {
                 // No mirror on this host: the rows come from peers, a reply at a time (D-S6 over the network). The tick that
@@ -1145,12 +1163,23 @@ impl super::PalwPanelService {
                 }
                 return self.tir_shard_holder_judge_v1(bond_key, network_domain, current_daa, duty, capture, hold_key, books).await;
             };
+            let memory = match resource::reserve_rows_v1(&crate::palw_memory_ledger::host_ledger_v1(), duty, &capture.binding.class) {
+                Ok(held) => held,
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-row-memory-{}", duty.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the row fetch waits ({why})", duty.class_id, place.shard)
+                    });
+                    return;
+                }
+            };
             let (class, class_id, root, path) =
                 (capture.binding.class.clone(), duty.class_id, duty.artifact_root, mirror.to_path_buf());
             let (s_l, shard) = (place.s_l, place.shard);
-            let fetched =
-                tokio::task::spawn_blocking(move || fetch_shard_params_v1(&class, class_id, root, s_l, shard, &TirFileMirrorV1(path)))
-                    .await;
+            let fetched = tokio::task::spawn_blocking(move || {
+                fetch_shard_params_v1(&class, class_id, root, s_l, shard, &TirFileMirrorV1(path))
+                    .map(|h| resource::ReservedRowsV1::new(h, memory))
+            })
+            .await;
             match fetched {
                 Ok(Ok(h)) => {
                     info!(
@@ -1188,7 +1217,7 @@ impl super::PalwPanelService {
         current_daa: u64,
         duty: &PalwSeatDutyV2,
         capture: TirCaptureV1,
-        hold_key: (Hash64, u16),
+        hold_key: (Hash64, u16, u16),
         books: &mut PalwTirShardBooksV1,
     ) {
         let Some(place) = duty.tir_shard else { return };
@@ -1412,8 +1441,17 @@ impl super::PalwPanelService {
         books: &mut PalwTirShardBooksV1,
     ) -> bool {
         let Some(place) = duty.tir_shard else { return false };
-        let hold_key = (duty.class_id, place.shard);
+        let hold_key = (duty.class_id, place.s_l, place.shard);
         if !books.row_fetches.contains_key(&hold_key) {
+            let memory = match resource::reserve_rows_v1(&crate::palw_memory_ledger::host_ledger_v1(), duty, &capture.binding.class) {
+                Ok(held) => held,
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1(&format!("tir-shard-row-memory-{}", duty.class_id), || {
+                        format!("[{PALW_PANEL}] class {} shard {}: the row fetch waits ({why})", duty.class_id, place.shard)
+                    });
+                    return false;
+                }
+            };
             match misaka_palw_sdk::lineages::tir::TirRowPursuitV1::new(
                 &capture.binding.class,
                 duty.class_id,
@@ -1430,7 +1468,7 @@ impl super::PalwPanelService {
                         pursuit.progress().1,
                         duty.artifact_root
                     );
-                    books.row_fetches.insert(hold_key, PalwTirRowFetchV1::new(pursuit));
+                    books.row_fetches.insert(hold_key, PalwTirRowFetchV1::new(pursuit, memory));
                 }
                 Err(why) => {
                     crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", duty.class_id), || {
@@ -1456,6 +1494,9 @@ impl super::PalwPanelService {
             );
         }
         if fetch.pursuit.complete() {
+            // Move the existing guard with the rows; never release/re-reserve between pursuit,
+            // construction and cache. A failure drops both the pursued rows and their guard.
+            let fetch = books.row_fetches.remove(&hold_key).expect("the completed fetch is present");
             let built = fetch.pursuit.holding();
             match built {
                 Ok(h) => {
@@ -1463,8 +1504,7 @@ impl super::PalwPanelService {
                         "[{PALW_PANEL}] class {}: fetched shard {}/{} from peers in {} request(s) — {} inventory rows, {} bytes, each proven against the registered root {}",
                         duty.class_id, place.shard, place.s_l, fetch.asks, h.leaves, h.bytes, duty.artifact_root
                     );
-                    books.holdings.insert(hold_key, std::sync::Arc::new(h));
-                    books.row_fetches.remove(&hold_key);
+                    books.holdings.insert(hold_key, std::sync::Arc::new(resource::ReservedRowsV1::new(h, fetch.memory)));
                     return true;
                 }
                 Err(why) => {
@@ -1472,7 +1512,6 @@ impl super::PalwPanelService {
                         "[{PALW_PANEL}] class {} shard {}: the fetched rows do not assemble ({why}); starting over",
                         duty.class_id, place.shard
                     );
-                    books.row_fetches.remove(&hold_key);
                     return false;
                 }
             }

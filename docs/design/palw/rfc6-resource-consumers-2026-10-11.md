@@ -32,3 +32,35 @@ The common admission has additional tests for seat/watcher/holder contention, pr
 | Resources/network | Release measurements at the actual intended 100k population and worst registered shape, with CPU/RSS/latency recorded; several actual processes exercising P2P/pruning/join/reorg. In-memory disclosure-pool and fold tests are not evidence of a pruned network join. |
 
 All these conditions remain part of the full RFC06 objective. The memory fixes above do not turn any UNKNOWN/FAIL economics or public soundness gate into PASS.
+
+
+## Fetched rows: ownership, admission and eviction
+
+A mirror fetch and a peer-row pursuit reserve the same host ledger before row lists or
+weight tensors are constructed. The checked node-policy envelope is
+`32 × operand bytes + 8192 × inventory leaves + 64 × encoded program bytes + 16 MiB`.
+The operand and leaf counts are derived from authenticated class geometry and inventory
+spans without enumerating every leaf. The multipliers cover the current i128 MapParams
+construction, encoded/native copies and paths/collection metadata conservatively;
+allocator/process RSS measurements and arbitrary-model workspace certificates remain open.
+This is an explicit local estimate, not an approved consensus RAM bound or a price.
+
+The pursuit owns its guard from admission through retries. Completion moves that guard
+to the held rows without dropping and reserving again. The cached rows and guard share
+one Arc: removing a cache entry cannot release memory while a verifier or court builder
+still reads those rows. A mirror error, refused reconstruction, eviction of an unfinished
+pursuit, or the last row owner's release returns the budget through RAII.
+
+Every panel tick retains cache/fetch entries only for the actual union of this bond's
+seat and enabled public-watcher duties through their receipt deadlines. Cache keys bind
+`(class id, layer-shard count, shard)`, so a replan cannot reuse another partition's
+parameters. This bounds stale cache lifetime; global material pools, whole-job run
+pursuits, post-Final evidence retention and actual pruned P2P recovery need their own
+acceptance evidence and are not closed by this cache change.
+
+Validation added: a real tiny artifact fixture checks exact profile versus fetched
+operand bytes/leaf count, shared-budget refusal, live watcher retention, incompatible
+partition eviction, expired incomplete-pursuit release, and a verifier keeping its
+reservation after cache eviction. Resource unit tests cover last-Arc release and all
+three checked-overflow terms without large allocations. These daemon tests are pending
+the parent integration build, not reported as passing here.

@@ -10463,6 +10463,15 @@ impl PalwPanelService {
                         format!("[{PALW_PANEL}] {refused} cell-masked receipt(s) this tick failed their signature check")
                     });
                 }
+                let watch = if self.config.tir_shard_watch
+                    && !self.config.tir_shard_shadow
+                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
+                {
+                    session.palw_tir_shard_watch_duties_v1(bond_key)
+                } else {
+                    Vec::new()
+                };
+                shard_books.retain_row_interests_v1(&shard_duties, &watch, current_daa);
                 if !shard_duties.is_empty() {
                     self.tir_shard_seat_pass_v1(
                         &session,
@@ -10481,24 +10490,18 @@ impl PalwPanelService {
                 }
                 // **RFC-0006 × G14: the non-seat cell watcher** (`--palw-tir-shard-watch`): the shards of live sharded claims this bond
                 // does not seat, verified from public material; a finding rides the seats' carrier path with this bond as accuser.
-                if self.config.tir_shard_watch
-                    && !self.config.tir_shard_shadow
-                    && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
-                {
-                    let watch = session.palw_tir_shard_watch_duties_v1(bond_key);
-                    if !watch.is_empty() {
-                        self.tir_shard_watch_pass_v1(
-                            &session,
-                            bond_key,
-                            network_domain,
-                            current_daa,
-                            &watch,
-                            &materials,
-                            &mut interval_openings,
-                            &mut shard_books,
-                        )
-                        .await;
-                    }
+                if !watch.is_empty() {
+                    self.tir_shard_watch_pass_v1(
+                        &session,
+                        bond_key,
+                        network_domain,
+                        current_daa,
+                        &watch,
+                        &materials,
+                        &mut interval_openings,
+                        &mut shard_books,
+                    )
+                    .await;
                 }
             }
             // **RFC-0006's pre-fence shadow** (`--palw-tir-shard-shadow`, fence dormant): the cell verifier beside the whole replay.
