@@ -2934,3 +2934,34 @@ async fn rfc12_c3_a_market_orders_cross_the_fence_with_the_virtual_market_armed_
     let last = rig.log.last().expect("blocks");
     assert!(last.snapshot.as_ref().expect("readable").is_some(), "a native snapshot from the fence on");
 }
+
+// =====================================================================================================================
+// R12-AUTHORITY (lane R12, 2026-10-11) — the served DNS gate facts past the retirement
+// =====================================================================================================================
+
+/// **EXPECTED (stated before the run).** RFC-0009 L2's op 203 serves this node's DNS BFT gate facts, which an issuer signs into its
+/// attestation. Past the retirement at the sink the gate abstains, so the served facts are the abstaining ones (`Bootstrap`, nothing
+/// confirmed) — never the row frozen at the fence, which still says `Active` with an anchor. Without a retirement the same planted
+/// row is served as it is. The attestation-quality diagnostic reports no curable deficit past the fence (attestations are refused
+/// there).
+#[tokio::test]
+async fn rfc12_x17_the_served_dns_gate_facts_abstain_past_the_retirement() {
+    use kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwDnsGateFactV1;
+    for retired in [false, true] {
+        let p = parts_with(retired.then_some(FENCE), true);
+        let mut a = Rig::new(&p, 0x12_1700_0000 + retired as u64 * 0x10_0000);
+        let pre = prefix(&mut a).await;
+        let tip = pre.last().unwrap();
+        plant_dns(&a, tip.header.hash, tip.header.daa_score, tip.header.hash, tip.header.daa_score);
+        let served = a.api().palw_fork_choice_openings_v1(&[]).expect("the node serves openings");
+        let expected = if retired {
+            PalwDnsGateFactV1 { stage_active: false, confirmed_anchor: None }
+        } else {
+            PalwDnsGateFactV1 { stage_active: true, confirmed_anchor: Some((tip.header.hash, tip.header.daa_score)) }
+        };
+        assert_eq!(served.dns_gate, Some(expected), "retired {retired}: the served gate facts");
+        if retired {
+            assert!(a.api().get_attestation_quality_deficits().is_empty(), "no curable attestation deficit past the fence");
+        }
+    }
+}
