@@ -10,7 +10,10 @@ use crate::{
 };
 use kaspa_consensus_core::config::{
     Config,
-    drill::{PalwDrillKeyringV1, palw_drill_network_v1, palw_t12_drill_genesis_block_v1, palw_t12_public_genesis_txid_v1},
+    drill::{
+        PalwDrillKeyringV1, palw_drill_network_v1, palw_t12_drill_genesis_block_v1, palw_t12_drill_genesis_utxos_v1,
+        palw_t12_drill_main_key_v1, palw_t12_public_genesis_txid_v1,
+    },
 };
 use kaspa_core::core::Core;
 use kaspa_rpc_service::service::RpcCoreService;
@@ -27,6 +30,23 @@ pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 
 /// Test-policy identity, not a release result or economic/security approval.
 pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
+    let genesis_money = config.palw_drill_genesis_salt.as_ref().map(|salt| {
+        let key = palw_t12_drill_main_key_v1(salt);
+        let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&key.payload);
+        let mut utxos: Vec<_> = palw_t12_drill_genesis_utxos_v1(salt)
+            .into_iter()
+            .filter(|(_, entry)| entry.script_public_key == script)
+            .map(|(outpoint, entry)| {
+                serde_json::json!({
+                    "transactionId": outpoint.transaction_id.to_string(), "index": outpoint.index,
+                    "amount": entry.amount.to_string(), "blockDaaScore": entry.block_daa_score,
+                    "isCoinbase": entry.is_coinbase,
+                })
+            })
+            .collect();
+        utxos.sort_by_key(|row| (row["transactionId"].as_str().unwrap().to_owned(), row["index"].as_u64().unwrap()));
+        serde_json::json!({"address": key.address(kaspa_addresses::Prefix::Testnet).to_string(), "utxos": utxos})
+    });
     let retirement = config.params.palw_dns_retirement.map(|r| {
         serde_json::json!({
             "activationDaa": r.activation.daa_score(),
@@ -45,6 +65,7 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
         "genesis": config.params.genesis.hash.to_string(),
         "consensusParamsId": config.params.consensus_params_id().to_string(),
         "saltId": config.palw_drill_genesis_salt.as_ref().map(|salt| salt.id()),
+        "genesisMoneyProbe": genesis_money,
         "retirement": retirement,
         "skipProofOfWork": config.params.skip_proof_of_work,
         "releaseApproval": false,
@@ -66,8 +87,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     }
     // Normal Args validation sees no public drill flag in this construction
     // path. Reuse its actual key checks against the Config's salt anyway.
-    crate::palw_drill::palw_drill_keys_are_drill_only_v1(args, &PalwDrillKeyringV1::new(*salt))
-        .map_err(|error| error.to_string())?;
+    crate::palw_drill::palw_drill_keys_are_drill_only_v1(args, &PalwDrillKeyringV1::new(*salt)).map_err(|error| error.to_string())?;
     for outpoint in [&args.palw_producer_bond, &args.palw_fee_outpoint, &args.stake_bond].into_iter().flatten() {
         let outpoint = crate::palw_producer::parse_outpoint(outpoint).map_err(|error| error.to_string())?;
         if palw_t12_public_genesis_txid_v1(&outpoint.transaction_id) {
@@ -180,9 +200,10 @@ mod tests {
         uncontrolled.outbound_target = 1;
         assert!(validate_private_probe(&uncontrolled, &config).unwrap_err().contains("controlled"));
         let mut public_payout = args.clone();
-        public_payout.palw_heartbeat_miner_address = Some(kaspa_addresses::Address::new(
-            kaspa_addresses::Prefix::Testnet, kaspa_addresses::Version::PubKeyHashMlDsa87, &[0; 64],
-        ).to_string());
+        public_payout.palw_heartbeat_miner_address = Some(
+            kaspa_addresses::Address::new(kaspa_addresses::Prefix::Testnet, kaspa_addresses::Version::PubKeyHashMlDsa87, &[0; 64])
+                .to_string(),
+        );
         assert!(validate_private_probe(&public_payout, &config).unwrap_err().contains("not an address of drill"));
         let mut public = config.clone();
         public.palw_drill_genesis_salt = None;

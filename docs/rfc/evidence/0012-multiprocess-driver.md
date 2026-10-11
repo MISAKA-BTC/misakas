@@ -120,3 +120,34 @@ private-process entry point, not the finite signed useful-work/100k plan or a
 successful P2P run. Native useful-work, public market/bridge, forced-kill/pruned
 join and release-scale acceptance remain pending until the actual logs and
 commitments exist.
+
+
+## Finite construction/transport smoke
+
+`scripts/misaka-rfc12-private-smoke.py` supplies a separate finite entry point
+once the opt-in helper is built. It fixes and saves a generated loopback plan
+before starting A/B/JOIN, owns initially empty DBs, reads real public wRPC genesis
+headers/import stamps, and compares indexed main-wallet UTXO rows against the
+salted genesis factory. The manifest includes only that public owner's address,
+outpoints, amounts and maturity fields; no signing seed is emitted. Ordinary
+P2P handshake, socket cut/heal, third-process join, SIGKILL and cold reopen use
+the same production services as the full driver. There is no DB copy, synthetic
+claim, background producer, timestamp restamp or fabricated native certificate.
+
+```sh
+python3 scripts/misaka-rfc12-private-smoke.py \
+  --binary /absolute/path/to/misaka-rfc12-private-node \
+  --salt <64-hex-nonzero-private-salt> --out /absolute/path/to/evidence.json
+```
+
+A successful measured run is named `CONSTRUCTION_TRANSPORT_PASS`. Its result
+always keeps `matureUsefulWorkMeasured`, `prunedIbdMeasured`, `release100kMeasured`,
+`marketFillsMeasured` and `fullRfc12SecurityApproval` false. It exercises genuine
+process/RPC/P2P construction and cold genesis money recovery, and does not satisfy
+the full driver's long-range/useful-work/pruning requirements. The driver is a
+runtime candidate until the actual helper build and preserved logs are available.
+
+The private constructor also applies the production salt keyring checks directly
+to its injected Config: public producer/validator/pay keys and public genesis
+bond/fee/stake outpoints are refused even though it intentionally uses no public
+salt Args flag. These are shared checks, with production Args validation unchanged.
