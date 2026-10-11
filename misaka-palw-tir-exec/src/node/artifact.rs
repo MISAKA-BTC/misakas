@@ -687,7 +687,9 @@ impl TirByteSourceV1 for TirArtifactV1 {
 impl TirParamOpenerV1 for TirArtifactV1 {
     fn param_scratch_storage_v1(&self, _leaves: &[u32]) -> Option<u64> {
         // open_with/operands_with read directly into the separately admitted pieces.
-        // The lazy persistent inventory tree has its own artifact lifetime.
+        // The lazy persistent inventory tree has its own artifact lifetime; a
+        // composite's transient refold has a separate guard inside param_carriage,
+        // including direct non-evidence-store callers.
         Some(0)
     }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
@@ -707,9 +709,41 @@ impl TirParamOpenerV1 for TirArtifactV1 {
         let Some(c) = &self.composite else {
             return self.param_multiproof(leaves).map(PalwTirParamOpeningV1::Single);
         };
+        let need = self.composite_carriage_storage_need_v1(leaves)?;
+        let reserver = super::memory::memory_reserver_v1();
+        let _scratch = if let Some(r) = reserver.as_ref() {
+            let root = c.r.artifact_root();
+            Some(r("tir-composite-carriage", self.class().ok()?.class_id(&root), root, need).ok()?)
+        } else { None };
         let tree = self.inventory_tree().ok()?;
         let opened = tree.operands_with(&self.plan.program, self, leaves)?;
         let (parent, adapter) = tree.leaves().split_at(usize::try_from(c.split).ok()?.min(tree.leaves().len()));
         palw_tir_composite_carriage_v1(&c.r, c.split, parent, adapter, &opened)
+    }
+}
+
+impl TirArtifactV1 {
+    /// The composite carriage's independent temporary full-subtree refold plus
+    /// operand/proof clones. This is operational requested storage, not a fee/RSS
+    /// certificate. Single artifacts read siblings off held levels and return zero.
+    pub fn composite_carriage_storage_need_v1(&self, leaves: &[u32]) -> Option<u64> {
+        let Some(c) = self.composite.as_ref() else { return Some(0) };
+        if leaves.is_empty() { return None; }
+        let index = PalwTirInventoryIndexV1::new(&self.plan.program)?;
+        let total = index.leaf_count();
+        let adapter = total.checked_sub(c.split)?;
+        let (mut parent_requested, mut adapter_requested) = (false, false);
+        let mut pieces = 1024u64;
+        for leaf in leaves {
+            let (j, _, _, len) = index.piece_of(*leaf)?;
+            if *leaf < c.split { parent_requested = true; } else { adapter_requested = true; }
+            let name = self.plan.program.params.get(j as usize)?.name.len() as u64;
+            pieces = pieces.checked_add(u64::from(len).checked_add(name)?.checked_add(64 * 64 + 256)?.checked_mul(8)?)?;
+        }
+        // Parent and adapter are folded sequentially. The current + next level's
+        // native hash vectors need <2*N hashes, with their own call-local admission.
+        let width = u64::from(if parent_requested { c.split } else { 0 })
+            .max(u64::from(if adapter_requested { adapter } else { 0 }));
+        width.checked_mul(2 * std::mem::size_of::<Hash64>() as u64)?.checked_add(pieces)?.checked_add(16 << 10)
     }
 }

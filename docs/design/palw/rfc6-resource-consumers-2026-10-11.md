@@ -647,3 +647,24 @@ arithmetic. A new real-container control exercises mapped and resident refusal,
 retry without extra reads before admission, root/opening equivalence, cache reuse,
 last-Arc release and malformed dimension overflow. Runtime awaits central testing;
 requested storage remains an operational envelope rather than RSS/fee approval.
+
+
+Composite carriage had another distinct transient: the historical multiproof helper
+refolds full parent/adapter leaf hashes for each proof. A persistent inventory guard
+cannot cover an arbitrary number of concurrent temporary refolds. The actual artifact
+`param_carriage` now requests a separate `tir-composite-carriage` host guard before
+piece reads and the refold, including direct callers outside `TirEvidenceV1`. Its
+checked envelope covers current/next hash levels of the larger requested sub-tree
+(parent and adapter are sequential), picked/ordered operand copies and paths. A
+single-piece opening remains slice-only; ordinary single-root carriage still reads
+its held levels. This preserves historical composite proof bytes.
+
+A new mapped/resident real composite control checks parent-only, adapter-only and
+joint carriage against the existing core helper's canonical Borsh, exact/one-less
+host admission, initial refusal before persistent-tree construction or residency
+reads, temporary guard release before return, and a separate lasting inventory guard
+through artifact Arc clones. It awaits central compilation/runtime with the copy and
+inventory controls. Actual returned proof objects require their longer-lived outer
+consumer admission; this transient reservation is neither an economic cap nor a
+physical instruction/RSS proof. The new inventory test also covers every executable
+corpus class, each mapped and resident, rather than only one example artifact.
