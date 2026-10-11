@@ -1850,7 +1850,7 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
-        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x7e843e3ab74906b2 },
+        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf024b12c046c9d4c },
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1",
@@ -1874,13 +1874,6 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     (
         "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1",
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_task_heads_v1", digest: 0x12222f873f5f85a5 },
-    ),
-    // codex G14 (constrained-token direct proofs, 2026-10-11): `PalwPanelContradictionV1` 14 `ConstrainedDecode` and 15
-    // `ConstrainedDecodeFlat` appended inside an ObjectiveOffence's opaque evidence bytes (tag 51), as `PalwPromptProofV1` above:
-    // isolation stays int-12; acceptance / fold refuse both below the public-filer (and constraint) fences (ContradictionNotAdmitted).
-    (
-        "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
-        PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0xf6c76ea7f70d9f96 },
     ),
     (
         "consensus/core/src/palw_state_v2.rs::PalwVoidReasonV2",
@@ -2108,7 +2101,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
         "palw_legacy_public_filer_v1",
-        "G14 registered table mismatch in opaque ObjectiveOffence evidence; old unstamped targets refuse and the public proof fence preserves the old acceptance stage",
+        "G14 contradiction14..19 inside opaque tag51: public-filer re-read; constrained14/15, immutable semantics16..18 and rooted staged19 retain their own admission predicates. Staged19 additionally requires palw_staged_public_court_v1 at acceptance and fold; old unstamped targets refuse",
         true,
     ),
     // ---- forms appended inside kinds int-12 decodes (tag 68 is ARMED on testnet-12: `palw_gen_v1`) ----
@@ -2128,12 +2121,6 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" },
         "palw_task_heads_v1",
         "HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read)",
-        true,
-    ),
-    a2_row(
-        PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
-        "palw_legacy_public_filer_v1",
-        "codex G14: PalwPanelContradictionV1 14/15 (constrained decode, flat) inside opaque tag-51 evidence; isolation remains int-12, refused below the public-filer and constraint fences at acceptance/fold (re-read)",
         true,
     ),
     a2_row(
@@ -3705,11 +3692,15 @@ pub(crate) mod tests {
         }
 
         fn canonical_fp_prompt_objects() -> Vec<PalwConsensusObjectV2> {
-            let mut samples = Vec::new();
             let contradiction = crate::palw_offence_v1::PalwPanelContradictionV1::PromptNotAnchored {
                 binding: zeros(),
                 proof: crate::palw_offence_v1::PalwPromptProofV1::FpCanonicalWhole { job: Box::new(zeros()) },
             };
+            attributed_contradiction_objects(contradiction)
+        }
+
+        fn attributed_contradiction_objects(contradiction: crate::palw_offence_v1::PalwPanelContradictionV1) -> Vec<PalwConsensusObjectV2> {
+            let mut samples = Vec::new();
             let mut v1: crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 = zeros();
             v1.contradiction = contradiction.clone();
             let mut v2: crate::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 = zeros();
@@ -3739,6 +3730,34 @@ pub(crate) mod tests {
                 let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)));
                 for at in [999, 1_000] {
                     assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                }
+            }
+        }
+
+        #[test]
+        fn registered_and_staged_contradictions_preserve_opaque_isolation_before_interpretation() {
+            use crate::palw_offence_v1::PalwPanelContradictionV1 as C;
+            let cases = [
+                (16, C::RegisteredTableMismatch { binding: zeros(), job: Box::new(zeros()) }),
+                (17, C::PrefixStateMismatch { binding: zeros(), job: Box::new(zeros()), tiles: vec![] }),
+                (18, C::TokenizerTableMismatch { binding: zeros(), job: Box::new(zeros()), tokenizer_bytes: vec![0], table_opening: zeros() }),
+                (19, C::StagedCourt { reference: zeros() }),
+            ];
+            for (tag, contradiction) in cases {
+                assert_eq!(borsh::to_vec(&contradiction).unwrap()[0], tag);
+                assert!(contradiction.is_attribution_only_v1());
+                for object in attributed_contradiction_objects(contradiction) {
+                    assert_eq!(palw_lifecycle_kind_owner_v1(&object), PalwLifecycleKindOwnerV1::Int12);
+                    let payload = payload_of(&object);
+                    for tolerate in [false, true] {
+                        assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), Ok(()));
+                    }
+                    let unarmed = PalwLifecycleKindFencesV1::default();
+                    let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)))
+                        .with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(1_000)));
+                    for at in [999, 1_000] {
+                        assert_eq!(validate_palw_lifecycle_tx_in_context_v1(&payload, &armed, at), Ok(()));
+                    }
                 }
             }
         }
@@ -4295,6 +4314,10 @@ pub(crate) mod tests {
                 eprintln!("[a2u] wrote {} wire types of {tree} to {out}", manifest.len());
                 return;
             }
+            let mut unique = std::collections::BTreeSet::new();
+            for (key, _) in PALW_INT12_WIRE_CHANGES_V1 {
+                assert!(unique.insert(*key), "duplicate wire classification shadows an earlier row: {key}");
+            }
             let frozen = int12_manifest();
             assert!(frozen.len() > 500, "the frozen manifest is the live build's ({} types)", frozen.len());
             assert!(frozen.contains_key("consensus/core/src/palw_state_v2.rs::PalwConsensusObjectV2"));
@@ -4459,9 +4482,9 @@ pub(crate) mod tests {
             (162, 0x16fdc18dd12bd954),
             (163, 0x51ac8be8e6561cbd),
             (164, 0x1328fec2bbe52c00),
-            (165, 0xf5a36f96be897647),
+            (165, 0xf78925778e6fd91f),
             (166, 0xe436b43fd3c3e30b),
-            (167, 0xd9d2c295b0c11eb7),
+            (167, 0xb344ac7c2eb761d5),
             (131, 0xab59e37a222e6f74),
         ];
 
