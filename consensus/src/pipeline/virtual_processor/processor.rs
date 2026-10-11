@@ -14200,8 +14200,11 @@ impl VirtualStateProcessor {
                     if reservation.reserved_daa != movement.reserved_daa || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
                         return Err("staged move changes live reservation identity or owner is inactive".into());
                     }
-                    if !Self::verify_mldsa87_with_context_bool(&owner.pubkey, &movement.signing_message(), &movement.signature, stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1) {
-                        return Err("staged move is not signed by its literal reserver".into());
+                    // Only a typed public-prefix Answer has distinct signature authority.
+                    // The fold additionally checks its saved literal custody/owner slot.
+                    let signer = state.bond(&movement.authorization_bond_v1()).ok_or("staged answerer has no registered bond")?;
+                    if !Self::verify_mldsa87_with_context_bool(&signer.pubkey, &movement.signing_message(), &movement.signature, stage::PALW_CONSTRAINT_STREAM_CONTEXT_V1) {
+                        return Err("staged move is not signed by its literal authorized owner/answerer".into());
                     }
                 }
                 Obj::ObjectiveEvidenceDeclaredV1 { declaration } => {

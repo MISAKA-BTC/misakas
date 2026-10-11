@@ -10,6 +10,45 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const PALW_PREFIX_PUBLIC_PART_BYTES_V1: usize = 65_536;
 
+/// Owner-signed request. The fold rederives coordinate/cursor, deadline and paid terms;
+/// none of these copied fields chooses scope or extends holds without payment.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPrefixPublicDemandV1 {
+    pub cursor_id: Hash64,
+    pub coordinate: PalwStepCoordinateV1,
+    pub deadline_daa: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPrefixPublicAnswerActionV1 {
+    Begin { opening: PalwStepOpeningV1 },
+    Part { offset: u32, bytes: Vec<u8> },
+    Finish,
+}
+/// The outer167 signature is the ANSWERER's signature, while reserver stays the literal
+/// court owner. The full signed envelope binds both identities, phase, claim and seed.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPrefixPublicAnswerV1 {
+    pub answerer: PalwBondKeyV2,
+    pub cursor_id: Hash64,
+    pub demand_id: Hash64,
+    pub action: PalwPrefixPublicAnswerActionV1,
+}
+impl PalwPrefixPublicAnswerV1 {
+    pub fn check(&self) -> Result<(), String> {
+        match &self.action {
+            PalwPrefixPublicAnswerActionV1::Begin { opening } if opening.siblings.len() > 64 => {
+                Err("public prefix answer exceeds original bounded step path".into())
+            }
+            PalwPrefixPublicAnswerActionV1::Part { bytes, .. }
+                if bytes.is_empty() || bytes.len() > PALW_PREFIX_PUBLIC_PART_BYTES_V1 =>
+            {
+                Err("public prefix answer exceeds bounded nonempty part".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 /// This descriptor must equal the family's derived pending cursor at outer admission.
 /// A canonical but unrelated coordinate is not authority to open a demand.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

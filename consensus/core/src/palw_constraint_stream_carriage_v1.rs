@@ -93,6 +93,8 @@ pub enum PalwConstraintStreamActionV1 {
     TokenizerSeal,
     TokenizerRenderingPart { offset: u32, bytes: Vec<u8> },
     Prefix(crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1),
+    PrefixPublicDemand(crate::palw_prefix_public_source_v1::PalwPrefixPublicDemandV1),
+    PrefixPublicAnswer(crate::palw_prefix_public_source_v1::PalwPrefixPublicAnswerV1),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -273,6 +275,14 @@ impl PalwConstraintStreamLeafV1 {
     }
 }
 impl PalwConstraintStreamMoveV1 {
+    /// Only this typed Answer changes signature authority. Every historic/owned action
+    /// remains owner-signed, including public-source Demand and local prefix continuation.
+    pub fn authorization_bond_v1(&self) -> PalwBondKeyV2 {
+        match &self.action {
+            PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) => answer.answerer,
+            _ => self.reserver,
+        }
+    }
     pub fn signing_message(&self) -> Vec<u8> {
         message(
             b"move",
@@ -289,6 +299,16 @@ impl PalwConstraintStreamMoveV1 {
     }
     pub fn check(&self) -> Result<(), String> {
         check_signature_shape(self.version, &self.signature)?;
+        if let PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) = &self.action {
+            answer.check()?;
+        }
+        if matches!(
+            &self.action,
+            PalwConstraintStreamActionV1::PrefixPublicDemand(_) | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
+        ) && self.phase != PalwConstraintStreamPhaseV1::PrefixCourt
+        {
+            return Err("public prefix acquisition changes typed prefix phase".into());
+        }
         match &self.action {
             PalwConstraintStreamActionV1::EogPart { ids, .. }
                 if ids.is_empty() || ids.len() > crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1 =>
@@ -329,6 +349,8 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::RenderingFinish => court.finish_rendering(),
             PalwConstraintStreamActionV1::EogTokenFinish => court.finish_eog_token(self.seed_id),
             PalwConstraintStreamActionV1::Prefix(_)
+            | PalwConstraintStreamActionV1::PrefixPublicDemand(_)
+            | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
             | PalwConstraintStreamActionV1::TokenizerPacket(_)
             | PalwConstraintStreamActionV1::TokenizerSeal
             | PalwConstraintStreamActionV1::TokenizerRenderingPart { .. } => {
@@ -352,6 +374,39 @@ mod tests {
             action: PalwConstraintStreamActionV1::RenderingPart { offset: 0, bytes: vec![b'a'] },
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }
+    }
+    #[test]
+    fn public_prefix_answer_signer_is_typed_and_every_literal_identity_is_signed() {
+        use crate::palw_prefix_public_source_v1::{PalwPrefixPublicAnswerActionV1, PalwPrefixPublicAnswerV1};
+        let mut answer = movement();
+        let signer = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(99), index: 3 });
+        answer.phase = PalwConstraintStreamPhaseV1::PrefixCourt;
+        answer.action = PalwConstraintStreamActionV1::PrefixPublicAnswer(PalwPrefixPublicAnswerV1 {
+            answerer: signer,
+            cursor_id: Hash64::from_u64_word(11),
+            demand_id: Hash64::from_u64_word(12),
+            action: PalwPrefixPublicAnswerActionV1::Finish,
+        });
+        assert_eq!(answer.authorization_bond_v1(), signer);
+        answer.check().unwrap();
+        let signed = answer.signing_message();
+        for mutation in 0..7 {
+            let mut changed = answer.clone();
+            match mutation {
+                0 => changed.reserver = signer,
+                1 => changed.claim = Hash64::from_u64_word(100),
+                2 => changed.reserved_daa += 1,
+                3 => changed.seed_id = Hash64::from_u64_word(100),
+                4 => changed.phase = PalwConstraintStreamPhaseV1::Prefix(0),
+                _ => {
+                    let PalwConstraintStreamActionV1::PrefixPublicAnswer(a) = &mut changed.action else { unreachable!() };
+                    if mutation == 5 { a.answerer = answer.reserver } else { a.demand_id = Hash64::from_u64_word(100) }
+                }
+            }
+            assert_ne!(changed.signing_message(), signed);
+        }
+        let owner_move = movement();
+        assert_eq!(owner_move.authorization_bond_v1(), owner_move.reserver);
     }
     #[test]
     fn signed_move_binds_literal_owner_claim_reservation_phase_offset_and_bytes() {
