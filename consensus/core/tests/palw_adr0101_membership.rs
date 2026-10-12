@@ -103,7 +103,8 @@ fn a_position_moves_only_between_a_holder_and_the_curve() {
     // (`apply_delta_entry`, for apply and for revert), which installs what an entry says. The replay
     // is only as narrow as the entries it is given, so the one place a `ModelPosition` entry is
     // BUILT (a match arm's pattern is a read) is pinned to the writer too.
-    let fold = &source[..source.find("\n#[cfg(test)]\npub(crate) mod tests {").expect("the tests follow the fold")];
+    // The fold's tests live in `palw_state_v2/tests.rs` since 2026-10-12; the fold file ends at the module declaration.
+    let fold = &source[..source.find("\n#[cfg(test)]\npub(crate) mod tests;").expect("the tests follow the fold")];
     let direct: std::collections::BTreeSet<String> = direct_position_writers(fold).into_iter().collect();
     assert_eq!(
         direct,
@@ -209,6 +210,12 @@ fn the_tier_sums_have_no_caller_in_the_fold_the_processor_or_the_evm() {
             if path.is_dir() {
                 rust_files(&path, out);
             } else if path.extension().is_some_and(|x| x == "rs") {
+                // A unit-test module split out of its parent file (2026-10-12: `tests.rs`, `*_tests.rs`, or under a `tests/`
+                // directory of `src`) is test code, as the inline module it came from was.
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == "tests.rs" || name.ends_with("_tests.rs") || path.components().any(|c| c.as_os_str() == "tests") {
+                    continue;
+                }
                 out.push(path);
             }
         }

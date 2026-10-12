@@ -135,6 +135,13 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// A unit-test module split out of its parent file (2026-10-12: `tests.rs`, `*_tests.rs`, or a file under a `tests/` directory of a
+/// `src` tree) is test code, exactly as the inline `#[cfg(test)] mod tests { … }` it came from was.
+fn is_split_test_module(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name == "tests.rs" || name.ends_with("_tests.rs") || path.components().any(|c| c.as_os_str() == "tests")
+}
+
 fn rust_sources() -> Vec<(PathBuf, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -142,7 +149,7 @@ fn rust_sources() -> Vec<(PathBuf, String)> {
             let path = entry.path();
             if path.is_dir() {
                 walk(&path, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
+            } else if path.extension().is_some_and(|e| e == "rs") && !is_split_test_module(&path) {
                 out.push(path);
             }
         }
