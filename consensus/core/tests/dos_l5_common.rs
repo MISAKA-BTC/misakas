@@ -13,7 +13,6 @@
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
-use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
     attempt_trace_manifest_root_v1, challenge_v2, execution_anchor_v3, execution_commitment_v3,
@@ -251,6 +250,7 @@ pub fn registry_fold(p: &Params, daa: u64) -> Option<kaspa_consensus_core::palw_
 }
 
 /// One chain block through the real fold, with the t12 flags and extras at `daa`.
+#[allow(clippy::type_complexity)]
 pub fn fold(
     p: &Params,
     sp: &PalwStateParamsV2,
@@ -443,6 +443,7 @@ pub fn carriage_bytes(s: &PalwChainStateV2) -> usize {
 /// A deterministic 64-bit generator (splitmix64) — fixed seeds, no dependency.
 pub struct Rng(pub u64);
 impl Rng {
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -508,6 +509,7 @@ pub fn admitted_per_attempt_on(p: &Params, parent: &PalwChainStateV2, class: Has
 
 /// [`fold`] with the 2026-09-23 audit fence forced OFF — the pre-fence rules (#9's live-state
 /// ceiling and #10's withholding charge absent), for PRE-FENCE DEFECT RECORDs only.
+#[allow(clippy::type_complexity)]
 pub fn fold_pre_fence(
     p: &Params,
     sp: &PalwStateParamsV2,

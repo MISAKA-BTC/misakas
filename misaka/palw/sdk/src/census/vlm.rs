@@ -326,17 +326,9 @@ fn admit_at_size(
         for (tile_len, output_tile, h_chunk, checkpoint) in layouts {
             let choice = GenLayoutChoiceV1 { tile_len, output_tile, h_chunk, checkpoint_interval: checkpoint };
             let class = class_with_tower_tiles(&stages, &choice, checkpoint, max_context, fitted.as_deref());
-            let object = palw_gen_post_genesis_registration_v1(
-                class,
-                Hash64::from_bytes([0; 64]),
-                0,
-                1 << 100,
-                1,
-                height,
-                bond.clone(),
-                Vec::new(),
-            )
-            .map_err(|e| format!("{} ({e})", e.code()));
+            let object =
+                palw_gen_post_genesis_registration_v1(class, Hash64::from_bytes([0; 64]), 0, 1 << 100, 1, height, bond, Vec::new())
+                    .map_err(|e| format!("{} ({e})", e.code()));
             let verdict = object.and_then(|o| {
                 palw_gen_registration_preflight_at_v1(&armed, &net.bundle, &o, height).map_err(|e| format!("{} ({e})", e.code()))
             });

@@ -416,10 +416,10 @@ impl PalwClassSdk {
                 continue;
             }
             for entry in entries {
-                if let Some(wanted) = wanted_model_id.filter(|s| !s.is_empty()) {
-                    if entry.model_id != wanted {
-                        continue;
-                    }
+                if let Some(wanted) = wanted_model_id.filter(|s| !s.is_empty())
+                    && entry.model_id != wanted
+                {
+                    continue;
                 }
                 if weights_on_chain && !owner_models.contains(&base_model_id(entry.model_id)) {
                     // Registered weights may seed only their own model's revisions — a same-shape

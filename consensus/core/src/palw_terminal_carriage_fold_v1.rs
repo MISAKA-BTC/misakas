@@ -18,7 +18,7 @@ impl PalwChainStateV2 {
             let record = self
                 .legacy_dispute_v1(&key.0)
                 .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("terminal assembly lacks a reservation record".into()))?;
-            if !record.live.get(&key.1).is_some_and(|r| r.reserved_daa == row.declaration.reserved_daa)
+            if record.live.get(&key.1).is_none_or(|r| r.reserved_daa != row.declaration.reserved_daa)
                 || row.deadline_daa != record.hard_deadline_daa
             {
                 return Err(PalwStateV2Error::CarriageInconsistent(
@@ -54,7 +54,7 @@ pub(super) fn declare(
     d.check(budget(b, ctx)?).map_err(|e| refusal(d.evidence_id, e))?;
     let record =
         b.state.legacy_dispute_v1(&d.claim).ok_or_else(|| refusal(d.evidence_id, "terminal declaration has no live reservation"))?;
-    if !record.live.get(&d.reserver).is_some_and(|r| r.reserved_daa == d.reserved_daa) {
+    if record.live.get(&d.reserver).is_none_or(|r| r.reserved_daa != d.reserved_daa) {
         return Err(refusal(d.evidence_id, "terminal declaration belongs to another reservation"));
     }
     let deadline = record.hard_deadline_daa;
@@ -74,10 +74,7 @@ pub(super) fn part(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, p: &
     let row =
         b.state.terminal_evidence.get(&key).ok_or_else(|| refusal(p.evidence_id, "terminal part lacks its owned declaration"))?;
     if ctx.daa_score >= row.deadline_daa
-        || !b
-            .state
-            .legacy_dispute_reservation_v1(&p.claim, &p.reserver)
-            .is_some_and(|r| r.reserved_daa == row.declaration.reserved_daa)
+        || b.state.legacy_dispute_reservation_v1(&p.claim, &p.reserver).is_none_or(|r| r.reserved_daa != row.declaration.reserved_daa)
     {
         return Err(refusal(p.evidence_id, "terminal reservation closed or expired"));
     }
@@ -140,10 +137,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
         .iter()
         .filter(|(key, row)| {
             ctx.daa_score >= row.deadline_daa
-                || !b
-                    .state
-                    .legacy_dispute_reservation_v1(&key.0, &key.1)
-                    .is_some_and(|r| r.reserved_daa == row.declaration.reserved_daa)
+                || b.state.legacy_dispute_reservation_v1(&key.0, &key.1).is_none_or(|r| r.reserved_daa != row.declaration.reserved_daa)
         })
         .map(|(k, _)| *k)
         .collect();

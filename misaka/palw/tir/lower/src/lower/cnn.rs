@@ -196,7 +196,7 @@ fn window_out(n: usize, k: usize, s: usize, p_total: usize, d: usize) -> Option<
 
 /// TensorFlow's "SAME" padding along one axis: `(before, after)`.
 fn tf_pad(n: usize, k: usize, s: usize) -> (usize, usize) {
-    let along = if s != 0 && n % s == 0 {
+    let along = if s != 0 && n.is_multiple_of(s) {
         k.saturating_sub(s)
     } else if s != 0 {
         k.saturating_sub(n % s)

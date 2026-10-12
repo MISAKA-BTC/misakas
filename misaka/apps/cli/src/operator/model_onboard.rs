@@ -138,7 +138,7 @@ pub(crate) fn envelope_sign(
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, CliError> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(CliError::new(exit::GENERIC, "the node served odd-length hex"));
     }
     (0..s.len() / 2)

@@ -169,11 +169,11 @@ fn main() {
     let a = Args::parse();
     match run(&a) {
         Ok(v) => {
-            if let Some(p) = &a.out {
-                if let Err(e) = std::fs::write(p, serde_json::to_vec_pretty(&v).unwrap_or_default()) {
-                    eprintln!("palw-tir-generate: {}: {e}", p.display());
-                    std::process::exit(1);
-                }
+            if let Some(p) = &a.out
+                && let Err(e) = std::fs::write(p, serde_json::to_vec_pretty(&v).unwrap_or_default())
+            {
+                eprintln!("palw-tir-generate: {}: {e}", p.display());
+                std::process::exit(1);
             }
         }
         Err(e) => {

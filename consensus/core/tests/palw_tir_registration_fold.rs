@@ -100,7 +100,7 @@ fn an_ir_registration_folds_past_the_fence_and_is_refused_below_it() {
     let below = chain.try_fold(
         &chain.s,
         &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0),
-        &[object.clone()],
+        std::slice::from_ref(&object),
         PalwBlockWorkV3::None,
         Hash64::default(),
     );
@@ -109,7 +109,7 @@ fn an_ir_registration_folds_past_the_fence_and_is_refused_below_it() {
     // At the fence: it folds (the harness re-applies, reverts and reloads the block).
     let collateral = chain.s.bond(&registrant).expect("the registrant").collateral;
     let root_before = chain.s.state_root();
-    chain.step_at(AT, &[object.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+    chain.step_at(AT, std::slice::from_ref(&object), PalwBlockWorkV3::None, Hash64::default(), 0);
     let (record, _) = palw_tir_class_record_v1(&admission.class, artifact_root).expect("decodes");
     assert_eq!(chain.s.tir_class_v1(&class_id), Some(&record), "the record, derived as admission derives it");
     assert_eq!(record.facts.class_id, class_id);
@@ -192,8 +192,8 @@ fn a_second_ir_registration_in_one_block_is_refused_by_the_folds_second_lock() {
             .try_fold(&chain.s, &ctx(0xCB_1000 + AT, AT, AT, 0), std::slice::from_ref(one), PalwBlockWorkV3::None, Hash64::default())
             .expect("one IR registration a block folds");
     }
-    chain.step_at(AT, &[a.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
-    chain.step_at(AT + 1, &[b.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+    chain.step_at(AT, std::slice::from_ref(&a), PalwBlockWorkV3::None, Hash64::default(), 0);
+    chain.step_at(AT + 1, std::slice::from_ref(&b), PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(chain.s.tir_class_v1(&id(&a)).is_some() && chain.s.tir_class_v1(&id(&b)).is_some(), "one a block: both land");
 }
 
@@ -215,10 +215,10 @@ fn a_registration_past_the_second_ir_fence_records_the_select_arm_credit() {
         let object = registration(&chain, registrant, AT);
         let PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, admission, .. } = &object else { unreachable!() };
         let (class_id, admission) = (*class_id, admission.clone());
-        chain.step_at(AT, &[object.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+        chain.step_at(AT, std::slice::from_ref(&object), PalwBlockWorkV3::None, Hash64::default(), 0);
         let program = admission.class.decode_program().expect("decodes");
         let want = palw_tir_model_work_v2(&program, &admission.canonical, min_select_arms).expect("a work row");
-        let row = chain.s.model_lifecycle(&class_id).expect("the registry's row").work.clone();
+        let row = chain.s.model_lifecycle(&class_id).expect("the registry's row").work;
         assert_eq!(row, want, "fence2 at {fence2}: the {} vector", if min_select_arms { "credited" } else { "release's" });
         rows.push(row);
     }

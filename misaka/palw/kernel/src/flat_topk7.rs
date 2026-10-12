@@ -151,9 +151,7 @@ fn line_resources(n: u32, k: u32) -> Result<(u128, u128), String> {
 fn opening_bytes(dtype: DType, shape: &[usize], flat: bool) -> Result<u64, DismissalV1> {
     let dims: Vec<_> = shape.iter().map(|n| *n as u64).collect();
     if flat {
-        return flat_material_bounds_v5(dtype, &dims)
-            .and_then(|b| u64::try_from(b.leaf_value_bytes).ok())
-            .ok_or_else(|| bad("invalid point layout"));
+        return flat_material_bounds_v5(dtype, &dims).map(|b| b.leaf_value_bytes).ok_or_else(|| bad("invalid point layout"));
     }
     let l = LayoutV3::try_of(shape).ok_or_else(|| bad("invalid legacy point layout"))?;
     Ok(128

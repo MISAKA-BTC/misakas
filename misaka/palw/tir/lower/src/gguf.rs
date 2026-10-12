@@ -1011,7 +1011,7 @@ fn parse_weight_rotation(meta: &BTreeMap<String, GValue>, arch: &str) -> Result<
         }
         let mut off = 0usize;
         for w in widths {
-            if w <= 0 || (w as usize) % block != 0 || off + w as usize > values.len() {
+            if w <= 0 || !(w as usize).is_multiple_of(block) || off + w as usize > values.len() {
                 return Err(refuse(format!("sign width {w}")));
             }
             let v = &values[off..off + w as usize];
@@ -1341,7 +1341,7 @@ impl GgufModel {
                     .get(n)
                     .ok_or_else(|| LowerError::not_lowerable(format!("GGUF prism.hadamard: weight `{n}` not found")))?;
                 let inp = t.dims.first().copied().unwrap_or(0) as usize;
-                if inp % r.block != 0 || (r.explicit && !r.signs.contains_key(&inp)) {
+                if !inp.is_multiple_of(r.block) || (r.explicit && !r.signs.contains_key(&inp)) {
                     return Err(LowerError::not_lowerable(format!(
                         "GGUF prism.hadamard: `{n}`'s input dimension {inp} has no block of {} or no sign vector",
                         r.block

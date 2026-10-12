@@ -440,7 +440,7 @@ fn the_residency_is_read_off_the_program_and_reported_without_judging() {
     let state = format!("--palw-class-resident-bytes {}", nres.floor_bytes);
     assert_eq!(nres.state_to_hold.as_deref(), Some(state.as_str()));
     assert!(node_dense.render().contains(&state), "{}", node_dense.render());
-    assert!(held.state_to_hold.is_some() == !held.default_holds_floor);
+    assert!(held.state_to_hold.is_some() != held.default_holds_floor);
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(dense);
 }

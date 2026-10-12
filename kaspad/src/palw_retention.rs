@@ -96,6 +96,7 @@ pub(crate) struct RetainedChainViewV1 {
 /// the one copy anywhere — is never due while `da_owed`, whatever its phase; and under the space
 /// rule the foreign copies a session can still demand are pinned alongside the producer's own committed capture. A covering signer answers from
 /// its copy; potential replay does not replace this accepted retention obligation.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn retention_prune_plan_v1(
     claims: &[RetainedClaimV1],
     chain: impl Fn(&Hash64) -> Option<RetainedChainViewV1>,
@@ -330,7 +331,7 @@ impl PalwRetentionJanitor {
         let owed = |claim: &Hash64| {
             session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until)
         };
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, &chain, owed, self.attempt_horizon, free, reserve);
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
         let mut removed = 0usize;
         let mut bytes = 0u64;
         for i in doomed {

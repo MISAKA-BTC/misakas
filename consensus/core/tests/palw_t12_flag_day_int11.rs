@@ -27,13 +27,13 @@ use kaspa_consensus_core::config::drill::{
     palw_drill_tir_fence_at_v1, palw_drill_tir_fence2_at_v1,
 };
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1,
-    PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA,
-    PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1,
-    PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
-    PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1,
-    palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
-    palw_t12_release_v4_params, palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA,
+    PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA, PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO250_FENCES_V1,
+    PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
+    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
+    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
+    palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};

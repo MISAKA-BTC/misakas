@@ -27,7 +27,7 @@ use crate::{
             stake_bonds::StakeBondsStoreReader,
             statuses::StatusesStoreReader,
             tips::{TipsStore, TipsStoreReader},
-            utxo_set::{UtxoSetStore, UtxoSetStoreReader},
+            utxo_set::UtxoSetStoreReader,
             virtual_state::VirtualState,
         },
     },
@@ -76,7 +76,6 @@ use kaspa_consensus_core::{
     mass::{ContextualMasses, NonContextualMasses},
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
-    muhash::MuHashExtensions,
     network::NetworkType,
     pruning::{
         PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList,
@@ -102,7 +101,6 @@ use kaspa_database::prelude::StoreResultExt;
 use kaspa_muhash::MuHash;
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::arc::ArcExtensions;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rocksdb::WriteBatch;
 
 use std::{
@@ -910,7 +908,7 @@ impl Consensus {
             .import_session()
             .map_err(|e| ConsensusError::GeneralOwned(format!("reading pruning import authority: {e}")))?;
         if import.epoch > 0 {
-            import.epoch = import.epoch.checked_add(1).ok_or_else(|| ConsensusError::General("pruning import epoch exhausted"))?;
+            import.epoch = import.epoch.checked_add(1).ok_or(ConsensusError::General("pruning import epoch exhausted"))?;
         }
         import.active = None;
         import.utxos_started = false;

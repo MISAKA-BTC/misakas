@@ -441,7 +441,7 @@ fn no_payout_before_final_panel_leg() {
 fn no_payout_before_final_model_allocation_leg() {
     let (sim, a, first) = one_claim_to_final();
     for s in before_final(&sim, &a, first) {
-        let row = s.bond_budget().unwrap().claim_row(&a).expect("budgeted").clone();
+        let row = *s.bond_budget().unwrap().claim_row(&a).expect("budgeted");
         assert!(row.model.is_some(), "the claim allocates against its model");
         assert_eq!(row.consumed.reward_sompi, 0, "no model-allocation reward before Final");
     }
@@ -452,7 +452,7 @@ fn no_payout_before_final_model_allocation_leg() {
     // reserved out of the model's clipped budget.
     let last = before_final(&sim, &a, first).pop().expect("a state before Final");
     let bond = last.claim(&a).unwrap().bond;
-    let income = last.bond_budget_native_claim_income_v1(&a, &bond).expect("the claim's native income hold").clone();
+    let income = *last.bond_budget_native_claim_income_v1(&a, &bond).expect("the claim's native income hold");
     assert!(named <= income.reserved.reward_sompi, "named {named} within the reservation {}", income.reserved.reward_sompi);
 }
 

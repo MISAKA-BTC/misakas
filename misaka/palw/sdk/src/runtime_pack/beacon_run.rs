@@ -448,7 +448,7 @@ fn leaf_outcome(leaf: &SelectedLeafV1, bytes: &[u8], program: &misaka_palw_tir::
     let w = dtype.width();
     let mut disagreement = None;
     let n = bytes.len() / w;
-    let reference = if bytes.len() % w != 0 {
+    let reference = if !bytes.len().is_multiple_of(w) {
         disagreement = Some(format!("leaf {}: {} bytes are not whole {} elements", leaf.leaf_index, bytes.len(), dtype.name()));
         ResultV1::Error("the leaf is not whole elements".into())
     } else {
@@ -600,6 +600,14 @@ impl Measures {
     }
 }
 
+/// The process's peak resident set, in bytes (a measurement only). 0 where `getrusage` does not exist (Windows): unmeasured, not zero.
+#[cfg(not(unix))]
+pub fn peak_rss_bytes() -> u64 {
+    0
+}
+
+/// The process's peak resident set, in bytes (a measurement only).
+#[cfg(unix)]
 pub fn peak_rss_bytes() -> u64 {
     // SAFETY: `getrusage` writes into the zeroed struct we pass and nothing else.
     let ru = unsafe {
@@ -845,6 +853,7 @@ pub struct RunInput<'a> {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose; boxing changes every match site
 pub enum RunOutcome {
     /// `WaitingRandomness`: fewer than `k` sources so far, or `k` sources whose last is not yet at depth `D`. Nothing was run.
     Waiting { have: u32, need: u32, lock_position: Option<u64>, tip: u64 },

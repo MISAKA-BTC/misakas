@@ -1270,7 +1270,7 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
                     let row = map::integer_kv_state_row_v1(&entry, bytes, p)
                         .ok_or_else(|| format!("attention chunk {index} is not its own length at position {p}"))?;
                     let values: Vec<i32> = if row.len() == width {
-                        if width % 4 == 0 {
+                        if width.is_multiple_of(4) {
                             row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
                         } else {
                             row.iter().map(|b| *b as i8 as i32).collect()
@@ -2925,7 +2925,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return Err("a backend with no registered graph carries no capture to tamper with".to_string());
         };
         let mut run = qwen36_execute_for_attempt_capped_v1(&self.artifact, profile, plan, job, prompt, self.network_ladder)?;
-        let ctx_hash = job.context_hash();
+        let _ctx_hash = job.context_hash();
         let profile_hash = profile.shape_profile_id();
         {
             let slot = run
@@ -2936,7 +2936,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(job, &profile_hash, &slot.1);
         }
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or
         // this is a producer whose roots disagree with its material — which any seat catches
@@ -2975,7 +2975,7 @@ fn qwen36_leaves_by_position(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
 ) -> Vec<Hash64> {
-    let ctx_hash = binding.job_context.context_hash();
+    let _ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {

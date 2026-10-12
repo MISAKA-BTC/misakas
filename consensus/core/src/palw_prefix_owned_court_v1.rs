@@ -256,7 +256,7 @@ impl PalwOwnedPrefixCourtV1 {
     /// consume this route. Its actual signed Answer carriers are debited by that wrapper's
     /// separate acquisition plan. This row still debits every reconstructed logical action;
     /// there is no caller-supplied action list or unauthenticated cache/state shortcut.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)] // dormant: not yet wired to a caller (its fence is unarmed)
     pub(crate) fn consume_authenticated_public_source_v1(
         &mut self,
         now: u64,
@@ -292,7 +292,7 @@ impl PalwOwnedPrefixCourtV1 {
     }
     pub fn certificate(&self) -> Result<Option<PalwPrefixCourtFaultV1>, String> {
         self.check()?;
-        Ok(self.court.finish()?.then(|| PalwPrefixCourtFaultV1 {
+        Ok(self.court.finish()?.then_some(PalwPrefixCourtFaultV1 {
             claim: self.claim,
             reserver: self.reserver,
             reserved_daa: self.reserved_daa,

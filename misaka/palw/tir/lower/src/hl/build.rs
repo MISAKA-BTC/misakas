@@ -466,7 +466,7 @@ impl Builder<'_> {
     /// over the param that holds `R`'s blocks), built once per activation in the block.
     fn rotated_input(&mut self, bk: &mut Bk, x: Ref, role: &str, width: usize) -> Result<Ref> {
         let Some(r) = self.s.hf.input_rotations.get(role).copied() else { return Ok(x) };
-        if r.width != width || r.block == 0 || width % r.block != 0 {
+        if r.width != width || r.block == 0 || !width.is_multiple_of(r.block) {
             return Err(LowerError::not_lowerable(format!(
                 "a rotation of block {} over width {} on `{role}`, which reads {width} values",
                 r.block, r.width
@@ -524,7 +524,7 @@ impl Builder<'_> {
         let mut x = bk.f(Op::Embedding, vec![Ref::Token, table], e.dim, "embed");
         // `WEIGHT_ROTATION_HADAMARD_V1`: a table stored in the rotated basis — the looked-up row restored, `h = R⁻¹·z`.
         if let Some(r) = self.s.hf.embed_rotation {
-            if r.width != e.dim || r.block == 0 || e.dim % r.block != 0 {
+            if r.width != e.dim || r.block == 0 || !e.dim.is_multiple_of(r.block) {
                 return Err(LowerError::not_lowerable(format!(
                     "an embedding rotation of block {} over width {} on a {}-wide table",
                     r.block, r.width, e.dim
@@ -1764,7 +1764,7 @@ impl Builder<'_> {
         let (s, d) = (hy.streams, self.s.hidden_size);
         let n = s * d;
         let heads = p.ngram_size.saturating_sub(1).saturating_mul(p.heads_per_ngram);
-        if heads == 0 || p.embed_dim % heads != 0 || p.ngram_size < 2 {
+        if heads == 0 || !p.embed_dim.is_multiple_of(heads) || p.ngram_size < 2 {
             return Err(LowerError::bad(format!("EMBED_NGRAM_PLE_V1: {} embedding width over {heads} hash heads", p.embed_dim)));
         }
         let dpn = p.embed_dim / heads;
@@ -1924,20 +1924,19 @@ impl Builder<'_> {
         let pf = a.param_prefix.clone().unwrap_or_else(|| "attn".into());
         let n = |s: &str| format!("{pf}.{s}");
         // `ATTN_DIFFERENTIAL_V1`: the values are double wide in the history, the context is combined before anything reads it.
-        if a.differential.is_some() {
-            if h % 2 != 0
+        if a.differential.is_some()
+            && (h % 2 != 0
                 || kv % 2 != 0
                 || kv == 0
                 || vd != hd
                 || a.sinks
                 || a.sparse.is_some()
                 || a.kv_share.is_some()
-                || a.output_gate
-            {
-                return Err(LowerError::not_lowerable(format!(
-                    "ATTN_DIFFERENTIAL_V1 needs an even number of heads and of kv heads and values as wide as keys ({h} heads, {kv} kv heads, {hd}/{vd}), and has no sinks, sparse blocks, KV sharing or fused output gate"
-                )));
-            }
+                || a.output_gate)
+        {
+            return Err(LowerError::not_lowerable(format!(
+                "ATTN_DIFFERENTIAL_V1 needs an even number of heads and of kv heads and values as wide as keys ({h} heads, {kv} kv heads, {hd}/{vd}), and has no sinks, sparse blocks, KV sharing or fused output gate"
+            )));
         }
         if let Some(moa) = &a.moa {
             return self.moa_attention(bk, a, moa, x);

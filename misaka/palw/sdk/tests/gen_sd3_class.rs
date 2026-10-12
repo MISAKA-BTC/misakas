@@ -60,7 +60,7 @@ fn all_armed() -> Params {
 
 fn court() -> kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2 {
     match &palw_t12_shipped_params().palw_consensus_mode {
-        PalwConsensusMode::ConsensusV2(b) => b.court.clone(),
+        PalwConsensusMode::ConsensusV2(b) => b.court,
         _ => unreachable!("testnet-12 runs V2"),
     }
 }
@@ -591,7 +591,7 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
             e.1 = *leaf;
         }
         done += 1;
-        if done % 100 == 0 {
+        if done.is_multiple_of(100) {
             eprintln!("  {done} closes measured");
         }
     }
@@ -707,7 +707,7 @@ fn breakdown_of_a_priced_close() {
     eprintln!("    by param: {by_param:?}");
     eprintln!("  edges {} ({} B), image tiles {}", reads.edges.len(), price.edges(&reads), reads.images.len());
     let mut by_edge: BTreeMap<u8, usize> = BTreeMap::new();
-    for ((st, _, _), _) in &reads.edges {
+    for (st, _, _) in reads.edges.keys() {
         *by_edge.entry(*st).or_default() += 1;
     }
     eprintln!("    by upstream stage: {by_edge:?}; token read: {}", reads.token);

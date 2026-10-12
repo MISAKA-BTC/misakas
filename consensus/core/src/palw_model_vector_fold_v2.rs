@@ -15,7 +15,7 @@ fn refused(why: impl Into<String>) -> PalwStateV2Error {
 }
 fn enabled(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
-    if !builder.extras.kernel_route.as_ref().is_some_and(|e| e.opv.is_some()) {
+    if builder.extras.kernel_route.as_ref().is_none_or(|e| e.opv.is_none()) {
         return Err(refused("model vector statements require palw_panel_free_v1"));
     }
     Ok(())

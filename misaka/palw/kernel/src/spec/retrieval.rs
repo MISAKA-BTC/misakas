@@ -130,7 +130,7 @@ pub fn merkle_verify_v1(leaf: Digest, mut index: u64, mut count: u64, path: &[Di
         let sib = index ^ 1;
         if sib < count {
             let Some(s) = path.get(used) else { return false };
-            acc = if index % 2 == 0 { node_hash(&acc, s) } else { node_hash(s, &acc) };
+            acc = if index.is_multiple_of(2) { node_hash(&acc, s) } else { node_hash(s, &acc) };
             used += 1;
         }
         index /= 2;

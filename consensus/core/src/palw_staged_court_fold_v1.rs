@@ -57,21 +57,21 @@ impl TransitionBuilder<'_> {
         // The authenticated class profile narrows vocabulary. The existing generated-position
         // format caps every other claim independently of a producer's asserted prompt/rendering size.
         let mut terms = config.claim_terms(claim.accepted_daa, 4095, vocab).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        if let Some(registered) = self.state.class_semantics.get(&claim.class_id) {
-            if let (Some(raw), Some(bound)) = (registered.raw_tokenizer_bytes, registered.tokenizer_key_events) {
-                let tokenizer =
-                    crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
-                        .and_then(|p| p.court_envelope(vocab, config.prices))
-                        .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
-                    claim.accepted_daa,
-                    terms.plan.cover(tokenizer),
-                    config.acquisition_daa,
-                    config.collection_daa,
-                    config.reorg_retention_daa,
-                )
-                .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
+        if let Some(registered) = self.state.class_semantics.get(&claim.class_id)
+            && let (Some(raw), Some(bound)) = (registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
+        {
+            let tokenizer =
+                crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
+                    .and_then(|p| p.court_envelope(vocab, config.prices))
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
+                claim.accepted_daa,
+                terms.plan.cover(tokenizer),
+                config.acquisition_daa,
+                config.collection_daa,
+                config.reorg_retention_daa,
+            )
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
         if let Some(public_job) = public_job.filter(|j| j.job.is_prefix_state()) {
             let job = &public_job.job;
@@ -199,7 +199,7 @@ fn gate<'a>(
     }
     let c =
         b.state.staged_claim_contract_v1(claim).ok_or_else(|| stage_refused(*claim, "claim has no prospective staged contract"))?;
-    if !b.state.legacy_dispute_reservation_v1(claim, &owner).is_some_and(|r| r.reserved_daa == reserved)
+    if b.state.legacy_dispute_reservation_v1(claim, &owner).is_none_or(|r| r.reserved_daa != reserved)
         || now >= c.terms.stream_until_daa
     {
         return Err(stage_refused(*claim, "staged owner is not the literal live reservation or its admitted clock ended"));
@@ -334,11 +334,13 @@ pub(super) fn open(
                 b.write_legacy_dispute(seed.claim, Some(dispute));
             }
             b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
-            if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned() {
-                if liability.voided_daa.is_none() && liability.void_reason.is_none() && liability.expiry_daa < until {
-                    liability.expiry_daa = until;
-                    b.write_panel_liability(seed.claim, Some(liability));
-                }
+            if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned()
+                && liability.voided_daa.is_none()
+                && liability.void_reason.is_none()
+                && liability.expiry_daa < until
+            {
+                liability.expiry_daa = until;
+                b.write_panel_liability(seed.claim, Some(liability));
             }
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
@@ -418,11 +420,13 @@ pub(super) fn open(
                 b.write_legacy_dispute(seed.claim, Some(dispute));
             }
             b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
-            if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned() {
-                if liability.voided_daa.is_none() && liability.void_reason.is_none() && liability.expiry_daa < until {
-                    liability.expiry_daa = until;
-                    b.write_panel_liability(seed.claim, Some(liability));
-                }
+            if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned()
+                && liability.voided_daa.is_none()
+                && liability.void_reason.is_none()
+                && liability.expiry_daa < until
+            {
+                liability.expiry_daa = until;
+                b.write_panel_liability(seed.claim, Some(liability));
             }
             // The initial prospective holds keep these locks economically attributed even if
             // an older ordinary lock expiry has passed. Extend the actual saved locked rows.

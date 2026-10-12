@@ -111,6 +111,7 @@ fn lanes_le(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
 }
 
 /// [`lanes_le`] for the cell verifier (RFC-0006): the same lanes, the same encoding.
+#[allow(dead_code)] // dormant: the RFC-0006 cell verifier is not wired yet
 pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
     lanes_le(data, from, n, out);
 }

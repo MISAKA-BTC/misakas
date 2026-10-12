@@ -29,6 +29,7 @@ fn t12() -> Params {
 }
 
 /// Every class testnet-12 registers, with the pwu its Final would be priced on.
+#[allow(clippy::collapsible_match)]
 fn registered_classes(p: &Params) -> Vec<(Hash64, u64, u64)> {
     let PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
     b.genesis_objects

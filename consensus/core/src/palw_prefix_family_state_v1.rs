@@ -167,7 +167,7 @@ impl PalwQwen36PrefixCacheDigestV1 {
             || offset != self.offset
             || bytes.is_empty()
             || bytes.len() > 65_536
-            || bytes.len() % 4 != 0
+            || !bytes.len().is_multiple_of(4)
             || length.checked_sub(self.offset).is_none_or(|remaining| bytes.len() as u64 > remaining)
         {
             return Err("the prefix bytes do not fit the exact next canonical cache unit".into());

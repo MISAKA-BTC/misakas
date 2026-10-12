@@ -101,7 +101,7 @@ fn g14s_a_filer_past_its_cumulative_scope_is_refused_and_an_honest_prosecutor_st
     }
     let mut w = World::new();
     scoped(&mut w, 0);
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     let job = w.post_job(2, &prompt, 1, 9);
     let (_, lie) = w.lying(&job, 1);
     let id = lie.claim.id();

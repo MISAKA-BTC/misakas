@@ -557,8 +557,8 @@ fn dos_g2_a_conviction_prunes_the_minted_schedule_and_a_revert_restores_it() {
         domain: h(0xD2),
         bond: honest_bond,
         operator_id: h(0x0B2),
-        claim_id: h(0x4011_E57),
-        execution_root: h(0x4011_E57_0000),
+        claim_id: h(0x0401_1E57),
+        execution_root: h(0x0401_1E57_0000),
         credit: 3 * PALW_EXECUTION_QUANTUM_V1,
         accepted_blue_score: 0,
     };

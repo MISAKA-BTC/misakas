@@ -552,6 +552,7 @@ fn balance_of(rig: &Rig, who: [u8; 20]) -> u128 {
 /// the withdrawal, and two attempts to execute and settle them. Returns the lock tx and the model line.
 pub(super) struct Run {
     pub lock: Transaction,
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub line: Hash64,
     pub names: Vec<(&'static str, BlockHash)>,
 }
@@ -622,7 +623,8 @@ pub(super) async fn scripted_run(rig: &mut Rig, through: &str) -> Run {
     Run { lock, line, names }
 }
 
-fn seen<'a>(rig: &'a Rig, hash: BlockHash) -> &'a Seen {
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
+fn seen(rig: &Rig, hash: BlockHash) -> &Seen {
     rig.log.iter().find(|s| s.hash == hash).expect("the block was observed")
 }
 
@@ -1041,7 +1043,7 @@ async fn rfc12_x6_a_node_without_the_fence_follows_history_to_the_fence_and_no_f
     let mut a = Rig::new(&pf, 0x12_0600_0000);
     let mut chain = prefix(&mut a).await;
     chain.extend(extend(&mut a, &[2, 3]).await);
-    let mut old = Rig::new(&po, 0x12_0610_0000);
+    let old = Rig::new(&po, 0x12_0610_0000);
     let mut divergence = None;
     for (i, blk) in chain.iter().enumerate() {
         let verdict = old.api().validate_and_insert_block(blk.clone()).virtual_state_task.await;
@@ -1851,8 +1853,7 @@ async fn rfc12_x8_certified_work_makes_a_prefix_safe_and_a_reorg_takes_it_back()
     let mut a = Rig::new(&p, 0x12_0800_0000);
     let pre_blocks = {
         // B must see the same planted prefix, so it is built the same way.
-        let pre = prefix(&mut a).await;
-        pre
+        prefix(&mut a).await
     };
     plant_frontier(&a, pre_blocks[0].header.blue_score, pre_blocks[0].header.hash);
     let mut b = follower(&p, 0x12_0810_0000, &pre_blocks).await;
@@ -2099,7 +2100,7 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     let (late, _, _) = dns_harness::funded_signed_bond_tx(card_seed(spare), spare_out, spare_entry.amount, 0, BOND, 0, mass);
     let refused =
         rig.api().build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(vec![late])), TemplateBuildMode::Standard);
-    let err = format!("{:?}", refused.err().expect("a stake bond after the fence cannot be mined"));
+    let err = format!("{:?}", refused.expect_err("a stake bond after the fence cannot be mined"));
     eprintln!("[x11] a new bond after the fence: {err}");
     assert!(err.contains("DnsParticipationRetired"), "refused by name: {err}");
 }

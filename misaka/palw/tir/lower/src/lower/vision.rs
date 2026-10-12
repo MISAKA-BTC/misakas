@@ -192,8 +192,8 @@ impl VisionSpec {
             return Err(bad("a normalisation mean or std that is not finite and positive".into()));
         }
         let (gh, gw) = self.grid();
-        if self.h % (self.downscale * self.patch) != 0
-            || self.w % (self.downscale * self.patch) != 0
+        if !self.h.is_multiple_of(self.downscale * self.patch)
+            || !self.w.is_multiple_of(self.downscale * self.patch)
             || gh % self.merge != 0
             || gw % self.merge != 0
         {
@@ -202,7 +202,7 @@ impl VisionSpec {
                 self.architecture, self.h, self.w, self.patch, self.merge
             )));
         }
-        if self.d % self.heads != 0 {
+        if !self.d.is_multiple_of(self.heads) {
             return Err(bad(format!("hidden {} not divisible by {} heads", self.d, self.heads)));
         }
         Ok(())

@@ -103,7 +103,7 @@ fn a_commitment_that_would_take_the_2m_attempts_room_is_refused_and_the_attempt_
     let c: Vec<PalwConsensusObjectV2> = (1..=3).map(|i| commitment(short, short_leaves, COMMITTER, 0xC0 + i)).collect();
     let pwu = class_pwu(&p, &s, id2m, next);
     let (env, key, own) =
-        junk_attempt(id2m, bond_key(PRODUCER), pubkey_of(PRODUCER), &operator_pubkey_of(PRODUCER), pwu, 0x41_01, 0x41_0000_01);
+        junk_attempt(id2m, bond_key(PRODUCER), pubkey_of(PRODUCER), &operator_pubkey_of(PRODUCER), pwu, 0x41_01, 0x4100_0001);
     let block = ctx(0x4100_0001, next, next, T12_BLOCK_SUBSIDY_SOMPI);
 
     // The acceptance rehearsal, one object at a time, with and without the own attempt reserved.

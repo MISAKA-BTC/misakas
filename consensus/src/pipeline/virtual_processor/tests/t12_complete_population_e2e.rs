@@ -44,6 +44,7 @@ fn complete_source() -> PalwPanelV3BeaconSourceV1 {
 /// Config owns ALL native genesis registrations; the harness bundle intentionally keeps only
 /// eight signing cards, since t12_genesis_chain asserts its card/key mapping. Added workers are
 /// installed by the real processor from Config, not injected into a tip or eligibility vector.
+#[allow(clippy::drop_non_drop)] // the drop marks where the drill stops holding the key
 fn complete_armed(extra_workers: u64, limit: u32) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let started = Instant::now();
     let (mut config, mut cards, mut premine, floats) = t12_with_harness_cards();
@@ -177,10 +178,10 @@ async fn complete_run(extra_workers: u64, limit: u32, expect_refusal: bool, repl
     }
     if replay {
         let blocks = chain_blocks(&a, a.sink());
-        let mut b = t12_genesis_chain(&config, &cards, &premine, &floats);
+        let b = t12_genesis_chain(&config, &cards, &premine, &floats);
         *b.vp().panel_v3_test_beacon.lock() = Some((vec![challenge_policy()], complete_source()));
         for block in blocks {
-            arrive(&mut b, block, "complete population replay").await;
+            arrive(&b, block, "complete population replay").await;
         }
         assert_eq!(state_of(&a), state_of(&b));
     }

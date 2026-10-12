@@ -106,10 +106,9 @@ fn a_differential_attention_it_does_not_model_is_refused_by_name() {
             a.v_head_dim = a.head_dim + 1;
         }
     }
-    let e = hl::build_program(&spec).err().expect("refused").to_string();
+    let e = hl::build_program(&spec).expect_err("refused").to_string();
     assert!(e.contains("ATTN_DIFFERENTIAL_V1"), "{e}");
-    let mut odd = cfg.replace("\"num_key_value_heads\": 2", "\"num_key_value_heads\": 1");
-    odd = odd.replace("\"num_attention_heads\": 4", "\"num_attention_heads\": 4");
+    let odd = cfg.replace("\"num_key_value_heads\": 2", "\"num_key_value_heads\": 1");
     let e = parse_config_str(&odd).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(e.contains("even"), "{e}");
 }

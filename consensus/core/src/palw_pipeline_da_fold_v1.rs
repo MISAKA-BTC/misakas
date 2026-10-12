@@ -269,7 +269,7 @@ mod tests {
                 class_id,
                 executor_bond: producer,
                 executor_pubkey: vec![6 + PRODUCER as u8; 4],
-                operator_id: palw_operator_id_v2(&vec![20 + PRODUCER as u8; 8]),
+                operator_id: palw_operator_id_v2(&[20 + PRODUCER as u8; 8]),
                 artifact_root: h64(11),
                 trace_root: h64(31),
                 output_root: h64(32),
@@ -283,7 +283,7 @@ mod tests {
         };
         let claim_id = attempt_id_v2(&env.attempt);
         run.at(2, &[], Some(&env));
-        let seats = vec![PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: palw_operator_id_v2(&vec![20 + SEAT as u8; 8]) }];
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: palw_operator_id_v2(&[20 + SEAT as u8; 8]) }];
         run.at(3, &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
         assert!(matches!(run.s.claim(&claim_id).expect("live").phase, PalwClaimPhaseV2::PanelBound { .. }));
         (run, claim_id)
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn a_demand_on_a_claim_that_is_not_a_pipeline_claim_is_refused() {
         let (binding, _) = gen_binding([9, 1030, 2]);
-        let (mut run, claim_id) = claimed(&binding, false);
+        let (run, claim_id) = claimed(&binding, false);
         let refused = run.try_at(FENCE, &[demand(claim_id, PalwDaUnitV1::PipelineStepLeaf { stage: 0, index: 0 }, OTHER)], None);
         assert!(matches!(refused, Err(PalwStateV2Error::DaAnswerMalformed { .. })), "{refused:?}");
         let missing = run.try_at(FENCE, &[demand(h64(0xDEAD), PalwDaUnitV1::PipelineStepLeaf { stage: 0, index: 0 }, OTHER)], None);

@@ -318,10 +318,10 @@ impl HttpTransport for CurlHttp {
         }
         cmd.arg(url).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| format!("cannot run curl: {e}"))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Some(b) = body {
-                stdin.write_all(b).map_err(|e| format!("curl: {e}"))?;
-            }
+        if let Some(mut stdin) = child.stdin.take()
+            && let Some(b) = body
+        {
+            stdin.write_all(b).map_err(|e| format!("curl: {e}"))?;
         }
         let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
         if !out.status.success() {

@@ -157,6 +157,7 @@ pub fn read_capture(outbox: &std::path::Path, job_id: &Hash64) -> Result<Vec<u8>
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::testkit::{FloorWorker, certified_facts, config, identity, temp_dir};

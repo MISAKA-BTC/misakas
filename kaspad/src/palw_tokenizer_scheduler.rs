@@ -374,9 +374,12 @@ impl TokenizerSchedulerV1 {
             signature: Vec::new(),
         }))
     }
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn seed(&self) -> &PalwConstraintStreamSeedV1 {
         &self.candidate.seed
     }
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn seed_id(&self) -> Hash64 {
         self.context
     }

@@ -243,6 +243,7 @@ pub struct PalwGenWorkerRequestV1 {
 /// **The worker's answer**: the binding (the commitment's execution root, the leaf count, the
 /// generated ids) — or a refusal naming the rule, never the prompt.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose (borsh wire / one per job); boxing changes every match site
 pub enum PalwGenWorkerAnswerV1 {
     Result {
         binding: PalwGenStepBindingV1,
@@ -575,6 +576,7 @@ pub fn gen_execution_first_divergence_v1(accused: &PalwGenExecutionV1, own: &Pal
 
 /// **A move a party files at the narrowed leaf.**
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose (borsh wire / one per job); boxing changes every match site
 pub enum GenCourtMoveV1 {
     /// A close (`GenCone`, `GenDecodeToken` or, for a tensor claim, `GenOutputTile`).
     Close(PalwCourtVerdictProofV2),

@@ -186,7 +186,7 @@ fn exec_root_freezes_rider_reallocation_without_disabling_riders_before_open() {
         };
         let root = open_object(decl(lead));
         let rider_object = PalwConsensusObjectV2::AttemptRidersV1 { lead, riders: riders.to_vec() };
-        let (control, _, control_skips) = fold(&[root.clone()]);
+        let (control, _, control_skips) = fold(std::slice::from_ref(&root));
         assert!(control_skips.is_empty(), "{control_skips:?}");
         for objects in [[root.clone(), rider_object.clone()], [rider_object.clone(), root.clone()]] {
             let (state, delta, skips) = fold(&objects);
@@ -1301,7 +1301,7 @@ fn exec_v2_legacy_clock_migrates_from_carried_proof_without_income_or_lease_rene
     let mut extras = xx_declare();
     extras.exec_v2_origin_headers.clear();
     extras.exec_v2_test_origin_daa = None;
-    let (migrated, delta) = step_with(&s, &p, 21, 110, &[object.clone()], &extras).unwrap();
+    let (migrated, delta) = step_with(&s, &p, 21, 110, std::slice::from_ref(&object), &extras).unwrap();
     let control = step_with(&s, &p, 21, 110, &[], &extras).unwrap().0;
     assert_eq!(migrated.claim(&id), control.claim(&id));
     assert_eq!(migrated.safe_weight, control.safe_weight);
@@ -1315,7 +1315,7 @@ fn exec_v2_legacy_clock_migrates_from_carried_proof_without_income_or_lease_rene
     assert!(step_with(&s, &p, 22, 111, &[open_object(d.clone())], &extras).is_err());
     let opened = step_with(&migrated, &p, 22, 111, &[open_object(d.clone())], &extras).unwrap().0;
     assert_eq!(opened.exec_v2_job_use_v1(&d.job_work_id(&s.claim(&id).unwrap().class_id)).unwrap().expires_daa, 100_100);
-    let repeated = step_with(&migrated, &p, 23, 112, &[object.clone()], &extras).unwrap_err();
+    let repeated = step_with(&migrated, &p, 23, 112, std::slice::from_ref(&object), &extras).unwrap_err();
     assert!(repeated.to_string().contains("already has a recorded"));
     assert!(step_with(&s, &p.clone().with_exec_v2_from_daa(None), 21, 110, &[object], &extras).is_err());
     // A late carried proof records the same original clock; it does not mint a lease from its migration block.
@@ -2150,6 +2150,7 @@ fn the_object_and_delta_numbers_are_the_allocated_ones() {
 }
 
 #[test]
+#[allow(clippy::overly_complex_bool_expr)]
 fn a_root_declaration_is_signed_by_the_claims_bond_for_this_network_and_by_no_other_key() {
     let (_, s, claim) = world(Some(0));
     let network = h64(999);
@@ -2174,7 +2175,7 @@ fn a_root_declaration_is_signed_by_the_claims_bond_for_this_network_and_by_no_ot
     tampered.expiry_daa += 1;
     assert_eq!(palw_work_root_verify_signature_v2(&s, network, &tampered, &verify), Err(PalwWorkRootRefusalV2::NotSigned));
     let wrong_key = |_: &[u8], m: &[u8], sig: &[u8], ctx: &[u8]| ctx == PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT && &sig[..64] == m && false;
-    assert_eq!(palw_work_root_verify_signature_v2(&s, network, &d, &wrong_key), Err(PalwWorkRootRefusalV2::NotSigned));
+    assert_eq!(palw_work_root_verify_signature_v2(&s, network, &d, wrong_key), Err(PalwWorkRootRefusalV2::NotSigned));
     let mut unknown = d.clone();
     unknown.root_claim_id = h64(0xBAD);
     assert_eq!(palw_work_root_verify_signature_v2(&s, network, &unknown, &verify), Err(PalwWorkRootRefusalV2::NoClaim));
@@ -2302,7 +2303,7 @@ mod amendment_1 {
             record.program_bytes = record.program.len().try_into().unwrap();
             record.graph_ir_root = crate::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&record.program);
             s.test_insert_tir_class_v1(class, record);
-            let facts = s.tir_class_v1(&class).unwrap().facts.clone();
+            let facts = s.tir_class_v1(&class).unwrap().facts;
             let root_claim = s.claim(&claim).unwrap().clone();
             let (prompt, context) = palw_exec_v2_real_job_v1(&facts, &root_claim.job_identity, xx_declare().prompt_ids_form_v1())
                 .expect("the anchored job");
@@ -3360,7 +3361,7 @@ mod amendment_1 {
         s.claims.get_mut(&claim).unwrap().output_root = palw_attempt_output_root_v1(&context, &generated);
         prefix.install(&mut s);
 
-        let err = open(&p, &s, prefix.decl(claim)).err().expect("a matching hash cannot enlarge the REAL decode").to_string();
+        let err = open(&p, &s, prefix.decl(claim)).expect_err("a matching hash cannot enlarge the REAL decode").to_string();
         assert!(err.contains("its decode differs"), "{err}");
         assert!(s.exec_v2_root_v1(&claim).is_none());
     }
@@ -3626,7 +3627,7 @@ mod amendment_1 {
                 );
             }
             assert!(defaulted.vesting_row(&native).is_none());
-            assert!(defaulted.exec_v2_rewards.get(&native).is_none());
+            assert!(!defaulted.exec_v2_rewards.contains_key(&native));
             assert_eq!(defaulted.vesting_counters.burned - last.vesting_counters.burned, money);
             assert_eq!(defaulted.vesting_counters.moved, last.vesting_counters.moved);
             assert_eq!(defaulted.safe_weight(), 0);

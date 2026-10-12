@@ -652,7 +652,7 @@ impl AnswerStream {
         // boundary so a half character never reaches a client's decoder.
         let mut end = self.bytes.len().saturating_sub(STOP_GUARD.len() - 1);
         // …and the held tail of ids (RFC-0001 §A.3): a stop sequence can only be the stream's end.
-        if self.hold_ids > 0 && self.ids.len() >= 1 {
+        if self.hold_ids > 0 && !self.ids.is_empty() {
             let first_held = self.ids.len().saturating_sub(self.hold_ids);
             end = end.min(self.offsets[first_held]);
         }

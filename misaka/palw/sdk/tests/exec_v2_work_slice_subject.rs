@@ -95,6 +95,7 @@ fn the_contract_names_the_kind_and_a_slice_maps_field_for_field() {
 }
 
 #[test]
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 fn no_field_of_a_slice_escapes_the_contracts_subject() {
     let base = slice();
     let base_id = subject_of(&base).id();
@@ -124,6 +125,7 @@ fn no_field_of_a_slice_escapes_the_contracts_subject() {
 }
 
 #[test]
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 fn the_pre_beacon_commitment_binds_what_the_typed_roots_do_not_carry() {
     let base = slice();
     let commitment = base.challenge_binding();

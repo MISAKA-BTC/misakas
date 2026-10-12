@@ -41,7 +41,7 @@ use misaka_palw_kernel::lifecycle::ClaimStateV1;
 #[test]
 fn f_c4r4_02_obs_watcher_absence_leaves_an_unverified_lie_permanent_and_quantifies_the_loss() {
     let mut w = World::new_opv();
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     let opv = w.l.opv.policy.expect("opv");
     let (reward, job_fee, admission_fee) = (pol.claim_reward, pol.job_fee, opv.economics.admission_fee);
 
@@ -111,7 +111,7 @@ fn grief_seal(bond: Digest, job: Digest) -> T {
 #[test]
 fn f_c4r4_03_a_squatter_seal_never_holds_a_posters_escrow_or_exit_past_the_ttl_and_one_seal_ttl() {
     let mut w = World::new();
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     let (reward, ttl, seal_ttl, delay) = (pol.claim_reward, pol.job_escrow_ttl_daa, pol.seal_ttl_daa, pol.exit_delay_daa);
     let poster_c0 = w.l.bonds[&POSTER].collateral;
 
@@ -225,7 +225,7 @@ fn f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court() {
     let mut pol = policy();
     pol.max_court_work_per_block = worst; // the heaviest class the block admits (registration allows worst == the block's budget)
     pol.prosecution_reserve_permille = 0; // Isolate dismissed-proof pricing at the full-block ceiling.
-    let mut w = World::with(pol.clone());
+    let mut w = World::with(pol);
     assert_ne!(w.class, [0; 64], "the class registers with a worst court equal to the block's court budget");
 
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
@@ -281,7 +281,7 @@ fn f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court() {
 #[test]
 fn f_c4r4_06_obs_checking_an_unpublished_honest_claim_burns_one_demand_bond_per_position() {
     let mut w = World::new_opv();
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let honest = w.honest(&job, 3);
     let (id, trace) = (honest.claim.id(), honest.trace.clone());
@@ -462,7 +462,7 @@ fn f_c4r4_08_a_beacon_window_sees_more_finals_than_the_live_cap_and_no_final_nam
 #[test]
 fn f_c4r4_12_obs_the_losing_sealer_of_a_job_race_forfeits_its_deposit() {
     let mut w = World::new_opv();
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let first = w.honest_by(&job, PRODUCER, 3);
     let second = w.honest_by(&job, HONEST, 3);
@@ -497,7 +497,7 @@ fn f_c4r4_12_obs_the_losing_sealer_of_a_job_race_forfeits_its_deposit() {
 fn f_c4r4_obs_capture_a_self_demand_stretches_one_admission_slot_to_the_hard_deadline() {
     let held = |self_demand: bool| -> u64 {
         let mut w = World::new_opv();
-        let pol = w.l.policy.clone();
+        let pol = w.l.policy;
         let opv = w.l.opv.policy.expect("opv");
         let job = w.post_job(2, &[3, 17, 9], 3, 1);
         let honest = w.honest(&job, 3);
@@ -560,7 +560,7 @@ fn signed_block(w: &mut World, daa: u64, txs: Vec<(Digest, T)>) -> Vec<E> {
 #[test]
 fn f_c4r4_13_a_service_past_the_check_deadline_must_not_time_the_claim_out_before_its_proof() {
     let mut w = World::new();
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let (at, lie) = w.lying(&job, 3);
     let (id, trace) = (lie.claim.id(), lie.trace.clone());
@@ -614,7 +614,7 @@ fn f_c4r4_14_free_junk_responses_must_not_force_an_honest_producers_default() {
     // dismissal fee. Returned: (default, honest loss, griefer paid, junk count, served at, griefer's cost).
     let run = |own_claim: bool| -> (Option<(u64, u64)>, u64, u64, u64, Option<u64>, u64) {
         let mut w = World::new();
-        let pol = w.l.policy.clone();
+        let pol = w.l.policy;
         let free_runs = pol.max_adjudications_per_block - pol.prosecution_reserved_runs();
         w.block(2, vec![bond(SPAM1, 10_000)]);
         let job = w.post_job(3, &[3, 17, 9], 3, 1);
@@ -729,7 +729,7 @@ fn f_c4r4_15_control_a_plain_self_conviction_at_49_percent_loses_at_least_51_per
         let mut pol = policy();
         pol.accuser_reward_permille = 490;
         pol.claim_collateral = collateral;
-        let mut w = World::with(pol.clone());
+        let mut w = World::with(pol);
         let job = w.post_job(2, &[3, 17, 9], 3, 1);
         let (_, lie) = w.lying(&job, 3);
         let (id, da) = (lie.claim.id(), Da::publishing(&lie.trace, &[]));
@@ -761,7 +761,7 @@ fn f_c4r4_15_control_a_plain_self_conviction_at_49_percent_loses_at_least_51_per
 fn f_c4r4_15_a_default_then_a_self_conviction_must_not_recycle_more_than_the_accuser_share() {
     let mut pol = policy();
     pol.accuser_reward_permille = 490;
-    let mut w = World::with(pol.clone());
+    let mut w = World::with(pol);
     let job = w.post_job(2, &[3, 17, 9], 3, 1);
     let (at, lie) = w.lying(&job, 3);
     let id = lie.claim.id();
@@ -833,6 +833,7 @@ fn rebuild_linear_map(rows: &[(Vec<i128>, Vec<i128>)], inp: usize, out: usize) -
     let mut m: Vec<Vec<i128>> =
         rows.iter().map(|(x, y)| x.iter().chain(y.iter()).map(|v| v.rem_euclid(GF)).collect::<Vec<i128>>()).collect();
     let mut rank = 0;
+    #[allow(clippy::explicit_counter_loop)]
     for col in 0..inp {
         let pivot = (rank..m.len()).find(|&r| m[r][col] != 0)?;
         m.swap(rank, pivot);
@@ -843,6 +844,7 @@ fn rebuild_linear_map(rows: &[(Vec<i128>, Vec<i128>)], inp: usize, out: usize) -
         for r in 0..m.len() {
             if r != rank && m[r][col] != 0 {
                 let f = m[r][col];
+                #[allow(clippy::needless_range_loop)]
                 for c in 0..inp + out {
                     m[r][c] = (m[r][c] - f * m[rank][c]).rem_euclid(GF);
                 }
@@ -874,7 +876,7 @@ fn f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights() {
     use misaka_palw_tir::program::Ref;
     let mut w = World::new();
     w.l.commitment_scope_from_daa = Some(0);
-    let pol = w.l.policy.clone();
+    let pol = w.l.policy;
     // A prompt of the extractor's choice: 20 distinct tokens (7 is prime to the 32-token vocabulary).
     let prompt: Vec<u32> = (0..20u32).map(|i| (i * 7 + 3) % 32).collect();
     let job = w.post_job(2, &prompt, 1, 9);

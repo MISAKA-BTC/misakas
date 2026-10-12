@@ -288,9 +288,9 @@ fn review12_1_a_public_registration_replays_for_ever_and_the_fold_refuses_it_onl
     let extras = t12_extras(&p, &b);
     let s0 = genesis_with(&b, &[(REGISTRANT, 51_642_979_663_480)], &extras);
     let signed = registration(&b, &s0, 71_001, bond_key(REGISTRANT));
-    let s1 = fold(&b, &s0, 2, 2, &[signed.clone()], &extras).expect("the honest registration folds");
+    let s1 = fold(&b, &s0, 2, 2, std::slice::from_ref(&signed), &extras).expect("the honest registration folds");
     // The same bytes, 20,000 DAA later: the fold's only verdict is the class's status.
-    let replay = fold(&b, &s1, 3, 20_000, &[signed.clone()], &extras);
+    let replay = fold(&b, &s1, 3, 20_000, std::slice::from_ref(&signed), &extras);
     println!("replay of an Active class 20,000 DAA later: {replay:?}");
     assert!(matches!(replay, Err(PalwStateV2Error::DuplicateClass(_))), "{replay:?}");
     // And a registration whose activation lies 20,000 DAA in the past is not stale to the fold.
@@ -313,7 +313,7 @@ fn review12_1_a_dormant_class_replay_burns_the_registrant_again() {
     let signed = registration(&b, &s0, 72_001, bond_key(REGISTRANT));
     let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = &signed else { unreachable!() };
     let class_id = *class_id;
-    let mut state = fold(&b, &s0, 2, 2, &[signed.clone()], &extras).expect("registers");
+    let mut state = fold(&b, &s0, 2, 2, std::slice::from_ref(&signed), &extras).expect("registers");
     let epoch = b.state.epoch_length();
     let epochs = u64::from(b.state.reclaim_epochs()) + 3;
     let (mut block, mut daa) = (2u64, 2u64);

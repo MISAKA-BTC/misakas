@@ -491,14 +491,10 @@ pub fn check_palw_receipt_spend_admission_v5(
         return Err(PalwReceiptV4Error::AuthorizationExpired { block_daa: ctx.daa_score, expiry }.into());
     }
     // The range may not name quanta the claim does not have (the fold refuses an out-of-range index anyway; named here first).
-    if let crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source {
-        if spend.quantum_index >= *quanta {
-            return Err(PalwFpAdmissionV3Error::QuantumOutOfRange {
-                claim: spend.claim_id,
-                index: spend.quantum_index,
-                quanta: *quanta,
-            });
-        }
+    if let crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source
+        && spend.quantum_index >= *quanta
+    {
+        return Err(PalwFpAdmissionV3Error::QuantumOutOfRange { claim: spend.claim_id, index: spend.quantum_index, quanta: *quanta });
     }
 
     // 7'. The builder: any `Active` bond holding the key that signed the block's position.

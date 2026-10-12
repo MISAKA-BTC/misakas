@@ -318,11 +318,11 @@ impl RequestPruningPointPalwStateFlow {
             // Reserve/charge this ONE traversal exactly like the old whole-message response.
             // Continuations may spend that traversal, but cannot rewind or duplicate a chunk.
             self.ctx.palw_gossip().charge_sidecar_serve(peer, sender.total);
-            if let Some(root) = root {
-                if sender.resume(pp, root, msg.chunk_index).is_err() {
-                    self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
-                    return Ok(());
-                }
+            if let Some(root) = root
+                && sender.resume(pp, root, msg.chunk_index).is_err()
+            {
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                return Ok(());
             }
             self.chunks = Some(sender);
         }

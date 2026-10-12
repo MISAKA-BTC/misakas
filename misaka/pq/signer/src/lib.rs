@@ -1769,7 +1769,7 @@ mod tests {
         let refused = s.handle_request(&req, Hash::default(), 1).result.expect_err("dormant: no signature exists");
         let SignerError::PolicyViolation(why) = refused else { panic!("{refused:?}") };
         assert!(why.contains("PalwReceiptAuthV4") && why.contains("palw_receipt_spend_v4"), "{why}");
-        assert_eq!(s.audit_chain_head() != Hash64::default(), true, "the refusal was audited");
+        assert!(s.audit_chain_head() != Hash64::default(), "the refusal was audited");
 
         // Offered: it signs, and the signature verifies under the authorization's context only.
         s.set_receipt_spend_v4_offered(true);

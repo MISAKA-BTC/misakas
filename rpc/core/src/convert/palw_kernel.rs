@@ -118,7 +118,7 @@ pub fn palw_kernel_rows_request_v1(request: &GetPalwKernelRowsRequest) -> RpcRes
     let after = if request.has_cursor {
         let table = u8::try_from(request.after_table).map_err(|_| RpcError::General("afterTable must fit a u8".to_string()))?;
         let text = request.after_key.trim();
-        if text.len() % 2 != 0 {
+        if !text.len().is_multiple_of(2) {
             return Err(RpcError::General("afterKey must be an even number of hex digits".to_string()));
         }
         let mut key = vec![0u8; text.len() / 2];

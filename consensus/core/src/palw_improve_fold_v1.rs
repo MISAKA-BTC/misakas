@@ -2287,7 +2287,7 @@ mod tests {
         assert_eq!(s.improvement_last_head(&h(LINE)).unwrap().cause, PalwHeadCauseV1::Promoted);
         let (_, b_row) = s.improvement_candidate(&h(LINE), 1, &h(CAND_B)).unwrap();
         assert!(!b_row.counts.unwrap().eligible);
-        assert!(s.improvement_earnings(&bond(BOB)) > 0 || s.pending_payouts.len() > 0, "B's bond and unspent escrow came back");
+        assert!(s.improvement_earnings(&bond(BOB)) > 0 || !s.pending_payouts.is_empty(), "B's bond and unspent escrow came back");
         let stages: Vec<PalwRewardStageV1> = s.improvement_grants(&h(LINE), 1).iter().map(|(_, g)| g.stage).collect();
         assert!(stages.contains(&PalwRewardStageV1::WinnerBond) && stages.contains(&PalwRewardStageV1::S2Trainer));
         conserved(&s, &h(LINE));
@@ -3198,7 +3198,7 @@ mod tests {
         assert_eq!((header.state, header.items), (PalwEpochStateV1::Evaluating, 8 + 3 + 2));
         let seed = header.seed.unwrap();
         let entries = |from: u32, count: u32| {
-            (from..from + count).map(|item| s.improvement_item(&h(LINE), 1, item).unwrap().clone()).collect::<Vec<_>>()
+            (from..from + count).map(|item| *s.improvement_item(&h(LINE), 1, item).unwrap()).collect::<Vec<_>>()
         };
         let regression: Vec<u32> = entries(8, 3)
             .iter()

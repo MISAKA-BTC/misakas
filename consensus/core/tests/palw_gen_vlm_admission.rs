@@ -371,7 +371,7 @@ fn a_text_only_class_is_refused_by_name_under_the_gen_fence_and_pointed_at_the_t
     );
     // From it: refused by name at the first step, as a preflight refusal, with the lane it belongs on.
     let rules = PalwGenAdmissionRulesV1::at(&p, AT).expect("the fence is in force");
-    let refused = palw_gen_registration_preflight_at_v1(&p, &bundle, &object, AT).err().expect("a text-only class is refused");
+    let refused = palw_gen_registration_preflight_at_v1(&p, &bundle, &object, AT).expect_err("a text-only class is refused");
     let PalwClassAdmissionError::GenClass(said) = &refused else { panic!("refused as a preflight refusal, by name: {refused:?}") };
     assert_eq!(said, &PalwGenClassErrorV1::TextOnly.to_string());
     assert_eq!(refused.code(), "GEN_CLASS_REFUSED");
@@ -401,7 +401,7 @@ fn a_topk_in_a_dissected_cone_is_refused_below_the_second_ir_fence_and_sized_by_
     let object = register(topk_class());
     let rules = PalwGenAdmissionRulesV1::at(&below, AT).unwrap();
     assert_eq!(rules.demand, PalwTirDemandRulesV1::Release2000);
-    let refused = verify_gen_class_admission_v1(&bundle(&below), &rules, &object).err().expect("refused below the fence");
+    let refused = verify_gen_class_admission_v1(&bundle(&below), &rules, &object).expect_err("refused below the fence");
     assert!(
         matches!(&refused, PalwClassAdmissionError::GenDissection { why, .. } if why.contains("TopK")),
         "the release's row: {refused:?}"

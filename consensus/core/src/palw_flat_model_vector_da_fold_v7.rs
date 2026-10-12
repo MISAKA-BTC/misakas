@@ -74,13 +74,12 @@ pub(super) fn demand(
                 return Err("flat hash leaf outside declared large-node layout".into());
             }
         }
-        if let FlatVectorUnitKindV7::Value(index) = unit.kind {
-            if !matches!(node.prim, misaka_palw_tir::Prim::TopK { .. })
+        if let FlatVectorUnitKindV7::Value(index) = unit.kind
+            && (!matches!(node.prim, misaka_palw_tir::Prim::TopK { .. })
                 || node.out.dtype != misaka_palw_tir::DType::Idx
-                || misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= index
-            {
-                return Err("selected value is not in the admitted TopK output".into());
-            }
+                || misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= index)
+        {
+            return Err("selected value is not in the admitted TopK output".into());
         }
         if shape.len() > 4 {
             return Err("flat shape rank".into());

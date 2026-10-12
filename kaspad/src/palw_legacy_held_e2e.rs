@@ -888,10 +888,10 @@ fn service_filer_drive_until(
                     matches!(service_filer_step(w, case).unwrap(), PalwFraudFilerStepV1::Engine(PalwFilerActionV1::Wait)),
                     "one open session at a time"
                 );
-                if let PalwLegacyProbeV1::HeldNode { unit } = probe {
-                    if withhold(unit) {
-                        return Err(unit);
-                    }
+                if let PalwLegacyProbeV1::HeldNode { unit } = probe
+                    && withhold(unit)
+                {
+                    return Err(unit);
                 }
                 let answer = match probe {
                     PalwLegacyProbeV1::Binding { row, tile } => PalwConsensusObjectV2::MaterialDisclosedV2 {
@@ -1640,7 +1640,7 @@ async fn lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_
         let historical = w.s.da_claim(&claim).unwrap();
         assert!(kaspa_consensus_core::palw_da_rcore_v1::palw_da_unit_answered_v1(historical, &probe.unit(), 2));
         assert!(!w.s.palw_da_unit_available_v1(&claim, historical, &probe.unit(), 2), "historical presence is not fresh delivery");
-        assert!(rc_step(&w.s, w.daa + 1, &[object.clone()]).is_err(), "a duplicate counter cannot open another session");
+        assert!(rc_step(&w.s, w.daa + 1, std::slice::from_ref(&object)).is_err(), "a duplicate counter cannot open another session");
         let old = PalwConsensusObjectV2::DefaultAccused {
             claim,
             missing_event_index: 0,
@@ -1649,7 +1649,7 @@ async fn lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_
         };
         assert!(
             matches!(
-                rc_step(&w.s, w.daa + 1, &[old.clone()]),
+                rc_step(&w.s, w.daa + 1, std::slice::from_ref(&old)),
                 Err(PalwStateV2Error::DaUnitAlreadyAnswered(_)) | Err(PalwStateV2Error::DaSessionAlreadyOpen { .. })
             ),
             "old signatures stay refused even while a new session is open"
@@ -1916,18 +1916,18 @@ fn public_prompt_binding(
         palw_int_activation_leg_root_v1,
     };
     let canonical = palw_attempt_canonical_v1(profile, false).expect("model canonical job");
-    let prompt_root = palw_attempt_prompt_root_v1(&profile, &prompt_anchor, canonical.0, form).expect("public prompt root");
-    let ctx = palw_attempt_context_v1(&profile, &anchor, canonical, prompt_root);
-    let checkpoint_profile = palw_canonical_checkpoint_profile_v1(&profile);
+    let prompt_root = palw_attempt_prompt_root_v1(profile, &prompt_anchor, canonical.0, form).expect("public prompt root");
+    let ctx = palw_attempt_context_v1(profile, &anchor, canonical, prompt_root);
+    let checkpoint_profile = palw_canonical_checkpoint_profile_v1(profile);
     let checkpoint_count =
-        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&profile, &ctx, checkpoint_profile.checkpoint_interval);
+        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(profile, &ctx, checkpoint_profile.checkpoint_interval);
     let mut binding = PalwStepBindingV2 {
         version: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
         state_chunk_map_id: profile.state_chunk_map_id,
         shape_profile: profile.clone(),
         checkpoint_profile,
         activation_leg_root: palw_int_activation_leg_root_v1(&ctx),
-        step_leaf_count: kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, 1 << 40).expect("count"),
+        step_leaf_count: kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, &ctx, 1 << 40).expect("count"),
         step_merkle_root: h64(0x1302),
         checkpoint_count,
         checkpoint_merkle_root: if checkpoint_count == 0 {

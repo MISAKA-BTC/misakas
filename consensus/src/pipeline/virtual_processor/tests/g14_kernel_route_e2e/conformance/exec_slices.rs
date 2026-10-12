@@ -198,7 +198,7 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
     let anchor = execution_anchor_v3(cw.net.domain, pre_pow, facts.class_id, &bond.0, header.nonce);
     // GAP-62: the anchored prompt, J5's canonical context and the honest run of the bound kernel class on that prompt.
-    let tir = cw.net.chain.tip_state().1.tir_class_v1(&class).expect("an IR class").facts.clone();
+    let tir = cw.net.chain.tip_state().1.tir_class_v1(&class).expect("an IR class").facts;
     let form = cw.net.config.params.palw_prompt_ids_form_at(header.daa_score);
     let (prompt, context) = palw_exec_v2_real_job_v1(&tir, &anchor, form).expect("the anchored job");
     let run = greedy(&cw.cand, &cw.net.ledger(), &kernel_class, &prompt, context.exact_decode_tokens.max(1) as usize);
@@ -756,7 +756,7 @@ async fn x8_g14_root_admission_uses_snapshot_origin_when_original_header_is_abse
 async fn x8_g14_kernel_claims_accept_a_canonical_prefix_and_its_continuations() {
     let mut cw = active_world().await;
     let identity = Hash64::from_u64_word(0xA77E);
-    let facts = cw.net.chain.tip_state().1.tir_class_v1(&cw.v2_class).unwrap().facts.clone();
+    let facts = cw.net.chain.tip_state().1.tir_class_v1(&cw.v2_class).unwrap().facts;
     let (prompt, context) = palw_exec_v2_real_job_v1(&facts, &identity, cw.net.config.params.palw_prompt_ids_form_at(cw.net.daa()))
         .expect("a canonical public job");
     let run = greedy(&cw.cand, &cw.net.ledger(), &cw.kernel_class, &prompt, context.exact_decode_tokens.max(1) as usize);
@@ -984,7 +984,7 @@ async fn session(cw: &mut Cw, lie_prefix: bool, lie: impl Fn(usize) -> bool) -> 
     }
     let state = cw.net.chain.tip_state().1;
     let root = state.exec_v2_root_v1(&s.real.claim).unwrap();
-    assert_eq!((root.next_index, root.phase.clone()), (3, PalwWorkRootPhaseV2::Complete), "every planned slice admitted");
+    assert_eq!((root.next_index, root.phase), (3, PalwWorkRootPhaseV2::Complete), "every planned slice admitted");
     assert!(
         !state.claim(&s.real.claim).unwrap().phase.is_terminal(),
         "the REAL claim is live while its slices wait: {:?}",

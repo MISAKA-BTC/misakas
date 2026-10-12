@@ -144,14 +144,6 @@ fn h_tile_bound_refusal(why: &str) -> bool {
     TIR_H_TILE_REFUSALS_V1.iter().any(|what| why.contains(what))
 }
 
-/// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
-/// has dropped any whose close is estimated past the carriage); for each, the history tile from
-/// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
-/// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
-/// `recurrent` program only: without a `Fixed` state the interval changes no leaf and no close. The
-/// first layout admitted is returned, at the widest logits tile, history tile and interval that admit;
-/// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
-/// the one an operator acts on.
 thread_local! {
     /// The instant the current thread's layout search must stop by (`None`: no budget). Set only by a caller that judges many classes
     /// in a row (the Hugging Face census), through [`tir_with_search_deadline_v1`]; every other caller is unaffected.
@@ -173,6 +165,14 @@ fn search_budget_spent() -> bool {
     SEARCH_DEADLINE.with(|d| d.get().is_some_and(|t| std::time::Instant::now() >= t))
 }
 
+/// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+/// has dropped any whose close is estimated past the carriage); for each, the history tile from
+/// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+/// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+/// `recurrent` program only: without a `Fixed` state the interval changes no leaf and no close. The
+/// first layout admitted is returned, at the widest logits tile, history tile and interval that admit;
+/// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+/// the one an operator acts on.
 fn tir_declare_search_v1(
     layout_for: &mut dyn FnMut(Option<u32>, u32) -> Result<PalwTirLayoutV1, String>,
     interval: &mut dyn FnMut(&PalwTirLayoutV1) -> Result<u32, String>,

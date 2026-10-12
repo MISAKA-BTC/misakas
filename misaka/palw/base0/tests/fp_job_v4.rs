@@ -22,6 +22,7 @@ const PROCESSOR: &str = include_str!("../../../../consensus-vectors/fp-v4/proces
 const NOOP: &str = include_str!("../../../../consensus-vectors/fp-v4/v4_noop_equals_v3.json");
 
 /// The three families as `(label, backend, class profile, prompt form, vocab)`.
+#[allow(clippy::type_complexity)]
 fn families() -> Vec<(&'static str, Box<dyn PalwExecutionBackendV1>, PalwShapeProfileV3, PalwPromptIdsFormV1, u32)> {
     let floor = common::floor_backend(PalwPromptIdsFormV1::Flat);
     let floor_profile = floor.profile().clone();

@@ -360,6 +360,7 @@ async fn independent_actor(
     }
     panic!("bounded acquisition did not terminate")
 }
+#[allow(clippy::unnecessary_unwrap)] // `corrupt` is Some on this branch by construction
 #[tokio::test]
 async fn flat_v9_native_independent_sparse_state_checker_public_values_own_seal_once_capital_and_redemption() {
     for corrupt in [None, Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)] {

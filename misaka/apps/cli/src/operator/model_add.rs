@@ -719,15 +719,16 @@ async fn walk(
         flow.row(Severity::Skip, "prompt lane", "not certified — optional: misaka model add … --prompt-lane");
     }
     // The registry's own state, for the closing line (T12-035): LIVE only where it admits weight.
-    if let Ok(model) = walk.node.client().get_palw_model(kaspa_rpc_core::GetPalwModelRequest { class_id: class_hex.clone() }).await {
-        if model.found && !model.registry_state.is_empty() {
-            flow.row(
-                if model.registry_state.starts_with("Active") { Severity::Ok } else { Severity::Info },
-                "registry",
-                format!("{} · {} of {} ready seats", model.registry_state, model.ready_seats, model.required_ready_seats),
-            );
-            doc.insert("registry_state".into(), model.registry_state.into());
-        }
+    if let Ok(model) = walk.node.client().get_palw_model(kaspa_rpc_core::GetPalwModelRequest { class_id: class_hex.clone() }).await
+        && model.found
+        && !model.registry_state.is_empty()
+    {
+        flow.row(
+            if model.registry_state.starts_with("Active") { Severity::Ok } else { Severity::Info },
+            "registry",
+            format!("{} · {} of {} ready seats", model.registry_state, model.ready_seats, model.required_ready_seats),
+        );
+        doc.insert("registry_state".into(), model.registry_state.into());
     }
     doc.insert("next".into(), format!("misaka model market open {class_hex}").into());
     flow.ui.sub(&paint::dim(&format!(
@@ -1216,7 +1217,6 @@ async fn register_remote(
 /// is needed**: the owner's public key (`--owner-pubkey`, or the nodes' report of the bond's key) and the payer's address
 /// (`--payer-address`, which may belong to another key than the bond's) are enough. Nothing is signed, funded or sent; everything
 /// the nodes said is `UNVERIFIED_REMOTE_STATE`, and the signer re-derives what it signs.
-#[allow(clippy::too_many_arguments)]
 /// **An IR class (`ClassRegisteredTirV1`) through `model add`** (H1's routed item 2, 2026-10-08): artifact (pack gate in `run`) → the
 /// class and root → **DUPLICATE_CLASS before anything is quoted or paid** → the registrant bond → the quote from ≥ 2 nodes (`--quote`) or
 /// an unsigned bundle (`--export-bundle`, then `model sign` / `model submit`, which carry IR registrations like catalog ones). In-process

@@ -857,6 +857,7 @@ impl PalwReporterFilerV1 {
     /// objects leave `court_pending`, its debounce keys leave `court_moved` (nothing else prunes
     /// them), and a stalled or expired one is handed back ([`Self::hand_back_v1`]). Returns how each
     /// finished filing ended.
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn tick(
         &mut self,
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,

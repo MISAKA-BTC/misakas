@@ -297,7 +297,7 @@ pub(super) fn apply_part_v1(
         let price = price_of(bond, *mask);
         // A bond that sits in several shards posts the shards' prices one after another: the first lock is covered by its duty,
         // each later shard's price is an increment that needs its own room.
-        let held = builder.state.slashable_locks.get(&(*bond, claim_id)).is_some();
+        let held = builder.state.slashable_locks.contains_key(&(*bond, claim_id));
         let owed = if held { price } else { price.saturating_sub(palw_seat_duty_of_v1(&builder.state, &claim_id, bond)) };
         if owed > builder.gate_room(bond, now, PalwRcoreGateV1::Work) {
             return Ok(());

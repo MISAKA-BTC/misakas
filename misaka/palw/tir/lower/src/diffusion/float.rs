@@ -70,7 +70,7 @@ impl Sd3Config {
         if cfg.caption_dim != cfg.width() {
             return Err(format!("caption_projection_dim {} is not the inner dimension {}", cfg.caption_dim, cfg.width()));
         }
-        if cfg.sample_size % cfg.patch_size != 0 || cfg.grid() > cfg.pos_max {
+        if !cfg.sample_size.is_multiple_of(cfg.patch_size) || cfg.grid() > cfg.pos_max {
             return Err("the latent grid does not fit the position table".to_string());
         }
         Ok(cfg)
@@ -227,7 +227,7 @@ impl Dit {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn block(&self, i: usize, pre_only: bool, h_img: &mut Vec<f64>, h_txt: &mut Vec<f64>, cond_a: &[f64], l: usize, cal: &mut Calib) {
+    fn block(&self, i: usize, pre_only: bool, h_img: &mut [f64], h_txt: &mut [f64], cond_a: &[f64], l: usize, cal: &mut Calib) {
         let cfg = &self.cfg;
         let (d, n) = (cfg.width(), cfg.grid() * cfg.grid());
         let pf = format!("transformer_blocks.{i}");

@@ -26,6 +26,7 @@ use misaka_palw_sdk::tir_layout::{
 };
 use std::path::PathBuf;
 
+#[allow(clippy::multiple_bound_locations)]
 fn env_list<T: std::str::FromStr>(key: &str, default: &[T]) -> Vec<T>
 where
     T: Clone,

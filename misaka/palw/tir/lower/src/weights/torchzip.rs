@@ -702,7 +702,7 @@ impl<'a> Machine<'a> {
         if d.sealed.get() {
             return Err(refuse("a dict that is a member of another value is changed"));
         }
-        if items.len() % 2 != 0 {
+        if !items.len().is_multiple_of(2) {
             return Err(refuse("SETITEMS with an odd number of values"));
         }
         if items.iter().any(|v| Rc::ptr_eq(v, d)) {
@@ -890,7 +890,7 @@ impl<'a> Machine<'a> {
                 }
                 // containers
                 b')' => self.push_val(Kind::Tuple(Vec::new()))?,
-                0x85 | 0x86 | 0x87 => {
+                0x85..=0x87 => {
                     let n = (op - 0x84) as usize;
                     let mut items = Vec::with_capacity(n);
                     for _ in 0..n {

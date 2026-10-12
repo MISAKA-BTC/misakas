@@ -50,7 +50,7 @@ pub(super) fn bind(
     pc: &ParamCommitmentsV1,
 ) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
-    if !builder.extras.kernel_route.as_ref().is_some_and(|e| e.opv.is_some()) {
+    if builder.extras.kernel_route.as_ref().is_none_or(|e| e.opv.is_none()) {
         return Err(refused("model artifact statements require palw_panel_free_v1"));
     }
     let route = builder.state.kernel_route.as_ref().unwrap();
@@ -149,7 +149,7 @@ pub(super) fn refute_outcome(
     proof_bytes: &[u8],
 ) -> Result<crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
-    if !builder.extras.kernel_route.as_ref().is_some_and(|e| e.opv.is_some()) {
+    if builder.extras.kernel_route.as_ref().is_none_or(|e| e.opv.is_none()) {
         return Err(refused("model artifact statements require palw_panel_free_v1"));
     }
     let id = Hash64::from_bytes(*binding);

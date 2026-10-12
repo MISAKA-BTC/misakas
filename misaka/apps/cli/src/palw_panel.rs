@@ -128,7 +128,7 @@ fn render_class_chain(s: &RpcPalwClassPanelStatus) -> String {
 
 fn render_seats(class: &str, seats: &[RpcPalwPanelSeat]) -> String {
     let mut out = String::new();
-    out.push_str(&format!("Seat          Ready  Last proof  Collateral         Assigned\n"));
+    out.push_str("Seat          Ready  Last proof  Collateral         Assigned\n");
     for s in seats.iter().filter(|s| class.is_empty() || s.class_id == class || s.class_id.starts_with(class)) {
         let ready = if s.ready { "yes" } else { "no " };
         let proof = if s.readiness_proved_daa == 0 { "—".into() } else { s.readiness_proved_daa.to_string() };

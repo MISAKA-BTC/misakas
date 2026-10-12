@@ -491,7 +491,7 @@ impl RangeTwin<'_> {
             PalwGenTwinInputV1::Free => Ok(()),
             PalwGenTwinInputV1::Edge { stage, rows, tile, elements } => {
                 let tile = tile.max(1) as u64;
-                let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+                let put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
                     let (t0, t1) = (lo / tile, (hi - 1) / tile);
                     this.tick(t1 - t0 + 1)?;
                     for t in t0..=t1 {

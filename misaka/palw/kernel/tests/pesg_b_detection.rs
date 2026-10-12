@@ -670,6 +670,7 @@ fn rank_mod<const E: u32>(m: &[Vec<i64>]) -> usize {
         for i in 0..a.len() {
             if i != rank && a[i][col] != Mersenne::<E>::ZERO {
                 let factor = a[i][col].fmul(inv);
+                #[allow(clippy::needless_range_loop)]
                 for j in 0..cols {
                     let t = a[rank][j].fmul(factor);
                     a[i][j] = a[i][j].fsub(t);
@@ -831,7 +832,7 @@ fn pesg_b_crt_miss_is_the_smallest_moduluss_below_the_product() {
 /// element has exactly one preimage — exact uniformity given uniform words.
 fn of_word_exact<const E: u32>() {
     let p = Mersenne::<E>::MODULUS;
-    for high in [0u128, 1u128 << E, u128::MAX & !p] {
+    for high in [0u128, 1u128 << E, !p] {
         let mut hits = vec![0u32; p as usize];
         let mut rejected = 0;
         for low in 0..=p {

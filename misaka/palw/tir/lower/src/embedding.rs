@@ -120,7 +120,7 @@ pub fn lower_bidir_embedding_v1(dir: &Path, opts: &EmbeddingLowerOptsV1) -> Resu
     };
     let q = {
         let bits = (-mat.logits_scale.log2()).round();
-        (bits >= 0.0 && bits <= 31.0 && (mat.logits_scale - (-bits).exp2()).abs() == 0.0).then_some(bits as u8)
+        ((0.0..=31.0).contains(&bits) && (mat.logits_scale - (-bits).exp2()).abs() == 0.0).then_some(bits as u8)
     };
     Ok(LoweredEmbeddingV1 {
         program,

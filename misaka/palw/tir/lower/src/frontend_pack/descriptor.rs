@@ -124,7 +124,7 @@ pub(super) fn parse(value: &Value, test_work: &mut usize) -> Result<Arc<QuantFor
     }
     config_paths(&d)?;
     for p in d.params.values().filter_map(|p| p.from_role.as_ref()) {
-        validate_paths(&[p.path.clone()])?;
+        validate_paths(std::slice::from_ref(&p.path))?;
     }
     let table_bytes: usize = d.tables.values().map(|t| t.hex.len() / 2).sum();
     if table_bytes > 64 << 10 {

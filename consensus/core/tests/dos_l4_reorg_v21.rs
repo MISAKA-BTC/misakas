@@ -141,7 +141,7 @@ impl Chain {
             &extras(),
         )?;
         // Restart / pruning import: the carriage must round-trip to the same root.
-        if daa % 7 == 0 || !objects.is_empty() {
+        if daa.is_multiple_of(7) || !objects.is_empty() {
             let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&next)).expect("encode");
             let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("decode");
             let restored = back.into_state(&self.params, Some(next.state_root())).expect("carriage restores the same root");

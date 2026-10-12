@@ -719,10 +719,10 @@ pub(super) fn apply_teacher_licence_v1(
     }
     // **Lane PA, RF-4 (`palw_audit_1004_v1`)**: a licence's life is bounded (the sweep removes it at its expiry, so the table is
     // bounded by the registration rate times this life; a table CAP would itself be a griefing channel and is not added).
-    if builder.params.audit_1004_active_at(daa) {
-        if licence.expiry_daa > daa.saturating_add(crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1) {
-            return Err(refused("a licence's expiry is past the longest life a licence may be registered for"));
-        }
+    if builder.params.audit_1004_active_at(daa)
+        && licence.expiry_daa > daa.saturating_add(crate::palw_audit_1004_v1::PALW_AUDIT_1004_MAX_LICENCE_LIFE_DAA_V1)
+    {
+        return Err(refused("a licence's expiry is past the longest life a licence may be registered for"));
     }
     if builder.state.improvement_licence(&licence.licence_id).is_some() {
         return Err(refused("the licence is already registered"));

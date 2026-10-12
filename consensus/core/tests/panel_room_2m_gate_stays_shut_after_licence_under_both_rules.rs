@@ -31,7 +31,7 @@ fn the_2m_gate_refuses_a_second_claim_after_the_first_is_licensed_past_and_below
     let sp = b.state.clone();
     let (_, id2m) = model_classes(&p);
     let g = genesis_state(&p);
-    let row = g.model_lifecycle(&id2m).unwrap().profile.clone();
+    let row = g.model_lifecycle(&id2m).unwrap().profile;
     let required = row.required_ready_seats as usize;
     assert!(palw_panel_held_to_final_v1(g.model_lifecycle(&id2m).unwrap()), "the 2M row is held to Final (ADR-0152's C7)");
     assert_eq!(row.max_inflight_claims, 1, "c_2M = 1");
@@ -53,7 +53,7 @@ fn the_2m_gate_refuses_a_second_claim_after_the_first_is_licensed_past_and_below
     .expect("bonds");
     let gate_empty = palw_class_admits_claim_v1(&s1, &sp, &rate, &id2m, NOW);
 
-    let (env1, key1, id1) = junk_attempt(id2m, bond_key(A1), pubkey_of(A1), &operator_pubkey_of(A1), pwu, 0x88_01, 0x88_0000_01);
+    let (env1, key1, id1) = junk_attempt(id2m, bond_key(A1), pubkey_of(A1), &operator_pubkey_of(A1), pwu, 0x88_01, 0x8800_0001);
     let (s2, _, skips) =
         go(&p, &sp, &s1, &ctx(0x8800_0002, NOW + 1, NOW + 1, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env1), key1)
             .expect("2M #1");
@@ -69,7 +69,7 @@ fn the_2m_gate_refuses_a_second_claim_after_the_first_is_licensed_past_and_below
     let gate_licensed = gate(&p, &sp, &s4, id2m, NOW + 4);
     let gate_licensed_below = palw_class_admits_claim_v1(&s4, &sp, &dormant_extras(&p, NOW + 4), &id2m, NOW + 4);
 
-    let (env2, key2, id2) = junk_attempt(id2m, bond_key(A2), pubkey_of(A2), &operator_pubkey_of(A2), pwu, 0x88_02, 0x88_0000_02);
+    let (env2, key2, id2) = junk_attempt(id2m, bond_key(A2), pubkey_of(A2), &operator_pubkey_of(A2), pwu, 0x88_02, 0x8800_0002);
     let second =
         go(&p, &sp, &s4, &ctx(0x8800_0006, NOW + 4, NOW + 4, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env2), key2);
     let live_2m = s4.claims_iter().filter(|(_, c)| c.class_id == id2m && !c.phase.is_terminal()).count();

@@ -182,7 +182,7 @@ async fn cross() -> Crossing {
         if daa >= end {
             break;
         }
-        if daa % 2 == 0 {
+        if daa.is_multiple_of(2) {
             run.attempt(card % 8).await;
             card += 1;
         }

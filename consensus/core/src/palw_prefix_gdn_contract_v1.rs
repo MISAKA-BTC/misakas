@@ -109,6 +109,7 @@ impl PalwPrefixGdnContractV1 {
             end: ranges[ordinal].1,
         })
     }
+    #[allow(dead_code)] // dormant: not yet wired to a caller (its fence is unarmed)
     pub fn input_rows(
         &self,
         binding: &PalwStepBindingV2,

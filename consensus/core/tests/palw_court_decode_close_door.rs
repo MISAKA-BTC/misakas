@@ -370,10 +370,10 @@ fn t18v_a_decode_close_is_judged_at_the_head_and_never_acquits() {
         let target = classes[1].2;
         let per_draw = g.palw_canonical_per_draw_v1(&short, NOW, Some(0)).unwrap();
         let pwu = palw_attempt_derived_pwu_v1(target, per_draw);
-        let (mut env, _, _) = junk_attempt(short, bond_key(exe), pubkey_of(exe), &operator_pubkey_of(exe), pwu, 0x71_00, 0x71_0000_00);
+        let (mut env, _, _) = junk_attempt(short, bond_key(exe), pubkey_of(exe), &operator_pubkey_of(exe), pwu, 0x71_00, 0x7100_0000);
         env.attempt.trace_root = binding.full_logits_trace_root;
         env.attempt.execution_root = binding.committed_execution_root;
-        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(h(NET), h(0x71_0000_00), short, &bond_key(exe).0, 7);
+        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(h(NET), h(0x7100_0000), short, &bond_key(exe).0, 7);
         let key = kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(&env.attempt, anchor);
         let claim_id = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&env.attempt);
         let (s2, skips) =

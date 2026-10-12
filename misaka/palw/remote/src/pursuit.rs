@@ -654,7 +654,7 @@ mod tests {
     #[test]
     fn the_resume_bound_leaves_the_carriage_and_one_fold() {
         // The arithmetic alone (the node tests run it against real rows): 3 missing chunks need 3 DAA of carriage and 1 to fold.
-        let carriage = 3u64.max(1) * ROUTE_DAA_PER_CHUNK_V1 + 1;
+        let carriage = 3u64 * ROUTE_DAA_PER_CHUNK_V1 + 1;
         assert_eq!(carriage, 4);
         assert_eq!(PURSUIT_DETERMINISTIC_RND_V1, [0u8; 32], "FIPS 204 deterministic signing");
     }

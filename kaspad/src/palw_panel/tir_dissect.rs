@@ -166,6 +166,7 @@ pub(crate) fn palw_tir_dissect_build_v1(
 /// A partial public holder prosecutes the local history constraint from the accused's
 /// authenticated dense inputs. It owes no root or responder round and never substitutes
 /// a separately executed prefix. The bottom is still adjudicated by the chain's dry run.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn palw_tir_partial_dissect_build_v1(
     holding: &misaka_palw_sdk::lineages::tir::TirShardHoldingV1,
     capture: &TirCaptureV1,

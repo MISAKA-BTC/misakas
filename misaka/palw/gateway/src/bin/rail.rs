@@ -57,7 +57,7 @@ use kaspa_pq_validator_core::{
     ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, MessageSigner, VALIDATOR_SEED_LEN, ValidatorKey, build_fp_commitment_tx_with,
     build_redemption_bundle_v4_with, estimate_overlay_fee_with,
 };
-use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
+use kaspa_txscript::script_class::ScriptClass;
 
 fn die(msg: String) -> ! {
     eprintln!("[misaka-palw-fp-rail] fatal: {msg}");
@@ -525,7 +525,7 @@ fn main() {
                 die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into())
             });
             let mut pubkey = vec![0u8; hex_text.len() / 2];
-            if hex_text.len() % 2 != 0 || faster_hex::hex_decode(hex_text.as_bytes(), &mut pubkey).is_err() {
+            if !hex_text.len().is_multiple_of(2) || faster_hex::hex_decode(hex_text.as_bytes(), &mut pubkey).is_err() {
                 die("--bond-pubkey is not hex".into());
             }
             let identity = kaspa_hashes::Hash::from_bytes([0x52; 32]); // how the sidecar's audit log names this rail
@@ -1005,7 +1005,6 @@ fn observe_endpoint(
 /// `finality_depth` DAA deep; and a claim row naming another executor bond is `Misattributed`, never ours. The nodes are compared, and a
 /// disagreement is printed as one rather than averaged away.
 fn track_once(endpoints: &[String], claim_hex: &str, tx_id_hex: Option<&str>, our_bond: TransactionOutpoint, finality_depth: u64) {
-    use kaspa_rpc_core::api::rpc::RpcApi;
     use misaka_palw_remote::track::ClaimTracker;
     let parse_hash = |what: &str, text: &str| -> Hash64 {
         let mut out = [0u8; 64];
@@ -1078,7 +1077,6 @@ struct ResubmitArgs<'a> {
 /// key). A relay's ACK is confirmed only by a node that is not that relay and not one already found swallowing; with no independent
 /// observer it sends nothing (`Blind`).
 fn track_and_resubmit(a: &ResubmitArgs<'_>) {
-    use kaspa_rpc_core::api::rpc::RpcApi;
     use misaka_palw_remote::relay::{RelayNode, check_fp_carrier_v1, tx_id_of_bytes};
     use misaka_palw_remote::resubmit::{ResubmitStateV1, step_resubmit_v1};
     if a.funding_amount == 0 {
@@ -1322,7 +1320,6 @@ fn relay_through_many(
         nodes.iter().map(|n| n as &dyn misaka_palw_remote::relay::RelayNode).collect();
     let verdict = misaka_palw_remote::relay::broadcast_signed_tx(tx, Some(funding), &refs, min_accept);
     for node in &nodes {
-        use kaspa_rpc_core::api::rpc::RpcApi;
         let _ = runtime.block_on(node.client.disconnect());
     }
     match verdict {

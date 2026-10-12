@@ -169,14 +169,14 @@ fn whole(
     f: &FlatWholeFaultV5,
 ) -> Result<FlatConvictionV5, DismissalV1> {
     let (p, s, n) = (f.output.position, f.output.occurrence, f.output.node);
-    let b = small_bounds(c, &pr, p, s, n)?;
-    if !common::authenticate_node(c, &pr, &f.output, (p, s, n)) {
+    let b = small_bounds(c, pr, p, s, n)?;
+    if !common::authenticate_node(c, pr, &f.output, (p, s, n)) {
         return Err(na("small output not bound"));
     }
     if common::size_with_limit(f, common::FLAT_FAULT_MAX_BYTES_V4).map_err(|_| na("oversized small fault"))? > b.filing_bytes {
         return Err(na("small fault exceeds relation bound"));
     }
-    let ops = common::authenticate_inputs(c, &pr, p, s, n, &f.inputs, &f.token, &b.operand_leaves)?;
+    let ops = common::authenticate_inputs(c, pr, p, s, n, &f.inputs, &f.token, &b.operand_leaves)?;
     let node = pr.w.node(s, n);
     let sh = pr.shapes(p, s, n);
     let count = LayoutV3::of(&sh.out).len;
@@ -206,7 +206,7 @@ fn malformed(
 ) -> Result<FlatConvictionV5, DismissalV1> {
     let o = &f.output;
     let (p, s, n) = (o.position, o.occurrence, o.node);
-    if !common::authenticate_node(c, &pr, o, (p, s, n)) || f.header.commitment() != Some(o.commitment) {
+    if !common::authenticate_node(c, pr, o, (p, s, n)) || f.header.commitment() != Some(o.commitment) {
         return Err(na("typed header not bound"));
     }
     let (dtype, shape) = pr.declared(s, n, p);
@@ -227,12 +227,12 @@ fn decode(
     let s = (pr.w.occurrences.len() - 1) as u16;
     let n = c.claim.program.logits;
     let o = f.logits.node.as_ref().ok_or_else(|| na("missing logits node"))?;
-    if !common::authenticate_node(c, &pr, o, (p, s, n)) {
+    if !common::authenticate_node(c, pr, o, (p, s, n)) {
         return Err(na("borrowed logits node"));
     }
     let (dtype, shape) = pr.declared(s, n, p);
     let len = LayoutV3::of(&shape).len;
-    let b = decode_bounds(c, &pr, p, s, n)?;
+    let b = decode_bounds(c, pr, p, s, n)?;
     if f.logits.flat.len() + f.logits.legacy.len() > 2
         || common::size_with_limit(f, common::FLAT_FAULT_MAX_BYTES_V4).map_err(|_| na("oversized decode fault"))? > b.filing_bytes
     {
@@ -368,7 +368,7 @@ fn fault_bounds_prepared(
 ) -> Result<FlatCourtBoundsV5, DismissalV1> {
     let mut b = match f {
         FlatFaultV5::Leaf(f) => common::bounds(c, pr, f.output.position, f.output.occurrence, f.output.node, f.leaf.index)?,
-        FlatFaultV5::Whole(f) => small_bounds(c, &pr, f.output.position, f.output.occurrence, f.output.node)?,
+        FlatFaultV5::Whole(f) => small_bounds(c, pr, f.output.position, f.output.occurrence, f.output.node)?,
         FlatFaultV5::Malformed(f) => {
             if !pr.valid(f.output.occurrence, f.output.node) || f.output.position >= c.claim.positions {
                 return Err(na("no malformed target"));
@@ -384,7 +384,7 @@ fn fault_bounds_prepared(
             if p >= c.claim.positions {
                 return Err(na("decode position out of extent"));
             }
-            decode_bounds(c, &pr, p, (pr.w.occurrences.len() - 1) as u16, c.claim.program.logits)?
+            decode_bounds(c, pr, p, (pr.w.occurrences.len() - 1) as u16, c.claim.program.logits)?
         }
     };
     b.filing_bytes += 3; // explicit outer version and fault discriminant

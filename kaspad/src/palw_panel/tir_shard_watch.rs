@@ -84,6 +84,7 @@ pub(crate) fn palw_tir_shard_watch_finding_v1(
 /// The public watcher over proven shard rows alone. A history fault names its leaf and
 /// opens the same interactive court the partial challenger consumer continues.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn palw_tir_shard_watch_finding_over_v1(
     holding: &TirShardHoldingV1,
     capture: &TirCaptureV1,
@@ -201,17 +202,8 @@ impl super::super::PalwPanelService {
                     && !books.demanded.contains(&duty.claim_id)
                     && current_daa >= duty.bound_daa.saturating_add(window / 4)
                 {
-                    self.tir_shard_run_pursuit_v1(
-                        session,
-                        bond_key,
-                        network_domain,
-                        current_daa,
-                        duty,
-                        &tir,
-                        interval_openings,
-                        books,
-                    )
-                    .await;
+                    self.tir_shard_run_pursuit_v1(session, bond_key, network_domain, current_daa, duty, tir, interval_openings, books)
+                        .await;
                 }
                 continue;
             };

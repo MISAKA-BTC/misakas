@@ -140,7 +140,7 @@ fn run(seed: u64) -> Outcome {
                 .filter(|(k, _, _)| {
                     let bnd = s.bond(k).unwrap();
                     matches!(bnd.status, PalwBondStatusV2::Active)
-                        && economy.map_or(true, |e| {
+                        && economy.is_none_or(|e| {
                             palw_seat_has_headroom_v1(
                                 bnd.collateral,
                                 s.reserved_exposure(k) + s.registration_exposure(k),

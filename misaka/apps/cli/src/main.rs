@@ -2943,25 +2943,25 @@ async fn run_cli() -> std::process::ExitCode {
     let task: std::pin::Pin<Box<dyn std::future::Future<Output = CliResult> + '_>> = match cli.command {
         Command::Init(args) => Box::pin(async move {
             match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
-                Ok(a) => operator::wizard::init(&ctx, a).await,
+                Ok(a) => operator::wizard::init(ctx, a).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Mining(MiningCmd::Setup(args)) => Box::pin(async move {
             match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
-                Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, a).await,
+                Ok(a) => operator::wizard::run(ctx, operator::wizard::Purpose::Mine, a).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Verifier(VerifierCmd::Setup(args)) => Box::pin(async move {
             match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
-                Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, a).await,
+                Ok(a) => operator::wizard::run(ctx, operator::wizard::Purpose::Verify, a).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Mining(MiningCmd::Status { profile: args, watch }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::status::run(&ctx, p, watch).await,
+                Ok(p) => operator::status::run(ctx, p, watch).await,
                 Err(e) => Err(e),
             }
         }),
@@ -2977,14 +2977,14 @@ async fn run_cli() -> std::process::ExitCode {
                     relaunch.extend(args.relaunch_args());
                     let mode =
                         operator::supervisor::StartMode { detach, print_command, service, role: operator::supervisor::Role::Miner };
-                    operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
+                    operator::supervisor::start(ctx, p, mode, &|| profile(&args), &relaunch).await
                 }
                 Err(e) => Err(e),
             }
         }),
         Command::Mining(MiningCmd::Stop { profile: args, drain, force, grace }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::supervisor::stop(&ctx, p, drain, force, grace).await,
+                Ok(p) => operator::supervisor::stop(ctx, p, drain, force, grace).await,
                 Err(e) => Err(e),
             }
         }),
@@ -3002,25 +3002,25 @@ async fn run_cli() -> std::process::ExitCode {
         }),
         Command::Doctor(args) => Box::pin(async move {
             match profile(&args.profile) {
-                Ok(p) => operator::doctor::run(&ctx, p, &args.areas, args.strict).await,
+                Ok(p) => operator::doctor::run(ctx, p, &args.areas, args.strict).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Work(WorkCmd::List { profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::work_cmd::list(&ctx, p).await,
+                Ok(p) => operator::work_cmd::list(ctx, p).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Work(WorkCmd::Show { id, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::work_cmd::show(&ctx, p, &id).await,
+                Ok(p) => operator::work_cmd::show(ctx, p, &id).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Work(WorkCmd::Why { id, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::work_cmd::why(&ctx, p, &id).await,
+                Ok(p) => operator::work_cmd::why(ctx, p, &id).await,
                 Err(e) => Err(e),
             }
         }),
@@ -3029,13 +3029,13 @@ async fn run_cli() -> std::process::ExitCode {
         }
         Command::Rewards { profile: args } => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::roles::rewards(&ctx, p).await,
+                Ok(p) => operator::roles::rewards(ctx, p).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Verifier(VerifierCmd::Status { profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::roles::verifier_status(&ctx, p).await,
+                Ok(p) => operator::roles::verifier_status(ctx, p).await,
                 Err(e) => Err(e),
             }
         }),
@@ -3054,32 +3054,32 @@ async fn run_cli() -> std::process::ExitCode {
                         service: false,
                         role: operator::supervisor::Role::Verifier,
                     };
-                    operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
+                    operator::supervisor::start(ctx, p, mode, &|| profile(&args), &relaunch).await
                 }
                 Err(e) => Err(e),
             }
         }),
         Command::Verifier(VerifierCmd::Stop { profile: args, force }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::supervisor::stop(&ctx, p, false, force, None).await,
+                Ok(p) => operator::supervisor::stop(ctx, p, false, force, None).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Model(ModelCmd::List { profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::market::model_list(&ctx, p).await,
+                Ok(p) => operator::market::model_list(ctx, p).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Model(ModelCmd::Status { model, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => palw_model_ops::status(&ctx, p, model).await,
+                Ok(p) => palw_model_ops::status(ctx, p, model).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Model(ModelCmd::Inspect { artifact, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => palw_model_ops::inspect(&ctx, p, artifact).await,
+                Ok(p) => palw_model_ops::inspect(ctx, p, artifact).await,
                 Err(e) => Err(e),
             }
         }),
@@ -3087,10 +3087,10 @@ async fn run_cli() -> std::process::ExitCode {
             {
                 if model_preflight::is_model(&artifact) {
                     // A model is judged from its headers, locally: no node, no profile.
-                    model_preflight::model_preflight(&ctx, &artifact, &model).await
+                    model_preflight::model_preflight(ctx, &artifact, &model).await
                 } else {
                     match profile(&args) {
-                        Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,
+                        Ok(p) => palw_model_ops::preflight(ctx, p, artifact).await,
                         Err(e) => Err(e),
                     }
                 }
@@ -3098,19 +3098,19 @@ async fn run_cli() -> std::process::ExitCode {
         }),
         Command::Model(ModelCmd::Registration { id, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => palw_model_ops::registration(&ctx, p, id).await,
+                Ok(p) => palw_model_ops::registration(ctx, p, id).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Model(ModelCmd::Readiness { class_id, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => palw_model_ops::readiness(&ctx, p, class_id).await,
+                Ok(p) => palw_model_ops::readiness(ctx, p, class_id).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Model(ModelCmd::Certify { class_id, yes, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => palw_model_ops::certify(&ctx, p, class_id, yes).await,
+                Ok(p) => palw_model_ops::certify(ctx, p, class_id, yes).await,
                 Err(e) => Err(e),
             }
         }),
@@ -3163,7 +3163,7 @@ async fn run_cli() -> std::process::ExitCode {
                             accept_unverified_state,
                         },
                     };
-                    operator::model_add::run(&ctx, p, a).await
+                    operator::model_add::run(ctx, p, a).await
                 }
                 (Err(e), _) | (_, Err(e)) => Err(e),
             }
@@ -3187,7 +3187,7 @@ async fn run_cli() -> std::process::ExitCode {
         }) => Box::pin(async move {
             {
                 operator::model_bundle::sign(
-                    &ctx,
+                    ctx,
                     operator::model_bundle::SignArgs {
                         bundle,
                         key_file,
@@ -3222,7 +3222,7 @@ async fn run_cli() -> std::process::ExitCode {
         }) => Box::pin(async move {
             {
                 operator::model_bundle::submit(
-                    &ctx,
+                    ctx,
                     operator::model_bundle::SubmitArgs {
                         signed,
                         relay,
@@ -3239,17 +3239,17 @@ async fn run_cli() -> std::process::ExitCode {
             }
         }),
         Command::Model(ModelCmd::Verify { signed, class, root, owner, pin }) => Box::pin(async move {
-            operator::remote_proof::verify(&ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
+            operator::remote_proof::verify(ctx, operator::remote_proof::VerifyArgs { signed, class, root, owner, pin }).await
         }),
         Command::Model(ModelCmd::Onboard(cmd)) => Box::pin(async move {
             match cmd {
                 OnboardCmd::EnvelopeExport { registration, bond, valid_from, valid_until, out } => {
-                    operator::model_onboard::envelope_export(&ctx, &registration, &bond, valid_from, valid_until, &out)
+                    operator::model_onboard::envelope_export(ctx, &registration, &bond, valid_from, valid_until, &out)
                 }
                 OnboardCmd::EnvelopeSign { request, key, expect_bond, out } => {
-                    operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
+                    operator::model_onboard::envelope_sign(ctx, &request, &key.source(), expect_bond.as_deref(), &out)
                 }
-                OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
+                OnboardCmd::Status { class } => operator::model_onboard::status(ctx, &class).await,
                 OnboardCmd::BootstrapPrepare {
                     stage,
                     registration,
@@ -3266,7 +3266,7 @@ async fn run_cli() -> std::process::ExitCode {
                     commitment_borsh,
                 } => {
                     operator::model_bootstrap::prepare(
-                        &ctx,
+                        ctx,
                         operator::model_bootstrap::PrepareArgs {
                             stage,
                             registration,
@@ -3287,7 +3287,7 @@ async fn run_cli() -> std::process::ExitCode {
                 }
                 OnboardCmd::CompletePost { class, artifact, bond, key, out, ledger_root, aux_root, tip_daa } => {
                     operator::model_complete::post(
-                        &ctx,
+                        ctx,
                         &class,
                         &artifact,
                         &bond,
@@ -3301,7 +3301,7 @@ async fn run_cli() -> std::process::ExitCode {
                 }
                 OnboardCmd::Verify { class, artifact, ledger_root, aux_root, tip_daa } => {
                     operator::model_onboard::verify(
-                        &ctx,
+                        ctx,
                         &class,
                         artifact.as_deref(),
                         ledger_root.as_deref(),
@@ -3313,29 +3313,29 @@ async fn run_cli() -> std::process::ExitCode {
             }
         }),
         Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => {
-            Box::pin(async move { operator::model_source::inspect(&ctx, &context, &ledger_root, &aux_root).await })
+            Box::pin(async move { operator::model_source::inspect(ctx, &context, &ledger_root, &aux_root).await })
         }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
+                Ok(p) => operator::market::market_open(ctx, p, &model, line, seed, yes, no_wait).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Position(PositionCmd::List { holder, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::market::position_list(&ctx, p, holder).await,
+                Ok(p) => operator::market::position_list(ctx, p, holder).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Position(PositionCmd::Quote { line, msk, positions, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::market::position_quote(&ctx, p, &line, msk.as_deref(), positions).await,
+                Ok(p) => operator::market::position_quote(ctx, p, &line, msk.as_deref(), positions).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Position(PositionCmd::Buy { line, msk, slippage, yes, profile: args }) => Box::pin(async move {
             match profile(&args) {
-                Ok(p) => operator::market::position_buy(&ctx, p, &line, &msk, &slippage, yes).await,
+                Ok(p) => operator::market::position_buy(ctx, p, &line, &msk, &slippage, yes).await,
                 Err(e) => Err(e),
             }
         }),
@@ -3344,7 +3344,7 @@ async fn run_cli() -> std::process::ExitCode {
                 {
                     match profile(&args) {
                         Ok(p) => {
-                            operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes, accept_burned_proceeds).await
+                            operator::market::position_sell(ctx, p, &line, positions, &slippage, yes, accept_burned_proceeds).await
                         }
                         Err(e) => Err(e),
                     }
@@ -3357,84 +3357,74 @@ async fn run_cli() -> std::process::ExitCode {
                 Err(e) => Err(e),
             }
         }),
-        Command::Node(NodeCmd::Doctor) => Box::pin(async move { node::doctor(&ctx).await }),
+        Command::Node(NodeCmd::Doctor) => Box::pin(async move { node::doctor(ctx).await }),
         Command::Node(NodeCmd::Liveness { state, stall_secs }) => {
-            Box::pin(async move { node::liveness(&ctx, &state, stall_secs).await })
+            Box::pin(async move { node::liveness(ctx, &state, stall_secs).await })
         }
-        Command::Node(NodeCmd::DagInfo { chain_from }) => Box::pin(async move { node::dag_info(&ctx, chain_from.as_deref()).await }),
+        Command::Node(NodeCmd::DagInfo { chain_from }) => Box::pin(async move { node::dag_info(ctx, chain_from.as_deref()).await }),
         Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
-            Box::pin(async move { security::security_report(&ctx, worker.as_ref(), verify_artifacts) })
+            Box::pin(async move { security::security_report(ctx, worker.as_ref(), verify_artifacts) })
         }
         Command::Node(NodeCmd::Endpoints) => Box::pin(async move { bootstrap::endpoints(ctx.output, &ctx.network) }),
         Command::Node(NodeCmd::Start(a)) => Box::pin(async move {
-            {
-                forward::node(
-                    &ctx,
-                    a.profile.as_deref(),
-                    a.node_profile.as_deref(),
-                    a.vps_8gb,
-                    a.min_disk_free_percent,
-                    &a.args,
-                    false,
-                )
-            }
+            forward::node(ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, false)
         }),
         Command::Join(a) => Box::pin(async move {
-            forward::node(&ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, true)
+            forward::node(ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, true)
         }),
         Command::Bootstrap(BootstrapCmd::Seeds) => Box::pin(async move { bootstrap::seeds(ctx.output, &ctx.network) }),
         Command::Bootstrap(BootstrapCmd::Resolve) => Box::pin(async move { bootstrap::resolve(ctx.output, &ctx.network) }),
-        Command::Setup(cmd) => Box::pin(async move { setup::run(&ctx, cmd).await }),
-        Command::Evm(EvmCmd::View { to, data }) => Box::pin(async move { eth::view(&ctx, &to, &data) }),
+        Command::Setup(cmd) => Box::pin(async move { setup::run(ctx, cmd).await }),
+        Command::Evm(EvmCmd::View { to, data }) => Box::pin(async move { eth::view(ctx, &to, &data) }),
         Command::Evm(EvmCmd::DepositLock { evm_address, amount, claim_tip, timeout_daa_delta, fee, yes, key }) => {
             Box::pin(async move {
-                evm_deposit::deposit_lock(&ctx, &key.source(), &evm_address, amount, claim_tip, timeout_daa_delta, fee, yes).await
+                evm_deposit::deposit_lock(ctx, &key.source(), &evm_address, amount, claim_tip, timeout_daa_delta, fee, yes).await
             })
         }
-        Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(&ctx, &outpoint).await }),
-        Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(&ctx, &address) }),
-        Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(&ctx, &address) }),
+        Command::Evm(EvmCmd::Claim { outpoint }) => Box::pin(async move { evm_deposit::claim(ctx, &outpoint).await }),
+        Command::Evm(EvmCmd::Balance { address }) => Box::pin(async move { eth::balance(ctx, &address) }),
+        Command::Evm(EvmCmd::Nonce { address }) => Box::pin(async move { eth::nonce(ctx, &address) }),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {
-            Box::pin(async move { eth::estimate_gas(&ctx, &from, to.as_deref(), value, data.as_deref()) })
+            Box::pin(async move { eth::estimate_gas(ctx, &from, to.as_deref(), value, data.as_deref()) })
         }
-        Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => Box::pin(async move { eth::tx_status(&ctx, &hash) }),
+        Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => Box::pin(async move { eth::tx_status(ctx, &hash) }),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => {
-            Box::pin(async move { eth::tx_wait(&ctx, &hash, timeout, poll) })
+            Box::pin(async move { eth::tx_wait(ctx, &hash, timeout, poll) })
         }
-        Command::Palw(PalwCmd::RoundLane { bond }) => Box::pin(async move { palw_round_lane(&ctx, bond.as_deref()).await }),
+        Command::Palw(PalwCmd::RoundLane { bond }) => Box::pin(async move { palw_round_lane(ctx, bond.as_deref()).await }),
         Command::Palw(PalwCmd::Settlement { daa, min_depth }) => {
-            Box::pin(async move { palw_settlement::run(&ctx, daa, min_depth).await })
+            Box::pin(async move { palw_settlement::run(ctx, daa, min_depth).await })
         }
         Command::Palw(PalwCmd::Vesting { bond, address, claim, limit, after, exec_after, json }) => {
-            Box::pin(async move { palw_vesting::run(&ctx, bond, address, claim, limit, after, exec_after, json).await })
+            Box::pin(async move { palw_vesting::run(ctx, bond, address, claim, limit, after, exec_after, json).await })
         }
-        Command::Palw(PalwCmd::CapacityShadow(args)) => Box::pin(async move { palw_capacity_shadow::run(&ctx, args).await }),
-        Command::Palw(PalwCmd::PanelV3(args)) => Box::pin(async move { palw_panel_v3::run(&ctx, args).await }),
-        Command::Palw(PalwCmd::Economics {}) => Box::pin(async move { palw_economics::run(&ctx).await }),
-        Command::Palw(PalwCmd::Registry {}) => Box::pin(async move { palw_registry::run(&ctx).await }),
+        Command::Palw(PalwCmd::CapacityShadow(args)) => Box::pin(async move { palw_capacity_shadow::run(ctx, args).await }),
+        Command::Palw(PalwCmd::PanelV3(args)) => Box::pin(async move { palw_panel_v3::run(ctx, args).await }),
+        Command::Palw(PalwCmd::Economics {}) => Box::pin(async move { palw_economics::run(ctx).await }),
+        Command::Palw(PalwCmd::Registry {}) => Box::pin(async move { palw_registry::run(ctx).await }),
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => {
-            Box::pin(async move { palw_panel::status(&ctx, class.as_deref()).await })
+            Box::pin(async move { palw_panel::status(ctx, class.as_deref()).await })
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::List { class })) => {
-            Box::pin(async move { palw_panel::list(&ctx, class.as_deref()).await })
+            Box::pin(async move { palw_panel::list(ctx, class.as_deref()).await })
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Assignments { claim })) => {
-            Box::pin(async move { palw_panel::assignments(&ctx, claim.as_deref()).await })
+            Box::pin(async move { palw_panel::assignments(ctx, claim.as_deref()).await })
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Join { key, bond, class, artifact, yes })) => Box::pin(async move {
-            palw_panel::join(&ctx, &key.source(), bond.as_deref(), &class, &artifact.display().to_string(), yes).await
+            palw_panel::join(ctx, &key.source(), bond.as_deref(), &class, &artifact.display().to_string(), yes).await
         }),
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Leave { key, bond, class, yes })) => {
-            Box::pin(async move { palw_panel::leave(&ctx, &key.source(), bond.as_deref(), &class, yes).await })
+            Box::pin(async move { palw_panel::leave(ctx, &key.source(), bond.as_deref(), &class, yes).await })
         }
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
-            Box::pin(async move { palw_panel::readiness_prove(&ctx, &class, &bond).await })
+            Box::pin(async move { palw_panel::readiness_prove(ctx, &class, &bond).await })
         }
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
-            palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
+            palw_fp::submit(ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }),
         Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate, maximum_total_fee_sompi }) => Box::pin(async move {
-            palw_fp::submit_objects_v2_capped(&ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
+            palw_fp::submit_objects_v2_capped(ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
                 .await
                 .map(|_| ())
         }),
@@ -3451,7 +3441,7 @@ async fn run_cli() -> std::process::ExitCode {
         }) => Box::pin(async move {
             {
                 palw_model_ops::tir_registration_object_gated(
-                    &ctx,
+                    ctx,
                     &key.source(),
                     &artifact,
                     parent.as_deref(),
@@ -3466,13 +3456,13 @@ async fn run_cli() -> std::process::ExitCode {
             }
         }),
         Command::Palw(PalwCmd::GenRegistration { key, artifact, bond, out, model_id }) => Box::pin(async move {
-            palw_gen::gen_registration_object(&ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
+            palw_gen::gen_registration_object(ctx, &key.source(), &artifact, &bond, &out, model_id.as_deref()).await
         }),
         Command::Palw(PalwCmd::GenClaim { key, artifact, request, bond, operator_id, out_dir, retention_dir, plant, list_leaves }) => {
             Box::pin(async move {
                 {
                     palw_gen::gen_claim_files(
-                        &ctx,
+                        ctx,
                         &key.source(),
                         palw_gen::GenClaimArgs {
                             artifact: &artifact,
@@ -3490,38 +3480,38 @@ async fn run_cli() -> std::process::ExitCode {
             })
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => {
-            Box::pin(async move { palw_extension::inspect(&ctx, &manifest, json) })
+            Box::pin(async move { palw_extension::inspect(ctx, &manifest, json) })
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
             Box::pin(
-                async move { palw_extension::verify(&ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json) },
+                async move { palw_extension::verify(ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json) },
             )
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
-            Box::pin(async move { palw_extension::preflight(&ctx, &manifest, json).await })
+            Box::pin(async move { palw_extension::preflight(ctx, &manifest, json).await })
         }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => Box::pin(async move {
             match sponsor.resolve() {
-                Ok(sponsor) => palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
+                Ok(sponsor) => palw_extension::submit(ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
                 Err(e) => Err(e),
             }
         }),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::ReceiptVerify { receipt, manifest, json })) => {
-            Box::pin(async move { palw_extension::receipt_verify(&ctx, &receipt, manifest.as_deref(), json) })
+            Box::pin(async move { palw_extension::receipt_verify(ctx, &receipt, manifest.as_deref(), json) })
         }
         Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => Box::pin(async move {
-            palw_da::accuse(&ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
+            palw_da::accuse(ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
         }),
         Command::Palw(PalwCmd::ShardPlan { key, class, count, bond, out }) => {
-            Box::pin(async move { palw_shard_licensing::shard_plan(&ctx, &key.source(), &class, count, &bond, &out).await })
+            Box::pin(async move { palw_shard_licensing::shard_plan(ctx, &key.source(), &class, count, &bond, &out).await })
         }
         Command::Palw(PalwCmd::BondShards { key, bond, class, count, shards, out }) => {
-            Box::pin(async move { palw_shard_licensing::bond_shards(&ctx, &key.source(), &bond, &class, count, &shards, &out).await })
+            Box::pin(async move { palw_shard_licensing::bond_shards(ctx, &key.source(), &bond, &class, count, &shards, &out).await })
         }
         Command::Palw(PalwCmd::ShardAccuse { key, accusation, bond, ladder, out }) => Box::pin(async move {
             {
                 palw_shard_court::accuse(
-                    &ctx,
+                    ctx,
                     &key.source(),
                     palw_shard_court::ShardAccuseArgs { accusation: &accusation, bond: &bond, ladder, out: &out },
                 )
@@ -3532,7 +3522,7 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move {
                 {
                     palw_court::court_close(
-                        &ctx,
+                        ctx,
                         &key.source(),
                         palw_court::CourtCloseArgs {
                             close: &close,
@@ -3550,10 +3540,10 @@ async fn run_cli() -> std::process::ExitCode {
             })
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => {
-            Box::pin(async move { palw_fp::certified(&ctx, &class_id, json).await })
+            Box::pin(async move { palw_fp::certified(ctx, &class_id, json).await })
         }
         Command::Palw(PalwCmd::Claim { claim_ids, outbox, json }) => {
-            Box::pin(async move { palw_claim::show(&ctx, &claim_ids, outbox.as_deref(), json).await })
+            Box::pin(async move { palw_claim::show(ctx, &claim_ids, outbox.as_deref(), json).await })
         }
         Command::Palw(PalwCmd::VerifyContext { vector, vector_file, list, stages, out, receipt_out, sign_with }) => {
             Box::pin(async move {
@@ -3573,14 +3563,14 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::VerifyReceipt { receipt, document }) => {
             Box::pin(async move { palw_verify_context::verify_receipt(&receipt, document.as_deref()) })
         }
-        Command::Palw(PalwCmd::Derived { claim_id, json }) => Box::pin(async move { palw_derived::show(&ctx, &claim_id, json).await }),
+        Command::Palw(PalwCmd::Derived { claim_id, json }) => Box::pin(async move { palw_derived::show(ctx, &claim_id, json).await }),
         Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => {
-            Box::pin(async move { palw_model::show(&ctx, &line_id, quote_msk, json).await })
+            Box::pin(async move { palw_model::show(ctx, &line_id, quote_msk, json).await })
         }
         Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => Box::pin(async move {
             {
                 let source = key.source_opt();
-                palw_model::positions(&ctx, holder, source.as_ref(), json).await
+                palw_model::positions(ctx, holder, source.as_ref(), json).await
             }
         }),
         #[cfg(feature = "evm-send")]
@@ -3596,15 +3586,15 @@ async fn run_cli() -> std::process::ExitCode {
             })
         }
         Command::Palw(PalwCmd::ModelEvmPosition { line, address }) => {
-            Box::pin(async move { eth::model_evm_position(&ctx, &line, &address) })
+            Box::pin(async move { eth::model_evm_position(ctx, &line, &address) })
         }
         Command::Palw(PalwCmd::ModelSeed { key, line, msk, yes }) => {
-            Box::pin(async move { palw_model::seed(&ctx, &key.source(), &line, &msk, yes).await })
+            Box::pin(async move { palw_model::seed(ctx, &key.source(), &line, &msk, yes).await })
         }
         Command::Palw(PalwCmd::ModelSponsor { key, class, msk, yes }) => {
-            Box::pin(async move { palw_activation_pool::sponsor(&ctx, &key.source(), &class, &msk, yes).await })
+            Box::pin(async move { palw_activation_pool::sponsor(ctx, &key.source(), &class, &msk, yes).await })
         }
-        Command::Palw(PalwCmd::ModelPool { class }) => Box::pin(async move { palw_activation_pool::pool(&ctx, &class).await }),
+        Command::Palw(PalwCmd::ModelPool { class }) => Box::pin(async move { palw_activation_pool::pool(ctx, &class).await }),
         #[cfg(feature = "evm-send")]
         Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
             Box::pin(async move { evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait) })
@@ -3617,28 +3607,24 @@ async fn run_cli() -> std::process::ExitCode {
                     (None, None) => Ok(palw_model::BuyFloor::Unstated),
                 };
                 match floor {
-                    Ok(floor) => palw_model::buy(&ctx, &key.source(), &line, &msk, floor, yes).await,
+                    Ok(floor) => palw_model::buy(ctx, &key.source(), &line, &msk, floor, yes).await,
                     Err(e) => Err(e),
                 }
             }
         }),
         Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes, accept_burned_proceeds }) => {
-            Box::pin(
-                async move { palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes, accept_burned_proceeds).await },
-            )
+            Box::pin(async move { palw_model::sell(ctx, &key.source(), &line, positions, min_msk, yes, accept_burned_proceeds).await })
         }
-        Command::Palw(PalwCmd::LineShow { line_id, json }) => {
-            Box::pin(async move { palw_line::line_show(&ctx, &line_id, json).await })
-        }
-        Command::Palw(PalwCmd::LineLog { line_id, json }) => Box::pin(async move { palw_line::line_log(&ctx, &line_id, json).await }),
+        Command::Palw(PalwCmd::LineShow { line_id, json }) => Box::pin(async move { palw_line::line_show(ctx, &line_id, json).await }),
+        Command::Palw(PalwCmd::LineLog { line_id, json }) => Box::pin(async move { palw_line::line_log(ctx, &line_id, json).await }),
         Command::Palw(PalwCmd::LineList { class_id, json }) => {
-            Box::pin(async move { palw_line::line_list(&ctx, &class_id, json).await })
+            Box::pin(async move { palw_line::line_list(ctx, &class_id, json).await })
         }
         Command::Palw(PalwCmd::Proposals { line_id, json }) => {
-            Box::pin(async move { palw_line::proposals(&ctx, &line_id, json).await })
+            Box::pin(async move { palw_line::proposals(ctx, &line_id, json).await })
         }
         Command::Palw(PalwCmd::LineFound { key, class, name, root, bond, yes }) => {
-            Box::pin(async move { palw_line::line_found(&ctx, &key.source(), &class, &name, &root, &bond, yes).await })
+            Box::pin(async move { palw_line::line_found(ctx, &key.source(), &class, &name, &root, &bond, yes).await })
         }
         Command::Palw(PalwCmd::VersionPublish {
             key,
@@ -3655,7 +3641,7 @@ async fn run_cli() -> std::process::ExitCode {
         }) => Box::pin(async move {
             {
                 palw_line::version_publish(
-                    &ctx,
+                    ctx,
                     &key.source(),
                     &line,
                     &root,
@@ -3672,44 +3658,44 @@ async fn run_cli() -> std::process::ExitCode {
             }
         }),
         Command::Palw(PalwCmd::VersionPromote { key, line, version, yes }) => {
-            Box::pin(async move { palw_line::version_move(&ctx, &key.source(), &line, version, true, yes).await })
+            Box::pin(async move { palw_line::version_move(ctx, &key.source(), &line, version, true, yes).await })
         }
         Command::Palw(PalwCmd::VersionWithdraw { key, line, version, yes }) => {
-            Box::pin(async move { palw_line::version_move(&ctx, &key.source(), &line, version, false, yes).await })
+            Box::pin(async move { palw_line::version_move(ctx, &key.source(), &line, version, false, yes).await })
         }
         Command::Palw(PalwCmd::LineBenefits { key, line, tiers, cadence_daa, expires_daa, yes }) => {
-            Box::pin(async move { palw_line::line_benefits(&ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await })
+            Box::pin(async move { palw_line::line_benefits(ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await })
         }
         Command::Palw(PalwCmd::ServiceDescribe { key, line, grants, roots, endpoints, valid_from_daa, expires_daa }) => {
             Box::pin(async move {
                 {
-                    palw_service::service_describe(&ctx, &key.source(), &line, &grants, roots, endpoints, valid_from_daa, expires_daa)
+                    palw_service::service_describe(ctx, &key.source(), &line, &grants, roots, endpoints, valid_from_daa, expires_daa)
                         .await
                 }
             })
         }
         Command::Palw(PalwCmd::ServiceCheck { descriptor }) => {
-            Box::pin(async move { palw_service::service_check(&ctx, &descriptor).await })
+            Box::pin(async move { palw_service::service_check(ctx, &descriptor).await })
         }
         Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => Box::pin(async move {
-            palw_line::line_roles(&ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
+            palw_line::line_roles(ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
         }),
         Command::Palw(PalwCmd::LineTransfer { key, line, new_owner, yes }) => {
-            Box::pin(async move { palw_line::line_transfer(&ctx, &key.source(), &line, &new_owner, yes).await })
+            Box::pin(async move { palw_line::line_transfer(ctx, &key.source(), &line, &new_owner, yes).await })
         }
         Command::Palw(PalwCmd::LineRetire { key, line, yes }) => {
-            Box::pin(async move { palw_line::line_retire(&ctx, &key.source(), &line, yes).await })
+            Box::pin(async move { palw_line::line_retire(ctx, &key.source(), &line, yes).await })
         }
         Command::Palw(PalwCmd::ProposalPost { key, line, root, note_hash, bond, yes }) => {
-            Box::pin(async move { palw_line::proposal_post(&ctx, &key.source(), &line, &root, &note_hash, &bond, yes).await })
+            Box::pin(async move { palw_line::proposal_post(ctx, &key.source(), &line, &root, &note_hash, &bond, yes).await })
         }
         Command::Palw(PalwCmd::ProposalClose { key, line, proposal, yes }) => {
-            Box::pin(async move { palw_line::proposal_close(&ctx, &key.source(), &line, &proposal, yes).await })
+            Box::pin(async move { palw_line::proposal_close(ctx, &key.source(), &line, &proposal, yes).await })
         }
         Command::Palw(PalwCmd::Evaluate { key, line, version, evaluator_id, score_permille, report_hash, bond, yes }) => {
             Box::pin(async move {
                 {
-                    palw_line::evaluate(&ctx, &key.source(), &line, version, &evaluator_id, score_permille, &report_hash, &bond, yes)
+                    palw_line::evaluate(ctx, &key.source(), &line, version, &evaluator_id, score_permille, &report_hash, &bond, yes)
                         .await
                 }
             })
@@ -3718,7 +3704,7 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move {
                 {
                     palw_derived::verify(
-                        &ctx,
+                        ctx,
                         palw_derived::DerivedVerifyArgs {
                             claim_id: &claim_id,
                             answer: &answer,
@@ -3735,31 +3721,31 @@ async fn run_cli() -> std::process::ExitCode {
             })
         }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, recent, key })) => {
-            Box::pin(async move { wallet::utxo_list(&ctx, address.as_deref(), &key.source(), recent).await })
+            Box::pin(async move { wallet::utxo_list(ctx, address.as_deref(), &key.source(), recent).await })
         }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
-            Box::pin(async move { wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await })
+            Box::pin(async move { wallet::consolidate(ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await })
         }
         Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => Box::pin(async move {
             match parse_msk_to_sompi(&amount) {
-                Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
+                Ok(sompi) => wallet::send(ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
                 Err(e) => Err(e),
             }
         }),
-        Command::Key(KeyCmd::Gen { out }) => Box::pin(async move { key_gen(&ctx, &out) }),
-        Command::Key(KeyCmd::Address { key }) => Box::pin(async move { key_address(&ctx, &key.source()) }),
-        Command::Key(KeyCmd::Pubkey { key }) => Box::pin(async move { key_pubkey(&ctx, &key.source()) }),
+        Command::Key(KeyCmd::Gen { out }) => Box::pin(async move { key_gen(ctx, &out) }),
+        Command::Key(KeyCmd::Address { key }) => Box::pin(async move { key_address(ctx, &key.source()) }),
+        Command::Key(KeyCmd::Pubkey { key }) => Box::pin(async move { key_pubkey(ctx, &key.source()) }),
         Command::Key(KeyCmd::Import { out, hex_stdin, hex_file }) => {
-            Box::pin(async move { key_import(&ctx, &out, hex_stdin, hex_file.as_deref()) })
+            Box::pin(async move { key_import(ctx, &out, hex_stdin, hex_file.as_deref()) })
         }
         Command::Bond(BondCmd::Status { key, bond, class_id }) => Box::pin(async move {
             {
                 let source = key.source_opt();
-                bond::status(&ctx, source.as_ref(), class_id.as_deref(), bond.as_deref()).await
+                bond::status(ctx, source.as_ref(), class_id.as_deref(), bond.as_deref()).await
             }
         }),
         Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => Box::pin(async move {
-            bond::capability(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
+            bond::capability(ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
         }),
         Command::Bond(BondCmd::RegisterExport {
             owner_pubkey,
@@ -3772,7 +3758,7 @@ async fn run_cli() -> std::process::ExitCode {
         }) => Box::pin(async move {
             {
                 operator::bond_remote::export(
-                    &ctx,
+                    ctx,
                     operator::bond_remote::ExportArgs {
                         owner_pubkey,
                         collateral,
@@ -3798,7 +3784,7 @@ async fn run_cli() -> std::process::ExitCode {
         }) => Box::pin(async move {
             {
                 operator::bond_remote::sign(
-                    &ctx,
+                    ctx,
                     operator::bond_remote::SignArgs {
                         bundle,
                         key: key.source(),
@@ -3816,14 +3802,14 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Bond(BondCmd::RegisterSubmit { signed, relay, relay_min, max_fee_sompi, no_wait }) => Box::pin(async move {
             {
                 operator::bond_remote::submit(
-                    &ctx,
+                    ctx,
                     operator::bond_remote::SubmitArgs { signed, relay, relay_min, max_fee_sompi, no_wait },
                 )
                 .await
             }
         }),
         Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
-            Box::pin(async move { bond::retire(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await })
+            Box::pin(async move { bond::retire(ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await })
         }
         Command::Config(ConfigCmd::Init { force }) => Box::pin(async move { config::init(&ctx.network, force) }),
         Command::Config(ConfigCmd::Show) => {
@@ -3855,7 +3841,7 @@ async fn run_cli() -> std::process::ExitCode {
                     std::iter::once("misaka validator setup".to_string()).chain(p.args[1..].iter().cloned()),
                 ) {
                     Ok(cli) => match cli.setup.into_setup(named_network.clone(), ctx.rpc.clone()) {
-                        Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Validate, a).await,
+                        Ok(a) => operator::wizard::run(ctx, operator::wizard::Purpose::Validate, a).await,
                         Err(e) => Err(e),
                     },
                     Err(e) => {
@@ -3866,9 +3852,9 @@ async fn run_cli() -> std::process::ExitCode {
             }
         }),
         Command::Validator(p) => Box::pin(async move {
-            match validator_reader::maybe_handle(&ctx, &p.args, named_network.as_deref()).await {
+            match validator_reader::maybe_handle(ctx, &p.args, named_network.as_deref()).await {
                 Some(result) => result,
-                None => forward::validator(&ctx, &p.args),
+                None => forward::validator(ctx, &p.args),
             }
         }),
         #[cfg(feature = "evm-send")]

@@ -183,7 +183,7 @@ fn t12_extras(lane_open: bool) -> PalwTransitionExtrasV1 {
             // testnet-12's maturity (user decision 2026-09-25): the short challenge window it applies.
             maturity_daa: kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1,
         }),
-        round_lane: lane_open.then(|| PalwExecLaneFoldV1 {
+        round_lane: lane_open.then_some(PalwExecLaneFoldV1 {
             schedule_span_daa: 1,
             execution_quantum: PALW_EXECUTION_QUANTUM_V1,
             span_open_round: 0,
@@ -267,7 +267,7 @@ fn split_exact(per_draw: u128, slash: u64, collateral: u64) -> (u128, u64, u64) 
     let mut best: Option<(u128, u64, u64)> = None;
     while k < 64 {
         let attempts = 1u128 << k;
-        if per_draw % attempts != 0 {
+        if !per_draw.is_multiple_of(attempts) {
             break;
         }
         let p = per_draw / attempts;
@@ -411,7 +411,7 @@ fn an_unsigned_panelbound_on_the_t12_2m_row_makes_the_real_fold_reject_the_carry
     println!("claim.reserved      = {} sompi = {:.2} MSK", hybrid_out.reserved_sompi, msk(hybrid_out.reserved_sompi));
     match &hybrid_out.result {
         Ok(state) => {
-            let bound = state.claims_iter().find(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. })).is_some();
+            let bound = state.claims_iter().any(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }));
             println!("    fold ACCEPTED the object; a panel is bound = {bound}");
             assert!(bound, "the control must actually bind a panel, or it proves nothing");
         }

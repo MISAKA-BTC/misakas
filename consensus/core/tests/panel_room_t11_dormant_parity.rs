@@ -226,7 +226,7 @@ fn run(p: &Params, force_audit_off: bool) -> String {
         }
         // Bind, then license, the oldest provisional/bound model claim every 7th block.
         let mut objects: Vec<PalwConsensusObjectV2> = Vec::new();
-        if daa % 7 == 0 {
+        if daa.is_multiple_of(7) {
             let bound = s
                 .claims_iter()
                 .filter(|(_, c)| models.contains(&c.class_id) && matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
@@ -256,7 +256,7 @@ fn run(p: &Params, force_audit_off: bool) -> String {
         }
         // The block's own attempt: model 0 twice, model 1 once, rotating producers.
         seed += 1;
-        let class = if seed % 3 == 0 { models[1] } else { models[0] };
+        let class = if seed.is_multiple_of(3) { models[1] } else { models[0] };
         let producer = 1 + (seed % BONDS);
         let pwu = s.class_target(&class).map(|_| 1_000u64).unwrap_or(1_000);
         let (env, key, _id) = junk_attempt(

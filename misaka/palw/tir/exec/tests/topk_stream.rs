@@ -46,6 +46,7 @@ fn all_native_widths_axes_and_offset_transpose_slice_broadcast_views_match_full_
             let base = Layout::contiguous_at(&shape, 7);
             let perm: Vec<_> = (0..shape.len() as u8).rev().collect();
             let mut views = vec![base, base.transposed(&perm)];
+            #[allow(clippy::needless_range_loop)]
             for axis in 0..shape.len() {
                 views.push(base.sliced(axis, 1, shape[axis] - 1));
             }

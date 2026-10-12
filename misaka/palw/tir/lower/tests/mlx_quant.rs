@@ -72,7 +72,7 @@ fn pack(rng: &mut Rng, rows: usize, cols: usize, bits: usize, gs: usize) -> Pack
     for o in 0..rows {
         let mut row = vec![0u32; words + 1];
         for i in 0..cols {
-            let q = rng.below(1 << bits) as u64;
+            let q = rng.below(1 << bits);
             let at = i * bits;
             let wide = (row[at / 32] as u64 | ((row[at / 32 + 1] as u64) << 32)) | (q << (at % 32));
             row[at / 32] = wide as u32;
@@ -263,6 +263,6 @@ fn a_decoder_configuration_with_mlx_quantization_reads_without_an_unread_key() {
     let both = misaka_palw_tir_lower::parse_config(&cfg).expect("reads");
     assert_eq!(both.hf.quant, spec.hf.quant);
     cfg["quantization"] = json!("int4");
-    let e = misaka_palw_tir_lower::parse_config(&cfg).err().expect("refused").to_string();
+    let e = misaka_palw_tir_lower::parse_config(&cfg).expect_err("refused").to_string();
     assert!(e.contains("not an MLX quantisation block"), "{e}");
 }

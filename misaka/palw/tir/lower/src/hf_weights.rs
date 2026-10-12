@@ -589,7 +589,8 @@ fn shared_kv(m: &mut M, a: &SharedKvSpec) -> Result<()> {
     }
     m.lin("attn.wo_b", "attn.wo_b", false)?;
     if let Some(c) = &a.compressed {
-        for pfx in [if c.overlap { "attn.csa" } else { "attn.hca" }] {
+        {
+            let pfx = if c.overlap { "attn.csa" } else { "attn.hca" };
             m.lin(&format!("{pfx}.wkv"), &format!("{pfx}.wkv"), false)?;
             m.lin(&format!("{pfx}.wgate"), &format!("{pfx}.wgate"), false)?;
             m.put(format!("{pfx}.ape"), Src::t(m.role(&format!("{pfx}.ape"))?))?;

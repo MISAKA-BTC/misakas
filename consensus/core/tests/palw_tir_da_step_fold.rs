@@ -428,7 +428,7 @@ impl<'a> AccusedView<'a> {
                 right.push(None);
             } else {
                 let sibling = *siblings.next().expect("the opening walks");
-                if position % 2 == 0 {
+                if position.is_multiple_of(2) {
                     right.push(Some(sibling));
                     current = step_merkle_node_v1(&current, &sibling);
                 } else {
@@ -460,7 +460,7 @@ impl<'a> AccusedView<'a> {
             Some(self.mine.levels[level as usize][position as usize])
         } else if position == on_path {
             Some(self.path[level as usize])
-        } else if on_path % 2 == 0 && position == on_path + 1 {
+        } else if on_path.is_multiple_of(2) && position == on_path + 1 {
             self.right[level as usize]
         } else {
             None
@@ -799,7 +799,7 @@ fn a_tree_with_no_leaf_under_a_leaf_node_defaults_at_that_leaf() {
     }
     assert_eq!(unit, PalwDaUnitV1::TirStepLeaf { index: gap }, "the descent reaches the leaf node with nothing under it");
     run.step(&[demand(claim_id, unit, SEAT)]);
-    assert!(sessions + 1 <= 4);
+    assert!(sessions < 4);
     // No preimage opens there: the honest leaf under the committed opening is refused.
     assert!(build_tir_step_leaf_disclosure_v1(&accused.binding, gap, &Store { f: &f, x: &accused }, MAX).is_err(), "no answer builds");
     let mut forced = leaf_disclosure(&f, &honest, gap);

@@ -151,6 +151,7 @@ impl Fixture {
         .unwrap();
         Self { route, class, genesis, network, bond, artifact, program: fx.program, params: fx.params }
     }
+    #[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
     fn reads(&self, daa: u64) -> (KernelRowsSnapshotV1, Vec<(u8, Vec<u8>, Vec<u8>)>) {
         let p = self.route.rows_page_v1(None, usize::MAX);
         (

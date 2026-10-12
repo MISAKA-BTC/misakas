@@ -57,7 +57,9 @@ mod prefix;
 mod tokenizer;
 #[path = "palw_tokenizer_scheduler.rs"]
 mod tokenizer_scheduler;
-pub(super) use input::{palw_fraud_filer_fp_input_v1, palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
+#[cfg(test)] // the in-process e2e tests read the fp input the filer builds
+pub(super) use input::palw_fraud_filer_fp_input_v1;
+pub(super) use input::{palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
 
 use super::reporter_filer::{
     PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1, PalwReporterFilerV1,
@@ -208,6 +210,7 @@ impl PalwFraudFilerOwnRunV1 {
 
 /// Where this node's judgement of one claim stands.
 #[derive(Clone)]
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(super) enum PalwFraudFilerVerdictV1 {
     /// Not yet replayed (or a replay that failed on this host, to be run once more).
     Pending,
@@ -282,6 +285,7 @@ pub(super) fn palw_fraud_filer_read_page_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(super) fn palw_fraud_filer_read_page_with_form_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     oldest: u64,
@@ -624,18 +628,17 @@ impl PalwFraudFilerCaseV1 {
     pub(super) fn learn(&mut self, probe: PalwLegacyProbeV1, answer: &PalwDaBuiltAnswerV1) -> Result<(), String> {
         if let (Some(plan), Some(binding), PalwLegacyProbeV1::HeldNode { unit }, PalwDaBuiltAnswerV1::LegacyHeldV2(answer)) =
             (self.prefix_plan.as_mut(), self.binding.as_ref(), probe, answer)
+            && plan.next_unit(binding)? == Some(unit)
         {
-            if plan.next_unit(binding)? == Some(unit) {
-                if answer.0 != *binding {
-                    return Err("the prefix witness carries another binding".into());
-                }
-                let PalwLegacyHeldAnswerV2::KernelWitness(witness) = &answer.1 else {
-                    return Err("the prefix unit is not a committed kernel witness".into());
-                };
-                plan.learn(binding, witness)?;
-                self.legacy_wanted = None;
-                return Ok(());
+            if answer.0 != *binding {
+                return Err("the prefix witness carries another binding".into());
             }
+            let PalwLegacyHeldAnswerV2::KernelWitness(witness) = &answer.1 else {
+                return Err("the prefix unit is not a committed kernel witness".into());
+            };
+            plan.learn(binding, witness)?;
+            self.legacy_wanted = None;
+            return Ok(());
         }
         if self.fp_bootstrap.is_some() || self.fp_job_pending {
             match (probe, answer) {
@@ -2035,6 +2038,7 @@ pub(super) fn palw_fraud_filer_step_v1(
 
 /// A direct proof from one public, authenticated event and the claim facts the tip recorded.
 /// No producer capture, own replay, Panel receipt or answered-session flag enters this decision.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(super) fn palw_fraud_filer_public_filing_v1(
     target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
     rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
@@ -2046,6 +2050,7 @@ pub(super) fn palw_fraud_filer_public_filing_v1(
 
 /// The public FP job is authenticated by the core proof's claim/binding checks. No input ids or
 /// successful replay is required to prosecute a self-consistent bad canonical count/root.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(super) fn palw_fraud_filer_public_filing_with_fp_v2(
     target: &kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
     rules: kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1,
@@ -3939,12 +3944,13 @@ impl PalwPanelService {
             .spawn_blocking(move |c| c.palw_fraud_filer_target_v1(claim).is_none_or(|target| target.registered_semantics.is_some()))
             .await;
         book.cases.get_mut(&claim).expect("selected case").registered_preflight = preflight;
-        if preflight && let Some(payload) = fp_payload.as_ref() {
-            if !self.fraud_filer_hold_fp_input_v1(book, claim, payload.clone(), self.class_prompt_ids_form(job.class_id)) {
-                book.cases.get_mut(&claim).expect("selected case").input_retry_at =
-                    current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
-                return;
-            }
+        if preflight
+            && let Some(payload) = fp_payload.as_ref()
+            && !self.fraud_filer_hold_fp_input_v1(book, claim, payload.clone(), self.class_prompt_ids_form(job.class_id))
+        {
+            book.cases.get_mut(&claim).expect("selected case").input_retry_at =
+                current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+            return;
         }
         // A probe selected while a replay/capture occupies the lane must not instantiate a
         // backend or reserve/start an extra replay. Missing-body binding pursuits were held above.

@@ -112,6 +112,7 @@ impl PalwVertexBookV1 {
         Self { last_sealed_round, ..Default::default() }
     }
 
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn last_sealed_round(&self) -> Option<u64> {
         self.last_sealed_round
     }
@@ -273,6 +274,7 @@ pub(crate) fn palw_vertex_object_v1(vertex: &PalwVerificationVertexV1) -> PalwCo
 }
 
 /// The context a vertex is signed under (the one constant the node reads from the rule).
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) const PALW_VERTEX_SIGN_CONTEXT_V1: &[u8] = PALW_VERTEX_MLDSA87_CONTEXT_V1;
 
 #[cfg(test)]

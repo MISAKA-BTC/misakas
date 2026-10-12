@@ -99,7 +99,7 @@ fn chain_of(ctx: &crate::node::Ctx) -> Result<Chain, CliError> {
 
 fn hex_bytes(text: &str, what: &str) -> Result<Vec<u8>, CliError> {
     let mut out = vec![0u8; text.len() / 2];
-    if text.len() % 2 != 0 || faster_hex::hex_decode(text.as_bytes(), &mut out).is_err() {
+    if !text.len().is_multiple_of(2) || faster_hex::hex_decode(text.as_bytes(), &mut out).is_err() {
         return Err(err(exit::GENERIC, format!("{what} is not hex")));
     }
     Ok(out)
@@ -277,7 +277,7 @@ pub(crate) async fn sign(ctx: &crate::node::Ctx, args: SignArgs) -> CliResult {
     let owner = KeySigner(args.key.load_key()?);
     let payout = match &args.expect_payout {
         Some(a) => payload_of(a, chain.params.prefix(), "--expect-payout")?,
-        None => own_payout_payload_v1(&owner.0.public_key()),
+        None => own_payout_payload_v1(owner.0.public_key()),
     };
     let policy = BondSignerPolicyV1 {
         network: chain.params.net.to_string(),

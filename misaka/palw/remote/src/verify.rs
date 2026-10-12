@@ -692,7 +692,7 @@ mod tests {
             salt,
             kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1,
             daa,
-            (blue as u64).into(),
+            blue.into(),
             blue,
             h(5),
         )

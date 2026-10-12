@@ -111,6 +111,7 @@ struct RowSink<'t> {
 }
 
 impl StepSink for RowSink<'_> {
+    #[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
     fn node(&mut self, v: &NodeValue<'_>) {
         if !v.commit {
             return;

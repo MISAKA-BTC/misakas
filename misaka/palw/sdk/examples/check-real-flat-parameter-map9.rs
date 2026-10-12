@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let source = artifact.params().get(j, layer).ok_or("mapped parameter missing")?;
         let width = d.dtype.width();
         let (root, _) = tensor_commitment_streamed_v3(d.dtype, &shape, WORKSPACE, &mut |offset, out| {
-            if offset as usize % width != 0 || out.len() % width != 0 {
+            if !(offset as usize).is_multiple_of(width) || out.len() % width != 0 {
                 return Err("raw range alignment".into());
             }
             let start = usize::try_from(offset).map_err(|e| e.to_string())? / width;

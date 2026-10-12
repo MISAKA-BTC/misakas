@@ -3816,7 +3816,7 @@ pub(crate) mod tests {
                     PalwInt12WireChangeV1::ObjectEnum | PalwInt12WireChangeV1::NotCarried(_) => continue,
                 };
                 assert!(
-                    rows.iter().any(|r| r.slot == S::Int12Inner { key: *key } && r.fence == *fence && r.landed),
+                    rows.iter().any(|r| r.slot == S::Int12Inner { key } && r.fence == *fence && r.landed),
                     "{key}: a carried change has its landed Int12Inner row naming {fence}"
                 );
             }

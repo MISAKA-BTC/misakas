@@ -128,7 +128,7 @@ impl Lcg {
     }
     /// A value of `[lo, hi]`, one time in four one of the listed extremes (clamped into the range).
     pub fn edgy(&mut self, lo: i128, hi: i128, extremes: &[i128]) -> i128 {
-        if self.next_u64() % 4 == 0 && !extremes.is_empty() {
+        if self.next_u64().is_multiple_of(4) && !extremes.is_empty() {
             extremes[(self.next_u64() % extremes.len() as u64) as usize].clamp(lo, hi)
         } else {
             self.range(lo, hi)

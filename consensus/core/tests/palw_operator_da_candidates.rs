@@ -118,7 +118,7 @@ fn a_claim_licensed_by_outside_signers_meets_the_operators_accusation_and_the_ju
 
     // Not offered: the operator's own claim; a licence carried by operator signers alone.
     assert!(palw_operator_da_candidates_v1(&c.s, &c.sp, &g, now).is_empty(), "the producer is an operator's");
-    assert!(palw_operator_da_candidates_v1(&c.s, &c.sp, &g[1..].to_vec(), now).is_empty(), "every signer is an operator's");
+    assert!(palw_operator_da_candidates_v1(&c.s, &c.sp, &g[1..], now).is_empty(), "every signer is an operator's");
     assert!(palw_operator_da_candidates_v1(&c.s, &c.sp, &[], now).is_empty(), "no operator set, nothing");
 
     // The fold's own gate for the operator bond: a NON-seat session at `Licensed`.

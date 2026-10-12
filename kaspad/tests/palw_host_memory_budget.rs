@@ -109,8 +109,8 @@ fn a_stated_share_overrides_the_equal_division() {
     assert_eq!(check_host_share_v1(a.palw_host_memory_budget, 4, palw_host_share_bytes_v1(&a)), Ok(()));
     // A stated share with no budget at all is also a share — and still floored.
     let mut b = args_for(None, 1);
-    b.palw_host_memory_share = Some(1 * GIB);
-    assert_eq!(palw_host_share_bytes_v1(&b), Some(1 * GIB));
+    b.palw_host_memory_share = Some(GIB);
+    assert_eq!(palw_host_share_bytes_v1(&b), Some(GIB));
     assert!(
         check_host_share_v1(None, 1, palw_host_share_bytes_v1(&b)).is_ok(),
         "no budget: the floor check passes through (nothing to divide)"

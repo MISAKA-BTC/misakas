@@ -607,7 +607,7 @@ mod tests {
                 values.iter().map(|(s, n, d, sh)| (*s, *n, *d, sh.clone(), SegValueModeV1::Clear)).collect();
             let fast = layout_parts(&clear).unwrap();
             assert_eq!(fast, reference_layout(values), "case {c}");
-            assert!(fast.len() >= 1);
+            assert!(!fast.is_empty());
         }
     }
 }

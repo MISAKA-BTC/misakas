@@ -56,6 +56,7 @@ fn sparse_params(n: u32) -> MapParams {
         .into(),
     }
 }
+#[allow(dead_code)]
 fn history() -> TirProgramV1 {
     let mut b = ProgramBuilder::new(256, HISTORY_BOUND_V1_HELD);
     let state = b.hist_state("history", DType::I16, &[2], 128, false);

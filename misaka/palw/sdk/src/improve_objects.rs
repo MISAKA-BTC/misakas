@@ -351,6 +351,7 @@ pub mod spec {
     /// **A hard case's spec**: `{ line, domain, prompt: [ids], reference: null | {exact_key: [ids], salt?} |
     /// {continuation: [ids], salt?}, source: "setter" | {artifact: hex} | {usage_opt_in: hex}, head_evidence?: hex }`
     /// — the salt returned beside the case, since the key's reveal needs it.
+    #[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
     pub fn hard_case(v: &Value) -> Result<(PalwHardCaseV1, Option<(Vec<u32>, Hash64)>), String> {
         let line_id = hash_of(v, "line")?;
         let domain = v.get("domain").and_then(Value::as_u64).unwrap_or(0) as u16;

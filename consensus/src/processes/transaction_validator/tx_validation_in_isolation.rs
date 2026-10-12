@@ -362,6 +362,7 @@ fn check_transaction_output_value_ranges(tx: &Transaction) -> TxResult<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_transaction_subnetwork(
     tx: &Transaction,
     palw_panel_da_admissible: bool,

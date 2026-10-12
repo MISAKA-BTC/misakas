@@ -1127,29 +1127,23 @@ pub(super) fn apply_kernel_route_object_v1(
         ledger.attest_artifact(row.kernel_param_root.as_bytes());
     }
     let object = scoped.as_ref().map(|(o, _)| o).unwrap_or(&object);
-    if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object {
-        if mode.is_optimistic() {
-            if let (Some(route), Some(opv)) =
-                (builder.state.kernel_route.as_ref(), builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()))
-            {
-                let facts = crate::palw_opv_bootstrap_v1::OpvClassFactsV1::of_registration(
-                    *descriptor,
-                    program_bytes,
-                    plan,
-                    param_commitments,
-                );
-                if route
-                    .model_conformance_eligibility_v2(
-                        &ledger,
-                        &facts,
-                        ctx.daa_score,
-                        &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv),
-                    )
-                    .is_ok()
-                {
-                    ledger.attest_artifact(facts.param_root);
-                }
-            }
+    if let KernelRouteObjectV1::RegisterClassV2 { mode, descriptor, program_bytes, plan, param_commitments } = &object
+        && mode.is_optimistic()
+        && let (Some(route), Some(opv)) =
+            (builder.state.kernel_route.as_ref(), builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()))
+    {
+        let facts =
+            crate::palw_opv_bootstrap_v1::OpvClassFactsV1::of_registration(*descriptor, program_bytes, plan, param_commitments);
+        if route
+            .model_conformance_eligibility_v2(
+                &ledger,
+                &facts,
+                ctx.daa_score,
+                &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv),
+            )
+            .is_ok()
+        {
+            ledger.attest_artifact(facts.param_root);
         }
     }
     if matches!(object, KernelRouteObjectV1::Withdraw { .. })
@@ -1158,7 +1152,7 @@ pub(super) fn apply_kernel_route_object_v1(
         return Ok(());
     }
     let before = loaded_rows(builder, &ledger);
-    match opv_gate_v1(builder, ctx, &ledger, &object) {
+    match opv_gate_v1(builder, ctx, &ledger, object) {
         OpvGateV1::Drop => return Ok(()),
         OpvGateV1::Admit(classes) => {
             for class in classes {
@@ -1191,7 +1185,7 @@ pub(super) fn apply_kernel_route_object_v1(
         }
         _ => None,
     };
-    let events = match ledger.apply_object(&object, &AuthV1 { signer_bond: kid }) {
+    let events = match ledger.apply_object(object, &AuthV1 { signer_bond: kid }) {
         Ok(events) => events,
         Err(_refusal) => {
             // A refusal that did court work still spent the block's budget (so junk cannot be tried for free); nothing else is kept.

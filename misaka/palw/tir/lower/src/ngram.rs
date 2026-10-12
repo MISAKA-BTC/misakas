@@ -51,12 +51,12 @@ pub fn is_prime(value: u64) -> bool {
     if value < 2 {
         return false;
     }
-    if value % 2 == 0 {
+    if value.is_multiple_of(2) {
         return value == 2;
     }
     let mut d = 3u64;
     while d * d <= value {
-        if value % d == 0 {
+        if value.is_multiple_of(d) {
             return false;
         }
         d += 2;
@@ -240,6 +240,7 @@ pub fn ids_batch(t: &NgramTables, tokens: &[i64]) -> Vec<Vec<i64>> {
             let mut out = Vec::with_capacity(t.heads());
             for n in 2..=t.ngram_size {
                 let mut mixed = shifted[0][i].wrapping_mul(t.multipliers[0]);
+                #[allow(clippy::needless_range_loop)] // `pos` also picks the multiplier
                 for pos in 1..n {
                     mixed ^= shifted[pos][i].wrapping_mul(t.multipliers[pos]);
                 }

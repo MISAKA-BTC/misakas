@@ -188,35 +188,6 @@ pub fn declared_cache_budget_bytes_v1(ram_scale: f64) -> u64 {
         + scaled(40_000_000) // acceptance_data
 }
 
-#[cfg(test)]
-mod declared_budget_tests {
-    /// **Every `scaled(..)` budget in the constructor is in the sum.**
-    ///
-    /// A hand-written total is a second copy of a list, and a second copy goes stale the first time a
-    /// cache is added — silently, because a sum that is too small still looks like a sum. This counts
-    /// the constructor's own `scaled(` sites and holds the count, so adding one without adding it here
-    /// fails rather than quietly understating the caches by its size.
-    #[test]
-    fn the_sum_lists_every_scaled_budget() {
-        // The needle is built from pieces on purpose: spelled whole, it would appear in this test's
-        // own text and the count would include the line doing the counting. The identity module's
-        // source scan hit the same trap, from the other direction.
-        let needle = format!("_budget {} scaled(", "=");
-        let in_constructor = include_str!("storage.rs").matches(needle.as_str()).count();
-        assert_eq!(in_constructor, 14, "the constructor sizes {in_constructor} caches; update declared_cache_budget_bytes_v1");
-    }
-
-    /// The figure the constructor's own comment claims, and the scale it claims it at.
-    #[test]
-    fn the_budget_is_about_the_gigabyte_the_comment_promises() {
-        let at_one = super::declared_cache_budget_bytes_v1(1.0);
-        assert_eq!(at_one, 1_440_000_000, "fourteen caches with their level multipliers");
-        // And it follows the scale, which is what makes it usable beside a per-share --ram-scale.
-        assert_eq!(super::declared_cache_budget_bytes_v1(0.225), 324_000_000);
-        assert_eq!(super::declared_cache_budget_bytes_v1(0.0), 0);
-    }
-}
-
 impl ConsensusStorage {
     pub fn new(db: Arc<DB>, config: Arc<Config>) -> Arc<Self> {
         let scale_factor = config.ram_scale;
@@ -558,5 +529,34 @@ impl ConsensusStorage {
             block_window_cache_for_past_median_time,
             lkg_virtual_state,
         })
+    }
+}
+
+#[cfg(test)]
+mod declared_budget_tests {
+    /// **Every `scaled(..)` budget in the constructor is in the sum.**
+    ///
+    /// A hand-written total is a second copy of a list, and a second copy goes stale the first time a
+    /// cache is added — silently, because a sum that is too small still looks like a sum. This counts
+    /// the constructor's own `scaled(` sites and holds the count, so adding one without adding it here
+    /// fails rather than quietly understating the caches by its size.
+    #[test]
+    fn the_sum_lists_every_scaled_budget() {
+        // The needle is built from pieces on purpose: spelled whole, it would appear in this test's
+        // own text and the count would include the line doing the counting. The identity module's
+        // source scan hit the same trap, from the other direction.
+        let needle = format!("_budget {} scaled(", "=");
+        let in_constructor = include_str!("storage.rs").matches(needle.as_str()).count();
+        assert_eq!(in_constructor, 14, "the constructor sizes {in_constructor} caches; update declared_cache_budget_bytes_v1");
+    }
+
+    /// The figure the constructor's own comment claims, and the scale it claims it at.
+    #[test]
+    fn the_budget_is_about_the_gigabyte_the_comment_promises() {
+        let at_one = super::declared_cache_budget_bytes_v1(1.0);
+        assert_eq!(at_one, 1_440_000_000, "fourteen caches with their level multipliers");
+        // And it follows the scale, which is what makes it usable beside a per-share --ram-scale.
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.225), 324_000_000);
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.0), 0);
     }
 }

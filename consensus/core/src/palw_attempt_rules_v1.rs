@@ -421,7 +421,7 @@ impl PalwPromptRootBlockGuardV2 {
     pub fn enter(block: Hash64) -> Self {
         PALW_BLOCK_PROMPT_ROOT_MEMO_V2.with(|memo| {
             let mut memo = memo.borrow_mut();
-            let owns_scope = !memo.as_ref().is_some_and(|memo| memo.block == block);
+            let owns_scope = memo.as_ref().is_none_or(|memo| memo.block != block);
             let previous = if owns_scope {
                 memo.replace(PalwBlockPromptRootMemoV2 { block, roots: Default::default(), retained_weight: 0 })
             } else {

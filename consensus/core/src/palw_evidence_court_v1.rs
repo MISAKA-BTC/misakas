@@ -94,10 +94,11 @@ pub fn challenge_outcome_v1(
     response: Option<(&[u8], u64)>,
     now_daa: u64,
 ) -> ChallengeOutcome {
-    if let Some((bytes, landed_daa)) = response {
-        if landed_daa <= challenge.deadline_daa && manifest.verify_chunk(challenge.chunk_index, bytes).is_ok() {
-            return ChallengeOutcome::Answered;
-        }
+    if let Some((bytes, landed_daa)) = response
+        && landed_daa <= challenge.deadline_daa
+        && manifest.verify_chunk(challenge.chunk_index, bytes).is_ok()
+    {
+        return ChallengeOutcome::Answered;
     }
     if now_daa > challenge.deadline_daa { ChallengeOutcome::Defaulted } else { ChallengeOutcome::Pending }
 }

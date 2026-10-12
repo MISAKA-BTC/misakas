@@ -162,14 +162,13 @@ fn bounds(c: &FlatContextV9<'_>, pr: &PreparedV1<'_>, f: &FlatFaultV9) -> Result
                 FlatFaultV5::Whole(f) => Some(&f.output),
                 _ => None,
             };
-            if let Some(o) = output {
-                if o.position >= c.base.claim.positions
+            if let Some(o) = output
+                && (o.position >= c.base.claim.positions
                     || !pr.valid(o.occurrence, o.node)
                     || !matches!(pr.w.node(o.occurrence, o.node).prim, misaka_palw_tir::Prim::TopK { .. })
-                    || crate::flat_scope7::point_relation(pr, o.position, o.occurrence, o.node)?
-                {
-                    return Err(bad("legacy9 relation must be TopK over a public/initial source"));
-                }
+                    || crate::flat_scope7::point_relation(pr, o.position, o.occurrence, o.node)?)
+            {
+                return Err(bad("legacy9 relation must be TopK over a public/initial source"));
             }
             let mut b = crate::flat_court5::flat_fault_court_bounds_v5(&c.base, f)?;
             b.filing_bytes -= 3;

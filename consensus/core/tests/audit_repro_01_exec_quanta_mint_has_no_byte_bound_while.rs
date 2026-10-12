@@ -125,7 +125,7 @@ fn t12_rows() -> Vec<Row> {
         let class = PalwClassStateV2 {
             artifact_root: *artifact_root,
             slash_value_per_pwu: *slash_value_per_pwu,
-            pwu_rule: pwu_rule.clone(),
+            pwu_rule: *pwu_rule,
             status: PalwClassStatusV2::Active,
             registered_daa: 0,
             registrant_bond: None,

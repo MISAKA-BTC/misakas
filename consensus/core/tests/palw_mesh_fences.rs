@@ -191,6 +191,7 @@ fn a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity_a
 #[test]
 fn never_is_absence_for_the_identity() {
     let base = palw_t12_release_v5_params();
+    #[allow(clippy::needless_range_loop)]
     for i in 0..3 {
         let mut never = palw_t12_release_v5_params();
         match i {
@@ -245,6 +246,7 @@ fn each_fence_is_refused_below_its_prerequisites_by_name_and_with_its_mirror_uns
     let late = armed_with(None, Some(AT - 2), Some(AT + 1), Some(AT));
     assert!(format!("{:?}", late.validate_palw_capped_onboarding_v1().expect_err("late")).contains("palw_audit_mesh_v1"));
     // The mirror: a fence with no mirror, and a mirror with no fence.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..3 {
         let mut unsynced = palw_t12_release_v5_params();
         match i {

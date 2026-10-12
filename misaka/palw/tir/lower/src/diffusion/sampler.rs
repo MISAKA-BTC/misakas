@@ -167,7 +167,7 @@ mod tests {
             let got_s: Vec<f64> = rec["sigmas"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
             let got_t: Vec<f64> = rec["timesteps"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
             // The scheduler computes in float32 on the host; the table keeps 64-bit values of those.
-            for (a, b) in s.iter().zip(&got_s).chain(t.iter().zip(&got_t).map(|(a, b)| (a, b))) {
+            for (a, b) in s.iter().zip(&got_s).chain(t.iter().zip(&got_t)) {
                 assert!((a - b).abs() <= 1e-4 * a.abs().max(1.0), "steps {steps}: {a} vs the scheduler's {b}");
             }
         }
@@ -251,13 +251,14 @@ mod tests {
             );
             let mut x: Vec<f64> = noise.iter().map(|n| *n as f64 / (1u64 << 24) as f64).collect();
             for (i, got) in xs.iter().enumerate() {
-                let ds = (tables.sigmas[k][i + 1] - tables.sigmas[k][i]) as f64;
+                let ds = tables.sigmas[k][i + 1] - tables.sigmas[k][i];
                 for e in 0..len {
                     x[e] += ds * v[e] as f64 * s_v;
                     let g = got.data[e] as f64 * s_x;
                     assert!((g - x[e]).abs() <= 3.0 * s_x + 2e-6, "count {steps} step {i} elem {e}: {g} vs {}", x[e]);
                 }
                 // Follow the integer state, not the float: resync so the check stays local to one step's rounding.
+                #[allow(clippy::needless_range_loop)]
                 for e in 0..len {
                     x[e] = got.data[e] as f64 * s_x;
                 }

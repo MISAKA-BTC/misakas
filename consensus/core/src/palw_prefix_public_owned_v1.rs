@@ -52,6 +52,7 @@ pub struct PalwPrefixJointDefaultV1 {
     pub panel: BTreeSet<PalwBondKeyV2>,
     pub deadline_daa: u64,
 }
+#[allow(dead_code)] // dormant: not yet wired to a caller (its fence is unarmed)
 impl PalwOwnedPublicPrefixCourtV1 {
     pub(crate) fn admit(
         inner: PalwOwnedPrefixCourtV1,

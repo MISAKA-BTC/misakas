@@ -657,6 +657,7 @@ fn composite_evidence<'a>(c: &'a Claim, r: &PalwTirCompositeRefV1) -> PalwEvalEv
 }
 
 #[test]
+#[allow(clippy::overly_complex_bool_expr)]
 fn a_composite_candidate_is_adjudicated_from_its_sections_openings() {
     let (claim, r, split) = composite_generation();
     let evidence = composite_evidence(&claim, &r);

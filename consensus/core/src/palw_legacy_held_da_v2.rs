@@ -543,7 +543,7 @@ fn palw_legacy_prompt_check_v2(
         return Ok(());
     }
     palw_step_node_reaches_at_depth_v1(PALW_LEGACY_PROMPT_CHUNK_DEPTH_V2, tiles, &root, level, u64::from(chunk), &nodes, siblings)
-        .map_err(|why| bad(why))
+        .map_err(bad)
 }
 
 // ---- checks (hash arithmetic; the fold's and the filer's one spelling) ----------------------------------------------------------

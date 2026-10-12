@@ -167,14 +167,13 @@ impl PalwBondBudgetStateV1 {
             return Err(PalwBudgetRefusalV1::Assignment("consumer contract requires valid state v4"));
         }
         let old = self.consumer_contracts.get(&claim).copied();
-        if let (Some(old), Some(new)) = (old, new) {
-            if old.terms != new.terms
+        if let (Some(old), Some(new)) = (old, new)
+            && (old.terms != new.terms
                 || matches!(old.status, PalwPaidConsumerStatusV1::Terminal { .. }) && old != new
                 || matches!(old.status, PalwPaidConsumerStatusV1::Exhausted { .. })
-                    && matches!(new.status, PalwPaidConsumerStatusV1::Live)
-            {
-                return Err(PalwBudgetRefusalV1::Duplicate);
-            }
+                    && matches!(new.status, PalwPaidConsumerStatusV1::Live))
+        {
+            return Err(PalwBudgetRefusalV1::Duplicate);
         }
         self.consumer_index_replace_v1(claim, old.as_ref(), new.as_ref());
         put(&mut self.consumer_contracts, PALW_BUDGET_TABLE_CONSUMER_CONTRACT_V1, &claim, new, j);

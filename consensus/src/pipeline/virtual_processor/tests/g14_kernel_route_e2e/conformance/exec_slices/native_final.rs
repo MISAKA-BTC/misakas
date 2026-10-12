@@ -477,7 +477,6 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         };
         add(key, *bond, leg.amount);
     }
-    drop(add);
     cw.net.beat_to(native.expiry_daa - 1).await;
     let before = cw.net.chain.tip_state().1;
     assert!(before.vesting_row(&first.real.claim).is_some());

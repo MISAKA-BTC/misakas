@@ -39,7 +39,6 @@ use misaka_palw_base0::gen_tensor_worker::{GenPlantV1, GenTensorCaptureV1, GenTe
 use misaka_palw_base0::gen_worker::{GenCourtMoveV1, GenHeldClassV1};
 use misaka_palw_gen::OutputSpecV1;
 use misaka_palw_sdk::gen_class::*;
-use misaka_palw_tir as tir;
 use misaka_palw_tir::builder::ProgramBuilder;
 use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interp::{MapParams, ParamSource};
@@ -202,7 +201,7 @@ fn toy_image() -> DrillClass {
             steps: vec![steps_max - 1, steps_max],
             profile: PalwGenProfileOffersV1::Image(PalwGenImageOffersV1 {
                 sampler_id: Hash64::from_bytes([0x5A; 64]),
-                guidance: Some(guidance.clone()),
+                guidance: Some(guidance),
                 steps_scalar: Some(1),
             }),
             scalars,
@@ -463,7 +462,7 @@ fn wide_embed() -> DrillClass {
 
 fn court() -> kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2 {
     match &palw_t12_shipped_params().palw_consensus_mode {
-        PalwConsensusMode::ConsensusV2(b) => b.court.clone(),
+        PalwConsensusMode::ConsensusV2(b) => b.court,
         _ => unreachable!("testnet-12 runs V2"),
     }
 }

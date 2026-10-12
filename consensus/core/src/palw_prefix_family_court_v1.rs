@@ -89,7 +89,7 @@ pub struct PalwPrefixPacketBuilderV1 {
 }
 impl PalwPrefixPacketBuilderV1 {
     pub fn new(maximum_body_bytes: u64) -> Result<Self, String> {
-        if maximum_body_bytes < 4 || maximum_body_bytes > 90_000 - 16_384 {
+        if !(4..=90_000 - 16_384).contains(&maximum_body_bytes) {
             return Err("prefix packet builder needs the admitted bounded encoded body".into());
         }
         Ok(Self { maximum_body_bytes, encoded_bytes: 4, actions: Vec::new() })
@@ -591,12 +591,12 @@ impl PalwPrefixFamilyCourtV1 {
     }
     fn completed_page_index_v1(&self, offset: u64) -> Result<u64, String> {
         let dk = u64::from(self.binding.shape_profile.gdn_head_k_dim);
-        if dk == 0 || offset % 4 != 0 {
+        if dk == 0 || !offset.is_multiple_of(4) {
             return Err("completed page has invalid geometry/offset".into());
         }
         let word = offset / 4;
         let column = word % dk;
-        if column % PALW_GDN_PAGE_WORDS_V1 as u64 != 0 {
+        if !column.is_multiple_of(PALW_GDN_PAGE_WORDS_V1 as u64) {
             return Err("completed page is not at a canonical page boundary".into());
         }
         Ok((word / dk) * dk.div_ceil(PALW_GDN_PAGE_WORDS_V1 as u64) + column / PALW_GDN_PAGE_WORDS_V1 as u64)
@@ -1073,10 +1073,10 @@ impl PalwPrefixFamilyCourtV1 {
             }
             _ => return Err("prefix move is for another immutable family/phase".into()),
         }
-        if let FamilyV1::Q36 { public, .. } = &mut self.family {
-            if public.as_ref().is_some_and(|p| p.source as usize == p.sources.len()) {
-                *public = None;
-            }
+        if let FamilyV1::Q36 { public, .. } = &mut self.family
+            && public.as_ref().is_some_and(|p| p.source as usize == p.sources.len())
+        {
+            *public = None;
         }
         self.check()
     }

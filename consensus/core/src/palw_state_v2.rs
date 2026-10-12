@@ -32737,15 +32737,14 @@ fn apply_legacy_held_answer_v2(
     }
     let unit = crate::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(carriage.unit);
     let (claim, record, in_run) = da_answer_admitted_v1(builder, ctx, claim_id, &unit, carriage.discloser)?;
-    if let crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::FpJob(job) = &carriage.answer {
-        if carriage.unit != crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob
+    if let crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::FpJob(job) = &carriage.answer
+        && (carriage.unit != crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob
             || !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
             || claim.job_identity == Hash64::default()
             || job.class_id != claim.class_id
-            || job.executor_bond != claim.bond.0
-        {
-            return Err(refused("FP job preimage differs from the recorded claim/lane/domain".into()));
-        }
+            || job.executor_bond != claim.bond.0)
+    {
+        return Err(refused("FP job preimage differs from the recorded claim/lane/domain".into()));
     }
     let network = builder.extras.held_context_ladder.unwrap_or(crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
     let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network);
@@ -35283,7 +35282,7 @@ fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwCha
     let mut pruned_locks: Vec<(PalwBondKeyV2, Hash64)> = Vec::new();
     for (claim_id, row) in &builder.state.panel_liabilities {
         let locks = locks_by_claim.remove(claim_id).unwrap_or_default();
-        if !builder.state.staged_claim_contract_v1(claim_id).is_some_and(|c| now < c.terms.material_until_daa)
+        if builder.state.staged_claim_contract_v1(claim_id).is_none_or(|c| now >= c.terms.material_until_daa)
             && prunable(row.expiry_daa, row.settled_at_final)
             && locks.iter().all(|(_, gone)| *gone)
         {
@@ -35293,7 +35292,7 @@ fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwCha
     }
     for (claim_id, locks) in locks_by_claim {
         let settled = builder.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal());
-        if settled && !builder.state.staged_claim_contract_v1(&claim_id).is_some_and(|c| now < c.terms.material_until_daa) {
+        if settled && builder.state.staged_claim_contract_v1(&claim_id).is_none_or(|c| now >= c.terms.material_until_daa) {
             pruned_locks.extend(locks.into_iter().filter(|(_, gone)| *gone).map(|(key, _)| key));
         }
     }
@@ -39329,8 +39328,8 @@ fn apply_object(
                 })
                 // The task-head profile: likewise a proof carrying a `Head` job below `palw_task_heads_v1`.
                 .filter(|object| {
-                    !(crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(object)
-                        && !builder.params.task_heads_active_at(ctx.daa_score))
+                    !crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(object)
+                        || builder.params.task_heads_active_at(ctx.daa_score)
                 })
                 // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
                 .filter(|object| {
@@ -47844,7 +47843,7 @@ pub(crate) mod tests {
                 &s3,
                 &p,
                 &ctx(4, 103, 4),
-                &[object.clone()],
+                std::slice::from_ref(&object),
                 None,
                 false,
                 false,
@@ -47858,7 +47857,7 @@ pub(crate) mod tests {
                 &s3,
                 &p,
                 &ctx(4, 103, 4),
-                &[object.clone()],
+                std::slice::from_ref(&object),
                 None,
                 false,
                 false,
@@ -51072,7 +51071,7 @@ pub(crate) mod tests {
                 &s9,
                 &p,
                 &point,
-                &[commit.clone()],
+                std::slice::from_ref(&commit),
                 Some(&attempt),
                 false,
                 false,
@@ -66086,7 +66085,7 @@ pub(crate) mod tests {
 
         let certified =
             PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::TirAttempt(drill.clone())) };
-        let (s2, _) = apply_da(&s1, &p, &ctx(2, 101, 2), &[certified.clone()], None);
+        let (s2, _) = apply_da(&s1, &p, &ctx(2, 101, 2), std::slice::from_ref(&certified), None);
         let program = class.decode_program().unwrap();
         let reachable = crate::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&program);
         assert!(
@@ -66095,7 +66094,7 @@ pub(crate) mod tests {
         );
         assert!(s2.chain_certified_families(PalwCertifiedLaneV1::Attempt).iter().any(|f| reachable.is_subset(&f.kernel_ids)));
 
-        let (s3, _) = apply_da(&s2, &p, &ctx(3, 102, 3), &[lane.clone()], None);
+        let (s3, _) = apply_da(&s2, &p, &ctx(3, 102, 3), std::slice::from_ref(&lane), None);
         assert!(s3.class_shares.get(&class_id).copied().unwrap_or(0) > 0, "seated at the floor");
         let mut other = class.clone();
         other.tokenizer_id = h64(77);
@@ -66192,7 +66191,7 @@ pub(crate) mod tests {
         let carried: PalwTirIdentityEvidenceV1 = borsh::from_slice(evidence).unwrap();
         assert!(carried.binding.class.program.is_empty(), "the program is referenced, not carried");
         assert!(palw_object_is_tir_v1(&object));
-        let s3 = step(&s2, 110, &[object.clone()], None).expect("kind 7 convicts");
+        let s3 = step(&s2, 110, std::slice::from_ref(&object), None).expect("kind 7 convicts");
         assert!(
             matches!(s3.claim(&faulty_claim).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
             "{:?}",
@@ -73347,7 +73346,7 @@ pub(crate) mod tests {
                     name: b"improved".to_vec(),
                     signature: vec![1],
                 };
-                let (next, delta) = fold(&s, &p, &[object.clone()]).unwrap();
+                let (next, delta) = fold(&s, &p, std::slice::from_ref(&object)).unwrap();
                 assert_eq!(next.model_line_or_founding(&id).unwrap().current, 1);
                 assert_eq!(next.model_version(&id, 1).unwrap().root, root);
                 assert_eq!(next.model_line_or_founding(&class), s.model_line_or_founding(&class));
@@ -79432,7 +79431,7 @@ pub(crate) mod tests {
             // `Valid` as the full cut, `min(3, k + new)`, and records that cut on the lock (L-3), so
             // Q-3 over the recorded masks (`palw_rcore_counted_masks_v1`, what the V3 door reads)
             // reaches the same number.
-            let lock = s4.slashable_lock(partial[1], claim_id).expect("the V2 door locked it").clone();
+            let lock = *s4.slashable_lock(partial[1], claim_id).expect("the V2 door locked it");
             assert_eq!((lock.attested, lock.segments), (PalwSegmentMaskV2::full(CUT), CUT), "the V2 door records the full cut");
             let door_k = s4.claim(&claim_id).unwrap().rcore.basis_k;
             assert_eq!(door_k, 2, "S-2's V2 door: min(3, 1 + 1)");

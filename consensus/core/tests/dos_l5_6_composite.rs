@@ -230,12 +230,11 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
             if skips.is_empty() { admitted += 1 } else { refused_by_ceiling += 1 }
         }
         for (id, c) in s.claims_iter() {
-            if c.bond == bond_key(ATTACKER) {
-                if let PalwClaimPhaseV2::Voided { reason, .. } = &c.phase {
-                    if seen_void.insert(*id) {
-                        *void_reasons.entry(format!("{reason:?}")).or_default() += 1;
-                    }
-                }
+            if c.bond == bond_key(ATTACKER)
+                && let PalwClaimPhaseV2::Voided { reason, .. } = &c.phase
+                && seen_void.insert(*id)
+            {
+                *void_reasons.entry(format!("{reason:?}")).or_default() += 1;
             }
         }
         let ar = s.reserved_exposure(&bond_key(ATTACKER));
@@ -254,7 +253,7 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         if room_floor < seat_count + 1 {
             daa_floor_dead += 1;
         }
-        if (daa - start) % 150 == 0 {
+        if (daa - start).is_multiple_of(150) {
             samples.push((daa, ar, hr, room_floor, room_2m, s.claims_iter().count()));
         }
     }

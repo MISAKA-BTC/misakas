@@ -64,12 +64,12 @@ fn at_eight_ready_seats_with_the_short_class_admitting_a_second_2m_claim_is_refu
     )
     .expect("bonds");
     let rooms_empty = (op186(&p, &sp, &s1, short, now).panel_room, op186(&p, &sp, &s1, id2m, now).panel_room);
-    let (e1, k1, id1) = junk_attempt(id2m, bond_key(9_201), pubkey_of(9_201), &operator_pubkey_of(9_201), pwu, 0x91_01, 0x91_0000_01);
+    let (e1, k1, id1) = junk_attempt(id2m, bond_key(9_201), pubkey_of(9_201), &operator_pubkey_of(9_201), pwu, 0x91_01, 0x9100_0001);
     let (s2, _, sk) = go(&p, &sp, &s1, &ctx(0x9100_0002, now + 1, 2, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&e1), k1)
         .expect("2M #1");
     assert!(sk.is_empty(), "{sk:?}");
     assert!(s2.claim(&id1).is_some(), "the first 2M claim is live");
-    let (e2, k2, _) = junk_attempt(id2m, bond_key(9_202), pubkey_of(9_202), &operator_pubkey_of(9_202), pwu, 0x91_02, 0x91_0000_02);
+    let (e2, k2, _) = junk_attempt(id2m, bond_key(9_202), pubkey_of(9_202), &operator_pubkey_of(9_202), pwu, 0x91_02, 0x9100_0002);
     let second = go(&p, &sp, &s2, &ctx(0x9100_0003, now + 2, 3, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&e2), k2);
     let rooms_one = (op186(&p, &sp, &s2, short, now + 1).panel_room, op186(&p, &sp, &s2, id2m, now + 1).panel_room);
     println!("rooms (short, 2M): empty {rooms_empty:?}, one 2M claim live {rooms_one:?}");

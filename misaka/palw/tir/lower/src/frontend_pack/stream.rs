@@ -95,7 +95,7 @@ impl Compiled {
                 }
             }
         }
-        let sources: BTreeMap<_, _> = self.bindings.values().flat_map(|r| r.sources.iter().map(|(n, m)| (n, m))).collect();
+        let sources: BTreeMap<_, _> = self.bindings.values().flat_map(|r| r.sources.iter()).collect();
         let source_bytes = sources
             .values()
             .try_fold(0u64, |n, m| n.checked_add(m.bytes))

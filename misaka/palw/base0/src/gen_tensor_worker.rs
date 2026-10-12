@@ -154,6 +154,7 @@ pub struct PalwGenTensorRequestV1 {
 /// **The worker's answer**: the binding (the commitment's execution root, the leaf count, the output
 /// digest) — or a refusal naming the rule, never the prompt.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose (borsh wire / one per job); boxing changes every match site
 pub enum PalwGenTensorAnswerV1 {
     Result { binding: PalwGenTensorBindingV1 },
     Refused { why: String },

@@ -121,6 +121,7 @@ fn arm_objective_offence_at_or_below(params: &mut Params, at: ForkActivation) {
     }
 }
 
+#[allow(unreachable_patterns)]
 fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     for fence in PalwLifecycleKindFenceV1::ALL {
         match fence {

@@ -98,7 +98,7 @@ fn floor_to_final(p: Params, seed: u64) -> (Chain, Hash64, PalwBondKeyV2, PalwSl
     let bound = c.bind(id, &c.floor_seats());
     licence_and_finalize(&mut c, id, bound);
     let seat = c.floor_seats()[0].0;
-    let lock = c.s.slashable_lock(seat, id).expect("a Valid seat holds a lock past the Final").clone();
+    let lock = *c.s.slashable_lock(seat, id).expect("a Valid seat holds a lock past the Final");
     (c, id, seat, lock)
 }
 

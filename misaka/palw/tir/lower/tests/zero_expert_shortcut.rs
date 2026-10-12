@@ -110,6 +110,6 @@ fn a_consumer_without_a_producer_is_refused_by_name() {
             sc.side = ShortcutSide::Consume;
         }
     }
-    let e = hl::build_program(&spec).err().expect("refused").to_string();
+    let e = hl::build_program(&spec).expect_err("refused").to_string();
     assert!(e.contains("FFN_SHORTCUT_MOE_V1"), "{e}");
 }

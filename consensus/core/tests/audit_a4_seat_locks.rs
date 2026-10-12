@@ -18,7 +18,7 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, 
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_model_registry_v1::palw_genesis_model_works_v1;
 use kaspa_consensus_core::palw_panel_var_v1::{PalwClaimFraudFactsV1, palw_max_fraud_gain_v1};
-use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
+use kaspa_consensus_core::palw_pwu::palw_pwu_v1;
 use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, palw_max_exposure_pwu_of_rule_v1};
 
 const T12_BLOCK_SUBSIDY_SOMPI: u64 = 444_562_014_000;

@@ -244,7 +244,7 @@ fn b2_03_leaf_count_collision_reprices_the_class() {
             let lo = v.iter().min_by_key(|(_, p)| *p).unwrap();
             let hi = v.iter().max_by_key(|(_, p)| *p).unwrap();
             if lo.1 != hi.1 {
-                let better = worst.map_or(true, |(_, _, wl, _, wh)| (hi.1 as f64 / lo.1 as f64) > (wh as f64 / wl as f64));
+                let better = worst.is_none_or(|(_, _, wl, _, wh)| (hi.1 as f64 / lo.1 as f64) > (wh as f64 / wl as f64));
                 if better {
                     worst = Some((*leaves, lo.0, lo.1, hi.0, hi.1));
                 }

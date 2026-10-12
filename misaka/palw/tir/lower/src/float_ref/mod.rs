@@ -787,7 +787,7 @@ impl<'a> Session<'a> {
                 }
                 // At the end of a window its FIRST series (rows `[0, dim)`) becomes the next window's previous half.
                 if let Some((pk, pg, ..)) = prev
-                    && (pos + 1) % m == 0
+                    && (pos + 1).is_multiple_of(m)
                 {
                     let dimu = *dim;
                     let (nk, ng): (Vec<f32>, Vec<f32>) =
@@ -802,7 +802,7 @@ impl<'a> Session<'a> {
                 let (q, w, cand) = (x(0)?.to_vec(), x(1)?.to_vec(), x(2)?.to_vec());
                 let keys = self.fixed_mut(s, lyr).clone();
                 let complete_old = pos / ratio;
-                let completing = (pos + 1) % ratio == 0;
+                let completing = (pos + 1).is_multiple_of(*ratio);
                 let score = |key: &[f32]| -> f64 {
                     (0..*heads)
                         .map(|h| w[h] as f64 * (0..*dim).map(|j| q[h * dim + j] as f64 * key[j] as f64).sum::<f64>().max(0.0))
@@ -900,11 +900,11 @@ impl<'a> Session<'a> {
                     .find(|(ml, _)| *ml == l)
                     .map(|(_, i)| *i)
                     .ok_or_else(|| LowerError::eval(format!("NgramIds: layer {l} is not a PLE layer of this block")))?;
-                if !self.ngram_tables.contains_key(&l) {
+                self.ngram_tables.entry(l).or_insert_with(|| {
                     let mut spec = ple.clone();
                     spec.layer_index = ple_index;
-                    self.ngram_tables.insert(l, crate::ngram::NgramTables::new(&spec));
-                }
+                    crate::ngram::NgramTables::new(&spec)
+                });
                 let t = self.ngram_tables[&l].clone();
                 let st = self.fixed_mut(s, lyr);
                 let window: Vec<i64> = st.iter().map(|v| *v as i64).collect();
@@ -921,7 +921,7 @@ impl<'a> Session<'a> {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("BlockMean without a state")) };
                 let k = x(0)?.to_vec();
                 let sum = self.fixed_mut(s, lyr);
-                if pos % ratio == 0 {
+                if pos.is_multiple_of(*ratio) {
                     sum.iter_mut().for_each(|v| *v = 0.0);
                 }
                 for (a, b) in sum.iter_mut().zip(&k) {
@@ -933,7 +933,7 @@ impl<'a> Session<'a> {
                 let Ref::State(s) = ins[1] else { return Err(LowerError::eval("BlockWrite without a state")) };
                 let row = x(0)?.to_vec();
                 let dim = row.len();
-                if (pos + 1) % ratio == 0 && pos / ratio < *blocks {
+                if (pos + 1).is_multiple_of(*ratio) && pos / ratio < *blocks {
                     let b = pos / ratio;
                     self.fixed_mut(s, lyr)[b * dim..(b + 1) * dim].copy_from_slice(&row);
                 }
@@ -944,7 +944,7 @@ impl<'a> Session<'a> {
                 let (q, cand) = (x(0)?.to_vec(), x(1)?.to_vec());
                 let keys = self.fixed_mut(s, lyr).clone();
                 let complete_old = pos / ratio;
-                let completing = (pos + 1) % ratio == 0;
+                let completing = (pos + 1).is_multiple_of(*ratio);
                 let score = |key: &[f32]| -> f64 {
                     (0..*heads).map(|h| (0..*dim).map(|j| q[h * dim + j] as f64 * key[j] as f64).sum::<f64>().max(0.0)).sum::<f64>()
                         / (*dim as f64).sqrt()

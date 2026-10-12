@@ -694,7 +694,7 @@ pub(crate) async fn readiness(ctx: &Ctx, _profile: Profile, class_id: String) ->
     if resp.ready_seats < resp.required_ready_seats {
         println!("code             {}", PalwModelRegistrationCodeV1::ReadySeatsInsufficient.code());
     }
-    println!("{:<18}{:<10}{:<12}{:<12}{}", "SEAT", "READY", "PROVED", "EXPIRES", "REASON");
+    println!("{:<18}{:<10}{:<12}{:<12}REASON", "SEAT", "READY", "PROVED", "EXPIRES");
     for s in &resp.seats {
         println!(
             "{:<18}{:<10}{:<12}{:<12}{}",
@@ -804,13 +804,13 @@ pub(crate) async fn track_after_submit(
         reg.submitted = true;
         reg.constructed = true;
     }
-    if let Some(text) = reject_text {
-        if let Some(code) = palw_model_reject_from_submit_text_v1(text) {
-            reg.reject_code = code.code().to_string();
-            reg.processor_verdict = code.code().to_string();
-            reg.accepted = false;
-            reg.mempool_accepted = false;
-        }
+    if let Some(text) = reject_text
+        && let Some(code) = palw_model_reject_from_submit_text_v1(text)
+    {
+        reg.reject_code = code.code().to_string();
+        reg.processor_verdict = code.code().to_string();
+        reg.accepted = false;
+        reg.mempool_accepted = false;
     }
     reg
 }

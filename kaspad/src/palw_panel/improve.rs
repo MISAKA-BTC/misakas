@@ -919,7 +919,7 @@ impl PalwPanelService {
         if let Some(done) = st.seat_done.get(&claim) {
             return palw_improve_seat_step_of_v1(done);
         }
-        if st.seat_runs.get(&claim).is_some() {
+        if st.seat_runs.contains_key(&claim) {
             if !st.seat_runs[&claim].is_finished() {
                 return PalwImproveSeatStepV1::Waiting;
             }

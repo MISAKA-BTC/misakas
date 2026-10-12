@@ -515,22 +515,21 @@ impl PalwTokenizerJsonStreamV1 {
         if self.stack.iter().any(|f| !matches!(f.phase, 0..=4) || f.namespace >= ADDED_ID_NAMESPACE) {
             return Err("tokenizer JSON stack is not bounded canonical parser state".into());
         }
-        if let Lex::Number(n) = &self.lex {
-            if n.significant.len() > 309 {
-                return Err("tokenizer number continuation is unbounded".into());
-            }
+        if let Lex::Number(n) = &self.lex
+            && n.significant.len() > 309
+        {
+            return Err("tokenizer number continuation is unbounded".into());
         }
-        if let Lex::String(s) = &self.lex {
-            if s.word.len() > 16
+        if let Lex::String(s) = &self.lex
+            && (s.word.len() > 16
                 || s.utf8.len() > 4
                 || s.escape > 5
                 || s.hex_digits > 3
                 || s.key_hash.byte_count().is_none()
                 || s.ordinary.byte_count().is_none()
-                || s.literal.byte_count().is_none()
-            {
-                return Err("tokenizer JSON string continuation exceeds bounded state".into());
-            }
+                || s.literal.byte_count().is_none())
+        {
+            return Err("tokenizer JSON string continuation exceeds bounded state".into());
         }
         Ok(())
     }

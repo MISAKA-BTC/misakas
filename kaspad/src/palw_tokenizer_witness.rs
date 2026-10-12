@@ -231,6 +231,7 @@ impl TokenizerWitnessV1 {
             _reservation: reservation,
         })
     }
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn offset(&self) -> u64 {
         self.parser.offset()
     }

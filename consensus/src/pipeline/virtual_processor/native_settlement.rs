@@ -569,13 +569,12 @@ impl VirtualStateProcessor {
         let retirement = self.palw_dns_retirement?;
         let mut memo = self.native_readiness_memo.lock();
         let pruning = self.pruning_point_store.read().pruning_point().unwrap();
-        if let Some((at, readiness)) = memo.as_ref() {
-            if *at == sink
-                && readiness.finalized.pruning_point == pruning
-                && self.pruning_meta_stores.read().pruning_utxoset_stable_flag()
-            {
-                return Some(readiness.clone());
-            }
+        if let Some((at, readiness)) = memo.as_ref()
+            && *at == sink
+            && readiness.finalized.pruning_point == pruning
+            && self.pruning_meta_stores.read().pruning_utxoset_stable_flag()
+        {
+            return Some(readiness.clone());
         }
         let evaluation = self.native_evaluate(sink);
         let finalized = self.native_finalized_readiness(&evaluation.snapshot, evaluation.pruning);

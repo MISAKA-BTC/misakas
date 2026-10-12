@@ -53,7 +53,7 @@ fn an_unannounced_fault_past_sixteen_positions_is_convicted_with_zero_demands_an
 #[test]
 fn local_artifact_aliases_and_false_commitment_filings_cannot_convict() {
     let c = Claim::honest();
-    let fresh = FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), &[c.descriptor.clone()], c.header()).unwrap();
+    let fresh = FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), std::slice::from_ref(&c.descriptor), c.header()).unwrap();
     let mut alias = c.params.clone();
     let t = alias.tensors.values_mut().find(|t| t.dtype.width() == 1).unwrap();
     t.data[0] += 256; // same truncated wire bytes, different integer arithmetic
@@ -61,7 +61,7 @@ fn local_artifact_aliases_and_false_commitment_filings_cannot_convict() {
     assert!(fresh.reexecute(&Artifact(&alias)).is_err(), "wire aliases are invalid local artifact tensors");
     let mut lie = c.trace.clone();
     bump(&mut lie.values[1][0][0], 0);
-    let other = FreshVerifierV1::from_public_bytes(&c.publish(&lie), &[c.descriptor.clone()], c.header()).unwrap();
+    let other = FreshVerifierV1::from_public_bytes(&c.publish(&lie), std::slice::from_ref(&c.descriptor), c.header()).unwrap();
     let ReexecutionV1::Fault(mut proof) = other.reexecute(&Artifact(&c.params)).unwrap() else { panic!("fault") };
     assert_eq!(fresh.try_proof(&FaultProofWireV1::of(&proof).to_bytes()), Err(DismissalV1::NoFault));
     proof.inputs[0].data[0] ^= 1;

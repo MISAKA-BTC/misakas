@@ -129,11 +129,7 @@ fn t07_f17_two_copies_of_one_conviction_pay_each_branchs_own_reporter() {
         let before = x.c.s.bond(&accused).unwrap().collateral;
         x.step(vec![eq.clone()]);
         let record = x.c.s.consumed_offence(&key).expect("the kind-0 record").clone();
-        assert_eq!(
-            u64::try_from(before - x.c.s.bond(&accused).unwrap().collateral).unwrap(),
-            record.collected,
-            "collected is the debit"
-        );
+        assert_eq!(before - x.c.s.bond(&accused).unwrap().collateral, record.collected, "collected is the debit");
         let amount = finish(&mut x, &[reporter]);
         assert_eq!(amount, palw_reporter_reward_amount_v1(record.collected, 0), "R-1: ⌊r × collected⌋");
         (x, amount)

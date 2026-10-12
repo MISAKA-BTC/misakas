@@ -3,7 +3,6 @@
 mod common;
 use common::chain::T;
 use common::ledger_world::*;
-use common::opv_world::*;
 use misaka_palw_kernel::ledger::KernelLedgerV1;
 use misaka_palw_kernel::rows::{LedgerRowsV1, config_root_of, diff_rows, root_of_rows};
 

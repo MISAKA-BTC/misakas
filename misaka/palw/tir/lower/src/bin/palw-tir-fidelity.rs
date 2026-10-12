@@ -234,10 +234,10 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let calib = cut(calib, a.calib_seqs);
     let (eval, eval_src) = tokens(&a.eval, vocab, 2, 29)?;
     let eval = cut(eval, a.eval_seqs);
-    if let Some(w) = a.max_window {
-        if let Some(n) = eval.iter().map(Vec::len).max().filter(|n| *n > w as usize) {
-            return Err(format!("an evaluation sequence of {n} positions is longer than --max-window {w}"));
-        }
+    if let Some(w) = a.max_window
+        && let Some(n) = eval.iter().map(Vec::len).max().filter(|n| *n > w as usize)
+    {
+        return Err(format!("an evaluation sequence of {n} positions is longer than --max-window {w}"));
     }
     // The calibration-length rule: a recurrent program is calibrated on a sequence as long as the
     // context it is evaluated at (with --stats-in, the statistics come from the --calib file).
@@ -365,7 +365,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         let (params_f, _) =
             misaka_palw_tir_lower::float_ref::ParamStore::from_source(&prep.hl, &prep.binding, src).map_err(|e| e.to_string())?;
         let every = |p: usize| {
-            if (p + 1) % 256 == 0 {
+            if (p + 1).is_multiple_of(256) {
                 eprintln!("[{:>7.1}s]   sites: {}", t0.elapsed().as_secs_f64(), p + 1);
             }
         };

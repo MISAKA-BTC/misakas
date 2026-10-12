@@ -13,7 +13,6 @@ use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
 use misaka_palw_tir::{DType, Ref, TensorType, TirProgramV1};
 use misaka_palw_tir_artifact::{PalwTirContainerV1, tensor_bytes_v1, write_container_v1_streamed};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 struct Counting;

@@ -347,6 +347,7 @@ fn past_the_fence_a_seat_is_priced_by_the_larger_of_work_and_residency_and_below
     // Past it: `max(work, resident)` over each seat's cells.
     assert_eq!(past.drawn, palw_tir_shard_drawn_price_permille_v2(&plan, &resident, &past.anchor, &past.claim, true));
     let room_shares = palw_tir_shard_room_permille_v2(&plan.cell_permille, &resident, plan.s_l, plan.s_p).unwrap();
+    #[allow(clippy::needless_range_loop)]
     for shard in 0..usize::from(plan.s_l) {
         let class_seat_prices: u32 = past.drawn[shard * 4 + 1..shard * 4 + 4].iter().sum();
         assert!(class_seat_prices <= 2 * room_shares[shard], "room must cover actual native bound-seat masks");

@@ -132,7 +132,7 @@ fn legacy_rows_only_material_is_not_licensed_on_a_court_capable_a16_class() {
     let artifact = a16_artifact(8_292);
     let (backend, profile) = a16_held_backend(&artifact);
     assert!(a16_court_capable_v1(&profile), "the held v7 row is court-capable: its honest producer writes binding material");
-    let anchor = Hash64::from_u64_word(0x1E6A_C7);
+    let anchor = Hash64::from_u64_word(0x001E_6AC7);
     let mut licensed_roots = Vec::new();
     for draw in [true, false] {
         let (job, _) = backend.job_for_anchor(anchor).expect("job");
@@ -364,7 +364,7 @@ fn floor_backend() -> Base0Backend {
 #[test]
 fn crafted_profile_is_refused_not_a_panic_on_the_floor_fp_route() {
     let backend = floor_backend();
-    let anchor = Hash64::from_u64_word(0xC0FF_EE);
+    let anchor = Hash64::from_u64_word(0x00C0_FFEE);
     let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
     let job = palw_attempt_job_v1(job, false);
     let out = backend.execute(&job, &prompt).expect("runs");

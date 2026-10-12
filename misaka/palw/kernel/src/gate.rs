@@ -387,7 +387,7 @@ pub fn public_pipeline_prosecution_complete_v1(
             Err(g) => gaps.push(G::Stage { stage: si as u8, gaps: g }),
             Ok(b) => {
                 // A pipeline court authenticates the surrounding pipeline record, not just its accused stage.
-                structural_work = structural_work.saturating_add((b.max_commit_bytes as u128).saturating_mul(16));
+                structural_work = structural_work.saturating_add(b.max_commit_bytes.saturating_mul(16));
                 // A stage position's response carries its stage inputs too.
                 let inputs: u128 = plan
                     .edges

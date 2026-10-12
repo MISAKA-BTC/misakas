@@ -1639,7 +1639,7 @@ mod tests {
             (format!("--validator-key={foreign_bond}"), "is not a validator key of drill"),
             (format!("--stake-bond={}:{}", public_seat.transaction_id, public_seat.index), "names public testnet-12's genesis txid"),
         ] {
-            let why = refusal(&node(&[extra.clone()]));
+            let why = refusal(&node(std::slice::from_ref(&extra)));
             assert!(why.contains(needle), "{extra}: {why}");
         }
 
@@ -1670,7 +1670,7 @@ mod tests {
             ),
             (format!("--palw-fee-outpoint={}:41", public_seat.transaction_id), "names public testnet-12's genesis txid"),
         ] {
-            let why = refusal(&node(&[extra.clone()]));
+            let why = refusal(&node(std::slice::from_ref(&extra)));
             assert!(why.contains(needle), "{extra}: {why}");
         }
     }

@@ -320,7 +320,7 @@ impl Base0Backend {
         job: &PalwJobContextV2,
         leaf_index: u64,
     ) -> Result<(), String> {
-        let ctx_hash = job.context_hash();
+        let _ctx_hash = job.context_hash();
         let profile_hash = self.profile.shape_profile_id();
         {
             let slot = run
@@ -331,7 +331,7 @@ impl Base0Backend {
                 .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(job, &profile_hash, &slot.1);
         }
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
         // is a producer whose roots disagree with its material — which any seat catches without a
@@ -1303,7 +1303,7 @@ fn leaves_by_position(
     tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
 ) -> Vec<kaspa_hashes::Hash64> {
     use kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1;
-    let ctx_hash = binding.job_context.context_hash();
+    let _ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let mut leaves = vec![kaspa_hashes::Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {

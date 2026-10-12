@@ -657,6 +657,64 @@ pub fn bf16_round(x: f32) -> f32 {
     f32::from_bits(rounded)
 }
 
+/// A rope spec from a config's rope fields (`rope_theta` + `rope_scaling`, or `rope_parameters`, flat or
+/// keyed by layer type), and the query temperature a `llama_4_scaling_beta` among them asks for
+/// (Ministral-3: `q ·= 1 + β·ln(1 + ⌊p / original_max_position_embeddings⌋)`). The temperature may
+/// only be carried by an architecture that applies it (`q_scaled`): elsewhere the key is refused,
+/// never dropped. Shared by the Rust parsers and the adapter evaluator (`rope` is a generic feature;
+/// which config keys feed it is the adapter's business).
+#[allow(clippy::too_many_arguments)]
+pub fn rope_spec_from_config(
+    cfg: &Cfg,
+    rotary_dim: usize,
+    style: RopeStyle,
+    theta_default: Option<f64>,
+    layer_type: Option<&str>,
+    partial: f64,
+    max_pos: Option<usize>,
+    top_orig: Option<usize>,
+    q_scaled: bool,
+) -> Result<(RopeSpec, Option<crate::spec::QTemperature>)> {
+    use crate::spec::QTemperature;
+    let mut rc = read_rope_config(cfg, theta_default, layer_type)?;
+    let beta = match rc.params.remove("llama_4_scaling_beta") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", cfg.arch)))?),
+    };
+    if beta.is_some() && !q_scaled {
+        return Err(LowerError::not_lowerable(format!(
+            "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
+            cfg.arch
+        )));
+    }
+    // transformers 5 also keeps the model's own length among the rope parameters.
+    if let Some(v) = rc.params.remove("max_position_embeddings")
+        && v.as_u64().map(|m| m as usize) != max_pos
+    {
+        return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", cfg.arch)));
+    }
+    let temp = match beta {
+        Some(b) => {
+            let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
+                LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", cfg.arch))
+            })?;
+            Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
+        }
+        None => None,
+    };
+    let freqs = compute_freqs(
+        &cfg.arch,
+        &rc,
+        RopeContext {
+            dim: rotary_dim,
+            max_position_embeddings: max_pos,
+            top_level_original_max: top_orig,
+            partial_rotary_factor: partial,
+        },
+    )?;
+    Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -899,62 +957,4 @@ mod tests {
         assert_eq!(bf16_round(1.0 + 3.0 / 256.0), 1.0 + 4.0 / 256.0);
         assert_eq!(bf16_round(0.70710677), 0.70703125);
     }
-}
-
-/// A rope spec from a config's rope fields (`rope_theta` + `rope_scaling`, or `rope_parameters`, flat or
-/// keyed by layer type), and the query temperature a `llama_4_scaling_beta` among them asks for
-/// (Ministral-3: `q ·= 1 + β·ln(1 + ⌊p / original_max_position_embeddings⌋)`). The temperature may
-/// only be carried by an architecture that applies it (`q_scaled`): elsewhere the key is refused,
-/// never dropped. Shared by the Rust parsers and the adapter evaluator (`rope` is a generic feature;
-/// which config keys feed it is the adapter's business).
-#[allow(clippy::too_many_arguments)]
-pub fn rope_spec_from_config(
-    cfg: &Cfg,
-    rotary_dim: usize,
-    style: RopeStyle,
-    theta_default: Option<f64>,
-    layer_type: Option<&str>,
-    partial: f64,
-    max_pos: Option<usize>,
-    top_orig: Option<usize>,
-    q_scaled: bool,
-) -> Result<(RopeSpec, Option<crate::spec::QTemperature>)> {
-    use crate::spec::QTemperature;
-    let mut rc = read_rope_config(cfg, theta_default, layer_type)?;
-    let beta = match rc.params.remove("llama_4_scaling_beta") {
-        None | Some(Value::Null) => None,
-        Some(v) => Some(v.as_f64().ok_or_else(|| LowerError::bad(format!("{}: llama_4_scaling_beta {v}", cfg.arch)))?),
-    };
-    if beta.is_some() && !q_scaled {
-        return Err(LowerError::not_lowerable(format!(
-            "{}: llama_4_scaling_beta (a query scaling) on an architecture that does not apply it",
-            cfg.arch
-        )));
-    }
-    // transformers 5 also keeps the model's own length among the rope parameters.
-    if let Some(v) = rc.params.remove("max_position_embeddings")
-        && v.as_u64().map(|m| m as usize) != max_pos
-    {
-        return Err(LowerError::bad(format!("{}: rope_parameters.max_position_embeddings {v} ≠ {max_pos:?}", cfg.arch)));
-    }
-    let temp = match beta {
-        Some(b) => {
-            let floor = rc.params.get("original_max_position_embeddings").and_then(Value::as_u64).ok_or_else(|| {
-                LowerError::bad(format!("{}: llama_4_scaling_beta without original_max_position_embeddings", cfg.arch))
-            })?;
-            Some(QTemperature { floor: floor as usize, scale: b, offset: 0 })
-        }
-        None => None,
-    };
-    let freqs = compute_freqs(
-        &cfg.arch,
-        &rc,
-        RopeContext {
-            dim: rotary_dim,
-            max_position_embeddings: max_pos,
-            top_level_original_max: top_orig,
-            partial_rotary_factor: partial,
-        },
-    )?;
-    Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
 }

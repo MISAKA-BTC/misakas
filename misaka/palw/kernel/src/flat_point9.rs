@@ -105,14 +105,9 @@ pub(crate) fn relation_priced_v9(
     let sh = pr.shapes(p, s, n);
     let output_elements = LayoutV3::try_of(&sh.out).ok_or_else(|| bad("invalid point output shape"))?.len;
     let output_leaf_bytes = if common::uses_flat::<5>(node.out.dtype, &sh.out) {
-        u64::try_from(
-            flat_material_bounds_v5(node.out.dtype, &shape64(&sh.out))
-                .ok_or_else(|| bad("invalid flat point output"))?
-                .leaf_hash_bytes
-                + 4
-                + 127 * node.out.dtype.width() as u64,
-        )
-        .map_err(|_| bad("point output byte overflow"))?
+        flat_material_bounds_v5(node.out.dtype, &shape64(&sh.out)).ok_or_else(|| bad("invalid flat point output"))?.leaf_hash_bytes
+            + 4
+            + 127 * node.out.dtype.width() as u64
     } else {
         legacy_leaf_bytes(node.out.dtype, &sh.out, AXIS_ROW)?
     };

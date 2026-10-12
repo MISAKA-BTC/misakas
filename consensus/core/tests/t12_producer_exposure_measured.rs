@@ -54,13 +54,13 @@ fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
 
     println!("\n=== t12 genesis registry ===");
     let mut rows = Vec::new();
-    for object in bundle.genesis_objects.iter().cloned() {
-        if let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = &object {
-            let leaves = declared_leaves(&object);
+    for object in bundle.genesis_objects.iter() {
+        if let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = object {
+            let leaves = declared_leaves(object);
             println!(
                 "  class {:.16}…  declared_leaves_per_draw={leaves}  derived_rule={}",
                 class_id.to_string(),
-                pwu_rule_is_derived(&object)
+                pwu_rule_is_derived(object)
             );
             rows.push((*class_id, leaves));
         }

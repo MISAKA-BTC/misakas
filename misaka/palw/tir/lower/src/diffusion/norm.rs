@@ -63,7 +63,10 @@ pub struct QGroupNorm {
 impl QGroupNorm {
     /// For inputs at `sx`, an output at `sy`, gain `gamma:[C]`, shift `beta:[C]` and `eps` (diffusers' `1e-6`).
     pub fn new(spec: GroupNormSpec, gamma: &[f32], beta: &[f32], eps: f64, sx: f64, sy: f64) -> Self {
-        assert!(spec.c % spec.groups == 0 && gamma.len() == spec.c && beta.len() == spec.c, "GroupNorm: groups divide the channels");
+        assert!(
+            spec.c.is_multiple_of(spec.groups) && gamma.len() == spec.c && beta.len() == spec.c,
+            "GroupNorm: groups divide the channels"
+        );
         assert!(spec.row() <= 65_535, "a partial row of {} elements overflows the i32 lane of Σx", spec.row());
         let n = spec.n() as f64;
         let eps_v = (n * n * eps / (sx * sx)).round() as i128;

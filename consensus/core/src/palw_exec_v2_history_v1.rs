@@ -91,10 +91,10 @@ pub(super) fn index_replace(
     if let Some(row) = old {
         state.exec_v2_job_use_deadlines.remove(&(row.expires_daa, key));
     }
-    if let Some(row) = new {
-        if !state.exec_v2.roots.contains_key(&row.owner_root) {
-            state.exec_v2_job_use_deadlines.insert((row.expires_daa, key));
-        }
+    if let Some(row) = new
+        && !state.exec_v2.roots.contains_key(&row.owner_root)
+    {
+        state.exec_v2_job_use_deadlines.insert((row.expires_daa, key));
     }
 }
 
@@ -128,10 +128,10 @@ impl TransitionBuilder<'_> {
         if let Some(row) = old {
             self.state.exec_v2_job_use_deadlines.remove(&(row.expires_daa, key));
         }
-        if let Some(row) = &new {
-            if !self.state.exec_v2.roots.contains_key(&row.owner_root) {
-                self.state.exec_v2_job_use_deadlines.insert((row.expires_daa, key));
-            }
+        if let Some(row) = &new
+            && !self.state.exec_v2.roots.contains_key(&row.owner_root)
+        {
+            self.state.exec_v2_job_use_deadlines.insert((row.expires_daa, key));
         }
         self.write_exec_v2_row(PALW_EXEC_V2_TABLE_JOB_USES_V1, key, new, |s| &mut s.exec_v2_job_uses);
     }

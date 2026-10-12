@@ -330,6 +330,7 @@ impl SnapshotReceiver {
     pub(crate) fn complete(&self) -> bool {
         self.next == self.count && self.received == self.total
     }
+    #[allow(dead_code)] // the whole-buffer form of decode_with, kept beside it
     pub(crate) fn decode<T: BorshDeserialize>(self) -> io::Result<T> {
         self.decode_with(|reader, _| T::deserialize_reader(reader))
     }
@@ -686,7 +687,6 @@ mod tests {
             total: crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64,
         };
         assert!(writer.write_all(&[1]).is_err());
-        drop(writer);
         drop(spill);
         assert!(!path.exists());
         assert_eq!(budget.available_permits(), 1);

@@ -179,7 +179,7 @@ fn courts_on_licensed_one_quantum_claims_charge_the_one_job_the_claims_pool_to()
             PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, initial_target, .. }
                 if *class_id != b.base_class_id && certified.contains(class_id) =>
             {
-                Some((*class_id, pwu_rule.clone(), *initial_target))
+                Some((*class_id, *pwu_rule, *initial_target))
             }
             _ => None,
         })
@@ -245,7 +245,7 @@ fn courts_on_licensed_one_quantum_claims_charge_the_one_job_the_claims_pool_to()
         class_id: model_id,
         artifact_root: h(0xB27),
         slash_value_per_pwu: floor.3,
-        pwu_rule: model_rule.clone(),
+        pwu_rule: model_rule,
         initial_target: model_target,
         share_permille: 0,
         activation_daa: 0,
@@ -342,7 +342,7 @@ fn two_courts_on_one_licensed_claim_charge_it_once() {
             PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, initial_target, .. }
                 if *class_id != b.base_class_id && certified.contains(class_id) =>
             {
-                Some((*class_id, pwu_rule.clone(), *initial_target))
+                Some((*class_id, *pwu_rule, *initial_target))
             }
             _ => None,
         })
@@ -408,7 +408,7 @@ fn two_courts_on_one_licensed_claim_charge_it_once() {
         class_id: model_id,
         artifact_root: h(0xB27),
         slash_value_per_pwu: floor.3,
-        pwu_rule: model_rule.clone(),
+        pwu_rule: model_rule,
         initial_target: model_target,
         share_permille: 0,
         activation_daa: 0,

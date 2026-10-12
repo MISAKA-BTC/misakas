@@ -451,7 +451,7 @@ impl KernelLedgerV1 {
         let rule = |why: &str| KernelRefusalV1::rule(NAME, why);
         let p = self.verifier_pay_in_force().ok_or_else(|| rule("palw_verifier_pay_v1 is not in force"))?;
         let seal = *self.seals.get(&(*job, *producer)).ok_or_else(|| rule("no live seal of this job by this producer"))?;
-        if !self.salted_seals_from().is_some_and(|at| seal.daa >= at) {
+        if self.salted_seals_from().is_none_or(|at| seal.daa < at) {
             return Err(rule("only a salted seal can be a beacon source"));
         }
         let key = (VERIFIER_PAY_BEACON_SOURCE_V1, beacon_source_key_v1(job, producer, seal.daa));

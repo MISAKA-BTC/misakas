@@ -29,9 +29,7 @@ use kaspa_consensus_core::config::params::{
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepOffsetV1};
-use kaspa_consensus_core::palw_attempt_v2::{
-    PALW_ATTEMPT_V2_TRACE_CHUNKS, PalwAttemptEnvelopeV2, attempt_id_v2, attempt_trace_manifest_root_v1,
-};
+use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_TRACE_CHUNKS, PalwAttemptEnvelopeV2, attempt_trace_manifest_root_v1};
 use kaspa_consensus_core::palw_audit_door_v1::{
     PalwAuditEntryV1, palw_audit_pool_of_claim_v1, palw_capacity_claim_credited_v1, palw_capacity_claim_k_aud_v1,
 };
@@ -203,7 +201,8 @@ fn every_prerequisite_is_refused_where_it_is_missing() {
     late.sync_palw_capacity_liability();
     assert!(late.validate_palw_v2().is_err(), "a ρ = 250 step below the fences it needs");
     // F-M1 without each of its prerequisites.
-    for (name, undo) in [("emission", &PALW_T12_CAPACITY_EMISSION_BUDGET_V1 as &PalwPostLaunchFenceV1)] {
+    {
+        let (name, undo) = ("emission", &PALW_T12_CAPACITY_EMISSION_BUDGET_V1 as &PalwPostLaunchFenceV1);
         let mut p = tier_params(Class::Floor, 100);
         (undo.set)(&mut p, None);
         assert!(p.validate_palw_v2().is_err(), "F-M1 without {name}");

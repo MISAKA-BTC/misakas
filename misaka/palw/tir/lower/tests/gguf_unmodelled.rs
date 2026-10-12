@@ -247,7 +247,8 @@ fn a_weight_space_rotation_is_never_ignored() {
     assert!(msg.contains("prism.something_else"), "{msg}");
     // A key of a later version of the declaration is refused, not skipped.
     let mut g = base();
-    for (k, (ty, raw)) in [("prism.hadamard.version", u(2))] {
+    {
+        let (k, (ty, raw)) = ("prism.hadamard.version", u(2));
         g.set(k, ty, raw);
     }
     let Err(LowerError::NotLowerable(msg)) = g.model() else { panic!("refused") };

@@ -93,5 +93,5 @@ fn the_fused_and_the_separate_gate_are_exclusive() {
             a.output_gate = true;
         }
     }
-    assert!(hl::build_program(&s).err().expect("refused").to_string().contains("ATTN_OUTPUT_GATE_SEPARATE_V1"));
+    assert!(hl::build_program(&s).expect_err("refused").to_string().contains("ATTN_OUTPUT_GATE_SEPARATE_V1"));
 }

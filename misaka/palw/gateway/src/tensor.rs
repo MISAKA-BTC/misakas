@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(binding.execution_root(), binding.committed_execution_root);
 
         // The seat: replays from the material and agrees; other pixels are not the job's.
-        let judged = gen_seat_judge_v1(&held, &work.execution_root(), &job, &prompt, &[fx.image.clone()], &[], FORM);
+        let judged = gen_seat_judge_v1(&held, &work.execution_root(), &job, &prompt, std::slice::from_ref(&fx.image), &[], FORM);
         assert_eq!(judged, GenSeatJudgmentV1::Valid);
         let mut other = admitted.images.clone();
         other[0].rgb[0] ^= 1;
@@ -448,7 +448,7 @@ mod tests {
         let work = work.expect("the run");
         assert_eq!(binding.execution_root(), binding.committed_execution_root);
         assert_eq!(work.output().values.len(), 4, "a [1, 4] i32 embedding");
-        let judged = gen_tensor_seat_judge_v1(&held, &work.execution_root(), &job, &[], &[], &[fx.image.clone()], FORM);
+        let judged = gen_tensor_seat_judge_v1(&held, &work.execution_root(), &job, &[], &[], std::slice::from_ref(&fx.image), FORM);
         assert_eq!(judged, GenSeatJudgmentV1::Valid);
         let mut other = image.clone();
         other.rgb[0] ^= 1;

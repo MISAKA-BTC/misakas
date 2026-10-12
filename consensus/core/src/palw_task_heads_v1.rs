@@ -173,6 +173,7 @@ pub fn palw_head_argmax_v1(row: &[i32]) -> u32 {
 pub fn palw_head_best_span_v1(start: &[i32], end: &[i32], context: usize, count: usize, max_len: usize) -> Option<(usize, usize)> {
     let count = count.min(start.len()).min(end.len());
     let mut best: Option<((usize, usize), i64)> = None;
+    #[allow(clippy::needless_range_loop)] // `(s, e)` are the answer, not only indices
     for s in context..count {
         for e in s..count.min(s.saturating_add(max_len.max(1))) {
             let v = start[s] as i64 + end[e] as i64;

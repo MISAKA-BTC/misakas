@@ -154,6 +154,7 @@ pub struct MappedFlatReplayUsageV9 {
     pub authenticated_model_inventory_root: Option<Hash64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose; boxing changes every match site
 pub enum MappedFlatReplayResultV9 {
     Finding(FlatFindingV9),
     Limit(&'static str),
@@ -379,7 +380,7 @@ impl MappedFlatReplayV9 {
             let width = d.dtype.width();
             let shape = d.shape.iter().map(|n| *n as usize).collect::<Vec<_>>();
             let (root, _) = tensor_commitment_streamed_v3(d.dtype, &shape, limits.parameter_workspace_bytes, &mut |offset, out| {
-                if offset as usize % width != 0 || out.len() % width != 0 {
+                if !(offset as usize).is_multiple_of(width) || out.len() % width != 0 {
                     return Err("raw parameter alignment".into());
                 }
                 let start = usize::try_from(offset).map_err(|e| e.to_string())? / width;

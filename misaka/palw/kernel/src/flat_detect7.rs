@@ -95,6 +95,7 @@ fn checked(c: &FlatContextV7<'_>, f: FlatFaultV7) -> FlatFindingV7 {
         },
     }
 }
+#[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
 fn point(
     public: &dyn FlatPublicReadsV7,
     unit: FlatReadV5,

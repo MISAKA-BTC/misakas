@@ -641,7 +641,8 @@ fn a_capital_assignment_is_refused_below_its_fence_and_by_d3_and_counts_once_sea
     assert_eq!(a5.bond_budget().unwrap().header.allocation.unwrap().accrued_sompi, 620);
     assert_eq!(a5.bond_budget().unwrap().model_available(&h64(1)), 620, "the only model holds the whole share");
     // Every step reverts to its parent.
-    for (parent, (child, delta)) in [(&a4, apply(&a4, &armed, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(5, 122, 5) }, &[], None))] {
+    {
+        let (parent, (child, delta)) = (&a4, apply(&a4, &armed, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(5, 122, 5) }, &[], None));
         assert_eq!(&revert_delta_v2(&child, &delta, &armed).unwrap(), parent);
     }
 }

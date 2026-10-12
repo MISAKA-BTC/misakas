@@ -35,8 +35,8 @@ impl PalwQ36PrefixPublicRowV1 {
         if prefix_tokens >= binding.job_context.declared_prefill_tokens
             || length == 0
             || length > 65_536
-            || offset % 4 != 0
-            || length % 4 != 0
+            || !offset.is_multiple_of(4)
+            || !length.is_multiple_of(4)
         {
             return Err("the public prefix chunk is not a proper bounded aligned cache interval".into());
         }

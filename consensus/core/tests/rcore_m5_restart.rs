@@ -108,7 +108,7 @@ fn t01_revert_and_ibd_twins_of_the_staged_lifecycle() {
             (released, basis),
             "{what}: SR-1's release and Q-3's recount"
         );
-        assert_eq!(licensed.rcore.g_res_sompi > 0, true, "{what}: the licence froze G_res");
+        assert!(licensed.rcore.g_res_sompi > 0, "{what}: the licence froze G_res");
         let after = t.c.s.reserved_exposure(&producer);
         assert_eq!(before - after, if released { e } else { 0 }, "{what}: E leaves at the licence iff released");
         assert!(w > 0 && e > 0);
@@ -151,7 +151,7 @@ fn t01_revert_and_ibd_twins_of_the_staged_lifecycle() {
         "F (S2)",
     );
     let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = t.c.s.claim(&f).unwrap().phase else { unreachable!() };
-    let e_f = escrow(&t.c.sp, &t.c.s.claim(&f).unwrap());
+    let e_f = escrow(&t.c.sp, t.c.s.claim(&f).unwrap());
     let before = t.c.s.reserved_exposure(&producer);
     let rest: Vec<_> = (0..5).filter(|i| *i != full && *i != partial).map(|i| valid(f, seats[i].0, f_bound)).collect();
     t.at(licensed_daa + 60, vec![PalwConsensusObjectV2::ReceiptLicensed { claim: f, receipts: rest }]);

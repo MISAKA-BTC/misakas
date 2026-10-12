@@ -79,6 +79,7 @@ fn row_cache_envelope_v1(raw: u64, leaves: u64, program: u64) -> Result<u64, Str
         .ok_or_else(|| "the rows' construction size overflows the memory ledger".into())
 }
 
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(in crate::palw_panel) fn reserve_rows_v1(
     host: &Arc<PalwMemoryLedgerV1>,
     duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,

@@ -611,7 +611,7 @@ fn b4r_07_the_maximal_admitted_floor_forgery() {
     for code in [24u8, 26u8] {
         let (mut lo, mut hi) = (64u32, 65_535u32);
         while lo < hi {
-            let mid = lo + (hi - lo + 1) / 2;
+            let mid = lo + (hi - lo).div_ceil(2);
             if admit(&p, &b, &build(mid, code), &job, root).is_ok() {
                 lo = mid;
             } else {

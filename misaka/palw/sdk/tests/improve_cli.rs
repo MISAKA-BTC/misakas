@@ -162,7 +162,7 @@ fn every_improve_kind_writes_an_object_the_chain_accepts() {
     let bad = d.join("bad.json");
     std::fs::write(&bad, serde_json::json!({ "line": hex(1), "sequence": 1, "policy": { "windows": { "grid": 1 } } }).to_string())
         .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_palw-class")).args(&common("policy", &bad, &d.join("bad.obj"))).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_palw-class")).args(common("policy", &bad, &d.join("bad.obj"))).output().unwrap();
     assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("would be refused"));
 
     // 71: a hard case, its key and salt written beside it for the reveal.

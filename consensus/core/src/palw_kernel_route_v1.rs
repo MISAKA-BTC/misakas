@@ -1324,6 +1324,61 @@ impl PalwKernelRouteStateV1 {
     }
 }
 
+impl PalwKernelRouteStateV1 {
+    /// Native-only projection of already admitted, journaled class9 rows. Each
+    /// historical registration was fully independently checked in its block.
+    /// Remote snapshot consumers use ledger()/full from_rows and an external
+    /// chain anchor, never this fixed-prefix operational projection.
+    pub(crate) fn ledger_native_projection_v9(&self) -> Result<KernelLedgerV1, String> {
+        use misaka_palw_kernel::{ledger::flat_candidate9::*, rows::*};
+        let mut count = 0usize;
+        let mut bytes = 0usize;
+        for ((_, _), row) in
+            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        {
+            count += 1;
+            bytes = bytes.checked_add(row.len()).ok_or("native9 registry size overflow")?;
+            if count > FLAT_CANDIDATE_REGISTRY_MAX_V9
+                || row.len() > FLAT_CANDIDATE_RECORD_MAX_BYTES_V9
+                || bytes > FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9
+            {
+                return Err("native9 admitted registry count/raw residency cap".into());
+            }
+        }
+        if count == 0 {
+            return self.ledger();
+        }
+        if let Some(cached) = self.ledger_cache.native_projection() {
+            debug_assert!(cached.scalars() == self.header.scalars);
+            debug_assert!(cached.flat_conformance_classes_v9.is_empty());
+            debug_assert!(cached.native_candidate_count_v9() == count);
+            debug_assert!(cached.to_rows().iter().all(|(k, v)| self.rows.get(k) == Some(v)));
+            debug_assert_eq!(
+                cached.to_rows().len(),
+                self.rows.keys().filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
+            );
+            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(cached);
+        }
+        let rows: LedgerRowsV1 = self
+            .rows
+            .iter()
+            .filter(|((table, _), _)| *table != TABLE_FLAT_CONFORMANCE_CLASSES_V9)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows)?;
+        for ((_, key), row) in
+            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        {
+            let class: Digest = borsh::from_slice(key).map_err(|e| e.to_string())?;
+            let owner: Digest =
+                row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_| "native9 owner size")?;
+            ledger.note_native_candidate_projection_v9(owner, class)?;
+        }
+        Ok(ledger)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1650,60 +1705,5 @@ mod tests {
         let completed_at = completed_at.expect("the last chunk completes the group");
         assert_eq!(completed_at, t0 + window, "it lands on the chunk-counted deadline's last DAA");
         assert!(completed_at > t0 + p.court_deadline_daa, "the fixed window would have defaulted an honest producer by size alone");
-    }
-}
-
-impl PalwKernelRouteStateV1 {
-    /// Native-only projection of already admitted, journaled class9 rows. Each
-    /// historical registration was fully independently checked in its block.
-    /// Remote snapshot consumers use ledger()/full from_rows and an external
-    /// chain anchor, never this fixed-prefix operational projection.
-    pub(crate) fn ledger_native_projection_v9(&self) -> Result<KernelLedgerV1, String> {
-        use misaka_palw_kernel::{ledger::flat_candidate9::*, rows::*};
-        let mut count = 0usize;
-        let mut bytes = 0usize;
-        for ((_, _), row) in
-            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
-        {
-            count += 1;
-            bytes = bytes.checked_add(row.len()).ok_or("native9 registry size overflow")?;
-            if count > FLAT_CANDIDATE_REGISTRY_MAX_V9
-                || row.len() > FLAT_CANDIDATE_RECORD_MAX_BYTES_V9
-                || bytes > FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9
-            {
-                return Err("native9 admitted registry count/raw residency cap".into());
-            }
-        }
-        if count == 0 {
-            return self.ledger();
-        }
-        if let Some(cached) = self.ledger_cache.native_projection() {
-            debug_assert!(cached.scalars() == self.header.scalars);
-            debug_assert!(cached.flat_conformance_classes_v9.is_empty());
-            debug_assert!(cached.native_candidate_count_v9() == count);
-            debug_assert!(cached.to_rows().iter().all(|(k, v)| self.rows.get(k) == Some(v)));
-            debug_assert_eq!(
-                cached.to_rows().len(),
-                self.rows.keys().filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
-            );
-            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(cached);
-        }
-        let rows: LedgerRowsV1 = self
-            .rows
-            .iter()
-            .filter(|((table, _), _)| *table != TABLE_FLAT_CONFORMANCE_CLASSES_V9)
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows)?;
-        for ((_, key), row) in
-            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
-        {
-            let class: Digest = borsh::from_slice(key).map_err(|e| e.to_string())?;
-            let owner: Digest =
-                row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_| "native9 owner size")?;
-            ledger.note_native_candidate_projection_v9(owner, class)?;
-        }
-        Ok(ledger)
     }
 }

@@ -489,6 +489,7 @@ pub fn tape_extras(chain: &Chain, fp_lane: bool, daa: u64, job_anchor: Hash64) -
     e
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl Tape {
     pub fn new(c: Chain) -> Self {
         let (base, base_daa) = (c.s.clone(), c.daa);

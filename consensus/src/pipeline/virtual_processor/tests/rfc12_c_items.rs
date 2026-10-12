@@ -35,6 +35,7 @@ const FENCE: u64 = 1;
 
 /// One claim's journey, as the processor lived it.
 struct ClaimLife {
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     claim_id: Hash64,
     /// The attempt block that accepted the claim.
     anchor: Block,

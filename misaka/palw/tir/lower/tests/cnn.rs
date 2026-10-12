@@ -815,7 +815,7 @@ impl Naive<'_> {
         // TensorFlow "SAME": along an axis of extent n, kernel k, stride s the padding is max(k - s, 0) when n is a multiple of
         // s and max(k - n mod s, 0) otherwise, the smaller half before (written from the HF function, not from the lowering's).
         let tf = |n: usize, k: usize, s: usize| {
-            let along = if n % s == 0 { k.saturating_sub(s) } else { k.saturating_sub(n % s) };
+            let along = if n.is_multiple_of(s) { k.saturating_sub(s) } else { k.saturating_sub(n % s) };
             (along / 2, along - along / 2)
         };
         let ((ph0, ph1), (pw0, pw1)) = if c.tf_same { (tf(h, kh, sh), tf(w, kw, sw)) } else { ((ph, ph), (pw, pw)) };

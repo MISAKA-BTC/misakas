@@ -126,7 +126,7 @@ mod tests {
             segments: PalwSegmentMaskV2::full(assignment.segments),
         };
         assert!(matches!(
-            palw_optimistic_receipts_license_v2(h(1), h(2), &seats, &[receipt.clone()]),
+            palw_optimistic_receipts_license_v2(h(1), h(2), &seats, std::slice::from_ref(&receipt)),
             Ok(PalwReceiptQuorumV2::Licensed { valid: 1 })
         ));
         let mut wrong = receipt;

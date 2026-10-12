@@ -228,7 +228,7 @@ impl PalwClassManifestFileV1 {
             if let Some(stripped) = after.strip_prefix('"') {
                 stripped.find('"').map(|end| stripped[..end].to_string())
             } else {
-                let end = after.find(|c: char| c == ',' || c == '\n' || c == '}')?;
+                let end = after.find([',', '\n', '}'])?;
                 Some(after[..end].trim().to_string())
             }
         };

@@ -188,7 +188,7 @@ mod tests {
     use super::fake::*;
     use super::*;
 
-    fn refs<'a>(v: &'a [FakeNode]) -> Vec<&'a dyn ChainView> {
+    fn refs(v: &[FakeNode]) -> Vec<&dyn ChainView> {
         v.iter().map(|n| n as &dyn ChainView).collect()
     }
 

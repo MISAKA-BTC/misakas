@@ -184,7 +184,7 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
     let claim = palw_eval_claim_v1(&work, &held, &facts).expect("a claim the executor's own check admits");
 
     // Signed and funded as the panel carries it.
-    let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0xF0; 64]).into(), 0);
+    let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0xF0; 64]), 0);
     let funding = UtxoEntry::new(10_000_000, ScriptPublicKey::from_vec(0, vec![0x51]), 0, false);
     let tx = key
         .build_fp_eval_commitment_tx(

@@ -40,8 +40,8 @@ use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
 use kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1;
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
-    PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+    PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwConsensusObjectV2,
+    palw_class_registration_message_v2,
 };
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{
@@ -95,7 +95,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn unhex(s: &str) -> Result<Vec<u8>, BundleRefusalV1> {
     let mut out = vec![0u8; s.len() / 2];
-    if s.len() % 2 != 0 || faster_hex::hex_decode(s.as_bytes(), &mut out).is_err() {
+    if !s.len().is_multiple_of(2) || faster_hex::hex_decode(s.as_bytes(), &mut out).is_err() {
         return Err(BundleRefusalV1::Malformed("a hex field is not hex".into()));
     }
     Ok(out)
@@ -1219,6 +1219,7 @@ mod tests {
     use crate::register::{BondFactsV1, RegistryRowV1, quote_registration_v1};
     use kaspa_consensus_core::palw_base0_profile::rc_job_context;
     use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B_A16, QWEN25_A16_CANONICAL, qwen25_a16_profile_v1};
+    use kaspa_consensus_core::palw_state_v2::{PalwClassAdmissionCarriageV2, PalwPwuRuleV2};
     use libcrux_ml_dsa::ml_dsa_87;
 
     fn h(n: u8) -> Hash64 {

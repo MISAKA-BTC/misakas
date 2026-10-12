@@ -606,13 +606,12 @@ pub(super) fn consistent(state: &PalwChainStateV2, params: &PalwStateParamsV2) -
         }) {
             return Err(bad("claim is not its Final"));
         }
-        if let Some(native) = state.vesting.get(id) {
-            if native.expiry_daa <= row.liability_until
+        if let Some(native) = state.vesting.get(id)
+            && (native.expiry_daa <= row.liability_until
                 || native.total_sompi_u128() + row.total_sompi_u128()
-                    > u128::from(native.escrowed_reward.saturating_sub(native.buyback_bound))
-            {
-                return Err(bad("native and additional vesting disagree"));
-            }
+                    > u128::from(native.escrowed_reward.saturating_sub(native.buyback_bound)))
+        {
+            return Err(bad("native and additional vesting disagree"));
         }
     }
     if payees != state.exec_v2_reward_payees {

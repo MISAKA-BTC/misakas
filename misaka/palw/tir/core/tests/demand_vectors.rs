@@ -593,7 +593,7 @@ fn file_for(pv: &ProgramVector) -> String {
         let found = regular.iter().find_map(|(target, elements)| {
             let (_, requests) = run_case_withholding(pv, &states, String::new(), *target, elements.clone(), UNLIMITED, false, &[]);
             let keys: BTreeSet<MapSourceKey> = requests.iter().map(key_of).collect();
-            keys.into_iter().find(|k| is_kind(k)).map(|k| (*target, elements.clone(), k))
+            keys.into_iter().find(&is_kind).map(|k| (*target, elements.clone(), k))
         });
         if let Some((target, elements, key)) = found {
             let name = format!("refused: the source withholds a {label} question (saying {raises:?})");

@@ -196,7 +196,7 @@ impl Chain {
     pub(super) fn new(config: Config, bundle: PalwConsensusParamsV2, premine: &[Funding]) -> Self {
         let tc = Arc::new(TestConsensus::new(&config));
         let mut multiset = MuHash::new();
-        tc.append_imported_pruning_point_utxos(premine, &mut multiset);
+        tc.append_imported_pruning_point_utxos(premine, &mut multiset).expect("the premine is appended");
         tc.import_pruning_point_utxo_set(config.params.genesis.hash, multiset).unwrap();
         let handles = tc.init();
         let bonds = bundle
@@ -470,7 +470,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         bond: format!("{}:{}", bond.0.transaction_id, bond.0.index),
         fee_outpoint: Some(format!("{}:{}", funding.0.transaction_id, funding.0.index)),
         state_dir: dir.join("state"),
-        court: chain.bundle.court.clone(),
+        court: chain.bundle.court,
         prompt_ids_form: chain.config.params.palw_prompt_ids_form_v1(),
         class_artifacts: vec![],
         class_cache_bytes: 0,
@@ -2114,7 +2114,7 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
                     service.fraud_filer_honest_replays.lock().unwrap().contains(&claim),
                     "release alone is insufficient: the real replay worker must have judged the three roots Honest"
                 );
-                assert!(honest.record.as_ref().unwrap().live.get(&bond).is_none());
+                assert!(!honest.record.as_ref().unwrap().live.contains_key(&bond));
                 let carriers: Vec<_> = if recovery_mode == Some(recovery::RecoveryMode::Reorg) {
                     recovery::accepted_objects(&chain, service_start)
                 } else {

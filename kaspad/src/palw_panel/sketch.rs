@@ -169,6 +169,8 @@ impl PalwSketchServiceV1 {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub(crate) fn totals_v1(&self) -> TirMirrorTotalsV1 {
         *self.totals.lock().expect("the totals are never poisoned")
     }
@@ -462,7 +464,7 @@ mod tests {
         }
         // A file that is not 32 bytes is an error, and is left as it is.
         std::fs::write(&path, b"short").unwrap();
-        let why = palw_sketch_secret_load_v1(dir.path()).err().expect("refused");
+        let why = palw_sketch_secret_load_v1(dir.path()).expect_err("refused");
         assert!(why.contains("5 bytes") && why.contains("32"), "{why}");
         assert_eq!(std::fs::read(&path).unwrap(), b"short", "not overwritten");
         // Another directory, another secret.

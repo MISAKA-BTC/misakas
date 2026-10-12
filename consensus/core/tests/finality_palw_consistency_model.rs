@@ -812,8 +812,9 @@ impl World {
         for m in members {
             let pr = self.producers[*m].clone();
             let every = pr.attempt_every.unwrap_or(self.p.attempt_every);
+            #[allow(clippy::needless_range_loop)]
             for b in 0..BONDS {
-                if pr.bonds & (1 << b) != 0 && (t + 3 * b as u64) % every == 0 {
+                if pr.bonds & (1 << b) != 0 && (t + 3 * b as u64).is_multiple_of(every) {
                     attempts += 1;
                     last_attempt[b] = pb.height + 2;
                     let id = self.next_claim;
@@ -1048,7 +1049,7 @@ fn run_split(p: ModelParams, rule: Rule, sc: Split, seed: u64) -> Outcome {
     w.min_bonds = !sc.maj_bonds;
     let attempting = sc.econ != Econ::HeartbeatOnly;
     let pm = w.add_producer(Side::Maj, maj, sc.maj_blue, if attempting { sc.maj_bonds } else { 0 });
-    let pn = w.add_producer(Side::Min, min, sc.min_blue, if attempting { !sc.maj_bonds } else { 0 });
+    let _pn = w.add_producer(Side::Min, min, sc.min_blue, if attempting { !sc.maj_bonds } else { 0 });
     // Shared history.
     for _ in 0..60 {
         w.step(false);

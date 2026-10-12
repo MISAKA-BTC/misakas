@@ -886,7 +886,7 @@ mod tests {
                     }
                 }
             }
-            assert!(matches!(palw_pipeline_node_parts_v1(leaves, height + 1, 0), None), "above the root");
+            assert!(palw_pipeline_node_parts_v1(leaves, height + 1, 0).is_none(), "above the root");
             assert!(palw_pipeline_node_parts_v1(leaves, 0, 0).is_none(), "a leaf is a PipelineStepLeaf");
         }
     }

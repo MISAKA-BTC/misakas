@@ -971,7 +971,7 @@ async fn mined_end_to_end_on(env: Env, c: &Case, card: usize) {
 
     // ---- registered is not eligible: the class exists and mines nothing (ADR-0145 §7) ----
     if let Some(c) = reg_row {
-        let lifecycle = c.row.as_ref().map(|r| r.state.clone());
+        let lifecycle = c.row.as_ref().map(|r| r.state);
         assert!(
             lifecycle.as_ref().is_some_and(|st| !st.admits_claims()),
             "a registered class's lifecycle admits no claims: {lifecycle:?}"
@@ -980,7 +980,7 @@ async fn mined_end_to_end_on(env: Env, c: &Case, card: usize) {
         panic!("the registry reads a row for the new class");
     }
     let facts = consensus.palw_producer_facts_v2(m.class_id, Some(bond.0)).expect("producer facts for the new class");
-    let verdict = facts.ready_to_produce(&TestConsensus::palw_v2_registry_keypair(m.card as u64).verification_key.as_ref().to_vec());
+    let verdict = facts.ready_to_produce(TestConsensus::palw_v2_registry_keypair(m.card as u64).verification_key.as_ref().as_ref());
     eprintln!("[g14] the registrant's producer facts for its own new class: ready_to_produce = {verdict:?}");
     assert!(verdict.is_err(), "the registrant cannot produce in the class it just registered (dormant / Candidate)");
 

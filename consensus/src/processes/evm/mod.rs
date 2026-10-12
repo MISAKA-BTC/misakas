@@ -2650,6 +2650,7 @@ impl EvmPipeline {
     /// Spawn the pipeline worker over `pending` (consecutive chain order). Store
     /// handles are cheap `Arc` clones; the worker reads ONLY committed rows plus
     /// its own in-memory chain, and writes nothing.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         evm_header_store: std::sync::Arc<crate::model::stores::evm::DbEvmHeaderStore>,
         evm_state_store: std::sync::Arc<crate::model::stores::evm::DbEvmStateStore>,

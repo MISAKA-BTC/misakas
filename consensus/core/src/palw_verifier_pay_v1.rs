@@ -59,14 +59,14 @@ impl Params {
     pub fn validate_palw_verifier_pay_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(at) = self.palw_verifier_pay_activation() else { return Ok(()) };
         let route = self.palw_probabilistic_constraints_v1.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
-        if !route.is_some_and(|r| r <= at) {
+        if route.is_none_or(|r| r > at) {
             return Err(PalwModeV2Error::Invalid(
                 "palw_verifier_pay_v1 requires palw_probabilistic_constraints_v1 (the kernel route it pays on) armed at or below it",
             ));
         }
         let opv =
             self.palw_panel_free_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
-        if !opv.is_some_and(|o| o <= at) {
+        if opv.is_none_or(|o| o > at) {
             return Err(PalwModeV2Error::Invalid("palw_verifier_pay_v1 requires palw_panel_free_v1 armed at or below it"));
         }
         Err(PalwModeV2Error::Invalid(

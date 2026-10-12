@@ -537,6 +537,8 @@ mod tests {
         let mut out = Network::default();
         for t in 8..8 + ticks {
             // The rows the chain counts at this DAA.
+            #[allow(clippy::needless_range_loop)] // the index is also used as a position
+            #[allow(clippy::needless_range_loop)] // the index is also used as a position
             for c in 0..classes {
                 let fresh = (0..seats).filter(|s| t.saturating_sub(rows[*s][c].proved_daa) <= max_age).count();
                 out.rows += seats as u64;

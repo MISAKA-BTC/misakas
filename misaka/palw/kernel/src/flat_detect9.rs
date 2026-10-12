@@ -209,6 +209,7 @@ pub fn authenticated_output_point_v9(o: &FlatOperandV5, dtype: DType, shape: &[u
     }
     common::value_in_opening::<5>(o, dtype, shape, index)
 }
+#[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
 fn typed_point(
     scope_root: &Digest,
     public: &dyn FlatPublicReadsV9,
@@ -227,6 +228,7 @@ fn typed_point(
         .map(|v| (v, reply.value))
         .ok_or(FlatFindingV9::ValueDemand(read))
 }
+#[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
 fn point(
     scope_root: &Digest,
     public: &dyn FlatPublicReadsV9,
@@ -238,6 +240,7 @@ fn point(
     let (v, o) = typed_point(scope_root, public, unit, output, DType::Idx, shape, element)?;
     u32::try_from(v).map(|v| (v, o)).map_err(error)
 }
+#[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
 fn header(
     c: &FlatContextV9<'_>,
     scope_root: &Digest,
@@ -597,9 +600,7 @@ pub(crate) fn check_flat_claim_v9(
                     Err(f) => f.into(),
                     Ok(o) => {
                         if flat_profile_commitment_v5(expected).ok() != Some(o.commitment) {
-                            if let Err(f) = header(c, &scope_root, public, unit, &o) {
-                                return Err(f);
-                            }
+                            header(c, &scope_root, public, unit, &o)?
                         }
                         crate::flat_detect5::relation(&c.base, pr, public, unit, expected, own, token).into()
                     }

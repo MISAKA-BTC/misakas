@@ -413,7 +413,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     // The residual carry is the hidden width, or `streams` times it under hyper-connections — and, under the multi-stream residuals whose
     // layers are several blocks (AltUp, mHC), a few more rows for what a layer's blocks hand to each other.
-    if hl.carries.iter().any(|c| c.shape.len() != 1) || !hl.carries.first().is_some_and(|c| c.shape[0] >= hl.hidden) {
+    if hl.carries.iter().any(|c| c.shape.len() != 1) || hl.carries.first().is_none_or(|c| c.shape[0] < hl.hidden) {
         return Err(LowerError::eval("internal: the carries are the residual, then rows"));
     }
     let token_bound = u32::try_from(hl.vocab).map_err(|_| LowerError::not_lowerable("vocabulary beyond u32"))?;
@@ -2640,7 +2640,6 @@ fn weight_codes(p: u32) -> FillFn {
 /// This is the static form of the int8 "outlier decomposition": a massive activation in a few
 /// fixed channels (Qwen2.5's first-token MLP channels reach 1000× the others) costs those
 /// channels nothing and the rest keep their precision.
-#[allow(clippy::too_many_arguments)]
 /// **`WEIGHT_ROTATION_HADAMARD_V1`**: `y[k·B + i] = Σ_j P[k·B + i, j] · x[k·B + j]` — the param's `[n, B]` rows at per-row `i8`
 /// (the normalised Hadamard's entries are all `±2^-log2(B)/2`: every row has one scale and the codes are `±127`, exact), viewed as
 /// `[n/B, B, B]`, times the input's codes viewed as `[n/B, B, 1]` (a batched `MatMul` into `i64`: `127 · 2^15 · B` fits), narrowed once
@@ -4210,7 +4209,7 @@ fn lower_weighted_sum(
     site: &str,
     want: &Want,
 ) -> Result<Val> {
-    if y.dt != DType::I32 || w.dt != DType::I32 || y.len % k != 0 {
+    if y.dt != DType::I32 || w.dt != DType::I32 || !y.len.is_multiple_of(k) {
         return Err(LowerError::eval("internal: a weighted sum reads wide rows and Q24 weights"));
     }
     let d = y.len / k;

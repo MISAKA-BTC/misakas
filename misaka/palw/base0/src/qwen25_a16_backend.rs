@@ -2107,7 +2107,7 @@ impl Qwen25A16Backend {
             vocab: self.artifact.shape.vocab,
             run: self.prefill_run_positions,
         };
-        let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let (_ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
         let mut query_tile = None;
         let mut pushed: Result<(), String> = Ok(());
         crate::fp_interval::base0_fp_replay_interval_with_v1(
@@ -2244,7 +2244,7 @@ impl Qwen25A16Backend {
             vocab: self.artifact.shape.vocab,
             run: self.prefill_run_positions,
         };
-        let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let (_ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
         let mut kept: Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)> = Vec::new();
         let mut pushed: Result<(), String> = Ok(());
         crate::fp_interval::base0_fp_replay_interval_with_v1(
@@ -4381,7 +4381,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // drill on this lane is as impossible as it was before — it goes through the free-prompt drill.
         let mut run =
             a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt, self.network_ladder)?;
-        let ctx_hash = job.context_hash();
+        let _ctx_hash = job.context_hash();
         let profile_hash = self.profile.shape_profile_id();
         {
             let slot = run
@@ -4392,7 +4392,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
             run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &slot.1);
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(job, &profile_hash, &slot.1);
         }
         // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
         // is a producer whose roots disagree with its material — which any seat catches without a
@@ -4431,7 +4431,7 @@ fn a16_leaves_by_position(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
 ) -> Vec<Hash64> {
-    let ctx_hash = binding.job_context.context_hash();
+    let _ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {

@@ -164,7 +164,7 @@ fn a3_11_pwu_saturation_via_the_work_target_ratchet() {
         PALW_T12_PERMIT_FEE_CEILING_SOMPI,
     );
     println!("  (quanta minted = {quanta}, realizable extra rights = {rights} sompi = {:.2} MSK)", rights as f64 / 1e8);
-    for pwu in [dense_ccu.min(u64::MAX as u128) as u64, 5_494 * 3_357_281_757_221_376u64.min(u64::MAX), u64::MAX] {
+    for pwu in [dense_ccu.min(u64::MAX as u128) as u64, 5_494 * 3_357_281_757_221_376u64, u64::MAX] {
         let gain = (T12_ESCROW_SOMPI as u128).saturating_add(palw_fork_weight_sompi_v1(pwu, T12_SLASH_PER_PWU)).saturating_add(rights);
         let lock = palw_seat_lock_required_v2(gain, PALW_PANEL_COLLUDING_QUORUM_V1);
         let ok = lock <= T12_POSTED_COLLATERAL_SOMPI as u128;

@@ -170,7 +170,7 @@ impl SegMaterialV1 for Produced {
 }
 
 fn produce(w: &W, job: Digest, prompt: &[u32], lie: Option<(u32, u16, u16)>) -> Produced {
-    let post = (w.program.occurrences().len() - 1) as usize;
+    let post = w.program.occurrences().len() - 1;
     let first = trace_v1(&w.program, &w.params, prompt).unwrap();
     let g0 = DecodeRuleV1::Greedy.select(&first.values[prompt.len() - 1][post][w.program.logits as usize]).unwrap();
     let mut tokens = prompt.to_vec();

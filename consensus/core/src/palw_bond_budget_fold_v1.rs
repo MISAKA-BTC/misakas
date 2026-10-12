@@ -1242,6 +1242,7 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    #[allow(dead_code)] // dormant: not yet wired to a caller (its fence is unarmed)
     pub(super) fn reserve_bond_income_v1(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -1345,7 +1346,7 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
         let id = source_income_id_v1(context, source, &bond);
-        if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
+        if budget.claim_row(&id).is_none_or(|row| row.accepted_daa != accepted_daa) {
             return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
         }
         let payload = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.payout_payload;
@@ -1374,7 +1375,7 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("source income engine missing".into()))?;
         let id = source_income_id_v1(context, source, &bond);
-        if !budget.claim_row(&id).is_some_and(|row| row.accepted_daa == accepted_daa) {
+        if budget.claim_row(&id).is_none_or(|row| row.accepted_daa != accepted_daa) {
             return Err(PalwStateV2Error::BondBudgetRefused("source income reservation is missing or has another acceptance".into()));
         }
         self.bond_budget_op(|budget, _, j| budget.cancel_source_income_v1(&id, j))

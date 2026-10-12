@@ -142,13 +142,12 @@ pub(crate) fn prepare<'a, const V: u8>(c: &FlatSegContext<'a, V>) -> Result<Prep
     if q.segment_roots.len() != crate::seg::segment_count_v1(q.positions) as usize {
         return Err(na("wrong segment count"));
     }
-    if let Some(ids) = q.inline_prompt {
-        if ids.len() != q.prompt_len as usize
+    if let Some(ids) = q.inline_prompt
+        && (ids.len() != q.prompt_len as usize
             || ids.iter().any(|t| *t >= q.program.token_bound)
-            || crate::seg::prompt_root_of_ids_v1(ids) != q.prompt_root
-        {
-            return Err(na("inline prompt not bound to job"));
-        }
+            || crate::seg::prompt_root_of_ids_v1(ids) != q.prompt_root)
+    {
+        return Err(na("inline prompt not bound to job"));
     }
     PreparedV1::without_scope(q.program, q.encoder.as_ref()).map_err(DismissalV1::NotAuthentic)
 }
@@ -248,8 +247,7 @@ pub(crate) fn relation_bounds_program<const V: u8>(
     let mut bytes = 2 + node_opening_bytes_v1(pr.node_count) + output_bytes + 4 + 1;
     // Canonical parsing/type validation and the unrolled source-writer scan are
     // separate from reference arithmetic, but both are part of this API's work.
-    let mut work =
-        (count as u64 * 4096).saturating_add(program_bytes.saturating_mul(1024)).saturating_add(pr.node_count.saturating_mul(256));
+    let mut work = (count * 4096).saturating_add(program_bytes.saturating_mul(1024)).saturating_add(pr.node_count.saturating_mul(256));
     let mut scratch = 8u64 << 20; // program/wiring metadata and fixed evaluator buffers
     let mut leaf_limits = Vec::with_capacity(sources.len());
     let mut total_leaves = 0;
@@ -290,7 +288,7 @@ pub(crate) fn relation_bounds_program<const V: u8>(
         };
         // The second MatMul operand's contraction is its penultimate dimension.
         let line = if matches!(node.prim, Prim::MatMul) && i == 1 { shape[shape.len() - 2] as u64 } else { line };
-        let reads = (count as u64).saturating_mul(line);
+        let reads = count.saturating_mul(line);
         if !committed {
             // Constants/public inputs need no Merkle leaves, but reference
             // contraction/reduction/sort work and scratch still have a cost.
@@ -369,7 +367,7 @@ pub(crate) fn relation_bounds_program<const V: u8>(
                             | Prim::IntLn
                     )))
         {
-            leaves = leaves.min((count as u64).div_ceil(64) + 1);
+            leaves = leaves.min(count.div_ceil(64) + 1);
         }
         leaf_limits.push(leaves);
         total_leaves += leaves;
@@ -455,8 +453,8 @@ pub(crate) fn verify_leaf_prepared<const V: u8>(
     wire: u64,
 ) -> Result<FlatLeafConvictionV4, DismissalV1> {
     let (p, s, n) = (f.output.position, f.output.occurrence, f.output.node);
-    let b = bounds(c, &pr, p, s, n, f.leaf.index)?;
-    if wire > b.filing_bytes || !authenticate_node(c, &pr, &f.output, (p, s, n)) {
+    let b = bounds(c, pr, p, s, n, f.leaf.index)?;
+    if wire > b.filing_bytes || !authenticate_node(c, pr, &f.output, (p, s, n)) {
         return Err(na("output not bound or filing over relation bound"));
     }
     let node = pr.w.node(s, n);
@@ -464,7 +462,7 @@ pub(crate) fn verify_leaf_prepared<const V: u8>(
     if f.leaf.dtype != node.out.dtype.tag() || f.leaf.shape != shape64(&sh.out) || !f.leaf.authenticates(&f.output.commitment) {
         return Err(na("output hash is not the declared committed value"));
     }
-    let ops = authenticate_inputs(c, &pr, p, s, n, &f.inputs, &f.token, &b.operand_leaves)?;
+    let ops = authenticate_inputs(c, pr, p, s, n, &f.inputs, &f.token, &b.operand_leaves)?;
     let (first, count) = f.leaf.layout().and_then(|l| l.span(f.leaf.index)).ok_or_else(|| na("invalid leaf span"))?;
     let mut bytes = Vec::with_capacity(count * node.out.dtype.width());
     let conviction = FlatLeafConvictionV4 { position: p, occurrence: s, node: n, leaf: f.leaf.index };
@@ -504,7 +502,7 @@ pub(crate) fn authenticate_inputs<'f, const V: u8>(
         match src {
             OperandSourceV1::Source(SourceV1::Node { position, occurrence, node }) => {
                 let opening = o.node.as_ref().ok_or_else(|| na("missing operand node"))?;
-                if !authenticate_node(c, &pr, opening, (*position, *occurrence, *node)) {
+                if !authenticate_node(c, pr, opening, (*position, *occurrence, *node)) {
                     return Err(na("borrowed operand node"));
                 }
                 root = Some(opening.commitment);
@@ -792,7 +790,7 @@ pub(crate) fn record_span<const V: u8>(
     b: FlatCourtBoundsV4,
 ) -> Result<FlatDependencyUnionV4, DismissalV1> {
     let sh = pr.shapes(p, s, n);
-    let src = operand_sources(&pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
+    let src = operand_sources(pr, p, s, n).map_err(DismissalV1::NotAuthentic)?;
     if own_inputs.len() != src.len()
         || own_inputs.iter().enumerate().any(|(i, t)| {
             t.dtype != sh.in_dtypes[i]

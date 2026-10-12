@@ -387,7 +387,7 @@ fn a_bond_registered_at_daa_13_leaves_the_draw_at_the_fence_and_returns_at_its_o
             );
             let expect = anchor < fence || anchor >= REGISTERED + PALW_T12_BOND_MATURITY_WINDOW_DAA;
             assert_eq!(drawable, expect, "fence {fence}, anchor {anchor}: newcomer drawable");
-            assert_eq!(off.contains(&newcomer), anchor < 1_000 || anchor >= 1_013, "the released rule at anchor {anchor}");
+            assert_eq!(off.contains(&newcomer), !(1_000..1_013).contains(&anchor), "the released rule at anchor {anchor}");
             if anchor >= 1_000 {
                 assert_eq!(on, off, "fence {fence}, anchor {anchor}: from D1's own height the populations are the release's");
             }

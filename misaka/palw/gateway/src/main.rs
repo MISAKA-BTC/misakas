@@ -1654,7 +1654,7 @@ fn handle_chat(
                 gone.set(true);
             }
             tokens_seen += 1;
-            if tokens_seen % 8 == 0 && !gone.get() && ctx.link.is_gone() {
+            if tokens_seen.is_multiple_of(8) && !gone.get() && ctx.link.is_gone() {
                 gone.set(true);
             }
         };
@@ -2728,9 +2728,8 @@ fn main() {
     }
 
     eprintln!(
-        "[misaka-palw-gateway] listening on {} ({}) — worker manifest {}…, class {}…, n_ctx {}, template {}",
+        "[misaka-palw-gateway] listening on {} (loopback) — worker manifest {}…, class {}…, n_ctx {}, template {}",
         config.listen,
-        "loopback",
         &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
         worker.manifest().n_ctx,

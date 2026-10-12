@@ -205,7 +205,7 @@ pub(crate) fn complete_artifact_operands_v1(
     domain: &CompleteCheckDomainV1,
 ) -> Result<Vec<PalwArtifactOperandV1>, Refusal> {
     let unreadable = |e| Refusal::new("ARTIFACT_UNREADABLE", e);
-    let ranges = ContainerRanges::open_with_window(&container, 32 << 10).map_err(unreadable)?;
+    let ranges = ContainerRanges::open_with_window(container, 32 << 10).map_err(unreadable)?;
     let mut operands = Vec::with_capacity(domain.leaves as usize);
     let mut failure = None;
     let mut total = 0u64;

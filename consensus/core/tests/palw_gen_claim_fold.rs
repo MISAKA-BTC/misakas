@@ -201,6 +201,7 @@ fn text_class() -> PalwGenClassV1 {
 /// embedding class, a text class) by the genesis registrant's bond, and two rich executor bonds.
 struct Net {
     chain: Chain,
+    #[allow(dead_code)]
     registrant: PalwBondKeyV2,
     image: Hash64,
     vision: Hash64,
@@ -413,7 +414,7 @@ fn below_either_fence_a_tensor_claim_is_refused_by_name() {
     let below = fresh.try_fold(
         &fresh.s,
         &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0),
-        &[object.clone()],
+        std::slice::from_ref(&object),
         PalwBlockWorkV3::None,
         Hash64::default(),
     );
@@ -611,7 +612,7 @@ fn audit_1004_generative_registrations_take_one_place_a_block() {
         let (b, _) = registration(&chain, vision_class(), h(0xAB), registrant);
         chain.step_at(AT - 1, &[executor_bond(EXECUTOR), executor_bond(OTHER_EXECUTOR)], PalwBlockWorkV3::None, Hash64::default(), 0);
         let c = ctx(0xCA_0000 + AT, AT, AT, 0);
-        let one = chain.try_fold(&chain.s, &c, &[a.clone()], PalwBlockWorkV3::None, Hash64::default());
+        let one = chain.try_fold(&chain.s, &c, std::slice::from_ref(&a), PalwBlockWorkV3::None, Hash64::default());
         assert!(one.is_ok(), "fence {on}: one registration folds: {:?}", one.err());
         let two = chain.try_fold(&chain.s, &c, &[a, b], PalwBlockWorkV3::None, Hash64::default());
         if on {

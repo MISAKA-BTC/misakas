@@ -569,7 +569,10 @@ impl TirProcessDeviceV1 {
         let mut io = Io { reader, writer, child: None };
         match Self::call(&mut io, &CellRequestV1::Hello { version })? {
             CellResponseV1::Refused(why) => Err(why),
-            other => Ok(drop(other)),
+            other => {
+                let _: () = drop(other);
+                Ok(())
+            }
         }
     }
 

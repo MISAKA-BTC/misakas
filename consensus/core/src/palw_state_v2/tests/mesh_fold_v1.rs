@@ -7,7 +7,6 @@
 
 use super::*;
 use crate::palw_mesh_v1::*;
-use crate::palw_panel_v2::PalwReceiptVerdictV2 as Verdict;
 use crate::palw_vertex_v1::*;
 
 const COLLATERAL: u64 = 1_000_000_000;
@@ -217,7 +216,7 @@ fn audited_leaves_are_counted_and_paid_and_silence_is_not_a_match() {
     assert!(!r1.all_matched(), "one of two is not every auditor");
     // The same auditor answers again (a mismatch this time): its first answer stands.
     let (s2, _) = step(&s1, &p, 12, 125, &[vertex(first.auditor, 125, vec![leaf(claim, first.ticket, 1)])]).unwrap();
-    assert_eq!(s2.mesh_audit_row_v1(&claim).unwrap().assignments[0].outcome.unwrap().matched, true, "an answer stands");
+    assert!(s2.mesh_audit_row_v1(&claim).unwrap().assignments[0].outcome.unwrap().matched, "an answer stands");
     assert_eq!(s2.panel_reserve_sompi(), reserve0 - pay, "and is paid once");
     // The second auditor attests a mismatch: recorded, paid (a mismatch is an audit done), and every drawn auditor answered.
     let (s3, _) = step(&s2, &p, 13, 130, &[vertex(second.auditor, 130, vec![leaf(claim, second.ticket, 1)])]).unwrap();

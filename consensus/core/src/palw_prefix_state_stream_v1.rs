@@ -80,13 +80,12 @@ impl PalwPrefixStateStreamV1 {
         {
             return Err("prefix digest/cumulative counters inconsistent".into());
         }
-        if let Some(p) = &self.pending {
-            if p.offset > p.length
+        if let Some(p) = &self.pending
+            && (p.offset > p.length
                 || p.length as usize > crate::palw_step_leg::PALW_STEP_LEG_MAX_TILE_BYTES
-                || p.hash.byte_count() != Some(282 + u128::from(p.offset))
-            {
-                return Err("prefix pending oldleaf hash counters inconsistent".into());
-            }
+                || p.hash.byte_count() != Some(282 + u128::from(p.offset)))
+        {
+            return Err("prefix pending oldleaf hash counters inconsistent".into());
         }
         Ok(())
     }

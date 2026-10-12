@@ -2005,7 +2005,7 @@ fn base0_replay_span_into_v1<K: Base0FpIntervalKernelsV1>(
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
     };
 
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let mut next = span_first;
     kernels
@@ -2023,7 +2023,7 @@ fn base0_replay_span_into_v1<K: Base0FpIntervalKernelsV1>(
                     return Err(format!("the replay reached leaf {at} where leaf {next} of the span was due"));
                 }
                 next += 1;
-                sink(at, step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf), &leaf)
+                sink(at, step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf), &leaf)
             },
         )
         .map_err(Base0FpIntervalError::Replay)?;
@@ -2183,13 +2183,13 @@ pub fn base0_open_fp_interval_sparse_anchored_capped_v1<K: Base0FpIntervalKernel
     let seed_row_tiles = base0_seed_row_tiles_from_rows_v1(binding, &material.logits_rows, &leaves_geometry, &geometry, index)?;
     // The preimages must hash to the leaves the replay just recomputed — the retained rows and the
     // committed leg are two records of one execution, and this is where they are compared.
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     if seed_row_tiles.len() != seed_hashes.len()
         || seed_row_tiles
             .iter()
             .zip(&seed_hashes)
-            .any(|(leaf, derived)| step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf) != *derived)
+            .any(|(leaf, derived)| step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf) != *derived)
     {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
@@ -2422,11 +2422,11 @@ pub trait Base0FpIntervalKernelsV1 {
         window: Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
-        let ctx_hash = ctx.context_hash();
+        let _ctx_hash = ctx.context_hash();
         let profile_hash = profile.shape_profile_id();
         let mut out = Vec::new();
         self.replay_interval_into(profile, ctx, start, window, step_leaf_count, &mut |index, leaf| {
-            out.push((index, step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf)));
+            out.push((index, step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf)));
             Ok(())
         })?;
         Ok(out)
@@ -2453,11 +2453,11 @@ pub fn base0_fp_replay_interval_v1<F>(
 where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let mut out = Vec::new();
     base0_fp_replay_interval_into_v1(profile, ctx, start, window, step_leaf_count, forward, &mut |index, leaf| {
-        out.push((index, step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf)));
+        out.push((index, step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf)));
         Ok(())
     })?;
     Ok(out)
@@ -2902,7 +2902,7 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
         }
         // The replay's tiles are the window's, in leaf order, each once (ADR-0121): hashed in turn,
         // they are this party's leaves for the interval.
-        let ctx_hash = ctx.context_hash();
+        let _ctx_hash = ctx.context_hash();
         let profile_hash = profile.shape_profile_id();
         let mut own = seed_hashes;
         let mut replayed = tiles.tiles.iter();
@@ -2910,7 +2910,7 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
             let hash = replayed
                 .next()
                 .filter(|(at, _)| *at == leaf_index)
-                .map(|(_, leaf)| step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf))
+                .map(|(_, leaf)| step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf))
                 .ok_or_else(|| format!("this party's replay has no leaf {leaf_index}"))?;
             own.push(hash);
         }
@@ -3104,7 +3104,7 @@ fn seed_row_from_tiles_v1(
     seed: (u32, u32),
     range_first: u64,
 ) -> Option<(u32, Vec<Hash64>)> {
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let slot = logits_node_slot_v1(profile);
     let mut row: Vec<i32> = Vec::new();
@@ -3120,7 +3120,7 @@ fn seed_row_from_tiles_v1(
         if leaf.values_le.len() != leaf.value_count as usize * 4 {
             return None;
         }
-        hashes.push(step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf));
+        hashes.push(step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf));
         row.extend(leaf.values_le.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])));
     }
     if row.is_empty() {
@@ -3279,10 +3279,10 @@ pub fn base0_verify_fp_interval_opening_v4_capped_v1<K: Base0FpIntervalKernelsV1
             return V::Mismatch;
         }
     }
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let replayed = kernels.replay_interval_into(profile, ctx, &start, window, step_leaf_count, &mut |index, leaf| {
-        check.push(index, step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf))
+        check.push(index, step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf))
     });
     if replayed.is_err() {
         return V::Unverifiable;
@@ -3555,13 +3555,13 @@ fn seed_token_from_opened_row_v1(
     seed: (u32, u32),
     range_first: u64,
 ) -> Option<u32> {
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let slot = logits_node_slot_v1(profile);
     let mut row: Vec<i32> = Vec::new();
     for (tile_index, leaf) in seed_row_tiles.iter().enumerate() {
         let want_index = range_first + tile_index as u64;
-        if step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf) != *range.leaf_hashes.get(tile_index)? {
+        if step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf) != *range.leaf_hashes.get(tile_index)? {
             return None;
         }
         if (leaf.coord.call_index, leaf.coord.position) != seed || leaf.coord.node_slot != slot {
@@ -4307,7 +4307,7 @@ pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
         return Err(Base0FpIntervalError::StepSpace(format!("block {block_index} is not inside interval {}", v4.interval_index)));
     }
     let interval_first = v4.range.first_leaf_index.saturating_add(u64::from(v4.seed_row_leaf_count));
-    let ctx_hash = binding.job_context.context_hash();
+    let _ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let mut kept: Vec<Hash64> = Vec::with_capacity((portion_end - portion_first) as usize);
     for index in portion_first..portion_end.min(interval_first) {
@@ -4350,7 +4350,7 @@ pub fn base0_fp_block_leaves_from_tiles_v1(
     let v4 = Base0FpIntervalOpeningV4::decode_v1(opening_bytes)?;
     let block_index = base0_fp_block_of_request_number_v1(&v4, block_index)
         .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("block number {block_index} names no block")))?;
-    let ctx_hash = v4.binding.job_context.context_hash();
+    let _ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
     let by_index: std::collections::HashMap<u64, &PalwStepTileLeafV1> = tiles.iter().map(|(i, t)| (*i, t)).collect();
     let leaf =
@@ -4471,7 +4471,7 @@ pub fn base0_fp_held_step_range_answer_v1<K: Base0FpIntervalKernelsV1>(
         }
         crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
             let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
-            let ctx_hash = binding.job_context.context_hash();
+            let _ctx_hash = binding.job_context.context_hash();
             let profile_hash = binding.shape_profile.shape_profile_id();
             let by_index: std::collections::HashMap<u64, &PalwStepTileLeafV1> = tiles.iter().map(|(i, t)| (*i, t)).collect();
             let leaves = (0..step_leaf_count)
@@ -4559,7 +4559,7 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         prompt_ids_form,
         Base0FpServedLeavesV1::Own { spans: &[(served.first_leaf_index, block_end)] },
     )?;
-    let ctx_hash = v4.binding.job_context.context_hash();
+    let _ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
     let mut own: std::collections::HashMap<u64, Hash64> =
         tiles.tiles.iter().map(|(i, t)| (*i, step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, t))).collect();
@@ -4639,7 +4639,7 @@ pub fn base0_fp_name_the_edge_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         prompt_ids_form,
         Base0FpServedLeavesV1::Own { spans: &spans },
     )?;
-    let ctx_hash = v4.binding.job_context.context_hash();
+    let _ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
     let mut own: std::collections::HashMap<u64, Hash64> =
         tiles.tiles.iter().map(|(i, t)| (*i, step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, t))).collect();
@@ -4935,7 +4935,7 @@ pub fn base0_fp_leaf_refutation_from_fold_v1<K: Base0FpIntervalKernelsV1>(
         }
         Ok(edges)
     };
-    let hash_of = |tile: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(&ctx, &profile.shape_profile_id(), tile);
+    let hash_of = |tile: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(ctx, &profile.shape_profile_id(), tile);
 
     // The annex the served path would carry for this leaf — the rows' root, the tile, the anchor.
     let annex = base0_fp_close_annex_v1(
@@ -5085,7 +5085,7 @@ pub fn base0_fp_leaf_openings_from_fold_v1<K: Base0FpIntervalKernelsV1>(
     if diverged {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
-    let hash_of = |tile: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(&ctx, &profile.shape_profile_id(), tile);
+    let hash_of = |tile: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(ctx, &profile.shape_profile_id(), tile);
     leaves
         .iter()
         .map(|&leaf| {
@@ -5736,7 +5736,7 @@ mod tests {
         let ctx = material.0.job_context.clone();
         let profile = material.0.shape_profile.clone();
         let mut leaves = vec![Hash64::default(); material.0.step_leaf_count as usize];
-        let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let profile_hash = profile.shape_profile_id();
         for (i, leaf) in &material.1 {
             leaves[*i as usize] = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf);
         }
@@ -6173,7 +6173,6 @@ mod tests {
         let tiles = crate::legs::Base0StepTilesV1 {
             tiles: honest.1.clone(),
             leaves: {
-                let ctx_hash = binding.job_context.context_hash();
                 let profile_hash = binding.shape_profile.shape_profile_id();
                 let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
                 for (at, leaf) in &honest.1 {
@@ -8477,12 +8476,11 @@ mod inspect_material {
         if let Some((i, leaf)) = tiles.last() {
             eprintln!("last tile[{i}] coord={:?} value_count={} bytes={}", leaf.coord, leaf.value_count, leaf.values_le.len());
         }
-        let ctx_hash = ctx.context_hash();
         let profile_hash = profile.shape_profile_id();
         let mut leaves = vec![kaspa_hashes::Hash64::default(); binding.step_leaf_count as usize];
         for (i, leaf) in &tiles {
             if let Some(slot) = leaves.get_mut(*i as usize) {
-                *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf);
+                *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf);
             }
         }
         let unfilled = leaves.iter().filter(|h| **h == kaspa_hashes::Hash64::default()).count();

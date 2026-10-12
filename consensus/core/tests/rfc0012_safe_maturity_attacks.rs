@@ -189,6 +189,7 @@ fn first_safe(l: &Life, fact: &MatureUsefulWorkV1, rule: Rule, honest: &[Obs]) -
     honest.iter().find(|o| safe_daa(l, fact, rule, o).is_some_and(|d| d >= l.accepted_daa)).map(|o| o.daa)
 }
 
+#[allow(dead_code)]
 fn offsets(l: &Life, base: &[u64]) -> BTreeSet<u64> {
     base.iter().map(|k| l.final_daa + k).collect()
 }

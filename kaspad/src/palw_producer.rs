@@ -43,8 +43,8 @@ use std::sync::Arc;
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::palw_attempt_v2::{
-    PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2,
-    PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2, class_ticket_v3,
+    PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+    class_ticket_v3,
 };
 use kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;

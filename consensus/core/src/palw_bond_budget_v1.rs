@@ -1644,12 +1644,11 @@ impl PalwBondBudgetStateV1 {
             }
             if old.awarded_daa.is_none()
                 && let Some(bond) = old.recipient
+                && let Some(count) = self.pending_reporters.get_mut(&bond)
             {
-                if let Some(count) = self.pending_reporters.get_mut(&bond) {
-                    *count -= 1;
-                    if *count == 0 {
-                        self.pending_reporters.remove(&bond);
-                    }
+                *count -= 1;
+                if *count == 0 {
+                    self.pending_reporters.remove(&bond);
                 }
             }
         }
@@ -3282,10 +3281,10 @@ mod tests {
             let refusal = PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward };
             assert_eq!(
                 s.reserve_income_v1(&p, capital, h(510), bond(3), 31, 1, 1, PalwBudgetOriginV1::MarketFee, &mut j),
-                Err(refusal.clone())
+                Err(refusal)
             );
-            assert_eq!(s.reserve_source_income_v1(&p, capital, h(511), bond(3), 31, 100, 1, &mut j), Err(refusal.clone()));
-            assert_eq!(s.hold_native_income_v1(&p, capital, h(512), bond(3), 31, 100, 1, &[], true, &mut j), Err(refusal.clone()));
+            assert_eq!(s.reserve_source_income_v1(&p, capital, h(511), bond(3), 31, 100, 1, &mut j), Err(refusal));
+            assert_eq!(s.hold_native_income_v1(&p, capital, h(512), bond(3), 31, 100, 1, &[], true, &mut j), Err(refusal));
             assert_eq!(
                 s.preview_claim_v1(&p, capital, bond(3), None, PalwBudgetAskV1 { reward_sompi: 1, ..Default::default() }),
                 Err(refusal)

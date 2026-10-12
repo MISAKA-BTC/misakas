@@ -196,7 +196,7 @@ impl Base0StepCaptureV1 {
         position: u32,
         rows: &[Base0CapturedRowV1],
     ) -> Result<(), LegError> {
-        let ctx_hash = ctx.context_hash();
+        let _ctx_hash = ctx.context_hash();
         let profile_hash = profile.shape_profile_id();
         for row in rows {
             let global_slot = profile
@@ -237,7 +237,7 @@ impl Base0StepCaptureV1 {
                 if self.leaves[index as usize] == Hash64::default() {
                     self.filled += 1;
                 }
-                self.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf);
+                self.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf);
                 // The tile object (8 + 2 + 16 + 4 + 24, padded) and its values' own allocation.
                 self.tile_bytes = self.tile_bytes.saturating_add(56 + leaf.values_le.capacity() as u64);
                 self.tiles.push((index, leaf));
@@ -276,6 +276,7 @@ impl Base0StepCaptureV1 {
 /// re-derived by replay (`fp_interval`). A family chooses the sink at the top of its loop and the
 /// rest of the loop cannot tell the difference, which is the property that makes the roots equal:
 /// the same rows, in the same order, through the same leaf hash.
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose (borsh wire / one per job); boxing changes every match site
 pub enum Base0CaptureSinkV1 {
     Dense(Base0StepCaptureV1),
     Sparse(crate::fp_capture::Base0SparseStepCaptureV1),
@@ -434,7 +435,7 @@ pub fn base0_step_tiles_v1(
     if leaf_count == 0 {
         return Err(LegError::EmptySpace);
     }
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let mut out = Base0StepTilesV1 { leaves: vec![Hash64::default(); leaf_count as usize], tiles: Vec::new() };
 
@@ -482,7 +483,7 @@ pub fn base0_step_tiles_v1(
                 // `int32` lane is.
                 values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
             };
-            out.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf);
+            out.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf);
             out.tiles.push((index, leaf));
         }
     }
@@ -2054,9 +2055,9 @@ pub fn base0_refutation_from_opening_capped_v1(
     if target_index < first || target_index >= end {
         return Err(LegError::CloseFromOpening("the disputed leaf is outside the served interval"));
     }
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
-    let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf);
+    let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf);
     // The served range holding `index`, if any: the accused's committed hash and the opening to
     // derive paths from.
     let holder = |index: u64| {

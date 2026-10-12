@@ -744,7 +744,7 @@ async fn model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_wi
         producer.c = SegmentedCommitmentsV1::new(commitments);
         post.segment_roots = producer.c.segment_roots();
         post.evidence = build_segmented_evidence_v1(
-            post.evidence.header.clone(),
+            post.evidence.header,
             &f.d,
             post.prompt.len() as u32,
             &prompt_root_of_ids_v1(&post.prompt),
@@ -834,7 +834,7 @@ async fn model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_wi
             assert!(whole.inputs[0].whole.is_none());
             assert_eq!(whole.inputs[0].leaves.len(), 1, "court opens one selected weight row, not 2048 rows");
             assert!(
-                matches!(misaka_palw_kernel::element::verify_seg_fault_v1(&view.context(), &fault), Err(_)),
+                misaka_palw_kernel::element::verify_seg_fault_v1(&view.context(), &fault).is_err(),
                 "the frozen claim court does not acquire candidate scope"
             );
             assert!(misaka_palw_kernel::element::verify_model_vector_fault_v2(&view.context(), &fault).is_ok());
@@ -1141,8 +1141,8 @@ fn flat_first_relation_fault_from_reads(
         Tensor::scalar(DType::Idx, view.trace.job.inline_prompt.as_ref().unwrap()[0] as i128).unwrap()
     };
     let own = vec![table.clone(), token];
-    let deps = if hash.is_some() {
-        flat_leaf_dependencies_v5(&view.context(), 0, 0, 0, hash.unwrap().index, &own).unwrap()
+    let deps = if let Some(h) = &hash {
+        flat_leaf_dependencies_v5(&view.context(), 0, 0, 0, h.index, &own).unwrap()
     } else {
         flat_whole_dependencies_v5(&view.context(), 0, 0, 0, &own).unwrap()
     };

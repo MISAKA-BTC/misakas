@@ -196,10 +196,10 @@ fn t90_the_admission_jury_is_the_operator_ticket_order_whatever_the_stake() {
                 ops.sort();
                 ops
             };
-            if let (Ok(a), Ok(b)) = (race(&pop), race(&reposted[2])) {
-                if ops(a) != ops(b) {
-                    race_moved += 1;
-                }
+            if let (Ok(a), Ok(b)) = (race(&pop), race(&reposted[2]))
+                && ops(a) != ops(b)
+            {
+                race_moved += 1;
             }
         }
     }

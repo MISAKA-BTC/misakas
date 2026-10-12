@@ -255,7 +255,7 @@ async fn t12_legacy_held_objects_are_dropped_below_the_fence_and_signed_by_their
             let staged = kaspa_consensus_core::palw_state_v2::apply_delta_v2(
                 &state,
                 &kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2 {
-                    point: point.clone(),
+                    point,
                     entries: vec![kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::LegacyAnswer {
                         key: d.key(),
                         old: None,

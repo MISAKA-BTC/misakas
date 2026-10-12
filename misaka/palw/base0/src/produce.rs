@@ -826,7 +826,7 @@ pub fn base0_anchored_leaf_check_v1(
     let committed = tiles
         .iter()
         .find(|(i, _)| *i == leaf_index)
-        .map(|(_, leaf)| kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile.shape_profile_id(), leaf))
+        .map(|(_, leaf)| kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(ctx, &profile.shape_profile_id(), leaf))
         .ok_or(ProduceError::Internal("the served material holds no tile at the disputed leaf"))?;
 
     let (recomputed, source) = base0_anchored_leaf_replay_v1(artifact, profile, ctx, &checkpoints, generated, leaf_index)?;
@@ -1038,12 +1038,12 @@ pub fn base0_replay_from_checkpoint_capped_v1(
     // the leaves it did not touch are not claims about zero — they are simply not this replay's.
     // Which is why only the touched ones are returned.
     let partial = capture.finish_partial();
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let leaf_hashes = partial
         .tiles
         .iter()
-        .map(|(i, leaf)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, leaf)))
+        .map(|(i, leaf)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf)))
         .collect();
     Ok(Base0CheckpointReplayV1 {
         tiles: partial.tiles,
@@ -1347,7 +1347,7 @@ pub fn base0_dense_step_leaves_capped_v1(
     if binding.step_leaf_count == 0 || binding.step_leaf_count > max_step_leaf_count {
         return None;
     }
-    let ctx_hash = binding.job_context.context_hash();
+    let _ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     for (index, leaf) in tiles {
@@ -1730,7 +1730,7 @@ fn base0_logits_rows_are_the_heads_output_v1(
         return Ok(());
     };
     let ctx = &binding.job_context;
-    let ctx_hash = ctx.context_hash();
+    let _ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     let vocab = profile.vocab_size as usize;
     let tile_len = head.tile_len as usize;
@@ -1758,7 +1758,7 @@ fn base0_logits_rows_are_the_heads_output_v1(
                 values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
             };
             let committed = usize::try_from(first + u64::from(tile_index)).ok().and_then(|at| committed_leaves.get(at));
-            if committed != Some(&step_tile_leaf_hash_ctx_v1(&ctx, &profile_hash, &leaf)) {
+            if committed != Some(&step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf)) {
                 return Err(refused);
             }
         }

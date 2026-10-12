@@ -166,6 +166,7 @@ fn block_ranges_retain_all_global_coordinates_across_rows_blocks_and_groups() {
 }
 
 #[test]
+#[allow(clippy::reversed_empty_ranges)] // the empty and reversed ranges are the invalid inputs under test
 fn plans_reject_another_descriptor_changed_headers_and_invalid_ranges_before_reads() {
     let f = format(tensor_desc());
     let t = f.as_tensors().unwrap();

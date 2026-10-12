@@ -420,6 +420,7 @@ impl PalwMemoryLedgerV1 {
     /// live probe only guards the shares over-summing, which the replay's own reservation still
     /// asks). Without one it is the live headroom with this pool's own reservations handed back —
     /// the reading `can_reserve` gives with nothing held. Grants nothing.
+    #[allow(clippy::result_large_err)] // the error is the evidence, returned once per check
     pub fn capacity_admits(&self, need_bytes: u64) -> Result<(), PalwMemoryRefusalV1> {
         let state = self.lock();
         let (share, live, reserved, _) = self.raw_bounds(&state);
@@ -447,6 +448,7 @@ impl PalwMemoryLedgerV1 {
 
     /// Whether `need_bytes` could be reserved now — the dry run a pre-check runs before a duty is
     /// even assembled. Grants nothing.
+    #[allow(clippy::result_large_err)] // the error is the evidence, returned once per check
     pub fn can_reserve(&self, need_bytes: u64) -> Result<(), PalwMemoryRefusalV1> {
         let state = self.lock();
         let (share, live, reserved, available) = self.bounds(&state);
@@ -478,6 +480,7 @@ impl PalwMemoryLedgerV1 {
     /// **Reserve `need_bytes` for `key`, or be told exactly why not.** Atomic under the ledger's
     /// lock: two duties that race for the last bytes are serialised, the first is granted, the
     /// second is refused naming the first.
+    #[allow(clippy::result_large_err)] // the error is the evidence, returned once per check
     pub fn reserve(
         self: &Arc<Self>,
         key: PalwMemoryReservationKeyV1,
@@ -745,7 +748,7 @@ mod tests {
         let _next = ledger.reserve(key("full-seat", 8), 12 * GIB).expect("the next duty is not held by a ghost");
         // An error return releases too.
         let failed: Result<(), String> = (|| {
-            let _held = ledger.reserve(key("court", 9), 1 * GIB).map_err(|e| e.to_string())?;
+            let _held = ledger.reserve(key("court", 9), GIB).map_err(|e| e.to_string())?;
             Err("the replay refused".to_string())
         })();
         assert!(failed.is_err());

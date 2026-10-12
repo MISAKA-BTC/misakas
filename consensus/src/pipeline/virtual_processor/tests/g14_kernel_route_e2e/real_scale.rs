@@ -343,7 +343,7 @@ impl SegWorld {
     ) -> SegClaim {
         assert_eq!(bound.len(), traced.len());
         let prompt = bound;
-        let post = (self.f.program.occurrences().len() - 1) as usize;
+        let post = self.f.program.occurrences().len() - 1;
         let logits = self.f.program.logits as usize;
         let first = trace_v1(&self.f.program, &self.f.params, traced).unwrap();
         let g0 = DecodeRuleV1::Greedy.select(&first.values[traced.len() - 1][post][logits]).unwrap();
@@ -977,6 +977,7 @@ async fn g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_
 // ---- GAP-30: the lie types, the filers and recovery, for K2-TIR-v4 on the node -------------------------------------------------
 
 /// A garbage trace: every committed value refilled with values of its dtype that no computation produced.
+#[allow(clippy::ptr_arg)] // the trace is the Vec the run produced
 fn garble(values: &mut Vec<Vec<Vec<Tensor>>>) {
     let mut x = 0x9E37_79B9_7F4A_7C15u64;
     for t in values.iter_mut().flatten().flatten() {

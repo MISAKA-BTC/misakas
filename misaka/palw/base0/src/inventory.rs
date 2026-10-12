@@ -101,6 +101,7 @@ fn rope_row_bytes(table: &crate::rope::RopeTableV1, d_head: usize, position: usi
 /// Process-local A16 inventory digests. Pairing a held 2M class walks one rotary row per position
 /// per rope node; the panel then rebuilds the same object at submit. The root is a function of
 /// `(artifact digest, profile id)`, so the second walk is the first walk's answer kept.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 fn a16_inventory_digest_cache_v1() -> &'static Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>> {
     static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -120,10 +121,10 @@ pub(crate) fn a16_inventory_digest_arc_v1(
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
 ) -> Result<Arc<PalwArtifactInventoryDigestV1>, InventoryBuildError> {
     let key = a16_inventory_digest_key_v1(artifact, profile);
-    if let Ok(cache) = a16_inventory_digest_cache_v1().lock() {
-        if let Some(hit) = cache.get(&key) {
-            return Ok(Arc::clone(hit));
-        }
+    if let Ok(cache) = a16_inventory_digest_cache_v1().lock()
+        && let Some(hit) = cache.get(&key)
+    {
+        return Ok(Arc::clone(hit));
     }
     let built = Arc::new(a16_inventory_digest_uncached_v1(artifact, profile)?);
     if let Ok(mut cache) = a16_inventory_digest_cache_v1().lock() {
@@ -135,6 +136,7 @@ pub(crate) fn a16_inventory_digest_arc_v1(
 /// **Process-local A16 inventory ROOTS.** Sixty-four bytes per `(artifact digest, profile id)`,
 /// against the digest cache's one entry per leaf — and the root is all a producer's class resolve,
 /// a registration preflight or a genesis check ever wanted from the walk.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 fn a16_inventory_root_cache_v1() -> &'static Mutex<HashMap<(Hash64, Hash64), (Hash64, u32)>> {
     static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), (Hash64, u32)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -159,15 +161,15 @@ pub fn a16_inventory_root_v1(
 ) -> Result<Hash64, InventoryBuildError> {
     let key = a16_inventory_digest_key_v1(artifact, profile);
     // A digest already built for openings answers without a second walk.
-    if let Ok(cache) = a16_inventory_digest_cache_v1().lock() {
-        if let Some(hit) = cache.get(&key) {
-            return Ok(hit.root());
-        }
+    if let Ok(cache) = a16_inventory_digest_cache_v1().lock()
+        && let Some(hit) = cache.get(&key)
+    {
+        return Ok(hit.root());
     }
-    if let Ok(cache) = a16_inventory_root_cache_v1().lock() {
-        if let Some((root, _)) = cache.get(&key) {
-            return Ok(*root);
-        }
+    if let Ok(cache) = a16_inventory_root_cache_v1().lock()
+        && let Some((root, _)) = cache.get(&key)
+    {
+        return Ok(*root);
     }
     Ok(a16_inventory_root_and_count_v1(artifact, profile)?.0)
 }
@@ -180,15 +182,15 @@ pub fn a16_inventory_root_and_count_v1(
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
 ) -> Result<(Hash64, u32), InventoryBuildError> {
     let key = a16_inventory_digest_key_v1(artifact, profile);
-    if let Ok(cache) = a16_inventory_digest_cache_v1().lock() {
-        if let Some(hit) = cache.get(&key) {
-            return Ok((hit.root(), hit.leaf_count()));
-        }
+    if let Ok(cache) = a16_inventory_digest_cache_v1().lock()
+        && let Some(hit) = cache.get(&key)
+    {
+        return Ok((hit.root(), hit.leaf_count()));
     }
-    if let Ok(cache) = a16_inventory_root_cache_v1().lock() {
-        if let Some(hit) = cache.get(&key) {
-            return Ok(*hit);
-        }
+    if let Ok(cache) = a16_inventory_root_cache_v1().lock()
+        && let Some(hit) = cache.get(&key)
+    {
+        return Ok(*hit);
     }
     // Counted as the walk passes, never collected: the vector of every leaf hash was 64 bytes a
     // leaf of nobody's reservation, just to learn its length (the pre-t12 drill of 2026-09-25).
@@ -220,6 +222,7 @@ pub fn a16_inventory_root_and_count_v1(
 /// Not yet the O(k·log n) ideal — the vector is the one term left — but it is the difference between
 /// a proof and a process the kernel kills. Returns the drawn operands in the order of `draw`; an
 /// index outside the inventory is a named refusal; an empty `draw` is the root and the vector alone.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 pub fn a16_readiness_material_streamed_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
@@ -235,6 +238,7 @@ pub fn a16_readiness_material_streamed_v1(
 /// comes back. What a prover that folds the proof as a stream calls (the pre-t12 drill of
 /// 2026-09-25, `PalwArtifactMultiproofStreamV1`): the walk holds one row at a time and the drawn
 /// rows' bytes, nothing that grows with the inventory.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 pub fn a16_readiness_leaves_streamed_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
@@ -349,7 +353,7 @@ fn a16_rope_row_at_v1(
     }
     let pairs = artifact.shape.d_head / 2;
     let row_len = 8usize.checked_mul(pairs)?;
-    if row_len == 0 || (row_start as usize) % row_len != 0 {
+    if row_len == 0 || !(row_start as usize).is_multiple_of(row_len) {
         return None;
     }
     let position = (row_start as usize) / row_len;

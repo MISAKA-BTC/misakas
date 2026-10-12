@@ -19,7 +19,9 @@
 //! plus the generative path (`gen_*` rows: FP Job V5, the tensor job, the execution roots) and the evidence manifest. Rows marked
 //! **not bound** are findings in the plain sense: the input exists, it is NOT in the claim, and the table says what carries it instead.
 
-use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerManifestV1, PalwFpWorkerRequestV3, PalwFpWorkerResultV3};
+#[cfg(test)]
+use kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerRequestV3;
+use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerManifestV1, PalwFpWorkerResultV3};
 
 /// One audited fact: what it is, where it enters, and the test that proves it.
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +36,7 @@ pub struct BindingRow {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // `NotBound` reads as the row says it: the fact is not bound
 pub enum Bound {
     /// In the job id (and so the claim id): changing it changes the claim.
     InClaim,

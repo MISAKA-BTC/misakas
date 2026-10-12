@@ -223,6 +223,115 @@ impl PalwPendingTerminalV1 {
     }
 }
 
+/// The assembled proof still observes the existing constraint fence; a chunk cannot bypass it.
+pub fn palw_terminal_is_constraint_v1(kind: PalwOffenceKindV1, evidence: &[u8]) -> bool {
+    use crate::palw_offence_attribution_v1::{PalwExecutorRefutedEvidenceV1, PalwPanelFalseValidEvidenceV2};
+    use crate::palw_offence_v1::PalwPanelContradictionV1 as C;
+    let c = match kind {
+        PalwOffenceKindV1::ExecutorRefuted => {
+            borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction)
+        }
+        PalwOffenceKindV1::PanelFalseValidV2 => {
+            borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction)
+        }
+        _ => None,
+    };
+    matches!(c, Some(C::ConstrainedDecode { .. } | C::ConstrainedDecodeFlat { .. }))
+}
+
+/// Runs the ordinary court for an already authenticated assembly. The manifest's claim is
+/// compared to the adjudicator's target rather than trusting an opaque bytes hash as attribution.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_terminal_adjudicate_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    d: &PalwTerminalDeclarationV1,
+    evidence: &[u8],
+    court_maximum: u64,
+    fp_decode_rules: bool,
+    rules: crate::palw_offence_attribution_v1::PalwIdentityRulesV1,
+    sessions: crate::palw_offence_attribution_v1::PalwSessionRuleV1,
+    sig: Option<crate::palw_offence_attribution_v1::PalwFalseValidSigCheckV1<'_>>,
+) -> Result<Hash64, String> {
+    use crate::palw_offence_attribution_v1 as a;
+    d.check(court_maximum)?;
+    if evidence.len() as u64 != d.total_bytes || crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != d.evidence_id {
+        return Err("terminal proof does not open its original evidence identity".into());
+    }
+    let budget = a::PalwObjectiveEvidenceBudgetV1::ReservedTerminal { court_maximum };
+    if let Some(charge) =
+        a::palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(state, &d.accused, d.kind, evidence, rules, true, sessions, budget)
+        && charge.prompt_ids > u64::from(d.heavy_prompt_ids)
+    {
+        return Err("terminal declaration did not buy its whole-prompt recomputation".into());
+    }
+
+    let (claim, offence) = match d.kind {
+        PalwOffenceKindV1::ExecutorRefuted => {
+            let f = a::palw_check_executor_refuted_at_v1_with_budget_v1(
+                state,
+                &d.accused,
+                evidence,
+                fp_decode_rules,
+                false,
+                rules,
+                sessions,
+                budget,
+            )
+            .map_err(|e| e.to_string())?;
+            (f.target.claim_id, a::palw_executor_refuted_offence_id_v1(&d.accused.0, &f.target.claim_id))
+        }
+        PalwOffenceKindV1::PanelFalseValidV2 => {
+            let f = a::palw_check_panel_false_valid_at_v2_with_budget_v1(
+                state,
+                &d.accused,
+                evidence,
+                fp_decode_rules,
+                false,
+                rules,
+                sig,
+                sessions,
+                budget,
+            )
+            .map_err(|e| e.to_string())?;
+            (f.target.claim_id, a::palw_false_valid_offence_id_v2(&d.accused.0, &f.target.claim_id))
+        }
+        PalwOffenceKindV1::TirIdentityMismatch => {
+            let f =
+                a::palw_check_tir_identity_mismatch_at_v1_with_budget_v1(state, &d.accused, evidence, false, rules, sessions, budget)
+                    .map_err(|e| e.to_string())?;
+            (f.target.claim_id, a::palw_tir_identity_offence_id_v1(&d.accused.0, &f.target.claim_id))
+        }
+        _ => return Err("terminal offence kind cannot be filed".into()),
+    };
+    if claim != d.claim {
+        return Err("adjudicated terminal target is another claim".into());
+    }
+    if state.consumed_offence(&offence).is_some() {
+        return Err("terminal offence was already consumed".into());
+    }
+    Ok(offence)
+}
+
+fn palw_terminal_prompt_ids_v1(kind: PalwOffenceKindV1, evidence: &[u8]) -> u32 {
+    use crate::palw_offence_attribution_v1::{PalwExecutorRefutedEvidenceV1, PalwPanelFalseValidEvidenceV2};
+    use crate::palw_offence_v1::{PalwPanelContradictionV1 as C, PalwPromptProofV1 as P};
+    let c = match kind {
+        PalwOffenceKindV1::ExecutorRefuted => {
+            borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction)
+        }
+        PalwOffenceKindV1::PanelFalseValidV2 => {
+            borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction)
+        }
+        _ => None,
+    };
+    match c {
+        Some(C::PromptNotAnchored { binding, proof: P::Whole | P::FpCanonicalWhole { .. } }) => {
+            binding.job_context.declared_prefill_tokens
+        }
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,7 +368,7 @@ mod tests {
         assert!(borsh::object_length(&d).unwrap() < 100_000);
         let mut pending = PalwPendingTerminalV1 { declaration: d, deadline_daa: 1_000, parts: BTreeMap::new() };
         for p in parts.iter().rev() {
-            assert!(borsh::object_length(p).unwrap() + 1 <= 100_000);
+            assert!(borsh::object_length(p).unwrap() < 100_000);
             if p.index == 0 {
                 assert_eq!(pending.preview(p, PALW_TERMINAL_MAX_BYTES_V1).unwrap(), Some(bytes.clone()));
             } else {
@@ -339,115 +448,5 @@ mod tests {
             ))
             .is_err()
         );
-    }
-}
-
-/// The assembled proof still observes the existing constraint fence; a chunk cannot bypass it.
-pub fn palw_terminal_is_constraint_v1(kind: PalwOffenceKindV1, evidence: &[u8]) -> bool {
-    use crate::palw_offence_attribution_v1::{PalwExecutorRefutedEvidenceV1, PalwPanelFalseValidEvidenceV2};
-    use crate::palw_offence_v1::PalwPanelContradictionV1 as C;
-    let c = match kind {
-        PalwOffenceKindV1::ExecutorRefuted => {
-            borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction)
-        }
-        PalwOffenceKindV1::PanelFalseValidV2 => {
-            borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction)
-        }
-        _ => None,
-    };
-    matches!(c, Some(C::ConstrainedDecode { .. } | C::ConstrainedDecodeFlat { .. }))
-}
-
-/// Runs the ordinary court for an already authenticated assembly. The manifest's claim is
-/// compared to the adjudicator's target rather than trusting an opaque bytes hash as attribution.
-#[allow(clippy::too_many_arguments)]
-pub fn palw_terminal_adjudicate_v1(
-    state: &crate::palw_state_v2::PalwChainStateV2,
-    d: &PalwTerminalDeclarationV1,
-    evidence: &[u8],
-    court_maximum: u64,
-    fp_decode_rules: bool,
-    rules: crate::palw_offence_attribution_v1::PalwIdentityRulesV1,
-    sessions: crate::palw_offence_attribution_v1::PalwSessionRuleV1,
-    sig: Option<crate::palw_offence_attribution_v1::PalwFalseValidSigCheckV1<'_>>,
-) -> Result<Hash64, String> {
-    use crate::palw_offence_attribution_v1 as a;
-    d.check(court_maximum)?;
-    if evidence.len() as u64 != d.total_bytes || crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != d.evidence_id {
-        return Err("terminal proof does not open its original evidence identity".into());
-    }
-    let budget = a::PalwObjectiveEvidenceBudgetV1::ReservedTerminal { court_maximum };
-    if let Some(charge) =
-        a::palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(state, &d.accused, d.kind, evidence, rules, true, sessions, budget)
-    {
-        if charge.prompt_ids > u64::from(d.heavy_prompt_ids) {
-            return Err("terminal declaration did not buy its whole-prompt recomputation".into());
-        }
-    }
-
-    let (claim, offence) = match d.kind {
-        PalwOffenceKindV1::ExecutorRefuted => {
-            let f = a::palw_check_executor_refuted_at_v1_with_budget_v1(
-                state,
-                &d.accused,
-                evidence,
-                fp_decode_rules,
-                false,
-                rules,
-                sessions,
-                budget,
-            )
-            .map_err(|e| e.to_string())?;
-            (f.target.claim_id, a::palw_executor_refuted_offence_id_v1(&d.accused.0, &f.target.claim_id))
-        }
-        PalwOffenceKindV1::PanelFalseValidV2 => {
-            let f = a::palw_check_panel_false_valid_at_v2_with_budget_v1(
-                state,
-                &d.accused,
-                evidence,
-                fp_decode_rules,
-                false,
-                rules,
-                sig,
-                sessions,
-                budget,
-            )
-            .map_err(|e| e.to_string())?;
-            (f.target.claim_id, a::palw_false_valid_offence_id_v2(&d.accused.0, &f.target.claim_id))
-        }
-        PalwOffenceKindV1::TirIdentityMismatch => {
-            let f =
-                a::palw_check_tir_identity_mismatch_at_v1_with_budget_v1(state, &d.accused, evidence, false, rules, sessions, budget)
-                    .map_err(|e| e.to_string())?;
-            (f.target.claim_id, a::palw_tir_identity_offence_id_v1(&d.accused.0, &f.target.claim_id))
-        }
-        _ => return Err("terminal offence kind cannot be filed".into()),
-    };
-    if claim != d.claim {
-        return Err("adjudicated terminal target is another claim".into());
-    }
-    if state.consumed_offence(&offence).is_some() {
-        return Err("terminal offence was already consumed".into());
-    }
-    Ok(offence)
-}
-
-fn palw_terminal_prompt_ids_v1(kind: PalwOffenceKindV1, evidence: &[u8]) -> u32 {
-    use crate::palw_offence_attribution_v1::{PalwExecutorRefutedEvidenceV1, PalwPanelFalseValidEvidenceV2};
-    use crate::palw_offence_v1::{PalwPanelContradictionV1 as C, PalwPromptProofV1 as P};
-    let c = match kind {
-        PalwOffenceKindV1::ExecutorRefuted => {
-            borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction)
-        }
-        PalwOffenceKindV1::PanelFalseValidV2 => {
-            borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction)
-        }
-        _ => None,
-    };
-    match c {
-        Some(C::PromptNotAnchored { binding, proof: P::Whole | P::FpCanonicalWhole { .. } }) => {
-            binding.job_context.declared_prefill_tokens
-        }
-        _ => 0,
     }
 }

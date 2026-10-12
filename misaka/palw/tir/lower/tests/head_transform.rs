@@ -57,6 +57,6 @@ fn a_head_transform_is_dense_act_norm_before_the_head() {
 fn the_transform_belongs_to_a_language_model_head() {
     let mut s = spec(true);
     s.output = OutputSpec::Embedding { proj: None, normalize: false };
-    let e = hl::build_program(&s).err().expect("refused").to_string();
+    let e = hl::build_program(&s).expect_err("refused").to_string();
     assert!(e.contains("HEAD_TRANSFORM_V1"), "{e}");
 }

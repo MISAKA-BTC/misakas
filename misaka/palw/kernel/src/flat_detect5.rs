@@ -44,6 +44,7 @@ pub enum FlatFindingV5 {
 fn error(e: impl std::fmt::Debug) -> FlatFindingV5 {
     FlatFindingV5::Inconsistent(format!("{e:?}"))
 }
+#[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
 pub(crate) fn read_node(
     c: &FlatSegContextV5<'_>,
     pr: &PreparedV1<'_>,
@@ -55,6 +56,7 @@ pub(crate) fn read_node(
         .filter(|o| common::authenticate_node(c, pr, o, (unit.position, unit.occurrence, unit.node)))
         .ok_or(FlatFindingV5::Demand(unit))
 }
+#[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
 pub(crate) fn value_proof(t: &Tensor, node: Option<NodeOpeningV1>, reads: &[(u64, u64)]) -> Result<FlatOperandV5, FlatFindingV5> {
     let mut out = FlatOperandV5 { node, flat: Vec::new(), legacy: Vec::new() };
     if out.node.is_some() && t.data.len() >= 64 {

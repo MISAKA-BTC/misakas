@@ -81,10 +81,10 @@ pub fn flat_resource_scope_v5(
     }
     let program_bytes = common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
         .map_err(|_| na("oversized flat scope program"))?;
-    if let Some(e) = encoder {
-        if max_positions != 1 || crate::seg_encoder::encoder_binding_v1(program).ok().as_ref() != Some(e) {
-            return Err(na("wrong flat scope encoder binding"));
-        }
+    if let Some(e) = encoder
+        && (max_positions != 1 || crate::seg_encoder::encoder_binding_v1(program).ok().as_ref() != Some(e))
+    {
+        return Err(na("wrong flat scope encoder binding"));
     }
     let pr = PreparedV1::without_scope(program, encoder).map_err(DismissalV1::NotAuthentic)?;
     let p = max_positions - 1;

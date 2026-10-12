@@ -133,7 +133,7 @@ pub(crate) fn unify(t: &Emitted, holes: usize, p: &TirProgramV1, bi: usize, anch
 /// map, every const by value.
 pub(crate) fn equal(t: &Emitted, u: &Unified, p: &TirProgramV1, bi: usize) -> bool {
     let block = &p.blocks[bi];
-    if u.map.len() != t.nodes.len() || u.map.get(&t.output).is_none() {
+    if u.map.len() != t.nodes.len() || !u.map.contains_key(&t.output) {
         return false;
     }
     for (tn, pn) in &u.map {

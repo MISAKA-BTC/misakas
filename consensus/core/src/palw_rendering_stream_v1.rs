@@ -106,7 +106,7 @@ impl LeafHashContinuationV1 {
         }
     }
     pub(crate) fn byte_count(&self) -> Option<u128> {
-        (self.buffer.len() <= 128 && self.compressed % 128 == 0).then(|| self.compressed + self.buffer.len() as u128)
+        (self.buffer.len() <= 128 && self.compressed.is_multiple_of(128)).then(|| self.compressed + self.buffer.len() as u128)
     }
     pub(crate) fn finish(&self) -> Hash64 {
         let mut words = self.words;
@@ -185,7 +185,7 @@ impl PalwRenderingStreamV1 {
     pub fn check(&self) -> Result<(), String> {
         let header = if self.present { 9u128 } else { 5 };
         if self.hash.buffer.len() > 128
-            || self.hash.compressed % 128 != 0
+            || !self.hash.compressed.is_multiple_of(128)
             || self.offset > self.length
             || u64::from(self.length) > PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64
             || (!self.present && self.length != 0)

@@ -878,7 +878,7 @@ fn verify_prepared_fault(c: &SegClaimContextV1<'_>, fault: &SegFaultV1, pr: &Pre
                 return Err(na("a whole-value court is not priced for this node".into()));
             }
             let convicted = || Ok(SegConvictionV1 { position: p, occurrence: s, node: n, kind: SegConvictionKindV1::WholeValue });
-            let ops = court_whole_operands(c, &pr, (p, s, n), &f.inputs, f.token.as_ref())?;
+            let ops = court_whole_operands(c, pr, (p, s, n), &f.inputs, f.token.as_ref())?;
             let sh = pr.shapes(p, s, n);
             let (dtype, shape) = pr.declared(s, n, p);
             let len = LayoutV3::of(&shape).len;
@@ -908,7 +908,7 @@ fn verify_prepared_fault(c: &SegClaimContextV1<'_>, fault: &SegFaultV1, pr: &Pre
             let (a, b) = hide_tile_range_v1(LayoutV3::of(&shape).len, tile).ok_or_else(|| na("no such tile".into()))?;
             let convicted =
                 || Ok(SegConvictionV1 { position: p, occurrence: s, node: n, kind: SegConvictionKindV1::HidingLeaf { tile } });
-            let ops = court_whole_operands(c, &pr, (p, s, n), &f.inputs, f.token.as_ref())?;
+            let ops = court_whole_operands(c, pr, (p, s, n), &f.inputs, f.token.as_ref())?;
             let sh = pr.shapes(p, s, n);
             let mut values = Vec::with_capacity((b - a) as usize);
             for e in a..b {
@@ -979,7 +979,7 @@ fn verify_prepared_fault(c: &SegClaimContextV1<'_>, fault: &SegFaultV1, pr: &Pre
                 .ok()
                 .and_then(|m| m.get(&f.element).copied())
                 .ok_or_else(|| na("the output leaf does not hold the element".into()))?;
-            let sources = operand_sources(&pr, p, s, n).map_err(na)?;
+            let sources = operand_sources(pr, p, s, n).map_err(na)?;
             if f.inputs.len() != sources.len() {
                 return Err(na(format!("{} operands where the node reads {}", f.inputs.len(), sources.len())));
             }
@@ -1218,7 +1218,7 @@ fn check_prepared_positions(
     }
     // Authenticate the available public response before doing another model replay. Adaptive DA retries (including partial
     // responses) must not run the whole prefix each time a requested part is still missing.
-    let mut loaded = match load_positions_or_demand(c, &pr, material, &ps) {
+    let mut loaded = match load_positions_or_demand(c, pr, material, &ps) {
         Ok(l) => l,
         Err(missing) => return SegFindingV1::Demand(missing),
     };
@@ -1254,7 +1254,7 @@ fn check_prepared_positions(
         return SegFindingV1::Inconsistent("an earlier position differs: localize it with the public root descent".into());
     }
     for &p in &ps {
-        match check_one(c, &pr, &loaded, material, artifact, tokens, p) {
+        match check_one(c, pr, &loaded, material, artifact, tokens, p) {
             Ok(None) => {}
             Ok(Some(f)) => return SegFindingV1::Fault(Box::new(f)),
             Err(why) => return SegFindingV1::Inconsistent(why),

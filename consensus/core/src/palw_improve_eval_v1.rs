@@ -2590,7 +2590,7 @@ mod tests {
         let leaf = |i: u32| {
             palw_improve_suite_leaf_v1(&PalwSuiteEntryV1 {
                 prompt: vec![i, i + 1],
-                reference: if i % 2 == 0 {
+                reference: if i.is_multiple_of(2) {
                     PalwSuiteReferenceV1::ExactKey(vec![i])
                 } else {
                     PalwSuiteReferenceV1::Continuation(vec![i, i])

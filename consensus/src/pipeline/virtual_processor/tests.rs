@@ -12575,7 +12575,11 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
             // **The V01 review's LOW 3: every node's per-block sweep asks the same gate** — nothing
             // while the queue has room, and a spent input is never the sweep's to judge.
             let pooled = std::sync::Arc::new(second.clone());
-            assert_eq!(ctx.consensus.palw_market_carrier_refusals_v1(&[pooled.clone()]), vec![None], "room: the sweep keeps it");
+            assert_eq!(
+                ctx.consensus.palw_market_carrier_refusals_v1(std::slice::from_ref(&pooled)),
+                vec![None],
+                "room: the sweep keeps it"
+            );
             vp.palw_state_v2_store.write().set_tip_for_tests(sink, &full).expect("the full queue becomes the tip");
             match mempool(&second) {
                 Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(why)) => {
@@ -12583,7 +12587,7 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
                 }
                 other => panic!("a full queue must refuse the carrier at the mempool, got {other:?}"),
             }
-            match ctx.consensus.palw_market_carrier_refusals_v1(&[pooled.clone()]).as_slice() {
+            match ctx.consensus.palw_market_carrier_refusals_v1(std::slice::from_ref(&pooled)).as_slice() {
                 [Some(why)] => assert!(why.contains("payout queue"), "the sweep refuses it as admission does: {why}"),
                 other => panic!("a full queue must refuse the pooled carrier at the sweep, got {other:?}"),
             }
@@ -12600,7 +12604,7 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
                 "an input the virtual does not hold (mined, double-spent, chained): not judged"
             );
             assert_eq!(
-                ctx.consensus.palw_h1_carrier_refusals_v1(&[pooled.clone()]),
+                ctx.consensus.palw_h1_carrier_refusals_v1(std::slice::from_ref(&pooled)),
                 vec![None],
                 "a market carrier is not the H-1 gate's to judge"
             );
@@ -14558,7 +14562,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
 async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_paid_once() {
     use crate::model::stores::ghostdag::{GhostdagData, HashKTypeMap};
     use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
-    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::fp_quantum_ticket_v3;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1;
     use kaspa_consensus_core::palw_state_v2::{
@@ -17612,7 +17616,7 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     let config = ConfigBuilder::new(DEVNET_PARAMS).skip_proof_of_work().build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     let genesis = config.params.genesis.hash;
-    ctx.consensus.set_pruning_utxoset_stable_flag(false);
+    ctx.consensus.set_pruning_utxoset_stable_flag(false).expect("the stable flag is written");
     ctx.consensus.complete_pruning_point_import(genesis).expect("the coherent genesis generation completes");
     assert!(ctx.consensus.is_pruning_utxoset_stable());
     let block = ctx.build_block_template_keeping_time(0).block.to_immutable();
@@ -17635,7 +17639,7 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
 
     // Even the established target cannot complete after the virtual generation
     // moved away. A failed completion leaves recovery visibly incomplete.
-    ctx.consensus.set_pruning_utxoset_stable_flag(false);
+    ctx.consensus.set_pruning_utxoset_stable_flag(false).expect("the stable flag is written");
     assert!(matches!(
         ctx.consensus.complete_pruning_point_import(genesis),
         Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))

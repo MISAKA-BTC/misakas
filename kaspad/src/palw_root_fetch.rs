@@ -61,6 +61,7 @@ pub(crate) fn palw_readiness_targets_v1(
 
 /// **What this node would fetch**: every target (and nothing for the base class) whose root is an in-force non-registered root, or whose
 /// class is a `Candidate`, and that `held` says this node has no bundle for.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn palw_root_fetch_wants_v1(
     read: &PalwModelRegistryReadV1,
     root_keyed: bool,

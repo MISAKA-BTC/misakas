@@ -179,7 +179,7 @@ fn walk(ladder: bool, c7_window: bool, rcore: bool) -> Owed {
             PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, initial_target, .. }
                 if *class_id != b.base_class_id && certified.contains(class_id) =>
             {
-                Some((*class_id, pwu_rule.clone(), *initial_target))
+                Some((*class_id, *pwu_rule, *initial_target))
             }
             _ => None,
         })
@@ -221,7 +221,7 @@ fn walk(ladder: bool, c7_window: bool, rcore: bool) -> Owed {
         class_id: model_id,
         artifact_root: h(0xB27),
         slash_value_per_pwu: floor.3,
-        pwu_rule: model_rule.clone(),
+        pwu_rule: model_rule,
         initial_target: model_target,
         share_permille: 0,
         activation_daa: 0,

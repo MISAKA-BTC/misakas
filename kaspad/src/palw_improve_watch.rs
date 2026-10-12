@@ -329,12 +329,12 @@ impl PalwImproveTamperV1 {
     pub(crate) fn applies_to(&self, line: &Hash64, subject: &kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1) -> bool {
         use kaspa_consensus_core::palw_improve_state_v1::PalwEvalSubjectV1 as S;
         line.to_string().starts_with(&self.line_prefix)
-            && match (self.subject, subject) {
-                (None, _) => true,
-                (Some(PalwImproveTamperSubjectV1::Parent), S::Parent) => true,
-                (Some(PalwImproveTamperSubjectV1::Candidate), S::Candidate(_)) => true,
-                _ => false,
-            }
+            && matches!(
+                (self.subject, subject),
+                (None, _)
+                    | (Some(PalwImproveTamperSubjectV1::Parent), S::Parent)
+                    | (Some(PalwImproveTamperSubjectV1::Candidate), S::Candidate(_))
+            )
     }
 }
 

@@ -348,7 +348,7 @@ fn a_generative_registration_folds_past_the_fence_and_is_refused_below_it() {
     let below = chain.try_fold(
         &chain.s,
         &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0),
-        &[object.clone()],
+        std::slice::from_ref(&object),
         PalwBlockWorkV3::None,
         Hash64::default(),
     );
@@ -357,7 +357,7 @@ fn a_generative_registration_folds_past_the_fence_and_is_refused_below_it() {
     // At the fence: it folds (the harness re-applies, reverts and reloads the block).
     let collateral = chain.s.bond(&registrant).expect("the registrant").collateral;
     let root_before = chain.s.state_root();
-    chain.step_at(AT, &[object.clone()], PalwBlockWorkV3::None, Hash64::default(), 0);
+    chain.step_at(AT, std::slice::from_ref(&object), PalwBlockWorkV3::None, Hash64::default(), 0);
     let record = palw_gen_class_record_v1(&admission.class, artifact_root).expect("decodes");
     assert_eq!(chain.s.gen_class_v1(&class_id), Some(&record), "the record, derived as admission derives it");
     let class_state = chain.s.class(&class_id).expect("the class");

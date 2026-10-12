@@ -96,7 +96,7 @@ fn a_certified_prefetching_class_steps_to_capped_and_otherwise_stays() {
     let (next, _) = step(&s4, &dormant, &ctx(nb, boundary(110 + nb) + SPAN, nb), &[], None, Some(f.clone())).unwrap();
     assert_eq!(state_of(&next), PalwModelLifecycleV1::Prefetching, "no fence, no Capped");
     // And a class-level attestation below the capped fence is not even recorded.
-    assert!(s4.vertex.held.get(&kimi_id()).is_none(), "nothing recorded below the fence");
+    assert!(!s4.vertex.held.contains_key(&kimi_id()), "nothing recorded below the fence");
 }
 
 fn palw_mesh_fold_v1_certificate(s: &PalwChainStateV2) -> bool {

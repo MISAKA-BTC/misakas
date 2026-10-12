@@ -2610,6 +2610,7 @@ fn palw_da_legacy_answer_v2(
 }
 
 /// The DA service's common signed-carrier builder, with the close ceiling and lifecycle ride checks for both tags.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn palw_da_built_answer_object_v1(
     network_domain: &Hash64,
     claim: Hash64,
@@ -4054,7 +4055,7 @@ pub struct PalwPanelConfig {
     /// drill's evidence transport on one machine; default beside the node's other retention.
     pub improve_capture_dir: Option<PathBuf>,
     /// **DRILL ONLY (D-M3): commit one evaluation with a fault** (`--palw-drill-tamper-eval`).
-    pub improve_tamper: Option<crate::palw_improve_watch::PalwImproveTamperV1>,
+    pub(crate) improve_tamper: Option<crate::palw_improve_watch::PalwImproveTamperV1>,
     /// Where THIS node's producer persists the material behind its own attempts, when it produces.
     ///
     /// A court can open long after a claim licensed, and the in-memory pool does not live that
@@ -5551,9 +5552,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         main: &[TransactionOutpoint],
     ) -> Option<(TransactionOutpoint, UtxoEntry)> {
-        if self.config.fee_outpoint.is_none() {
-            return None;
-        }
+        self.config.fee_outpoint.as_ref()?;
         let script = self.fee_script(session)?;
         let pov_daa = session.get_virtual_daa_score();
         let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
@@ -5573,7 +5572,7 @@ impl PalwPanelService {
             cursor = chunk.last().map(|(o, _)| *o);
             for (outpoint, entry) in chunk {
                 if entry.script_public_key == script {
-                    scan.offer(outpoint, entry, &usable, &is_free);
+                    scan.offer(outpoint, entry, usable, is_free);
                 }
             }
         }
@@ -6235,7 +6234,7 @@ impl PalwPanelService {
                 // other output B-3 holds, and a coinbase only once the mempool takes its spend —
                 // the rewards this bond earns fund its filing (`palw_fee_funding_usable_v1`); and of
                 // what pays a carrier, the largest (`PalwFeeFundingScanV1::offer`).
-                scan.offer(outpoint, entry, &usable, &is_free);
+                scan.offer(outpoint, entry, usable, is_free);
             }
         }
         let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust, .. } = scan;
@@ -6824,10 +6823,10 @@ impl PalwPanelService {
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
             // the smaller float we retained. A successful submission ends the free slot.
-            if failed_minimum.is_none_or(|failed| minimum < failed) {
-                if let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, funding, *inflight).await {
-                    failed_minimum = Some(failed);
-                }
+            if failed_minimum.is_none_or(|failed| minimum < failed)
+                && let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, funding, *inflight).await
+            {
+                failed_minimum = Some(failed);
             }
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
                 // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
@@ -11891,10 +11890,8 @@ impl PalwPanelService {
                                         // signed under this seat's bond key and queued on the same
                                         // carrier path every court move rides. Once per claim.
                                         let court = 'court: {
-                                            if !(crate::palw_producer::palw_shard_court_in_force_v1(
-                                                &self.consensus_config,
-                                                current_daa,
-                                            ) && !accused.contains(&duty.claim_id))
+                                            if !crate::palw_producer::palw_shard_court_in_force_v1(&self.consensus_config, current_daa)
+                                                || accused.contains(&duty.claim_id)
                                             {
                                                 break 'court None;
                                             }
@@ -15086,6 +15083,7 @@ fn attn_held_objects_page_from_chain_v1(
 
 /// Whether an accepted lifecycle object is one [`attn_held_objects_page_from_chain_v1`] returns for the
 /// session and its claim — the predicate alone, so a fixture chain filters with it too.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn palw_held_chain_object_is_the_sessions_v1(
     object: &PalwConsensusObjectV2,
     session_id: &Hash64,
@@ -16403,7 +16401,7 @@ impl PalwPanelService {
                 // by recomputation) and a disagreement is a fault in the claim, filed as the court's question.
                 if let Some(job) = fp_job.filter(|job| job.is_prefix_state()).cloned() {
                     let ids = prompt_ids.to_vec();
-                    let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+                    let Ok((returned, checked)) = offload(backend, move |b| b.verify_prefix_state_v1(&job, &ids)).await else {
                         return None;
                     };
                     backend = returned;
@@ -23811,16 +23809,16 @@ mod p2_7_disclosure_policy {
             assert!(palw_fp_constraint_scope_v1().is_none(), "recovery restores the caller's thread scope");
         }
         let mut wrong_tokenizer = job.clone();
-        wrong_tokenizer.tokenizer_id = Hash64::from_u64_word(0xBAD_DA_C014);
+        wrong_tokenizer.tokenizer_id = Hash64::from_u64_word(0x000B_ADDA_C014);
         let mut unavailable = job.clone();
         let Some(PalwFpJobTailV1::Constraint(tail)) = unavailable.tail.as_mut() else { unreachable!() };
-        tail.table_root = Hash64::from_u64_word(0xBAD_DA_C015);
+        tail.table_root = Hash64::from_u64_word(0x000B_ADDA_C015);
         for refused in [wrong_tokenizer, unavailable] {
             let (built, retained) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&refused, &ids)], &event, false);
             assert!(built.is_err() && retained.is_none(), "another/missing table cannot become a DA answer");
             assert!(palw_fp_constraint_scope_v1().is_none());
         }
-        facts.execution_root = Hash64::from_u64_word(0xBAD_DA_C016);
+        facts.execution_root = Hash64::from_u64_word(0x000B_ADDA_C016);
         let (built, retained) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&job, &ids)], &event, false);
         assert!(built.is_err() && retained.is_none(), "correct recovery must still reproduce the recorded claim roots");
         assert!(palw_fp_constraint_scope_v1().is_none());
@@ -24286,11 +24284,7 @@ mod p2_6_da_accusation_policy {
                 .expect("the debounce leaves with the book entry");
         assert!(pruned < carriers);
         let licence = source.find("if palw_seat_unserved_licence_v1(phase) {").expect("the licence seam");
-        assert!(
-            source[licence..]
-                .find("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));")
-                .is_some()
-        );
+        assert!(source[licence..].contains("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));"));
         assert!(!source.contains("the DefaultAccused filing that answers it is Phase 2's"), "the seam files now");
     }
 

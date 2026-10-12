@@ -170,7 +170,8 @@ fn every_primitive_is_convicted_from_commitments_without_any_producer_values_or_
         Claim::of(wide_v1(3), k2_tir_v2_descriptor()),
         Claim::of(exotic_v1(), k2_tir_v1_descriptor()),
     ] {
-        let honest = FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), &[c.descriptor.clone()], c.header()).unwrap();
+        let honest =
+            FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), std::slice::from_ref(&c.descriptor), c.header()).unwrap();
         assert!(matches!(honest.reexecute(&ArtifactOnly(&c.params)).unwrap(), ReexecutionV1::Match { .. }));
         for (s, (b, _)) in c.program.occurrences().iter().enumerate() {
             for (n, node) in c.program.blocks[*b as usize].nodes.iter().enumerate() {
@@ -179,7 +180,8 @@ fn every_primitive_is_convicted_from_commitments_without_any_producer_values_or_
                 }
                 let mut lie = c.trace.clone();
                 bump(&mut lie.values[1][s][n], 0);
-                let fresh = FreshVerifierV1::from_public_bytes(&c.publish(&lie), &[c.descriptor.clone()], c.header()).unwrap();
+                let fresh =
+                    FreshVerifierV1::from_public_bytes(&c.publish(&lie), std::slice::from_ref(&c.descriptor), c.header()).unwrap();
                 // Neither the false value nor its location is passed to the verifier.
                 let ReexecutionV1::Fault(proof) = fresh.reexecute(&ArtifactOnly(&c.params)).unwrap() else {
                     panic!("{:?}: a different commitment passed replay", node.prim)

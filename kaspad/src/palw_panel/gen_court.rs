@@ -165,7 +165,7 @@ impl super::PalwPanelService {
                 PalwSeatReplayPollV1::Running => waiting = true,
                 PalwSeatReplayPollV1::Done { result: Ok(replayed), fresh } => {
                     let step = palw_seat_replay_step_v1(
-                        &Ok(replayed.clone()),
+                        &Ok(replayed),
                         duty.execution_root,
                         duty.trace_root,
                         duty.work_leaves,
@@ -270,7 +270,7 @@ impl super::PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         bond_key: PalwBondKeyV2,
-        network_domain: Hash64,
+        _network_domain: Hash64,
         current_daa: u64,
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
         seat_faulted: &HashSet<Hash64>,

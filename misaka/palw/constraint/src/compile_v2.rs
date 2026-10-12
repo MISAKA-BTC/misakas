@@ -237,7 +237,7 @@ fn integer_range(schema: &Schema) -> Result<Option<Vec<Value>>, String> {
             "the integer range admits {width} values, past the {MAX_INTEGER_RANGE_VALUES_V2} the compiler enumerates (each is a literal of the automaton); narrow it or list the values"
         ));
     }
-    Ok(Some((lo..=hi).map(|n| Value::from(n)).collect()))
+    Ok(Some((lo..=hi).map(Value::from).collect()))
 }
 
 fn count(value: Option<u64>, keyword: &str) -> Result<Option<usize>, String> {

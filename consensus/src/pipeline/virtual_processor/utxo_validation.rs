@@ -501,27 +501,26 @@ impl VirtualStateProcessor {
             // refusal the native body is wholly unaccepted and charges no fee.
             // The independently held execution permit still bounds EVM work.
             let mut round_income = None;
-            if let Some(verdicts) = ctx.palw_round_verdicts.as_mut() {
-                if verdicts.permitted.contains(&merged_block) {
-                    if let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut()) {
-                        let maximum = validated_transactions.iter().try_fold(0u64, |sum, (tx, _)| {
-                            let burned = bond_filter.map(|filter| filter.burn_owed(tx.tx)).unwrap_or(0);
-                            sum.checked_add(self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score))
-                        });
-                        let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
-                            block: merged_block,
-                            bond: *bond,
-                            maximum_sompi,
-                            actual_sompi: maximum_sompi,
-                        });
-                        if income.is_some_and(|income| budget.admit(income).is_ok()) {
-                            round_income = income;
-                        } else {
-                            validated_transactions.clear();
-                            inner_multiset = MuHash::new();
-                            info!("[palw-round-lane] Round {merged_block} native body refused: recipient reward budget exhausted");
-                        }
-                    }
+            if let Some(verdicts) = ctx.palw_round_verdicts.as_mut()
+                && verdicts.permitted.contains(&merged_block)
+                && let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut())
+            {
+                let maximum = validated_transactions.iter().try_fold(0u64, |sum, (tx, _)| {
+                    let burned = bond_filter.map(|filter| filter.burn_owed(tx.tx)).unwrap_or(0);
+                    sum.checked_add(self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score))
+                });
+                let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+                    block: merged_block,
+                    bond: *bond,
+                    maximum_sompi,
+                    actual_sompi: maximum_sompi,
+                });
+                if income.is_some_and(|income| budget.admit(income).is_ok()) {
+                    round_income = income;
+                } else {
+                    validated_transactions.clear();
+                    inner_multiset = MuHash::new();
+                    info!("[palw-round-lane] Round {merged_block} native body refused: recipient reward budget exhausted");
                 }
             }
 
@@ -1055,12 +1054,11 @@ impl VirtualStateProcessor {
         // committee beacon, the credit walk, the audit fee, the challenge slash) is gone, and no
         // shipped chain carried one of these transactions (ADR-0134 §2).
         self.check_compute_overlay_retired(&txs, header.daa_score)?;
-        if self.dns_retired_at(header.daa_score) {
-            if let Some(tx) =
+        if self.dns_retired_at(header.daa_score)
+            && let Some(tx) =
                 txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id))
-            {
-                return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
-            }
+        {
+            return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
         }
 
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018

@@ -242,7 +242,7 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
             PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, initial_target, .. }
                 if *class_id != b.base_class_id && certified.contains(class_id) =>
             {
-                Some((*class_id, pwu_rule.clone(), *initial_target))
+                Some((*class_id, *pwu_rule, *initial_target))
             }
             _ => None,
         })
@@ -272,7 +272,7 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
         class_id: held_id,
         artifact_root: h(0xB27),
         slash_value_per_pwu: floor.3,
-        pwu_rule: held_rule.clone(),
+        pwu_rule: held_rule,
         initial_target: held_target,
         share_permille: 0,
         activation_daa: 0,
@@ -319,7 +319,7 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
     let cap = row.profile.max_inflight_claims;
     let s = c.into_state_v3(sp, None, false, None).expect("rebuilds");
     println!("held class {held_id}: Active, inflight cap {cap} claims");
-    assert!(cap >= 1 && cap <= 64, "a small cap to fill ({cap})");
+    assert!((1..=64).contains(&cap), "a small cap to fill ({cap})");
 
     // What ONE whole claim of this class reserves (a canonical-size commitment), vs the smallest.
     let canonical = held_rule.canonical_leaves_v1();

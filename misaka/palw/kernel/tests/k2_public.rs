@@ -175,7 +175,7 @@ fn no_reward_opens_without_a_complete_public_prosecution_of_exactly_that_profile
     let armed = registration_outcome_v1(&active(), &d, &c.program, root_of(&c.program), MAX_POSITIONS, 0);
     let profile = c.header().class_binding_id;
     let public = ProfileMaterialV1::kernel_route(true);
-    let nodes: u64 = c.trace.values[0].iter().map(|o| o.len() as u64).sum();
+    let _nodes: u64 = c.trace.values[0].iter().map(|o| o.len() as u64).sum();
     let gate = |m: &ProfileMaterialV1| public_prosecution_complete_v1(&d, &c.program, &c.plan, m, &POLICY);
     let code = gate(&public);
     let bounds = code.as_ref().expect("every relation of this plan has a public court and finite bounds");

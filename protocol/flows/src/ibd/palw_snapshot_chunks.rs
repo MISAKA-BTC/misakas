@@ -31,10 +31,10 @@ impl IbdFlow {
             None
         };
         let result = self.receive_pruning_point_palw_chunks(point, &mut receiver, &mut spill).await;
-        if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed)) {
-            if let Some(receiver) = receiver.take() {
-                park_interrupted_snapshot(receiver);
-            }
+        if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed))
+            && let Some(receiver) = receiver.take()
+        {
+            park_interrupted_snapshot(receiver);
         }
         result
     }

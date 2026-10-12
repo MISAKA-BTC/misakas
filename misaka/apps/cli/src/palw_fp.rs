@@ -372,15 +372,15 @@ fn check_carrier_batch_fees_v1(fees: impl IntoIterator<Item = u64>, maximum: Opt
         .into_iter()
         .try_fold(0u64, |sum, fee| sum.checked_add(fee))
         .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast"))?;
-    if let Some(maximum) = maximum {
-        if total > maximum {
-            return Err(CliError::new(
-                exit::GENERIC,
-                format!(
-                    "the actual batch carrier fee {total} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast"
-                ),
-            ));
-        }
+    if let Some(maximum) = maximum
+        && total > maximum
+    {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "the actual batch carrier fee {total} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast"
+            ),
+        ));
     }
     Ok(total)
 }
@@ -918,7 +918,7 @@ mod carrier_batch_tests {
     use std::{cell::Cell, path::PathBuf};
 
     fn object(index: u8) -> PalwConsensusObjectV2 {
-        PalwConsensusObjectV2::ObjectChunk { group: Hash64::from_u64_word(200), index, count: 2, bytes: vec![index as u8; 128] }
+        PalwConsensusObjectV2::ObjectChunk { group: Hash64::from_u64_word(200), index, count: 2, bytes: vec![index; 128] }
     }
 
     fn assert_built_carrier(tx: &Transaction, funding: &UtxoEntry, expected_fee: u64, object: &PalwConsensusObjectV2) {

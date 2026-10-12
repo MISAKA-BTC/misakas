@@ -339,10 +339,10 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
         }
     };
     if none_ok && a_same == Some(true) {
-        push("A", "standard template (no adapter)".to_string(), none.ok().expect("none"));
+        push("A", "standard template (no adapter)".to_string(), none.expect("none"));
     }
     if auto_ok {
-        let m = auto.ok().expect("auto");
+        let m = auto.expect("auto");
         let (level, via) = match &m.adapter {
             misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id, .. } => ("B", format!("built-in adapter `{id}`")),
             _ => ("A", "standard template (no adapter)".to_string()),
@@ -350,7 +350,7 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
         push(level, via, m);
     }
     if user_ok {
-        let m = user.expect("user").ok().expect("user read");
+        let m = user.expect("user").expect("user read");
         let id = match &m.adapter {
             misaka_palw_tir_lower::hf_schema::AdapterSource::UserFile { id, .. } => id.clone(),
             _ => "?".into(),
@@ -806,7 +806,7 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
         sess.cross_states = Some(states.clone());
         let fl = sess.run(&tokens).map_err(|e| e.to_string())?;
         let il = fidelity::int_logits(&text.program, &pt, &tokens, logits_scale, &|_| {}).map_err(|e| format!("integer run: {e}"))?;
-        let m = fidelity::compare(&[fl], &[il], &[tokens.clone()]);
+        let m = fidelity::compare(&[fl], &[il], std::slice::from_ref(&tokens));
         let v = json!({"positions": m.positions, "top1": m.top1_agreement, "kl_mean": m.kl_mean, "kl_max": m.kl_max});
         if m.top1_agreement < 0.8 || m.kl_mean > 0.02 {
             return Err(format!("integer vs float with declared states: top-1 {:.3}, KL {:.5}", m.top1_agreement, m.kl_mean));
@@ -820,7 +820,8 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
     }
     let s = stage(|| {
         let (tw0, ct0) = three_way_and_court(&kv.program, &p0, &[vec![0usize]]).map_err(|e| format!("stage 0: {e}"))?;
-        let (tw1, ct1) = three_way_and_court(&text.program, &pt, &[tokens.clone()]).map_err(|e| format!("text stage: {e}"))?;
+        let (tw1, ct1) =
+            three_way_and_court(&text.program, &pt, std::slice::from_ref(&tokens)).map_err(|e| format!("text stage: {e}"))?;
         Ok(json!({"stage0": tw0, "text": tw1, "court_stage0": ct0, "court_text": ct1}))
     });
     st.insert("cross_three_way_court", s);

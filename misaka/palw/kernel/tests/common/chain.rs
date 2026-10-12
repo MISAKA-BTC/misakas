@@ -122,7 +122,7 @@ pub fn test_salt(claim_id: &Digest) -> Digest {
 /// clock) every reveal carries its seal's salt (OPV-BOOT GAP-B1a), so each commit becomes a salted reveal under [`test_salt`];
 /// before the fence (or with no OPV policy) `txs` is returned as it is.
 pub fn salted(l: &KernelLedgerV1, txs: Vec<T>) -> Vec<T> {
-    if !l.salted_seals_from().is_some_and(|at| l.daa >= at) {
+    if l.salted_seals_from().is_none_or(|at| l.daa < at) {
         return txs;
     }
     txs.into_iter()

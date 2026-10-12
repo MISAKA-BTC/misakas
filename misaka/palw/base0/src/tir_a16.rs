@@ -388,6 +388,7 @@ fn parse_triples(name: &str, bytes: &[u8], want: usize) -> Result<Vec<A16QuantPa
 
 /// **The artifact's tensors as the mirror program's params**, every instance's little-endian
 /// bytes keyed by `(param index, layer)`.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 pub fn a16_tir_tensor_bytes(
     artifact: &Base0ArtifactV1,
     program: &TirProgramV1,

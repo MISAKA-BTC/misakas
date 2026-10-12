@@ -54,7 +54,7 @@ use kaspa_consensus_core::palw_model_registry_v1::{
 use kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClassAdmissionCarriageV2, PalwConsensusObjectV2,
-    PalwPwuRuleV2, PalwStateParamsV2, PalwTransitionExtrasV1, apply_palw_transition_v7, palw_operator_id_v2,
+    PalwPwuRuleV2, PalwTransitionExtrasV1, apply_palw_transition_v7, palw_operator_id_v2,
 };
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, step_leaf_count_capped_v1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -177,7 +177,7 @@ fn registry_fold(p: &Params, b: &PalwConsensusParamsV2) -> PalwModelRegistryFold
 /// `PalwTransitionExtrasV1` for t12 at `daa`, field for field as
 /// `processor.rs:8242 palw_transition_extras` builds it, with `bits = 0` (the degenerate network
 /// draw of one, which is the conservative reading for the attacker).
-fn t12_extras(p: &Params, b: &PalwConsensusParamsV2, daa: u64) -> PalwTransitionExtrasV1 {
+fn t12_extras(p: &Params, b: &PalwConsensusParamsV2, _daa: u64) -> PalwTransitionExtrasV1 {
     let fold = registry_fold(p, b);
     PalwTransitionExtrasV1 {
         model_lines_active: true,
@@ -359,6 +359,7 @@ fn run_registration_gate(
 }
 
 #[test]
+#[allow(unused_assignments)] // `highest` records how far the class got; the last gate it passes is read only by a failure message
 fn the_malicious_class_walked_through_every_gate_in_order() {
     let p = t12();
     let b = bundle_of(&p);
@@ -669,7 +670,7 @@ fn the_reward_the_malicious_class_collects_for_floor_work() {
 
     // The honest floor, for reference.
     let real = real_ccu(); // 21_657_728 MAC-eq
-    let floor_target = palw_work_ticket_target_v1(real, w0);
+    let _floor_target = palw_work_ticket_target_v1(real, w0);
 
     println!("\n=========================================================================");
     println!("  THE REWARD — malicious class vs the honest floor, SAME real compute");

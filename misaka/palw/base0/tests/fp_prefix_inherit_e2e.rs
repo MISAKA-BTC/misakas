@@ -14,8 +14,7 @@ use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
 use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
 use kaspa_consensus_core::palw_fp_prefix_v1::{PALW_FP_PREFIX_INHERIT_VERSION, PALW_FP_PREFIX_VERSION, palw_fp_prefix_state_root_v1};
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpJobTailV1, PalwFpPrefixStateV1,
-    PalwFreePromptJobV3, fp_job_id_v3,
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PalwFpJobTailV1, PalwFpPrefixStateV1, PalwFreePromptJobV3, fp_job_id_v3,
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_step::canonical_step_coordinates;
@@ -28,6 +27,7 @@ const K: u32 = 3;
 struct Claim {
     job: PalwFreePromptJobV3,
     ids: Vec<u32>,
+    #[allow(dead_code)]
     prompt: Vec<usize>,
     run: PalwFpRunV1,
 }
@@ -185,7 +185,7 @@ fn inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_lea
     // VERSION 2 UNCHANGED: the same prefix as a version-11 claim is a version-2 context whose prefix leaves are job-bound.
     let v11e = claim(&backend, PALW_FP_PREFIX_VERSION, &ids_e, 0x11, state);
     let v11l = claim(&backend, PALW_FP_PREFIX_VERSION, &ids_l, 0x22, state);
-    let (m11e, m11l) = (material(&v11e), material(&v11l));
+    let (m11e, _m11l) = (material(&v11e), material(&v11l));
     assert_eq!(m11e.binding.job_context.version, PALW_TRACE_COMMITMENT_VERSION_V2);
     assert_eq!(m11e.binding.job_context.inherited_prefix_v1(), None);
     let (qe, ql) = (prefix_leaves(&v11e), prefix_leaves(&v11l));

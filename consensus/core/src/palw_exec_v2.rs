@@ -1090,9 +1090,8 @@ mod tests {
         for at in (4..good.len()).step_by(37) {
             let mut mutated = good.clone();
             mutated[at] ^= 0x01;
-            match PalwExecV2Envelope::decode(&mutated) {
-                Ok(other) => assert_ne!(other, env, "bit flip at {at} decoded to the same envelope"),
-                Err(_) => {}
+            if let Ok(other) = PalwExecV2Envelope::decode(&mutated) {
+                assert_ne!(other, env, "bit flip at {at} decoded to the same envelope")
             }
         }
     }

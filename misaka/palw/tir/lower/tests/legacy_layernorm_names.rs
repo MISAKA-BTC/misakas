@@ -40,7 +40,7 @@ fn legacy_copy(src: &Path, tag: &str) -> (PathBuf, usize) {
         renamed.insert(new.unwrap_or(k), v);
     }
     let mut h = serde_json::to_vec(&renamed).unwrap();
-    while h.len() % 8 != 0 {
+    while !h.len().is_multiple_of(8) {
         h.push(b' ');
     }
     let mut out = (h.len() as u64).to_le_bytes().to_vec();

@@ -179,7 +179,7 @@ fn the_5102_figure_is_the_ladder_clock_and_testnet12_charges_the_held_clock() {
     // history needs 3 moves, and every history up to 2^32 positions fits the 3,000-DAA window.
     for history in [16u64, 512, 32_768, 262_144, 1 << 20, 2_000_000, 1 << 32] {
         let worst = palw_attn_court_admits_row_held_v1(&court, history, 16, 3_000).unwrap_or_else(|e| panic!("{history}: {e:?}"));
-        assert!(worst + reserve + 1 <= 3_000, "{history}: {worst} + {reserve} + 1");
+        assert!(worst + reserve < 3_000, "{history}: {worst} + {reserve} + 1");
         println!("held clock, {history:>10} positions: the exchange takes {} of 3,000 DAA", worst + reserve + 1);
     }
     // The window the fence would derive is therefore the network's, for every such history.

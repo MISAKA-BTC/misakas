@@ -234,7 +234,7 @@ impl Pattern {
     fn has(&self, p: u64) -> bool {
         match self {
             Pattern::Every => true,
-            Pattern::EveryK(k) => p % k == 0,
+            Pattern::EveryK(k) => p.is_multiple_of(*k),
             Pattern::OnlyZero => p == 0,
             Pattern::Nothing => false,
             Pattern::Some(s) => s.contains(&p),

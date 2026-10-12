@@ -15,7 +15,7 @@ fn refused(s: impl Into<String>) -> PalwStateV2Error {
 }
 pub(super) fn enabled(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
-    if !builder.extras.kernel_route.as_ref().is_some_and(|r| r.opv.is_some()) {
+    if builder.extras.kernel_route.as_ref().is_none_or(|r| r.opv.is_none()) {
         return Err(refused("flat vectors require palw_panel_free_v1"));
     }
     Ok(())
@@ -96,7 +96,7 @@ fn post_inner(
     // its worst-case public pursuit — G14-B's clock and carriage, the sealed filing included — lands inside its liability horizon.
     let pursuit_gate = if super::palw_model_refutation_seal_fold_v4::sealed_refutations_in_force_v4(builder) {
         let ledger_policy = route_ledger_policy_v1(builder)?;
-        builder.extras.kernel_route.as_ref().and_then(|r| r.opv.as_ref()).map(|o| (ledger_policy, o.policy.clone()))
+        builder.extras.kernel_route.as_ref().and_then(|r| r.opv.as_ref()).map(|o| (ledger_policy, o.policy))
     } else {
         None
     };

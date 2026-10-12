@@ -101,7 +101,7 @@ impl TirPieceViewV1 {
         let w = dtype.width();
         let mut decoded = Vec::with_capacity(pieces.len());
         for (offset, bytes) in pieces {
-            if offset as usize % w != 0 || bytes.len() % w != 0 {
+            if !(offset as usize).is_multiple_of(w) || bytes.len() % w != 0 {
                 return Err("a piece is not aligned to its element width".into());
             }
             let t = Tensor::from_le_bytes(dtype, &[bytes.len() / w], &bytes).map_err(|e| e.to_string())?;

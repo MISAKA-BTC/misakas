@@ -74,10 +74,10 @@ pub(super) fn demand(
                 return Err("flat hash leaf outside declared large-node layout".into());
             }
         }
-        if let FlatVectorUnitKindV9::Value(index) = unit.kind {
-            if misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= index {
-                return Err("typed value is not in the admitted output".into());
-            }
+        if let FlatVectorUnitKindV9::Value(index) = unit.kind
+            && misaka_palw_kernel::merkle3::LayoutV3::of(&shape).len <= index
+        {
+            return Err("typed value is not in the admitted output".into());
         }
         if shape.len() > 4 {
             return Err("flat shape rank".into());

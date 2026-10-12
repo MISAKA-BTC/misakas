@@ -68,6 +68,7 @@ fn setup(name: &str, program: &TirProgramV1, params: &MapParams, seed: u32, c: u
 }
 
 /// A partition of the layers into `s` contiguous shards, as occurrence ranges: `pre` with the first, `post` with the last.
+#[allow(clippy::single_range_in_vec_init)]
 fn shards(n_occ: usize, s: usize) -> Vec<Range<usize>> {
     let layers = n_occ - 2;
     if s > layers.max(1) {
@@ -365,7 +366,7 @@ fn a_lie_inside_a_cell_is_found_by_that_cell_at_that_leaf_and_a_consistent_bound
         };
         let a = 3u32;
         let target = s.space.leaves_of_position(&s.ctx, a).into_iter().find(|l| {
-            matches!(l.kind, PalwTirLeafKindV1::Commit { occurrence, .. } if cuts[1].contains(&(occurrence as usize)) && occurrence as usize != cuts[1].end - 1 || false)
+            matches!(l.kind, PalwTirLeafKindV1::Commit { occurrence, .. } if cuts[1].contains(&(occurrence as usize)) && occurrence as usize != cuts[1].end - 1)
                 && !boundary_leaf(l)
                 && !matches!(l.kind, PalwTirLeafKindV1::Commit { occurrence, .. } if occurrence as usize == cuts[1].start)
         });
@@ -631,7 +632,7 @@ fn a_seat_duty_verifies_its_shards_cells_over_a_backends_capture() {
                     let capture = TirCaptureV1::decode(&outcome.material).unwrap();
                     let class = backend.class();
                     let holding = misaka_palw_tir_exec::node::fetch_shard_params_v1(
-                        &class,
+                        class,
                         class.class_id(&root),
                         root,
                         s_l,
@@ -834,7 +835,6 @@ fn the_drills_boundary_lie_is_found_upstream_and_passes_downstream() {
 // ---------------------------------------------------------------------------------------------
 
 mod helper {
-    use super::*;
     use misaka_palw_tir_exec::node::DeviceKernelBackendV1;
     use misaka_palw_tir_exec::{CpuDeviceV1, TirProcessDeviceV1, serve_cell_requests_v1};
     use misaka_palw_tir_exec::{NodeValue, StepSink, TirCellStepperV1, TirDeviceV1, TirParams, TirPlan};
@@ -1314,6 +1314,7 @@ fn a_row_pursuit_over_peers_refuses_liars_and_ends_with_the_mirrors_holding() {
 }
 
 #[test]
+#[allow(clippy::reversed_empty_ranges)]
 fn malformed_public_cell_run_requests_refuse_before_indexing_or_demanding_unrestorable_material() {
     let (name, program, params) = programs().into_iter().next().unwrap();
     let s = setup(&name, &program, &params, 1, 2, 4, 4, 5);

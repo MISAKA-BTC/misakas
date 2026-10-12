@@ -339,7 +339,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
 
     // ---- a kind the decoder pipeline does not run: its RFC-0003 route (a vision tower, a convolutional network, an encoder–decoder, a
     // diffusers component) is read, lowered to its version-2 programs and admitted, and that is the convert stage's verdict ------------
-    let mut routed_ok = false;
+    let mut _routed_ok = false; // kept for the probe trace; nothing reads it since the route decides by `routed`
     let mut routed: Option<RoutedClass> = None;
     let is_route = src.gguf_model.is_none() && src.config.as_ref().is_some_and(misaka_palw_tir_lower::model::route::is_data_route);
     if let (Some(config), None) = (&src.config, &src.gguf_model)
@@ -348,7 +348,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
         let dir = (src.kind == InputKind::HfDirectory).then(|| std::path::PathBuf::from(&src.label)).filter(|d| d.is_dir());
         let probe = misaka_palw_tir_lower::model::route::probe_data_route(config, tindex.as_ref(), dir.as_deref());
         if probe["ok"] == serde_json::json!(true) {
-            routed_ok = true;
+            _routed_ok = true;
             let programs = probe["programs"].as_array().cloned().unwrap_or_default();
             notes.push(format!(
                 "a {} class (adapter {}): lowered to {} RFC-0003 program(s), each admitted ({}); it registers as a pipeline class, {}",
@@ -413,7 +413,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 Blocker::new(Stage::Convert, "ARCH_REFUSED", "the model's data route (RFC-0003 programs) refuses it")
                     .evidence([short(probe["error"].as_str().unwrap_or("no reason given"))]),
             );
-            routed_ok = false;
+            _routed_ok = false;
         }
         // Either way the decoder pipeline's own refusal is not the verdict of a kind it does not run.
         report = report.map(|mut r| {
@@ -639,8 +639,10 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     });
     let base_tokenizer =
         opts.base_tokenizer.as_ref().filter(|bt| src.kind == InputKind::HfDirectory && declared_vocab == Some(bt.vocab_size));
-    if tokenizer_known == Some(false) && needs_tokenizer && base_tokenizer.is_some() {
-        let bt = base_tokenizer.expect("checked");
+    if tokenizer_known == Some(false)
+        && needs_tokenizer
+        && let Some(bt) = base_tokenizer
+    {
         notes.push(format!(
             "TOKENIZER_BOUND_FROM_BASE: no tokenizer file beside the checkpoint; the class binds the tokenizer of its pinned base `{}` (its configuration declares vocab_size {} = this model's): the registrant commits to the bytes of that one file",
             bt.base, bt.vocab_size

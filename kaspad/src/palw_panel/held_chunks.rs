@@ -55,6 +55,7 @@ pub(super) const PALW_HELD_DECLARATION_PATIENCE_DAA_V1: u64 = 200;
 /// **One challenge this node is carrying** (see the module doc).
 #[derive(Clone, Debug)]
 pub(super) struct PalwHeldChunksV1 {
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     pub claim: Hash64,
     pub session_id: Hash64,
     /// The digest the declaration pinned: the chain's group is ours only if it carries it.

@@ -339,6 +339,7 @@ fn frontier(ok: u64, step: u64, cap: u64, try_at: &dyn Fn(u64) -> Result<Judged,
 /// ceilings and the node's carrier still admit. At every admitted geometry the worst filing fits the carrier — the gate refuses any
 /// class whose priced court does not — so these are the worst court bytes, court work and retained bytes a v5 class can have.
 #[test]
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 fn k2s_v5_the_worst_geometry_the_ceilings_admit() {
     let at = |d: u64, ff: u64, layers: u64, vocab: u64, l: u64| -> Result<Judged, String> {
         let program = encoder_view(&bert(d, ff, layers, vocab, l.max(512)), l as u32, Pooling::Cls)?;
@@ -750,6 +751,7 @@ fn k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_materi
         let node_count: u64 = occ.iter().map(|(b, _)| w.enc.program.blocks[*b as usize].nodes.len() as u64).sum();
         let (mut filed, mut worst_ratio) = (0usize, 0f64);
         for (s, (b, _)) in occ.iter().enumerate() {
+            #[allow(clippy::needless_range_loop)] // the index is also used as a position
             for n in 0..w.enc.program.blocks[*b as usize].nodes.len() {
                 let len = honest.values[0][s][n].len() as u64;
                 let priced = misaka_palw_kernel::element::element_court_cost_in_v1(

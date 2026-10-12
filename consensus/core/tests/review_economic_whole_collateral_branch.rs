@@ -23,10 +23,6 @@ use common::*;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
-use kaspa_consensus_core::palw_execution_lane_v1::{
-    PalwExecFinalV1, PalwExecScheduleV1, palw_execution_permits_v1, palw_execution_schedule_snapshot_v1,
-};
-use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_bounded_v1};
 use kaspa_consensus_core::palw_offence_v1::{
     PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
     palw_offence_evidence_digest_v1,

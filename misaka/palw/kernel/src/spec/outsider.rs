@@ -356,6 +356,7 @@ impl SpecOutsiderV1<'_> {
                                         }));
                                     }
                                     ReexecutionV1::Match { logits, .. } => {
+                                        #[allow(clippy::needless_range_loop)] // `r` is also the decode position and the fault's index
                                         for r in 0..generated.len() {
                                             let t = logits
                                                 .get(sub_claim.select_position(&sub_job, r) as usize)
@@ -374,6 +375,7 @@ impl SpecOutsiderV1<'_> {
                                 continue;
                             }
                             let (post, logits) = m.logits_at();
+                            #[allow(clippy::needless_range_loop)] // `r` is also the decode position and the fault's index
                             for r in 0..generated.len() {
                                 let p = sub_claim.select_position(&sub_job, r);
                                 let t = self.node(s as u8, p, post, logits).ok_or("a stage's logits vanished")?;

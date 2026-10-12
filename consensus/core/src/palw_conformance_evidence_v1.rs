@@ -454,7 +454,7 @@ pub fn reference_leaf_result_v1(program: &TirProgramV1, param: u16, bytes: &[u8]
     let decl = program.params.get(param as usize).ok_or("the program declares no such param")?;
     let dtype = decl.dtype;
     let w = dtype.width();
-    if w == 0 || bytes.len() % w != 0 {
+    if w == 0 || !bytes.len().is_multiple_of(w) {
         return Err(format!("{} bytes are not whole {} elements", bytes.len(), dtype.name()));
     }
     let n = bytes.len() / w;

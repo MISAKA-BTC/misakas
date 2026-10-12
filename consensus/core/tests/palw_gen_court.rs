@@ -273,6 +273,7 @@ fn the_output_digest_is_the_output_nodes_step_tiles() {
     let lanes = |tile: usize| -> Vec<i128> { t.run.output.data[tile * tile_len as usize..][..tile_len as usize].to_vec() };
     // The decoder is a `Final` stage at one position: output tile t is its step tile t.
     let row = t.run.output.data.len() as u64;
+    #[allow(clippy::needless_range_loop)]
     for tile in 0..tiles.len() {
         assert_eq!(palw_gen_output_tile_of_v1(&decoder.output, row, tile_len, 1, 0, tile as u64), Some(tile as u64));
         let proof = output_tile_proof_v1(&leaves, tile).unwrap();
@@ -287,6 +288,7 @@ fn the_output_digest_is_the_output_nodes_step_tiles() {
     let lied_root = output_root_v1(&spec, &lied, tile_len).unwrap();
     let lied_leaves = output_leaves_v1(&spec, &lied, tile_len).unwrap();
     let lied_tiles = misaka_palw_gen::output::output_tiles_v1(&spec, &lied, tile_len).unwrap();
+    #[allow(clippy::needless_range_loop)]
     for tile in 0..tiles.len() {
         let proof = output_tile_proof_v1(&lied_leaves, tile).unwrap();
         let verdict =

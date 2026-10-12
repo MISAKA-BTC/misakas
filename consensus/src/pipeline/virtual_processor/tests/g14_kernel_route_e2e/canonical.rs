@@ -398,6 +398,7 @@ impl Rpc {
     /// **Op 211 `getPalwKernelRows`, paged to the end**: the route's header and every row, reassembled into the route state and checked
     /// against the ledger and aux roots the op serves (every page must report one snapshot). Returns the state and the served ledger
     /// root.
+    #[allow(unused_assignments)]
     pub(super) fn route(&self) -> (PalwKernelRouteStateV1, Hash64) {
         let mut request =
             GetPalwKernelRowsRequest { has_cursor: false, after_table: 0, after_key: String::new(), max_bytes: ROWS_PAGE_BYTES };

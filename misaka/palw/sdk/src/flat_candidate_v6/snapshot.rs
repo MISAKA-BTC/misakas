@@ -114,7 +114,7 @@ struct WireRow {
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>, Refusal> {
-    if s.len() % 2 != 0 || !s.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+    if !s.len().is_multiple_of(2) || !s.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         return Err(Refusal::new("SNAPSHOT_HEX", "RPC page contains malformed hex"));
     }
     let digit = |x: u8| if x.is_ascii_digit() { x - b'0' } else { x.to_ascii_lowercase() - b'a' + 10 };

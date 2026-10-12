@@ -150,7 +150,7 @@ impl PalwPrefixSourceStreamV1 {
             || offset != p.offset
             || bytes.is_empty()
             || bytes.len() > 65_536
-            || bytes.len() % 4 != 0
+            || !bytes.len().is_multiple_of(4)
             || bytes.len() as u64 > u64::from(p.length - p.offset)
         {
             return Err("source chunk changes bounded contiguous old preimage interval".into());

@@ -135,7 +135,7 @@ impl TiledFixture {
 
     pub fn backend(&self, chain: &Chain) -> Box<dyn PalwExecutionBackendV1> {
         let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(
-            chain.bundle.court.clone(),
+            chain.bundle.court,
             chain.config.params.palw_prompt_ids_form_v1(),
             chain.config.params.net.to_string().into_bytes(),
         )
@@ -143,7 +143,7 @@ impl TiledFixture {
         let holding = sdk.load_artifact(&self.path).unwrap();
         let registry = crate::palw_backends::PalwBackendRegistry::for_node_v1(
             &chain.config.params,
-            chain.bundle.court.clone(),
+            chain.bundle.court,
             chain.config.params.palw_prompt_ids_form_v1(),
             vec![holding],
             chain.config.params.net.to_string().into_bytes(),
@@ -503,6 +503,7 @@ impl TiledFixture {
     pub async fn refresh_panel_readiness(&self, chain: &mut Chain, floats: &mut [Funding]) {
         // Jury possession expires before accepted_daa + anchor_delay on this native span
         // clock. The colluding model holders refresh through ordinary signed carriers.
+        #[allow(clippy::needless_range_loop)] // `card` is the bond index and the seat number
         for card in 1..chain.bonds.len() {
             let object = self.readiness(chain, card);
             chain.send(card, &object, &mut floats[card], &[]).await;
@@ -511,6 +512,7 @@ impl TiledFixture {
 
     pub async fn prepare_panel(&self, chain: &mut Chain, floats: &mut [Funding]) {
         let class_id = self.profile.shape_profile_id();
+        #[allow(clippy::needless_range_loop)] // `card` is the bond index and the seat number
         for card in 1..chain.bonds.len() {
             let capable_classes = BTreeSet::from([chain.bundle.base_class_id, class_id]);
             let message = kaspa_consensus_core::palw_state_v2::palw_bond_capability_message_v2(
@@ -542,6 +544,7 @@ impl TiledFixture {
             .find(|s| kaspa_consensus_core::palw_activation_pool_v1::palw_admission_audit_due_staggered_v1(&class_id, *s, period))
             .unwrap();
         chain.advance((audit - 10) * read.span_daa).await;
+        #[allow(clippy::needless_range_loop)] // `card` is the bond index and the seat number
         for card in 1..chain.bonds.len() {
             let object = self.readiness(chain, card);
             chain.send(card, &object, &mut floats[card], &[]).await;

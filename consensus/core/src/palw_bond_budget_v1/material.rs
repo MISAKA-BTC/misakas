@@ -173,14 +173,13 @@ impl PalwBondBudgetStateV1 {
             accepted_daa: held.accepted_daa,
             payment: PalwMaterialPaymentV1::Pending { income },
         };
-        if let Some(old) = self.material_income.get(&id) {
-            if old.root.is_some_and(|old| old != root)
+        if let Some(old) = self.material_income.get(&id)
+            && (old.root.is_some_and(|old| old != root)
                 || old.amount > amount
                 || old.accepted_daa != held.accepted_daa
-                || old.payment != row.payment
-            {
-                return Err(PalwBudgetRefusalV1::Duplicate);
-            }
+                || old.payment != row.payment)
+        {
+            return Err(PalwBudgetRefusalV1::Duplicate);
         }
         self.put_material_income_v1(id, Some(row), j)
     }

@@ -95,7 +95,13 @@ fn past_the_fence_a_legacy_family_registration_is_refused_by_name_and_below_it_i
     .expect("the held hybrid row derives at 512");
     let chain = Chain::new(p.clone());
     let fold_at = |daa: u64| {
-        chain.try_fold(&chain.s, &ctx(0xCA_0000 + daa, daa, daa, 0), &[object.clone()], PalwBlockWorkV3::None, Hash64::default())
+        chain.try_fold(
+            &chain.s,
+            &ctx(0xCA_0000 + daa, daa, daa, 0),
+            std::slice::from_ref(&object),
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+        )
     };
     let past = fold_at(AT + 20);
     match past {

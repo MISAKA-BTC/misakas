@@ -1890,7 +1890,7 @@ fn build_tir_root_claim_with_budget(
         let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
         source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
         if let Some(budget) = budget.as_deref_mut() {
-            budget.targets(u64::from(*count)).map_err(eval_err)?;
+            budget.targets(*count).map_err(eval_err)?;
         }
         let elements: Vec<usize> = (0..*count as usize).collect();
         let request = DemandRequest { target: DemandTarget::Node { ctx: site.ctx, node: *node }, elements: &elements };

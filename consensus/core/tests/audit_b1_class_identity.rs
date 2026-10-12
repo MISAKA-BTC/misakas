@@ -223,12 +223,11 @@ fn what_one_claim_of_each_t12_class_reserves() {
     let mut floor_declared = 0u64;
 
     for o in &bundle.genesis_objects {
-        if let PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, .. } = o {
-            if *class_id == bundle.base_class_id {
-                if let kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } = pwu_rule {
-                    floor_declared = *pwu_per_inference;
-                }
-            }
+        if let PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, .. } = o
+            && *class_id == bundle.base_class_id
+            && let kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } = pwu_rule
+        {
+            floor_declared = *pwu_per_inference;
         }
     }
     println!("floor: declared_leaves {floor_declared}  derived_per_draw {floor_draw} MAC-eq");

@@ -65,10 +65,10 @@ impl KernelLedgerV1 {
             return Err("unsupported or expired EXEC reward hold".into());
         }
         let hold = ExecRewardHoldV1 { owner_root: root, expires_daa };
-        if let Some(old) = self.exec_reward_holds.get(&claim) {
-            if *old != hold {
-                return Err("the EXEC reward claim already belongs to another root".into());
-            }
+        if let Some(old) = self.exec_reward_holds.get(&claim)
+            && *old != hold
+        {
+            return Err("the EXEC reward claim already belongs to another root".into());
         }
         if !self.exec_reward_holds.contains_key(&claim) && self.exec_reward_holds.len() >= MAX_EXEC_REWARD_HOLDS_V1 {
             return Err("too many EXEC reward holds".into());

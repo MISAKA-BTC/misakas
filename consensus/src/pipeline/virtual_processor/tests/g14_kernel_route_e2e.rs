@@ -1357,7 +1357,7 @@ async fn g14_kernel_route_replay_and_reorg_reach_the_same_roots() {
     // ---- Z replays A ----
     let z = w.net.replay().await;
     w.net.assert_same(&z, "Z on A");
-    let mut zn = w.net.on_chain(z);
+    let zn = w.net.on_chain(z);
 
     // ---- B, from the same fork, mines a heavier chain that never saw the proof ----
     let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
@@ -1822,7 +1822,7 @@ async fn g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escro
     // its own branch — still exactly one reward and one debit.
     let z = w.net.replay().await;
     w.net.assert_same(&z, "Z on A");
-    let mut zn = w.net.on_chain(z);
+    let zn = w.net.on_chain(z);
     let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
     let up_to_fork = chain_blocks(&w.net.chain, fork);
     let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
@@ -2303,7 +2303,7 @@ async fn g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a
     // A second node replays to the same route.
     let z = w.net.replay().await;
     w.net.assert_same(&z, "Z replays A");
-    let mut zn = w.net.on_chain(z);
+    let zn = w.net.on_chain(z);
 
     // B, from the fork, out-works A's two blocks: Z reorgs onto B, and B's route is exactly the fork's.
     let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
@@ -2602,7 +2602,7 @@ async fn g14_opv_replay_and_reorg_reach_the_same_roots() {
 
     let z = w.net.replay().await;
     w.net.assert_same(&z, "Z on A");
-    let mut zn = w.net.on_chain(z);
+    let zn = w.net.on_chain(z);
     let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
     let up_to_fork = chain_blocks(&w.net.chain, fork);
     let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;

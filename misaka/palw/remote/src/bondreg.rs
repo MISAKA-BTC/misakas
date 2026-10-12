@@ -50,7 +50,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn unhex(s: &str) -> Result<Vec<u8>, BondRefusalV1> {
     let mut out = vec![0u8; s.len() / 2];
-    if s.len() % 2 != 0 || faster_hex::hex_decode(s.as_bytes(), &mut out).is_err() {
+    if !s.len().is_multiple_of(2) || faster_hex::hex_decode(s.as_bytes(), &mut out).is_err() {
         return Err(BondRefusalV1::Malformed("a hex field is not hex".into()));
     }
     Ok(out)

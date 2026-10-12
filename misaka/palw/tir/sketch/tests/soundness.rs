@@ -651,7 +651,7 @@ impl Class {
         panic!("no plain weight site reads {name}");
     }
 
-    fn blocked<'a>(&'a self, blocks: usize) -> (TirSketchStoreV1, TirSketchKeysV1, misaka_palw_tir::MapParams) {
+    fn blocked(&self, blocks: usize) -> (TirSketchStoreV1, TirSketchKeysV1, misaka_palw_tir::MapParams) {
         let keys = TirSeatSketchSecretV1::from_bytes([0x33; 32]).keys(&CLASS, 1);
         let store =
             TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");

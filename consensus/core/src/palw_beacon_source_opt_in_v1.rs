@@ -106,72 +106,6 @@ impl Params {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::params::{MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
-
-    #[test]
-    fn source_opt_in_onboarding_horizon_refuses_other_consumer_subjects_before_monetary_admission() {
-        use misaka_palw_challenge::{BeaconContextV1, RootV1, SubjectKindV1};
-        let policy = crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5();
-        let ledger = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(
-            kaspa_hashes::Hash64::from_u64_word(1),
-            kaspa_hashes::Hash64::from_u64_word(2),
-        );
-        let source = PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1));
-        let context = BeaconContextV1 {
-            chain_genesis: [1; 64],
-            ruleset_id: [2; 64],
-            policy,
-            subject_kind: SubjectKindV1::ModelConformance,
-            commitment_root: [3; 64],
-            commitment_position: 100,
-            challenge_epoch: 0,
-            eligible_profiles: std::collections::BTreeSet::from([[4; 64]]),
-            excluded_profiles: std::collections::BTreeSet::from([[5; 64]]),
-            candidate_profile_id: RootV1::Present([5; 64]),
-        };
-        let original = source.policy.target(context.clone(), &ledger).unwrap();
-        original.validate().unwrap();
-        for subject in SubjectKindV1::ALL {
-            if subject == SubjectKindV1::ModelConformance {
-                continue;
-            }
-            let mut changed = context.clone();
-            changed.subject_kind = subject;
-            assert!(source.policy.target(changed.clone(), &ledger).is_err(), "{subject:?}");
-            changed.candidate_profile_id = RootV1::Absent;
-            assert!(source.policy.target(changed, &ledger).is_err(), "typed absence does not authorize {subject:?}");
-        }
-        let mut missing = context;
-        missing.candidate_profile_id = RootV1::Absent;
-        assert!(source.policy.target(missing, &ledger).is_err());
-    }
-
-    #[test]
-    fn source_opt_in_has_its_own_dormant_fence_and_none_is_fingerprint_neutral() {
-        let t12 = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
-        for original in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, SIMNET_PARAMS, t12] {
-            assert!(original.palw_beacon_source_opt_in_v1.is_none());
-            original.validate_palw_beacon_source_opt_in_v1().unwrap();
-            let mut p = original.clone();
-            let before = (p.consensus_params_id(), p.consensus_schedule_id());
-            p.palw_beacon_source_opt_in_v1 = Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1)));
-            assert!(p.validate_palw_beacon_source_opt_in_v1().is_err());
-            assert_ne!((p.consensus_params_id(), p.consensus_schedule_id()), before);
-            let armed = (p.consensus_params_id(), p.consensus_schedule_id());
-            p.palw_beacon_source_opt_in_v1.as_mut().unwrap().policy.deposit_sompi += 1;
-            assert_ne!(p.consensus_params_id(), armed.0, "source contract changes consensus identity");
-            assert_ne!(p.consensus_schedule_id(), armed.1, "source contract changes schedule identity");
-            p.palw_beacon_source_opt_in_v1 = Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::never()));
-            p.validate_palw_beacon_source_opt_in_v1().unwrap();
-            assert!(p.palw_beacon_source_opt_in_activation().is_none());
-            assert_eq!(p.consensus_identity_id(), original.consensus_identity_id());
-        }
-    }
-}
-
 /// Frozen per-attempt source contract; kernel route aux table 108 (codex used 46 — RFC-02's model artifact v2 bindings on the
 /// integration line, where aux 32–107 are all used; renumbered at the R6781-F merge), independent of kernel reservation table 30.
 pub const PALW_BEACON_SOURCE_TABLE_TARGETS_V4: u8 = 108;
@@ -285,5 +219,71 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             });
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::params::{MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
+
+    #[test]
+    fn source_opt_in_onboarding_horizon_refuses_other_consumer_subjects_before_monetary_admission() {
+        use misaka_palw_challenge::{BeaconContextV1, RootV1, SubjectKindV1};
+        let policy = crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5();
+        let ledger = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(
+            kaspa_hashes::Hash64::from_u64_word(1),
+            kaspa_hashes::Hash64::from_u64_word(2),
+        );
+        let source = PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1));
+        let context = BeaconContextV1 {
+            chain_genesis: [1; 64],
+            ruleset_id: [2; 64],
+            policy,
+            subject_kind: SubjectKindV1::ModelConformance,
+            commitment_root: [3; 64],
+            commitment_position: 100,
+            challenge_epoch: 0,
+            eligible_profiles: std::collections::BTreeSet::from([[4; 64]]),
+            excluded_profiles: std::collections::BTreeSet::from([[5; 64]]),
+            candidate_profile_id: RootV1::Present([5; 64]),
+        };
+        let original = source.policy.target(context.clone(), &ledger).unwrap();
+        original.validate().unwrap();
+        for subject in SubjectKindV1::ALL {
+            if subject == SubjectKindV1::ModelConformance {
+                continue;
+            }
+            let mut changed = context.clone();
+            changed.subject_kind = subject;
+            assert!(source.policy.target(changed.clone(), &ledger).is_err(), "{subject:?}");
+            changed.candidate_profile_id = RootV1::Absent;
+            assert!(source.policy.target(changed, &ledger).is_err(), "typed absence does not authorize {subject:?}");
+        }
+        let mut missing = context;
+        missing.candidate_profile_id = RootV1::Absent;
+        assert!(source.policy.target(missing, &ledger).is_err());
+    }
+
+    #[test]
+    fn source_opt_in_has_its_own_dormant_fence_and_none_is_fingerprint_neutral() {
+        let t12 = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        for original in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, SIMNET_PARAMS, t12] {
+            assert!(original.palw_beacon_source_opt_in_v1.is_none());
+            original.validate_palw_beacon_source_opt_in_v1().unwrap();
+            let mut p = original.clone();
+            let before = (p.consensus_params_id(), p.consensus_schedule_id());
+            p.palw_beacon_source_opt_in_v1 = Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1)));
+            assert!(p.validate_palw_beacon_source_opt_in_v1().is_err());
+            assert_ne!((p.consensus_params_id(), p.consensus_schedule_id()), before);
+            let armed = (p.consensus_params_id(), p.consensus_schedule_id());
+            p.palw_beacon_source_opt_in_v1.as_mut().unwrap().policy.deposit_sompi += 1;
+            assert_ne!(p.consensus_params_id(), armed.0, "source contract changes consensus identity");
+            assert_ne!(p.consensus_schedule_id(), armed.1, "source contract changes schedule identity");
+            p.palw_beacon_source_opt_in_v1 = Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::never()));
+            p.validate_palw_beacon_source_opt_in_v1().unwrap();
+            assert!(p.palw_beacon_source_opt_in_activation().is_none());
+            assert_eq!(p.consensus_identity_id(), original.consensus_identity_id());
+        }
     }
 }

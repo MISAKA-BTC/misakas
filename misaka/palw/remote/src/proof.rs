@@ -79,7 +79,7 @@ impl StateProofV1 {
     pub fn open(&self) -> Result<(Header, PalwFactProofV1), String> {
         fn unhex(t: &str) -> Result<Vec<u8>, String> {
             let mut out = vec![0u8; t.len() / 2];
-            if t.len() % 2 != 0 || faster_hex::hex_decode(t.as_bytes(), &mut out).is_err() {
+            if !t.len().is_multiple_of(2) || faster_hex::hex_decode(t.as_bytes(), &mut out).is_err() {
                 return Err("a hex field is not hex".into());
             }
             Ok(out)

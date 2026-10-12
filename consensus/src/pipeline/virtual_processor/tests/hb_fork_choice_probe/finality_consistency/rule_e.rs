@@ -652,7 +652,7 @@ async fn finx_e_sybil_peers_first_cannot_hold_a_fresh_node() {
         let mut n = net_ruled(None, armed);
         shared_prefix(&mut n).await;
         let shared = blocks_in_topological_order(&n.light);
-        let mut sybils = vec![n.fresh_node(), n.fresh_node()];
+        let mut sybils = [n.fresh_node(), n.fresh_node()];
         for s in sybils.iter_mut() {
             feed(s, &shared).await;
         }

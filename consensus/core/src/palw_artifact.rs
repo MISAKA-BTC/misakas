@@ -1603,7 +1603,7 @@ mod multiproof_tests {
         for n in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 13, 16, 17, 31, 33, 64, 100, 257, 1_000, 4_097] {
             let (operands, leaves, root) = inventory(n);
             // Sixteen draws, the readiness V2 shape: scattered, with the last leaf and neighbours.
-            let mut draw: Vec<u32> = (0..16u32).map(|i| (i.wrapping_mul(2_654_435_761) % n.max(1)) as u32).collect();
+            let mut draw: Vec<u32> = (0..16u32).map(|i| i.wrapping_mul(2_654_435_761) % n.max(1)).collect();
             draw.push(n - 1);
             draw.sort_unstable();
             draw.dedup();
@@ -1817,7 +1817,7 @@ mod multiproof_size_tests {
                 let a = (next(&mut x) % leaf_count as u64) as u32;
                 let b = (a + 1 + (next(&mut x) % 40) as u32).min(leaf_count);
                 subsets.push((a..b).collect()); // a contiguous run
-                let mut random: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x) % 7 == 0).collect();
+                let mut random: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x).is_multiple_of(7)).collect();
                 if random.is_empty() {
                     random.push((next(&mut x) % leaf_count as u64) as u32);
                 }
@@ -1859,7 +1859,7 @@ mod multiproof_size_tests {
             for _ in 0..8 {
                 let a = (next(&mut x) % leaf_count as u64) as u32;
                 subsets.push((a..(a + 1 + (next(&mut x) % 17) as u32).min(leaf_count)).collect());
-                let mut gaps: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x) % 5 == 0).collect();
+                let mut gaps: Vec<u32> = (0..leaf_count).filter(|_| next(&mut x).is_multiple_of(5)).collect();
                 gaps.dedup();
                 if !gaps.is_empty() {
                     subsets.push(gaps);

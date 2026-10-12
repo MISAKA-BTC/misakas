@@ -128,6 +128,7 @@ impl Fixture {
             .unwrap(),
         );
     }
+    #[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
     fn reads(&self) -> (KernelRowsSnapshotV1, Vec<(u8, Vec<u8>, Vec<u8>)>, BootstrapSnapshotPinsV1) {
         let page = self.route.rows_page_v1(None, usize::MAX);
         let pins = BootstrapSnapshotPinsV1 { ledger_root: self.route.ledger_root(), aux_root: self.route.aux_root(), tip_daa: 6 };

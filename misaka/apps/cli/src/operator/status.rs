@@ -695,7 +695,7 @@ pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String
 /// and B-3's hold on the bond. Burns are not per payee here: `misaka palw vesting` prints the
 /// chain's burned counter.
 pub(crate) fn vesting_suffix(v: &crate::operator::snapshot::VestingFacts) -> String {
-    let mut out = format!(" · vesting {}", catalog::msk(v.vesting_sompi.saturating_add(v.latched_sompi) as u128));
+    let mut out = format!(" · vesting {}", catalog::msk(v.vesting_sompi.saturating_add(v.latched_sompi)));
     if v.rows > 0 {
         out.push_str(&format!(" in {} row(s)", v.rows));
     }
@@ -704,7 +704,7 @@ pub(crate) fn vesting_suffix(v: &crate::operator::snapshot::VestingFacts) -> Str
     }
     let reporter = v.reporter_pending_sompi.saturating_add(v.reporter_awarded_sompi);
     if reporter > 0 {
-        out.push_str(&format!(" · reporter {}", catalog::msk(reporter as u128)));
+        out.push_str(&format!(" · reporter {}", catalog::msk(reporter)));
     }
     if v.halted {
         out.push_str(" · HALTED (no anchor settling: nothing matures)");

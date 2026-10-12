@@ -112,7 +112,7 @@ struct Cw {
 
 impl Cw {
     async fn new() -> Cw {
-        Cw::over(|c| TestConsensus::new(c)).await
+        Cw::over(TestConsensus::new).await
     }
 
     async fn over(make: impl FnOnce(&Config) -> TestConsensus) -> Cw {
@@ -125,6 +125,7 @@ impl Cw {
     }
 
     /// A candidate and ruleset edit for RFC-0008's composed slice run.
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     async fn over_with(
         seed: u64,
         edit: impl FnOnce(&mut kaspa_consensus_core::config::params::Params),
@@ -1220,7 +1221,7 @@ async fn g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_rewa
 #[tokio::test]
 async fn g14_rewards_on_the_release_terms_a_sampled_conformance_earns_nothing() {
     kaspa_core::log::try_init_logger("warn");
-    let mut cw = Cw::over_floor(|c| TestConsensus::new(c), 128).await;
+    let mut cw = Cw::over_floor(TestConsensus::new, 128).await;
     cw.pass_conformance().await;
     assert_eq!(cw.gate(), PalwOnboardingGateV1::Ready, "the onboarding gate alone would activate it");
     assert_eq!(cw.attempt().record.state, S::G14Eligible, "never ACTIVE_REWARDABLE");

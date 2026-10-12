@@ -285,7 +285,7 @@ fn draw() -> Value {
 fn suite() -> Value {
     let entry = |i: u32| PalwSuiteEntryV1 {
         prompt: vec![100 + i, 7],
-        reference: if i % 2 == 0 {
+        reference: if i.is_multiple_of(2) {
             PalwSuiteReferenceV1::ExactKey(vec![i, i + 1])
         } else {
             PalwSuiteReferenceV1::Continuation(vec![i])

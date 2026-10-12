@@ -866,6 +866,7 @@ fn check_execution_funding_v11<C: ExecutionClassContextV11>(
     Ok((commit_deadline, deadline))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_prepared_execution_job_v11<C: ExecutionClassContextV11>(
     class: &C,
     quota: &QuotaPolicyV11,
@@ -1144,8 +1145,8 @@ impl ExecutionJobStateV11 {
         {
             return Err("restored execution job funding, identity or clock differs".into());
         }
-        if let Some(c) = &self.claim {
-            if c.job_id != j.id()
+        if let Some(c) = &self.claim
+            && (c.job_id != j.id()
                 || c.producer != j.producer
                 || c.committed_daa < j.admitted_daa
                 || c.committed_daa > j.commit_deadline
@@ -1154,10 +1155,9 @@ impl ExecutionJobStateV11 {
                 || c.challenge_end.checked_add(record.horizons.tail()?) != Some(c.retention_until)
                 || c.retention_until >= j.deadline_daa
                 || c.terminal != self.terminal
-                || c.credit_paid != (self.terminal == ExecutionTerminalV11::Final)
-            {
-                return Err("restored execution claim differs from its original funded job".into());
-            }
+                || c.credit_paid != (self.terminal == ExecutionTerminalV11::Final))
+        {
+            return Err("restored execution claim differs from its original funded job".into());
         }
         match (&self.settlement, self.terminal) {
             (None, ExecutionTerminalV11::Funded | ExecutionTerminalV11::Challengeable) => {

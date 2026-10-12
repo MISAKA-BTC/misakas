@@ -281,7 +281,8 @@ fn the_real_deepseek_v4_shape_is_admitted() {
     v["max_position_embeddings"] = serde_json::json!(8192);
     let spec = parse_config_str(&v.to_string()).expect("spec");
     let hl = hl::build_program(&spec).expect("hl");
-    for w in [1u32 << 13] {
+    {
+        let w = 1u32 << 13;
         let lw = lower(&hl, &LowerOpts { max_window: Some(w), ..LowerOpts::default() }).expect("lower");
         let a = tir_admit_program_v1(&lw.program, &default_inputs()).unwrap_or_else(|e| panic!("REFUSED {e}"));
         let nodes = lw.program.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);

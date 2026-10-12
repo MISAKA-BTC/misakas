@@ -1436,7 +1436,7 @@ impl<'a> Env<'a> {
         if op == "$rope" {
             serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
         } else {
-            serde_json::to_value(&temp).map_err(|e| bad(e.to_string()))
+            serde_json::to_value(temp).map_err(|e| bad(e.to_string()))
         }
     }
 

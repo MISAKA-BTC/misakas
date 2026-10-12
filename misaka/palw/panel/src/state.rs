@@ -146,7 +146,7 @@ impl PermissionlessPanelStateV1 {
     /// that is no epoch's commitment or an epoch that froze none.
     pub fn frozen_sources_at(&self, commitment_position: u64) -> Option<&EpochSourceSetV1> {
         let period = self.policy.beacon_period_daa;
-        if period == 0 || commitment_position % period != 0 {
+        if period == 0 || !commitment_position.is_multiple_of(period) {
             return None;
         }
         self.epoch_sources.get(&(commitment_position / period))
@@ -1072,16 +1072,15 @@ impl PermissionlessPanelStateV1 {
             if seal.id != claim_seal_id(self.network, self.ruleset, r, &snapshot, seal.anchor_slot, seal.beacon_epoch) {
                 return Err(PanelErrorV1::InvalidCarriage);
             }
-            if let (Some(seed), Some(beacon_id), Some(output)) = (t.last_seed, t.last_beacon_id, r.entropy_output) {
-                if seed != panel_seed_v3(self.network, self.ruleset, seal, &snapshot, output)
+            if let (Some(seed), Some(beacon_id), Some(output)) = (t.last_seed, t.last_beacon_id, r.entropy_output)
+                && (seed != panel_seed_v3(self.network, self.ruleset, seal, &snapshot, output)
                     || beacon_id
                         != digest(
                             "misaka-palw/panel-v3/beacon",
                             &(self.network, self.ruleset, self.policy.beacon_scheme, seal.beacon_epoch, output),
-                        )
-                {
-                    return Err(PanelErrorV1::InvalidCarriage);
-                }
+                        ))
+            {
+                return Err(PanelErrorV1::InvalidCarriage);
             }
         }
         Ok(())
@@ -1244,14 +1243,13 @@ impl PermissionlessPanelStateV1 {
                         return Err(PanelErrorV1::InvalidCarriage);
                     }
                 }
-                if let ClaimPhaseV3::EntropyReady { ready_daa, assignment_point, seed, beacon_id } = &r.phase {
-                    if entropy != Some((*seed, *beacon_id))
+                if let ClaimPhaseV3::EntropyReady { ready_daa, assignment_point, seed, beacon_id } = &r.phase
+                    && (entropy != Some((*seed, *beacon_id))
                         || *ready_daa != add(seal.anchor_slot, self.policy.beacon_wait_daa)?
                         || *assignment_point != add(*ready_daa, self.policy.assignment_delay_daa)?
-                        || self.daa <= *ready_daa
-                    {
-                        return Err(PanelErrorV1::InvalidCarriage);
-                    }
+                        || self.daa <= *ready_daa)
+                {
+                    return Err(PanelErrorV1::InvalidCarriage);
                 }
                 let seat_count = r.strata.map_or(self.policy.seat_count as usize, |strata| strata.seat_count());
                 for (index, binding) in r.binding_history.iter().enumerate() {
@@ -1276,10 +1274,10 @@ impl PermissionlessPanelStateV1 {
                 if used != r.used_operators {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
-                if let ClaimPhaseV3::Bound(b) = &r.phase {
-                    if r.binding_history.last() != Some(b) {
-                        return Err(PanelErrorV1::InvalidCarriage);
-                    }
+                if let ClaimPhaseV3::Bound(b) = &r.phase
+                    && r.binding_history.last() != Some(b)
+                {
+                    return Err(PanelErrorV1::InvalidCarriage);
                 }
             }
         }

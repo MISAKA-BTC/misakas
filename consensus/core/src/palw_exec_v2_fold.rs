@@ -431,20 +431,19 @@ impl PalwChainStateV2 {
             return Ok(());
         }
         for (claim_id, root) in &self.exec_v2.roots {
-            if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
-                if let Some(kernel) = &self.kernel_route {
-                    let dependencies = std::iter::once(root.prefix_claim)
-                        .chain(self.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(_, row)| row.evidence_root));
-                    for id in dependencies {
-                        if let Some(row) = kernel
-                            .rows
-                            .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&id)))
-                            .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
-                        {
-                            if super::palw_kernel_route_fold_v1::exec_provider_lapsed_v1(self, &id, &row) {
-                                return Err(bad("a provider lapse was not propagated to its EXEC root".into()));
-                            }
-                        }
+            if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. })
+                && let Some(kernel) = &self.kernel_route
+            {
+                let dependencies = std::iter::once(root.prefix_claim)
+                    .chain(self.exec_v2.slices.range((*claim_id, 0)..=(*claim_id, u32::MAX)).map(|(_, row)| row.evidence_root));
+                for id in dependencies {
+                    if let Some(row) = kernel
+                        .rows
+                        .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&id)))
+                        .and_then(|bytes| borsh::from_slice::<misaka_palw_kernel::ledger::ClaimRowV1>(bytes).ok())
+                        && super::palw_kernel_route_fold_v1::exec_provider_lapsed_v1(self, &id, &row)
+                    {
+                        return Err(bad("a provider lapse was not propagated to its EXEC root".into()));
                     }
                 }
             }
@@ -517,38 +516,37 @@ impl PalwChainStateV2 {
                 }
                 // Reuse the one reconstructed plan for all rows, rather than reparsing IR per
                 // slice. Pruned dependency retention remains WINDOW's separate obligation.
-                if let (Some(plan), Some(kernel)) = (&work_plan, &self.kernel_route) {
-                    if let Some(claim_bytes) =
+                if let (Some(plan), Some(kernel)) = (&work_plan, &self.kernel_route)
+                    && let Some(claim_bytes) =
                         kernel.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, palw_exec_v2_kernel_key_v1(&row.evidence_root)))
-                    {
-                        let kernel_claim: misaka_palw_kernel::ledger::ClaimRowV1 = borsh::from_slice(claim_bytes)
-                            .map_err(|e| bad(format!("root {claim_id}'s slice {index} kernel claim: {e}")))?;
-                        if let Some(job_bytes) = kernel.rows.get(&(
-                            misaka_palw_kernel::rows::TABLE_JOBS_V1,
-                            borsh::to_vec(&kernel_claim.job_id).expect("a digest serializes"),
-                        )) {
-                            let job: misaka_palw_kernel::job::KernelJobV1 = borsh::from_slice(job_bytes)
-                                .map_err(|e| bad(format!("root {claim_id}'s slice {index} kernel job: {e}")))?;
-                            let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &kernel_claim.body else {
-                                return Err(bad(format!("root {claim_id}'s slice {index} is not a program claim")));
-                            };
-                            let terms = palw_exec_v2_retention_terms_v1(
-                                root.expiry_daa,
-                                root.executor_exposure,
-                                params.window_court(),
-                                &kernel.header.policy,
-                            )
-                            .map_err(|why| bad(why.into()))?;
-                            let nonce =
-                                palw_exec_v2_root_slice_job_nonce_v2(claim_id, *index, root, &terms).map_err(|why| bad(why.into()))?;
-                            if job.nonce != nonce.as_bytes() {
-                                return Err(bad(format!("root {claim_id}'s slice {index} did not authorize its retention terms")));
-                            }
-                            if job.max_new_tokens as usize != claim.generated.len()
-                                || plan.check_slice_job(*index as usize, job.prompt.len(), claim.generated.len()).is_err()
-                            {
-                                return Err(bad(format!("root {claim_id}'s slice {index} has a different execution scope")));
-                            }
+                {
+                    let kernel_claim: misaka_palw_kernel::ledger::ClaimRowV1 = borsh::from_slice(claim_bytes)
+                        .map_err(|e| bad(format!("root {claim_id}'s slice {index} kernel claim: {e}")))?;
+                    if let Some(job_bytes) = kernel.rows.get(&(
+                        misaka_palw_kernel::rows::TABLE_JOBS_V1,
+                        borsh::to_vec(&kernel_claim.job_id).expect("a digest serializes"),
+                    )) {
+                        let job: misaka_palw_kernel::job::KernelJobV1 = borsh::from_slice(job_bytes)
+                            .map_err(|e| bad(format!("root {claim_id}'s slice {index} kernel job: {e}")))?;
+                        let misaka_palw_kernel::ledger::ClaimBodyV1::Program { claim, .. } = &kernel_claim.body else {
+                            return Err(bad(format!("root {claim_id}'s slice {index} is not a program claim")));
+                        };
+                        let terms = palw_exec_v2_retention_terms_v1(
+                            root.expiry_daa,
+                            root.executor_exposure,
+                            params.window_court(),
+                            &kernel.header.policy,
+                        )
+                        .map_err(|why| bad(why.into()))?;
+                        let nonce =
+                            palw_exec_v2_root_slice_job_nonce_v2(claim_id, *index, root, &terms).map_err(|why| bad(why.into()))?;
+                        if job.nonce != nonce.as_bytes() {
+                            return Err(bad(format!("root {claim_id}'s slice {index} did not authorize its retention terms")));
+                        }
+                        if job.max_new_tokens as usize != claim.generated.len()
+                            || plan.check_slice_job(*index as usize, job.prompt.len(), claim.generated.len()).is_err()
+                        {
+                            return Err(bad(format!("root {claim_id}'s slice {index} has a different execution scope")));
                         }
                     }
                 }
@@ -1103,7 +1101,7 @@ pub(super) fn record_exec_anchor_v2(
     builder: &mut TransitionBuilder<'_>,
     fold: &crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1,
 ) -> Result<(), PalwStateV2Error> {
-    if !builder.params.exec_v2_from_daa().is_some() {
+    if builder.params.exec_v2_from_daa().is_none() {
         return Err(refused("an anchor before palw_exec_payload_v2 is in force"));
     }
     let stale: Vec<Hash64> = builder

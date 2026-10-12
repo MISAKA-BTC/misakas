@@ -18,7 +18,7 @@ use misaka_palw_kernel::{
     flat_scope9::*,
     hash::Digest,
     job::DecodeRuleV1,
-    merkle::{AXIS_COL, AXIS_ROW},
+    merkle::AXIS_ROW,
     merkle3::{LeafOpeningV3, TreesV3},
     merkle5::{FlatLeafValueV5, FlatTreeV5},
     seg::{SegmentedCommitmentsV1, prompt_root_of_ids_v1},
@@ -136,7 +136,7 @@ impl StepSink for Finder<'_> {
         self.seen += 1;
         match flat_profile_commitment_v5(&t) {
             Ok(root) => {
-                if self.public.commitments.get(0).and_then(|p| p.get(s as usize)).and_then(|s| s.get(v.node as usize)).copied()
+                if self.public.commitments.first().and_then(|p| p.get(s as usize)).and_then(|s| s.get(v.node as usize)).copied()
                     != Some(root)
                 {
                     self.first.get_or_insert((s, v.node));

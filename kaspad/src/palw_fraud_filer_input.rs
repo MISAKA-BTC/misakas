@@ -308,6 +308,7 @@ pub(in crate::palw_panel) struct PalwFraudFilerFpInputV1 {
 
 /// PublicDA reads carried ids; canonical jobs derive ids from their own job anchor; otherwise only an authenticated public
 /// input envelope of this exact job is usable. Missing PanelDA input stays pending until its disclosure/bootstrap route supplies it.
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(in crate::palw_panel) fn palw_fraud_filer_fp_input_v1(
     backend: &dyn PalwExecutionBackendV1,
     payload: &PalwFpCommitmentTxPayloadV3,
@@ -637,7 +638,7 @@ pub(in crate::palw_panel) mod tests {
         };
         for (magic, width) in [(PALW_FP_MATERIAL_V1_MAGIC, 0), (PALW_FP_CAPTURE_V1_MAGIC, 1), (PALW_FP_ANSWER_V1_MAGIC, 4)] {
             let bytes = encode(magic, &material, width);
-            assert_eq!(palw_fraud_filer_fp_input_v1(&backend, &payload, form, &[bytes.clone()]).unwrap().prompt_ids, ids);
+            assert_eq!(palw_fraud_filer_fp_input_v1(&backend, &payload, form, std::slice::from_ref(&bytes)).unwrap().prompt_ids, ids);
             assert!(
                 public_material_input(&bytes[..bytes.len() - 1], &borsh::to_vec(&material.job).unwrap(), &material.job, form)
                     .is_none(),

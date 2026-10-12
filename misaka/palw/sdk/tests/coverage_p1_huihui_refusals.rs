@@ -364,6 +364,7 @@ fn refusal_4_the_legacy_held_route_has_no_builder_for_24_recurrent_layers() {
 /// duplicate) are the registrant's object's to satisfy and the lane-D E2E carries this class through them
 /// (`fixtures/g14/shipped/huihui-qwen3.5-9b-8k.json`); this test pins the class-dependent ones with their numbers.
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn the_9b_8k_text_class_meets_every_class_rule_at_daa_7000() {
     use kaspa_consensus_core::palw_tir_admission_v1::{PalwTirAdmissionRulesV1, palw_tir_carriable_close_bytes_v1};
     let (params, bundle) = t12();

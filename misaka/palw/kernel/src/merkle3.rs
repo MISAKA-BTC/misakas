@@ -231,7 +231,7 @@ pub(crate) fn range_siblings(mut level: Vec<Digest>, mut a: usize, mut b: usize,
         if a % 2 == 1 {
             out.push(level[a - 1]);
         }
-        if (b - 1) % 2 == 0 && b < level.len() {
+        if (b - 1).is_multiple_of(2) && b < level.len() {
             out.push(level[b]);
         }
         a /= 2;

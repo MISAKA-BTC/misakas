@@ -155,7 +155,7 @@ impl Pk {
         self.raw(b"X").raw(&l).raw(s.as_bytes())
     }
     fn int(self, i: i64) -> Pk {
-        if (0..256).contains(&i) { self.raw(&[b'K', i as u8]) } else { self.raw(&[b'J']).raw(&(i as i32).to_le_bytes()) }
+        if (0..256).contains(&i) { self.raw(&[b'K', i as u8]) } else { self.raw(b"J").raw(&(i as i32).to_le_bytes()) }
     }
     fn mark(self) -> Pk {
         self.raw(b"(")

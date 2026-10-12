@@ -29,8 +29,11 @@ use kaspa_consensus_core::palw_work_target_v1::{palw_work_floor_v1, palw_work_ti
 const T12_BLOCK_SUBSIDY_SOMPI: u64 = 444_562_014_000;
 const SLASH_VALUE_PER_PWU: u64 = 5;
 const SEATS: u16 = 5;
+#[allow(dead_code)]
 const WINDOW_CHALLENGE: u64 = 1_200;
+#[allow(dead_code)]
 const WINDOW_COURT: u64 = 3_000;
+#[allow(dead_code)]
 const CADENCE_MS: u64 = 120_000;
 
 fn t12() -> Params {

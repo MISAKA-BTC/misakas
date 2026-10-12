@@ -36,7 +36,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
     let (sender, _receiver) = async_channel::unbounded();
     let tc = Arc::new(TestConsensus::with_db(db.clone(), &chain.config, sender));
     let mut multiset = MuHash::new();
-    tc.append_imported_pruning_point_utxos(premine, &mut multiset);
+    tc.append_imported_pruning_point_utxos(premine, &mut multiset).expect("the premine is appended");
     tc.import_pruning_point_utxo_set(chain.config.params.genesis.hash, multiset).unwrap();
     let handles = tc.init();
     let mut fresh = Chain {

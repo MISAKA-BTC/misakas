@@ -45,7 +45,7 @@ use crate::{
             DB,
             depth::DbDepthStore,
             ghostdag::{DbGhostdagStore, GhostdagStoreReader},
-            headers::{DbHeadersStore, HeaderStore, HeaderStoreReader},
+            headers::{DbHeadersStore, HeaderStoreReader},
             headers_selected_tip::DbHeadersSelectedTipStore,
             past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},

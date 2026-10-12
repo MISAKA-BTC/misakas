@@ -267,7 +267,7 @@ impl Gate {
         facts.ready_to_produce(&card_pubkey(EXECUTOR)).expect("card 0 is ready to produce");
         restate(&mut facts);
         let pre_pow = pre_pow_hash_64(&header);
-        let trace_root = Hash64::from_u64_word(0x5210_7A);
+        let trace_root = Hash64::from_u64_word(0x0052_107A);
         let attempt = PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain: self.domain,
@@ -279,7 +279,7 @@ impl Gate {
             artifact_root: facts.artifact_root,
             trace_root,
             output_root: Hash64::from_u64_word(0x0052_1032),
-            execution_root: Hash64::from_u64_word(0x5210_41),
+            execution_root: Hash64::from_u64_word(0x0052_1041),
             pwu: facts.pwu,
             trace_manifest_root: attempt_trace_manifest_root_v1(trace_root, PALW_ATTEMPT_V2_TRACE_CHUNKS),
             trace_chunk_count: PALW_ATTEMPT_V2_TRACE_CHUNKS,

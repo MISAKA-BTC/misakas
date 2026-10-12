@@ -128,7 +128,7 @@ fn duty(ir: &Ir, shard: u16, s_l: u16, s_p: u16, segments: PalwSegmentMaskV2, ou
         receipt_deadline: 700,
         panel_anchor: Hash64::from_u64_word(0xA9),
         seat_index: 1,
-        panel_seat_count: u16::from(s_l) * 4,
+        panel_seat_count: s_l * 4,
         pwu: 0,
         quanta: 0,
         free_prompt: false,
@@ -376,6 +376,7 @@ fn a_shard_only_seat_files_the_accusation_a_full_holder_would_and_the_gate_convi
 }
 
 #[test]
+#[allow(clippy::overly_complex_bool_expr)]
 fn a_seat_with_no_copy_fetches_its_shard_from_peers_through_the_interval_lanes_pool() {
     use kaspa_consensus_core::palw_tir_shard_v1::{palw_tir_rows_request_decode_v1, palw_tir_rows_request_index_v1};
     use misaka_palw_sdk::lineages::tir::{TirCaptureV1, TirRowPursuitV1, serve_rows_v1};

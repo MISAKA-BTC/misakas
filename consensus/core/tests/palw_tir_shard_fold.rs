@@ -44,6 +44,7 @@ use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 const PRODUCER: u64 = 1;
 /// The eight seats of a 2-shard plan with an outsider each: shard 0 is `[10, 11, 12, 13]`, shard 1 `[14, 15, 16, 17]`
 /// (the outsider first). A bystander for the demands.
+#[allow(dead_code)]
 const SEAT0: u64 = 10;
 const OTHER: u64 = 30;
 const RCORE: u64 = 0;
@@ -333,7 +334,7 @@ fn a_claim_licenses_by_two_parts_with_its_outsiders_and_the_recount_runs_over_ce
         let place = d.tir_shard.expect("a sharded claim's duty has a shard place");
         let i = d.seat_index as usize;
         assert_eq!((place.shard as usize, place.slice_index as usize), (i / 4, i % 4));
-        assert_eq!(place.outsider, i % 4 == 0, "the outsider leads each slice");
+        assert_eq!(place.outsider, i.is_multiple_of(4), "the outsider leads each slice");
         assert_eq!((place.s_l, place.s_p), (2, 1));
         assert_eq!(place.segments, PalwSegmentMaskV2::full(1), "layers-only: every seat attests the whole shard");
     }
@@ -545,6 +546,7 @@ fn a_bond_may_sit_in_several_shards_and_its_lock_accumulates_and_it_is_paid_shar
 }
 
 #[test]
+#[allow(clippy::erasing_op)]
 fn a_final_claim_pays_its_seats_by_the_work_they_vouched_for_and_the_reward_is_conserved() {
     let f = fixture();
     let x = f.honest();

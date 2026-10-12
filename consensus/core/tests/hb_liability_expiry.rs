@@ -212,7 +212,7 @@ fn the_deadline_table_is_all_one_clock() {
         ("receipt maturity", b.freeprompt.receipt_maturity_daa(), "DAA", "ECONOMIC"),
     ];
     println!("=== H2-3: the testnet-12 deadline table ===");
-    println!("{:<34} {:>8}  {:<6} {}", "deadline", "value", "unit", "what the invariant demands");
+    println!("{:<34} {:>8}  {:<6} what the invariant demands", "deadline", "value", "unit");
     for (name, value, unit, demand) in &rows {
         println!("{name:<34} {value:>8}  {unit:<6} {demand}");
     }

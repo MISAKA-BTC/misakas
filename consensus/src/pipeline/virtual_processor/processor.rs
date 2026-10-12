@@ -2962,16 +2962,16 @@ impl VirtualStateProcessor {
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
                                         if state_params.exec_v2_active_at(point.daa_score) {
-                                            if attempt.is_some() {
-                                                if let Ok(bytes) = borsh::to_vec(header.as_ref()) {
-                                                    extras.exec_v2_origin_headers.insert(current, bytes);
-                                                }
+                                            if attempt.is_some()
+                                                && let Ok(bytes) = borsh::to_vec(header.as_ref())
+                                            {
+                                                extras.exec_v2_origin_headers.insert(current, bytes);
                                             }
                                             for owned in &merged_owned {
-                                                if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned {
-                                                    if let Ok(bytes) = borsh::to_vec(origin_header.as_ref()) {
-                                                        extras.exec_v2_origin_headers.insert(*source, bytes);
-                                                    }
+                                                if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned
+                                                    && let Ok(bytes) = borsh::to_vec(origin_header.as_ref())
+                                                {
+                                                    extras.exec_v2_origin_headers.insert(*source, bytes);
                                                 }
                                             }
                                         }
@@ -8101,10 +8101,10 @@ impl VirtualStateProcessor {
     > {
         let merged = [self.palw_merged_attempt_work_v1(blue, blue_header, envelope, subsidy, None, 0)];
         let mut extras = self.palw_transition_extras_for(point);
-        if let Some(header) = blue_header {
-            if let Ok(bytes) = borsh::to_vec(header) {
-                extras.exec_v2_origin_headers.insert(blue, bytes);
-            }
+        if let Some(header) = blue_header
+            && let Ok(bytes) = borsh::to_vec(header)
+        {
+            extras.exec_v2_origin_headers.insert(blue, bytes);
         }
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             state,
@@ -9471,37 +9471,37 @@ impl VirtualStateProcessor {
             }
             // A completing owned terminal carries the same heavy-prompt budget as a direct offence.
             // Its rent was bought by the signed declaration; partial chunks never consume this slot.
-            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = &object {
-                if let Some(row) = folded.terminal_pending_v1(&(part.claim, part.reserver)) {
-                    let maximum = self.palw_court_params_v2.as_ref().map_or(0, |c| c.max_close_bytes());
-                    if let Ok(Some(evidence)) = row.preview(part, maximum) {
-                        let d = &row.declaration;
-                        if let Some(charge) =
-                            kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(
-                                &folded,
-                                &d.accused,
-                                d.kind,
-                                &evidence,
-                                self.palw_identity_rules_v1(point.daa_score),
-                                batch_licence,
-                                self.palw_session_rule_at(point.daa_score),
-                                kaspa_consensus_core::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::ReservedTerminal {
-                                    court_maximum: maximum,
-                                },
-                            )
-                        {
-                            if charge.prompt_ids > u64::from(d.heavy_prompt_ids) {
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = &object
+                && let Some(row) = folded.terminal_pending_v1(&(part.claim, part.reserver))
+            {
+                let maximum = self.palw_court_params_v2.as_ref().map_or(0, |c| c.max_close_bytes());
+                if let Ok(Some(evidence)) = row.preview(part, maximum) {
+                    let d = &row.declaration;
+                    if let Some(charge) =
+                        kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_at_v2_with_budget_v1(
+                            &folded,
+                            &d.accused,
+                            d.kind,
+                            &evidence,
+                            self.palw_identity_rules_v1(point.daa_score),
+                            batch_licence,
+                            self.palw_session_rule_at(point.daa_score),
+                            kaspa_consensus_core::palw_offence_attribution_v1::PalwObjectiveEvidenceBudgetV1::ReservedTerminal {
+                                court_maximum: maximum,
+                            },
+                        )
+                    {
+                        if charge.prompt_ids > u64::from(d.heavy_prompt_ids) {
+                            continue;
+                        }
+                        if !heavy_prompt_claims.contains(&charge.claim_id) {
+                            if heavy_prompt_ids_charged.saturating_add(charge.prompt_ids)
+                                > kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1
+                            {
                                 continue;
                             }
-                            if !heavy_prompt_claims.contains(&charge.claim_id) {
-                                if heavy_prompt_ids_charged.saturating_add(charge.prompt_ids)
-                                    > kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1
-                                {
-                                    continue;
-                                }
-                                heavy_prompt_ids_charged += charge.prompt_ids;
-                                heavy_prompt_claims.insert(charge.claim_id);
-                            }
+                            heavy_prompt_ids_charged += charge.prompt_ids;
+                            heavy_prompt_claims.insert(charge.claim_id);
                         }
                     }
                 }
@@ -10003,7 +10003,7 @@ impl VirtualStateProcessor {
         // function the chain will check it with, at the same point.
         if self.palw_shard_licensing_at(point.daa_score)
             && let Some(plan) = kaspa_consensus_core::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(
-                &state,
+                state,
                 &claim,
                 panel_params.seat_count(),
             )
@@ -10037,10 +10037,10 @@ impl VirtualStateProcessor {
                         receipts: attempt.clone(),
                     };
                     match kaspa_consensus_core::palw_panel_v2::validate_shard_receipt_part_v1(
-                        &state,
+                        state,
                         panel_params,
                         state_params,
-                        &point,
+                        point,
                         network_domain,
                         &part,
                         verify,
@@ -10072,10 +10072,10 @@ impl VirtualStateProcessor {
         // past `palw_rcore_plus`, the backed subset's (below).
         let quorum = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2]| {
             kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
-                &state,
+                state,
                 panel_params,
                 state_params,
-                &point,
+                point,
                 network_domain,
                 &claim,
                 receipts,
@@ -10272,10 +10272,10 @@ impl VirtualStateProcessor {
         };
         let coverage = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
             kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
-                &state,
+                state,
                 panel_params,
                 state_params,
-                &point,
+                point,
                 network_domain,
                 &claim,
                 receipts,
@@ -10284,11 +10284,11 @@ impl VirtualStateProcessor {
                 self.palw_admission_independence_daa(),
             )
         };
-        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, &coverage, |receipts| {
+        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, coverage, |receipts| {
             self.palw_v2_offered_licence_licenses_v1(
-                &state,
+                state,
                 state_params,
-                &point,
+                point,
                 &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.to_vec() },
             )
         })?;
@@ -10519,10 +10519,10 @@ impl VirtualStateProcessor {
         };
         let coverage = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
             kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
-                &state,
+                state,
                 panel_params,
                 state_params,
-                &point,
+                point,
                 network_domain,
                 &claim,
                 receipts,
@@ -10532,16 +10532,16 @@ impl VirtualStateProcessor {
             )
         };
         let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_optimistic_licence_v2(
-            &state,
+            state,
             &claim,
             self.palw_admission_independence_daa(),
             candidates,
             coverage,
             |receipts| {
                 self.palw_v2_offered_licence_licenses_v1(
-                    &state,
+                    state,
                     state_params,
-                    &point,
+                    point,
                     &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed {
                         claim,
                         receipts: receipts.to_vec(),
@@ -11283,8 +11283,8 @@ impl VirtualStateProcessor {
                             })
                             // The task-head profile: likewise a proof carrying a `Head` job below `palw_task_heads_v1`.
                             .filter(|object| {
-                                !(kaspa_consensus_core::palw_task_heads_v1::palw_object_needs_task_heads_v1(object)
-                                    && !self.palw_task_heads_at(point.daa_score))
+                                !kaspa_consensus_core::palw_task_heads_v1::palw_object_needs_task_heads_v1(object)
+                                    || self.palw_task_heads_at(point.daa_score)
                             })
                             // RFC-0004 A6: likewise an evaluation proof below `palw_improvement_v1`.
                             .filter(|object| {
@@ -12539,16 +12539,14 @@ impl VirtualStateProcessor {
                 Obj::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
                     if let Some(reference) =
                         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_reference_v1(*kind, evidence)
-                    {
-                        if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score))
+                        && (!self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score))
                             || !kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_collection_open_v1(
                                 state,
                                 &reference,
                                 point.daa_score,
-                            )
-                        {
-                            return Err("rooted staged conviction is outside its accepting-block fence or collection clock".into());
-                        }
+                            ))
+                    {
+                        return Err("rooted staged conviction is outside its accepting-block fence or collection clock".into());
                     }
                     if !self.palw_objective_offence_at(point.daa_score) {
                         return Err("an objective offence is not armed on this network (ADR-0144 §9)".into());
@@ -12742,7 +12740,7 @@ impl VirtualStateProcessor {
                         // refutation of that class, so a seat that voted Valid on a visible lie could
                         // not be convicted through this route at all.
                         self.palw_max_step_leaf_count_v1(),
-                        |pk, msg, sig, ctx| Self::verify_mldsa87_with_context_bool(pk, msg, sig, ctx),
+                        Self::verify_mldsa87_with_context_bool,
                     )
                     .map_err(|e| e.to_string())?;
                     if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid = kind {
@@ -14425,7 +14423,7 @@ impl VirtualStateProcessor {
                     if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
                         continue;
                     }
-                    let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+                    let _court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     leaf.check()?;
                     let owner = state.bond(&leaf.reserver).ok_or("staged owner has no registered bond")?;
                     let reservation = state
@@ -14451,7 +14449,7 @@ impl VirtualStateProcessor {
                     if !self.palw_staged_public_court_v1.is_some_and(|activation| activation.is_active(point.daa_score)) {
                         continue;
                     }
-                    let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+                    let _court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     movement.check()?;
                     let owner = state.bond(&movement.reserver).ok_or("staged owner has no registered bond")?;
                     let reservation = state
@@ -16476,7 +16474,7 @@ impl VirtualStateProcessor {
             // `PalwStateParamsV2`), the declared worth of one stolen round, and the maturity the
             // network serves (testnet-12: 120 DAA, user decision 2026-09-25). `None` where the
             // fence is dormant, and then every path it touches is byte-identical.
-            economic_safety: self.palw_economic_safety_at(daa_score).then(|| {
+            economic_safety: self.palw_economic_safety_at(daa_score).then_some({
                 kaspa_consensus_core::palw_state_v2::PalwEconomicSafetyFoldV1 {
                     target_time_per_block_ms: self.palw_target_time_per_block_ms,
                     permit_value_sompi: kaspa_consensus_core::palw_economic_safety_v1::PALW_T12_PERMIT_FEE_CEILING_SOMPI,
@@ -22029,64 +22027,64 @@ impl VirtualStateProcessor {
             return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
         };
         let sink = virtual_state.ghostdag_data.selected_parent;
-        if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref()) {
-            if params.bond_budget_active_at(virtual_state.daa_score) {
-                let (_, state) = self
-                    .palw_v2_state_at(sink)
-                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
-                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                    block: Default::default(),
-                    daa_score: virtual_state.daa_score,
-                    blue_score: virtual_state.ghostdag_data.blue_score,
-                    subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
-                };
-                let mut budget = state
-                    .round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
-                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
-                let view = self
-                    .palw_round_view_v1(round)
-                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the execution schedule is unavailable".into()))?;
-                let recipients: std::collections::BTreeSet<_> = view
-                    .permits
-                    .iter()
-                    .filter(|permit| !view.used.contains(&permit.index))
-                    .filter(|permit| {
-                        state.bond(&permit.bond).is_some_and(|bond| {
-                            kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes()) == payout
-                        })
+        if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref())
+            && params.bond_budget_active_at(virtual_state.daa_score)
+        {
+            let (_, state) = self
+                .palw_v2_state_at(sink)
+                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: Default::default(),
+                daa_score: virtual_state.daa_score,
+                blue_score: virtual_state.ghostdag_data.blue_score,
+                subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
+            };
+            let mut budget = state
+                .round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
+                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
+            let view = self
+                .palw_round_view_v1(round)
+                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the execution schedule is unavailable".into()))?;
+            let recipients: std::collections::BTreeSet<_> = view
+                .permits
+                .iter()
+                .filter(|permit| !view.used.contains(&permit.index))
+                .filter(|permit| {
+                    state.bond(&permit.bond).is_some_and(|bond| {
+                        kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes()) == payout
                     })
-                    .map(|permit| permit.bond)
-                    .collect();
-                if recipients.len() != 1 || template.calculated_fees.len() + 1 != template.block.transactions.len() {
-                    return Err(RuleError::RoundFeeBudgetRefused(
-                        "an unambiguous bonded permit and validated transaction fees are required".into(),
-                    ));
-                }
-                let burned = self.palw_v2_bond_burn_obligations(&state, point.daa_score);
-                let maximum_sompi = template
-                    .block
-                    .transactions
-                    .iter()
-                    .skip(1)
-                    .zip(&template.calculated_fees)
-                    .try_fold(0u64, |sum, (tx, fee)| {
-                        let bond_burned = tx
-                            .inputs
-                            .iter()
-                            .map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
-                            .fold(0u64, u64::saturating_add);
-                        sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
-                    })
-                    .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
-                budget
-                    .admit(kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
-                        block: Default::default(),
-                        bond: *recipients.first().expect("one permit recipient"),
-                        maximum_sompi,
-                        actual_sompi: maximum_sompi,
-                    })
-                    .map_err(|why| RuleError::RoundFeeBudgetRefused(why.to_string()))?;
+                })
+                .map(|permit| permit.bond)
+                .collect();
+            if recipients.len() != 1 || template.calculated_fees.len() + 1 != template.block.transactions.len() {
+                return Err(RuleError::RoundFeeBudgetRefused(
+                    "an unambiguous bonded permit and validated transaction fees are required".into(),
+                ));
             }
+            let burned = self.palw_v2_bond_burn_obligations(&state, point.daa_score);
+            let maximum_sompi = template
+                .block
+                .transactions
+                .iter()
+                .skip(1)
+                .zip(&template.calculated_fees)
+                .try_fold(0u64, |sum, (tx, fee)| {
+                    let bond_burned = tx
+                        .inputs
+                        .iter()
+                        .map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
+                        .fold(0u64, u64::saturating_add);
+                    sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
+                })
+                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
+            budget
+                .admit(kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+                    block: Default::default(),
+                    bond: *recipients.first().expect("one permit recipient"),
+                    maximum_sompi,
+                    actual_sompi: maximum_sompi,
+                })
+                .map_err(|why| RuleError::RoundFeeBudgetRefused(why.to_string()))?;
         }
         let anchor = self
             .ghostdag_store
@@ -22157,7 +22155,7 @@ impl VirtualStateProcessor {
             let lane_members: Option<Vec<_>> = ghostdag
                 .unordered_mergeset_without_selected_parent()
                 .filter(|member| self.ghostdag_manager.is_round_block(*member))
-                .map(|member| coords_of(member))
+                .map(&coords_of)
                 .collect();
             let Some(lane_members) = lane_members else { continue };
             let slices = lane_members.iter().filter(|coords| matches!(coords, PalwExecLaneCoordsV1::Slice { .. })).count();
@@ -23221,16 +23219,15 @@ impl VirtualStateProcessor {
     ) -> PruningImportResult<()> {
         use crate::model::stores::utxo_set::UtxoSetStore;
         let pruning = self.pruning_point_store.read();
-        if let Some(point) = point {
-            if pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, e.to_string()))?
+        if let Some(point) = point
+            && pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, e.to_string()))?
                 != point
-            {
-                return Err(PruningImportError::PruningImportSessionRefused {
-                    point,
-                    epoch: 0,
-                    reason: "target changed before UTXO append".into(),
-                });
-            }
+        {
+            return Err(PruningImportError::PruningImportSessionRefused {
+                point,
+                epoch: 0,
+                reason: "target changed before UTXO append".into(),
+            });
         }
         let mut meta = self.pruning_meta_stores.write();
         meta.utxo_set.write_many(chunk).expect("writing an authorized UTXO import chunk cannot fail");
@@ -23249,18 +23246,17 @@ impl VirtualStateProcessor {
         state: Option<&kaspa_consensus_core::pruning::PruningImportSessionStateV1>,
     ) -> PruningImportResult<()> {
         let pruning = self.pruning_point_store.read();
-        if let Some(token) = state.and_then(|s| s.active) {
-            if pruning
+        if let Some(token) = state.and_then(|s| s.active)
+            && pruning
                 .pruning_point()
                 .map_err(|e| PruningImportError::PruningPointImportContextUnavailable(token.point, e.to_string()))?
                 != token.point
-            {
-                return Err(PruningImportError::PruningImportSessionRefused {
-                    point: token.point,
-                    epoch: token.epoch,
-                    reason: "target changed before UTXO clear".into(),
-                });
-            }
+        {
+            return Err(PruningImportError::PruningImportSessionRefused {
+                point: token.point,
+                epoch: token.epoch,
+                reason: "target changed before UTXO clear".into(),
+            });
         }
         let mut meta = self.pruning_meta_stores.write();
         let mut batch = WriteBatch::default();

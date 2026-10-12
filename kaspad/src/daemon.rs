@@ -1468,7 +1468,7 @@ Do you confirm? (y/n)";
                         // salted chain; refused again here, on the chain this node RUNS, so a lost params swap cannot
                         // arm it on public testnet-12.
                         drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {
-                            Some(seconds) if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill => {
+                            Some(seconds) if config.palw_drill_genesis_salt.is_none() || !palw_private_drill => {
                                 panic!("--palw-drill-real-submit-delay-s={seconds} is a drill and is a salted testnet-12 drill only")
                             }
                             Some(seconds) => {
@@ -1484,7 +1484,7 @@ Do you confirm? (y/n)";
                         // and again here, on the chain this node RUNS — the floor producer then draws floor attempts the fold
                         // refuses (ADR-0165), which on public testnet-12 would only be burning its own blocks.
                         drill_floor_ignore_policy: match args.palw_drill_floor_ignore_policy {
-                            true if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill => {
+                            true if config.palw_drill_genesis_salt.is_none() || !palw_private_drill => {
                                 panic!("--palw-drill-floor-ignore-policy is a drill and is a salted testnet-12 drill only")
                             }
                             true => {
@@ -1499,7 +1499,7 @@ Do you confirm? (y/n)";
                         },
                         // **DRILL ONLY** (`--palw-drill-anchor-duty-after-slots`): the release's wait everywhere else.
                         anchor_duty_after_slots: match args.palw_drill_anchor_duty_after_slots {
-                            Some(slots) if !config.palw_drill_genesis_salt.is_some() || !palw_private_drill => {
+                            Some(slots) if config.palw_drill_genesis_salt.is_none() || !palw_private_drill => {
                                 panic!("--palw-drill-anchor-duty-after-slots={slots} is a drill and is a salted testnet-12 drill only")
                             }
                             Some(slots) => {
@@ -1915,13 +1915,10 @@ Do you confirm? (y/n)";
                         canonical_interval_daa: args.palw_canonical_interval_daa,
                         improve_evaluate: args.palw_improve_evaluate,
                         tir_shard_hold: args.palw_tir_shard_hold.clone(),
-                        tir_shard_declare: match args.palw_tir_shard_declare.as_deref() {
-                            None => None,
-                            Some(spec) => Some(
-                                crate::args::parse_palw_tir_shard_declare_v1(spec)
-                                    .unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}")),
-                            ),
-                        },
+                        tir_shard_declare: args.palw_tir_shard_declare.as_deref().map(|spec| {
+                            crate::args::parse_palw_tir_shard_declare_v1(spec)
+                                .unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}"))
+                        }),
                         tir_shard_gpu: args.palw_tir_shard_gpu,
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
                         tir_shard_watch: args.palw_tir_shard_watch,

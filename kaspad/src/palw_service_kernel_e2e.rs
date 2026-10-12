@@ -738,7 +738,7 @@ async fn g14k_the_kernel_service_convicts_covered_lies_pre_and_post_final_and_th
     })
     .await;
     let ledger = ledger_of(&w.chain);
-    let policy = ledger.policy.clone();
+    let policy = ledger.policy;
     for (id, producer, lie, seats) in after_final.iter().chain(before_final.iter()) {
         let row = &ledger.claims[id];
         assert!(row.convicted, "{lie:?}: convicted");

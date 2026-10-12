@@ -11,7 +11,7 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 pub fn unhex(text: &str, max: usize) -> Result<Vec<u8>> {
-    if text.len() % 2 != 0 || !text.is_ascii() || text.len() / 2 > max {
+    if !text.len().is_multiple_of(2) || !text.is_ascii() || text.len() / 2 > max {
         return Err(LowerError::bad("FRONTEND_ENCODING: invalid or oversized hex"));
     }
     text.as_bytes()
@@ -334,7 +334,7 @@ impl Program {
             || self.blocks.len() > MAX_BLOCKS
             || self.schedule.layers.len() > MAX_LAYERS
             || !names_ok
-            || !constant_bytes.is_some_and(|n| n <= MAX_CONST_BYTES)
+            || constant_bytes.is_none_or(|n| n > MAX_CONST_BYTES)
             || self.consts.len() > u16::MAX as usize
             || self.consts.iter().any(|c| c.shape.len() > 4)
             || self.blocks.iter().any(|b| {

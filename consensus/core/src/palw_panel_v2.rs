@@ -691,10 +691,8 @@ pub fn derive_tir_shard_panel_v1(
             }
             other => other,
         })?;
-        if outsider {
-            if let Some(first) = drawn.first() {
-                outsider_operators.push(first.operator_id);
-            }
+        if outsider && let Some(first) = drawn.first() {
+            outsider_operators.push(first.operator_id);
         }
         seats.extend(drawn);
     }

@@ -24,7 +24,7 @@ pub(super) fn sealed_refutations_in_force_v4(builder: &TransitionBuilder<'_>) ->
 
 fn enabled(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
-    if !builder.extras.kernel_route.as_ref().is_some_and(|r| r.opv.is_some()) {
+    if builder.extras.kernel_route.as_ref().is_none_or(|r| r.opv.is_none()) {
         return Err(refused("sealed candidate refutations require palw_panel_free_v1"));
     }
     if !sealed_refutations_in_force_v4(builder) {
@@ -47,12 +47,12 @@ pub(super) fn seal(
     }
     let daa = ctx.daa_score;
     let policy = route_ledger_policy_v1(builder)?;
-    if let Some(row) = builder.state.kernel_route.as_ref().unwrap().model_refutation_seal_v4(signer, slot) {
-        if row.live_at(daa) {
-            // G14-R's rule for the claim/proof seals: an IDENTICAL re-seal is a no-op — the earlier row and its clock stand (a
-            // restarted finder re-sends the same bytes; it must not restart its own maturity). Another seal waits for the slot.
-            return if row.seal == *seal { Ok(()) } else { Err(refused("the slot holds a live refutation seal")) };
-        }
+    if let Some(row) = builder.state.kernel_route.as_ref().unwrap().model_refutation_seal_v4(signer, slot)
+        && row.live_at(daa)
+    {
+        // G14-R's rule for the claim/proof seals: an IDENTICAL re-seal is a no-op — the earlier row and its clock stand (a
+        // restarted finder re-sends the same bytes; it must not restart its own maturity). Another seal waits for the slot.
+        return if row.seal == *seal { Ok(()) } else { Err(refused("the slot holds a live refutation seal")) };
     }
     // Original capital: the deposit comes out of collateral nothing else has committed (an expired row in this slot no longer counts).
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);

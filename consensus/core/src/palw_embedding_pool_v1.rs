@@ -137,7 +137,7 @@ mod tests {
             let r = palw_isqrt_u128_v1(n);
             assert!(r * r <= n, "{n}");
             assert!(r.checked_mul(r).is_some());
-            assert!(n < (r + 1).checked_mul(r + 1).unwrap_or(u128::MAX) || (r + 1).checked_mul(r + 1).is_none(), "{n}");
+            assert!(n < (r + 1).saturating_mul(r + 1) || (r + 1).checked_mul(r + 1).is_none(), "{n}");
         }
         assert_eq!(palw_isqrt_u128_v1(1 << 126), 1 << 63);
     }

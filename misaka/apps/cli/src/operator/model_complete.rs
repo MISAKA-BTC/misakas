@@ -13,7 +13,7 @@ fn bad(message: impl Into<String>) -> CliError {
     CliError::new(exit::GENERIC, message.into())
 }
 fn unhex(s: &str) -> Result<Vec<u8>, CliError> {
-    if s.len() % 2 != 0 || !s.is_ascii() {
+    if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return Err(bad("the node served malformed hex"));
     }
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|_| bad("the node served malformed hex"))).collect()

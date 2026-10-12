@@ -1380,6 +1380,7 @@ where
 /// Marks a batch error that was the OUTPUT stream failing (a dead gateway), not a bad job.
 const STREAM_BROKEN: &str = "\u{0}stream-broken:";
 
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose (borsh wire / one per job); boxing changes every match site
 enum WorkerOutcome {
     Committed(PalwFpWorkerResultV3),
     Answered(kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerAnswerV1),

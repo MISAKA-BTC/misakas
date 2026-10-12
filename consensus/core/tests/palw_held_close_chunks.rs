@@ -38,9 +38,6 @@ use kaspa_consensus_core::palw_gen_claim_v1::*;
 use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
-use kaspa_consensus_core::palw_gen_step_v1::{
-    PalwGenLeafCoordV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1,
-};
 use kaspa_consensus_core::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenExecutionV1, palw_gen_execute_tensor_v1};
 use kaspa_consensus_core::palw_held_close_v1::*;
@@ -523,7 +520,7 @@ fn a_challenge_opens_the_session_at_the_leaf_and_writes_the_challengers_group() 
     assert_eq!(palw_held_leaf_challenge_shape_v1(&ch.challenge), Ok(()));
     let accuser_before = collateral(&env, ACCUSER);
     let at = next(&env);
-    step_held(&mut env, at, &[ch.object.clone()]);
+    step_held(&mut env, at, std::slice::from_ref(&ch.object));
     let s = &env.chain.s;
     let session = s.court_session(&ch.session).expect("the session opened under the id the challenge names");
     assert_eq!(session.challenger_bond, bond_key(ACCUSER));
@@ -558,7 +555,7 @@ fn the_chunks_deliver_the_close_in_any_order_and_the_lying_claim_is_convicted() 
     let (proof, leaf) = output_close(&env, &claim, 0);
     let ch = challenge(&env, claim.id, ACCUSER, leaf, proof, 3);
     let at = next(&env);
-    step_held(&mut env, at, &[ch.object.clone()]);
+    step_held(&mut env, at, std::slice::from_ref(&ch.object));
     // What the acceptance layer would adjudicate the assembled proof to, at the session's leaf.
     assert_eq!(adjudicates(&env, &ch), Ok(PalwCourtVerdictV2::ExecutorGuilty), "the close convicts the lie at the named leaf");
     let (executor_before, accuser_before) = (collateral(&env, EXECUTOR), collateral(&env, ACCUSER));
@@ -592,7 +589,7 @@ fn a_close_of_another_leaf_does_not_adjudicate_at_the_named_one() {
     assert_ne!(leaf_0, leaf_1);
     let ch = challenge(&env, claim.id, ACCUSER, leaf_0, proof_1, 2);
     let at = next(&env);
-    step_held(&mut env, at, &[ch.object.clone()]);
+    step_held(&mut env, at, std::slice::from_ref(&ch.object));
     let refused = adjudicates(&env, &ch);
     assert!(refused.is_err(), "a close is a move IN this session, at the leaf it narrowed to: {refused:?}");
 }
@@ -604,7 +601,7 @@ fn a_close_that_never_comes_convicts_its_declarer_and_leaves_the_claim_alone() {
     let (proof, leaf) = output_close(&env, &claim, 0);
     let ch = challenge(&env, claim.id, ACCUSER, leaf, proof, 2);
     let at = next(&env);
-    step_held(&mut env, at, &[ch.object.clone()]);
+    step_held(&mut env, at, std::slice::from_ref(&ch.object));
     let deadline = env.chain.s.court_close_group(&ch.session, PalwCourtSideV1::Challenger).expect("the group").assembly_deadline_daa;
     // One chunk arrives; the other never does.
     let at = next(&env);
@@ -622,7 +619,7 @@ fn a_close_that_never_comes_convicts_its_declarer_and_leaves_the_claim_alone() {
     assert_eq!(collateral(&env, EXECUTOR), executor_before, "the executor pays nothing");
     let charged = accuser_before - collateral(&env, ACCUSER);
     assert!(
-        charged >= palw_close_assembly_deposit_v1(2) as u64,
+        charged >= palw_close_assembly_deposit_v1(2),
         "the accuser forfeits its deposit ({charged}) and what a lost held dissection costs"
     );
 }
@@ -635,7 +632,7 @@ fn an_executors_own_acquitting_close_may_stand_beside_the_challengers_group_and_
     let (proof, leaf) = output_close(&env, &claim, 0);
     let ch = challenge(&env, claim.id, ACCUSER, leaf, proof.clone(), 2);
     let at = next(&env);
-    step_held(&mut env, at, &[ch.object.clone()]);
+    step_held(&mut env, at, std::slice::from_ref(&ch.object));
     // The executor's acquitting close, declared in its own group (the unfused terminal is the turn it may declare at).
     let acquit = PalwConsensusObjectV2::CourtClosed { session_id: ch.session, verdict: PalwCourtVerdictV2::ChallengerDefeated, proof };
     let bytes = borsh::to_vec(&acquit).unwrap();
@@ -678,7 +675,7 @@ fn an_executors_own_acquitting_close_may_stand_beside_the_challengers_group_and_
     assert_eq!(collateral(&env, EXECUTOR), executor_before, "the executor's delivered group costs it nothing");
     let charged = accuser_before - collateral(&env, ACCUSER);
     assert!(
-        charged >= palw_close_assembly_deposit_v1(2) as u64,
+        charged >= palw_close_assembly_deposit_v1(2),
         "the losing challenger forfeits its undelivered group's deposit and is charged ({charged})"
     );
 }
@@ -692,10 +689,10 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
     let at = next(&env);
     let parent = env.chain.s.clone();
     let fold = |objects: &[PalwConsensusObjectV2], held: Option<u64>, at: u64| fold_held(&env, &parent, at, objects, held).map(|_| ());
-    assert!(fold(&[ch.object.clone()], Some(HELD), at).is_ok(), "the control folds");
+    assert!(fold(std::slice::from_ref(&ch.object), Some(HELD), at).is_ok(), "the control folds");
     // Off the held regime the ladder reaches the leaf; below the fence (a ruleset that arms it later) the lock refuses.
     assert!(
-        matches!(fold(&[ch.object.clone()], None, at), Err(PalwStateV2Error::HeldLeafChallengeRefused(_))),
+        matches!(fold(std::slice::from_ref(&ch.object), None, at), Err(PalwStateV2Error::HeldLeafChallengeRefused(_))),
         "a chain that plays bisection"
     );
     let mut early = env_with(armed_with_chunks_at(AT + 1_000));
@@ -703,7 +700,7 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
     let (early_proof, early_leaf) = output_close(&early, &early_claim, 0);
     let early_ch = challenge(&early, early_claim.id, ACCUSER, early_leaf, early_proof, 2);
     let early_parent = early.chain.s.clone();
-    let below = fold_held(&early, &early_parent, next(&early), &[early_ch.object.clone()], Some(HELD)).map(|_| ());
+    let below = fold_held(&early, &early_parent, next(&early), std::slice::from_ref(&early_ch.object), Some(HELD)).map(|_| ());
     assert!(matches!(below, Err(PalwStateV2Error::HeldLeafChallengeRefused(_))), "below palw_held_close_chunks_v1: {below:?}");
     // Another claim; the roots and the executor are the claim's; a producer does not challenge its own claim.
     assert!(
@@ -761,10 +758,10 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
         ));
     }
     // Once opened: a second challenge by the same accuser is a duplicate session; a bond that is no seat may not add one.
-    step_held(&mut env, at, &[ch.object.clone()]);
+    step_held(&mut env, at, std::slice::from_ref(&ch.object));
     let parent = env.chain.s.clone();
     let at = next(&env);
-    let again = fold_held(&env, &parent, at, &[ch.object.clone()], Some(HELD)).map(|_| ());
+    let again = fold_held(&env, &parent, at, std::slice::from_ref(&ch.object), Some(HELD)).map(|_| ());
     assert!(
         matches!(
             again,
@@ -773,7 +770,7 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
         "{again:?}"
     );
     let other = challenge(&env, claim.id, OTHER, leaf, proof, 2);
-    let from_a_non_seat = fold_held(&env, &parent, at, &[other.object.clone()], Some(HELD)).map(|_| ());
+    let from_a_non_seat = fold_held(&env, &parent, at, std::slice::from_ref(&other.object), Some(HELD)).map(|_| ());
     assert!(
         matches!(
             from_a_non_seat,
@@ -791,7 +788,7 @@ fn the_challenge_is_refused_by_name_where_it_is_not_this_courts() {
     }
     assert!(done.chain.claim(&claim.id).phase.is_terminal(), "the first challenge convicted the claim");
     let parent = done.chain.s.clone();
-    let after = fold_held(&done, &parent, next(&done), &[ch2.object.clone()], Some(HELD)).map(|_| ());
+    let after = fold_held(&done, &parent, next(&done), std::slice::from_ref(&ch2.object), Some(HELD)).map(|_| ());
     assert!(matches!(after, Err(PalwStateV2Error::WrongPhase { .. }) | Err(PalwStateV2Error::MissingClaim(_))), "{after:?}");
 }
 

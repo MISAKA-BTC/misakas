@@ -135,10 +135,10 @@ pub fn flat_resource_scope_v9(
     if max_positions == 0 || max_positions > program.history_bound || max_positions > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD {
         return Err(bad("invalid flat-v9 scope extent"));
     }
-    if let Some(e) = encoder {
-        if max_positions != 1 || crate::seg_encoder::encoder_binding_v1(program).ok().as_ref() != Some(e) {
-            return Err(bad("wrong flat-v9 encoder binding"));
-        }
+    if let Some(e) = encoder
+        && (max_positions != 1 || crate::seg_encoder::encoder_binding_v1(program).ok().as_ref() != Some(e))
+    {
+        return Err(bad("wrong flat-v9 encoder binding"));
     }
     let program_bytes = common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)
         .map_err(|_| bad("oversized v9 program"))?;

@@ -1486,7 +1486,7 @@ mod tests {
         // Drop the full seat: each segment keeps one partial plus the outsider, but only ONE class seat.
         let full = masks.iter().position(|m| m.is_full(2)).unwrap();
         let without_full: Vec<_> =
-            std::iter::once(outsider).chain(all.iter().enumerate().filter(|(i, _)| *i != full).map(|(_, r)| r.clone())).collect();
+            std::iter::once(outsider).chain(all.iter().enumerate().filter(|(i, _)| *i != full).map(|(_, r)| *r)).collect();
         assert!(matches!(
             palw_tir_shard_part_verdict_v1(&slice, &seed, &claim, 3, 2, true, &without_full),
             PalwTirShardPartVerdictV1::Short(_)

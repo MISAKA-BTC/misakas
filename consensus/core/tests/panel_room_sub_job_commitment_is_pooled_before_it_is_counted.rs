@@ -191,7 +191,7 @@ fn a_one_quantum_commitment_in_the_last_part_job_is_kept_beside_the_2m_attempt()
     // is admitted.
     let pwu = class_pwu(&p, &s, id2m, next);
     let (env, key, own) =
-        junk_attempt(id2m, bond_key(PRODUCER), pubkey_of(PRODUCER), &operator_pubkey_of(PRODUCER), pwu, 0x44_01, 0x44_0000_01);
+        junk_attempt(id2m, bond_key(PRODUCER), pubkey_of(PRODUCER), &operator_pubkey_of(PRODUCER), pwu, 0x44_01, 0x4400_0001);
     let objects = [whole, one_q, one_q2, six];
     let folded = fold_with(&p, &sp, &s, &block, &objects, PalwBlockWorkV3::Attempt(&env), key, &fp_extras(&p, next));
     let (after, _, skips) = folded.unwrap_or_else(|e| panic!("four commitments and the 2M attempt fold: {e}"));
@@ -325,7 +325,7 @@ fn a_class_held_to_final_refuses_a_part_job_commitment_at_its_cap() {
         &sp,
         &s,
         &ctx(0x4600_0001, next, next, 0),
-        &[first.clone()],
+        std::slice::from_ref(&first),
         PalwBlockWorkV3::None,
         Hash64::default(),
         &fp_extras(&p, next),

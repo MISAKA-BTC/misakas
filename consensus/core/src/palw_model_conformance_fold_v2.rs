@@ -22,7 +22,7 @@ pub(super) fn complete(
     proof: &[u8],
 ) -> Result<(), PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
-    if !builder.extras.kernel_route.as_ref().is_some_and(|r| r.opv.is_some()) {
+    if builder.extras.kernel_route.as_ref().is_none_or(|r| r.opv.is_none()) {
         return Err(refused("model conformance requires palw_panel_free_v1"));
     }
     let (class, id) = (Hash64::from_bytes(*class), Hash64::from_bytes(*binding));

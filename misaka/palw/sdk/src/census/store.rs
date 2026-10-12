@@ -389,6 +389,7 @@ pub fn source_of(l: &ListingV1, sel: &SelectedV1, fx: &Fetched) -> Result<Census
 
 /// The configurations of a diffusers pipeline's components, by component name: `(library, class, config)` from `model_index.json` and
 /// `<component>/config.json`.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 pub fn diffusers_components(fx: &Fetched) -> Result<BTreeMap<String, (String, String, Option<serde_json::Value>)>, Problem> {
     let f = &fx.fetch;
     let it = f.item("model_index.json").ok_or_else(|| problem(codes::FETCH_FAILED, "model_index.json", "not fetched"))?;

@@ -691,7 +691,7 @@ fn qwen36_geometry(s: &ArchSpec) -> Result<kaspa_consensus_core::palw_qwen36_pro
     let n = s.layers.len();
     let full: Vec<usize> = (0..n).filter(|i| matches!(s.layers[*i].mixer, Mixer::Attention(_))).collect();
     let interval = full.first().map(|i| i + 1).ok_or("no full-attention layer")?;
-    if full.iter().enumerate().any(|(k, i)| *i != (k + 1) * interval - 1) || n % interval != 0 {
+    if full.iter().enumerate().any(|(k, i)| *i != (k + 1) * interval - 1) || !n.is_multiple_of(interval) {
         return Err("a layer pattern other than every n-th layer full attention".into());
     }
     let Mixer::Attention(a) = &s.layers[interval - 1].mixer else { unreachable!("found above") };

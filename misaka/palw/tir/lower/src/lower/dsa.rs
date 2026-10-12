@@ -123,7 +123,7 @@ pub(super) fn token_index_mask(
 /// `sb + 1 + bidx` a multiple of four with `H ≤ 2^bidx`.
 pub(super) fn top_k_mask(b: &mut BlockBuilder<'_>, sc: tir::Ref, h: Dim, bidx: u32, sb: u32, topk: usize) -> tir::Ref {
     let total_bits = sb + 1 + bidx;
-    debug_assert!(total_bits % 4 == 0, "the radix search takes four bits a pass");
+    debug_assert!(total_bits.is_multiple_of(4), "the radix search takes four bits a pass");
     let passes = total_bits / 4;
     // κ_t = (s_t + 2^sb) · 2^b + (2^b − 1 − t) ∈ [0, 2^total_bits), distinct per t.
     let off = b.c(DType::I64, 1i128 << sb);
@@ -237,7 +237,7 @@ mod tests {
                         1 => (rng.next() % 3) as i64 - 1,
                         2 => [0, 0, 0, 5, -5][(rng.next() % 5) as usize],
                         3 => {
-                            if rng.next() % 2 == 0 {
+                            if rng.next().is_multiple_of(2) {
                                 lim
                             } else {
                                 -lim

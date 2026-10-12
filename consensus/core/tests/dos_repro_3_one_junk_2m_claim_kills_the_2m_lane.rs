@@ -300,7 +300,7 @@ fn dos_repro_3b_the_2m_class_is_gated_until_active() {
 
     assert!(
         matches!(
-            g.model_lifecycle(&id2m).map(|r| r.state.clone()),
+            g.model_lifecycle(&id2m).map(|r| r.state),
             Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Prefetching)
         ),
         "the shipped 2M row opens Prefetching"

@@ -230,7 +230,7 @@ impl PalwOwnedTokenizerCourtV1 {
     }
     pub fn certificate(&self) -> Result<Option<PalwTokenizerCourtFaultV1>, String> {
         self.check()?;
-        Ok(self.court.finish()?.then(|| PalwTokenizerCourtFaultV1 {
+        Ok(self.court.finish()?.then_some(PalwTokenizerCourtFaultV1 {
             claim: self.claim,
             reserver: self.reserver,
             reserved_daa: self.reserved_daa,

@@ -957,7 +957,7 @@ pub(crate) mod test_rows {
         }
     }
 
-    pub(crate) fn result_v1(seed: u8) -> PalwEvalResultV1 {
+    pub(crate) fn result_v1(_seed: u8) -> PalwEvalResultV1 {
         PalwEvalResultV1 {
             item: 0,
             subject: PalwEvalSubjectV1::Parent,

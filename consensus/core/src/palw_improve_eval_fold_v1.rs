@@ -88,7 +88,7 @@ pub(crate) mod test_disclosure {
 
     type Disclosed = BTreeMap<(Hash64, u64, u32), (Vec<u32>, Option<Vec<u32>>)>;
     thread_local! {
-        static DISCLOSED: RefCell<Disclosed> = RefCell::new(BTreeMap::new());
+        static DISCLOSED: RefCell<Disclosed> = const { RefCell::new(BTreeMap::new()) };
     }
 
     pub fn set(line_id: Hash64, epoch: u64, item: u32, prompt: Vec<u32>, reference: Option<Vec<u32>>) {

@@ -201,6 +201,7 @@ pub(crate) fn palw_tir_shard_accusation_v1(
 /// DISSECTED leaf opens the existing interactive court. Its challenger uses these same authenticated
 /// committed inputs and proven rows to choose each child and build the bottom.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(crate) fn palw_tir_shard_accusation_over_v1(
     holding: &TirShardHoldingV1,
     capture: &TirCaptureV1,
@@ -828,10 +829,10 @@ impl PalwTirShardBooksV1 {
     ) {
         for duty in duties.iter().filter(|d| !d.i_am_responder && d.tir_dissection.is_some()) {
             let leaf = duty.tir_dissection.as_ref().expect("filtered phase").leaf_index();
-            if let Some((key, until)) = self.court_row_interests.get_mut(&(duty.claim_id, leaf)) {
-                if key.0 == duty.class_id {
-                    *until = (*until).max(duty.session_deadline_daa);
-                }
+            if let Some((key, until)) = self.court_row_interests.get_mut(&(duty.claim_id, leaf))
+                && key.0 == duty.class_id
+            {
+                *until = (*until).max(duty.session_deadline_daa);
             }
         }
         self.court_row_interests.retain(|_, (_, until)| daa <= *until);
@@ -1470,11 +1471,11 @@ impl super::PalwPanelService {
         books: &mut PalwTirShardBooksV1,
         ladder: u64,
     ) -> Result<Option<std::sync::Arc<resource::ReservedRowsV1<misaka_palw_tir_exec::node::TirRunInputsV1>>>, String> {
-        if let Some((inputs, root, expiry)) = books.cell_run_inputs.get_mut(&key) {
-            if *root == capture.binding.committed_execution_root {
-                *expiry = (*expiry).max(until);
-                return Ok(Some(inputs.clone()));
-            }
+        if let Some((inputs, root, expiry)) = books.cell_run_inputs.get_mut(&key)
+            && *root == capture.binding.committed_execution_root
+        {
+            *expiry = (*expiry).max(until);
+            return Ok(Some(inputs.clone()));
         }
         books.cell_run_inputs.remove(&key);
         if books.cell_run_pursuits.get(&key).is_some_and(|p| !p.matches(capture)) {
@@ -1917,7 +1918,7 @@ impl super::PalwPanelService {
         books: &mut PalwTirShardBooksV1,
     ) -> bool {
         let hold_key = (request.class_id, request.s_l, request.shard);
-        if !books.row_fetches.contains_key(&hold_key) {
+        if let std::collections::hash_map::Entry::Vacant(e) = books.row_fetches.entry(hold_key) {
             let memory = match self.tir_shard_reserve_row_request_v1(request, &capture.binding.class) {
                 Ok(held) => held,
                 Err(why) => {
@@ -1943,7 +1944,7 @@ impl super::PalwPanelService {
                         pursuit.progress().1,
                         request.artifact_root
                     );
-                    books.row_fetches.insert(hold_key, PalwTirRowFetchV1::new(pursuit, memory));
+                    e.insert(PalwTirRowFetchV1::new(pursuit, memory));
                 }
                 Err(why) => {
                     crate::palw_backends::note_throttled_v1(&format!("tir-shard-fetch-{}", request.class_id), || {
@@ -2020,7 +2021,7 @@ impl super::PalwPanelService {
         };
         let claim = duty.claim_id;
         let ladder = crate::palw_producer::palw_tir_da_answerable_leaves_v1(&self.consensus_config.params, current_daa);
-        if !books.run_pursuits.contains_key(&claim) {
+        if let std::collections::hash_map::Entry::Vacant(e) = books.run_pursuits.entry(claim) {
             let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return };
             let Some((ctx, prompt)) = self.attempt_job_for_claim(
                 session,
@@ -2042,7 +2043,7 @@ impl super::PalwPanelService {
                  demanded on chain (at most {PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1} sessions) only for what stays unanswered",
                 pursuit.runs()
             );
-            books.run_pursuits.insert(claim, pursuit);
+            e.insert(pursuit);
         }
         // The replies the lane pooled for the asks made, then the asks now due (off chain, no session).
         {

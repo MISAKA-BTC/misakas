@@ -58,7 +58,7 @@ pub fn producer_facts_from_wire_v1(
 ) -> Result<ProducerFactsSummary, String> {
     let hash = |what: &str, s: &str| s.trim().parse::<Hash64>().map_err(|_| format!("{what} '{s}' is not a 128-hex id"));
     let mut pubkey = vec![0u8; bond_registered_pubkey_hex.len() / 2];
-    if bond_registered_pubkey_hex.len() % 2 != 0
+    if !bond_registered_pubkey_hex.len().is_multiple_of(2)
         || (0..pubkey.len())
             .any(|i| u8::from_str_radix(&bond_registered_pubkey_hex[2 * i..2 * i + 2], 16).map(|b| pubkey[i] = b).is_err())
     {
@@ -422,8 +422,8 @@ mod tests {
 
     #[test]
     fn a_completed_block_goes_to_every_node_and_a_double_submission_is_a_success() {
-        let ok = Node("a", |hh| Reply::Accepted(hh));
-        let dup = Node("b", |hh| Reply::AlreadyKnown(hh));
+        let ok = Node("a", Reply::Accepted);
+        let dup = Node("b", Reply::AlreadyKnown);
         let evil = Node("c", |_| Reply::Accepted(Hash64::from_bytes([0xEE; 64])));
         let nodes: Vec<&dyn BlockNode> = vec![&ok, &dup, &evil, &ok];
         let r = submit_block_idempotent(h(1), b"block", &nodes, 2).unwrap();

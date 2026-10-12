@@ -9,6 +9,7 @@ use kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(super) fn flat_contradiction_v1(
     target: &PalwOffenceTargetV1,
     binding: &PalwStepBindingV2,
@@ -183,6 +184,7 @@ pub(super) fn tiled_plan_v1(
     Ok(None)
 }
 
+#[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
 pub(super) fn tiled_contradiction_v1(
     target: &PalwOffenceTargetV1,
     job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
@@ -767,7 +769,7 @@ mod tests {
             for (unit, event) in plan.units().iter().zip(&events) {
                 let PalwDaUnitV1::Event { row, tile } = *unit else { unreachable!() };
                 let case = book.cases.get_mut(&target.claim_id).unwrap();
-                let prior_bisect = case.bisect.clone();
+                let prior_bisect = case.bisect;
                 case.learn(
                     kaspa_consensus_core::palw_legacy_public_filer_v1::PalwLegacyProbeV1::Binding { row, tile },
                     &answer(event.clone()),

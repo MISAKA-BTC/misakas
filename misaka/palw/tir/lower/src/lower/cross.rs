@@ -39,7 +39,7 @@ pub(super) fn lower_cross_attention(
     want: &Want,
 ) -> Result<Val> {
     let (inner, dc) = (kv * hd, slots.len());
-    if q.len != heads * hd || q.dt != DType::I16 || q.key.split() != 0 || dc == 0 || heads % kv != 0 {
+    if q.len != heads * hd || q.dt != DType::I16 || q.key.split() != 0 || dc == 0 || !heads.is_multiple_of(kv) {
         return Err(LowerError::eval(format!("internal: cross-attention `{site}` reads {:?} of {} for {heads}×{hd}", q.dt, q.len)));
     }
     let (g, kv32, hd32, n32) = ((heads / kv) as u32, kv as u32, hd as u32, rows as u32);
@@ -209,7 +209,7 @@ pub fn lower_cross_kv(hl: &HlProgram, spec: &ModelSpec, unit: f64) -> Result<Low
         block_map[hl.pre] = b.finish(&[r]);
     }
     // post: every cross layer's K and V from the codes of the states.
-    let mut out_node = None;
+    let out_node;
     {
         let mut lb = new_lb(hl, hl.post);
         let tb = pb.blocks.len() as u8;

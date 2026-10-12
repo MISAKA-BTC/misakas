@@ -109,13 +109,13 @@ fn opt_in_is_signed_target_bound_and_closed_without_its_own_fence() {
     oversized[1] = 40;
     assert!(O::decode(&oversized).is_err());
     refusal_unchanged(&mut w, PRODUCER, &object);
-    inputs(&mut w, &[t.clone()], None);
+    inputs(&mut w, std::slice::from_ref(&t), None);
     refusal_unchanged(&mut w, PRODUCER, &object);
-    inputs(&mut w, &[t.clone()], Some(13));
+    inputs(&mut w, std::slice::from_ref(&t), Some(13));
     refusal_unchanged(&mut w, PRODUCER, &object);
-    inputs(&mut w, &[t.clone()], Some(11));
+    inputs(&mut w, std::slice::from_ref(&t), Some(11));
     refusal_unchanged(&mut w, PRODUCER, &object); // target predates the new fence
-    inputs(&mut w, &[t.clone()], Some(0));
+    inputs(&mut w, std::slice::from_ref(&t), Some(0));
     let empty_root = w.l.root();
     let empty_rows = w.l.to_rows();
     let empty = roundtrip(&w.l);
@@ -153,7 +153,7 @@ fn every_target_costs_a_fresh_deposit_and_failure_keeps_the_slot_until_its_horiz
     assert_eq!(w.l.bonds[&PRODUCER].reserved, 1, "ordinary seal is still distinct");
     assert!(w.l.beacon_sources.values().all(|s| s.held == 0 && matches!(s.outcome, Some(BeaconSourceOutcomeV1::Forfeited { .. }))));
     let next = target(&w, 4, 90, 40);
-    inputs(&mut w, &[next.clone()], Some(0));
+    inputs(&mut w, std::slice::from_ref(&next), Some(0));
     w.block(102, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal: [0xB5; 64] }]);
     refusal_unchanged(&mut w, PRODUCER, &opt(PRODUCER, job.id(), [0xB5; 64], &next));
     let late = target(&w, 5, 400, 40);
@@ -173,7 +173,7 @@ fn same_position_reseals_cannot_erase_the_target_opt_in_or_avoid_its_forfeit() {
     let seal = [0xA5; 64];
     w.block(12, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
     let t = target(&w, 1, 10, 40);
-    inputs(&mut w, &[t.clone()], Some(0));
+    inputs(&mut w, std::slice::from_ref(&t), Some(0));
     submit(&mut w, 12, PRODUCER, opt(PRODUCER, job.id(), seal, &t));
     let before = w.l.to_rows();
     let before_scalars = w.l.scalars();
@@ -220,7 +220,7 @@ fn a_reveal_keeps_source_collateral_and_claim_liability_through_the_signed_horiz
     let seal = misaka_palw_kernel::route::claim_seal_v2(&claim, &test_salt(&claim));
     w.block(12, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
     let t = target(&w, 1, 10, 40);
-    inputs(&mut w, &[t.clone()], Some(0));
+    inputs(&mut w, std::slice::from_ref(&t), Some(0));
     submit(&mut w, 12, PRODUCER, opt(PRODUCER, job.id(), seal, &t));
     let T::CommitClaim { claim: c, evidence, commitments } = p.tx.clone() else { panic!() };
     let early = O::CommitClaimSalted {
@@ -265,7 +265,7 @@ fn abandonment_after_reveal_burns_the_source_deposit_as_well_as_the_claim_defaul
     let seal = misaka_palw_kernel::route::claim_seal_v2(&id, &test_salt(&id));
     w.block(12, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
     let t = target(&w, 1, 10, 40);
-    inputs(&mut w, &[t.clone()], Some(0));
+    inputs(&mut w, std::slice::from_ref(&t), Some(0));
     submit(&mut w, 12, PRODUCER, opt(PRODUCER, job.id(), seal, &t));
     submit(&mut w, 52, PRODUCER, reveal_object(p.tx));
     w.block(90, vec![T::FileDemand { demander: OUTSIDER, claim: id, stage: 0, position: 1 }]);
@@ -324,7 +324,7 @@ fn a_public_conviction_after_source_final_collects_both_independent_reservations
     let seal = misaka_palw_kernel::route::claim_seal_v2(&id, &test_salt(&id));
     w.block(12, vec![T::SealClaim { producer: PRODUCER, job: job.id(), seal }]);
     let t = target(&w, 1, 10, 40);
-    inputs(&mut w, &[t.clone()], Some(0));
+    inputs(&mut w, std::slice::from_ref(&t), Some(0));
     submit(&mut w, 12, PRODUCER, opt(PRODUCER, job.id(), seal, &t));
     submit(&mut w, 52, PRODUCER, reveal_object(p.tx));
     w.block(102, vec![]);

@@ -926,10 +926,8 @@ fn a_cone_close_at_a_leaf_holding_a_lane_outside_its_dtype_convicts_on_the_lane_
     let mut forged = close.clone();
     forged.disputed.lanes_le[0] ^= 1;
     assert!(
-        matches!(
-            check_gen_cone_close_v1(&forged, &f.row, &f.row.class_id, &accused.committed_execution_root, Some(global), FORM, &LIMITS),
-            Err(_)
-        ),
+        check_gen_cone_close_v1(&forged, &f.row, &f.row.class_id, &accused.committed_execution_root, Some(global), FORM, &LIMITS)
+            .is_err(),
         "an unproven leaf is a refusal, not a conviction"
     );
 }

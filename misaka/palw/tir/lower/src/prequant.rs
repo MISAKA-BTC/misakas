@@ -987,6 +987,7 @@ mod tests {
         // Zero points per (group, out): z = 1 + (g + o) % 15; v1 stores z − 1.
         let z = |g: usize, o: usize| (1 + (g + o) % 15) as u32;
         let mut qz = vec![0u32; 2];
+        #[allow(clippy::needless_range_loop)]
         for g in 0..2 {
             for o in 0..out {
                 qz[g] |= ((z(g, o) - 1) & 15) << (4 * o);
@@ -998,6 +999,7 @@ mod tests {
         let fmt = QFormat::Gptq { bits, group: 4, desc_act: true, sym: false, v2: false };
         let w = unpack_gptq(&fmt, (&[1, out], &qw), (&[2, 1], &qz), &scales, Some((&[inp], &g_idx))).unwrap();
         for i in 0..inp {
+            #[allow(clippy::needless_range_loop)]
             for o in 0..out {
                 let g = g_idx[i] as usize;
                 let want = scales.data[g * out + o] as f64 * (q[i][o] as f64 - z(g, o) as f64);
@@ -1050,6 +1052,7 @@ mod tests {
         let scales = Tensor::new(vec![2, out], (0..2 * out).map(|k| 0.25 * (k + 1) as f32).collect());
         let fmt = QFormat::Awq { bits: 4, group: gs };
         let w = unpack_awq(&fmt, (&[inp, 1], &qw), (&[2, 1], &qz), &scales).unwrap();
+        #[allow(clippy::needless_range_loop)]
         for i in 0..inp {
             for o in 0..out {
                 let g = i / gs;

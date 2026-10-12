@@ -72,6 +72,7 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
 
 /// The fixture's tokenizer ids (`[CLS]`, `[SEP]`, `[PAD]`) and its HF reference outputs: `(padded ids,
 /// real count, mean-pooled normalised embedding)`.
+#[allow(clippy::type_complexity)] // the tuple is the record; naming it adds a type nobody else uses
 fn hf_reference() -> (u32, u32, u32, Vec<(Vec<u32>, usize, Vec<f64>)>) {
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture_dir().join("outputs.json")).expect("outputs")).unwrap();
     let seqs: Vec<(Vec<u32>, usize, Vec<f64>)> = v["sequences"]
@@ -343,7 +344,7 @@ fn a_planted_fault_is_convicted_through_the_court_and_an_honest_claim_is_not() {
     let job = job(&e, &ids);
     let honest = held.run_tensor(&job, &ids, &[], &[], FORM).unwrap();
     let court = match &palw_t12_shipped_params().palw_consensus_mode {
-        PalwConsensusMode::ConsensusV2(b) => b.court.clone(),
+        PalwConsensusMode::ConsensusV2(b) => b.court,
         _ => unreachable!(),
     };
     let session = Hash64::from_bytes([0x5E; 64]);

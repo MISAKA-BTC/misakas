@@ -720,7 +720,7 @@ impl RpcCoreService {
             Ok(TransactionQueryResult::Transaction(txs)) => txs
                 .iter()
                 .find(|tx| tx.id() == carrier)
-                .and_then(|tx| kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(tx)),
+                .and_then(kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1),
             _ => None,
         };
         let (verdict, reason) = match (object, palw_v2_bundle(&self.config.params)) {
@@ -2821,19 +2821,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if let Some(row) = &row {
             fill_registration_from_class(&mut registration, row);
         }
-        if let Some(class_id) = row.as_ref().map(|r| r.class_id).or(requested_class) {
-            if let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await {
-                if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
-                    registration.registry_state =
-                        class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
-                    if class.row.is_some() {
-                        registration.folded = true;
-                        registration.included = true;
-                        registration.accepted = true;
-                        registration.submitted = true;
-                        registration.constructed = true;
-                    }
-                }
+        if let Some(class_id) = row.as_ref().map(|r| r.class_id).or(requested_class)
+            && let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await
+            && let Some(class) = read.classes.iter().find(|c| c.class_id == class_id)
+        {
+            registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
+            if class.row.is_some() {
+                registration.folded = true;
+                registration.included = true;
+                registration.accepted = true;
+                registration.submitted = true;
+                registration.constructed = true;
             }
         }
         if carrier.is_some() {
@@ -5201,7 +5199,7 @@ impl AsyncService for RpcCoreService {
     }
 }
 
-/// `getPalwKernelRows` / `getPalwKernelFinals` page bounds: `kaspa_rpc_core::convert::palw_kernel` (shared with the G14 harness).
+// `getPalwKernelRows` / `getPalwKernelFinals` page bounds: `kaspa_rpc_core::convert::palw_kernel` (shared with the G14 harness).
 
 /// `getPalwCapacityShadow`'s default page of bond and claim rows, and the most a caller may ask.
 const PALW_CAPACITY_SHADOW_RPC_ROWS: usize = 500;
@@ -5440,7 +5438,7 @@ fn decode_class_registered_hex(hex: &str) -> RpcResult<kaspa_consensus_core::pal
     if hex.is_empty() {
         return Err(RpcError::General("objectHex is empty".into()));
     }
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(RpcError::General("objectHex is not even-length hex".into()));
     }
     let mut bytes = vec![0u8; hex.len() / 2];
@@ -5559,9 +5557,8 @@ fn finalize_registration_state(registration: &mut RpcPalwModelRegistration) {
         Stage::Accepted
     } else if registration.submitted {
         Stage::Submitted
-    } else if registration.constructed {
-        Stage::Constructed
     } else {
+        // `constructed` or not, an unsubmitted registration reads as Constructed.
         Stage::Constructed
     };
     registration.submission_state = stage.name().to_string();

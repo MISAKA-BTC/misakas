@@ -28,7 +28,7 @@ const MODEL_WINDOW: u64 = 9_000;
 
 fn with_window(l: &Life, state: &PalwChainStateV2) -> PalwChainStateV2 {
     let delta = PalwStateDeltaV2 {
-        point: state.last_point().unwrap().clone(),
+        point: *state.last_point().unwrap(),
         entries: vec![PalwDeltaEntryV2::ClassCourtWindow { key: l.class, old: None, new: Some(MODEL_WINDOW) }],
     };
     apply_delta_v2(state, &delta, &l.sp).unwrap()

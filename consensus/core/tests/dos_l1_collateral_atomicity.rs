@@ -507,9 +507,9 @@ fn q2_block(audit: bool) -> Q2 {
     let c3 = ctx_paid(200, 102, 200);
     // The processor's pre-check: against the PARENT (`processor.rs:1891` passes `state`).
     let pre = check_palw_attempt_admission_v2(&s2, sp, &b.admission, &c3, &own, fences());
-    let (s3, delta, skips) = f.go(&s2, &c3, &[panel.clone()], PalwBlockWorkV3::Attempt(&own), &[], h(0xE8));
+    let (s3, delta, skips) = f.go(&s2, &c3, std::slice::from_ref(&panel), PalwBlockWorkV3::Attempt(&own), &[], h(0xE8));
     // What the step-3 duty alone leaves on bond 1.
-    let (s3d, _, _) = f.go(&s2, &c3, &[panel.clone()], PalwBlockWorkV3::None, &[], Hash64::default());
+    let (s3d, _, _) = f.go(&s2, &c3, std::slice::from_ref(&panel), PalwBlockWorkV3::None, &[], Hash64::default());
     // Contrast: the SAME attempt carried as MERGED work in the same block, with the same subsidy
     // and carve its own block would have escrowed.
     let paid = PalwMergedWorkV1 { subsidy: SUBSIDY, escrow_carve: f.extras.escrow_carve, ..merged(&own, 9, 9) };
@@ -1361,7 +1361,7 @@ fn dos_l1_q7_a_free_prompt_commitment_on_a_non_admitting_t12_class_is_refused() 
             PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, initial_target, .. }
                 if *class_id != b.base_class_id && certified.contains(class_id) =>
             {
-                Some((*class_id, pwu_rule.clone(), *initial_target))
+                Some((*class_id, *pwu_rule, *initial_target))
             }
             _ => None,
         })
@@ -1398,7 +1398,7 @@ fn dos_l1_q7_a_free_prompt_commitment_on_a_non_admitting_t12_class_is_refused() 
         class_id: held_id,
         artifact_root: h(0xB27),
         slash_value_per_pwu: floor.3,
-        pwu_rule: held_rule.clone(),
+        pwu_rule: held_rule,
         initial_target: held_target,
         share_permille: 0,
         activation_daa: 0,

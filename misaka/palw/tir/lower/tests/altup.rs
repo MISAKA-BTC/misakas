@@ -260,7 +260,8 @@ fn the_real_gemma3n_e4b_text_decoder_is_admitted() {
         .expect("config");
     let spec = parse_config_str(&cfg).expect("spec");
     let hl = hl::build_program(&spec).expect("hl");
-    for w in [1u32 << 13] {
+    {
+        let w = 1u32 << 13;
         let lw = lower(&hl, &LowerOpts { max_window: Some(w), ..LowerOpts::default() }).expect("lower");
         let a = tir_admit_program_v1(&lw.program, &default_inputs()).unwrap_or_else(|e| panic!("REFUSED {e}"));
         let nodes = lw.program.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);

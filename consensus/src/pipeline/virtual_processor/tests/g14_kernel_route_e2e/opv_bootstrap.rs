@@ -79,6 +79,7 @@ struct Onb {
     opv: Digest,
     complete: bool,
     /// Bound under the sealed-source (v3) policy instead of the sampled (v2) one.
+    #[allow(dead_code)] // dormant or test-only: kept, not yet wired to a caller in this build
     sealed: bool,
 }
 

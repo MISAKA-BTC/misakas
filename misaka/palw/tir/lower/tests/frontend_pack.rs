@@ -176,7 +176,7 @@ fn independent_template_is_the_same_bytes_and_runs_on_three_engines_and_court() 
     let (_, params) = artifact::read(&path, &p).unwrap();
     assert_eq!(params.tensors[&(2, Some(0))].le_bytes(), s.tensors["stranger.m.0"].1, "I64 bits above f64/f32 exactness retained");
     let seq: Vec<usize> = (0..32).map(|i| i % 16).collect();
-    assert_eq!(common::three_ways(&p, &params, &[seq.clone()]).unwrap(), 32);
+    assert_eq!(common::three_ways(&p, &params, std::slice::from_ref(&seq)).unwrap(), 32);
     let tokens: Vec<u32> = seq.into_iter().map(|n| n as u32).collect();
     common::court_coverage(&p, &params, &tokens, &[0, 1, 15, 16, 31], &[4, 16]).unwrap();
 }
@@ -497,7 +497,7 @@ fn an_unknown_packed_descriptor_streams_to_the_same_tir_and_three_engines() {
         assert_eq!(t.le_bytes(), expected.tensors[id].le_bytes());
     }
     let seq: Vec<usize> = (0..20).map(|i| i % 16).collect();
-    common::three_ways(&p, &actual, &[seq.clone()]).unwrap();
+    common::three_ways(&p, &actual, std::slice::from_ref(&seq)).unwrap();
     common::court_coverage(&p, &actual, &seq.into_iter().map(|n| n as u32).collect::<Vec<_>>(), &[0, 15, 16, 19], &[4, 16]).unwrap();
     let mut wrong = d.clone();
     wrong["quant_formats"]["outsider"]["doc"] = json!("changed source spec");
@@ -1383,7 +1383,9 @@ fn native_gguf_unknown_type_rebuilds_via_cli_and_refuses_unread_or_changed_metad
     common::three_ways(&p, &params, &[vec![0, 0]]).unwrap();
     common::court_coverage(&p, &params, &[0, 0], &[0, 1], &[4]).unwrap();
     let mut changed_meta = metadata;
-    changed_meta[0].2.last_mut().map(|b| *b ^= 1);
+    if let Some(b) = changed_meta[0].2.last_mut() {
+        *b ^= 1;
+    }
     std::fs::write(&path, native_gguf(&tensors, &changed_meta, None)).unwrap();
     let before = std::fs::read(&target).unwrap();
     let e = compiled.write(&target, &source, tokenizer, 8).err().unwrap().to_string();

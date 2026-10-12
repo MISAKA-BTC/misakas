@@ -78,8 +78,8 @@ fn owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts()
 #[test]
 fn owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation() {
     let (p, base, claim, decl, parts, x) = fixture();
-    let (s1, _) = f2_apply(&base, &p, &ctx(5, 105, 105), &[decl.clone()], &x).unwrap();
-    assert!(f2_apply(&s1, &p, &ctx(6, 106, 106), &[decl.clone()], &x).is_err());
+    let (s1, _) = f2_apply(&base, &p, &ctx(5, 105, 105), std::slice::from_ref(&decl), &x).unwrap();
+    assert!(f2_apply(&s1, &p, &ctx(6, 106, 106), std::slice::from_ref(&decl), &x).is_err());
     let mut foreign = decl.clone();
     if let PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { declaration } = &mut foreign {
         declaration.reserver = bond_key(4);

@@ -202,7 +202,7 @@ pub fn palw_improve_draw_independent_v1(
     min_suppliers: usize,
 ) -> Option<Vec<usize>> {
     let kept: Vec<usize> = (0..pool.len()).filter(|i| !excluded.contains(&pool[*i].supplier)).collect();
-    let sub: Vec<PalwDrawEntryV1> = kept.iter().map(|i| pool[*i].clone()).collect();
+    let sub: Vec<PalwDrawEntryV1> = kept.iter().map(|i| pool[*i]).collect();
     let drawn: Vec<usize> = palw_improve_draw_v1(seed, &sub, n, setter_cap_permille).into_iter().map(|j| kept[j]).collect();
     let mut suppliers: Vec<PalwBondKeyV2> = drawn.iter().map(|i| pool[*i].supplier).collect();
     suppliers.sort();
@@ -301,7 +301,7 @@ mod tests {
         let keys: Vec<Hash64> = drawn.iter().map(|&i| palw_improve_draw_key_v1(&seed, &pool[i].id)).collect();
         assert!(keys.windows(2).all(|w| w[0].as_byte_slice() < w[1].as_byte_slice()), "in order-key order");
         assert_eq!(palw_improve_draw_v1(&seed, &pool[..5], 12, 1000).len(), 5, "a short pool gives all it can");
-        assert_eq!(palw_improve_draw_v1(&h(8), &pool, 12, 250) == drawn, false, "another seed, another draw");
+        assert!(palw_improve_draw_v1(&h(8), &pool, 12, 250) != drawn, "another seed, another draw");
         // One supplier and a cap of max(1, ⌊κ·n⌋): 1 item.
         let lone: Vec<PalwDrawEntryV1> = (0..10u8).map(|i| PalwDrawEntryV1 { id: h(i), supplier: bond(1) }).collect();
         assert_eq!(palw_improve_draw_v1(&seed, &lone, 3, 100).len(), 1);

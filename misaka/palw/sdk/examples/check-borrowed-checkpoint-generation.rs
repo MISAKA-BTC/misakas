@@ -191,9 +191,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("reusable parameter quantization/site recipes differ".into());
     }
     // Record every actual structural difference, not a history-bound rewrite.
-    let changes=old.blocks.iter().zip(&p.blocks).enumerate().map(|(b,(old,new))|serde_json::json!({"block":b,"nodes_equal":old.nodes==new.nodes,"carry_types_equal":old.carry_in==new.carry_in&&old.carry_out==new.carry_out})).collect::<Vec<_>>();
-    let old_states = old.states.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>();
-    let new_states = p.states.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>();
+    let _changes=old.blocks.iter().zip(&p.blocks).enumerate().map(|(b,(old,new))|serde_json::json!({"block":b,"nodes_equal":old.nodes==new.nodes,"carry_types_equal":old.carry_in==new.carry_in&&old.carry_out==new.carry_out})).collect::<Vec<_>>();
+    let _old_states = old.states.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>();
+    let _new_states = p.states.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>();
     let plan = TirPlan::compile(p)?;
     if plan.param_instances != artifact.plan().param_instances
         || pc.by_instance.len() != plan.param_instances.len()
@@ -233,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let shape = d.shape.iter().map(|x| *x as usize).collect::<Vec<_>>();
         let width = d.dtype.width();
         let (root, _) = tensor_commitment_streamed_v3(d.dtype, &shape, 32 << 20, &mut |offset, out| {
-            if offset as usize % width != 0 || out.len() % width != 0 {
+            if !(offset as usize).is_multiple_of(width) || out.len() % width != 0 {
                 return Err("raw source alignment".into());
             }
             let start = usize::try_from(offset).map_err(|e| e.to_string())? / width;

@@ -591,6 +591,7 @@ mod rule_tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn eligibility_reads_every_rule() {
         let mut c = PalwPromotionCountsV1::default();
         c.primary = PalwPairedCountsV1 { wins: 8, losses: 0, ties: 0 };

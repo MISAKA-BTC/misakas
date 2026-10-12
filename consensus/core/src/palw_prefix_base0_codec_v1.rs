@@ -61,7 +61,7 @@ impl PalwBase0PrefixDigestV1 {
             || offset_values != self.offset_values
             || values_i32_le.is_empty()
             || values_i32_le.len() > 65_536
-            || values_i32_le.len() % 4 != 0
+            || !values_i32_le.len().is_multiple_of(4)
         {
             return Err("the i8 prefix chunk changes its next coordinate or bounded aligned offset".into());
         }

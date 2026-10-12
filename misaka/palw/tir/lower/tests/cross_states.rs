@@ -179,7 +179,7 @@ fn the_integer_text_stage_follows_the_float_reference_over_the_declared_states()
     let xkv = run_stage0(&s);
     let p = common::with_inputs(&s.text.program, &s.text_params, &[(XKV_PARAM, xkv)]);
     let il = fidelity::int_logits(&s.text.program, &p, &s.tokens, s.logits_scale, &|_| {}).expect("integer run");
-    let m = fidelity::compare(&[s.float_logits.clone()], &[il], &[s.tokens.clone()]);
+    let m = fidelity::compare(std::slice::from_ref(&s.float_logits), &[il], std::slice::from_ref(&s.tokens));
     eprintln!("mllama with states: top-1 {:.3} KL {:.5} (max {:.4})", m.top1_agreement, m.kl_mean, m.kl_max);
     assert!(m.top1_agreement >= 0.8 && m.kl_mean <= 0.02, "integer vs float: {m:?}");
     let _ = (&s.states_f, &s.hl);
@@ -193,7 +193,7 @@ fn the_three_implementations_agree_on_both_stages() {
     common::three_ways(&s.kv.program, &p0, &[vec![0]]).expect("stage 0");
     let xkv = run_stage0(&s);
     let p = common::with_inputs(&s.text.program, &s.text_params, &[(XKV_PARAM, xkv)]);
-    common::three_ways(&s.text.program, &p, &[s.tokens.clone()]).expect("text stage");
+    common::three_ways(&s.text.program, &p, std::slice::from_ref(&s.tokens)).expect("text stage");
 }
 
 /// Both programs are admitted, and the court reproduces every node of both from the committed leaves.

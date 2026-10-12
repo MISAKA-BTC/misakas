@@ -120,7 +120,7 @@ impl StepSink for Finder<'_> {
         self.seen += 1;
         match flat_profile_commitment_v5(&t) {
             Ok(root) => {
-                if self.public.commitments.get(0).and_then(|p| p.get(s as usize)).and_then(|s| s.get(v.node as usize)).copied()
+                if self.public.commitments.first().and_then(|p| p.get(s as usize)).and_then(|s| s.get(v.node as usize)).copied()
                     != Some(root)
                 {
                     self.first.get_or_insert((s, v.node));

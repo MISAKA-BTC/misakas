@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(palw_clock_tick_source_v1(&both, true), (true, 900), "the newest of either kind");
         assert_eq!(palw_clock_tick_source_v1(&both, false), (true, 900));
         let priced = PalwClockMergesetFactsV1 { priced: 1, ..f };
-        assert_eq!(palw_clock_tick_source_v1(&priced, true).0, false, "a bits-priced block is the clock; no stand-in");
+        assert!(!palw_clock_tick_source_v1(&priced, true).0, "a bits-priced block is the clock; no stand-in");
     }
 
     /// **The clock-safety simulation (ADR-0165 §3.4).** A chain of steps, each merging every tick source

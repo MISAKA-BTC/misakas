@@ -225,7 +225,7 @@ fn audit_c_colluding_quorum_inequality_from_the_card() {
             None => palw_pwu_v1(*initial_target, declared),
         };
         let quanta = kaspa_consensus_core::palw_execution_quanta_v1::palw_execution_quantum_count_v1(
-            u128::from(pwu.min(u64::MAX)),
+            u128::from(pwu),
             u128::from(PALW_EXECUTION_QUANTUM_V1),
             Hash64::default(),
             Hash64::default(),

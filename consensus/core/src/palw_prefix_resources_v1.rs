@@ -32,7 +32,7 @@ fn range_cost(width: u64, tile: u32, start: u64, end: u64) -> Result<(u128, u128
     let last = (end - 1) / t;
     let leaves = last - first + 1;
     let bytes = (width.min((last + 1) * t) - first * t) * 4;
-    let ragged = if last == width / t && width % t != 0 { width % t } else { 0 };
+    let ragged = if last == width / t && !width.is_multiple_of(t) { width % t } else { 0 };
     let full = leaves - u64::from(ragged != 0);
     let moves =
         u128::from(full) * (u128::from(tile) * 4).div_ceil(65_536) + u128::from(ragged * 4).div_ceil(65_536) + u128::from(leaves) * 2;
@@ -48,7 +48,7 @@ fn full_cache_row_cost(width: u64, tile: u32, base: u64, total: u64) -> Result<(
     let (b, l, m) = range_cost(width, tile, 0, width)?;
     // Exact for a one-chunk unit or when source tiles align with every cache-chunk boundary.
     // Otherwise this bounds all chunk/source boundary repeats using that source's own tiles.
-    let repeats = if total <= 16_384 || (16_384 % u64::from(tile) == 0 && base % u64::from(tile) == 0) {
+    let repeats = if total <= 16_384 || (16_384 % u64::from(tile) == 0 && base.is_multiple_of(u64::from(tile))) {
         1
     } else {
         u64::from(tile).div_ceil(16_384) + 1

@@ -732,7 +732,7 @@ pub fn cell_runs_capped_v1(
             match leaf.kind {
                 PalwTirLeafKindV1::Commit { occurrence, node, .. } => {
                     let o = occurrence as usize;
-                    if cell.occ.contains(&o) && !(o + 1 == n_occ && !job.runs_post(a)) {
+                    if cell.occ.contains(&o) && (o + 1 != n_occ || job.runs_post(a)) {
                         wanted.push((leaf.index, false));
                     } else if cell.occ.start > 0 && o + 1 == cell.occ.start && carry_nodes.contains(&node) {
                         wanted.push((leaf.index, true));

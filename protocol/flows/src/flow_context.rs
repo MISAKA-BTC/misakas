@@ -443,7 +443,7 @@ mod tests {
         assert!(fork_id_rejudge_v1(&armed, 1_150, &met_at_0).is_some());
         for daa in [FENCE, FENCE + 1] {
             assert_eq!(
-                fork_id_rejudge_v1(&armed, daa, &met_at_0).map(|(mismatch, fence)| (mismatch, fence)),
+                fork_id_rejudge_v1(&armed, daa, &met_at_0),
                 Some((ForkIdMismatch::NotCarriedPastCrossedFence { fence: FENCE }, FENCE)),
                 "dropped once this node is at {daa}"
             );

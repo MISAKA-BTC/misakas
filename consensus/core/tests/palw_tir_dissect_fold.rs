@@ -446,7 +446,7 @@ fn play(run: &mut Run, w: &World, x: &Execution, sid: Hash64, push: bool) -> End
         run.step(&[object]);
         let named = filed.children.iter().zip(&truth.children).position(|(f, t)| f != t).unwrap_or_else(|| {
             let last = filed.children.len() - 1;
-            if played % 2 == 0 { 0 } else { last }
+            if played.is_multiple_of(2) { 0 } else { last }
         }) as u8;
         run.step(&[chosen(run, sid, named)]);
         played += 1;
@@ -731,8 +731,8 @@ fn every_move_is_refused_out_of_turn_by_the_wrong_party_and_below_the_fence() {
     let choice = PalwTirDissectChoiceV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, session_id: sid, round: 0, child: 0 };
     let early_round = PalwConsensusObjectV2::CourtTirDissected { session_id: sid, round: round.clone(), signature: vec![1; 8] };
     let early_choice = PalwConsensusObjectV2::CourtTirChildChosen { session_id: sid, choice: choice.clone(), signature: vec![1; 8] };
-    assert!(matches!(run.refused(&[early_round.clone()]), PalwStateV2Error::NoDissection(_)));
-    assert!(matches!(run.refused(&[early_choice.clone()]), PalwStateV2Error::NoDissection(_)));
+    assert!(matches!(run.refused(std::slice::from_ref(&early_round)), PalwStateV2Error::NoDissection(_)));
+    assert!(matches!(run.refused(std::slice::from_ref(&early_choice)), PalwStateV2Error::NoDissection(_)));
     assert!(!palw_court_move_spends_the_slot_v1(&run.s, &early_round), "a move the fold refuses on its face spends no slot");
     assert!(
         matches!(check_court_tir_round_acceptance_v1(&run.s, &sid, &round, &[], verify), Err(PalwCourtV2Error::NoDissection(_))),
@@ -870,7 +870,7 @@ fn every_move_is_refused_out_of_turn_by_the_wrong_party_and_below_the_fence() {
     let (truth, _) = children_of(&w, &w.honest, &run.phase(&sid));
     let move_ = dissected(&run, sid, truth);
     assert!(palw_object_is_tir_v1(&move_) && palw_object_is_tir_dissection_move_v1(&move_));
-    assert!(matches!(below.refused(&[move_.clone()]), PalwStateV2Error::TirRegistrationRefused(_)));
+    assert!(matches!(below.refused(std::slice::from_ref(&move_)), PalwStateV2Error::TirRegistrationRefused(_)));
     assert_eq!(palw_tir_dissection_move_is_admissible_v1(&move_, false), Err(PalwCourtV2Error::KaryCourtDormant));
     assert_eq!(borsh::to_vec(&move_).unwrap()[0], 65, "tag 65");
     assert_eq!(borsh::to_vec(&root_claimed_unchecked(sid, build_root(&w), 2)).unwrap()[0], 64, "tag 64");
@@ -933,7 +933,7 @@ fn a_leaf_that_is_not_dissected_is_answered_by_a_declared_close() {
         // Declared at the last DAA of its rung window, so the rung passes while the group assembles.
         let rung = run.s.court_session(&sid).unwrap().ladder.last_deadline_daa();
         run.at(rung, &[declare(PalwCourtSideV1::Executor)], None);
-        assert!(rung + 1 <= rung + palw_close_assembly_daa_v1(2), "the assembly window outlasts the rung");
+        assert!(rung < rung + palw_close_assembly_daa_v1(2), "the assembly window outlasts the rung");
         run.at(rung + 1, &[], None);
         assert!(run.s.court_session(&sid).is_some(), "past its rung, the executor's clock waits on its declared close");
         let duty = kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&run.s, &[bond_key(PRODUCER)])

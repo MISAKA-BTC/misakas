@@ -300,7 +300,7 @@ impl KernelLedgerV1 {
                 return Err("fee promise inventory differs from prepaid escrow".into());
             }
         }
-        for (key, _) in &self.beacon_source_fee_promises {
+        for key in self.beacon_source_fee_promises.keys() {
             if !self.beacon_source_fees.contains_key(&key.0) {
                 return Err("orphan source fee promise".into());
             }

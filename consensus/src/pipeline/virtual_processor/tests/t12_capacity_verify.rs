@@ -2077,7 +2077,7 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
     let before = s.state().bond(&seat).unwrap().clone();
     assert!(matches!(before.status, PalwBondStatusV2::Active));
     let now = s.daa();
-    use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexEquivocationV1, PalwVertexLeafV1};
+    use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexLeafV1};
     let n = s.keys[&seat];
     let leaf = |claim: Hash64, verdict| PalwVertexLeafV1::Verdict { claim: PalwClaimRefV1::Full(claim), verdict };
     let a = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Valid)], |m, c| {

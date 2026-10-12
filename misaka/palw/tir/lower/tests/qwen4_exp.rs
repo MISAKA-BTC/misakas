@@ -779,7 +779,7 @@ fn the_court_reproduces_every_node_of_the_qwen4_programs_from_the_leaves() {
     let mut used: BTreeSet<&'static str> = BTreeSet::new();
     let mut covered: BTreeMap<&'static str, usize> = BTreeMap::new();
     for n in ["qwen4_exp", "qwen4_qsa_r3", "qwen4_ple_bigram", "qwen4_hc1"] {
-        let c = case(&n);
+        let c = case(n);
         let p = &c.prep.lowered.program;
         for b in &p.blocks {
             for nd in &b.nodes {

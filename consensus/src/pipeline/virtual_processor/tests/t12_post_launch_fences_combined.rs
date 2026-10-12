@@ -194,7 +194,7 @@ async fn cross() -> Crossing {
             break;
         }
         let straddle_gap = daa + 2 >= H && daa < H;
-        if daa % 2 == 0 && !straddle_gap {
+        if daa.is_multiple_of(2) && !straddle_gap {
             run.attempt(card % 8).await;
             card += 1;
         }

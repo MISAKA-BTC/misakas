@@ -242,6 +242,7 @@ fn aligned_span_v1(first: u64, end: u64, leaf_count: u64, level: u32) -> Option<
 
 /// Where the opening's replay resumes.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // a value type kept by value on purpose (borsh wire / one per job); boxing changes every match site
 pub enum Base0SegmentAnchorV1 {
     /// From the prompt.
     Genesis,
@@ -615,7 +616,7 @@ pub fn base0_replay_segment_opening_v2<K: Base0FpIntervalKernelsV1 + ?Sized>(
     let (first, end) = plan.proven;
     let mut fold =
         Base0RangeFoldV1::new(plan.leaf_count, first, end - first, plan.fold_level).map_err(Base0SegmentRefusalV1::Replay)?;
-    let ctx_hash = job.context_hash();
+    let _ctx_hash = job.context_hash();
     let profile_hash = class_profile.shape_profile_id();
     let mut kept: Option<Vec<(u64, Hash64)>> = Some(Vec::new());
     kernels
@@ -624,7 +625,7 @@ pub fn base0_replay_segment_opening_v2<K: Base0FpIntervalKernelsV1 + ?Sized>(
             if !proven && kept.is_none() {
                 return Ok(());
             }
-            let hash = step_tile_leaf_hash_ctx_v1(&job, &profile_hash, &tile);
+            let hash = step_tile_leaf_hash_ctx_v1(job, &profile_hash, &tile);
             if let Some(list) = kept.as_mut() {
                 if list.len() < PALW_SEGMENT_REPLAY_KEPT_LEAVES_V1 {
                     list.push((index, hash));

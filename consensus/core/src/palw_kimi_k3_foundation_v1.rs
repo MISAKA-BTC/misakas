@@ -305,7 +305,7 @@ mod tests {
         let profile = kimi_k3_derived_profile_v1().expect("derives");
         assert!(profile.verification_window_spans >= 1);
         assert!(
-            kimi_k3_window_fits_global_receipt_v1(span_daa, 0).expect("derives") == false,
+            !kimi_k3_window_fits_global_receipt_v1(span_daa, 0).expect("derives"),
             "a zero receipt window refuses the class rather than inventing a per-class deadline"
         );
     }
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(s, PalwModelLifecycleV1::Candidate, "the registrant cannot seat the jury alone");
         s = palw_lifecycle_step_v1(s, &calm(0, true), &profile, &g);
         assert_eq!(s, PalwModelLifecycleV1::Prefetching);
-        s = palw_lifecycle_step_v1(s, &calm(ready.saturating_sub(1).max(0), true), &profile, &g);
+        s = palw_lifecycle_step_v1(s, &calm(ready.saturating_sub(1), true), &profile, &g);
         assert_eq!(s, PalwModelLifecycleV1::Prefetching, "short of the derived ready-seat floor");
         s = palw_lifecycle_step_v1(s, &calm(ready, true), &profile, &g);
         assert_eq!(s, PalwModelLifecycleV1::Probation { probes_passed: 0 });
