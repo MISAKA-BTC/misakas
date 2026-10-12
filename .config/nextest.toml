@@ -1,5 +1,10 @@
 # The `ci` profile is the default profile plus a JUnit report, which the Test Suite job turns into
 # its job summary (scripts/ci/misaka-ci-summary.py). CI selects it with NEXTEST_PROFILE=ci, so the
 # `cargo nextest run` command line stays byte-identical to scripts/ci-gates.sh's.
+# Run every test even when one fails: a fail-fast suite stopped at test 425 of 12,223 (run 38184845501)
+# and left the other 11,798 unreported, so nobody knew which of them were red.
+[profile.ci]
+fail-fast = false
+
 [profile.ci.junit]
 path = "junit.xml"

@@ -64,7 +64,8 @@ gate_job() {
         toolchain-pin)        echo "Toolchain pin" ;;
         workflow-parity)      echo "Gates (parity)" ;;
         artifact-*)           echo "Derived artifacts" ;;
-        fmt|clippy|pq-guard)  echo "Lints" ;;
+        fmt|clippy)           echo "Lints" ;;
+        pq-guard)             echo "Security (PQ isolation + advisories)" ;;
         check)                echo "Check" ;;
         context-vectors)      echo "Context vectors (release)" ;;
         *)                    echo "Test Suite" ;;
