@@ -520,6 +520,12 @@ fn main() {
     let bond = match (seed_path, signer_socket) {
         (Some(_), Some(_)) => die("--bond-key-seed and --signer-socket are two custodies of one key: pick one".into()),
         (Some(path), None) => BondSigner::Seed(ValidatorKey::from_seed(read_seed(&path))),
+        #[cfg(not(unix))]
+        (None, Some(_)) => {
+            let _ = bond_pubkey_hex;
+            die("--signer-socket needs a Unix-domain socket (the kaspa-pq-signer sidecar); this platform has none: use --bond-key-seed".into())
+        }
+        #[cfg(unix)]
         (None, Some(socket)) => {
             let hex_text = bond_pubkey_hex.unwrap_or_else(|| {
                 die("--signer-socket needs --bond-pubkey <hex>: the public key the sidecar's validator holds".into())
@@ -1221,6 +1227,7 @@ impl misaka_palw_remote::view::ChainView for WrpcViewNode<'_> {
 /// The bond key's custodian: a seed this process holds, or a sidecar it asks.
 enum BondSigner {
     Seed(ValidatorKey),
+    #[cfg(unix)] // the sidecar is a Unix-domain socket (kaspa_pq_signer::sidecar is unix-only)
     Sidecar(kaspa_pq_signer::sidecar::SidecarSigner),
 }
 
@@ -1228,6 +1235,7 @@ impl BondSigner {
     fn signer(&self) -> &dyn MessageSigner {
         match self {
             BondSigner::Seed(key) => key,
+            #[cfg(unix)]
             BondSigner::Sidecar(sidecar) => sidecar,
         }
     }
