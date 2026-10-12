@@ -158,7 +158,7 @@ fn the_only_consensus_check_on_a_root_is_membership_in_the_set_it_came_from() {
         src.contains("if !state.class_roots_in_force(&attempt.class_id, daa).contains(&attempt.artifact_root)"),
         "the admission gate is a set-membership test over values the chain itself stored"
     );
-    let st = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/palw_state_v2.rs")).expect("readable");
+    let st = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1().to_string();
     let at = st.find("pub fn class_roots_in_force").expect("present");
     let body = &st[at..at + 900];
     assert!(body.contains("roots.push(class.artifact_root)"), "it returns the registration's own value");

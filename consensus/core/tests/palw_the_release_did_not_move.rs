@@ -163,7 +163,7 @@ fn p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it() {
 /// and the magnitude question has to be answered again rather than inherited.
 #[test]
 fn the_work_price_denominator_cannot_reach_the_payer_past_the_bundle() {
-    let fold = include_str!("../src/palw_state_v2.rs");
+    let fold = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
     let body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
     assert!(
         body.contains("None if self.extras.work_priced_reward_active => self.work_priced_escrow(claim)"),

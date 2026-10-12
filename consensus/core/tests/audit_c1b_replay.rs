@@ -468,7 +468,7 @@ fn audit_c1b_no_execution_quantum_on_t12_is_ever_reachable() {
 /// that closes cleanly.
 #[test]
 fn audit_c1b_permit_consumption_is_in_the_rooted_state() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/palw_state_v2.rs")).expect("read state");
+    let src = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1().to_string();
     assert!(
         src.contains(r#"state.update(collection_root(b"round_permits_used", &self.round_permits_used).as_byte_slice());"#),
         "round_permits_used is hashed into state_root"

@@ -805,7 +805,7 @@ mod tests {
         // tables are inside the root preimage and which are not, so that is what is checked, at
         // whatever version the tree is at (17 → 18 with ADR-0080 design A's split close; the
         // dissection phase moves it again).
-        let preimage = std::include_str!("palw_state_v2.rs");
+        let preimage = crate::palw_state_v2::palw_state_v2_fold_source_v1();
         let hashed = PALW_ECONOMIC_LOCUS_CENSUS_V1
             .iter()
             .find(|r| r.name.starts_with("claim state rows, hashed"))

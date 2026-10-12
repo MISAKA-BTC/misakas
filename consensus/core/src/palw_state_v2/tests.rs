@@ -13976,7 +13976,7 @@ mod fp_compute_pricing {
         // 4. And `prompt_mode` — the one field that says whether a user was there — is not on
         //    the object at all, so the fold has nothing to read it from.
         assert_ne!(PALW_FP_PROMPT_MODE_USER, PALW_FP_PROMPT_MODE_CANONICAL, "the two modes are distinct on the wire");
-        let fold_source = include_str!("../palw_state_v2.rs");
+        let fold_source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
         let body = &fold_source[..fold_source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
         assert!(
             body.lines().count() > 30_000,
@@ -19045,7 +19045,7 @@ fn a_held_class_records_its_ladder_at_registration_and_nothing_else_does() {
 /// for a silence it did not choose.
 #[test]
 fn every_held_court_arm_of_the_fold_reads_the_claims_class_ladder() {
-    let source = include_str!("../palw_state_v2.rs");
+    let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
     // The tests live in `palw_state_v2/tests.rs` (split out 2026-10-12); the fold file ends at the module declaration.
     let fold = &source[..source.find("\n#[cfg(test)]\npub(crate) mod tests;").expect("the tests follow the fold")];
     let arm = |name: &str| {
@@ -27628,7 +27628,10 @@ mod model_lines {
                     continue;
                 }
                 // The fold's own tests moved to `palw_state_v2/tests.rs` (2026-10-12); they were allowed as part of the fold file.
-                if !name.ends_with(".rs") || allowed.contains(&name.as_str()) || path.ends_with("palw_state_v2/tests.rs") {
+                if !name.ends_with(".rs")
+                    || allowed.contains(&name.as_str())
+                    || path.parent().is_some_and(|d| d.ends_with("palw_state_v2"))
+                {
                     continue;
                 }
                 // Only consensus decides blocks. An RPC or a CLI printing the shadow is what it
@@ -30637,7 +30640,7 @@ mod held_forfeits_v1 {
     /// so it holds on this line (no pool block yet) and after the integration merge (both).
     #[test]
     fn the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool() {
-        let source = include_str!("../palw_state_v2.rs");
+        let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
         // Each needle is spliced at run time, so this test's own text never matches it.
         let at = |needle: &str| source.find(&needle.replacen('~', "", 1));
         let rcore = at("state.upd~ate(b\"rcore_plus/v1\");").expect("R-core+'s root block");
@@ -30743,7 +30746,7 @@ mod capacity_liability_v1 {
         back.bond_freezes.clear();
         assert_eq!(back.state_root(), base.state_root(), "none again: the root as before");
         assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&back)).unwrap(), base_bytes, "and the bytes");
-        let source = include_str!("../palw_state_v2.rs");
+        let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
         let at = |needle: &str| source.find(&needle.replacen('~', "", 1));
         let ring = at("state.upd~ate(b\"recent_anchor_daas/v1\");").expect("the ring's block");
         let freezes = at("state.upd~ate(b\"bond_freezes/v1\");").expect("the freezes' block");
@@ -33977,7 +33980,7 @@ mod class_verify_deadline {
     /// the sweep), the load check below it, the court-close re-arm and the ADR-0062 DA-close re-arm.
     #[test]
     fn td0_the_final_floor_has_one_producer() {
-        let source = include_str!("../palw_state_v2.rs");
+        let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
         let rules = &source[..source.find("\n#[cfg(test)]").expect("the rules precede the tests")];
         let lines: Vec<&str> = rules.lines().collect();
         let helper_start = lines.iter().position(|l| l.starts_with("pub fn palw_claim_final_floor_v1(")).expect("the helper");

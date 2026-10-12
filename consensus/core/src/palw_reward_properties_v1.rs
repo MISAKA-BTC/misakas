@@ -1064,7 +1064,7 @@ fn tampering_with_the_declared_work_changes_no_price() {
     }
 
     // The fold states the same refusal by name, so the two rules cannot drift into two answers.
-    let fold = include_str!("palw_state_v2.rs");
+    let fold = crate::palw_state_v2::palw_state_v2_fold_source_v1();
     assert!(
         fold.contains("FreePromptWorkLeavesMismatch"),
         "the transition still refuses a disagreeing commitment rather than pricing it"
@@ -1224,7 +1224,7 @@ fn eligible_weight_never_exceeds_the_protocol_budget() {
         );
     }
     // And the volume side: the fold refuses by name, off a room it does not let a class widen.
-    let fold = include_str!("palw_state_v2.rs");
+    let fold = crate::palw_state_v2::palw_state_v2_fold_source_v1();
     let body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
     assert!(body.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
     assert!(body.contains("ClassNotAdmitting"), "a class that does not admit is refused by name");
@@ -1573,7 +1573,7 @@ fn a_derived_basis_changes_the_unit_the_collateral_is_denominated_in() {
 /// defect was a MISSING call, and no behavioural fixture can fail for a call that is not there.
 #[test]
 fn the_difficulty_seed_reads_no_registrant_declaration() {
-    let source = include_str!("palw_state_v2.rs");
+    let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
     let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
     assert!(fold.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
 
@@ -1603,7 +1603,7 @@ fn the_difficulty_seed_reads_no_registrant_declaration() {
 /// preserve. This pins the rule so a later branch cannot tidy it into uniformity.
 #[test]
 fn the_price_unit_stays_raw_because_it_is_a_denominator() {
-    let source = include_str!("palw_state_v2.rs");
+    let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
     let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
     assert!(fold.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
     let at = fold.find("fn work_price_unit_at(").expect("the work price is still here");
@@ -1647,7 +1647,7 @@ fn the_price_unit_stays_raw_because_it_is_a_denominator() {
 #[test]
 fn every_construction_of_the_admission_fences_names_the_canonical_work_height() {
     let sources = [
-        ("palw_state_v2.rs", include_str!("palw_state_v2.rs")),
+        ("palw_state_v2.rs", crate::palw_state_v2::palw_state_v2_fold_source_v1()),
         ("processor.rs", include_str!("../../src/pipeline/virtual_processor/processor.rs")),
     ];
     let mut checked = 0;

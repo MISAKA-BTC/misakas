@@ -118,7 +118,7 @@ fn the_ceiling_and_the_ledger_price_one_claim_with_one_expression() {
 #[test]
 fn neither_the_ceiling_nor_the_ledger_carries_its_own_copy_of_the_expression() {
     let gate = include_str!("../src/palw_admission_v2.rs");
-    let fold = include_str!("../src/palw_state_v2.rs");
+    let fold = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
     let fold_body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
 
     assert!(

@@ -214,7 +214,9 @@ fn body_of<'a>(source: &'a str, signature: &str) -> &'a str {
 
 fn try_body_of<'a>(source: &'a str, signature: &str) -> Option<&'a str> {
     let start = source.find(signature)?;
-    let indent = source[..start].rsplit('\n').next().unwrap_or("").len();
+    // The line's leading whitespace (a `pub(super) ` before `fn` is not indentation: the fold was split on 2026-10-12).
+    let line = source[..start].rsplit('\n').next().unwrap_or("");
+    let indent = line.len() - line.trim_start().len();
     let close = format!("\n{}}}\n", " ".repeat(indent));
     let end = source[start..].find(&close).unwrap_or_else(|| panic!("`{signature}` closes")) + start;
     Some(&source[start..end])
@@ -227,7 +229,7 @@ fn try_body_of<'a>(source: &'a str, signature: &str) -> Option<&'a str> {
 /// function itself reads each bond's operator id only — never its collateral.
 #[test]
 fn t90_the_folds_jury_reads_neither_the_stake_nor_the_fence() {
-    let state = include_str!("../src/palw_state_v2.rs");
+    let state = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
     // This line's name, or the Activation Pool's (which returns the drawn jury): exactly one exists.
     let (name, seated) = match (try_body_of(state, "fn admission_jury_seated("), try_body_of(state, "fn admission_jury_v1(")) {
         (Some(body), None) => ("admission_jury_seated", body),

@@ -15178,7 +15178,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
         "at the fence"
     );
     assert!(arm[refusal..].contains("return Err("), "and refused");
-    let fold = include_str!("../../../core/src/palw_state_v2.rs");
+    let fold = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
     let fold_at = fold.find("PalwConsensusObjectV2::ShardCourtAccused { accusation } => {").expect("the fold's arm");
     let fold_arm =
         &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];

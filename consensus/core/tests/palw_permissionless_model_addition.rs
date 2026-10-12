@@ -210,7 +210,7 @@ fn the_lifecycle_expands_the_amount_of_eligible_work_and_never_its_price() {
 
     // The quantity the ladder scales is a COUNT of claims per span, and the registry says so in
     // the one expression that reads it.
-    let fold = include_str!("../src/palw_state_v2.rs");
+    let fold = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
     assert!(
         fold.contains("profile.admission_claims_per_span_milli.saturating_mul(state.admission_permille() as u64) / 1_000"),
         "admission_permille scales claims per span — an amount — and nothing else"

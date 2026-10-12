@@ -79,7 +79,7 @@ fn direct_position_writers(source: &str) -> Vec<String> {
 /// is an ADR that supersedes ADR-0101 Decision 5 by name, not an edit here.
 #[test]
 fn a_position_moves_only_between_a_holder_and_the_curve() {
-    let source = include_str!("../src/palw_state_v2.rs");
+    let source = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
     let lines: Vec<&str> = source.lines().collect();
     let writers: Vec<String> = lines
         .iter()
@@ -248,7 +248,10 @@ fn the_tier_sums_have_no_caller_in_the_fold_the_processor_or_the_evm() {
                     continue; // a comment, or the definition itself
                 }
                 let within = enclosing_fn(&lines, line);
-                if NAMES.contains(&within.as_str()) && file.ends_with("palw_state_v2.rs") {
+                // the fold is `palw_state_v2.rs` and the files split out of it (2026-10-12)
+                if NAMES.contains(&within.as_str())
+                    && (file.ends_with("palw_state_v2.rs") || file.parent().is_some_and(|d| d.ends_with("palw_state_v2")))
+                {
                     continue; // the three call each other
                 }
                 callers.push(format!("{}:{} in {within}", file.display(), line + 1));

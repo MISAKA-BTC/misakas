@@ -748,7 +748,12 @@ mod tests {
         let mut found: Vec<Found> = Vec::new();
         let mut functions_scanned = 0;
         for (file, path) in SETTLEMENT_PATH_SOURCES {
-            let source = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            // The fold is several files since its 2026-10-12 split; read it as one text.
+            let source = if file == "palw_state_v2.rs" {
+                crate::palw_state_v2::palw_state_v2_fold_source_v1().to_string()
+            } else {
+                std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"))
+            };
             let code = blank_test_modules(&strip_non_code(&source));
             // A guard that scans nothing is green for nothing: each file still has its code.
             let functions = code.split(|c: char| !is_identifier_char(c)).filter(|t| *t == "fn").count();

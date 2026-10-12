@@ -3557,7 +3557,7 @@ pub(crate) mod tests {
         /// `(variant, tag)` of every variant of `PalwConsensusObjectV2`, read from its SOURCE — declaration order, Rust's discriminant
         /// rule (explicit `= N`, else the previous plus one).
         fn enum_kinds_from_source() -> Vec<(String, u8)> {
-            enum_variants_from_source(include_str!("palw_state_v2.rs"), "PalwConsensusObjectV2")
+            enum_variants_from_source(crate::palw_state_v2::palw_state_v2_fold_source_v1(), "PalwConsensusObjectV2")
         }
 
         /// `(variant, discriminant)` of `pub enum <name>` in `src`, by Rust's rule (explicit `= N`, else the previous plus one).

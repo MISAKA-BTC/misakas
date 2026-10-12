@@ -1758,8 +1758,8 @@ mod tests {
     /// the adapter asks it too — otherwise the node would prove for spans no jury sits at.
     #[test]
     fn the_node_asks_the_folds_own_audit_predicate() {
-        let fold = include_str!("../../consensus/core/src/palw_state_v2.rs");
-        let jury = &fold[fold.find("    fn admission_jury").expect("the fold's admission jury")..];
+        let fold = kaspa_consensus_core::palw_state_v2::palw_state_v2_fold_source_v1();
+        let jury = &fold[fold.find("fn admission_jury").expect("the fold's admission jury")..];
         let jury = &jury[..jury.find("\n    }\n").expect("its end")];
         let ours = include_str!("palw_candidate_proof_timing.rs");
         let adapter = &ours[ours.find("pub fn palw_candidate_audit_due_v1(").expect("the adapter")..];
