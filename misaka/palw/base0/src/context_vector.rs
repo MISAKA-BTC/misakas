@@ -1342,7 +1342,14 @@ mod tests {
     fn the_4k_vector_passes_every_stage_and_is_pinned() {
         check_pinned(
             "0110-dense-v7-4k",
-            "a54a5ee6b22cf298be468ddc865d48d8394d3d180f60463845b366fe7ba6a35db33f87586ff52f423a961c7fd9f218c8ecee8323ac20162d33143505e5f305a5",
+            // Re-pinned 2026-10-12 — the moves the 512 vector was re-pinned for on 2026-09-23/24, which this release-only
+            // vector never received (no CI run reached it green since). Checked by printing both documents, not argued:
+            // against the 2026-09-12 pin's document (61ed42808) exactly seven fields moved, the same seven as the 512
+            // vector's over the same span — `ruleset.consensus_params_id` (e6e93633… → 943a9e0f…, the devnet-held preset's
+            // fences, state v21/v22 and the fifth family) and `consensus.commit.job_id` with the five roots that follow the
+            // job (execution, trace, output, step, checkpoint). The other 139 fields — every count, size, availability
+            // answer, court leaf and verdict — are the 2026-09-12 document's. Previous: `a54a5ee6…`.
+            "07b4a376668cb2ea6623a67d439893ada93dffc6e6ea365609438d34db2e48d6fce7cc7737b371d4c047ed4686d7adc96e292e26670b91545592fd0cecc21a5e",
         );
     }
 
@@ -1355,7 +1362,14 @@ mod tests {
     fn the_32k_vector_passes_every_stage_and_is_pinned() {
         check_pinned(
             "0110-dense-v7-32k",
-            "0b8b191de944cad815cc53a1504a92b0a9052ae4dd08433014ffc2b9749ec18611f66c3c0fbcc32a1763d926c94c47cb1804801befbeae000a817ee6bfcd6e55",
+            // Re-pinned 2026-10-12 — the moves the 512 vector was re-pinned for on 2026-09-23/24, which this release-only
+            // vector never received (no CI run reached it green since). Checked by printing both documents, not argued:
+            // against the 2026-09-12 pin's document (61ed42808) exactly seven fields moved, the same seven as the 512
+            // vector's over the same span — `ruleset.consensus_params_id` (e6e93633… → 943a9e0f…, the devnet-held preset's
+            // fences, state v21/v22 and the fifth family) and `consensus.commit.job_id` with the five roots that follow the
+            // job (execution, trace, output, step, checkpoint). The other 139 fields — every count, size, availability
+            // answer, court leaf and verdict — are the 2026-09-12 document's. Previous: `0b8b191d…`.
+            "44b5a5581e92b6f0ab12c2ccd8613cce7fc7d8e35e1fe73173bbaca01951ff622c1c3cf5fe7394d5304acd14b5258c3f02fbc1868461196d968741827c777f66",
         );
     }
 }
