@@ -1916,9 +1916,11 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
         PalwInt12WireChangeV1::CarriedReread { fence: "palw_legacy_public_filer_v1", digest: 0x14f2c2b7896b15f4 },
     ),
     // LG14-B: `LegacyHeldV2` appended; every int-12 kind carrying it is owned by `palw_legacy_held_da_v2` (guarded arms).
+    // Digest re-taken 2026-10-12 after `cargo fmt --all` split the struct variants over lines and gave each a trailing comma
+    // (`cca88a4c7733b9e5` before): the declaration's tokens, and so its bytes on the wire, are the ones classified above.
     (
         "consensus/core/src/palw_da_rcore_v1.rs::PalwDaUnitV1",
-        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0xcca88a4c7733b9e5 },
+        PalwInt12WireChangeV1::CarriedAppended { fence: "palw_legacy_held_da_v2", digest: 0x57bc1944484fc3a5 },
     ),
     // HFX task heads: `Head` appended to the generative class's profile offers (variant 3) and to the job body (variant 2); the profile
     // byte `Head = 6` is a hand-read tag the live build decodes and refuses at admission (`Profile(6)`), re-read below the fence.
