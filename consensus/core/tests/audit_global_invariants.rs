@@ -1010,7 +1010,7 @@ fn i7_consensus_identity_never_rests_on_a_hand_entered_hash() {
     // --- the floor and hybrid roots: is there any derivation reachable from here? -----------------
     // The card's own constants are `Hash64::from_bytes([..])` literals. If a derivation existed in
     // this crate the constant would be a call, as the dense row's is. Measured structurally:
-    let card_source = include_str!("../src/config/params.rs");
+    let card_source = kaspa_consensus_core::palw_source_guard_v1::palw_params_source_v1();
     fn const_body<'a>(src: &'a str, name: &str) -> &'a str {
         let at = src.find(&format!("pub const {name}: crate::Hash64")).unwrap_or_else(|| panic!("{name} is declared"));
         let tail = &src[at..];

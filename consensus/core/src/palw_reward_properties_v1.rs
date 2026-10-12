@@ -989,7 +989,7 @@ fn no_registrant_writable_field_increases_the_weight() {
     }
 
     // The precondition that turns that knowledge into a refusal.
-    let params = include_str!("config/params.rs");
+    let params = crate::palw_source_guard_v1::palw_params_source_v1();
     assert!(
         params.contains("palw_artifact_root_ownership at or below it"),
         "the economic bundle refuses to arm without one owner per artifact root"

@@ -170,7 +170,7 @@ fn the_work_price_denominator_cannot_reach_the_payer_past_the_bundle() {
         "the work-priced escrow is still only the fallback for a claim with no economics snapshot"
     );
 
-    let params = include_str!("../src/config/params.rs");
+    let params = kaspa_consensus_core::palw_source_guard_v1::palw_params_source_v1();
     assert!(
         params.contains("palw_work_target is armed without palw_model_registry and palw_economic_payout armed at or below"),
         "and the work target still requires the payout at or below it, which is what makes the snapshot always present"

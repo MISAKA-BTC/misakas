@@ -152,7 +152,7 @@ fn no_consensus_boundary_names_the_typed_identities() {
         "the three types are used nowhere in the consensus crate's own sources — the split is confined to the SDK"
     );
     // And the genesis-card entrypoint takes three interchangeable `Hash64` positions.
-    let src = std::fs::read_to_string(root.join("config/params.rs")).expect("params.rs");
+    let src = kaspa_consensus_core::palw_source_guard_v1::palw_params_source_v1().to_string();
     for decl in [
         "base0_artifact_root: crate::Hash64,",
         "qwen36_artifact_root: crate::Hash64,",

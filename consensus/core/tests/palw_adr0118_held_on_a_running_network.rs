@@ -236,7 +236,7 @@ fn a_held_class_on_testnet_11_is_admitted_to_2_21_at_its_own_ladder() {
 /// Pinned in the source because no value-level test can separate the root from the height.
 #[test]
 fn the_held_fence_writes_the_v4_contexts_beside_its_height() {
-    let source = include_str!("../src/config/params.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_params_source_v1();
     // In `consensus_params_id` — the ruleset's identity — not the schedule id, which names heights.
     let id = source.find("pub fn consensus_params_id(&self)").expect("the identity");
     let at = id + source[id..].find("h.write(b\"palw_held_context\");").expect("the fence's identity write");

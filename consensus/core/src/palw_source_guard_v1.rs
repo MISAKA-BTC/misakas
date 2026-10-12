@@ -30,3 +30,20 @@ pub fn palw_processor_source_v1() -> &'static str {
             .join("\n")
     })
 }
+
+/// **`config/params.rs` as one text** — the file and the `impl Params` parts split out of it on 2026-10-13 (`identity.rs`,
+/// `validation.rs`, `activation.rs`, `mirror.rs`; its test modules are not included). Same crate, so `include_str!`.
+#[doc(hidden)]
+pub fn palw_params_source_v1() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| {
+        [
+            include_str!("config/params.rs"),
+            include_str!("config/params/identity.rs"),
+            include_str!("config/params/validation.rs"),
+            include_str!("config/params/activation.rs"),
+            include_str!("config/params/mirror.rs"),
+        ]
+        .join("\n")
+    })
+}
