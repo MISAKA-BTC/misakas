@@ -39,9 +39,7 @@ use crate::palw_step::{
     PALW_STEP_INPUT_LAYER_IN, PALW_STEP_INPUT_SENTINEL_MIN, PalwShapeProfileV3, PalwStepCoordinateV1, canonical_step_leaf_index,
     kernel_semantics_id_v1,
 };
-use crate::palw_step_leg::{
-    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1,
-};
+use crate::palw_step_leg::{PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1};
 use crate::palw_transcendental::{ggml_v_silu_v1, glibc_expf_v1};
 
 // ---------------------------------------------------------------------------------------------
@@ -4512,13 +4510,8 @@ pub fn check_execution_step_refutation_opened_capped_v1(
         Err(e) => return Err(e.into()),
     }
 
-    let (recomputed_row, row_offset, tile_start) = recompute_challenged_row_v1(
-        refutation,
-        refutation.output_preimage.coord,
-        weights,
-        prompt_ids_opening,
-        max_step_leaf_count,
-    )?;
+    let (recomputed_row, row_offset, tile_start) =
+        recompute_challenged_row_v1(refutation, refutation.output_preimage.coord, weights, prompt_ids_opening, max_step_leaf_count)?;
 
     // 4) Compare the challenged tile's slice, exact bits.
     let committed: Vec<u32> =
@@ -4815,7 +4808,12 @@ pub fn check_execution_step_leaf_hash_v1(
     let fault = PalwStepFaultV1::ComputationMismatch { value_index: u32::MAX };
     Ok(PalwStepRefutationVerdictV1 {
         fault,
-        evidence_id: crate::palw_step_leg::step_refutation_evidence_id(&binding.committed_execution_root, 7, opening.leaf_index, fault),
+        evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+            &binding.committed_execution_root,
+            7,
+            opening.leaf_index,
+            fault,
+        ),
     })
 }
 
@@ -4829,8 +4827,11 @@ pub fn palw_recomputed_tile_leaf_v1(
     max_step_leaf_count: u64,
 ) -> Option<PalwStepTileLeafV1> {
     let binding = &refutation.binding;
-    let coord =
-        crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, refutation.output_opening.leaf_index)?;
+    let coord = crate::palw_step::canonical_step_coordinates(
+        &binding.shape_profile,
+        &binding.job_context,
+        refutation.output_opening.leaf_index,
+    )?;
     let (node, _) = binding.shape_profile.resolve_node_slot(coord.node_slot)?;
     if node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused {
         return None;
@@ -5528,11 +5529,11 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::palw_legs::PalwCheckpointProfileV1;
-    use crate::palw_step_leg::step_tile_leaf_hash_v1;
     use crate::palw_step::{
         PALW_STEP_OBJECT_VERSION_V1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
         canonical_step_coordinates, kv_aux_leaf_count, step_leaf_count,
     };
+    use crate::palw_step_leg::step_tile_leaf_hash_v1;
     use crate::palw_step_leg::{
         PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepLegBuilderV1, checkpoint_empty_root_v2, checkpoint_leg_root_v2,
         execution_commitment_root_v2, step_leg_root_v1, step_opening_v1,
@@ -7926,7 +7927,6 @@ pub fn check_tiled_decode_token_refutation_v3(
     if beats { Ok(convicted()) } else { Err(PalwStepRefuteError::NoFaultFound) }
 }
 
-
 /// **The court's third arm for a claim whose constraint it holds only by commitment** (ADR-0096 Decision 7 as a wire proof
 /// kind): [`check_tiled_decode_token_refutation_v3`]'s rule, with the class table replaced by renderings opened against the
 /// claim's own table root, so no 150,000-entry table rides a carrier.
@@ -7959,19 +7959,44 @@ pub fn check_constrained_decode_token_at_v2(
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let pin = &accusation.pin;
     let (ctx_hash, vocab, tiles) = tiled_row_authenticate_v1(
-        binding, &pin.generated_token_ids, pin.position, &pin.row_root, &pin.row_opening, max_step_leaf_count,
+        binding,
+        &pin.generated_token_ids,
+        pin.position,
+        &pin.row_root,
+        &pin.row_opening,
+        max_step_leaf_count,
     )?;
     let beat = (!pin.committed_tile_lanes.is_empty() || !pin.beat_tile_lanes.is_empty()).then_some(pin.beat_lane);
     constrained_decode_decision_v1(
-        binding, &accusation.job, &pin.generated_token_ids, pin.position, &accusation.renderings,
-        &accusation.eog, accusation.witness, beat, public_filer_active, |committed, beat_lane| {
-            let open_tile = |lanes: &[i32], opening: &crate::palw_step_leg::PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
-                tiled_tile_authenticate_v1(&ctx_hash, pin.position, vocab, tiles, &pin.row_root,
-                    (lane / PALW_LOGITS_TILE_LANES) as u64, lanes, opening, max_step_leaf_count)?;
-                Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
-            };
-            Ok((open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed)?,
-                open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?))
+        binding,
+        &accusation.job,
+        &pin.generated_token_ids,
+        pin.position,
+        &accusation.renderings,
+        &accusation.eog,
+        accusation.witness,
+        beat,
+        public_filer_active,
+        |committed, beat_lane| {
+            let open_tile =
+                |lanes: &[i32], opening: &crate::palw_step_leg::PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
+                    tiled_tile_authenticate_v1(
+                        &ctx_hash,
+                        pin.position,
+                        vocab,
+                        tiles,
+                        &pin.row_root,
+                        (lane / PALW_LOGITS_TILE_LANES) as u64,
+                        lanes,
+                        opening,
+                        max_step_leaf_count,
+                    )?;
+                    Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
+                };
+            Ok((
+                open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed)?,
+                open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?,
+            ))
         },
     )
 }
@@ -7999,10 +8024,20 @@ pub fn check_constrained_flat_decode_token_at_v2(
     }
     check_base0_decode_pin(binding, &accusation.pin)?;
     constrained_decode_decision_v1(
-        binding, &accusation.job, &accusation.pin.generated_token_ids, accusation.position,
-        &accusation.renderings, &accusation.eog, accusation.witness, accusation.beat_lane, public_filer_active,
+        binding,
+        &accusation.job,
+        &accusation.pin.generated_token_ids,
+        accusation.position,
+        &accusation.renderings,
+        &accusation.eog,
+        accusation.witness,
+        accusation.beat_lane,
+        public_filer_active,
         |committed, beat_lane| {
-            let row = accusation.pin.logits_rows.get(accusation.position as usize)
+            let row = accusation
+                .pin
+                .logits_rows
+                .get(accusation.position as usize)
                 .ok_or(PalwStepRefuteError::InputSetNotCanonical("the challenged row is absent"))?;
             Ok((row[committed], row[beat_lane]))
         },
@@ -8058,7 +8093,12 @@ fn constrained_decode_decision_v1(
         let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: position_u32 };
         crate::palw_step_leg::PalwStepRefutationVerdictV1 {
             fault,
-            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(&binding.committed_execution_root, PALW_DECODE_TOKEN_EVIDENCE_KIND, position_u32 as u64, fault),
+            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                &binding.committed_execution_root,
+                PALW_DECODE_TOKEN_EVIDENCE_KIND,
+                position_u32 as u64,
+                fault,
+            ),
         }
     };
     // 1. The state: every earlier id renders and the automaton admits the prefix.
@@ -8067,10 +8107,14 @@ fn constrained_decode_decision_v1(
         if !renders.contains_key(id) && !eog(*id) {
             return Err(bad("an id before the challenged position carries no opened rendering"));
         }
-        prefix.push(rendering(*id).ok_or(bad("an id before the challenged position has no rendering — that position is the one to challenge"))?);
+        prefix.push(
+            rendering(*id)
+                .ok_or(bad("an id before the challenged position has no rendering — that position is the one to challenge"))?,
+        );
     }
-    let state = constraint_state_after_v1(&constraint, prefix.iter())
-        .ok_or(bad("the prefix is not admitted before the challenged position — the first position that is not is the one to challenge"))?;
+    let state = constraint_state_after_v1(&constraint, prefix.iter()).ok_or(bad(
+        "the prefix is not admitted before the challenged position — the first position that is not is the one to challenge",
+    ))?;
     // The committed token's own rendering must be OPENED (or be an eog id): a missing opening is not an admission either way.
     if !renders.contains_key(&committed) && !eog(committed) {
         return Err(bad("the committed token carries no opened rendering"));
@@ -8104,8 +8148,10 @@ fn constrained_decode_decision_v1(
     }
     let sampling = job.sampling_v2();
     let beats = crate::palw_decode_select_v2::decode_lane_beats_v2(
-        sampling.lane_key(v_beat, position_u32, beat_lane as usize), beat_lane as usize,
-        sampling.lane_key(v_committed, position_u32, committed as usize), committed as usize,
+        sampling.lane_key(v_beat, position_u32, beat_lane as usize),
+        beat_lane as usize,
+        sampling.lane_key(v_committed, position_u32, committed as usize),
+        committed as usize,
     );
     if beats { Ok(convicted()) } else { Err(PalwStepRefuteError::NoFaultFound) }
 }

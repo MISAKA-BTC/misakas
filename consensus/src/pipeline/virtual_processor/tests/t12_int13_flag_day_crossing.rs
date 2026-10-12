@@ -30,12 +30,12 @@ use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
-use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_INT13_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
-    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, palw_t12_arm_int11_flag_day_at_v1,
-    palw_t12_arm_int13_flag_day_at_v1, palw_t12_launch_params_v1,
-};
 use kaspa_consensus_core::config::Config;
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_INT13_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
+    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_launch_params_v1,
+};
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
@@ -87,11 +87,17 @@ pub(super) fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premin
             assert_eq!(at, Some(ForkActivation::new(H)), "{} is set to {H} by its entry", fence.name);
         }
         assert_eq!(PALW_T12_INT13_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(), LIST);
-        assert!(params.palw_audit_1004_active_at(H) && !params.palw_audit_1004_active_at(H - 1), "audit 1004 is live from {H}, not below");
+        assert!(
+            params.palw_audit_1004_active_at(H) && !params.palw_audit_1004_active_at(H - 1),
+            "audit 1004 is live from {H}, not below"
+        );
         assert!(params.palw_gen_range_twin_active_at(H) && !params.palw_gen_range_twin_active_at(H - 1), "the range twin, likewise");
         assert!(params.palw_model_court_window_active_at(H) && !params.palw_model_court_window_active_at(H - 1), "the court window");
         assert!(params.palw_receipt_spend_v4_active_at(H) && !params.palw_receipt_spend_v4_active_at(H - 1), "V4 receipt redemption");
-        assert!(params.palw_gen_v1_active_at(INT11) && !params.palw_gen_v1_active_at(INT11 - 1), "the range twin's prerequisite stands at {INT11}");
+        assert!(
+            params.palw_gen_v1_active_at(INT11) && !params.palw_gen_v1_active_at(INT11 - 1),
+            "the range twin's prerequisite stands at {INT11}"
+        );
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!("testnet-12 is ConsensusV2") };
         assert_eq!(
             (bundle.state.audit_1004_from_daa(), bundle.state.gen_range_twin_from_daa()),
@@ -132,7 +138,11 @@ impl Crossing {
             self.beats_without_a_tick += 1;
             assert!(self.beats_without_a_tick < 4, "the DAA clock stalled at {before} (fence {H}): four beats without a tick");
         } else {
-            assert_eq!(beat.header.daa_score, before + 1, "a heartbeat ticks the DAA by one at most — at DAA {before} (fence {H}) too");
+            assert_eq!(
+                beat.header.daa_score,
+                before + 1,
+                "a heartbeat ticks the DAA by one at most — at DAA {before} (fence {H}) too"
+            );
             self.beats_without_a_tick = 0;
         }
         self.record(&beat);
@@ -217,7 +227,10 @@ async fn every_int13_fence_at_one_height_is_crossed_with_the_clock_running_and_t
 
     // ---- 2: the clock ran through the height; claims bound on both sides ---------------------------------------------
     let (first, last) = (armed.blocks.first().unwrap().1, armed.blocks.last().unwrap().1);
-    assert!(first < INT11 && last >= H + 2 * delay, "the DAA clock ran from below the int-11 list through the fence ({first} -> {last}, fence {H})");
+    assert!(
+        first < INT11 && last >= H + 2 * delay,
+        "the DAA clock ran from below the int-11 list through the fence ({first} -> {last}, fence {H})"
+    );
     let (_, state) = armed.chain.tip_state();
     let (mut below, mut past) = (0usize, 0usize);
     for (_, anchor) in armed.claims.iter() {
@@ -261,7 +274,10 @@ async fn every_int13_fence_at_one_height_is_crossed_with_the_clock_running_and_t
             past_fence += 1;
         }
     }
-    assert!(compared >= H as usize && past_fence >= 1, "blocks on both sides of the fence were compared ({compared} below, {past_fence} past)");
+    assert!(
+        compared >= H as usize && past_fence >= 1,
+        "blocks on both sides of the fence were compared ({compared} below, {past_fence} past)"
+    );
 
     // ---- 4: the anchors are chain data — a second armed node (IBD from genesis) agrees ---------------------------------
     let hashes = chain_hashes(&armed);

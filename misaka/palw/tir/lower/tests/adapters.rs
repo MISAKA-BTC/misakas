@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 
 fn fixture_config(root: &str, name: &str) -> Value {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(root).join(name).join("config.json");
-    serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))))
-        .expect("json")
+    serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(
+        &std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+    ))
+    .expect("json")
 }
 
 /// The first path at which two JSON values differ.
@@ -77,12 +79,14 @@ fn pairs() -> Vec<(String, String, Value)> {
     // `tests/configs/<dir>/<name>.json`: configs of published checkpoints
     for dir in ["real", "encoders", "legacy", "tiny", "encdec"] {
         let Ok(rd) = std::fs::read_dir(tests.join("configs").join(dir)) else { continue };
-        let mut files: Vec<PathBuf> = rd.map(|e| e.expect("entry").path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+        let mut files: Vec<PathBuf> =
+            rd.map(|e| e.expect("entry").path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
         files.sort();
         for p in files {
             let n = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
             let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-            let v: Value = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text)).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            let v: Value = serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&text))
+                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
             cfgs.push((format!("{dir}/{n}"), v));
         }
     }
@@ -91,8 +95,29 @@ fn pairs() -> Vec<(String, String, Value)> {
         // The differential oracle is the DECODER readers'; the encoder-decoder adapters have their own (tests/encdec_adapters.rs).
         // Adapters that are DATA ONLY have no Rust parser to be an oracle for: a family added after the parsers were
         // retired (qwen4-exp, the three FR-01 corpus families and the later corpus families) is judged by its fixtures and the corpus harness.
-        const DATA_ONLY: &[&str] = &["qwen4-exp", "dbrx", "granitemoehybrid", "ernie4-5-moe", "bitnet", "diffllama", "jetmoe", "longcat-flash", "mllama", "apertus", "lfm2", "kimi-linear", "zamba2", "chatglm3", "deepseek-v4", "nemotron-h", "falcon-h1"];
-        if let Some(a) = builtin::all().iter().find(|a| a.kind() == "decoder" && a.architectures().contains(&arch.as_str()) && !DATA_ONLY.contains(&a.id.as_str())) {
+        const DATA_ONLY: &[&str] = &[
+            "qwen4-exp",
+            "dbrx",
+            "granitemoehybrid",
+            "ernie4-5-moe",
+            "bitnet",
+            "diffllama",
+            "jetmoe",
+            "longcat-flash",
+            "mllama",
+            "apertus",
+            "lfm2",
+            "kimi-linear",
+            "zamba2",
+            "chatglm3",
+            "deepseek-v4",
+            "nemotron-h",
+            "falcon-h1",
+        ];
+        if let Some(a) = builtin::all()
+            .iter()
+            .find(|a| a.kind() == "decoder" && a.architectures().contains(&arch.as_str()) && !DATA_ONLY.contains(&a.id.as_str()))
+        {
             out.push((a.id.clone(), name, cfg));
         }
     }
@@ -106,203 +131,227 @@ fn pairs() -> Vec<(String, String, Value)> {
 mod oracle {
     use super::*;
 
-/// What the two readers said about one configuration.
-enum Outcome {
-    Agree { read: bool },
-    /// The Rust parser panicked (an unbounded divide or index on a hostile config — its own defect);
-    /// the adapter is only required not to panic.
-    LegacyPanicked,
-    /// The adapter refuses, through the generic validation of the produced spec or the evaluator's
-    /// total arithmetic, a configuration no Hugging Face class can run (a head count that does not
-    /// divide the width, an odd rotary dimension, a division by zero, a non-finite number) where
-    /// the Rust parser read it without looking. Stricter, never looser.
-    Stricter(String),
-    Differ(String),
-}
-
-/// Messages of the generic checks an adapter's result goes through.
-const STRICTER: &[&str] =
-    &["heads, kv heads and head dim are inconsistent", "must be even and positive", "division by zero in an adapter expression", "produced an invalid ModelSpec", "needs at least one layer"];
-
-/// The legacy parser's refusal or its spec, the adapter's refusal or its spec: both must agree. An
-/// adapter must never panic, whatever the configuration says.
-fn outcome(id: &str, name: &str, cfg: &Value) -> Outcome {
-    use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ReadOptions, read_model};
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    let l = catch_unwind(AssertUnwindSafe(|| misaka_palw_tir_lower::hf_config::parse_legacy(cfg)));
-    let r = match catch_unwind(AssertUnwindSafe(|| read_model(cfg, None, &ReadOptions { adapter: AdapterChoice::BuiltIn(id.to_string()) }))) {
-        Ok(r) => r,
-        Err(_) => return Outcome::Differ(format!("adapter `{id}` PANICS on {name}")),
-    };
-    match (l, r) {
-        (Ok(Ok(l)), Ok(r)) => match first_diff(&comparable(l), &comparable(r.spec), "") {
-            None => Outcome::Agree { read: true },
-            Some(d) => Outcome::Differ(format!("adapter `{id}` on {name} differs from the Rust parser at {d}")),
+    /// What the two readers said about one configuration.
+    enum Outcome {
+        Agree {
+            read: bool,
         },
-        (Ok(Err(_)), Err(_)) => Outcome::Agree { read: false },
-        (Ok(Ok(_)), Err(e)) if STRICTER.iter().any(|m| e.to_string().contains(m)) => Outcome::Stricter(format!("adapter `{id}` refuses {name} ({e}) but the Rust parser reads it")),
-        (Ok(Ok(_)), Err(e)) => Outcome::Differ(format!("adapter `{id}` refuses {name} ({e}) but the Rust parser reads it")),
-        // The adapter reads where the Rust parser refused ONLY unknown keys that the transformers class never reads
-        // (`hf_schema::hf_keys`, `tests/hf_keys_ignored.rs`): looser on purpose, by the class's own source.
-        (Ok(Err(e)), Ok(_)) if refused_only_keys_the_class_never_reads(cfg, &e.to_string()) => Outcome::Agree { read: true },
-        (Ok(Err(e)), Ok(_)) => Outcome::Differ(format!("adapter `{id}` reads {name} but the Rust parser refuses it ({e})")),
-        (Err(_), _) => Outcome::LegacyPanicked,
+        /// The Rust parser panicked (an unbounded divide or index on a hostile config — its own defect);
+        /// the adapter is only required not to panic.
+        LegacyPanicked,
+        /// The adapter refuses, through the generic validation of the produced spec or the evaluator's
+        /// total arithmetic, a configuration no Hugging Face class can run (a head count that does not
+        /// divide the width, an odd rotary dimension, a division by zero, a non-finite number) where
+        /// the Rust parser read it without looking. Stricter, never looser.
+        Stricter(String),
+        Differ(String),
     }
-}
 
-/// The Rust parser's refusal names unknown keys, all of which the configuration's own transformers class never reads.
-fn refused_only_keys_the_class_never_reads(cfg: &Value, refusal: &str) -> bool {
-    let Some(rest) = refusal.split("config key(s) this lowerer does not model: ").nth(1) else { return false };
-    let keys: Vec<String> = rest.split(" — ").next().unwrap_or("").split(", ").map(str::to_string).collect();
-    let (Some(mt), arch) = (cfg.get("model_type").and_then(Value::as_str), arch_of(cfg)) else { return false };
-    cfg.get("auto_map").is_none_or(Value::is_null)
-        && !keys.is_empty()
-        && misaka_palw_tir_lower::hf_schema::hf_keys::never_read(Some(&arch), mt, &keys).len() == keys.len()
-}
+    /// Messages of the generic checks an adapter's result goes through.
+    const STRICTER: &[&str] = &[
+        "heads, kv heads and head dim are inconsistent",
+        "must be even and positive",
+        "division by zero in an adapter expression",
+        "produced an invalid ModelSpec",
+        "needs at least one layer",
+    ];
 
-fn outcome_diff(id: &str, name: &str, cfg: &Value) -> Option<String> {
-    match outcome(id, name, cfg) {
-        Outcome::Differ(d) | Outcome::Stricter(d) => Some(d),
-        _ => None,
+    /// The legacy parser's refusal or its spec, the adapter's refusal or its spec: both must agree. An
+    /// adapter must never panic, whatever the configuration says.
+    fn outcome(id: &str, name: &str, cfg: &Value) -> Outcome {
+        use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ReadOptions, read_model};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let l = catch_unwind(AssertUnwindSafe(|| misaka_palw_tir_lower::hf_config::parse_legacy(cfg)));
+        let r = match catch_unwind(AssertUnwindSafe(|| {
+            read_model(cfg, None, &ReadOptions { adapter: AdapterChoice::BuiltIn(id.to_string()) })
+        })) {
+            Ok(r) => r,
+            Err(_) => return Outcome::Differ(format!("adapter `{id}` PANICS on {name}")),
+        };
+        match (l, r) {
+            (Ok(Ok(l)), Ok(r)) => match first_diff(&comparable(l), &comparable(r.spec), "") {
+                None => Outcome::Agree { read: true },
+                Some(d) => Outcome::Differ(format!("adapter `{id}` on {name} differs from the Rust parser at {d}")),
+            },
+            (Ok(Err(_)), Err(_)) => Outcome::Agree { read: false },
+            (Ok(Ok(_)), Err(e)) if STRICTER.iter().any(|m| e.to_string().contains(m)) => {
+                Outcome::Stricter(format!("adapter `{id}` refuses {name} ({e}) but the Rust parser reads it"))
+            }
+            (Ok(Ok(_)), Err(e)) => Outcome::Differ(format!("adapter `{id}` refuses {name} ({e}) but the Rust parser reads it")),
+            // The adapter reads where the Rust parser refused ONLY unknown keys that the transformers class never reads
+            // (`hf_schema::hf_keys`, `tests/hf_keys_ignored.rs`): looser on purpose, by the class's own source.
+            (Ok(Err(e)), Ok(_)) if refused_only_keys_the_class_never_reads(cfg, &e.to_string()) => Outcome::Agree { read: true },
+            (Ok(Err(e)), Ok(_)) => Outcome::Differ(format!("adapter `{id}` reads {name} but the Rust parser refuses it ({e})")),
+            (Err(_), _) => Outcome::LegacyPanicked,
+        }
     }
-}
 
-fn compare_outcomes(id: &str, name: &str, cfg: &Value) {
-    if let Some(d) = outcome_diff(id, name, cfg) {
-        panic!("{d}");
+    /// The Rust parser's refusal names unknown keys, all of which the configuration's own transformers class never reads.
+    fn refused_only_keys_the_class_never_reads(cfg: &Value, refusal: &str) -> bool {
+        let Some(rest) = refusal.split("config key(s) this lowerer does not model: ").nth(1) else { return false };
+        let keys: Vec<String> = rest.split(" — ").next().unwrap_or("").split(", ").map(str::to_string).collect();
+        let (Some(mt), arch) = (cfg.get("model_type").and_then(Value::as_str), arch_of(cfg)) else { return false };
+        cfg.get("auto_map").is_none_or(Value::is_null)
+            && !keys.is_empty()
+            && misaka_palw_tir_lower::hf_schema::hf_keys::never_read(Some(&arch), mt, &keys).len() == keys.len()
     }
-}
 
-/// Single-key mutants of a configuration: every key deleted, nulled, flipped (bool), nudged
-/// (numbers), rewritten (strings), shortened (arrays) — at the top level and one object down —
-/// plus one unknown key. A mutant is usually not a real model; it is a *probe*: the adapter and the
-/// Rust parser must still agree on it (both read it into the same spec, or both refuse it).
-fn mutants(cfg: &Value) -> Vec<(String, Value)> {
-    fn variants(v: &Value) -> Vec<(String, Value)> {
-        let mut out = vec![("null".to_string(), Value::Null)];
-        match v {
-            Value::Bool(b) => out.push(("flip".into(), Value::Bool(!b))),
-            Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    out.push(("+1".into(), Value::from(i + 1)));
-                    if i >= 1 {
-                        out.push(("-1".into(), Value::from(i - 1)));
+    fn outcome_diff(id: &str, name: &str, cfg: &Value) -> Option<String> {
+        match outcome(id, name, cfg) {
+            Outcome::Differ(d) | Outcome::Stricter(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    fn compare_outcomes(id: &str, name: &str, cfg: &Value) {
+        if let Some(d) = outcome_diff(id, name, cfg) {
+            panic!("{d}");
+        }
+    }
+
+    /// Single-key mutants of a configuration: every key deleted, nulled, flipped (bool), nudged
+    /// (numbers), rewritten (strings), shortened (arrays) — at the top level and one object down —
+    /// plus one unknown key. A mutant is usually not a real model; it is a *probe*: the adapter and the
+    /// Rust parser must still agree on it (both read it into the same spec, or both refuse it).
+    fn mutants(cfg: &Value) -> Vec<(String, Value)> {
+        fn variants(v: &Value) -> Vec<(String, Value)> {
+            let mut out = vec![("null".to_string(), Value::Null)];
+            match v {
+                Value::Bool(b) => out.push(("flip".into(), Value::Bool(!b))),
+                Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        out.push(("+1".into(), Value::from(i + 1)));
+                        if i >= 1 {
+                            out.push(("-1".into(), Value::from(i - 1)));
+                        }
+                        out.push(("0".into(), Value::from(0)));
+                    } else if let Some(f) = n.as_f64() {
+                        out.push(("x2".into(), serde_json::Number::from_f64(f * 2.0).map(Value::Number).unwrap_or(Value::Null)));
+                        out.push(("x0.5".into(), serde_json::Number::from_f64(f * 0.5).map(Value::Number).unwrap_or(Value::Null)));
                     }
-                    out.push(("0".into(), Value::from(0)));
-                } else if let Some(f) = n.as_f64() {
-                    out.push(("x2".into(), serde_json::Number::from_f64(f * 2.0).map(Value::Number).unwrap_or(Value::Null)));
-                    out.push(("x0.5".into(), serde_json::Number::from_f64(f * 0.5).map(Value::Number).unwrap_or(Value::Null)));
                 }
-            }
-            Value::String(_) => {
-                for s in ["silu", "gelu", "relu", "bogus"] {
-                    out.push((format!("str:{s}"), Value::String(s.into())));
+                Value::String(_) => {
+                    for s in ["silu", "gelu", "relu", "bogus"] {
+                        out.push((format!("str:{s}"), Value::String(s.into())));
+                    }
                 }
-            }
-            Value::Array(a) if !a.is_empty() => {
-                out.push(("drop-last".into(), Value::Array(a[..a.len() - 1].to_vec())));
-                if a.iter().all(Value::is_string) {
-                    out.push(("first=full".into(), Value::Array(std::iter::once(Value::String("full_attention".into())).chain(a[1..].iter().cloned()).collect())));
-                    out.push(("first=sliding".into(), Value::Array(std::iter::once(Value::String("sliding_attention".into())).chain(a[1..].iter().cloned()).collect())));
-                    out.push(("first=bogus".into(), Value::Array(std::iter::once(Value::String("bogus".into())).chain(a[1..].iter().cloned()).collect())));
+                Value::Array(a) if !a.is_empty() => {
+                    out.push(("drop-last".into(), Value::Array(a[..a.len() - 1].to_vec())));
+                    if a.iter().all(Value::is_string) {
+                        out.push((
+                            "first=full".into(),
+                            Value::Array(
+                                std::iter::once(Value::String("full_attention".into())).chain(a[1..].iter().cloned()).collect(),
+                            ),
+                        ));
+                        out.push((
+                            "first=sliding".into(),
+                            Value::Array(
+                                std::iter::once(Value::String("sliding_attention".into())).chain(a[1..].iter().cloned()).collect(),
+                            ),
+                        ));
+                        out.push((
+                            "first=bogus".into(),
+                            Value::Array(std::iter::once(Value::String("bogus".into())).chain(a[1..].iter().cloned()).collect()),
+                        ));
+                    }
                 }
+                _ => {}
             }
-            _ => {}
+            out
         }
-        out
-    }
-    let mut out = Vec::new();
-    let Value::Object(top) = cfg else { return out };
-    for (k, v) in top {
-        if k == "architectures" {
-            continue;
-        }
-        let mut del = cfg.clone();
-        del.as_object_mut().map(|o| o.remove(k));
-        out.push((format!("-{k}"), del));
-        for (what, nv) in variants(v) {
-            let mut m = cfg.clone();
-            m[k] = nv;
-            out.push((format!("{k}={what}"), m));
-        }
-        if let Value::Object(inner) = v {
-            for (k2, v2) in inner {
-                let mut del = cfg.clone();
-                del[k].as_object_mut().map(|o| o.remove(k2));
-                out.push((format!("-{k}.{k2}"), del));
-                for (what, nv) in variants(v2) {
-                    let mut m = cfg.clone();
-                    m[k][k2] = nv;
-                    out.push((format!("{k}.{k2}={what}"), m));
-                }
-            }
-        }
-    }
-    let mut unk = cfg.clone();
-    unk["zzz_unknown_key"] = Value::from(1);
-    out.push(("+zzz_unknown_key".into(), unk));
-    out
-}
-
-#[test]
-fn every_builtin_adapter_says_what_the_rust_parser_said() {
-    let pairs = pairs();
-    let mut by: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for (id, name, cfg) in &pairs {
-        compare_outcomes(id, name, cfg);
-        *by.entry(id.clone()).or_default() += 1;
-    }
-    eprintln!("{} (config, adapter) pairs agree with the Rust parsers: {by:?}", pairs.len());
-}
-
-/// **The adapters agree with the Rust parsers off the fixtures too.** Every fixture and real config
-/// is probed with its single-key mutants (see [`mutants`]); the two readers must agree on each.
-#[test]
-fn adapters_agree_with_the_rust_parsers_on_single_key_mutants() {
-    // A debug build reads ~30 mutants a second; the default samples every 24th, and
-    // `PALW_MUTANT_STRIDE=1 cargo test --release …` runs them all (15 k probes).
-    let stride: usize = std::env::var("PALW_MUTANT_STRIDE").ok().and_then(|v| v.parse().ok()).filter(|s| *s >= 1).unwrap_or(24);
-    // `PALW_MUTANT_ONLY=deepseek-v3,phimoe` probes just those adapters.
-    let only: Vec<String> = std::env::var("PALW_MUTANT_ONLY").ok().map(|v| v.split(',').map(str::to_string).collect()).unwrap_or_default();
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let (mut probes, mut read, mut refused, mut legacy_panics, mut k) = (0usize, 0usize, 0usize, 0usize, 0usize);
-    let mut bad: Vec<String> = Vec::new();
-    let mut stricter: Vec<String> = Vec::new();
-    for (id, name, cfg) in pairs() {
-        if !only.is_empty() && !only.contains(&id) {
-            continue;
-        }
-        for (what, m) in mutants(&cfg) {
-            k += 1;
-            if k % stride != 0 {
+        let mut out = Vec::new();
+        let Value::Object(top) = cfg else { return out };
+        for (k, v) in top {
+            if k == "architectures" {
                 continue;
             }
-            probes += 1;
-            match outcome(&id, &format!("{name} [{what}]"), &m) {
-                Outcome::Differ(d) => bad.push(d),
-                Outcome::Stricter(d) => stricter.push(d),
-                Outcome::Agree { read: true } => read += 1,
-                Outcome::Agree { read: false } => refused += 1,
-                Outcome::LegacyPanicked => legacy_panics += 1,
+            let mut del = cfg.clone();
+            del.as_object_mut().map(|o| o.remove(k));
+            out.push((format!("-{k}"), del));
+            for (what, nv) in variants(v) {
+                let mut m = cfg.clone();
+                m[k] = nv;
+                out.push((format!("{k}={what}"), m));
+            }
+            if let Value::Object(inner) = v {
+                for (k2, v2) in inner {
+                    let mut del = cfg.clone();
+                    del[k].as_object_mut().map(|o| o.remove(k2));
+                    out.push((format!("-{k}.{k2}"), del));
+                    for (what, nv) in variants(v2) {
+                        let mut m = cfg.clone();
+                        m[k][k2] = nv;
+                        out.push((format!("{k}.{k2}={what}"), m));
+                    }
+                }
             }
         }
+        let mut unk = cfg.clone();
+        unk["zzz_unknown_key"] = Value::from(1);
+        out.push(("+zzz_unknown_key".into(), unk));
+        out
     }
-    std::panic::set_hook(hook);
-    eprintln!(
-        "{probes} mutants (stride {stride}): {read} read identically, {refused} refused by both, {} refused by the adapter's generic checks only, {legacy_panics} on which only the Rust parser panics, {} disagree",
-        stricter.len(),
-        bad.len()
-    );
-    for d in stricter.iter().take(3) {
-        eprintln!("  stricter, e.g. {d}");
-    }
-    for d in bad.iter().take(400) {
-        eprintln!("  {d}");
-    }
-    assert!(bad.is_empty(), "{} mutants on which an adapter and the Rust parser disagree", bad.len());
-}
 
+    #[test]
+    fn every_builtin_adapter_says_what_the_rust_parser_said() {
+        let pairs = pairs();
+        let mut by: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for (id, name, cfg) in &pairs {
+            compare_outcomes(id, name, cfg);
+            *by.entry(id.clone()).or_default() += 1;
+        }
+        eprintln!("{} (config, adapter) pairs agree with the Rust parsers: {by:?}", pairs.len());
+    }
+
+    /// **The adapters agree with the Rust parsers off the fixtures too.** Every fixture and real config
+    /// is probed with its single-key mutants (see [`mutants`]); the two readers must agree on each.
+    #[test]
+    fn adapters_agree_with_the_rust_parsers_on_single_key_mutants() {
+        // A debug build reads ~30 mutants a second; the default samples every 24th, and
+        // `PALW_MUTANT_STRIDE=1 cargo test --release …` runs them all (15 k probes).
+        let stride: usize = std::env::var("PALW_MUTANT_STRIDE").ok().and_then(|v| v.parse().ok()).filter(|s| *s >= 1).unwrap_or(24);
+        // `PALW_MUTANT_ONLY=deepseek-v3,phimoe` probes just those adapters.
+        let only: Vec<String> =
+            std::env::var("PALW_MUTANT_ONLY").ok().map(|v| v.split(',').map(str::to_string).collect()).unwrap_or_default();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let (mut probes, mut read, mut refused, mut legacy_panics, mut k) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        let mut bad: Vec<String> = Vec::new();
+        let mut stricter: Vec<String> = Vec::new();
+        for (id, name, cfg) in pairs() {
+            if !only.is_empty() && !only.contains(&id) {
+                continue;
+            }
+            for (what, m) in mutants(&cfg) {
+                k += 1;
+                if k % stride != 0 {
+                    continue;
+                }
+                probes += 1;
+                match outcome(&id, &format!("{name} [{what}]"), &m) {
+                    Outcome::Differ(d) => bad.push(d),
+                    Outcome::Stricter(d) => stricter.push(d),
+                    Outcome::Agree { read: true } => read += 1,
+                    Outcome::Agree { read: false } => refused += 1,
+                    Outcome::LegacyPanicked => legacy_panics += 1,
+                }
+            }
+        }
+        std::panic::set_hook(hook);
+        eprintln!(
+            "{probes} mutants (stride {stride}): {read} read identically, {refused} refused by both, {} refused by the adapter's generic checks only, {legacy_panics} on which only the Rust parser panics, {} disagree",
+            stricter.len(),
+            bad.len()
+        );
+        for d in stricter.iter().take(3) {
+            eprintln!("  stricter, e.g. {d}");
+        }
+        for d in bad.iter().take(400) {
+            eprintln!("  {d}");
+        }
+        assert!(bad.is_empty(), "{} mutants on which an adapter and the Rust parser disagree", bad.len());
+    }
 }
 
 #[test]
@@ -348,7 +397,8 @@ fn level_a_coverage_of_the_families_with_an_adapter() {
     let mut by_family: std::collections::BTreeMap<String, (usize, usize, usize, Vec<String>)> = std::collections::BTreeMap::new();
     for (id, name, cfg) in &pairs {
         let with = read_model(cfg, None, &ReadOptions { adapter: AdapterChoice::BuiltIn(id.clone()) });
-        let tensors = name.strip_prefix("hf/").and_then(|n| TensorIndex::from_checkpoint_path(&tests.join("fixtures/hf").join(n)).ok());
+        let tensors =
+            name.strip_prefix("hf/").and_then(|n| TensorIndex::from_checkpoint_path(&tests.join("fixtures/hf").join(n)).ok());
         let e = by_family.entry(id.clone()).or_default();
         e.0 += 1;
         let Ok(w) = with else { continue };

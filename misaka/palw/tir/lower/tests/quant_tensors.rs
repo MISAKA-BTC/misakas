@@ -8,7 +8,9 @@
 //! (`QuantFormat::from_json`); the registry test below counts them.
 
 use misaka_palw_tir_lower::LowerError;
-use misaka_palw_tir_lower::prequant::{QFormat, QuantConfig, parse_quant_config, parse_quant_config_with, skip_matches, unpack_awq, unpack_gptq};
+use misaka_palw_tir_lower::prequant::{
+    QFormat, QuantConfig, parse_quant_config, parse_quant_config_with, skip_matches, unpack_awq, unpack_gptq,
+};
 use misaka_palw_tir_lower::quantfmt::tensors::RoleTensor;
 use misaka_palw_tir_lower::quantfmt::{QuantFormat, QuantRegistry};
 use misaka_palw_tir_lower::weights::Tensor;
@@ -95,7 +97,8 @@ fn gptq_through_its_descriptor_is_the_hand_written_unpacker() {
                     (0..inp).map(|i| (i / gs) as i32).collect()
                 };
                 let fmt = QFormat::Gptq { bits, group, desc_act: act, sym, v2 };
-                let want = unpack_gptq(&fmt, (&[inp / pack, out], &qweight), (&[ng, out / pack], &qzeros), &sc, Some((&[inp], &g_idx)));
+                let want =
+                    unpack_gptq(&fmt, (&[inp / pack, out], &qweight), (&[ng, out / pack], &qzeros), &sc, Some((&[inp], &g_idx)));
                 let (f, params) = fmt.binding().expect("a tensors format");
                 let t = f.as_tensors().expect("tensors");
                 let roles = vec![
@@ -130,7 +133,11 @@ fn awq_through_its_descriptor_is_the_hand_written_unpacker() {
         let fmt = QFormat::Awq { bits: 4, group };
         let a = unpack_awq(&fmt, (&[inp, out / 8], &qweight), (&[ng, out / 8], &qzeros), &sc).expect("oracle");
         let (f, params) = fmt.binding().expect("tensors");
-        let roles = vec![role(&[inp, out / 8], "I32", bytes_i32(&qweight)), role(&[ng, out / 8], "I32", bytes_i32(&qzeros)), role(&[ng, out], "F16", sc_raw)];
+        let roles = vec![
+            role(&[inp, out / 8], "I32", bytes_i32(&qweight)),
+            role(&[ng, out / 8], "I32", bytes_i32(&qzeros)),
+            role(&[ng, out], "F16", sc_raw),
+        ];
         let b = f.as_tensors().expect("tensors").decode_integers(&roles, &params).expect("descriptor");
         same(&a, &b, &format!("awq g{group}"));
     }
@@ -161,7 +168,14 @@ fn every_builtin_descriptor_carries_vectors_and_the_registry_knows_its_configs()
     for f in reg.all() {
         assert!(!f.desc.tests.is_empty(), "{} has no vector", f.name());
     }
-    for m in ["gptq", "awq", "fp8", "compressed-tensors/pack-quantized", "compressed-tensors/float-quantized", "compressed-tensors/int-quantized"] {
+    for m in [
+        "gptq",
+        "awq",
+        "fp8",
+        "compressed-tensors/pack-quantized",
+        "compressed-tensors/float-quantized",
+        "compressed-tensors/int-quantized",
+    ] {
         assert!(reg.config_methods().contains(&m.to_string()), "{m}");
     }
     assert_eq!(reg.config("compressed-tensors", Some("pack-quantized")).map(|f| f.name()), Some("CT_PACK_QUANTIZED"));
@@ -200,7 +214,11 @@ fn a_compressed_tensors_config_is_read_by_its_descriptor() {
     assert_eq!((l.group, l.order, l.offset_term), (128, true, false));
     // `ignore`: the head is not quantised, the router matches the pattern, an explicit name is exact.
     assert!(!c.lm_head);
-    assert!(!c.converts("model.layers.3.mlp.gate") && c.converts("model.layers.3.mlp.gate_proj") && c.converts("model.layers.3.mlp.up_proj"));
+    assert!(
+        !c.converts("model.layers.3.mlp.gate")
+            && c.converts("model.layers.3.mlp.gate_proj")
+            && c.converts("model.layers.3.mlp.up_proj")
+    );
     assert!(!c.converts("model.layers.0.self_attn.k_proj") && c.converts("model.layers.1.self_attn.k_proj"));
     // Without `lm_head` in `ignore`, the head is stored in the format.
     let mut v = ct_cfg();
@@ -215,16 +233,36 @@ fn a_compressed_tensors_config_is_read_by_its_descriptor() {
 #[test]
 fn what_a_descriptor_does_not_cover_is_refused_by_name() {
     let cases: Vec<(&str, Box<dyn Fn(&mut serde_json::Value)>, &str)> = vec![
-        ("two config groups", Box::new(|v| v["config_groups"]["group_1"] = json!({"targets": ["re:.*q_proj"]})), "more than one config group"),
+        (
+            "two config groups",
+            Box::new(|v| v["config_groups"]["group_1"] = json!({"targets": ["re:.*q_proj"]})),
+            "more than one config group",
+        ),
         ("a quantised KV cache", Box::new(|v| v["kv_cache_scheme"] = json!({"num_bits": 8, "type": "float"})), "KV cache"),
         ("a transform", Box::new(|v| v["transform_config"] = json!({"config_groups": {}, "x": 1})), "transforms"),
         ("a sparse checkpoint", Box::new(|v| v["sparsity_config"] = json!({"format": "sparse-24-bitmask"})), "sparse"),
-        ("per-tensor weights", Box::new(|v| v["config_groups"]["group_0"]["weights"]["strategy"] = json!("tensor")), "other than group or channel"),
-        ("float weights under the int format", Box::new(|v| v["config_groups"]["group_0"]["weights"]["type"] = json!("float")), "float-quantized"),
-        ("targets other than Linear", Box::new(|v| v["config_groups"]["group_0"]["targets"] = json!(["re:.*q_proj"])), "targets other than"),
+        (
+            "per-tensor weights",
+            Box::new(|v| v["config_groups"]["group_0"]["weights"]["strategy"] = json!("tensor")),
+            "other than group or channel",
+        ),
+        (
+            "float weights under the int format",
+            Box::new(|v| v["config_groups"]["group_0"]["weights"]["type"] = json!("float")),
+            "float-quantized",
+        ),
+        (
+            "targets other than Linear",
+            Box::new(|v| v["config_groups"]["group_0"]["targets"] = json!(["re:.*q_proj"])),
+            "targets other than",
+        ),
         ("2-bit codes", Box::new(|v| v["config_groups"]["group_0"]["weights"]["num_bits"] = json!(2)), "defined for"),
         ("a key nobody declared", Box::new(|v| v["mystery"] = json!(1)), "does not read"),
-        ("an actorder it does not know", Box::new(|v| v["config_groups"]["group_0"]["weights"]["actorder"] = json!("sideways")), "defined for"),
+        (
+            "an actorder it does not know",
+            Box::new(|v| v["config_groups"]["group_0"]["weights"]["actorder"] = json!("sideways")),
+            "defined for",
+        ),
     ];
     for (what, edit, needle) in cases {
         let mut v = ct_cfg();
@@ -237,7 +275,10 @@ fn what_a_descriptor_does_not_cover_is_refused_by_name() {
 #[test]
 fn a_method_no_descriptor_reads_says_what_to_supply() {
     let e = refusal(parse_quant_config(&json!({"quant_method": "brand_new_quant", "bits": 4}), "LlamaForCausalLM", "llama"));
-    assert!(e.contains("quant_method=brand_new_quant") && e.contains("no quant-format descriptor") && e.contains("--quant-format"), "{e}");
+    assert!(
+        e.contains("quant_method=brand_new_quant") && e.contains("no quant-format descriptor") && e.contains("--quant-format"),
+        "{e}"
+    );
     assert!(e.contains("compressed-tensors/pack-quantized") && e.contains("gptq"), "the refusal lists what is known: {e}");
     // bitsandbytes is described now — under conditions, and the refusal lists them.
     assert!(e.contains("bitsandbytes [load_in_4bit = true, bnb_4bit_quant_type = \"nf4\"]"), "{e}");
@@ -245,8 +286,15 @@ fn a_method_no_descriptor_reads_says_what_to_supply() {
     let e = refusal(parse_quant_config(&json!({"quant_method": "hqq", "quant_config": {}}), "LlamaForCausalLM", "llama"));
     assert!(e.contains("`hqq` is known and not yet described") && e.contains("zero point"), "{e}");
     assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().any(|k| k.method == "aqlm" && k.status == "known"));
-    assert!(misaka_palw_tir_lower::quantfmt::known_undescribed().iter().all(|k| k.method != "bitsandbytes"), "a described method is no longer listed as undescribed");
-    let e = refusal(parse_quant_config(&json!({"quant_method": "compressed-tensors", "format": "mixed-precision", "config_groups": {}}), "LlamaForCausalLM", "llama"));
+    assert!(
+        misaka_palw_tir_lower::quantfmt::known_undescribed().iter().all(|k| k.method != "bitsandbytes"),
+        "a described method is no longer listed as undescribed"
+    );
+    let e = refusal(parse_quant_config(
+        &json!({"quant_method": "compressed-tensors", "format": "mixed-precision", "config_groups": {}}),
+        "LlamaForCausalLM",
+        "llama",
+    ));
     assert!(e.contains("quant_method=compressed-tensors/mixed-precision"), "{e}");
 }
 
@@ -326,7 +374,10 @@ fn a_format_nobody_wrote_code_for_is_added_by_a_file() {
     // The registry refuses to let a supplied file redefine a method it already reads.
     let mut again: serde_json::Value = serde_json::from_str(TOYQ).unwrap();
     again["name"] = json!("TOYQ2");
-    let e = QuantRegistry::with_files(&[path]).and_then(|r| r.with(vec![QuantFormat::from_json(&again.to_string())?])).unwrap_err().to_string();
+    let e = QuantRegistry::with_files(&[path])
+        .and_then(|r| r.with(vec![QuantFormat::from_json(&again.to_string())?]))
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("cannot redefine") && e.contains("toyq"), "{e}");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -376,7 +427,8 @@ fn an_fp8_module_decodes_and_a_module_the_quantiser_left_in_bf16_is_read_as_it_i
     let m = eval_src(&Src::Quant { module: "m".into(), fmt: c.fmt.clone() }, &r, None, &none).expect("an FP8 module");
     assert_eq!(m.shape, vec![4, 8]);
     assert_eq!(&m.data[..4], &[0.5, 1.0, -0.5, 0.25]);
-    let n = eval_src(&Src::Quant { module: "n".into(), fmt: c.fmt.clone() }, &r, None, &none).expect("a bf16 module under an fp8 config");
+    let n =
+        eval_src(&Src::Quant { module: "n".into(), fmt: c.fmt.clone() }, &r, None, &none).expect("a bf16 module under an fp8 config");
     assert_eq!(&n.data[..4], &[1.0, 2.0, -1.0, 0.5]);
     assert!(r.untouched().is_empty(), "every tensor is read: {:?}", r.untouched());
     // A module with neither form is an error that says what is missing.
@@ -425,7 +477,10 @@ fn a_virtual_format_serves_packed_tensors_as_the_float_export_and_by_row_ranges(
     let name = "m.mlp.experts.gate_up_proj";
     let names = src.names();
     assert!(names.contains(&name.to_string()) && !names.iter().any(|n| n.ends_with("_blocks") || n.ends_with("_scales")), "{names:?}");
-    assert!(names.contains(&"m.mlp.experts.gate_up_proj_bias".to_string()) && names.contains(&"m.self_attn.q_proj.weight".to_string()), "the other tensors pass through");
+    assert!(
+        names.contains(&"m.mlp.experts.gate_up_proj_bias".to_string()) && names.contains(&"m.self_attn.q_proj.weight".to_string()),
+        "the other tensors pass through"
+    );
     // [E, in, out]: the packed [E, out, in] transposed, exactly as the float export has it.
     assert_eq!(src.shape(name), Some(vec![e_n, g_n * 32, o_n]));
     assert!(src.shape("m.mlp.experts.gate_up_proj_blocks").is_none(), "the packed tensor is hidden");
@@ -451,7 +506,9 @@ fn a_virtual_format_serves_packed_tensors_as_the_float_export_and_by_row_ranges(
     // A names-only listing (no tensors) is rewritten the same way.
     let listing: std::collections::BTreeSet<String> = Checkpoint::open(&dir).expect("opens").names().into_iter().collect();
     let served = served_names(&listing, &f);
-    assert!(served.contains(name) && !served.contains("m.mlp.experts.gate_up_proj_blocks") && served.contains("m.self_attn.q_proj.weight"));
+    assert!(
+        served.contains(name) && !served.contains("m.mlp.experts.gate_up_proj_blocks") && served.contains("m.self_attn.q_proj.weight")
+    );
     // A module whose scales are not one per block breaks the descriptor's own rule, by name.
     write_safetensors(
         &dir.join("model.safetensors"),
@@ -460,7 +517,10 @@ fn a_virtual_format_serves_packed_tensors_as_the_float_export_and_by_row_ranges(
             ("bad.experts.down_proj_scales", "U8", vec![e_n, o_n, g_n + 1], vec![127u8; e_n * o_n * (g_n + 1)]),
         ],
     );
-    let e = DescribedSource::new(Box::new(Checkpoint::open(&dir).expect("opens")), f, Default::default()).err().expect("refused").to_string();
+    let e = DescribedSource::new(Box::new(Checkpoint::open(&dir).expect("opens")), f, Default::default())
+        .err()
+        .expect("refused")
+        .to_string();
     assert!(e.contains("bad.experts.down_proj") && e.contains("one per block"), "{e}");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -479,7 +539,6 @@ fn an_mxfp4_configuration_is_read_by_its_descriptor() {
     let e = refusal(parse_quant_config(&v, "GptOssForCausalLM", "gpt_oss"));
     assert!(e.contains("does not read") && e.contains("mystery"), "{e}");
 }
-
 
 // ───────────────────────────── bitsandbytes ─────────────────────────────
 
@@ -501,14 +560,21 @@ fn a_bitsandbytes_configuration_picks_nf4_fp4_or_int8_by_its_own_keys() {
     let read = |v: &serde_json::Value| parse_quant_config(v, "LlamaForCausalLM", "llama");
     assert_eq!(name_of(&read(&bnb_cfg(true, "nf4", true)).expect("nf4")), "BNB_NF4");
     assert_eq!(name_of(&read(&bnb_cfg(true, "fp4", false)).expect("fp4")), "BNB_FP4");
-    assert_eq!(name_of(&read(&bnb_cfg(false, "fp4", false)).expect("int8")), "BNB_INT8", "the 4-bit keys an 8-bit configuration carries as defaults are not read");
+    assert_eq!(
+        name_of(&read(&bnb_cfg(false, "fp4", false)).expect("int8")),
+        "BNB_INT8",
+        "the 4-bit keys an 8-bit configuration carries as defaults are not read"
+    );
     // The 4-bit type defaults to fp4 when the key is absent (as BitsAndBytesConfig's constructor does).
     let mut v = bnb_cfg(true, "fp4", false);
     v.as_object_mut().unwrap().remove("bnb_4bit_quant_type");
     assert_eq!(name_of(&read(&v).expect("fp4 by default")), "BNB_FP4");
     // A 4-bit type with no descriptor is a refusal that lists what is read, with the conditions.
     let e = refusal(read(&bnb_cfg(true, "af4", false)));
-    assert!(e.contains("quant_method=bitsandbytes") && e.contains("no quant-format descriptor") && e.contains("bnb_4bit_quant_type"), "{e}");
+    assert!(
+        e.contains("quant_method=bitsandbytes") && e.contains("no quant-format descriptor") && e.contains("bnb_4bit_quant_type"),
+        "{e}"
+    );
     // Neither width: nothing to read.
     let mut v = bnb_cfg(true, "nf4", false);
     v["load_in_4bit"] = json!(false);
@@ -543,11 +609,11 @@ fn llm_int8_skip_modules_are_read_as_transformers_reads_them() {
     assert!(!c.lm_head, "the head is named");
     for (name, converted) in [
         ("lm_head", false),
-        ("model.layers.3.mlp.down_proj", false),             // the last component
-        ("model.layers.3.mlp.experts.5.down_proj", false),   // ... of an expert too
-        ("model.layers.3.mlp.gate", false),                  // the router: its last component is `gate`
-        ("model.layers.3.mlp.gate_proj", true),              // `gate_proj` is not `gate`, and `gate.` does not occur in it
-        ("model.layers.0.self_attn.q_proj", false),          // a path prefix: `model.layers.0.self_attn.` occurs in it
+        ("model.layers.3.mlp.down_proj", false),           // the last component
+        ("model.layers.3.mlp.experts.5.down_proj", false), // ... of an expert too
+        ("model.layers.3.mlp.gate", false),                // the router: its last component is `gate`
+        ("model.layers.3.mlp.gate_proj", true),            // `gate_proj` is not `gate`, and `gate.` does not occur in it
+        ("model.layers.0.self_attn.q_proj", false),        // a path prefix: `model.layers.0.self_attn.` occurs in it
         ("model.layers.1.self_attn.q_proj", true),
         ("model.layers.3.mlp.up_proj", true),
     ] {
@@ -595,7 +661,9 @@ fn vector_roles(f: &QuantFormat, vec: &serde_json::Value) -> Vec<Option<RoleTens
             vec["roles"].get(name).map(|r| RoleTensor {
                 shape: r["shape"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(),
                 dtype: r["dtype"].as_str().unwrap().to_string(),
-                data: (0..r["hex"].as_str().unwrap().len() / 2).map(|i| u8::from_str_radix(&r["hex"].as_str().unwrap()[2 * i..2 * i + 2], 16).unwrap()).collect(),
+                data: (0..r["hex"].as_str().unwrap().len() / 2)
+                    .map(|i| u8::from_str_radix(&r["hex"].as_str().unwrap()[2 * i..2 * i + 2], 16).unwrap())
+                    .collect(),
             })
         })
         .collect()
@@ -661,9 +729,21 @@ fn a_malformed_bitsandbytes_module_is_refused_with_its_reason() {
         ("no shape", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16"}"#.into(), "has no `shape[0]`"),
         ("a 3-D shape", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16", "shape": [8, 4, 8]}"#.into(), "not a matrix"),
         ("a dtype nobody uses", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "int4", "shape": [8, 32]}"#.into(), "int4"),
-        ("a shape that does not match the tensors", r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16", "shape": [8, 33]}"#.into(), "packed weight is not"),
-        ("a block size that does not match absmax", r#"{"quant_type": "nf4", "blocksize": 32, "dtype": "float16", "shape": [8, 32]}"#.into(), "one per block"),
-        ("a float block size", r#"{"quant_type": "nf4", "blocksize": 64.5, "dtype": "float16", "shape": [8, 32]}"#.into(), "not an integer"),
+        (
+            "a shape that does not match the tensors",
+            r#"{"quant_type": "nf4", "blocksize": 64, "dtype": "float16", "shape": [8, 33]}"#.into(),
+            "packed weight is not",
+        ),
+        (
+            "a block size that does not match absmax",
+            r#"{"quant_type": "nf4", "blocksize": 32, "dtype": "float16", "shape": [8, 32]}"#.into(),
+            "one per block",
+        ),
+        (
+            "a float block size",
+            r#"{"quant_type": "nf4", "blocksize": 64.5, "dtype": "float16", "shape": [8, 32]}"#.into(),
+            "not an integer",
+        ),
     ];
     for (what, text, needle) in cases {
         let mut r = good.clone();

@@ -211,21 +211,37 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
 /// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
 /// resolved), the ledger rebuilt from the rows, the block begun.
 pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
-    load_ledger_with_projection_v9(builder,ctx,None,true)
+    load_ledger_with_projection_v9(builder, ctx, None, true)
 }
 
 pub(super) struct NativeProjectionPrepaidV9(());
-pub(super) fn paid_projection_v9() -> NativeProjectionPrepaidV9 {NativeProjectionPrepaidV9(())}
-
-/// Count only fixed authenticated keys/owner prefixes. No model bytes are read.
-pub(super) fn projection_work_v9(builder:&TransitionBuilder<'_>) -> Result<u64,PalwStateV2Error> {
-    use misaka_palw_kernel::{rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9,ledger::flat_candidate9::FLAT_CANDIDATE_REGISTRY_MAX_V9};
-    let count=builder.state.kernel_route.as_ref().map(|k|k.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9,Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9+1,Vec::new())).count()).unwrap_or(0);
-    if count>FLAT_CANDIDATE_REGISTRY_MAX_V9 {return Err(refused("v9 fixed-prefix registry cap"));}
-    (count as u64).checked_mul(9216).ok_or_else(||refused("v9 fixed-prefix work overflow"))
+pub(super) fn paid_projection_v9() -> NativeProjectionPrepaidV9 {
+    NativeProjectionPrepaidV9(())
 }
 
-fn load_ledger_with_projection_v9(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,paid:Option<NativeProjectionPrepaidV9>,may_spend_reserve:bool)->Result<KernelLedgerV1,PalwStateV2Error> {
+/// Count only fixed authenticated keys/owner prefixes. No model bytes are read.
+pub(super) fn projection_work_v9(builder: &TransitionBuilder<'_>) -> Result<u64, PalwStateV2Error> {
+    use misaka_palw_kernel::{ledger::flat_candidate9::FLAT_CANDIDATE_REGISTRY_MAX_V9, rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9};
+    let count = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .map(|k| {
+            k.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new())).count()
+        })
+        .unwrap_or(0);
+    if count > FLAT_CANDIDATE_REGISTRY_MAX_V9 {
+        return Err(refused("v9 fixed-prefix registry cap"));
+    }
+    (count as u64).checked_mul(9216).ok_or_else(|| refused("v9 fixed-prefix work overflow"))
+}
+
+fn load_ledger_with_projection_v9(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    paid: Option<NativeProjectionPrepaidV9>,
+    may_spend_reserve: bool,
+) -> Result<KernelLedgerV1, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     let scope_table = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1;
     let stored_scope = builder
@@ -248,14 +264,24 @@ fn load_ledger_with_projection_v9(builder:&mut TransitionBuilder<'_>,ctx:&PalwBl
         }
     }
     if paid.is_none() {
-        let work=projection_work_v9(builder)?;
-        if work!=0 {
-            let policy=route_policies(builder)?.0;
-            let (a,w)=builder.state.kernel_route.as_ref().and_then(|k|k.aux_row::<(u64,u32,u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,&[]))
-                .filter(|(blue,_,_)|*blue==ctx.blue_score).map(|(_,a,w)|(a,w)).unwrap_or_default();
-            let limit=if may_spend_reserve {policy.max_court_work_per_block} else {policy.admission_work_limit_v1()};
-            let next=w.checked_add(work).filter(|w|*w<=limit).ok_or_else(||refused("v9 fixed-prefix block work cap"))?;
-            builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,Vec::new(),Some(borsh::to_vec(&(ctx.blue_score,a,next)).expect("fixed prefix budget")));
+        let work = projection_work_v9(builder)?;
+        if work != 0 {
+            let policy = route_policies(builder)?.0;
+            let (a, w) = builder
+                .state
+                .kernel_route
+                .as_ref()
+                .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+                .filter(|(blue, _, _)| *blue == ctx.blue_score)
+                .map(|(_, a, w)| (a, w))
+                .unwrap_or_default();
+            let limit = if may_spend_reserve { policy.max_court_work_per_block } else { policy.admission_work_limit_v1() };
+            let next = w.checked_add(work).filter(|w| *w <= limit).ok_or_else(|| refused("v9 fixed-prefix block work cap"))?;
+            builder.write_kernel_row(
+                PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
+                Vec::new(),
+                Some(borsh::to_vec(&(ctx.blue_score, a, next)).expect("fixed prefix budget")),
+            );
         }
     }
     let extras = builder.extras.kernel_route.as_ref().expect("checked by the header");
@@ -286,9 +312,9 @@ fn load_ledger_with_projection_v9(builder:&mut TransitionBuilder<'_>,ctx:&PalwBl
     // RFC-0002 P0 residual (RFC02-T): the sealed-bounty rule for kernel filings is `palw_model_refutation_seal_v1`'s — injected at every
     // load (not in the root; its table 19 is written only past it). The contest window is the route's seal TTL.
     let seal_ttl_daa = ledger.policy.seal_ttl_daa;
-    ledger.sealed_bounty_policy = extras.model_refutation_seal.map(|activation_daa| {
-        misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 { activation_daa, contest_daa: seal_ttl_daa }
-    });
+    ledger.sealed_bounty_policy = extras
+        .model_refutation_seal
+        .map(|activation_daa| misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1 { activation_daa, contest_daa: seal_ttl_daa });
     // DA16: the claims whose material obligation moved to bonded providers — derived from the court's rooted rows, never a ledger table
     // (and nothing at all below `palw_provider_court_v1`, where no such row can exist).
     if extras.provider_court.is_some() {
@@ -328,10 +354,21 @@ fn load_ledger_with_projection_v9(builder:&mut TransitionBuilder<'_>,ctx:&PalwBl
 /// tables the load sets (the attested artifacts and the admitted OPV classes) replaced by the ledger's own — exactly
 /// `ledger.to_rows()` straight after `load_ledger`.
 fn loaded_rows(builder: &TransitionBuilder<'_>, ledger: &KernelLedgerV1) -> LedgerRowsV1 {
-    use misaka_palw_kernel::rows::{TABLE_ATTESTED_V1, TABLE_OPV_ADMITTED_V1, TABLE_FLAT_CONFORMANCE_CLASSES_V9};
-    let mut rows:LedgerRowsV1 = builder.state.kernel_route.as_ref().map(|k| k.rows.iter()
-        .filter(|((table,_),_)| !matches!(*table,TABLE_ATTESTED_V1|TABLE_OPV_ADMITTED_V1|TABLE_FLAT_CONFORMANCE_CLASSES_V9))
-        .map(|(k,v)|(k.clone(),v.clone())).collect()).unwrap_or_default();
+    use misaka_palw_kernel::rows::{TABLE_ATTESTED_V1, TABLE_FLAT_CONFORMANCE_CLASSES_V9, TABLE_OPV_ADMITTED_V1};
+    let mut rows: LedgerRowsV1 = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .map(|k| {
+            k.rows
+                .iter()
+                .filter(|((table, _), _)| {
+                    !matches!(*table, TABLE_ATTESTED_V1 | TABLE_OPV_ADMITTED_V1 | TABLE_FLAT_CONFORMANCE_CLASSES_V9)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     for root in &ledger.attested_artifacts {
         rows.insert((TABLE_ATTESTED_V1, key_bytes(root)), Vec::new());
     }
@@ -462,14 +499,22 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     // bytes. Preserve them exactly, except an authenticated withdrawal removed
     // their owner/class entry. Only this action's new record appears in diff.
     use misaka_palw_kernel::rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9;
-    let removed:Vec<Vec<u8>>=builder.state.kernel_route.as_ref().unwrap().rows
-        .range((TABLE_FLAT_CONFORMANCE_CLASSES_V9,Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9+1,Vec::new()))
-        .filter_map(|((_,key),row)|{
-            let class:misaka_palw_kernel::hash::Digest=borsh::from_slice(key).ok()?;
-            let owner:misaka_palw_kernel::hash::Digest=row.get(..64)?.try_into().ok()?;
-            (!ledger.native_candidate_owned_v9(&owner,&class)).then(||key.clone())
-        }).collect();
-    for key in removed {builder.write_kernel_row(TABLE_FLAT_CONFORMANCE_CLASSES_V9,key,None);}
+    let removed: Vec<Vec<u8>> = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .rows
+        .range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        .filter_map(|((_, key), row)| {
+            let class: misaka_palw_kernel::hash::Digest = borsh::from_slice(key).ok()?;
+            let owner: misaka_palw_kernel::hash::Digest = row.get(..64)?.try_into().ok()?;
+            (!ledger.native_candidate_owned_v9(&owner, &class)).then(|| key.clone())
+        })
+        .collect();
+    for key in removed {
+        builder.write_kernel_row(TABLE_FLAT_CONFORMANCE_CLASSES_V9, key, None);
+    }
     let header = builder.state.kernel_route.as_ref().expect("a route that flushes exists").header.clone();
     let scalars = ledger.scalars();
     if header.scalars != scalars {
@@ -477,9 +522,11 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
     }
     let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
     let cached = ledger.clone().as_rebuilt_from_v1(&kernel.rows);
-    if kernel.rows.keys().any(|(t,_)|*t==TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
+    if kernel.rows.keys().any(|(t, _)| *t == TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
         kernel.ledger_cache.set_native_projection(cached);
-    } else {kernel.ledger_cache.set(cached);}
+    } else {
+        kernel.ledger_cache.set(cached);
+    }
 }
 
 /// Latest permitted root Final plus native evidence window and the complete kernel court path.
@@ -652,12 +699,13 @@ fn apply_settlements_to_exec_vesting(
         let route = builder.state.kernel_route.as_ref().ok_or_else(|| refused("reporter route missing"))?;
         hash.update(route.ledger_root().as_byte_slice());
         hash.update(&now.to_le_bytes());
-        let settlements: Vec<_> = events.iter().filter_map(|event| {
-            if let LedgerEventV1::Settlement(s) = event { Some(*s) } else { None }
-        }).collect();
+        let settlements: Vec<_> =
+            events.iter().filter_map(|event| if let LedgerEventV1::Settlement(s) = event { Some(*s) } else { None }).collect();
         hash.update(&borsh::to_vec(&settlements).expect("settlements serialize"));
         Some(finish(hash))
-    } else { None };
+    } else {
+        None
+    };
     let mut reporter_funded: std::collections::BTreeMap<_, u64> = Default::default();
     let mut fee_paid = std::collections::BTreeSet::new();
     for (ordinal, event) in events.iter().enumerate() {
@@ -752,12 +800,21 @@ fn apply_settlements_to_exec_vesting(
                     let claim = s.claim.ok_or_else(|| refused("reporter award has no terminal court subject"))?;
                     let terminal = events.iter().any(|event| match event {
                         LedgerEventV1::Convicted { claim: proved, accuser, accuser_reward, .. }
-                            if s.kind == SettlementKindV1::AccuserReward => *proved == claim && *accuser == s.bond && *accuser_reward == amount,
-                        LedgerEventV1::ProducerDefault { claim: defaulted, .. } | LedgerEventV1::PostFinalDefault { claim: defaulted, .. }
-                            if s.kind == SettlementKindV1::DemanderShare => *defaulted == claim,
+                            if s.kind == SettlementKindV1::AccuserReward =>
+                        {
+                            *proved == claim && *accuser == s.bond && *accuser_reward == amount
+                        }
+                        LedgerEventV1::ProducerDefault { claim: defaulted, .. }
+                        | LedgerEventV1::PostFinalDefault { claim: defaulted, .. }
+                            if s.kind == SettlementKindV1::DemanderShare =>
+                        {
+                            *defaulted == claim
+                        }
                         _ => false,
                     });
-                    if !terminal { return Err(refused("reporter award has no objective terminal verdict receipt")); }
+                    if !terminal {
+                        return Err(refused("reporter award has no objective terminal verdict receipt"));
+                    }
                     let funded = reporter_funded.entry(s.claim).or_default();
                     *funded = funded.checked_sub(amount).ok_or_else(|| refused("reporter award lacks collected collateral"))?;
                     let bond = key.ok_or_else(|| refused("reporter award recipient has no native bond"))?;
@@ -919,7 +976,7 @@ pub(super) fn apply_kernel_route_object_v1(
                 0 if *index == 0 => Kind::Node,
                 1 => Kind::Hash(*index),
                 2 => Kind::Value(*index),
-                3 if *index==0 => Kind::Header,
+                3 if *index == 0 => Kind::Header,
                 _ => return Err(refused("unknown v9 public unit")),
             };
             return super::palw_flat_model_vector_da_fold_v9::demand(
@@ -1047,11 +1104,13 @@ pub(super) fn apply_kernel_route_object_v1(
         }
         _ => {}
     }
-    let mut projection_paid=None;
+    let mut projection_paid = None;
     let scoped = if matches!(object, KernelRouteObjectV1::RegisterFlatModelCandidateV9 { .. }) {
-        let Some((o,id,paid)) = super::palw_model_artifact_fold_v2::flat_candidate_v9(builder, ctx, signer, &object)? else { return Ok(()); };
-        projection_paid=Some(paid);
-        Some((o,id))
+        let Some((o, id, paid)) = super::palw_model_artifact_fold_v2::flat_candidate_v9(builder, ctx, signer, &object)? else {
+            return Ok(());
+        };
+        projection_paid = Some(paid);
+        Some((o, id))
     } else if matches!(object, KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. }) {
         let Some(scoped) = super::palw_model_artifact_fold_v2::flat_candidate_v7(builder, ctx, signer, &object)? else {
             return Ok(());
@@ -1060,8 +1119,8 @@ pub(super) fn apply_kernel_route_object_v1(
     } else {
         super::palw_model_artifact_fold_v2::candidate(builder, ctx, &object)?
     };
-    let proof=matches!(object,KernelRouteObjectV1::FileProof {..});
-    let mut ledger = load_ledger_with_projection_v9(builder, ctx, projection_paid,proof)?;
+    let proof = matches!(object, KernelRouteObjectV1::FileProof { .. });
+    let mut ledger = load_ledger_with_projection_v9(builder, ctx, projection_paid, proof)?;
     let original_attested = ledger.attested_artifacts.clone();
     if let Some((_, id)) = &scoped {
         let row = builder.state.kernel_route.as_ref().unwrap().model_artifact_binding_header_v2(id).unwrap();
@@ -1093,8 +1152,9 @@ pub(super) fn apply_kernel_route_object_v1(
             }
         }
     }
-    if matches!(object,KernelRouteObjectV1::Withdraw { .. })
-        && candidate_withdraw_held_v9(builder,ctx,&ledger,&palw_kernel_bond_id_v1(signer))? {
+    if matches!(object, KernelRouteObjectV1::Withdraw { .. })
+        && candidate_withdraw_held_v9(builder, ctx, &ledger, &palw_kernel_bond_id_v1(signer))?
+    {
         return Ok(());
     }
     let before = loaded_rows(builder, &ledger);
@@ -1142,20 +1202,28 @@ pub(super) fn apply_kernel_route_object_v1(
     // A class registers only if its worst filing, response and commitments can actually be carried (chunking counted).
     for event in &events {
         if let LedgerEventV1::FlatConformanceClassRegisteredV9 { class } = event {
-            let route=builder.state.kernel_route.as_ref().unwrap();
-            use misaka_palw_kernel::{ledger::flat_candidate9::FLAT_CANDIDATE_REGISTRY_MAX_V9,rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9};
-            if route.rows.contains_key(&(TABLE_FLAT_CONFORMANCE_CLASSES_V9,borsh::to_vec(class).unwrap()))
-                || route.rows.keys().filter(|(table,_)|*table==TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()>=FLAT_CANDIDATE_REGISTRY_MAX_V9 {
-                persist_budget(builder,ctx,&ledger);return Ok(());
+            let route = builder.state.kernel_route.as_ref().unwrap();
+            use misaka_palw_kernel::{
+                ledger::flat_candidate9::FLAT_CANDIDATE_REGISTRY_MAX_V9, rows::TABLE_FLAT_CONFORMANCE_CLASSES_V9,
+            };
+            if route.rows.contains_key(&(TABLE_FLAT_CONFORMANCE_CLASSES_V9, borsh::to_vec(class).unwrap()))
+                || route.rows.keys().filter(|(table, _)| *table == TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
+                    >= FLAT_CANDIDATE_REGISTRY_MAX_V9
+            {
+                persist_budget(builder, ctx, &ledger);
+                return Ok(());
             }
 
-            let fits=ledger.flat_conformance_classes_v9.get(class).is_some_and(|(_,r)| {
+            let fits = ledger.flat_conformance_classes_v9.get(class).is_some_and(|(_, r)| {
                 // The candidate was just independently derived by this paid
                 // attempt; fixed generated metadata supplies its carrier cap.
                 misaka_palw_kernel::ledger::flat_candidate9::decode_scope_v9(&r.scope_bytes)
-                    .is_ok_and(|s|s.worst_court_bytes as usize+134<=PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1)
+                    .is_ok_and(|s| s.worst_court_bytes as usize + 134 <= PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1)
             });
-            if !fits {persist_budget(builder,ctx,&ledger);return Ok(());}
+            if !fits {
+                persist_budget(builder, ctx, &ledger);
+                return Ok(());
+            }
         }
         if let LedgerEventV1::FlatConformanceClassRegisteredV7 { class } = event {
             let fits = ledger
@@ -1234,9 +1302,9 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     if let Some((_, binding)) = &scoped {
         for event in &events {
-            if let LedgerEventV1::ConformanceClassRegistered { class } | LedgerEventV1::FlatConformanceClassRegisteredV7 { class }
-                |LedgerEventV1::FlatConformanceClassRegisteredV9 {class} =
-                event
+            if let LedgerEventV1::ConformanceClassRegistered { class }
+            | LedgerEventV1::FlatConformanceClassRegisteredV7 { class }
+            | LedgerEventV1::FlatConformanceClassRegisteredV9 { class } = event
             {
                 builder.write_kernel_row(
                     crate::palw_model_artifact_v2::PALW_MODEL_ARTIFACT_CANDIDATE_TABLE_V2,
@@ -1630,15 +1698,20 @@ pub(super) fn apply_kernel_route_chunk_v1(
             && builder.state.kernel_route.as_ref().is_some_and(|r| {
                 r.chunk_target_deadline_v1(&chunk.target, ctx.daa_score).is_some()
                     && r.flat_model_vector_header_v3(&vector)
-                        .and_then(|h| protected_flat_chunk_finish_work_v9(r,&h))
+                        .and_then(|h| protected_flat_chunk_finish_work_v9(r, &h))
                         .is_some_and(|w| w <= policy.guaranteed_proof_work_v1())
             });
         // Fixed seal authentication precedes assembly. Unsealed spam consumes only
         // admission capacity; a mature authenticated filer uses the proof reserve.
         // Read/clone/serialize the bounded own group and assemble/hash the final
         // carrier. Price that worst envelope before variable stored-group decode.
-        let cap=builder.state.kernel_route.as_ref().and_then(|r|r.flat_model_vector_header_v3(&vector))
-            .and_then(|h|protected_flat_chunk_cap_v9(&h)).ok_or_else(||refused("no admitted typed9 assembly cap"))?;
+        let cap = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|r| r.flat_model_vector_header_v3(&vector))
+            .and_then(|h| protected_flat_chunk_cap_v9(&h))
+            .ok_or_else(|| refused("no admitted typed9 assembly cap"))?;
         let work = super::palw_flat_model_vector_fold_v9::metadata_work(chunk.bytes.len() + 3 * cap)
             .ok_or_else(|| refused("protected chunk metadata work overflows"))?;
         let Some(fee) = super::palw_flat_model_vector_fold_v3::charge(builder, ctx, &chunk.opener, work, valid)? else {
@@ -1696,7 +1769,12 @@ pub(super) fn apply_kernel_route_chunk_v1(
     let proof_cap = match chunk.target {
         PalwKernelChunkTargetV1::FlatProofV6 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6),
         PalwKernelChunkTargetV1::FlatProofV7 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7),
-        PalwKernelChunkTargetV1::FlatProofV9 { vector,.. } => Some(route.flat_model_vector_header_v3(&vector).and_then(|h|protected_flat_chunk_cap_v9(&h)).ok_or_else(||refused("no typed9 assembly cap"))?),
+        PalwKernelChunkTargetV1::FlatProofV9 { vector, .. } => Some(
+            route
+                .flat_model_vector_header_v3(&vector)
+                .and_then(|h| protected_flat_chunk_cap_v9(&h))
+                .ok_or_else(|| refused("no typed9 assembly cap"))?,
+        ),
         _ => None,
     };
     if proof_cap
@@ -1727,8 +1805,12 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if !palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target) {
         return Err(refused("the assembled object is not a prosecution of its group's target"));
     }
-    if matches!(chunk.target, PalwKernelChunkTargetV1::FlatProofV6 { .. } | PalwKernelChunkTargetV1::FlatProofV7 { .. } | PalwKernelChunkTargetV1::FlatProofV9 { .. })
-        && !matches!(&inner, PalwConsensusObjectV2::KernelRouteV1 { signer, .. } if *signer == chunk.opener)
+    if matches!(
+        chunk.target,
+        PalwKernelChunkTargetV1::FlatProofV6 { .. }
+            | PalwKernelChunkTargetV1::FlatProofV7 { .. }
+            | PalwKernelChunkTargetV1::FlatProofV9 { .. }
+    ) && !matches!(&inner, PalwConsensusObjectV2::KernelRouteV1 { signer, .. } if *signer == chunk.opener)
     {
         return Err(refused("a protected reveal must be signed by its chunk opener"));
     }
@@ -1761,30 +1843,53 @@ fn forfeit_expired_chunk_groups_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
 /// only; never clone a variable posting or execute a model. The work-only debit
 /// is bounded and precedes the header walk, and cannot consume prosecution runs.
 fn candidate_withdraw_held_v9(
-    builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,ledger:&KernelLedgerV1,owner:&misaka_palw_kernel::hash::Digest,
-)->Result<bool,PalwStateV2Error> {
-    use crate::palw_flat_model_vector_v3::{FLAT_MODEL_VECTOR_TABLE_V3,FlatModelVectorHeaderV3};
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    ledger: &KernelLedgerV1,
+    owner: &misaka_palw_kernel::hash::Digest,
+) -> Result<bool, PalwStateV2Error> {
+    use crate::palw_flat_model_vector_v3::{FLAT_MODEL_VECTOR_TABLE_V3, FlatModelVectorHeaderV3};
     use borsh::BorshDeserialize;
-    let policy=route_policies(builder)?.0;
-    let count_cap=policy.admission_work_limit_v1()/65536;
-    let count=builder.state.kernel_route.as_ref().unwrap().aux
-        .range((FLAT_MODEL_VECTOR_TABLE_V3,Vec::new())..(FLAT_MODEL_VECTOR_TABLE_V3+1,Vec::new()))
-        .take(count_cap as usize+1).count() as u64;
-    if count>count_cap {return Ok(true);}
-    let work=count.checked_mul(65536).ok_or_else(||refused("candidate retention metadata overflow"))?;
-    if work!=0 {
-        let (a,w)=builder.state.kernel_route.as_ref().and_then(|k|k.aux_row::<(u64,u32,u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,&[]))
-            .filter(|(blue,_,_)|*blue==ctx.blue_score).map(|(_,a,w)|(a,w)).unwrap_or_default();
-        let Some(w)=w.checked_add(work).filter(|w|*w<=policy.admission_work_limit_v1()) else {return Ok(true)};
-        builder.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,Vec::new(),Some(borsh::to_vec(&(ctx.blue_score,a,w)).expect("retention metadata budget")));
+    let policy = route_policies(builder)?.0;
+    let count_cap = policy.admission_work_limit_v1() / 65536;
+    let count = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .unwrap()
+        .aux
+        .range((FLAT_MODEL_VECTOR_TABLE_V3, Vec::new())..(FLAT_MODEL_VECTOR_TABLE_V3 + 1, Vec::new()))
+        .take(count_cap as usize + 1)
+        .count() as u64;
+    if count > count_cap {
+        return Ok(true);
     }
-    let route=builder.state.kernel_route.as_ref().unwrap();
-    for ((_,key),row) in route.aux.range((FLAT_MODEL_VECTOR_TABLE_V3,Vec::new())..(FLAT_MODEL_VECTOR_TABLE_V3+1,Vec::new())) {
-        let id:Hash64=borsh::from_slice(key).map_err(|e|refused(format!("candidate retention vector key: {e}")))?;
-        if !route.flat_model_vector_protected_v7(&id) && !route.flat_model_vector_protected_v9(&id) {continue;}
-        let h=FlatModelVectorHeaderV3::deserialize_reader(&mut std::io::Cursor::new(row))
-            .map_err(|e|refused(format!("candidate retention header: {e}")))?;
-        if !h.refuted && ctx.daa_score<h.liability_until && ledger.native_candidate_owned_v9(owner,&h.class.as_bytes()) {
+    let work = count.checked_mul(65536).ok_or_else(|| refused("candidate retention metadata overflow"))?;
+    if work != 0 {
+        let (a, w) = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|k| k.aux_row::<(u64, u32, u64)>(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, &[]))
+            .filter(|(blue, _, _)| *blue == ctx.blue_score)
+            .map(|(_, a, w)| (a, w))
+            .unwrap_or_default();
+        let Some(w) = w.checked_add(work).filter(|w| *w <= policy.admission_work_limit_v1()) else { return Ok(true) };
+        builder.write_kernel_row(
+            PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1,
+            Vec::new(),
+            Some(borsh::to_vec(&(ctx.blue_score, a, w)).expect("retention metadata budget")),
+        );
+    }
+    let route = builder.state.kernel_route.as_ref().unwrap();
+    for ((_, key), row) in route.aux.range((FLAT_MODEL_VECTOR_TABLE_V3, Vec::new())..(FLAT_MODEL_VECTOR_TABLE_V3 + 1, Vec::new())) {
+        let id: Hash64 = borsh::from_slice(key).map_err(|e| refused(format!("candidate retention vector key: {e}")))?;
+        if !route.flat_model_vector_protected_v7(&id) && !route.flat_model_vector_protected_v9(&id) {
+            continue;
+        }
+        let h = FlatModelVectorHeaderV3::deserialize_reader(&mut std::io::Cursor::new(row))
+            .map_err(|e| refused(format!("candidate retention header: {e}")))?;
+        if !h.refuted && ctx.daa_score < h.liability_until && ledger.native_candidate_owned_v9(owner, &h.class.as_bytes()) {
             return Ok(true);
         }
     }

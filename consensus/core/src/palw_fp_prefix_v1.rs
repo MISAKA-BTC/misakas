@@ -77,9 +77,7 @@ impl Params {
         if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
             return Err(PalwModeV2Error::Invalid("palw_fp_prefix_inherit is armed on a network that is not ConsensusV2"));
         }
-        let ok = self
-            .palw_fp_prefix_state
-            .is_some_and(|o| o != ForkActivation::never() && o.daa_score() <= fence.daa_score());
+        let ok = self.palw_fp_prefix_state.is_some_and(|o| o != ForkActivation::never() && o.daa_score() <= fence.daa_score());
         if !ok {
             return Err(PalwModeV2Error::Invalid(
                 "palw_fp_prefix_inherit needs palw_fp_prefix_state in force at or below it: version 12 is a prefix-state job",
@@ -227,8 +225,7 @@ pub fn palw_fp_prefix_stand_in_v1(payload: &PalwFpCommitmentTxPayloadV3) -> Palw
 }
 
 /// The walk's refusal text for a version-12 claim over a class that is not inheritance-safe.
-pub const PALW_FP_PREFIX_INHERIT_CLASS_REFUSAL_V1: &str =
-    "an inherited-prefix claim (FP job version 12) over a class whose leaves are not inheritance-safe (fused attention, KV aux, held, IR/generative, or no published integer-lane profile)";
+pub const PALW_FP_PREFIX_INHERIT_CLASS_REFUSAL_V1: &str = "an inherited-prefix claim (FP job version 12) over a class whose leaves are not inheritance-safe (fused attention, KV aux, held, IR/generative, or no published integer-lane profile)";
 
 /// **RFC-0001 stage 2b admission: which classes may carry inherited prefix leaves.** Only a class proven so: a dense integer-lane class
 /// (`PalwStepLaneV1::Int32`) with a published profile, no KV aux series (`kv_chunk_calls == 0`), no fused-attention court window,
@@ -402,7 +399,8 @@ mod tests {
     #[test]
     fn inheritance_admission_refuses_every_unproven_kind_by_name() {
         use super::palw_fp_prefix_inherit_class_safe_v1 as safe;
-        let base = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("floor profile");
+        let base =
+            crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("floor profile");
         assert_eq!(safe(Some(&base), false, false, false), Ok(()));
         assert!(safe(Some(&base), true, false, false).unwrap_err().contains("held"));
         assert!(safe(Some(&base), false, true, false).unwrap_err().contains("IR or generative"));
@@ -419,14 +417,12 @@ mod tests {
     use super::*;
     use crate::constants::TX_VERSION;
     use crate::palw_decode_pipeline_v4::DecodeConfigV4;
-    use crate::palw_fp_objects_v3::{
-        PalwFpClassCapsV1, PalwFpDerivedWorkCapV1, palw_fp_objects_from_accepted_txs_by_class_v1,
-    };
+    use crate::palw_fp_objects_v3::{PalwFpClassCapsV1, PalwFpDerivedWorkCapV1, palw_fp_objects_from_accepted_txs_by_class_v1};
+    use crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1;
     use crate::palw_freeprompt_v3::{
         PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFpStopReasonV3, PalwFreePromptCommitmentV3,
         PalwFreePromptParamsV3, fp_claim_id_v3, fp_job_id_v3, fp_trace_manifest_v3,
     };
-    use crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1;
     use crate::palw_state_v2::PalwConsensusObjectV2;
     use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
     use crate::tx::{Transaction, TransactionId, TransactionOutpoint};
@@ -509,7 +505,11 @@ mod tests {
         Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, bytes)
     }
 
-    fn walk(p: &PalwFpCommitmentTxPayloadV3, armed: bool, tokenizer: PalwFpTokenizerRuleV1) -> crate::palw_fp_objects_v3::PalwFpExtractionV3 {
+    fn walk(
+        p: &PalwFpCommitmentTxPayloadV3,
+        armed: bool,
+        tokenizer: PalwFpTokenizerRuleV1,
+    ) -> crate::palw_fp_objects_v3::PalwFpExtractionV3 {
         palw_fp_objects_from_accepted_txs_by_class_v1(
             &[tx(borsh::to_vec(p).unwrap())],
             net(),
@@ -522,7 +522,8 @@ mod tests {
                 derived_work: PalwFpDerivedWorkCapV1::Declared,
                 logits_q24: true,
                 prefix_state_armed: armed,
-                prefix_inherit_armed: false, prefix_inherit_class_safe: false,
+                prefix_inherit_armed: false,
+                prefix_inherit_class_safe: false,
                 constraint_armed: false,
                 constraint_v2_armed: false,
                 tokenizer,
@@ -564,7 +565,9 @@ mod tests {
             ));
         }
         assert!(palw_fp_prefix_tail_v1(&v4.commitment.job).is_none());
-        assert!(palw_fp_payload_is_prefix_v1(&borsh::to_vec(&v11).unwrap()) && !palw_fp_payload_is_prefix_v1(&borsh::to_vec(&v4).unwrap()));
+        assert!(
+            palw_fp_payload_is_prefix_v1(&borsh::to_vec(&v11).unwrap()) && !palw_fp_payload_is_prefix_v1(&borsh::to_vec(&v4).unwrap())
+        );
     }
 
     #[test]
@@ -580,10 +583,9 @@ mod tests {
         let mut job = ok.clone();
         job.tail = None;
         assert_eq!(palw_fp_prefix_shape_v1(&job), Err(PalwFpPrefixErrorV1::NoTail));
-        for genesis in [
-            PalwFpPrefixStateV1 { state_root: Hash64::default(), ..state() },
-            PalwFpPrefixStateV1 { prefix_tokens: 0, ..state() },
-        ] {
+        for genesis in
+            [PalwFpPrefixStateV1 { state_root: Hash64::default(), ..state() }, PalwFpPrefixStateV1 { prefix_tokens: 0, ..state() }]
+        {
             let mut job = ok.clone();
             job.tail = Some(PalwFpJobTailV1::Prefix(genesis));
             assert_eq!(palw_fp_prefix_shape_v1(&job), Err(PalwFpPrefixErrorV1::StateIsGenesis));
@@ -646,7 +648,11 @@ mod tests {
         assert!(skipped.objects.is_empty());
         assert!(skipped.skipped[0].1.contains("palw_fp_tokenizer_match"), "{:?}", skipped.skipped);
         assert_eq!(walk(&v4_payload(), false, PalwFpTokenizerRuleV1::of(true, Some(h64(0x70)))).objects.len(), 1, "its own passes");
-        assert_eq!(walk(&v4_payload(), false, PalwFpTokenizerRuleV1::of(true, None)).objects.len(), 1, "a class that lists none is not asked");
+        assert_eq!(
+            walk(&v4_payload(), false, PalwFpTokenizerRuleV1::of(true, None)).objects.len(),
+            1,
+            "a class that lists none is not asked"
+        );
         assert_eq!(walk(&v4_payload(), false, PalwFpTokenizerRuleV1::Dormant).objects.len(), 1, "dormant: not asked");
     }
 
@@ -667,7 +673,10 @@ mod tests {
                 true,
             )
         };
-        assert!(matches!(door(false), Err(PalwFpV3Error::UnsupportedVersion { got: 11, .. })), "shut: refused like a build without it");
+        assert!(
+            matches!(door(false), Err(PalwFpV3Error::UnsupportedVersion { got: 11, .. })),
+            "shut: refused like a build without it"
+        );
         assert_eq!(door(true), Ok(()));
         // A malformed one is refused by name at the open door.
         let mut genesis = prefix_payload();

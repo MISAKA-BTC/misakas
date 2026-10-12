@@ -198,11 +198,17 @@ fn olmo_cohere_granite_nemotron() {
 fn bitnet_and_apertus() {
     let (s, p) = ok("bitnet-b1.58-2b-4t");
     assert!(attn(&s, 0).o_norm.is_some(), "attn_sub_norm");
-    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.act == Act::Relu2 && m.inner_norm.is_some()), "ReLU2 gated with ffn_sub_norm");
+    assert!(
+        matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.act == Act::Relu2 && m.inner_norm.is_some()),
+        "ReLU2 gated with ffn_sub_norm"
+    );
     assert!(s.head.tied);
     assert!(p.params.iter().any(|d| d.name == "attn.sub_norm.gain") && p.params.iter().any(|d| d.name == "mlp.sub_norm.gain"));
     let (s, p) = ok("apertus-8b-2509");
-    assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if !m.gated && m.act == Act::Xielu && m.inner_norm.is_none()), "an ungated xIELU MLP");
+    assert!(
+        matches!(&s.layers[0].ffn, Ffn::Mlp(m) if !m.gated && m.act == Act::Xielu && m.inner_norm.is_none()),
+        "an ungated xIELU MLP"
+    );
     assert_eq!(attn(&s, 0).qk_norm.map(|q| q.scope), Some(QkNormScope::PerHeadShared));
     assert_eq!(rope(attn(&s, 0)).freqs.rope_type, "llama3");
     for k in ["alpha_p", "alpha_n", "beta", "eps"] {
@@ -247,9 +253,24 @@ fn nemotron_h_is_one_block_per_layer() {
     let (s, p) = ok("nemotron-h-8b-base-8k");
     assert_eq!(s.layers.len(), 52);
     let kinds = |f: &dyn Fn(&LayerSpec) -> bool| s.layers.iter().filter(|l| f(l)).count();
-    assert_eq!(kinds(&|l| matches!(&l.mixer, Mixer::Mamba2(m) if m.groups == 8 && m.norm_groups == 8 && m.norm_mode == Mamba2Norm::GateFirst && m.dt_min == 0.0 && !m.proj_bias)), 24);
-    assert_eq!(kinds(&|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.position, Position::None) && a.heads == 32 && a.kv_heads == 8)), 4);
-    assert_eq!(kinds(&|l| matches!((&l.mixer, &l.ffn), (Mixer::None, Ffn::Mlp(m)) if !m.gated && m.act == Act::Relu2 && m.intermediate == 21504)), 24);
+    assert_eq!(
+        kinds(
+            &|l| matches!(&l.mixer, Mixer::Mamba2(m) if m.groups == 8 && m.norm_groups == 8 && m.norm_mode == Mamba2Norm::GateFirst && m.dt_min == 0.0 && !m.proj_bias)
+        ),
+        24
+    );
+    assert_eq!(
+        kinds(
+            &|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.position, Position::None) && a.heads == 32 && a.kv_heads == 8)
+        ),
+        4
+    );
+    assert_eq!(
+        kinds(
+            &|l| matches!((&l.mixer, &l.ffn), (Mixer::None, Ffn::Mlp(m)) if !m.gated && m.act == Act::Relu2 && m.intermediate == 21504)
+        ),
+        24
+    );
     // A mixer layer has one pre-norm before its mixer and none before an FFN it does not have; an FFN-only layer has the norm before its FFN.
     assert!(s.layers.iter().all(|l| match (&l.mixer, &l.residual) {
         (Mixer::None, Residual::Sequential { pre_mixer, pre_ffn, .. }) => pre_mixer.is_none() && pre_ffn.is_some(),
@@ -274,7 +295,8 @@ fn nemotron_h_is_one_block_per_layer() {
     assert_eq!(m.act, Act::Relu2);
     assert!(p.params.iter().any(|d| d.name == "moe.experts.up") && !p.params.iter().any(|d| d.name == "moe.experts.gate"));
     // The latent projection widens the routed experts' params to the latent width and adds two linears.
-    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/nemotron-3-nano-30b-a3b.json")).unwrap();
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/nemotron-3-nano-30b-a3b.json"))
+        .unwrap();
     let latent = parse_config_str(&cfg.replace("\"n_group\": 1,", "\"n_group\": 1, \"moe_latent_size\": 1024,")).unwrap();
     let hl = hl::build_program(&latent).unwrap();
     let shape = |n: &str| hl.params.iter().find(|d| d.name == n).map(|d| d.shape.clone());
@@ -310,13 +332,27 @@ fn falcon_h1_parallel_mamba_and_attention_with_mup() {
     assert!((a.scale - 0.1767766952966369 / 8.0).abs() < 1e-15, "{}", a.scale);
     assert_eq!((bs[1].in_scale, bs[1].out_scale), (1.0, 0.9375));
     // The MLP's multipliers are weights expressions on the gate and down projections.
-    assert!(s.hf.weights.contains_key("mlp.gate.w") && s.hf.weights.contains_key("mlp.down.w"), "{:?}", s.hf.weights.keys().collect::<Vec<_>>());
+    assert!(
+        s.hf.weights.contains_key("mlp.gate.w") && s.hf.weights.contains_key("mlp.down.w"),
+        "{:?}",
+        s.hf.weights.keys().collect::<Vec<_>>()
+    );
     // Split projections for the chunk scales: z, x, B, C, dt and three convolutions.
-    for n in ["mamba2.in.z.w", "mamba2.in.x.w", "mamba2.in.b.w", "mamba2.in.c.w", "mamba2.in.dt.w", "mamba2.conv.x.w", "mamba2.conv.b.w", "mamba2.conv.c.w"] {
+    for n in [
+        "mamba2.in.z.w",
+        "mamba2.in.x.w",
+        "mamba2.in.b.w",
+        "mamba2.in.c.w",
+        "mamba2.in.dt.w",
+        "mamba2.conv.x.w",
+        "mamba2.conv.b.w",
+        "mamba2.conv.c.w",
+    ] {
         assert!(p.params.iter().any(|d| d.name == n), "{n}");
     }
     // Disagreeing biases of the two Mamba-2 projections are refused.
-    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/falcon-h1-0.5b-instruct.json")).unwrap();
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/falcon-h1-0.5b-instruct.json"))
+        .unwrap();
     assert!(parse_config_str(&cfg.replace("\"projectors_bias\": false", "\"projectors_bias\": true")).is_err());
     // A non-default dt clamp is refused (HF's prefill clamps, its decode does not).
     assert!(parse_config_str(&cfg.replace("\"vocab_size\"", "\"time_step_limit\": [0.01, 100.0], \"vocab_size\"")).is_err());
@@ -333,8 +369,11 @@ fn paligemma_is_its_text_decoder_and_refuses_image_rows() {
     assert!(s.notes.iter().any(|n| n.contains("ATTN_PREFIX_LM_V1")), "{:?}", s.notes);
     assert!(s.hf.names["embed"].starts_with("language_model.model."), "{:?}", s.hf.names.get("embed"));
     // The same decoder with image rows bound is another function: refused.
-    let cfg = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/paligemma-3b-pt-224.json")).unwrap();
-    let rows = misaka_palw_tir_lower::lower::ImageRows { rows: 256, width: 2048, unit: 1.0 / 4096.0, placeholder: 257152, mrope: None };
+    let cfg =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/paligemma-3b-pt-224.json"))
+            .unwrap();
+    let rows =
+        misaka_palw_tir_lower::lower::ImageRows { rows: 256, width: 2048, unit: 1.0 / 4096.0, placeholder: 257152, mrope: None };
     let opts = misaka_palw_tir_lower::lower::LowerOpts { image_rows: Some(rows), ..Default::default() };
     let e = misaka_palw_tir_lower::fidelity::prepare(&cfg, &opts).err().expect("refused").to_string();
     assert!(e.contains("ATTN_PREFIX_LM_V1"), "{e}");
@@ -495,10 +534,13 @@ fn refusals_name_their_reason() {
     refused("bert-base-uncased", "no adapter");
     refused("gemma-3n-e4b", "multimodal Gemma-3n");
     // Pre-quantised: GPTQ and AWQ are read from their integers; every other method is refused.
-    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
+    let base =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/llama-3.1-8b-gptq.json")).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&base).unwrap();
     v["quantization_config"]["quant_method"] = serde_json::json!("bitsandbytes");
-    assert!(matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("quant_method=bitsandbytes")));
+    assert!(
+        matches!(misaka_palw_tir_lower::parse_config(&v), Err(LowerError::NotLowerable(s)) if s.contains("quant_method=bitsandbytes"))
+    );
 }
 
 #[test]
@@ -542,7 +584,8 @@ fn an_unknown_key_or_unimplemented_value_is_refused_not_ignored() {
 #[test]
 fn deepseek_v3_2_fp8_scale_fmt_is_refused_by_name() {
     let name = "deepseek-v3.2";
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/configs/real/{name}.json"))).expect("config");
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/configs/real/{name}.json")))
+        .expect("config");
     let v: serde_json::Value = serde_json::from_str(&text).expect("json");
     match misaka_palw_tir_lower::parse_config(&v) {
         Err(LowerError::NotLowerable(m)) => assert!(m.contains("scale_fmt") && m.contains("FP8_BLOCK"), "{m}"),
@@ -613,7 +656,11 @@ fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
         match &s.layers[l].mixer {
             Mixer::Mla(m) => {
                 assert!(full.contains(&(l + 1)), "layer {l}");
-                assert!(m.rope.is_none() && m.q_lora_rank.is_none() && (m.kv_lora_rank, m.qk_nope_head_dim, m.qk_rope_head_dim, m.v_head_dim) == (512, 128, 64, 128));
+                assert!(
+                    m.rope.is_none()
+                        && m.q_lora_rank.is_none()
+                        && (m.kv_lora_rank, m.qk_nope_head_dim, m.qk_rope_head_dim, m.v_head_dim) == (512, 128, 64, 128)
+                );
                 assert_eq!(m.scale, 1.0 / 192f64.sqrt());
                 assert_eq!(m.kv_a_norm.eps, 1e-6, "the latent norms keep their own epsilon, not rms_norm_eps");
             }
@@ -632,9 +679,17 @@ fn kimi_linear_reads_the_hubs_linear_attn_config_and_binds_every_tensor() {
     assert_eq!(s.hf.names["kda.q_conv"], "model.layers.{L}.self_attn.q_conv1d");
     assert_eq!(s.hf.names["mla.kv_a"], "model.layers.{L}.self_attn.kv_a_proj_with_mqa");
     // The delta attention's decay is one gate per key channel: the node carries `channel_decay` and a `[heads · head_dim]` decay chain.
-    assert!(p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::GatedDelta { channel_decay: true, v_heads: 32, dk: 128, .. })));
+    assert!(
+        p.blocks
+            .iter()
+            .flat_map(|b| &b.nodes)
+            .any(|n| matches!(n.op, Op::GatedDelta { channel_decay: true, v_heads: 32, dk: 128, .. }))
+    );
     assert!(p.params.iter().any(|d| d.name == "kda.A" && d.shape == vec![32 * 128]));
-    assert!(!p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Rope { heads: 1, .. })), "no rotation of the shared key");
+    assert!(
+        !p.blocks.iter().flat_map(|b| &b.nodes).any(|n| matches!(n.op, Op::Rope { heads: 1, .. })),
+        "no rotation of the shared key"
+    );
     // The features a registrant sees named.
     let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
     assert!(ids.contains(&"MIXER_KDA_V1") && ids.contains(&"MIXER_MLA_NOPE_V1"), "{ids:?}");
@@ -679,7 +734,9 @@ fn chatglm3_6b_is_a_partial_interleaved_multi_query_decoder_and_binds_every_tens
     assert_eq!(s.vocab_size, 65024);
     assert!(!s.head.tied);
     assert_eq!(kinds(&p), 1);
-    assert!(matches!(s.reference, Reference::RemoteCode { ref module, pin: None } if module == "modeling_chatglm.ChatGLMForConditionalGeneration"));
+    assert!(
+        matches!(s.reference, Reference::RemoteCode { ref module, pin: None } if module == "modeling_chatglm.ChatGLMForConditionalGeneration")
+    );
     // ChatGLM3-32k's `rope_ratio` scales the base.
     let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/chatglm3-6b.json")).unwrap();
     let long = parse_config_str(&cfg.replace("\"rmsnorm\": true", "\"rmsnorm\": true, \"rope_ratio\": 50")).unwrap();
@@ -696,7 +753,11 @@ fn gemma_3n_e4b_text_is_altup_with_laurel_and_sparse_layers() {
     let sparse = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Mlp(m) if m.sparsity == Some(0.95))).count();
     assert_eq!(sparse, 10);
     assert!(s.layers.iter().all(|l| matches!(&l.residual, Residual::AltUp { laurel: Some(l), .. } if l.rank == 64)));
-    let shared = s.layers.iter().filter(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.kv_share, Some(KvShare::Consumer { .. })))).count();
+    let shared = s
+        .layers
+        .iter()
+        .filter(|l| matches!(&l.mixer, Mixer::Attention(a) if matches!(a.kv_share, Some(KvShare::Consumer { .. }))))
+        .count();
     assert_eq!(shared, 15);
     assert_eq!(p.carries[0].shape, vec![5 * 2048], "four streams and the layer's intermediate");
 }
@@ -717,7 +778,13 @@ fn deepseek_v4_flash_is_mhc_over_shared_kv_attention_with_csa_and_hca_layers() {
     let c0 = skv(0).compressed.as_ref().expect("a compressed layer");
     assert_eq!((c0.ratio, c0.overlap, c0.indexer.is_none()), (128, false, true), "the first layers are HCA");
     let csa: Vec<usize> = (0..43).filter(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.overlap)).collect();
-    assert!(!csa.is_empty() && csa.iter().all(|l| skv(*l).compressed.as_ref().is_some_and(|c| c.ratio == 4 && c.indexer.as_ref().is_some_and(|i| i.topk == 512))));
+    assert!(
+        !csa.is_empty()
+            && csa.iter().all(|l| skv(*l)
+                .compressed
+                .as_ref()
+                .is_some_and(|c| c.ratio == 4 && c.indexer.as_ref().is_some_and(|i| i.topk == 512)))
+    );
     let hash = s.layers.iter().filter(|l| matches!(&l.ffn, Ffn::Moe(m) if m.router.scoring == Scoring::SqrtSoftplusHash)).count();
     assert_eq!(hash, 3);
     assert!(s.layers.iter().all(|l| matches!(&l.ffn, Ffn::Moe(m) if matches!(m.glu, Glu::LimitedGlu { limit } if limit == 10.0))));

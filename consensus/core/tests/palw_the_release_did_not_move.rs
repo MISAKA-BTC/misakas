@@ -11,8 +11,8 @@
 //! with the new height and the new fingerprint written down together.
 
 use kaspa_consensus_core::config::params::{
-    palw_rc_shipped_params, MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
-    PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+    MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_EXECUTION_QUANTA_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+    palw_rc_shipped_params,
 };
 
 /// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0133 §7's seat gate at DAA 8,100
@@ -129,7 +129,7 @@ fn arming_one_fence_of_the_bundle_on_the_release_is_refused() {
 #[test]
 fn p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it() {
     use kaspa_consensus_core::palw_arbitrage_search_v1::{
-        palw_arbitrage_search_shipped_classes_v1, PALW_ARBITRAGE_BOUND_ARITHMETIC_V1,
+        PALW_ARBITRAGE_BOUND_ARITHMETIC_V1, palw_arbitrage_search_shipped_classes_v1,
     };
     let bound = palw_arbitrage_search_shipped_classes_v1();
     assert_eq!(bound.weight_per_mac_spread, PALW_ARBITRAGE_BOUND_ARITHMETIC_V1);

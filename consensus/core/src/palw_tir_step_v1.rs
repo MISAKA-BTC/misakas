@@ -444,18 +444,24 @@ impl PalwTirStepSpaceV1 {
     /// preimage buffers before enumeration/allocation. Saturation refuses on conversion
     /// under a finite node storage budget; it changes no commitment or layout rule.
     pub fn lane_count_at_position_v1(&self, job: &PalwTirJobShapeV1, a: u32) -> u128 {
-        if a >= job.positions { return 0; }
+        if a >= job.positions {
+            return 0;
+        }
         let post = self.occurrences.len() - 1;
         let mut lanes = 0u128;
         for (i, (block, _)) in self.occurrences.iter().enumerate() {
-            if i == post && !job.runs_post(a) { continue; }
+            if i == post && !job.runs_post(a) {
+                continue;
+            }
             let h = self.h_of(*block, a);
             for commit in &self.blocks[*block as usize].commits {
                 lanes = lanes.saturating_add(u128::from(commit.elements(h)));
             }
         }
         if (a + 1).is_multiple_of(self.layout.checkpoint_interval) {
-            for instance in &self.fixed { lanes = lanes.saturating_add(u128::from(instance.elements)); }
+            for instance in &self.fixed {
+                lanes = lanes.saturating_add(u128::from(instance.elements));
+            }
         }
         if (a + 1).is_multiple_of(self.layout.h_tile) {
             for instance in &self.hist {

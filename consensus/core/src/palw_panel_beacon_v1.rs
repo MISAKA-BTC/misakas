@@ -80,7 +80,10 @@ pub trait PanelBeaconHistoryV1 {
     fn pending_work_of_epoch(&self, epoch: u64) -> BTreeSet<Digest>;
     /// Required for v4/v5. Implementations must read an authenticated immutable
     /// epoch row, rather than reconstructing eligibility from the current tip.
-    fn source_snapshot(&self, _request: &BeaconRequestV1) -> Result<crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1, String> {
+    fn source_snapshot(
+        &self,
+        _request: &BeaconRequestV1,
+    ) -> Result<crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1, String> {
         Err("the frozen Panel source subject is unavailable".into())
     }
     fn opt_in_material(&self, _context: &Digest) -> Result<(challenge::OptInContractV4, Vec<challenge::OptInSourceV4>), String> {
@@ -222,7 +225,9 @@ enum Collector {
 /// a whole contract: filtering it out would also erase a mixed or withheld
 /// source and produce a different beacon.
 fn opt_in_context_and_subjects(
-    history: &impl PanelBeaconHistoryV1, request: &BeaconRequestV1, policy: &PostCommitChallengePolicyV1,
+    history: &impl PanelBeaconHistoryV1,
+    request: &BeaconRequestV1,
+    policy: &PostCommitChallengePolicyV1,
 ) -> Result<(BeaconContextV1, BTreeSet<Digest>), PanelBeaconRefusalV1> {
     let snapshot = history.source_snapshot(request).map_err(PanelBeaconRefusalV1::SourceContract)?;
     let ctx = snapshot.context(request, policy).map_err(PanelBeaconRefusalV1::SourceContract)?;
@@ -230,8 +235,10 @@ fn opt_in_context_and_subjects(
 }
 
 fn refuse_assigned_sources(sources: &[challenge::OptInSourceV4], assigned: &BTreeSet<Digest>) -> Result<(), PanelBeaconRefusalV1> {
-    if sources.iter().any(|s| matches!(s.source.reveal.as_ref().map(|r| &r.fate),
-        Some(challenge::SourceFateV3::Final(event)) if assigned.contains(&event.canonical_work_id))) {
+    if sources.iter().any(|s| {
+        matches!(s.source.reveal.as_ref().map(|r| &r.fate),
+        Some(challenge::SourceFateV3::Final(event)) if assigned.contains(&event.canonical_work_id))
+    }) {
         return Err(PanelBeaconRefusalV1::SourceContract("a sealed assignment is a source of its own Panel epoch".into()));
     }
     Ok(())
@@ -354,15 +361,31 @@ mod paid_panel_tests {
         current_pending: BTreeSet<Digest>,
     }
     impl PanelBeaconHistoryV1 for History {
-        fn final_events(&self) -> Vec<WorkFinalEventV1> { Vec::new() }
-        fn attributed_works(&self) -> Vec<AttributedWorkV1> { Vec::new() }
-        fn sealed_sources(&self) -> Vec<SealedSourceV3> { Vec::new() }
-        fn tip_position(&self) -> u64 { 211 }
-        fn eligible_profiles(&self, _: u64) -> BTreeSet<Digest> { self.current_profiles.clone() }
-        fn pending_work_of_epoch(&self, _: u64) -> BTreeSet<Digest> { self.current_pending.clone() }
-        fn source_snapshot(&self, _: &BeaconRequestV1) -> Result<PalwPanelSourceSnapshotV1, String> { Ok(self.snapshot.clone()) }
+        fn final_events(&self) -> Vec<WorkFinalEventV1> {
+            Vec::new()
+        }
+        fn attributed_works(&self) -> Vec<AttributedWorkV1> {
+            Vec::new()
+        }
+        fn sealed_sources(&self) -> Vec<SealedSourceV3> {
+            Vec::new()
+        }
+        fn tip_position(&self) -> u64 {
+            211
+        }
+        fn eligible_profiles(&self, _: u64) -> BTreeSet<Digest> {
+            self.current_profiles.clone()
+        }
+        fn pending_work_of_epoch(&self, _: u64) -> BTreeSet<Digest> {
+            self.current_pending.clone()
+        }
+        fn source_snapshot(&self, _: &BeaconRequestV1) -> Result<PalwPanelSourceSnapshotV1, String> {
+            Ok(self.snapshot.clone())
+        }
         fn paid_material(&self, context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
-            if *context != self.material.0.source.context_id { return Err("substituted context".into()); }
+            if *context != self.material.0.source.context_id {
+                return Err("substituted context".into());
+            }
             Ok(self.material.clone())
         }
     }
@@ -370,32 +393,100 @@ mod paid_panel_tests {
         // Synthetic mechanics only: both sources are genuine contract types,
         // not an economic/soundness approval or a real-node provenance claim.
         let p = paid_opt_in_source_policy_v5(2, 2, 20, 2, 1);
-        let req = BeaconRequestV1 { network: Hash64::from_u64_word(1), ruleset: Hash64::from_u64_word(2),
-            scheme: Hash64::from_bytes(p.id()), epoch: 11, release_daa: 100, deadline_daa: 300 };
-        let snapshot = PalwPanelSourceSnapshotV1 { version: 1, network: req.network, ruleset: req.ruleset, scheme: req.scheme,
-            epoch: 11, release_daa: 100, deadline_daa: 300, committed_daa: 110,
-            committed_block: Hash64::from_u64_word(3), checkpoint: Hash64::from_u64_word(4), checkpoint_daa: 90,
-            eligible_profiles: BTreeSet::from([[4; 64]]), excluded_profiles: BTreeSet::from([[5; 64]]),
-            assigned_work_ids: BTreeSet::from([[91; 64]]) };
+        let req = BeaconRequestV1 {
+            network: Hash64::from_u64_word(1),
+            ruleset: Hash64::from_u64_word(2),
+            scheme: Hash64::from_bytes(p.id()),
+            epoch: 11,
+            release_daa: 100,
+            deadline_daa: 300,
+        };
+        let snapshot = PalwPanelSourceSnapshotV1 {
+            version: 1,
+            network: req.network,
+            ruleset: req.ruleset,
+            scheme: req.scheme,
+            epoch: 11,
+            release_daa: 100,
+            deadline_daa: 300,
+            committed_daa: 110,
+            committed_block: Hash64::from_u64_word(3),
+            checkpoint: Hash64::from_u64_word(4),
+            checkpoint_daa: 90,
+            eligible_profiles: BTreeSet::from([[4; 64]]),
+            excluded_profiles: BTreeSet::from([[5; 64]]),
+            assigned_work_ids: BTreeSet::from([[91; 64]]),
+        };
         let ctx = snapshot.context(&req, &p).unwrap();
-        let contract = PaidOptInContractV5 { source: OptInContractV4 { context_id: ctx.id(), terms_id: [6; 64], source_final_by: 210 },
-            fee_terms_id: [7; 64], minimum_fee: 50, fee_per_source: 60, max_sources: 2, funded_position: 113 };
-        let sources: Vec<_> = [1u8, 2].into_iter().map(|who| OptInSourceV4 { context_id: ctx.id(), terms_id: [6; 64],
-            opted_in_position: 115, forfeited_position: None, source: SealedSourceV3 { source_profile_id: [4; 64],
-                attribution: SourceAttributionV1 { producer_id: [who; 64], consumer_id: RootV1::Present([who + 10; 64]) },
-                seal: [who + 20; 64], seal_position: 114, reveal: Some(SealRevealV3 { reveal_position: 135, salt: [who + 30; 64],
-                    fate: SourceFateV3::Final(WorkFinalEventV1 { kind: WorkSourceKindV1::RealUsefulWork, source_profile_id: [4; 64],
-                        canonical_work_id: [who + 40; 64], execution_commitment: [who + 50; 64], accepted_position: 135,
-                        settlement_position: 185, occurrence_index: 0, claim_final: true, da_satisfied: true,
-                        validity_independent: true, depends_on_profiles: Vec::new(), final_path: FinalPathV1::PanelIndependent }) }) }
-        }).collect();
-        let promises: Vec<_> = sources.iter().map(|s| PaidSourcePromiseV5 { context_id: ctx.id(),
-            producer: s.source.attribution.producer_id, fee_terms_id: contract.fee_terms_id, accepted_position: 115, fee: 60 }).collect();
-        let SealedBeaconStateV3::Locked(beacon) = collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, 211).unwrap()
-            else { panic!("complete synthetic paid Panel sources lock") };
-        let proof = BeaconProofV1 { epoch: 11, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() };
-        (p, req, History { snapshot, material: (contract, sources, promises), current_profiles: BTreeSet::new(),
-            current_pending: BTreeSet::new() }, proof)
+        let contract = PaidOptInContractV5 {
+            source: OptInContractV4 { context_id: ctx.id(), terms_id: [6; 64], source_final_by: 210 },
+            fee_terms_id: [7; 64],
+            minimum_fee: 50,
+            fee_per_source: 60,
+            max_sources: 2,
+            funded_position: 113,
+        };
+        let sources: Vec<_> = [1u8, 2]
+            .into_iter()
+            .map(|who| OptInSourceV4 {
+                context_id: ctx.id(),
+                terms_id: [6; 64],
+                opted_in_position: 115,
+                forfeited_position: None,
+                source: SealedSourceV3 {
+                    source_profile_id: [4; 64],
+                    attribution: SourceAttributionV1 { producer_id: [who; 64], consumer_id: RootV1::Present([who + 10; 64]) },
+                    seal: [who + 20; 64],
+                    seal_position: 114,
+                    reveal: Some(SealRevealV3 {
+                        reveal_position: 135,
+                        salt: [who + 30; 64],
+                        fate: SourceFateV3::Final(WorkFinalEventV1 {
+                            kind: WorkSourceKindV1::RealUsefulWork,
+                            source_profile_id: [4; 64],
+                            canonical_work_id: [who + 40; 64],
+                            execution_commitment: [who + 50; 64],
+                            accepted_position: 135,
+                            settlement_position: 185,
+                            occurrence_index: 0,
+                            claim_final: true,
+                            da_satisfied: true,
+                            validity_independent: true,
+                            depends_on_profiles: Vec::new(),
+                            final_path: FinalPathV1::PanelIndependent,
+                        }),
+                    }),
+                },
+            })
+            .collect();
+        let promises: Vec<_> = sources
+            .iter()
+            .map(|s| PaidSourcePromiseV5 {
+                context_id: ctx.id(),
+                producer: s.source.attribution.producer_id,
+                fee_terms_id: contract.fee_terms_id,
+                accepted_position: 115,
+                fee: 60,
+            })
+            .collect();
+        let SealedBeaconStateV3::Locked(beacon) =
+            collect_paid_opt_in_work_beacon_v5(&ctx, &contract, &sources, &promises, 211).unwrap()
+        else {
+            panic!("complete synthetic paid Panel sources lock")
+        };
+        let proof =
+            BeaconProofV1 { epoch: 11, output: Hash64::from_bytes(beacon.output), proof: borsh::to_vec(beacon.beacon()).unwrap() };
+        (
+            p,
+            req,
+            History {
+                snapshot,
+                material: (contract, sources, promises),
+                current_profiles: BTreeSet::new(),
+                current_pending: BTreeSet::new(),
+            },
+            proof,
+        )
     }
     #[test]
     fn paid_panel_adapter_uses_frozen_facts_and_complete_fee_inventory_without_approving_a_policy() {
@@ -407,11 +498,17 @@ mod paid_panel_tests {
         let before = panel_beacon_state_v1(&approved, &h, &req, 211).unwrap();
         h.current_profiles.insert([99; 64]);
         h.current_pending.insert([41; 64]);
-        assert_eq!(panel_beacon_state_v1(&approved, &h, &req, 211).unwrap(), before,
-            "later eligibility and pending changes cannot rewrite the frozen epoch");
+        assert_eq!(
+            panel_beacon_state_v1(&approved, &h, &req, 211).unwrap(),
+            before,
+            "later eligibility and pending changes cannot rewrite the frozen epoch"
+        );
         verify_panel_beacon_v1(&approved, &h, &req, &proof).unwrap();
         h.material.2.pop();
-        assert!(verify_panel_beacon_v1(&approved, &h, &req, &proof).is_err(), "an unpaid mixed source cannot use the legacy collector");
+        assert!(
+            verify_panel_beacon_v1(&approved, &h, &req, &proof).is_err(),
+            "an unpaid mixed source cannot use the legacy collector"
+        );
         assert!(panel_beacon_state_v1(&approved, &h, &req, 211).is_err());
     }
     #[test]

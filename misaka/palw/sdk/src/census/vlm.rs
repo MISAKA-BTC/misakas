@@ -557,10 +557,8 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tir/lower/tests/fixtures/hf-vis")
-            .join(name)
-            .join("config.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tir/lower/tests/fixtures/hf-vis").join(name).join("config.json");
         serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))).unwrap()
     }
 

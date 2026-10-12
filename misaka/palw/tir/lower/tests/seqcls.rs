@@ -84,7 +84,8 @@ struct Seq {
 }
 
 fn outputs(name: &str) -> Vec<Seq> {
-    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture_dir(name).join("outputs.json")).expect("outputs")).expect("json");
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_dir(name).join("outputs.json")).expect("outputs")).expect("json");
     v["sequences"]
         .as_array()
         .expect("sequences")
@@ -121,7 +122,8 @@ fn worst(a: &[f64], b: &[f64]) -> f64 {
 fn decoder_end_to_end(name: &str, float_tol: f64, int_tol: f64) {
     let dir = fixture_dir(name);
     let cfg: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
-    let r = misaka_palw_tir_lower::hf_schema::read_model(&cfg, None, &misaka_palw_tir_lower::hf_schema::ReadOptions::default()).expect("read");
+    let r = misaka_palw_tir_lower::hf_schema::read_model(&cfg, None, &misaka_palw_tir_lower::hf_schema::ReadOptions::default())
+        .expect("read");
     let spec = r.spec;
     let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
     let binding = misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).expect("bind");
@@ -149,7 +151,8 @@ fn decoder_end_to_end(name: &str, float_tol: f64, int_tol: f64) {
         let run = interp.run(&mat.params, &tir::interp_v2::MapInputs::default(), &toks).expect("v2 run");
         let out = &run.last().unwrap().output;
         let job = tir::pipeline::PipelineJob { prompt: toks.clone(), ..Default::default() };
-        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&mat.params), &NoRandom, &job).expect("pipeline");
+        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&mat.params), &NoRandom, &job)
+            .expect("pipeline");
         assert_eq!(pr.output.data, out.data, "{name}: the pipeline gives the version-2 program's bytes");
         let got: Vec<f64> = out.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
         assert_eq!(got.len(), s.logits.len(), "{name}: one logit per label");
@@ -223,7 +226,10 @@ fn encoder_end_to_end(name: &str, pad: u32, float_tol: f64, int_tol: f64) {
     use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Padded, Pooling};
     let dir = fixture_dir(name);
     let cfg_json: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
-    let spec = misaka_palw_tir_lower::hf_schema::read_model(&cfg_json, None, &misaka_palw_tir_lower::hf_schema::ReadOptions::default()).expect("read").spec;
+    let spec =
+        misaka_palw_tir_lower::hf_schema::read_model(&cfg_json, None, &misaka_palw_tir_lower::hf_schema::ReadOptions::default())
+            .expect("read")
+            .spec;
     let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
     let binding = misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).expect("bind");
     let ck = Checkpoint::open(&dir).expect("checkpoint");
@@ -271,19 +277,26 @@ fn encoder_end_to_end(name: &str, pad: u32, float_tol: f64, int_tol: f64) {
     let spread = seqs.iter().flat_map(|(_, w)| w.iter()).fold(0.0f64, |m, x| m.max(x.abs()));
     for (p, want) in &seqs {
         let mut inputs = tir::interp_v2::MapInputs::default();
-        inputs.constant.insert(0, tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect()).unwrap());
+        inputs
+            .constant
+            .insert(0, tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect()).unwrap());
         inputs.constant.insert(1, tir::Tensor::scalar(tir::DType::Idx, p.count as i128).unwrap());
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let out = &run[0].output;
-        let job = tir::pipeline::PipelineJob { prompt: p.ids[1..p.count - 1].iter().map(|t| *t as u32).collect(), ..Default::default() };
-        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&params2), &NoRandom, &job).expect("pipeline");
+        let job =
+            tir::pipeline::PipelineJob { prompt: p.ids[1..p.count - 1].iter().map(|t| *t as u32).collect(), ..Default::default() };
+        let pr =
+            tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&params2), &NoRandom, &job).expect("pipeline");
         assert_eq!(pr.output.data, out.data, "{name}: the pipeline differs from the program");
         let got: Vec<f64> = out.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
         assert_eq!(got.len(), want.len(), "{name}: one logit per label");
         // Absolute error, in logits: a reranker's one logit can sit near zero, where a relative error means nothing. The bound is a
         // fraction of the logit spread of the fixture (at least 0.5): the BERT lineage's post-LN rows quantise to ~1-3 % of their range.
         let abs = got.iter().zip(want).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
-        eprintln!("{name}: integer vs HF logits ({} real of {lmax}): worst absolute error {abs:.4} (unit {:.2e})", p.count, mat.logits_scale);
+        eprintln!(
+            "{name}: integer vs HF logits ({} real of {lmax}): worst absolute error {abs:.4} (unit {:.2e})",
+            p.count, mat.logits_scale
+        );
         assert!(abs < int_tol * spread.max(0.5), "{name}: integer vs HF: {abs}");
     }
     // The three implementations and the court on the encoder's version-1 view.
@@ -299,7 +312,8 @@ fn encoder_end_to_end(name: &str, pad: u32, float_tol: f64, int_tol: f64) {
     }
     let inputs = misaka_palw_tir_lower::admission::default_inputs();
     tir::admit_v2::tir_admit_program_v2(&p2, &inputs).expect("tir_admit_v2");
-    tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1()).expect("tir_admit_pipeline_v1");
+    tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
+        .expect("tir_admit_pipeline_v1");
 }
 
 #[test]

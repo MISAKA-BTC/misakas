@@ -364,7 +364,13 @@ pub async fn dag_info(ctx: &Ctx, chain_from: Option<&str>) -> CliResult {
     match ctx.output {
         crate::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default()),
         _ => {
-            println!("sink {}  virtual daa {}  blocks {}  tips {}", dag.sink, dag.virtual_daa_score, dag.block_count, dag.tip_hashes.len());
+            println!(
+                "sink {}  virtual daa {}  blocks {}  tips {}",
+                dag.sink,
+                dag.virtual_daa_score,
+                dag.block_count,
+                dag.tip_hashes.len()
+            );
             if let Some(m) = &moved {
                 println!(
                     "since {}: {} chain block(s) removed, {} added",

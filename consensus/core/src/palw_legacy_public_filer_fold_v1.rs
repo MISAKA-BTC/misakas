@@ -394,10 +394,13 @@ pub(super) fn palw_final_public_dispute_open_v1(
     }
     params.legacy_public_filer_active_at(now_daa)
         && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
-        && state
-            .panel_liabilities
-            .get(claim_id)
-            .is_some_and(|row| row.free_prompt && row.voided_daa.is_none() && row.void_reason.is_none() && (now_daa < row.expiry_daa || state.staged_claim_contract_v1(claim_id).is_some_and(|c| now_daa < c.terms.collect_until_daa)))
+        && state.panel_liabilities.get(claim_id).is_some_and(|row| {
+            row.free_prompt
+                && row.voided_daa.is_none()
+                && row.void_reason.is_none()
+                && (now_daa < row.expiry_daa
+                    || state.staged_claim_contract_v1(claim_id).is_some_and(|c| now_daa < c.terms.collect_until_daa))
+        })
         && now_daa.checked_add(palw_da_disclose_window_daa_v1(params)).is_some_and(|deadline| deadline <= claim.trace_retention_daa)
 }
 
@@ -535,14 +538,19 @@ pub(super) fn apply_dispute_reacquired_v1(
             if let Some(why) = builder.da_binding_answers_another_job_v1(now, &claim_id, binding) {
                 return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
             }
-            if matches!(unit, crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
-                | crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob)
-            {
+            if matches!(
+                unit,
+                crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
+                    | crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob
+            ) {
                 crate::palw_legacy_answer_chunks_v2::palw_legacy_input_answer_transport_check_v2(
-                    binding, unit, builder.extras.prompt_ids_form_v1(),
+                    binding,
+                    unit,
+                    builder.extras.prompt_ids_form_v1(),
                     crate::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
                     palw_da_disclose_window_daa_v1(builder.params),
-                ).map_err(refused)?;
+                )
+                .map_err(refused)?;
             }
             None
         }
@@ -812,7 +820,10 @@ impl PalwLegacyDisputeObservationV1 {
             trace_retention_daa: view.trace_retention_daa,
             job_identity: view.job_identity,
             public_fp_job: view.public_fp_job.as_ref().map(|wire| faster_hex::hex_string(wire)),
-            registered_semantics: view.registered_semantics.as_ref().map(|row| faster_hex::hex_string(&borsh::to_vec(row).expect("Vec writer"))),
+            registered_semantics: view
+                .registered_semantics
+                .as_ref()
+                .map(|row| faster_hex::hex_string(&borsh::to_vec(row).expect("Vec writer"))),
             registered_semantics_commitment: view.registered_semantics.as_ref().map(|row| row.commitment()),
             work_leaves: view.work_leaves,
             deadline_daa: view.deadline_daa,

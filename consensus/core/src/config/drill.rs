@@ -666,36 +666,24 @@ pub fn palw_drill_held_close_chunks_at_v1(
 /// [`crate::palw_vertex_v1::PALW_DRILL_VERTEX_FENCES_V1`]: ARMS `palw_verification_vertex_v1` at `at` and moves nothing else.
 /// `validate_palw_v2` refuses the result unless `palw_verification_v2`, `palw_rcore_plus`, `palw_unavailable_abstains`,
 /// `palw_panel_economy` and `palw_objective_offence` are in force at or below `at`.
-pub fn palw_drill_vertex_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_vertex_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_VERTEX_V1)
 }
 
 /// **A drill arms the witness manifest at a low height** (RFC-0007 Part II; `--palw-drill-witness-at`): ARMS
 /// `palw_witness_manifest_v1` at `at` and moves nothing else; `validate_palw_v2` refuses it unless `palw_tir_v1` and
 /// `palw_unavailable_abstains` are in force at or below `at`.
-pub fn palw_drill_witness_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_witness_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_WITNESS_V1)
 }
 
 /// **A drill arms the audit mesh at a low height** (RFC-0007 Part IV.1; `--palw-drill-audit-mesh-at`).
-pub fn palw_drill_audit_mesh_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_audit_mesh_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_AUDIT_MESH_V1)
 }
 
 /// **A drill arms capped onboarding at a low height** (RFC-0007 Part IV.2; `--palw-drill-capped-at`).
-pub fn palw_drill_capped_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_capped_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_CAPPED_V1)
 }
 
@@ -778,10 +766,7 @@ pub fn palw_drill_improve_fence_at_v1(
 /// bundle's mirror) and moves nothing else. The fence is in no network's release. Every refusal of the post-launch moves applies,
 /// named for this flag, and `validate_palw_v2` refuses the result unless `palw_tir_v1`, `palw_tir_fence2`, `palw_kary_court`,
 /// `palw_improvement_v1` (RFC-0004's job family) and the other prerequisites it names are in force at or below `at`.
-pub fn palw_drill_tir_shard_at_v1(
-    params: &mut crate::config::params::Params,
-    at: u64,
-) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_tir_shard_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_SHARD_V1)
 }
 
@@ -794,21 +779,30 @@ pub fn palw_drill_fp_prefix_at_v1(params: &mut crate::config::params::Params, at
 
 /// **A drill arms the inherited-prefix leaves (palw_fp_prefix_inherit, FP job version 12) at a low height** (RFC-0001 stage 2b; `--palw-drill-fp-prefix-inherit-at`):
 /// ARMS `palw_fp_prefix_inherit` at `at` and moves nothing else. Refused unless palw_fp_prefix_state is in force at or below it.
-pub fn palw_drill_fp_prefix_inherit_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_fp_prefix_inherit_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_PREFIX_INHERIT_V1)
 }
 
 /// **A drill arms the tokenizer-match rule (palw_fp_tokenizer_match) at a low height** (RFC-0001; `--palw-drill-fp-tokenizer-at`) — the same machinery for the one-entry drill
 /// list [`crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_FENCES_V1`]: ARMS `palw_fp_tokenizer_match` at `at` and moves nothing else.
 /// `validate_palw_v2` refuses the result unless palw_tir_v1 and palw_fp_decode_rules are in force at or below it.
-pub fn palw_drill_fp_tokenizer_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_fp_tokenizer_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_TOKENIZER_V1)
 }
 
 /// **A drill arms the second constraint subset (palw_fp_constraint_v2) at a low height** (RFC-0001; `--palw-drill-fp-constraint2-at`) — the same machinery for the one-entry drill
 /// list [`crate::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_FENCES_V1`]: ARMS `palw_fp_constraint_v2` at `at` and moves nothing else.
 /// `validate_palw_v2` refuses the result unless palw_fp_decode_constraint and palw_fp_decode_rules are in force at or below it (this build cannot arm the first).
-pub fn palw_drill_fp_constraint2_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_fp_constraint2_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_CONSTRAINT2_V1)
 }
 
@@ -822,7 +816,10 @@ pub fn palw_drill_adapter_at_v1(params: &mut crate::config::params::Params, at: 
 /// **A drill arms the decode constraint (palw_fp_decode_constraint, FP job version 6) at a low height** (RFC-0001; `--palw-drill-fp-constraint-at`) — the same machinery for the one-entry drill
 /// list [`crate::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1`]: ARMS `palw_fp_decode_constraint` at `at` and moves nothing else.
 /// `validate_palw_v2` refuses the result unless the network is ConsensusV2.
-pub fn palw_drill_fp_constraint_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+pub fn palw_drill_fp_constraint_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_FP_CONSTRAINT_V1)
 }
 
@@ -875,10 +872,8 @@ const PALW_DRILL_FLAG_DAY_CLASS_SEATING_V1: PalwDrillFlagDayV1 = PalwDrillFlagDa
 };
 
 /// The Useful Work Transition's two fences (`--palw-drill-useful-work-at`, ADR-0165): a drill-only list.
-const PALW_DRILL_FLAG_DAY_USEFUL_WORK_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
-    list: crate::palw_real_share_v1::PALW_DRILL_USEFUL_WORK_FENCES_V1,
-    flag: "--palw-drill-useful-work-at",
-};
+const PALW_DRILL_FLAG_DAY_USEFUL_WORK_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_real_share_v1::PALW_DRILL_USEFUL_WORK_FENCES_V1, flag: "--palw-drill-useful-work-at" };
 
 /// The held leaf challenge alone (`--palw-drill-held-chunks-at`): a drill-only list.
 const PALW_DRILL_FLAG_DAY_HELD_CLOSE_CHUNKS_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
@@ -902,10 +897,8 @@ const PALW_DRILL_FLAG_DAY_AUDIT_MESH_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_CAPPED_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_mesh_v1::PALW_DRILL_CAPPED_FENCES_V1, flag: "--palw-drill-capped-at" };
 /// Lane PL's panel-liveness list (parts C, D, E; ADR-0166) at one height (`--palw-drill-panel-liveness-at`).
-const PALW_DRILL_FLAG_DAY_PANEL_LIVENESS_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
-    list: crate::config::params::PALW_T12_PANEL_LIVENESS_FENCES_V1,
-    flag: "--palw-drill-panel-liveness-at",
-};
+const PALW_DRILL_FLAG_DAY_PANEL_LIVENESS_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_PANEL_LIVENESS_FENCES_V1, flag: "--palw-drill-panel-liveness-at" };
 
 /// The second IR fence alone (`--palw-drill-tir2-at`).
 const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
@@ -923,22 +916,30 @@ const PALW_DRILL_FLAG_DAY_DECODE_RULES_V1: PalwDrillFlagDayV1 =
 const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1, flag: "--palw-drill-improve-at" };
 /// The prefix-state receipt (palw_fp_prefix_state) alone (`--palw-drill-fp-prefix-at`): a drill-only list.
-const PALW_DRILL_FLAG_DAY_FP_PREFIX_INHERIT_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_INHERIT_FENCES_V1, flag: "--palw-drill-fp-prefix-inherit-at" };
+const PALW_DRILL_FLAG_DAY_FP_PREFIX_INHERIT_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_INHERIT_FENCES_V1,
+    flag: "--palw-drill-fp-prefix-inherit-at",
+};
 const PALW_DRILL_FLAG_DAY_FP_PREFIX_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_FENCES_V1, flag: "--palw-drill-fp-prefix-at" };
 /// The tokenizer-match rule (palw_fp_tokenizer_match) alone (`--palw-drill-fp-tokenizer-at`): a drill-only list.
-const PALW_DRILL_FLAG_DAY_FP_TOKENIZER_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_FENCES_V1, flag: "--palw-drill-fp-tokenizer-at" };
+const PALW_DRILL_FLAG_DAY_FP_TOKENIZER_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::palw_fp_tokenizer_v1::PALW_DRILL_FP_TOKENIZER_MATCH_FENCES_V1,
+    flag: "--palw-drill-fp-tokenizer-at",
+};
 /// The second constraint subset (palw_fp_constraint_v2) alone (`--palw-drill-fp-constraint2-at`): a drill-only list.
-const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT2_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_FENCES_V1, flag: "--palw-drill-fp-constraint2-at" };
+const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT2_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_FENCES_V1,
+    flag: "--palw-drill-fp-constraint2-at",
+};
 /// The adapter class listing (palw_adapter_class_v1) alone (`--palw-drill-adapter-at`): a drill-only list.
 const PALW_DRILL_FLAG_DAY_ADAPTER_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_FENCES_V1, flag: "--palw-drill-adapter-at" };
 /// The decode constraint (palw_fp_decode_constraint, FP job version 6) alone (`--palw-drill-fp-constraint-at`): a drill-only list.
-const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT_V1: PalwDrillFlagDayV1 =
-    PalwDrillFlagDayV1 { list: crate::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1, flag: "--palw-drill-fp-constraint-at" };
+const PALW_DRILL_FLAG_DAY_FP_CONSTRAINT_V1: PalwDrillFlagDayV1 = PalwDrillFlagDayV1 {
+    list: crate::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1,
+    flag: "--palw-drill-fp-constraint-at",
+};
 /// **The int-11 flag day's whole list** (`--palw-drill-int11-at`): decode rules, gen, FP Job V5, the held leaf challenge, improvement,
 /// F-N's verification term and ρ = 25 — at one height, as the release arms them.
 const PALW_DRILL_FLAG_DAY_INT11_V1: PalwDrillFlagDayV1 =
@@ -1165,7 +1166,12 @@ pub fn palw_drill_int11_at_v1(params: &mut crate::config::params::Params, at: u6
     let rho100_at = at
         .checked_add(crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA)
         .filter(|rho100| *rho100 != u64::MAX)
-        .ok_or_else(|| format!("--palw-drill-int11-at={at}: ρ = 100 arms {} DAA after it, past the last DAA", crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA))?;
+        .ok_or_else(|| {
+            format!(
+                "--palw-drill-int11-at={at}: ρ = 100 arms {} DAA after it, past the last DAA",
+                crate::config::params::PALW_T12_INT11_RHO100_OFFSET_DAA
+            )
+        })?;
     let later = |offset: u64, what: &str| {
         at.checked_add(offset)
             .filter(|height| *height != u64::MAX)
@@ -1305,10 +1311,15 @@ pub fn palw_drill_capacity_fences_at_v1(
 ) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
     use crate::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1};
     if params.net != palw_drill_network_v1() {
-        return Err(format!("the capacity fences are testnet-12's, and this ruleset is {}: a salted testnet-12 drill only", params.net));
+        return Err(format!(
+            "the capacity fences are testnet-12's, and this ruleset is {}: a salted testnet-12 drill only",
+            params.net
+        ));
     }
     if params.genesis.hash == PALW_T12_GENESIS.hash {
-        return Err("this ruleset runs PUBLIC testnet-12's genesis: the capacity fences are crossed on a salted drill chain only".to_owned());
+        return Err(
+            "this ruleset runs PUBLIC testnet-12's genesis: the capacity fences are crossed on a salted drill chain only".to_owned()
+        );
     }
     if at == 0 || at == u64::MAX {
         return Err(format!("capacity fences at {at}: a drill CROSSES the flag day, so not genesis (0) and not never"));
@@ -1327,7 +1338,11 @@ pub fn palw_drill_capacity_fences_at_v1(
             return Err(format!("{} is not a fence of this ruleset (Params::palw_fences_v1 does not name it)", fence.name));
         };
         (fence.set)(&mut moved, Some(ForkActivation::new(at)));
-        moves.push(PalwDrillFenceMoveV1 { name: fence.name, was: was.filter(|was| *was != ForkActivation::never()).map(|was| was.daa_score()), at });
+        moves.push(PalwDrillFenceMoveV1 {
+            name: fence.name,
+            was: was.filter(|was| *was != ForkActivation::never()).map(|was| was.daa_score()),
+            at,
+        });
     }
     for ((name, was), (_, now)) in before.iter().zip(moved.palw_fences_v1().iter()) {
         if listed(name) {
@@ -1337,7 +1352,9 @@ pub fn palw_drill_capacity_fences_at_v1(
                 return Err(format!("{name}'s entry did not set it to DAA {at} (it reads {now:?})"));
             }
         } else if was != now && !name.starts_with("palw_capacity_") {
-            return Err(format!("arming the capacity fences moved {name} too ({was:?} -> {now:?}): the drill moves them and nothing else"));
+            return Err(format!(
+                "arming the capacity fences moved {name} too ({was:?} -> {now:?}): the drill moves them and nothing else"
+            ));
         }
     }
     moved.validate_palw_v2().map_err(|e| format!("the drill ruleset with the capacity fences at DAA {at} does not validate: {e}"))?;
@@ -1696,9 +1713,9 @@ mod tests {
     #[test]
     fn the_capacity_fence_list_is_dormant_everywhere_and_apart_from_the_post_launch_list() {
         use crate::config::params::{
-            DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA,
-            PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS,
-            palw_t12_release_v2_params, palw_t12_shipped_params,
+            DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
+            PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_release_v2_params,
+            palw_t12_shipped_params,
         };
         assert!(!PALW_T12_CAPACITY_FENCES_V1.is_empty());
         let drill = dormant_drill(0x53);
@@ -1759,13 +1776,23 @@ mod tests {
         let mut taken = drill.clone();
         assert!(palw_drill_capacity_fences_at_v1(&mut taken, 750).unwrap_err().contains("already"), "750 is the release's height");
         let mut early = drill.clone();
-        assert!(palw_drill_capacity_fences_at_v1(&mut early, 700).unwrap_err().contains("does not validate"), "below strict-win and lane A");
+        assert!(
+            palw_drill_capacity_fences_at_v1(&mut early, 700).unwrap_err().contains("does not validate"),
+            "below strict-win and lane A"
+        );
         let mut moved = drill.clone();
         let moves = palw_drill_capacity_fences_at_v1(&mut moved, 1_234).expect("past the release's fences");
-        assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>());
+        assert_eq!(
+            moves.iter().map(|m| m.name).collect::<Vec<_>>(),
+            PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>()
+        );
         let rho10 = |name: &str| crate::config::params::PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().any(|f| f.name == name);
         assert!(moves.iter().all(|m| m.at == 1_234
-            && if rho10(m.name) { m.was == Some(1_700) && !m.to_string().contains("ARMED") } else { m.was.is_none() && m.to_string().contains("ARMED") }));
+            && if rho10(m.name) {
+                m.was == Some(1_700) && !m.to_string().contains("ARMED")
+            } else {
+                m.was.is_none() && m.to_string().contains("ARMED")
+            }));
         assert!(moved.palw_capacity_weight_cap_active_at(1_234) && !moved.palw_capacity_weight_cap_active_at(1_233));
         assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
         for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
@@ -1791,7 +1818,10 @@ mod tests {
         use crate::config::params::{ForkActivation, palw_t12_shipped_params};
         let drill = dormant_drill(0x57);
         let ramp = |p: &crate::config::params::Params| -> Vec<(u64, u32)> {
-            p.palw_capacity_aggregate_liability.as_ref().map(|v| v.steps.iter().map(|s| (s.from_daa, s.rho)).collect()).unwrap_or_default()
+            p.palw_capacity_aggregate_liability
+                .as_ref()
+                .map(|v| v.steps.iter().map(|s| (s.from_daa, s.rho)).collect())
+                .unwrap_or_default()
         };
         let mut public = palw_t12_shipped_params();
         assert!(palw_drill_capacity_step2_at_v1(&mut public, 560).unwrap_err().contains("PUBLIC testnet-12"));
@@ -1830,7 +1860,8 @@ mod tests {
         assert_eq!((moves[0].name, moves[0].was, moves[0].at), ("palw_capacity_aggregate_liability_step_2", None, 560));
         assert_eq!(ramp(&ramped), vec![(80, 10), (560, 25)]);
         assert_ne!(ramped.consensus_params_id(), base.consensus_params_id(), "the step is in the fingerprint");
-        let named = |p: &crate::config::params::Params, name: &str| p.palw_fences_v1().iter().find(|(n, _)| *n == name).and_then(|(_, f)| *f);
+        let named =
+            |p: &crate::config::params::Params, name: &str| p.palw_fences_v1().iter().find(|(n, _)| *n == name).and_then(|(_, f)| *f);
         assert_eq!(named(&ramped, "palw_capacity_aggregate_liability_step_2"), Some(ForkActivation::new(560)), "the fork id names it");
         for ((name, before), (_, after)) in base.palw_fences_v1().iter().zip(ramped.palw_fences_v1().iter()) {
             if *name != "palw_capacity_aggregate_liability_step_2" {
@@ -1942,7 +1973,7 @@ mod tests {
     /// the height, not below it, its bundle mirror following), nothing else moves and the params id moves.
     #[test]
     fn a_drill_crosses_the_ir_fence_and_nothing_else_moves() {
-        use crate::config::params::{palw_t12_shipped_params};
+        use crate::config::params::palw_t12_shipped_params;
         let drill = dormant_drill(0x54);
         let mut public = palw_t12_shipped_params();
         assert!(palw_drill_tir_fence_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
@@ -2030,7 +2061,8 @@ mod tests {
         let mut low = base.clone();
         assert!(palw_drill_tir_shard_at_v1(&mut low, 22).unwrap_err().contains("palw_tir_fence2"));
         // A free height only: another fence's height is refused.
-        let used = base.palw_fences_v1().iter().find_map(|(_, f)| f.map(|f| f.daa_score()).filter(|h| *h > 24 && *h < u64::MAX)).unwrap();
+        let used =
+            base.palw_fences_v1().iter().find_map(|(_, f)| f.map(|f| f.daa_score()).filter(|h| *h > 24 && *h < u64::MAX)).unwrap();
         let mut clash = base.clone();
         assert!(palw_drill_tir_shard_at_v1(&mut clash, used).is_err(), "{used}");
         for ((name, before), (_, after)) in base.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {

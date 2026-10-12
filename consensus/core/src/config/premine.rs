@@ -668,7 +668,11 @@ pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
     // the set are not: the operators keep their keys, the members keep their allocations, the chain
     // is a different chain.
     if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
-        return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_T12_GENESIS_BONDS), testnet12_community_utxos());
+        return bonded_genesis_utxos(
+            net,
+            &bond_money_rows(crate::config::params::PALW_T12_GENESIS_BONDS),
+            testnet12_community_utxos(),
+        );
     }
     // **Mainnet takes the same shape the moment it has cards, and not before.** The list is empty
     // until a genesis registry exists (real keys, held by the operators who will run those seats),

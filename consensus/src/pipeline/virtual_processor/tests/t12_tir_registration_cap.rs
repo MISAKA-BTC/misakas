@@ -84,8 +84,9 @@ fn registration(
     let root = Hash64::from_bytes([0x42; 64]);
     let facts = PalwTirJobFactsV1::of_class(&class, class.class_id(&root)).expect("decodes");
     let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&class).expect("wide enough"));
-    let mut object = palw_tir_post_genesis_registration_v1(class, canonical, root, 0, target, slash, daa, registrant, Vec::new(), ladder)
-        .expect("the builder counts the canonical job");
+    let mut object =
+        palw_tir_post_genesis_registration_v1(class, canonical, root, 0, target, slash, daa, registrant, Vec::new(), ladder)
+            .expect("the builder counts the canonical job");
     if sign {
         let Obj::ClassRegisteredTirV1 {
             class_id,

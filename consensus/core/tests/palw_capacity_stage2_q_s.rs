@@ -49,7 +49,8 @@ fn stage2_params(class: Class, rho: u32, q: u16) -> Params {
 /// A receipt batch by `auditor` for `claims`, each with the root `root_of` gives (the fold never reads
 /// the signature: the acceptance layer's).
 fn receipt(auditor: PalwBondKeyV2, entries: &[(Hash64, Hash64)]) -> PalwConsensusObjectV2 {
-    let mut entries: Vec<PalwAuditEntryV1> = entries.iter().map(|(claim_id, root)| PalwAuditEntryV1 { claim_id: *claim_id, reproduced_root: *root }).collect();
+    let mut entries: Vec<PalwAuditEntryV1> =
+        entries.iter().map(|(claim_id, root)| PalwAuditEntryV1 { claim_id: *claim_id, reproduced_root: *root }).collect();
     entries.sort();
     PalwConsensusObjectV2::AuditReceiptBatchV1 { auditor, entries, signature: vec![] }
 }
@@ -84,7 +85,11 @@ fn q_a_credited_claim_waits_for_its_audit_then_finals() {
     assert_eq!(sim.c.s.deadline_of(&id), None, "an unaudited credited claim owes no deadline");
     let collateral = sim.c.s.bond(&bond_key(90)).unwrap().collateral;
     sim.block(licensed_at + 400, vec![], None);
-    assert!(matches!(phase(&sim, &id), Some(PalwClaimPhaseV2::ReceiptLicensed { .. })), "it waits past its floor: {:?}", phase(&sim, &id));
+    assert!(
+        matches!(phase(&sim, &id), Some(PalwClaimPhaseV2::ReceiptLicensed { .. })),
+        "it waits past its floor: {:?}",
+        phase(&sim, &id)
+    );
     assert_eq!(sim.c.s.bond(&bond_key(90)).unwrap().collateral, collateral, "never charged for waiting");
     assert!(sim.c.s.vesting_row(&id).is_none(), "and never paid");
     assert_eq!(palw_capacity_audit_backlog_v1(&sim.c.s, &sim.c.sp), 1, "it is the backlog");
@@ -194,7 +199,11 @@ fn s_the_outstanding_cap_binds_and_a_counted_licence_frees_a_slot() {
     }
     let read = palw_issuance_read_at_v1(&sim.c.s, &sim.c.sp, &bond, collateral, sim.c.daa + 1).expect("F-S reads");
     assert_eq!((ids.len() as u64, read.outstanding, read.cap), (153, 153, 153), "u·ρ = 153 slots, below the ceiling's 156");
-    assert!(sim.skips.keys().any(|k| k.contains("issuance is capped") && k.contains("Outstanding")), "lane S refused: {:?}", sim.skips);
+    assert!(
+        sim.skips.keys().any(|k| k.contains("issuance is capped") && k.contains("Outstanding")),
+        "lane S refused: {:?}",
+        sim.skips
+    );
     let seats = sim.seats();
     let bound = sim.bind(ids[0], &seats);
     sim.license(ids[0], &seats, bound);
@@ -310,7 +319,10 @@ fn q_s_reorg_restart_and_ibd_are_deterministic() {
     assert!(ids.len() >= 4, "one a DAA at ρ 10 (13k) admits at least four of six: {}", ids.len());
     for id in &ids {
         let bound = t.bind_to(*id, &seats);
-        t.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: *id, receipts: seats.iter().map(|(k, _)| valid(*id, *k, bound)).collect() }]);
+        t.step(vec![PalwConsensusObjectV2::ReceiptLicensed {
+            claim: *id,
+            receipts: seats.iter().map(|(k, _)| valid(*id, *k, bound)).collect(),
+        }]);
     }
     let fork_at = t.len();
     let receipts = audit_receipts_for(&t.c.s, &t.c.sp, &ids);
@@ -320,7 +332,10 @@ fn q_s_reorg_restart_and_ibd_are_deterministic() {
     }
     let last = ids.iter().filter_map(|id| t.c.s.deadline_of(id)).max().expect("audited claims owe deadlines");
     t.at(last + 1, vec![]);
-    assert!(ids.iter().all(|id| matches!(t.c.s.claim(id).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::Final { .. }))), "Final through the audits");
+    assert!(
+        ids.iter().all(|id| matches!(t.c.s.claim(id).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::Final { .. }))),
+        "Final through the audits"
+    );
     t.revert_to_base_and_reapply();
     t.ibd_from(t.base.clone());
     for j in 0..=t.len() {

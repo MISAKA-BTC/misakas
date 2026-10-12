@@ -74,10 +74,7 @@ fn a3_13_identical_real_work_different_weight() {
         let exact_draws = q32 as f64 / (1u128 << 32) as f64;
         let real_work = exact_draws * ccu as f64;
         let pwu = palw_attempt_derived_pwu_v1(target, ccu);
-        println!(
-            "{ccu:>22} {target:>26} {exact_draws:>16.6} {real_work:>22.0} {pwu:>24} {:>10.4}",
-            pwu as f64 / real_work
-        );
+        println!("{ccu:>22} {target:>26} {exact_draws:>16.6} {real_work:>22.0} {pwu:>24} {:>10.4}", pwu as f64 / real_work);
         rows.push((ccu, real_work, pwu, palw_expected_attempts_v1(target)));
     }
     let (ccu_a, work_a, pwu_a, att_a) = rows[0];

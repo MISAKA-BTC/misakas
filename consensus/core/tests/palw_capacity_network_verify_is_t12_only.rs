@@ -13,9 +13,9 @@
 //! mirror that disagrees. It is in no flag-day list (the int-11 flag day names its height) and not in the capacity list.
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1,
-    Params, PalwPostLaunchFenceV1, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
-    palw_t12_release_v2_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1,
+    PALW_T12_POST_LAUNCH_FENCES_V1, PalwPostLaunchFenceV1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -51,9 +51,11 @@ fn presets() -> Vec<(&'static str, Params)> {
 /// The fold's mirror of the term, and the two numbers `L_ver` reads.
 fn mirror(p: &Params) -> (Option<u64>, u64, u64) {
     match &p.palw_consensus_mode {
-        PalwConsensusMode::ConsensusV2(bundle) => {
-            (bundle.state.capacity_network_verify_from_daa(), bundle.state.window_receipt(), bundle.state.capacity_network_anchor_delay())
-        }
+        PalwConsensusMode::ConsensusV2(bundle) => (
+            bundle.state.capacity_network_verify_from_daa(),
+            bundle.state.window_receipt(),
+            bundle.state.capacity_network_anchor_delay(),
+        ),
         _ => (None, 0, 0),
     }
 }
@@ -105,7 +107,11 @@ fn arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity() {
         let (from, receipt, delay) = mirror(&armed);
         assert_eq!(from, Some(h));
         // The constant the term caps the level at: 435 at the shipped windows.
-        assert_eq!(palw_network_verify_level_v1(receipt, delay), 435, "L_ver at the shipped receipt window {receipt} / anchor delay {delay}");
+        assert_eq!(
+            palw_network_verify_level_v1(receipt, delay),
+            435,
+            "L_ver at the shipped receipt window {receipt} / anchor delay {delay}"
+        );
         assert!(armed.palw_capacity_network_verify.is_some() && base.palw_capacity_network_verify.is_none());
         assert!(!bundle_of(&armed).capacity_network_verify_active_at(h - 1) && bundle_of(&armed).capacity_network_verify_active_at(h));
         // What the fold caps `L_net` with: nothing below the height, 435 from it (and after).
@@ -174,7 +180,10 @@ fn the_fence_needs_f_n_at_or_below_it_and_its_mirror() {
 #[test]
 fn it_is_in_no_list_but_its_own_and_the_drill_names_it() {
     assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != NAME), "not in the DAA-750 list");
-    assert!(PALW_T12_CAPACITY_FENCES_V1.iter().all(|f| f.name != NAME), "not in the capacity list (the int-11 flag day names its height)");
+    assert!(
+        PALW_T12_CAPACITY_FENCES_V1.iter().all(|f| f.name != NAME),
+        "not in the capacity list (the int-11 flag day names its height)"
+    );
     assert_eq!(PALW_T12_CAPACITY_NETWORK_VERIFY_FENCES_V1.len(), 1);
     let mut p = base_at(1_001);
     (entry().set)(&mut p, Some(ForkActivation::new(1_001)));

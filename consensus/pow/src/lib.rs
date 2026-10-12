@@ -18,9 +18,8 @@ use kaspa_consensus_core::{
     },
     pow_layer0::{
         POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2,
-        POW_ALGO_ID_PALW_RECEIPT_V3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES,
-        POW_L1_TAG_MAX_BYTES, PowLayer0Error, argon2id_l1_tag_v1,
-        blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
+        POW_ALGO_ID_PALW_RECEIPT_V3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES, POW_L1_TAG_MAX_BYTES, PowLayer0Error,
+        argon2id_l1_tag_v1, blake2b_sha3_l1_tag_v1, l1_seed32_for_kheavyhash_v1, pow_finalizer_blake2b_512,
     },
 };
 use kaspa_hashes::{Hash64, PowHash};
@@ -865,7 +864,9 @@ mod tests_pq {
         for network in [&b"devnet"[..], b"testnet-10", b"testnet-11", b"testnet-12", b"mainnet", b"simnet"] {
             for algo in [POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
                 let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, algo);
-                assert!(matches!(StateLayer0::new(&h, network).check_pow_layer0(0), Err(PowLayer0Error::UnknownAlgoId(id)) if id == algo));
+                assert!(
+                    matches!(StateLayer0::new(&h, network).check_pow_layer0(0), Err(PowLayer0Error::UnknownAlgoId(id)) if id == algo)
+                );
                 assert_eq!(calc_block_level_check_pow_layer0(&h, network, 64), (0, false));
             }
         }

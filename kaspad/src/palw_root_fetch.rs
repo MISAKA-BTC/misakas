@@ -38,7 +38,10 @@ pub(crate) struct PalwRootWantV1 {
 
 /// **The `(class, root)` pairs a seat proves**, each as the class's read with `artifact_root` set to the root, and whether the root is
 /// a non-registered one: the registered root always, and — with `root_keyed` (`palw_audit_1004_v1`) — every other root in force.
-pub(crate) fn palw_readiness_targets_v1(read: &PalwModelRegistryReadV1, root_keyed: bool) -> Vec<(PalwModelRegistryClassReadV1, bool)> {
+pub(crate) fn palw_readiness_targets_v1(
+    read: &PalwModelRegistryReadV1,
+    root_keyed: bool,
+) -> Vec<(PalwModelRegistryClassReadV1, bool)> {
     read.classes
         .iter()
         .filter(|c| !c.is_base_class)
@@ -150,7 +153,9 @@ impl PalwRootFetchStateV1 {
         let (Some(cmd), Some(drop_dir)) = (cmd, drop_dir) else { return events };
         for want in wants {
             let key = (want.class_id, want.root);
-            if self.running.contains_key(&key) || self.last_run.get(&key).is_some_and(|at| now.duration_since(*at) < PALW_ROOT_FETCH_RETRY_V1) {
+            if self.running.contains_key(&key)
+                || self.last_run.get(&key).is_some_and(|at| now.duration_since(*at) < PALW_ROOT_FETCH_RETRY_V1)
+            {
                 continue;
             }
             let Some(argv) = palw_root_fetch_argv_v1(cmd, want, None, None, drop_dir) else { continue };
@@ -271,7 +276,10 @@ mod tests {
             ],
             "the registered root of a live class is the node's start-up business, not the hook's"
         );
-        assert!(palw_root_fetch_wants_v1(&r, false, &none_held).iter().all(|w| w.kind == PalwRootWantKindV1::Candidate), "below the fence only candidates");
+        assert!(
+            palw_root_fetch_wants_v1(&r, false, &none_held).iter().all(|w| w.kind == PalwRootWantKindV1::Candidate),
+            "below the fence only candidates"
+        );
         let held = |_: &Hash64, root: &Hash64| *root == h(11);
         assert_eq!(palw_root_fetch_wants_v1(&r, true, &held).len(), 1, "a held root is not fetched");
     }

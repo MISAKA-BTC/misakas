@@ -39,7 +39,11 @@ fn a_chatglm3_config_reads_as_a_partial_interleaved_multi_query_decoder_that_fol
     assert!(a.q_bias && a.k_bias && a.v_bias && !a.o_bias, "add_qkv_bias gives the fused projection a bias; `dense` has none");
     assert!((a.scale - 1.0 / 8f64.sqrt()).abs() < 1e-15, "the softmax scale is 1/sqrt(kv_channels)");
     let Position::Rope(r) = &a.position else { panic!() };
-    assert_eq!((r.rotary_dim, r.style), (4, misaka_palw_tir_lower::rope::RopeStyle::Interleaved), "the first half of each head, adjacent pairs");
+    assert_eq!(
+        (r.rotary_dim, r.style),
+        (4, misaka_palw_tir_lower::rope::RopeStyle::Interleaved),
+        "the first half of each head, adjacent pairs"
+    );
     assert!(matches!(&s.layers[0].ffn, Ffn::Mlp(m) if m.gated && m.act == Act::Silu && m.intermediate == 64));
     assert!(!s.head.tied && s.final_norm.is_some());
     assert_eq!(s.hf.names["attn.qkv"], "transformer.encoder.layers.{L}.self_attention.query_key_value");
@@ -54,7 +58,10 @@ fn the_float_reference_follows_the_pinned_file_and_the_program_is_the_same_on_th
     let prep = fidelity::prepare(&config(), &LowerOpts::default()).unwrap_or_else(|e| panic!("{e}"));
     let ck = Checkpoint::open(&dir()).unwrap();
     let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).unwrap_or_else(|e| panic!("{e}"));
-    assert!(unused.is_empty(), "every tensor of the checkpoint is read (the rotary table's inv_freq is a buffer, not a weight): {unused:?}");
+    assert!(
+        unused.is_empty(),
+        "every tensor of the checkpoint is read (the rotary table's inv_freq is a buffer, not a weight): {unused:?}"
+    );
     // The float reference against the logits the modelling file gave (UNVERIFIED: the file is the corpus's reconstruction).
     let meta: Value = serde_json::from_str(&std::fs::read_to_string(dir().join("reference.json")).unwrap()).unwrap();
     let tokens: Vec<usize> = meta["tokens"].as_array().unwrap().iter().map(|t| t.as_u64().unwrap() as usize).collect();
@@ -126,7 +133,11 @@ fn a_chatglm3_config_without_its_auto_map_is_refused_because_it_exists_only_as_r
 #[test]
 fn a_chatglm3_config_the_adapter_does_not_model_is_refused_by_name() {
     for (from, to, needle) in [
-        ("\"apply_residual_connection_post_layernorm\": false", "\"apply_residual_connection_post_layernorm\": true", "apply_residual_connection_post_layernorm"),
+        (
+            "\"apply_residual_connection_post_layernorm\": false",
+            "\"apply_residual_connection_post_layernorm\": true",
+            "apply_residual_connection_post_layernorm",
+        ),
         ("\"pre_seq_len\": null", "\"pre_seq_len\": 8", "pre_seq_len"),
         ("\"quantization_bit\": 0", "\"quantization_bit\": 4", "quantization_bit"),
     ] {

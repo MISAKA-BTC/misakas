@@ -884,10 +884,12 @@ mod tests {
     }
     #[test]
     fn actual_qwen_metadata_prices_source_scans_hashes_reference_memory_and_unrolled_nodes_without_loading_weights() {
-        let p = TirProgramV1::decode_canonical(include_bytes!("../../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"))
-            .unwrap();
+        let p =
+            TirProgramV1::decode_canonical(include_bytes!("../../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"))
+                .unwrap();
         let pc: ParamCommitmentsV1 =
-            borsh::from_slice(include_bytes!("../../../../docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh")).unwrap();
+            borsh::from_slice(include_bytes!("../../../../docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh"))
+                .unwrap();
         let plan = derive_flat_resources_v10(&p, &pc, 32, None).unwrap();
         assert_eq!(plan.vector.primitives.len(), 7658);
         assert_eq!(pc.by_instance.len(), 1636);

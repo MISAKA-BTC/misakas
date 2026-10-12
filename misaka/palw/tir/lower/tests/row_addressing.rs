@@ -39,7 +39,8 @@ fn lower(cfg: &str, opts: &LowerOpts) -> TirProgramV1 {
 /// index. Either tier reads a row at its offset; the one tier a 51 GB table must not be in is the pinned one.)
 #[test]
 fn qwen4_exp_tables_are_served_by_rows_and_its_experts_routed_at_the_published_shape() {
-    let layer_types: Vec<&str> = (0..40).map(|i| if (i + 1) % 4 == 0 { "qwen_sparse_attention" } else { "linear_attention" }).collect();
+    let layer_types: Vec<&str> =
+        (0..40).map(|i| if (i + 1) % 4 == 0 { "qwen_sparse_attention" } else { "linear_attention" }).collect();
     let cfg = serde_json::json!({
         "architectures": ["Qwen4ExpForCausalLM"], "model_type": "qwen4_exp_text",
         "vocab_size": 248320, "hidden_size": 2048, "num_hidden_layers": 40, "num_attention_heads": 16, "num_key_value_heads": 2,
@@ -62,7 +63,12 @@ fn qwen4_exp_tables_are_served_by_rows_and_its_experts_routed_at_the_published_s
         if d.name.starts_with("ple.ngram.table.h") {
             ngram += 1;
             assert!(tier.is_rows(), "{}: {tier:?} — a table the runtime must hold whole", d.name);
-            assert_eq!((t.params[j].unit, d.shape.len()), (128, 2), "{}: a row is the 128 codes of an axis-0 [rows, 128] tensor", d.name);
+            assert_eq!(
+                (t.params[j].unit, d.shape.len()),
+                (128, 2),
+                "{}: a row is the 128 codes of an axis-0 [rows, 128] tensor",
+                d.name
+            );
         }
         if d.name.contains("moe.experts") && d.shape.len() == 3 && d.shape[0] == 512 {
             experts += 1;
@@ -122,13 +128,19 @@ fn the_ngram_tables_of_the_ple_fixtures_are_served_by_rows_at_any_chunking() {
 #[test]
 fn experts_are_routed_and_embeddings_gathered_at_real_shapes() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real");
-    for (name, routes) in [("qwen3-30b-a3b", true), ("deepseek-v2-lite", true), ("gpt-oss-20b-bf16", true), ("qwen2.5-7b-instruct", false)] {
+    for (name, routes) in
+        [("qwen3-30b-a3b", true), ("deepseek-v2-lite", true), ("gpt-oss-20b-bf16", true), ("qwen2.5-7b-instruct", false)]
+    {
         let cfg = std::fs::read_to_string(dir.join(format!("{name}.json"))).expect("config");
         let p = lower(&cfg, &LowerOpts::default());
         let t = tiers_of(&p);
         let routed = t.params.iter().filter(|x| x.tier == TirTierV1::Routed).count();
         assert_eq!(routed > 0, routes, "{name}: {routed} routed params");
-        let embed = p.params.iter().position(|d| d.name == "embed.table.c0" || d.name == "embed.table" || d.name.starts_with("embed.table")).expect("an embedding table");
+        let embed = p
+            .params
+            .iter()
+            .position(|d| d.name == "embed.table.c0" || d.name == "embed.table" || d.name.starts_with("embed.table"))
+            .expect("an embedding table");
         eprintln!("{name}: embedding {:?}, {routed} routed params", t.params[embed].tier);
     }
 }

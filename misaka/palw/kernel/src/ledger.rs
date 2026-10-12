@@ -524,7 +524,9 @@ pub enum LedgerEventV1 {
     FlatConformanceClassRegisteredV7 {
         class: Digest,
     } = 33,
-    FlatConformanceClassRegisteredV9 { class: Digest } = 34,
+    FlatConformanceClassRegisteredV9 {
+        class: Digest,
+    } = 34,
     ClassRegistered {
         class: Digest,
     } = 1,
@@ -1090,20 +1092,20 @@ impl KernelLedgerV1 {
         self.authorize(obj, auth)?;
         let mut out = Vec::new();
         match obj {
-            KernelRouteObjectV1::PostFlatModelVectorV9 {..}
-            | KernelRouteObjectV1::SealFlatModelProofV9 {..}
-            | KernelRouteObjectV1::RevealFlatModelProofV9 {..}
-            | KernelRouteObjectV1::ExpireFlatModelSealV9 {..}
-            | KernelRouteObjectV1::DemandFlatModelUnitV9 {..}
-            | KernelRouteObjectV1::AnswerFlatModelUnitV9 {..}
-            | KernelRouteObjectV1::SettleFlatModelDemandV9 {..}
-            | KernelRouteObjectV1::PostFlatModelVectorV7 {..}
-            | KernelRouteObjectV1::SealFlatModelProofV7 {..}
-            | KernelRouteObjectV1::RevealFlatModelProofV7 {..}
-            | KernelRouteObjectV1::ExpireFlatModelSealV7 {..}
-            | KernelRouteObjectV1::DemandFlatModelUnitV7 {..}
-            | KernelRouteObjectV1::AnswerFlatModelUnitV7 {..}
-            | KernelRouteObjectV1::SettleFlatModelDemandV7 {..}
+            KernelRouteObjectV1::PostFlatModelVectorV9 { .. }
+            | KernelRouteObjectV1::SealFlatModelProofV9 { .. }
+            | KernelRouteObjectV1::RevealFlatModelProofV9 { .. }
+            | KernelRouteObjectV1::ExpireFlatModelSealV9 { .. }
+            | KernelRouteObjectV1::DemandFlatModelUnitV9 { .. }
+            | KernelRouteObjectV1::AnswerFlatModelUnitV9 { .. }
+            | KernelRouteObjectV1::SettleFlatModelDemandV9 { .. }
+            | KernelRouteObjectV1::PostFlatModelVectorV7 { .. }
+            | KernelRouteObjectV1::SealFlatModelProofV7 { .. }
+            | KernelRouteObjectV1::RevealFlatModelProofV7 { .. }
+            | KernelRouteObjectV1::ExpireFlatModelSealV7 { .. }
+            | KernelRouteObjectV1::DemandFlatModelUnitV7 { .. }
+            | KernelRouteObjectV1::AnswerFlatModelUnitV7 { .. }
+            | KernelRouteObjectV1::SettleFlatModelDemandV7 { .. }
             | KernelRouteObjectV1::PostFlatModelVectorV6 { .. }
             | KernelRouteObjectV1::SealFlatModelProofV6 { .. }
             | KernelRouteObjectV1::RevealFlatModelProofV6 { .. }

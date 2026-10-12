@@ -9,9 +9,13 @@
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
-use kaspa_consensus_core::palw_class_admission_v2::{palw_admission_probe_v1, palw_admission_shape_at_v1, PalwAdmissionProbeRefusalV1};
+use kaspa_consensus_core::palw_class_admission_v2::{
+    PalwAdmissionProbeRefusalV1, palw_admission_probe_v1, palw_admission_shape_at_v1,
+};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v7,
+};
 use kaspa_hashes::Hash64;
 use misaka_palw_extension::{PalwExtensionClassificationV1 as C, PalwExtensionDepthV1 as D, PalwExtensionEnvV1, verify_extension_v1};
 use misaka_palw_sdk::{PalwClassEntryV1, PalwClassSdk};
@@ -21,12 +25,19 @@ fn the_manifest_verifier_the_sdk_and_the_gate_name_the_same_verdict_for_the_9b_h
     let t12 = NetworkId::with_suffix(NetworkType::Testnet, 12);
     let params: Params = t12.into();
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 ships a bundle") };
-    let profile = qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: 16, ..QWEN36_35B_A3B })).expect("the hybrid row");
+    let profile =
+        qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: 16, ..QWEN36_35B_A3B })).expect("the hybrid row");
     let class_id = profile.shape_profile_id();
     let root = Hash64::from_u64_word(0x9B);
     let canonical = rc_job_context(&profile, 1, 2);
     let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
-    let entry = PalwClassEntryV1 { model_id: "Huihui-Qwen3.5-9B", lineage_id: "test", profile: profile.clone(), canonical_job: (1, 2), needs_artifact_file: true };
+    let entry = PalwClassEntryV1 {
+        model_id: "Huihui-Qwen3.5-9B",
+        lineage_id: "test",
+        profile: profile.clone(),
+        canonical_job: (1, 2),
+        needs_artifact_file: true,
+    };
     let hex = {
         let bytes = borsh::to_vec(&profile).expect("borsh");
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
@@ -61,28 +72,47 @@ fn the_manifest_verifier_the_sdk_and_the_gate_name_the_same_verdict_for_the_9b_h
         let env = PalwExtensionEnvV1 { network_id: t12, daa_score: Some(daa), chain_terms: None };
         let report = verify_extension_v1(manifest.as_bytes(), dir.path(), &env, D::Vectors).expect("no boundary refusal");
         let manifest_says = format!("{:?}", report.classification);
-        println!("daa {daa:>5}: gate {gate_code} | sdk {} | manifest {}", sdk_v.as_ref().map(|_| "ok".to_string()).unwrap_or_else(|e| e.chars().take(200).collect()), manifest_says.chars().take(300).collect::<String>());
+        println!(
+            "daa {daa:>5}: gate {gate_code} | sdk {} | manifest {}",
+            sdk_v.as_ref().map(|_| "ok".to_string()).unwrap_or_else(|e| e.chars().take(200).collect()),
+            manifest_says.chars().take(300).collect::<String>()
+        );
         if let Err(PalwAdmissionProbeRefusalV1::Gate(e)) = &gate {
-            let decided = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(shape.held.armed, Some(daa), params.palw_held_context.map(|f| f.daa_score()));
+            let decided = kaspa_consensus_core::palw_refusal_v1::palw_refusal_decided_by_v1(
+                shape.held.armed,
+                Some(daa),
+                params.palw_held_context.map(|f| f.daa_score()),
+            );
             println!("          structured: {}", e.refusal_v1(&decided).to_json());
         }
         // No reader charges the ladder clock.
-        assert!(!manifest_says.contains("5102") && !manifest_says.contains("5,102"), "daa {daa}: the manifest verifier charged the ladder clock: {manifest_says}");
+        assert!(
+            !manifest_says.contains("5102") && !manifest_says.contains("5,102"),
+            "daa {daa}: the manifest verifier charged the ladder clock: {manifest_says}"
+        );
         // int-12: testnet-12's release arms `palw_gdn_key_heads` (P0a) at the 5,300 flag day, past which the gate itself refuses this class's
         // version-2 profile on the v5 map (16 key heads over 32 value heads: register the version-3 profile). Below it the gate admits and
         // the processor's attribution check beside it (C5) is the next wall. Either way the three readers name the SAME wall.
         // A Qwen3.5 profile must be rebuilt with explicit key heads (the version-3 profile on the v5 map) to register past 5,300.
         let past_p0a = daa >= kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-12 flag day");
-        let (want_gate, want_wall) =
-            if past_p0a { ("GDN_MAP_ASSUMES_EQUAL_HEADS", "GDN_MAP_ASSUMES_EQUAL_HEADS") } else { ("ADMITTED", "HELD_CLASS_UNANSWERABLE") };
+        let (want_gate, want_wall) = if past_p0a {
+            ("GDN_MAP_ASSUMES_EQUAL_HEADS", "GDN_MAP_ASSUMES_EQUAL_HEADS")
+        } else {
+            ("ADMITTED", "HELD_CLASS_UNANSWERABLE")
+        };
         assert!(gate_code == want_gate, "daa {daa}: the gate says {gate_code}, wanted {want_gate}");
         let sdk_err = sdk_v.expect_err("the SDK names the refusal");
         assert!(sdk_err.contains(want_wall), "daa {daa}: {sdk_err}");
-        let C::Refused { reason, .. } = &report.classification else { panic!("daa {daa}: the manifest verifier says {manifest_says}") };
+        let C::Refused { reason, .. } = &report.classification else {
+            panic!("daa {daa}: the manifest verifier says {manifest_says}")
+        };
         // Every reader carries the structured refusal's CODE (and the rest of it, in the JSON): the manifest verifier too.
         assert!(reason.contains(want_wall), "daa {daa}: {reason}");
         if past_p0a {
-            assert!(reason.contains("\"code\":\"GDN_MAP_ASSUMES_EQUAL_HEADS\""), "daa {daa}: the structured refusal rides the verifier's reason: {reason}");
+            assert!(
+                reason.contains("\"code\":\"GDN_MAP_ASSUMES_EQUAL_HEADS\""),
+                "daa {daa}: the structured refusal rides the verifier's reason: {reason}"
+            );
         }
         seen.push(gate_code);
     }

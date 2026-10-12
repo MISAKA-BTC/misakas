@@ -165,7 +165,10 @@ fn the_floor_is_accepted_in_idle_refused_in_probe_and_normal_and_accepted_again(
     assert_eq!((s.safe_weight(), s.bounded_immature()), (before.safe_weight(), before.bounded_immature()), "and no weight");
     assert_eq!(s.reserved_exposure(&bond_key(1)), before.reserved_exposure(&bond_key(1)), "and no reservation");
     let why = palw_class_admits_claim_v1(&s, &p, &PalwTransitionExtrasV1::default(), &h64(1), 108).unwrap_err();
-    assert!(matches!(&why, PalwStateV2Error::FloorNotIdle { daa: 108, state, .. } if state.mode == Probe { until: 106 + PROBE }), "{why:?}");
+    assert!(
+        matches!(&why, PalwStateV2Error::FloorNotIdle { daa: 108, state, .. } if state.mode == Probe { until: 106 + PROBE }),
+        "{why:?}"
+    );
     assert!(why.to_string().contains("idle-only fallback") && why.to_string().contains("probe"), "{why}");
     assert!(palw_class_admits_claim_v1(&s, &p, &PalwTransitionExtrasV1::default(), &h64(2), 108).is_ok(), "REAL work is untouched");
     // A BLUE REAL attempt inside the Probe (here the block's own) makes it Normal; the floor stays refused through
@@ -275,17 +278,26 @@ fn several_attempts_in_one_mergeset_apply_in_folds_order_and_a_floor_reads_its_p
 #[test]
 fn blocks_straddling_the_fence_count_at_the_accepting_blocks_daa() {
     let p = params().with_floor_reserve_from_daa(Some(110));
-    let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &{
-        let mut o = register_class_and_bond();
-        o.push(real_class(2));
-        o
-    }, None);
+    let (s0, _) = apply(
+        &PalwChainStateV2::genesis(),
+        &p,
+        &ctx(1, 100, 1),
+        &{
+            let mut o = register_class_and_bond();
+            o.push(real_class(2));
+            o
+        },
+        None,
+    );
     // Below the fence: a REAL attempt, accepted, writes nothing; the floor is accepted after it.
     let (s1, _, _) = fold(&s0, &p, 105, Some(&real(1)), &[], &[]);
     assert!(s1.claim(&claim_of(&real(1))).is_some());
     assert_eq!(floor_of(&s1), PalwFloorStateV1::default(), "below the fence nothing is written");
     let (s2, _, skips) = fold(&s1, &p, 108, Some(&floor(2)), &[], &[]);
-    assert!(s2.claim(&claim_of(&floor(2))).is_some() && skips.is_empty(), "below the fence a floor follows a REAL attempt as it always did");
+    assert!(
+        s2.claim(&claim_of(&floor(2))).is_some() && skips.is_empty(),
+        "below the fence a floor follows a REAL attempt as it always did"
+    );
     // At the fence: the block at 112 merges a REAL attempt that was drawn below it — it counts, at 112.
     let (s3, _, _) = fold(&s2, &p, 112, None, &[(0xB1, &real(3))], &[0xB1]);
     assert_eq!(floor_of(&s3), st(Probe { until: 112 + PROBE }, None));
@@ -423,7 +435,10 @@ fn only_a_fully_accepted_real_attempt_moves_the_floor_state() {
         assert_eq!(skips.len(), 1, "{skips:?}");
         assert!(!d.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::RealWork { .. })), "no floor state written");
         assert_eq!(floor_of(&b), PalwFloorStateV1::default());
-        assert!(palw_class_admits_claim_v1(&b, &p, &PalwTransitionExtrasV1::default(), &h64(1), 106).is_ok(), "the floor is still valid");
+        assert!(
+            palw_class_admits_claim_v1(&b, &p, &PalwTransitionExtrasV1::default(), &h64(1), 106).is_ok(),
+            "the floor is still valid"
+        );
     }
     // The refusal moved nothing anywhere else either.
     assert_eq!(s.state_root(), before.state_root());

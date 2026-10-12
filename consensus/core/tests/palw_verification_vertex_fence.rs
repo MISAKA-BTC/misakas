@@ -118,7 +118,10 @@ fn every_ruleset_leaves_it_dormant_and_no_flag_day_list_names_it() {
         PALW_T12_TIR_FENCE2_FENCES_V1,
         PALW_T12_INT11_RHO100_FENCES_V1,
     ] {
-        assert!(list.iter().all(|f| f.name != "palw_verification_vertex_v1"), "no earlier testnet-12 flag day arms the verification vertex");
+        assert!(
+            list.iter().all(|f| f.name != "palw_verification_vertex_v1"),
+            "no earlier testnet-12 flag day arms the verification vertex"
+        );
     }
     assert!(PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == "palw_verification_vertex_v1"), "the int-12 list arms it");
     let names: Vec<&str> = PALW_DRILL_VERTEX_FENCES_V1.iter().map(|f| f.name).collect();

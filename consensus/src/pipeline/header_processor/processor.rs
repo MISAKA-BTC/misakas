@@ -395,7 +395,7 @@ impl HeaderProcessor {
     /// (`getPalwRoundLane`'s refusal counters); an orphan (missing parents) or an already-known-invalid
     /// block is not a new refusal and is not counted.
     fn palw_note_round_header_refusal(&self, header: &Header, error: &RuleError) {
-        use kaspa_consensus_core::palw_exec_view_v1::{palw_round_lane_telemetry_v1, PalwRoundRefusalV1 as Refusal};
+        use kaspa_consensus_core::palw_exec_view_v1::{PalwRoundRefusalV1 as Refusal, palw_round_lane_telemetry_v1};
         if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 || self.palw_execution_lane.is_none() {
             return;
         }

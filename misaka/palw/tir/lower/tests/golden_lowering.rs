@@ -51,13 +51,34 @@ const INTENDED: &[(&str, &str)] = &[
     ("real/deepseek-v3-fp8.json", "FP8_BLOCK descriptor: refused before, lowers now (1db3c430f)"),
     // MXFP4_HF: a virtual descriptor serves the packed experts as the float export's tensors, so gpt-oss's MXFP4 config lowers.
     ("real/gpt-oss-20b-mxfp4.json", "MXFP4_HF descriptor: refused before, lowers now"),
-    ("hf/qwen4_exp", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
-    ("hf/qwen4_hc1", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
-    ("hf/qwen4_hc2", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
-    ("hf/qwen4_hc_edge", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
-    ("hf/qwen4_ple_bigram", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
-    ("hf/qwen4_ple_boundary", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
-    ("hf/qwen4_ple_trigram", "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)"),
+    (
+        "hf/qwen4_exp",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
+    (
+        "hf/qwen4_hc1",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
+    (
+        "hf/qwen4_hc2",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
+    (
+        "hf/qwen4_hc_edge",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
+    (
+        "hf/qwen4_ple_bigram",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
+    (
+        "hf/qwen4_ple_boundary",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
+    (
+        "hf/qwen4_ple_trigram",
+        "lane G (EMBED_NGRAM_PLE_V1, `generic-frontend-v1.md` §9.4): the n-gram table is one axis-0 `[rows, dim]` param per hash head (and chunk), each read by `Gather { axis: 0, batch_dims: 0 }` of the param itself — the layout lane M2's runtime residency can address by row — instead of one batched gather over `[heads, rows, dim]` (a dense use to it: a 51 GB table pinned)",
+    ),
 ];
 
 /// The two modes of `detmath`; per mode the version-1 baseline (programs only) and the version-2 one.
@@ -86,7 +107,11 @@ fn digests(dir: &Path) -> Result<Value, String> {
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
         .map_err(|e| format!("materialise: {e}"))?;
-    let tmp = std::env::temp_dir().join(format!("palw-golden-{}-{}.palwtir", dir.file_name().unwrap_or_default().to_string_lossy(), std::process::id()));
+    let tmp = std::env::temp_dir().join(format!(
+        "palw-golden-{}-{}.palwtir",
+        dir.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
     let file = artifact::write(&tmp, &prep.lowered.program, &mat.params, [0u8; 64], json!({})).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&tmp);
     let p = &prep.lowered.program;
@@ -127,7 +152,9 @@ fn real_configs() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = std::fs::read_dir(&dir)
         .expect("configs")
         .map(|e| e.expect("entry").path())
-        .map(|p| (format!("real/{}", p.file_name().unwrap_or_default().to_string_lossy()), std::fs::read_to_string(&p).expect("config")))
+        .map(|p| {
+            (format!("real/{}", p.file_name().unwrap_or_default().to_string_lossy()), std::fs::read_to_string(&p).expect("config"))
+        })
         .collect();
     v.sort();
     v
@@ -162,7 +189,10 @@ fn check_baseline(mode: &str, v1_file: &str, v2_file: &str) {
     for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf"] {
         for (name, dir) in dirs(root) {
             // A fixture without weights (config only) is not part of the artifact baseline.
-            if dir.join("config.json").exists() && !dir.join("model.safetensors").exists() && !dir.join("model.safetensors.index.json").exists() {
+            if dir.join("config.json").exists()
+                && !dir.join("model.safetensors").exists()
+                && !dir.join("model.safetensors.index.json").exists()
+            {
                 continue;
             }
             match digests(&dir) {
@@ -185,7 +215,9 @@ fn check_baseline(mode: &str, v1_file: &str, v2_file: &str) {
         for (k, v) in &got {
             match v2.get(k) {
                 Some(old) if old != v && !INTENDED.iter().any(|(n, _)| n == k) => {
-                    panic!("[{mode}] {k}: the baseline row would change ({old} → {v}); list it in INTENDED with the commit that explains it")
+                    panic!(
+                        "[{mode}] {k}: the baseline row would change ({old} → {v}); list it in INTENDED with the commit that explains it"
+                    )
                 }
                 _ => {}
             }
@@ -219,7 +251,11 @@ fn check_baseline(mode: &str, v1_file: &str, v2_file: &str) {
     if update {
         return;
     }
-    assert!(!v2.is_empty(), "[{mode}] no version-2 baseline at {} (record it with PALW_GOLDEN_UPDATE=1)", golden_path(v2_file).display());
+    assert!(
+        !v2.is_empty(),
+        "[{mode}] no version-2 baseline at {} (record it with PALW_GOLDEN_UPDATE=1)",
+        golden_path(v2_file).display()
+    );
     let mut moved = Vec::new();
     for (k, want) in &v2 {
         match got.get(k) {
@@ -249,7 +285,8 @@ fn the_audit_containers_hold_the_programs_the_configs_lower_to() {
         eprintln!("SKIPPED: no audit directory at {}", root.display());
         return;
     };
-    let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.join("lowered.palwtir").exists() && p.join("config.json").exists()).collect();
+    let mut dirs: Vec<PathBuf> =
+        rd.flatten().map(|e| e.path()).filter(|p| p.join("lowered.palwtir").exists() && p.join("config.json").exists()).collect();
     dirs.sort();
     let (mut equal, mut moved) = (0, Vec::new());
     for d in &dirs {

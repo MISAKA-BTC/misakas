@@ -188,7 +188,10 @@ fn voided_by(c: &Chain, id: &Hash64, reason: PalwVoidReasonV2) -> bool {
 }
 
 fn live(c: &Chain, id: &Hash64) -> bool {
-    matches!(phase(c, id), PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. })
+    matches!(
+        phase(c, id),
+        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }
+    )
 }
 
 /// B-3's gate on `bond` at the next DAA, the processor's inputs.
@@ -223,7 +226,10 @@ fn fences(p: &Params, daa: u64) -> PalwEpochBudgetFencesV1 {
 
 /// `claim` licensed by a `Valid` from each of `seats`, signed at `signed`.
 fn license(c: &mut Chain, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)], signed: u64) {
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: seats.iter().map(|(k, _)| valid(claim, *k, signed)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim,
+        receipts: seats.iter().map(|(k, _)| valid(claim, *k, signed)).collect(),
+    }]);
     assert!(matches!(phase(c, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "the licence folds");
 }
 
@@ -408,7 +414,10 @@ fn l_t1_an_intent_conviction_forfeits_the_whole_bond_past_the_fence_and_only_its
             assert!(f.final_ && f.since_daa == at, "an intent-class freeze is final, dated at the conviction: {f:?}");
             assert_eq!(f.offence_key, key, "it names the conviction's record");
             assert!(u128::from(f.forfeited_sompi) <= u128::from(before), "the forfeiture took at most what the verdict left");
-            assert!(u128::from(f.forfeited_sompi) + u128::from(record.collected) <= u128::from(c0), "A-I1: never more than the bond ever posted");
+            assert!(
+                u128::from(f.forfeited_sompi) + u128::from(record.collected) <= u128::from(c0),
+                "A-I1: never more than the bond ever posted"
+            );
             assert!(record.collected <= record.amount, "collected ≤ amount, past the fence too");
             if let Some(reward) = reward {
                 assert_eq!(
@@ -433,7 +442,10 @@ fn l_t1_an_intent_conviction_forfeits_the_whole_bond_past_the_fence_and_only_its
             let mut env = env;
             env.attempt.artifact_root = c.s.class(&floor).expect("the floor").artifact_root;
             let refused = check_palw_attempt_admission_v2(&c.s, &c.sp, &bundle(&c.p).admission, &x, &env, fences(&c.p, x.daa_score));
-            assert!(matches!(refused, Err(PalwAdmissionV2Error::ProducerBelowFloor { bond: b, collateral: 0, .. }) if b == producer), "{refused:?}");
+            assert!(
+                matches!(refused, Err(PalwAdmissionV2Error::ProducerBelowFloor { bond: b, collateral: 0, .. }) if b == producer),
+                "{refused:?}"
+            );
             let h_obl = c.sp.window_receipt();
             assert!(c.sp.claim_retirement_daa() >= h_obl, "AG-5: claims retire no sooner than h_obl");
             run_to(c, at + h_obl);
@@ -500,7 +512,10 @@ fn l_t1_an_equivocation_freezes_by_its_tier_lifts_after_window_court_and_an_inte
         let at = c.daa + 1;
         let x = PalwBlockContextV2 { block: h(0x7E_0000 + at), daa_score: at, blue_score: at, subsidy: T12_BLOCK_SUBSIDY_SOMPI };
         let refused = check_palw_attempt_admission_v2(&c.s, &c.sp, &bundle(&c.p).admission, &x, &env, fences(&c.p, at));
-        assert!(matches!(refused, Err(PalwAdmissionV2Error::ProducerFrozen { bond: b }) if b == q), "admission refuses it by name: {refused:?}");
+        assert!(
+            matches!(refused, Err(PalwAdmissionV2Error::ProducerFrozen { bond: b }) if b == q),
+            "admission refuses it by name: {refused:?}"
+        );
         assert!(exit_shut(&c, &q), "frozen: the exit is shut");
         // A second conviction re-dates it.
         run_to(&mut c, first + 100);
@@ -550,18 +565,37 @@ fn l_t2_the_freeze_effects_one_by_one() {
     let bound = c.bind(x, &seats);
     let pending = c.floor_claim(0xC2);
     let eligible = |c: &Chain, claim: &Hash64| -> Vec<PalwBondKeyV2> {
-        kaspa_consensus_core::palw_panel_v2::palw_panel_eligible_bonds_v2(&c.s, claim, c.sp.min_collateral_sompi(), None, false, None, None, 5)
-            .expect("the population")
-            .into_iter()
-            .map(|(k, _)| *k)
-            .collect()
+        kaspa_consensus_core::palw_panel_v2::palw_panel_eligible_bonds_v2(
+            &c.s,
+            claim,
+            c.sp.min_collateral_sompi(),
+            None,
+            false,
+            None,
+            None,
+            5,
+        )
+        .expect("the population")
+        .into_iter()
+        .map(|(k, _)| *k)
+        .collect()
     };
     let base = |c: &Chain, claim: &Hash64| -> Vec<PalwBondKeyV2> {
-        kaspa_consensus_core::palw_panel_v2::palw_panel_stake_base_bonds_judging_v1(&c.s, claim, &floor, c.sp.min_collateral_sompi(), None, false, None, None, 5)
-            .expect("the base")
-            .into_iter()
-            .map(|(k, _)| *k)
-            .collect()
+        kaspa_consensus_core::palw_panel_v2::palw_panel_stake_base_bonds_judging_v1(
+            &c.s,
+            claim,
+            &floor,
+            c.sp.min_collateral_sompi(),
+            None,
+            false,
+            None,
+            None,
+            5,
+        )
+        .expect("the base")
+        .into_iter()
+        .map(|(k, _)| *k)
+        .collect()
     };
     assert!(eligible(&c, &pending).contains(&s) && base(&c, &pending).contains(&s), "the premise: S is drawable");
     let (eq, _) = equivocation_of(s, floor, 0xE5);
@@ -657,7 +691,11 @@ fn l_t3_griefing_an_honest_bond_costs_its_stage_commitments_and_never_freezes_it
             assert!(voided_by(&c, id, PalwVoidReasonV2::ReceiptTimeout), "armed={armed}: S0′ on {id}");
         }
         let lost = u128::from(posted - collateral(&c, &honest));
-        println!("armed={armed}: {N} griefed claims cost {:.2} MSK = Σ stage commitment {:.2} MSK", lost as f64 / 1e8, owed as f64 / 1e8);
+        println!(
+            "armed={armed}: {N} griefed claims cost {:.2} MSK = Σ stage commitment {:.2} MSK",
+            lost as f64 / 1e8,
+            owed as f64 / 1e8
+        );
         assert_eq!(lost, owed, "armed={armed}: honest loss is exactly Σ commitment (≤ Σ m_c), never the pool");
         assert!(probe_attempt_by(&c, 9, 0x9FF).0, "armed={armed}: the honest bond keeps producing");
         roots.push(c.s.state_root());
@@ -693,7 +731,8 @@ fn l_t5_a_pre_committed_pool_is_forfeited_whole_and_a_seat_s_legs_burn_leg_by_le
     let e = claim_by_genesis(&mut c, s_index, 0xF3);
     c.bind(e, &own_seats);
     let at = c.daa + 1;
-    let committed = kaspa_consensus_core::palw_state_v2::palw_bond_committed_raw_v1(&c.s, &c.sp, &s, at, c.extras_at(at).settled_anchor_depth);
+    let committed =
+        kaspa_consensus_core::palw_state_v2::palw_bond_committed_raw_v1(&c.s, &c.sp, &s, at, c.extras_at(at).settled_anchor_depth);
     assert!(committed > 0, "the premise: S's pool is committed (claims, duties, the lock on X)");
     let posted = collateral(&c, &s);
     println!("S posts {:.2} MSK with {:.2} MSK committed before the conviction", posted as f64 / 1e8, committed as f64 / 1e8);
@@ -824,7 +863,10 @@ fn l_t7_script(t: &mut Tape) -> (usize, usize, usize) {
     t.attempt(None, 0x7B);
     let seats = t.c.floor_seats();
     let bound = t.c.s.panel(&a).expect("bound").bound_daa;
-    t.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: a, receipts: seats.iter().map(|(k, _)| valid(a, *k, bound)).collect() }]);
+    t.step(vec![PalwConsensusObjectV2::ReceiptLicensed {
+        claim: a,
+        receipts: seats.iter().map(|(k, _)| valid(a, *k, bound)).collect(),
+    }]);
     t.step(vec![court_opened(&t.c.s, a, bond_key(61))]);
     let session = court_session_of(&t.c.s, a, bond_key(61));
     t.step(vec![guilty_close(session, false)]);
@@ -841,11 +883,7 @@ fn l_t7_reorg_restart_and_ibd_agree_across_a_conviction_a_lift_and_a_forfeiture(
     assert!(t.c.s.bond_freeze_of_v1(&producer).is_some_and(|f| f.final_), "the script ends on a final freeze");
     assert!(t.state_at(before_conviction + 1).bond_freeze_of_v1(&bond_key(7)).is_some(), "bond 7 frozen by the Eq");
     assert!(t.state_at(after_lift).bond_freeze_of_v1(&bond_key(7)).is_none(), "and lifted");
-    assert_ne!(
-        t.state_at(before_conviction + 1).state_root(),
-        t.state_at(before_conviction).state_root(),
-        "a freeze moves the root"
-    );
+    assert_ne!(t.state_at(before_conviction + 1).state_root(), t.state_at(before_conviction).state_root(), "a freeze moves the root");
     t.revert_to_base_and_reapply();
     for j in [0, before_conviction, before_conviction + 1, after_lift - 1, after_lift, tip - 1] {
         t.restart_at(j);
@@ -900,11 +938,10 @@ fn l_t8_each_13k_piece_forfeits_its_own_whole_bond_and_no_other() {
     let pieces: Vec<(u64, Hash64)> = (12..=14).map(|n| (n, claim_by(&mut c, n, 0xB00 + n))).collect();
     let before: Vec<u64> = (11..=14).map(|n| collateral(&c, &bond_key(n))).collect();
     court_fraud(&mut c, first, &seats, bond_key(61));
-    let record = c
-        .s
-        .consumed_offence(&kaspa_consensus_core::palw_state_v2::palw_court_conviction_offence_id_v1(&bond_key(11).0, &first))
-        .unwrap()
-        .clone();
+    let record =
+        c.s.consumed_offence(&kaspa_consensus_core::palw_state_v2::palw_court_conviction_offence_id_v1(&bond_key(11).0, &first))
+            .unwrap()
+            .clone();
     assert_eq!(collateral(&c, &bond_key(11)), 0, "the piece forfeits its whole bond");
     assert!(freeze(&c, &bond_key(11)).is_some_and(|f| f.final_), "and is frozen for good");
     let lost = u128::from(before[0]);
@@ -960,7 +997,8 @@ fn seat_prices(step: Option<(u32, u16)>) -> SeatPrices {
     let seats = c.floor_seats();
     let at = c.daa + 1;
     let claim = c.claim(&x);
-    let inputs = kaspa_consensus_core::palw_state_v2::palw_rcore_bind_prices_v1(&c.s, &c.sp, &c.extras_at(at), &x, &claim, seats.len(), at);
+    let inputs =
+        kaspa_consensus_core::palw_state_v2::palw_rcore_bind_prices_v1(&c.s, &c.sp, &c.extras_at(at), &x, &claim, seats.len(), at);
     let bound = c.bind(x, &seats);
     let duty = c.s.panel_duty_row_of(&x).expect("the duty row").seat_exposure;
     assert_eq!(duty, inputs.duty_bind, "the fold reserves the bind's own price");
@@ -1029,7 +1067,8 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
     );
     assert!((today_rate - 0.94).abs() / 0.94 < 0.10, "today's seat capital is §5.4's 0.94/DAA within 10% ({today_rate:.3})");
     for (rho, q, want) in [(10u32, 250u16, 9.4), (25, 250, 23.5), (100, 250, 94.0), (10, 0, 0.0), (100, 0, 0.0)] {
-        let step = kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: 1_001, rho, q_credit_permille: q };
+        let step =
+            kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: 1_001, rho, q_credit_permille: q };
         let m = seat_prices(Some((rho, q)));
         // Stage 2 (v3 AS-1′): the step prices the credited claim's seats; an uncredited claim's are today's.
         let credited = q >= 250;
@@ -1043,7 +1082,8 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
         let composed_commitment = today.escrow.div_ceil(u128::from(rho)) + today.weight;
         // The escrow lane's bind reserves at least the lock (its eligibility) when the credit cuts the
         // commitment under seats × lock.
-        let composed_duty = palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, credited.then_some(step)).max(m.lock);
+        let composed_duty =
+            palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, credited.then_some(step)).max(m.lock);
         let composed = SEAT_ROOM_MSK / capital(composed_duty, m.lock);
         println!(
             "ρ = {rho:>3}, q = {q:>3}‰: lane alone duty {:.4} lock {:.4} MSK (fold) → derived {:.2}/DAA (×{:.2}); with escrow's m_c = ⌈E/ρ⌉ duty {:.4} MSK → derived {:.2}/DAA (×{:.2})",
@@ -1081,7 +1121,8 @@ fn a_frozen_seat_cannot_be_bound() {
     let at = c.daa + 1;
     let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
     let bind = PalwConsensusObjectV2::PanelBound { claim: x, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&seats) };
-    let (next, _, _) = c.try_fold(&c.s, &x_ctx, std::slice::from_ref(&bind), PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
+    let (next, _, _) =
+        c.try_fold(&c.s, &x_ctx, std::slice::from_ref(&bind), PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
     assert!(
         matches!(next.claim(&x).unwrap().phase, PalwClaimPhaseV2::Provisional) && next.panel(&x).is_none(),
         "past the 2026-09-23 fence a panel naming a frozen seat is inert: the claim stays Provisional"
@@ -1266,7 +1307,11 @@ fn a_held_forfeit_refund_to_a_forfeited_challenger_joins_its_forfeiture_and_the_
             if armed {
                 assert_eq!(c.s.held_forfeits_of_claim(&y).count(), 0, "{door}: the record is gone with Y");
                 assert!(
-                    voided_by(&c, &y, if through_forfeiture { PalwVoidReasonV2::AggregateForfeit } else { PalwVoidReasonV2::ProducerWithholding }),
+                    voided_by(
+                        &c,
+                        &y,
+                        if through_forfeiture { PalwVoidReasonV2::AggregateForfeit } else { PalwVoidReasonV2::ProducerWithholding }
+                    ),
                     "{door}: Y voided ({yp:?})"
                 );
                 assert_eq!(after.collateral, 0, "{door}: a final freeze posts no collateral, refund or not");
@@ -1279,7 +1324,10 @@ fn a_held_forfeit_refund_to_a_forfeited_challenger_joins_its_forfeiture_and_the_
             } else {
                 if through_forfeiture {
                     // The dormant twin forfeits nothing at Z′: Y's own DA-7 default refunds X.
-                    assert!(matches!(yp, PalwClaimPhaseV2::ReceiptLicensed { .. }) || voided_by(&c, &y, PalwVoidReasonV2::ProducerWithholding));
+                    assert!(
+                        matches!(yp, PalwClaimPhaseV2::ReceiptLicensed { .. })
+                            || voided_by(&c, &y, PalwVoidReasonV2::ProducerWithholding)
+                    );
                     run_to(&mut c, dy);
                     step_landed(&mut c, dy + 1);
                 }
@@ -1422,7 +1470,9 @@ fn l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step() {
             let at = c.daa + 1;
             let bind = PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&panel) };
             let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
-            let (next, _, _) = c.try_fold(&c.s, &x_ctx, std::slice::from_ref(&bind), PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
+            let (next, _, _) = c
+                .try_fold(&c.s, &x_ctx, std::slice::from_ref(&bind), PalwBlockWorkV3::None, Hash64::default())
+                .expect("the block stands");
             if matches!(next.claim(&id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }) {
                 c.step(&[bind]);
                 bound_ids.push((id, c.daa));
@@ -1484,10 +1534,16 @@ fn guilty_close(session_id: Hash64, dissection: bool) -> PalwConsensusObjectV2 {
     use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
     let PalwConsensusObjectV2::CourtClosed { proof, .. } = court_cleared(session_id) else { unreachable!("a close") };
     let proof = if dissection {
-        let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } = proof else { unreachable!("court_cleared's arithmetic skeleton") };
+        let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } = proof else {
+            unreachable!("court_cleared's arithmetic skeleton")
+        };
         let tile = |index: u64| PalwAttnRowOpeningV1 {
             leaf: refutation.output_preimage.clone(),
-            opening: kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 { leaf_index: index, leaf_hash: h(0xBAD5), siblings: vec![] },
+            opening: kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 {
+                leaf_index: index,
+                leaf_hash: h(0xBAD5),
+                siblings: vec![],
+            },
         };
         PalwCourtVerdictProofV2::AttnDissection {
             binding: Box::new(refutation.binding.clone()),
@@ -1566,7 +1622,11 @@ fn l_t6_measured_one_conviction_at_13k_by_route_and_only_whole_bond_routes_credi
                 let session = court_session_of(&c.s, id, bond_key(61));
                 assert_eq!(collateral(&c, &piece), before_open, "{route}: opening a court takes nothing from the executor");
                 c.step(&[guilty_close(session, offence == PalwConvictedOffenceV1::CourtHeldVerdict)]);
-                let want = if offence == PalwConvictedOffenceV1::CourtFraud { PalwVoidReasonV2::CourtFraud } else { PalwVoidReasonV2::CourtHeldVerdict };
+                let want = if offence == PalwConvictedOffenceV1::CourtFraud {
+                    PalwVoidReasonV2::CourtFraud
+                } else {
+                    PalwVoidReasonV2::CourtHeldVerdict
+                };
                 assert!(voided_by(&c, &id, want), "{route}: the verdict voids the claim {want:?}: {:?}", phase(&c, &id));
             }
         }
@@ -1587,7 +1647,11 @@ fn l_t6_measured_one_conviction_at_13k_by_route_and_only_whole_bond_routes_credi
             msk(three_g),
             e,
             m,
-            if intent { String::new() } else { format!(" (with the escrow lane's m_c in the slot: L {escrow_slot:.2}, EV {:+.1})", ev1(Q, P_STAR, e, m, escrow_slot)) }
+            if intent {
+                String::new()
+            } else {
+                format!(" (with the escrow lane's m_c in the slot: L {escrow_slot:.2}, EV {:+.1})", ev1(Q, P_STAR, e, m, escrow_slot))
+            }
         );
         if intent {
             assert_eq!(lost, u128::from(PIECE), "{route}: the whole piece");
@@ -1609,7 +1673,9 @@ fn l_t6_measured_one_conviction_at_13k_by_route_and_only_whole_bond_routes_credi
             "tag {tag}"
         );
     }
-    for offence in [PalwConvictedOffenceV1::Equivocation, PalwConvictedOffenceV1::CoveringSigner, PalwConvictedOffenceV1::CourtHeldVerdict] {
+    for offence in
+        [PalwConvictedOffenceV1::Equivocation, PalwConvictedOffenceV1::CoveringSigner, PalwConvictedOffenceV1::CourtHeldVerdict]
+    {
         assert!(!palw_producer_conviction_credits_q_v1(offence), "{offence:?} is not a whole-bond producer conviction");
     }
 }

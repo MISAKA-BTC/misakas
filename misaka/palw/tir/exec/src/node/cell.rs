@@ -74,8 +74,11 @@ pub fn tir_public_court_cells_v1(
     let mut cells = Vec::new();
     if end == space.occurrences().len() {
         let post = &space.program.blocks[space.program.schedule.post as usize];
-        if post.nodes.iter().any(|node| node.inputs.iter().any(|input|
-            matches!(input, misaka_palw_tir::Ref::State(state) if !space.program.states[*state as usize].per_layer))) {
+        if post.nodes.iter().any(|node| {
+            node.inputs
+                .iter()
+                .any(|input| matches!(input, misaka_palw_tir::Ref::State(state) if !space.program.states[*state as usize].per_layer))
+        }) {
             cells.push(TirCellV1 { shard, occ: 0..1, positions: 0..positions });
         }
     }
@@ -637,7 +640,9 @@ impl TirRunInputsV1 {
         Ok(())
     }
 
-    pub(crate) fn preimages_v1(&self) -> &BTreeMap<u64, PalwStepTileLeafV1> { &self.preimages }
+    pub(crate) fn preimages_v1(&self) -> &BTreeMap<u64, PalwStepTileLeafV1> {
+        &self.preimages
+    }
     pub(crate) fn validate_capture_v1(&self, capture: &super::backend::TirCaptureV1, class_id: Hash64) -> Result<(), String> {
         let b = &capture.binding;
         if self.identity != Some((b.step_leaf_count, b.step_merkle_root, b.job_context.context_hash(), class_id)) {
@@ -645,11 +650,18 @@ impl TirRunInputsV1 {
         }
         Ok(())
     }
-    pub(crate) fn proof_tree_v1(&self, binding: &super::backend::TirCaptureV1, class_id: Hash64, cap: u64) -> Result<super::sparse_tree::TirSparseStepTreeV1, String> {
+    pub(crate) fn proof_tree_v1(
+        &self,
+        binding: &super::backend::TirCaptureV1,
+        class_id: Hash64,
+        cap: u64,
+    ) -> Result<super::sparse_tree::TirSparseStepTreeV1, String> {
         self.validate_capture_v1(binding, class_id)?;
         let b = &binding.binding;
         let mut tree = super::sparse_tree::TirSparseStepTreeV1::new(b.step_leaf_count, b.step_merkle_root)?;
-        for opening in self.ranges.values() { tree.add_range(opening, cap)?; }
+        for opening in self.ranges.values() {
+            tree.add_range(opening, cap)?;
+        }
         Ok(tree)
     }
 
@@ -677,11 +689,18 @@ pub fn cell_runs_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &T
 
 /// Node-policy planning bound, checked before allocating a position's leaf list or
 /// an unbounded descriptor vector. It does not alter consensus class eligibility.
-pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, cell: &TirCellV1, cap: usize) -> Result<Vec<(u64, u32, usize)>, String> {
+pub fn cell_runs_capped_v1(
+    space: &PalwTirStepSpaceV1,
+    ctx: &PalwJobContextV2,
+    cell: &TirCellV1,
+    cap: usize,
+) -> Result<Vec<(u64, u32, usize)>, String> {
     let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
     let listed_at = |a: u32| -> Result<Vec<kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafV1>, String> {
         let leaves = space.running_total(&job, a.saturating_add(1)).saturating_sub(space.running_total(&job, a));
-        if leaves > cap as u128 { return Err("the node's position leaf planning budget is full".into()); }
+        if leaves > cap as u128 {
+            return Err("the node's position leaf planning budget is full".into());
+        }
         Ok(space.leaves_of_position(ctx, a))
     };
     let n_occ = space.occurrences().len();
@@ -737,7 +756,9 @@ pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, c
             }
             // A run's preimages are a PREFIX of it: the carry-in tiles lead it (they sit just before the cell's own leaves).
             let pre = wanted[i..j].iter().take_while(|(_, needs)| *needs).count();
-            if runs.len() >= cap { return Err("the node's cell run descriptor budget is full".into()); }
+            if runs.len() >= cap {
+                return Err("the node's cell run descriptor budget is full".into());
+            }
             runs.push((wanted[i].0, u32::try_from(j - i).map_err(|_| "the requested run leaf count exceeds u32")?, pre));
             i = j;
         }
@@ -752,7 +773,9 @@ pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, c
             if let PalwTirLeafKindV1::State { instance, .. } = leaf.kind
                 && owned_fixed.contains(&(instance as usize))
             {
-                if handed.len() >= cap { return Err("the node's restore leaf planning budget is full".into()); }
+                if handed.len() >= cap {
+                    return Err("the node's restore leaf planning budget is full".into());
+                }
                 handed.push(leaf.index);
             }
         }
@@ -767,8 +790,10 @@ pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, c
                     if let PalwTirLeafKindV1::HistTile { instance, .. } = leaf.kind
                         && instance as usize == *k
                     {
-                        if handed.len() >= cap { return Err("the node's restore leaf planning budget is full".into()); }
-                handed.push(leaf.index);
+                        if handed.len() >= cap {
+                            return Err("the node's restore leaf planning budget is full".into());
+                        }
+                        handed.push(leaf.index);
                     }
                 }
             }
@@ -781,7 +806,9 @@ pub fn cell_runs_capped_v1(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, c
             while j < handed.len() && handed[j] == handed[j - 1] + 1 {
                 j += 1;
             }
-            if runs.len() >= cap { return Err("the node's restore run descriptor budget is full".into()); }
+            if runs.len() >= cap {
+                return Err("the node's restore run descriptor budget is full".into());
+            }
             runs.push((handed[i], u32::try_from(j - i).map_err(|_| "the restore run count exceeds u32")?, j - i));
             i = j;
         }
@@ -873,7 +900,16 @@ pub fn tir_verify_capture_cells_v1(
     backend: &mut dyn KernelBackendV1,
 ) -> Result<TirCellVerdictV1, String> {
     let capture = tir.decode_capture(material)?;
-    tir_verify_capture_cells_over_v1(tir.space(), tir.artifact().plan(), tir.artifact().params(), tir.class_id(), tir.fused_kernels(), &capture, cells, backend)
+    tir_verify_capture_cells_over_v1(
+        tir.space(),
+        tir.artifact().plan(),
+        tir.artifact().params(),
+        tir.class_id(),
+        tir.fused_kernels(),
+        &capture,
+        cells,
+        backend,
+    )
 }
 
 /// [`tir_verify_capture_cells_v1`] over what the cells read and nothing else: the step space, the plan and the params of the

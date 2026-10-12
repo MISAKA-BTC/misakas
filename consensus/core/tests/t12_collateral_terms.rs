@@ -21,13 +21,18 @@ fn the_doc_comments_table_is_the_derivation() {
         palw_canonical_draw_work_v1(&d, &j, true).unwrap().provisional_scalar_v1()
     };
 
-    let floor_p = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap();
+    let floor_p =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .unwrap();
     let floor_draw = draw(&floor_p, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL);
     let floor_declared: u64 = 7_708;
 
     let dense_draw = |n_ctx: u32| {
         let p = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
-            kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 { n_ctx, ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B },
+            kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                n_ctx,
+                ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+            },
         )
         .unwrap();
         draw(&p, kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(n_ctx))
@@ -58,7 +63,9 @@ fn the_doc_comments_table_is_the_derivation() {
         total += term;
         println!(
             "  {name:20} draw={d:>18}  exposure_pwu={pwu:>14}  reservation={:>12.5} MSK  gain={:>12.5} MSK  x{conc:<5} -> collateral {:>13.2} MSK",
-            msk(reservation), msk(gain), msk(term)
+            msk(reservation),
+            msk(gain),
+            msk(term)
         );
     }
     println!("\n  TOTAL collateral a seat   {} sompi = {:.8} MSK", total, msk(total));

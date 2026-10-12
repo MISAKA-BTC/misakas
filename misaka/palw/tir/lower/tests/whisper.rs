@@ -76,7 +76,11 @@ fn whisper_matches_its_hf_fixture() {
     let cfg: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).expect("config")).expect("json");
     let o: Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).expect("outputs")).expect("json");
     let read = read_encdec(&cfg, &ReadOptions::default()).unwrap_or_else(|e| panic!("the adapter: {e}"));
-    assert!(matches!(&read.adapter, misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id, .. } if id == "whisper"), "{:?}", read.adapter);
+    assert!(
+        matches!(&read.adapter, misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id, .. } if id == "whisper"),
+        "{:?}",
+        read.adapter
+    );
     let s = read.spec;
     let lmax = (s.enc_pos_rows.unwrap()) as u32;
     let ck = Checkpoint::open(&dir).expect("checkpoint");
@@ -106,7 +110,8 @@ fn whisper_matches_its_hf_fixture() {
     let (mut es, mut ds): (Stats, Stats) = (Stats::new(), Stats::new());
     let (bins, frames_n) = (cfg["num_mel_bins"].as_u64().unwrap() as usize, 2 * lmax as usize);
     for _ in 0..10 {
-        let f: Vec<Vec<f64>> = (0..frames_n).map(|_| (0..bins).map(|_| ((rng.gen_range(-1.0..1.5f64)) * 8192.0).round() / 8192.0).collect()).collect();
+        let f: Vec<Vec<f64>> =
+            (0..frames_n).map(|_| (0..bins).map(|_| ((rng.gen_range(-1.0..1.5f64)) * 8192.0).round() / 8192.0).collect()).collect();
         let enc = encdec::float_encoder_src(&ehl, &s, &ep, Source::Frames(&f), Some(&mut es)).expect("calibration encoder");
         let m = rng.gen_range(4..=8usize);
         let stream: Vec<usize> = std::iter::once(s.decoder_start as usize).chain((1..m).map(|_| rng.gen_range(0..s.vocab))).collect();
@@ -138,11 +143,16 @@ fn whisper_matches_its_hf_fixture() {
             let stream: Vec<u32> = ids_of(&rec[ids_key]).iter().map(|t| *t as u32).collect();
             let run = dinterp.run(&d_params, &din, &stream).expect("the integer decoder");
             let want = rows_of(&rec[logits_key]);
-            let got: Vec<Vec<f64>> = run.iter().map(|st| st.output.data.iter().map(|c| *c as f64 * dmat.logits_scale).collect()).collect();
+            let got: Vec<Vec<f64>> =
+                run.iter().map(|st| st.output.data.iter().map(|c| *c as f64 * dmat.logits_scale).collect()).collect();
             let r = rel(&got.concat(), &want.concat());
             let hits = got.iter().zip(&want).filter(|(a, b)| argmax(a) == argmax(b)).count();
             let k: f64 = got.iter().zip(&want).map(|(a, b)| kl(b, a)).sum();
-            eprintln!("whisper integer vs HF `{logits_key}`: logits rel {r:.2e}, top-1 {hits}/{}, mean KL {:.2e}", want.len(), k / want.len() as f64);
+            eprintln!(
+                "whisper integer vs HF `{logits_key}`: logits rel {r:.2e}, top-1 {hits}/{}, mean KL {:.2e}",
+                want.len(),
+                k / want.len() as f64
+            );
             assert!(r < 0.05, "logits rel {r}");
             agree += hits;
             total += want.len();
@@ -150,7 +160,11 @@ fn whisper_matches_its_hf_fixture() {
         }
         first.get_or_insert((mel, xkv));
     }
-    assert!(agree as f64 / total as f64 >= 0.85 && kl_sum / (total as f64) < 0.05, "top-1 {agree}/{total}, KL {}", kl_sum / total as f64);
+    assert!(
+        agree as f64 / total as f64 >= 0.85 && kl_sum / (total as f64) < 0.05,
+        "top-1 {agree}/{total}, KL {}",
+        kl_sum / total as f64
+    );
     // 4. The three implementations and the court, on both stages (the lowering's inputs are params in the version-1 view; the
     //    decoder is fed the integer encoder's own cross K/V).
     {
@@ -160,7 +174,8 @@ fn whisper_matches_its_hf_fixture() {
         let stream: Vec<u32> = ids_of(&recs[0]["decoder_input_ids"]).iter().map(|t| *t as u32).collect();
         let last = stream.len() as u32 - 1;
         let n3 = three_ways(&elw.program, &ep6, &[vec![0]]).unwrap_or_else(|e| panic!("encoder, three implementations: {e}"));
-        let n3d = three_ways(&dlw.program, &dp6, &[stream.iter().map(|t| *t as usize).collect()]).unwrap_or_else(|e| panic!("decoder, three implementations: {e}"));
+        let n3d = three_ways(&dlw.program, &dp6, &[stream.iter().map(|t| *t as usize).collect()])
+            .unwrap_or_else(|e| panic!("decoder, three implementations: {e}"));
         let ce = court_coverage(&elw.program, &ep6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("encoder, court: {e}"));
         let cd = court_coverage(&dlw.program, &dp6, &stream, &[0, 1, last], &[1, 3]).unwrap_or_else(|e| panic!("decoder, court: {e}"));
         eprintln!(
@@ -227,11 +242,18 @@ fn real_whispers_lower_and_are_admitted_or_refused_by_name() {
         };
         let inputs = misaka_palw_tir_lower::admission::default_inputs();
         let verdict = |p: &tir::program_v2::TirProgramV2| match tir::admit_v2::tir_admit_program_v2(p, &inputs) {
-            Ok(a) => format!("ADMITTED (position {:.3e} MACs, {} step leaves)", a.view.position.cost.macs as f64, a.view.position.step_leaves),
+            Ok(a) => format!(
+                "ADMITTED (position {:.3e} MACs, {} step leaves)",
+                a.view.position.cost.macs as f64, a.view.position.step_leaves
+            ),
             Err(e) => format!("REFUSED: {e}"),
         };
         let ((en, em), (dn, dm)) = (nodes(&e2), nodes(&d2));
-        eprintln!("{name} at {l} source rows: encoder {en} nodes (max {em}/block) {}; decoder {dn} nodes (max {dm}/block) {}", verdict(&e2), verdict(&d2));
+        eprintln!(
+            "{name} at {l} source rows: encoder {en} nodes (max {em}/block) {}; decoder {dn} nodes (max {dm}/block) {}",
+            verdict(&e2),
+            verdict(&d2)
+        );
         // The decoder is a text stage of one position over a fixed source axis: admitted at every size.
         assert!(tir::admit_v2::tir_admit_program_v2(&d2, &inputs).is_ok(), "{name}: the decoder is refused");
     }
@@ -256,7 +278,9 @@ fn a_longer_tile_admits_whisper_small_and_the_larger_sizes_need_stages() {
         let e2 = encoder::encdec_frames_encoder_v2(&elw).expect("encoder v2");
         let mut inputs = misaka_palw_tir_lower::admission::default_inputs();
         inputs.tile_len = tile;
-        tir::admit_v2::tir_admit_program_v2(&e2, &inputs).map(|a| (a.view.position.step_leaves, a.view.position.cost.macs)).map_err(|e| e.to_string())
+        tir::admit_v2::tir_admit_program_v2(&e2, &inputs)
+            .map(|a| (a.view.position.step_leaves, a.view.position.cost.macs))
+            .map_err(|e| e.to_string())
     };
     // tiny and base are admitted at the default tile and at 256.
     for name in ["whisper-tiny", "whisper-base"] {

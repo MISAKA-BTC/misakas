@@ -30,7 +30,8 @@ pub fn probe_data_route(cfg: &Value, tensors: Option<&TensorIndex>, dir: Option<
     use crate::lower::{cnn, encdec, vision};
     let inputs = crate::admission::default_inputs();
     let adm = |p: &misaka_palw_tir::program_v2::TirProgramV2| -> Result<Value, String> {
-        let a = misaka_palw_tir::admit_v2::tir_admit_program_v2(p, &inputs).map_err(|e| format!("tir_admit_program_v2 refuses: {e}"))?;
+        let a =
+            misaka_palw_tir::admit_v2::tir_admit_program_v2(p, &inputs).map_err(|e| format!("tir_admit_program_v2 refuses: {e}"))?;
         Ok(json!({
             "nodes": p.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(),
             "blocks": p.blocks.len(),
@@ -50,12 +51,17 @@ pub fn probe_data_route(cfg: &Value, tensors: Option<&TensorIndex>, dir: Option<
             // for; every other class is refused with the capabilities its lowering lacks named.
             use crate::diffusion::probe::{probe_sd3_transformer, probe_vae_decoder};
             use crate::hf_schema::{DiffusersRoute, read_diffusers};
-            let r = read_diffusers(cfg).map_err(|f| format!("{} [missing: {}]", f.error, f.missing.iter().map(|m| m.what.as_str()).collect::<Vec<_>>().join(", ")))?;
+            let r = read_diffusers(cfg).map_err(|f| {
+                format!("{} [missing: {}]", f.error, f.missing.iter().map(|m| m.what.as_str()).collect::<Vec<_>>().join(", "))
+            })?;
             let dir = dir.ok_or("no checkpoint to lower the component from")?;
-            let ck = crate::weights::Checkpoint::open(&dir.join("diffusion_pytorch_model.safetensors")).map_err(|e| format!("checkpoint: {e}"))?;
+            let ck = crate::weights::Checkpoint::open(&dir.join("diffusion_pytorch_model.safetensors"))
+                .map_err(|e| format!("checkpoint: {e}"))?;
             let probe = match &r.route {
                 DiffusersRoute::Sd3Transformer(_) => probe_sd3_transformer(cfg, &ck)?,
-                DiffusersRoute::VaeDecoder(c) => probe_vae_decoder(cfg, &ck, Some(cfg["sample_size"].as_u64().map(|s| s as usize / c.upscale()).unwrap_or(8)))?,
+                DiffusersRoute::VaeDecoder(c) => {
+                    probe_vae_decoder(cfg, &ck, Some(cfg["sample_size"].as_u64().map(|s| s as usize / c.upscale()).unwrap_or(8)))?
+                }
             };
             if !probe.unread.is_empty() {
                 return Err(format!("checkpoint tensors nothing reads: {:?}", probe.unread));
@@ -115,7 +121,9 @@ pub fn probe_data_route(cfg: &Value, tensors: Option<&TensorIndex>, dir: Option<
             v
         }
         Ok(Err(m)) => json!({"ok": false, "error": short_msg(&m, 400)}),
-        Err(p) => json!({"ok": false, "error": short_msg(&p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(), 300)}),
+        Err(p) => {
+            json!({"ok": false, "error": short_msg(&p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(), 300)})
+        }
     }
 }
 
@@ -422,35 +430,40 @@ pub fn lower_image_class_shape_v1(cfg: &Value) -> Result<ImageShapeV1, String> {
     use misaka_palw_tir::pipeline::{Binding, StageDecl, TirPipelineV1, TripRule};
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<ImageShapeV1, String> {
         let opts = ReadOptions { adapter: AdapterChoice::Auto };
-        let (kind, adapter, program, size, labels): (&'static str, String, misaka_palw_tir::program_v2::TirProgramV2, (u32, u32), Option<usize>) =
-            if is_vision_tower(cfg) {
-                let r = read_vision(cfg, &opts).map_err(|f| f.error.to_string())?;
-                let labels = match r.spec.out {
-                    vision::VisionOut::Classify { labels } => Some(labels),
-                    _ => None,
-                };
-                let (hl, _) = vision::hl_program(&r.spec).map_err(|e| format!("hl: {e}"))?;
-                let lw = vision::lower_vision_with(&hl, &r.spec, true).map_err(|e| format!("lower: {e}"))?;
-                let p2 = encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
-                let id = match &r.adapter {
-                    AdapterSource::BuiltIn { id, .. } => id.clone(),
-                    other => format!("{other:?}"),
-                };
-                ("vision", id, p2, (r.spec.h, r.spec.w), labels)
-            } else if is_cnn(cfg) {
-                let r = read_cnn(cfg, &opts).map_err(|f| f.error.to_string())?;
-                let labels = r.spec.head.as_ref().map(|h| h.labels);
-                let (hl, _) = cnn::hl_program(&r.spec).map_err(|e| format!("hl: {e}"))?;
-                let lw = cnn::lower_cnn(&hl, &r.spec).map_err(|e| format!("lower: {e}"))?;
-                let p2 = encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
-                let id = match &r.adapter {
-                    AdapterSource::BuiltIn { id, .. } => id.clone(),
-                    other => format!("{other:?}"),
-                };
-                ("cnn", id, p2, (r.spec.h, r.spec.w), labels)
-            } else {
-                return Err("not a vision tower or a convolutional network".into());
+        let (kind, adapter, program, size, labels): (
+            &'static str,
+            String,
+            misaka_palw_tir::program_v2::TirProgramV2,
+            (u32, u32),
+            Option<usize>,
+        ) = if is_vision_tower(cfg) {
+            let r = read_vision(cfg, &opts).map_err(|f| f.error.to_string())?;
+            let labels = match r.spec.out {
+                vision::VisionOut::Classify { labels } => Some(labels),
+                _ => None,
             };
+            let (hl, _) = vision::hl_program(&r.spec).map_err(|e| format!("hl: {e}"))?;
+            let lw = vision::lower_vision_with(&hl, &r.spec, true).map_err(|e| format!("lower: {e}"))?;
+            let p2 = encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
+            let id = match &r.adapter {
+                AdapterSource::BuiltIn { id, .. } => id.clone(),
+                other => format!("{other:?}"),
+            };
+            ("vision", id, p2, (r.spec.h, r.spec.w), labels)
+        } else if is_cnn(cfg) {
+            let r = read_cnn(cfg, &opts).map_err(|f| f.error.to_string())?;
+            let labels = r.spec.head.as_ref().map(|h| h.labels);
+            let (hl, _) = cnn::hl_program(&r.spec).map_err(|e| format!("hl: {e}"))?;
+            let lw = cnn::lower_cnn(&hl, &r.spec).map_err(|e| format!("lower: {e}"))?;
+            let p2 = encoder::vision_v2(&lw).map_err(|e| format!("v2: {e}"))?;
+            let id = match &r.adapter {
+                AdapterSource::BuiltIn { id, .. } => id.clone(),
+                other => format!("{other:?}"),
+            };
+            ("cnn", id, p2, (r.spec.h, r.spec.w), labels)
+        } else {
+            return Err("not a vision tower or a convolutional network".into());
+        };
         let Some(labels) = labels else {
             return Ok(ImageShapeV1::NotDeclarable(
                 "an image backbone (no classifier head) is an Embedding-profile class over an image slot, which this build does not declare from headers"
@@ -480,8 +493,18 @@ pub fn lower_image_class_shape_v1(cfg: &Value) -> Result<ImageShapeV1, String> {
             }],
             output_stage: 0,
         };
-        misaka_palw_tir::pipeline::validate_pipeline(&pipeline, std::slice::from_ref(&program)).map_err(|e| format!("pipeline normal form: {e}"))?;
-        Ok(ImageShapeV1::Class(Box::new(ImageClassShapeV1 { kind, adapter, program, pipeline, size, rows, width, labels: labels as u32 })))
+        misaka_palw_tir::pipeline::validate_pipeline(&pipeline, std::slice::from_ref(&program))
+            .map_err(|e| format!("pipeline normal form: {e}"))?;
+        Ok(ImageShapeV1::Class(Box::new(ImageClassShapeV1 {
+            kind,
+            adapter,
+            program,
+            pipeline,
+            size,
+            rows,
+            width,
+            labels: labels as u32,
+        })))
     }));
     match r {
         Ok(v) => v,

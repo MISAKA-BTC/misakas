@@ -261,7 +261,8 @@ impl PalwRhoBreakerV1 {
                 if !forfeited_before {
                     next.nominal = next.nominal.saturating_add(nominal);
                     next.collected = next.collected.saturating_add(collected.min(nominal));
-                    if collected < nominal && next.short_bonds.len() < PALW_BREAKER_K2_BONDS_V1 && !next.short_bonds.contains(&accused) {
+                    if collected < nominal && next.short_bonds.len() < PALW_BREAKER_K2_BONDS_V1 && !next.short_bonds.contains(&accused)
+                    {
                         next.short_bonds.push(accused);
                     }
                 }
@@ -308,7 +309,8 @@ pub fn palw_breaker_verdict_v1(row: &PalwRhoBreakerV1, overdue: u64) -> PalwBrea
         return PalwBreakerVerdictV1::Trip;
     }
     // Clean: every ratio under half its threshold (the minimum counts need not be reached to be clean), K2 under half.
-    let half = |numerator: u64, reached: u64| numerator.saturating_mul(PALW_BREAKER_RATIO_DENOM_V1 * 2) < reached.max(1) || numerator == 0;
+    let half =
+        |numerator: u64, reached: u64| numerator.saturating_mul(PALW_BREAKER_RATIO_DENOM_V1 * 2) < reached.max(1) || numerator == 0;
     let clean = half(u64::from(row.receipt_voids), u64::from(row.receipt_reached))
         && half(u64::from(row.bind_voids), u64::from(row.bind_reached))
         && (overdue == 0 || overdue.saturating_mul(PALW_BREAKER_RATIO_DENOM_V1 * 2) < credited.max(1))
@@ -326,7 +328,13 @@ pub fn palw_breaker_index_of_rho_v1(rho: u32) -> u8 {
 /// counts clean). The level only goes DOWN on a trip (one rung below the tier in force, or 0 on a severe one) and UP one rung
 /// after two consecutive clean epochs; it is capped by the top of the ladder, and [`palw_breaker_tier_v1`] caps the tier by the
 /// schedule, so the breaker never raises ρ above what the flag days armed.
-pub fn palw_breaker_evaluate_v1(row: &PalwRhoBreakerV1, step_rho: u32, overdue: u64, new_epoch: u64, skipped: u64) -> PalwRhoBreakerV1 {
+pub fn palw_breaker_evaluate_v1(
+    row: &PalwRhoBreakerV1,
+    step_rho: u32,
+    overdue: u64,
+    new_epoch: u64,
+    skipped: u64,
+) -> PalwRhoBreakerV1 {
     let tier = row.level.min(palw_breaker_index_of_rho_v1(step_rho));
     let (mut level, mut clean) = (row.level, row.clean_epochs);
     match palw_breaker_verdict_v1(row, overdue) {
@@ -590,7 +598,11 @@ mod tests {
         for _ in 0..100 {
             row = row.noted_v1(PalwBreakerEventV1::Licensed { credited: true });
         }
-        assert_eq!(palw_breaker_verdict_v1(&row, 19), PalwBreakerVerdictV1::Hold, "19 overdue: under the minimum count, over half the ratio");
+        assert_eq!(
+            palw_breaker_verdict_v1(&row, 19),
+            PalwBreakerVerdictV1::Hold,
+            "19 overdue: under the minimum count, over half the ratio"
+        );
         assert_eq!(palw_breaker_verdict_v1(&row, 20), PalwBreakerVerdictV1::Trip, "20 of 100 credited licences: ≥ 5%");
         assert_eq!(palw_breaker_verdict_v1(&row, 50), PalwBreakerVerdictV1::Severe, "half of them: level 0");
     }

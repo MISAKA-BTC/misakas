@@ -68,7 +68,9 @@ impl Response {
 }
 
 fn split_url(url: &str) -> Result<(String, String), LowerError> {
-    let rest = url.strip_prefix("http://").ok_or_else(|| LowerError::Io(format!("{url}: this client speaks http:// (https goes through curl, cargo feature `remote`)")))?;
+    let rest = url.strip_prefix("http://").ok_or_else(|| {
+        LowerError::Io(format!("{url}: this client speaks http:// (https goes through curl, cargo feature `remote`)"))
+    })?;
     let (host, path) = match rest.split_once('/') {
         Some((h, p)) => (h.to_string(), format!("/{p}")),
         None => (rest.to_string(), "/".to_string()),

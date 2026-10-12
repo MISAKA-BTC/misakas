@@ -240,7 +240,9 @@ pub(super) fn refute_outcome(
     let work = flat_model_vector_work_v3(h.program_bytes_len, h.pc_instances, bytes.len().saturating_add(h.post_bytes_len as usize))
         .and_then(|w| w.checked_add(h.max_court_work))
         .ok_or_else(|| refused("flat court work overflow"))?;
-    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun) };
+    let Some(fee) = charge(builder, ctx, signer, work, true)? else {
+        return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun);
+    };
     let proven = (|| -> Result<(), String> {
         if bytes.len() as u64 > h.max_filing_bytes {
             return Err("flat filing beyond stored admission".into());
@@ -299,7 +301,7 @@ pub(super) fn demand(
     if builder.state.bonds.get(&h.poster).map(|b| b.operator_id) == builder.state.bonds.get(signer).map(|b| b.operator_id) {
         return Err(refused("flat poster operator cannot demand its own bounty"));
     }
-    if route.flat_vector_slot_v9(signer,slot).and_then(|id|route.flat_vector_demand_v9(&id)).is_some_and(|d|!d.settled) {
+    if route.flat_vector_slot_v9(signer, slot).and_then(|id| route.flat_vector_demand_v9(&id)).is_some_and(|d| !d.settled) {
         return Err(refused("shared typed9 requester slot held"));
     }
     let prior_slot = route.flat_vector_slot_v3(signer, slot);

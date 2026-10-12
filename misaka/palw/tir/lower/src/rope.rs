@@ -135,7 +135,9 @@ impl RopeFreqs {
             return Err(LowerError::bad("a rope reversed twice"));
         }
         if self.dynamic.is_some() || self.longrope.is_some() || self.mrope.is_some() {
-            return Err(LowerError::not_lowerable("ROPE_REVERSED_V1 over position-dependent or multimodal frequencies is not modelled"));
+            return Err(LowerError::not_lowerable(
+                "ROPE_REVERSED_V1 over position-dependent or multimodal frequencies is not modelled",
+            ));
         }
         self.inv_freq.iter_mut().for_each(|f| *f = -*f);
         self.reversed = true;
@@ -148,7 +150,8 @@ impl RopeFreqs {
             let seq_len = pos + 1;
             if seq_len > d.max_pos {
                 let dim = self.dim as f64;
-                let base = self.theta * crate::detmath::powf((d.factor * seq_len as f64 / d.max_pos as f64) - (d.factor - 1.0), dim / (dim - 2.0));
+                let base = self.theta
+                    * crate::detmath::powf((d.factor * seq_len as f64 / d.max_pos as f64) - (d.factor - 1.0), dim / (dim - 2.0));
                 return default_inv_freq(base, self.dim);
             }
         }
@@ -221,7 +224,16 @@ pub fn longrope_short_only_spec(cfg: &Cfg, head_dim: usize, theta_default: Optio
         )));
     }
     if let Some(k) = rc.params.keys().find(|k| {
-        !["short_factor", "long_factor", "short_mscale", "long_mscale", "original_max_position_embeddings", "factor", "attention_factor"].contains(&k.as_str())
+        ![
+            "short_factor",
+            "long_factor",
+            "short_mscale",
+            "long_mscale",
+            "original_max_position_embeddings",
+            "factor",
+            "attention_factor",
+        ]
+        .contains(&k.as_str())
     }) {
         return Err(LowerError::not_lowerable(format!("{arch}: rope parameter `{k}` is not modelled")));
     }
@@ -405,10 +417,14 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
             // an image the components differ (`crate::lower::ImageRows::mrope`).
             let interleaved = m.remove("mrope_interleaved").and_then(|v| v.as_bool()) == Some(true);
             if let Some(v) = m.remove("mrope_section") {
-                let s: Vec<usize> = v.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect()).unwrap_or_default();
+                let s: Vec<usize> =
+                    v.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect()).unwrap_or_default();
                 // HF splits the contiguous layout by the sections, which must cover the frequencies.
                 if s.len() != 3 || (!interleaved && s.iter().sum::<usize>() != dim / 2) {
-                    return Err(LowerError::bad(format!("{arch}: mrope_section {s:?} does not split {} frequencies in three", dim / 2)));
+                    return Err(LowerError::bad(format!(
+                        "{arch}: mrope_section {s:?} does not split {} frequencies in three",
+                        dim / 2
+                    )));
                 }
                 out.mrope = Some(MRope { section: [s[0], s[1], s[2]], interleaved });
             }
@@ -486,7 +502,11 @@ pub fn compute_freqs(arch: &str, rc: &RopeConfig, ctx: RopeContext) -> Result<Ro
                 .ok_or_else(|| LowerError::bad(format!("{arch}: freq_factors rope without `factors`")))?;
             refuse_leftover(&m)?;
             if factors.len() != dim / 2 {
-                return Err(LowerError::bad(format!("{arch}: freq_factors has {} entries, rotary dim/2 is {}", factors.len(), dim / 2)));
+                return Err(LowerError::bad(format!(
+                    "{arch}: freq_factors has {} entries, rotary dim/2 is {}",
+                    factors.len(),
+                    dim / 2
+                )));
             }
             if let Some(f) = factors.iter().find(|f| !f.is_finite() || **f <= 0.0) {
                 return Err(LowerError::bad(format!("{arch}: freq_factors holds {f}: a divisor is finite and positive")));
@@ -543,7 +563,8 @@ pub fn yarn_inv_freq(
     truncate: bool,
 ) -> Vec<f32> {
     let two_pi = 2.0 * std::f64::consts::PI;
-    let find_dim = |rot: f64| (dim as f64 * crate::detmath::ln(original_max as f64 / (rot * two_pi))) / (2.0 * crate::detmath::ln(base));
+    let find_dim =
+        |rot: f64| (dim as f64 * crate::detmath::ln(original_max as f64 / (rot * two_pi))) / (2.0 * crate::detmath::ln(base));
     let (mut low, mut high) = (find_dim(beta_fast), find_dim(beta_slow));
     if truncate {
         low = low.floor();
@@ -682,9 +703,21 @@ mod tests {
         let mr = f.mrope.unwrap();
         assert!(!mr.interleaved);
         assert_eq!((0..4).map(|j| mr.component(j)).collect::<Vec<_>>(), [0, 0, 1, 2]);
-        let f = compute_freqs("t", &rc("default", 1e7, json!({"mrope_section": [11, 11, 10], "mrope_interleaved": true})), ctx(64, 128)).unwrap();
+        let f =
+            compute_freqs("t", &rc("default", 1e7, json!({"mrope_section": [11, 11, 10], "mrope_interleaved": true})), ctx(64, 128))
+                .unwrap();
         let mr = f.mrope.unwrap();
-        let hf: Vec<usize> = (0..32).map(|j| if j % 3 == 1 && j < 33 { 1 } else if j % 3 == 2 && j < 30 { 2 } else { 0 }).collect();
+        let hf: Vec<usize> = (0..32)
+            .map(|j| {
+                if j % 3 == 1 && j < 33 {
+                    1
+                } else if j % 3 == 2 && j < 30 {
+                    2
+                } else {
+                    0
+                }
+            })
+            .collect();
         assert_eq!((0..32).map(|j| mr.component(j)).collect::<Vec<_>>(), hf);
         assert_eq!(hf.iter().filter(|k| **k == 1).count(), 11);
         assert_eq!(hf.iter().filter(|k| **k == 2).count(), 10);
@@ -791,7 +824,16 @@ mod tests {
     fn freq_factors_divide_the_default_frequencies_and_reproduce_llama3_scaling() {
         let dim = 128;
         let theta = 500000.0;
-        let llama3 = compute_freqs("t", &rc("llama3", theta, json!({"factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192})), ctx(dim, 131072)).unwrap();
+        let llama3 = compute_freqs(
+            "t",
+            &rc(
+                "llama3",
+                theta,
+                json!({"factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192}),
+            ),
+            ctx(dim, 131072),
+        )
+        .unwrap();
         // The divisors llama.cpp's converter writes for that scaling (`LlamaModel.generate_extra_tensors`).
         let plain = default_inv_freq(theta, dim);
         let factors: Vec<f64> = plain.iter().zip(&llama3.inv_freq).map(|(p, l)| (*p / *l) as f64).collect();
@@ -907,7 +949,12 @@ pub fn rope_spec_from_config(
     let freqs = compute_freqs(
         &cfg.arch,
         &rc,
-        RopeContext { dim: rotary_dim, max_position_embeddings: max_pos, top_level_original_max: top_orig, partial_rotary_factor: partial },
+        RopeContext {
+            dim: rotary_dim,
+            max_position_embeddings: max_pos,
+            top_level_original_max: top_orig,
+            partial_rotary_factor: partial,
+        },
     )?;
     Ok((RopeSpec { rotary_dim, offset: 0, style, freqs }, temp))
 }

@@ -22,17 +22,18 @@
 //! Run: `cargo test -p kaspa-consensus-core --test palw_t12_flag_day_int11`
 
 use kaspa_consensus_core::config::drill::{
-    PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_int11_at_v1, palw_drill_model_court_window_at_v1, palw_drill_post_launch_fences_at_v1,
-    palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1, palw_drill_tir_fence2_at_v1, palw_drill_tir_fence_at_v1,
+    PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_drill_int11_at_v1, palw_drill_model_court_window_at_v1,
+    palw_drill_post_launch_fences_at_v1, palw_drill_post_launch_fences_v2_at_v1, palw_drill_post_launch_fences_v3_at_v1,
+    palw_drill_tir_fence_at_v1, palw_drill_tir_fence2_at_v1,
 };
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
-    PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_INT11_RHO250_DAA,
-    PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params,
-    palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
-    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params, palw_t12_release_v5_params,
-    palw_t12_release_v6_params, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_DECODE_RULES_DAA, PALW_T12_INT11_FENCES_V1,
+    PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO100_OFFSET_DAA,
+    PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO1000_FENCES_V1,
+    PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
+    PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FLAG_DAY_DAA, Params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1,
+    palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
+    palw_t12_release_v4_params, palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -160,10 +161,21 @@ fn the_flag_day_is_the_list_at_h_and_rho100_at_h_plus_95_heights_no_other_fence_
         }
     }
     let schedule = shipped.fence_schedule_v1();
-    for earlier in [750, 1_000, 1_300, 1_700, PALW_T12_TIR_FLAG_DAY_DAA.expect("the IR flag day"), PALW_T12_TIR_FENCE2_DAA.expect("the 3,600 flag day")] {
+    for earlier in [
+        750,
+        1_000,
+        1_300,
+        1_700,
+        PALW_T12_TIR_FLAG_DAY_DAA.expect("the IR flag day"),
+        PALW_T12_TIR_FENCE2_DAA.expect("the 3,600 flag day"),
+    ] {
         assert!(schedule.contains(&earlier), "{earlier}: an earlier flag day, still scheduled ({schedule:?})");
     }
-    assert_eq!(&schedule[schedule.len() - 4..], [H, RHO100, RHO250, RHO1000], "the int-11 flag day's four heights are the schedule's last ({schedule:?})");
+    assert_eq!(
+        &schedule[schedule.len() - 4..],
+        [H, RHO100, RHO250, RHO1000],
+        "the int-11 flag day's four heights are the schedule's last ({schedule:?})"
+    );
 }
 
 #[test]
@@ -206,7 +218,11 @@ fn testnet12_ships_the_list_armed_at_h_over_the_int10_release() {
     let baseline = palw_t12_release_v5_params();
     let shipped = palw_t12_release_v6_params();
     shipped.validate_palw_v2().expect("testnet-12 as the int-12 release ships it validates");
-    assert_eq!(ids(&shipped), ids(&with_list(baseline.clone(), Some(H))), "testnet-12 as the int-12 release ships it arms the list at 5,300 over int-10");
+    assert_eq!(
+        ids(&shipped),
+        ids(&with_list(baseline.clone(), Some(H))),
+        "testnet-12 as the int-12 release ships it arms the list at 5,300 over int-10"
+    );
     assert_eq!(
         ids(&Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))),
         ids(&palw_t12_shipped_params()),
@@ -294,7 +310,15 @@ fn the_ceilings_are_no_looser_than_the_ir_and_the_improvement_ones_are_the_drill
         assert_eq!(c.max_job_cone_work, ir.max_cone_work, "{profile:?}: cone work, the IR's 2^16");
         assert!(c.max_state_bytes <= ir.max_state_bytes, "{profile:?}: state bytes no looser than the IR's");
         assert_eq!(
-            (c.max_position_step_leaves, c.max_job_macs, c.max_job_transcendentals, c.max_job_step_leaves, c.max_stages, c.max_class_bytes, c.max_inflight_claims),
+            (
+                c.max_position_step_leaves,
+                c.max_job_macs,
+                c.max_job_transcendentals,
+                c.max_job_step_leaves,
+                c.max_stages,
+                c.max_class_bytes,
+                c.max_inflight_claims
+            ),
             (1 << 22, 1 << 46, 1 << 40, 1 << 22, 16, 1 << 21, 16),
             "{profile:?}: the drills' values everywhere else"
         );
@@ -333,12 +357,21 @@ fn the_fork_id_keeps_an_int10_node_below_h_and_refuses_it_from_h() {
         let n = fork_id_v1(&new, daa);
         let p = fork_id_v1(&partial, daa);
         assert_eq!(n.next, RHO100, "ρ = 100 is announced next at {daa}");
-        assert!(!evaluate_fork_id_v1(&new, daa, p.fired.as_bytes().as_slice(), p.next).refuses(), "new keeps the list-only build at {daa}");
+        assert!(
+            !evaluate_fork_id_v1(&new, daa, p.fired.as_bytes().as_slice(), p.next).refuses(),
+            "new keeps the list-only build at {daa}"
+        );
         assert!(!evaluate_fork_id_v1(&partial, daa, n.fired.as_bytes().as_slice(), n.next).refuses(), "…and it keeps new at {daa}");
     }
     let (n, p) = (fork_id_v1(&new, RHO100), fork_id_v1(&partial, RHO100));
-    assert!(evaluate_fork_id_v1(&new, RHO100, p.fired.as_bytes().as_slice(), p.next).refuses(), "a build without ρ = 100 is refused from H + 95");
-    assert!(evaluate_fork_id_v1(&partial, RHO100, n.fired.as_bytes().as_slice(), n.next).refuses(), "…and refuses the build that has it");
+    assert!(
+        evaluate_fork_id_v1(&new, RHO100, p.fired.as_bytes().as_slice(), p.next).refuses(),
+        "a build without ρ = 100 is refused from H + 95"
+    );
+    assert!(
+        evaluate_fork_id_v1(&partial, RHO100, n.fired.as_bytes().as_slice(), n.next).refuses(),
+        "…and refuses the build that has it"
+    );
 }
 
 fn entry(name: &str) -> &'static kaspa_consensus_core::config::params::PalwPostLaunchFenceV1 {
@@ -366,7 +399,10 @@ fn a_build_without_rho_250_or_rho_1000_is_refused_from_their_heights() {
         let (n, o) = (fork_id_v1(&new, daa), fork_id_v1(&up_to_100, daa));
         assert_eq!(n.next, RHO250, "ρ = 250 is announced next at {daa}");
         assert!(!evaluate_fork_id_v1(&new, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "kept below ρ = 250 at {daa}");
-        assert!(!evaluate_fork_id_v1(&up_to_100, daa, n.fired.as_bytes().as_slice(), n.next).refuses(), "…in both directions at {daa}");
+        assert!(
+            !evaluate_fork_id_v1(&up_to_100, daa, n.fired.as_bytes().as_slice(), n.next).refuses(),
+            "…in both directions at {daa}"
+        );
     }
     let (n, o) = (fork_id_v1(&new, RHO250), fork_id_v1(&up_to_100, RHO250));
     assert!(evaluate_fork_id_v1(&new, RHO250, o.fired.as_bytes().as_slice(), o.next).refuses(), "refused from H + 190");
@@ -454,7 +490,10 @@ fn the_list_holds_its_prerequisites_by_name() {
         p.validate_palw_anchor_window_v1().err().map(|e| format!("{e:?}")).unwrap_or_default()
     };
     assert!(window(&|p| p.palw_execution_lane = None).contains("palw_anchor_window_v1"), "the window without the execution lane");
-    assert!(window(&|p| p.palw_economic_safety = at(H + 1)).contains("palw_anchor_window_v1"), "without economic safety at or below it");
+    assert!(
+        window(&|p| p.palw_economic_safety = at(H + 1)).contains("palw_anchor_window_v1"),
+        "without economic safety at or below it"
+    );
     assert!(window(&|p| p.palw_admission_independence = None).contains("palw_anchor_window_v1"), "without ADR-0147's jury");
     assert!(window(&|p| p.palw_model_registry = at(H + 1)).contains("palw_anchor_window_v1"), "without the registry at or below it");
     let mut unsynced = armed.clone();
@@ -527,7 +566,8 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_with_rho100_95_later_and_mov
     assert!(palw_drill_int11_at_v1(&mut same, 24).is_err(), "another fence's height (the second IR fence's)");
     assert_eq!(ids(&same), ids(&before), "refused untouched");
     let mut rho100_collides = before.clone();
-    palw_drill_model_court_window_at_v1(&mut rho100_collides, 28 + 95).expect("the (dormant-on-testnet-12) court window at ρ = 100's future height");
+    palw_drill_model_court_window_at_v1(&mut rho100_collides, 28 + 95)
+        .expect("the (dormant-on-testnet-12) court window at ρ = 100's future height");
     let was = ids(&rho100_collides);
     let why = palw_drill_int11_at_v1(&mut rho100_collides, 28).expect_err("ρ = 100's height is another fence's");
     assert!(why.contains("palw_model_court_window") && why.contains("fork id"), "{why}");
@@ -536,7 +576,10 @@ fn the_drill_crosses_the_whole_list_at_a_low_height_with_rho100_95_later_and_mov
     // The flag days it needs below it, or it is refused by name and the ruleset is untouched.
     let bare = palw_t12_drill_params_v1(&salt());
     let mut p = bare.clone();
-    assert!(palw_drill_int11_at_v1(&mut p, 28).is_err(), "the IR flag days and the capacity flag day are above 28 on the bare drill ruleset");
+    assert!(
+        palw_drill_int11_at_v1(&mut p, 28).is_err(),
+        "the IR flag days and the capacity flag day are above 28 on the bare drill ruleset"
+    );
     assert_eq!(ids(&p), ids(&bare));
     // Public testnet-12's genesis and another network: never.
     let mut public = palw_t12_shipped_params();
@@ -558,7 +601,10 @@ fn a_per_fence_drill_flag_moves_its_entry_and_keeps_the_rest_of_the_release_arme
     assert!(palw_drill_capacity_step3_at_v1(&mut q, 655).is_err(), "ρ = 100 at 655 under the release's ρ = 25 at 5,300");
     palw_drill_capacity_step2_at_v1(&mut q, 560).expect("ρ = 25 low");
     palw_drill_capacity_step3_at_v1(&mut q, 655).expect("and ρ = 100 above it");
-    assert_eq!((fence_at(&q, "palw_capacity_aggregate_liability_step_2"), fence_at(&q, "palw_capacity_aggregate_liability_step_3")), (Some(560), Some(655)));
+    assert_eq!(
+        (fence_at(&q, "palw_capacity_aggregate_liability_step_2"), fence_at(&q, "palw_capacity_aggregate_liability_step_3")),
+        (Some(560), Some(655))
+    );
     q.validate_palw_v2().expect("validates");
 }
 
@@ -578,7 +624,11 @@ fn print_the_release_fence_table() {
     rows.sort();
     println!("FENCE TABLE (testnet-12 as shipped; heights past genesis):");
     for (at, name) in &rows {
-        let note = if baseline.palw_fences_v1().iter().any(|(n, f)| n == name && f.map(|f| f.daa_score()) == Some(*at)) { "" } else { "  <- int-11" };
+        let note = if baseline.palw_fences_v1().iter().any(|(n, f)| n == name && f.map(|f| f.daa_score()) == Some(*at)) {
+            ""
+        } else {
+            "  <- int-11"
+        };
         println!("  {at:>6}  {name}{note}");
     }
     let (sp, si, ss) = ids(&shipped);

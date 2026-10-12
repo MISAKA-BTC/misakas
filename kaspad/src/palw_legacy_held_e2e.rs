@@ -579,8 +579,14 @@ fn lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partia
                 let progress = w.s.legacy_answer_pending_v2(&key).unwrap().progress();
                 let object = crate::palw_panel::da_answer_chunks::next_answer_object_v2(
                     PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer: answer.clone() },
-                    Some(&progress), w.daa, deadline, 200_000, &h64(999), |_, _| Some(SIG.to_vec()),
-                ).unwrap();
+                    Some(&progress),
+                    w.daa,
+                    deadline,
+                    200_000,
+                    &h64(999),
+                    |_, _| Some(SIG.to_vec()),
+                )
+                .unwrap();
                 assert_eq!(object, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(c.clone()) });
                 w.block(vec![object]).unwrap();
             }
@@ -2634,8 +2640,10 @@ impl ProducerTrees {
             d.backend.prompt_ids_form(),
         )
         .expect("the producer answers from its retention");
-        palw_legacy_held_answer_object_v2(&h64(999), claim, unit, binding.clone(), answer, bond_key(PRODUCER), |_, _| Some(SIG.to_vec()))
-            .expect("built")
+        palw_legacy_held_answer_object_v2(&h64(999), claim, unit, binding.clone(), answer, bond_key(PRODUCER), |_, _| {
+            Some(SIG.to_vec())
+        })
+        .expect("built")
     }
 }
 
@@ -2673,8 +2681,17 @@ fn lanes_filer_step(
             read,
         );
     }
-    palw_fraud_filer_legacy_step_v3(PalwFilerRoleV1::PublicBond, Some(&view), &bond_key(OUTSIDER), reservable, court, case, lanes, read)
-        .expect("the production controller can judge its own replica")
+    palw_fraud_filer_legacy_step_v3(
+        PalwFilerRoleV1::PublicBond,
+        Some(&view),
+        &bond_key(OUTSIDER),
+        reservable,
+        court,
+        case,
+        lanes,
+        read,
+    )
+    .expect("the production controller can judge its own replica")
 }
 
 /// What one parallel pursuit did, session by session (absolute DAA).
@@ -2715,7 +2732,9 @@ fn stall_and_answer(
             PalwDaUnitV1::Event { row, tile } => PalwConsensusObjectV2::MaterialDisclosedV2 {
                 claim,
                 unit: *unit,
-                answer: PalwDaAnswerV1::Event(d.backend.disclose_trace_event(&d.material, *row, *tile).expect("producer's obligation")),
+                answer: PalwDaAnswerV1::Event(
+                    d.backend.disclose_trace_event(&d.material, *row, *tile).expect("producer's obligation"),
+                ),
                 discloser: bond_key(PRODUCER),
                 signature: SIG.to_vec(),
             },
@@ -3013,8 +3032,7 @@ async fn g14l_a_coalition_cannot_exhaust_parallel_sessions() {
     let one = w.s.da_session(&claim, &bond_key(10_001)).unwrap().exposure / k as u128;
     assert_eq!(session.exposure, one * k as u128, "each lane carries its own deposit");
     // The join window: a lane past it is refused.
-    let late =
-        rc_step(&w.s, session.opened_daa + PALW_LEGACY_LANE_JOIN_WINDOW_DAA_V1 + 1, &[demand(bond_key(10_002), node(2 * k))]);
+    let late = rc_step(&w.s, session.opened_daa + PALW_LEGACY_LANE_JOIN_WINDOW_DAA_V1 + 1, &[demand(bond_key(10_002), node(2 * k))]);
     assert!(format!("{late:?}").contains("join window"), "{late:?}");
     // One coalition bond answers its way through sessions until its own lane budget ends: 63 + 63 + 2 = 128 extra lanes.
     let bond = bond_key(10_001);

@@ -153,7 +153,22 @@ macro_rules! moe {
     )*};
 }
 
-moe!(mixtral, qwen2_moe, qwen3_moe, olmoe, granitemoe, gpt_oss, deepseek_v2, deepseek_v2_lite, deepseek_v3, glm4_moe, phimoe, llama4, llama4_vlm, gemma4);
+moe!(
+    mixtral,
+    qwen2_moe,
+    qwen3_moe,
+    olmoe,
+    granitemoe,
+    gpt_oss,
+    deepseek_v2,
+    deepseek_v2_lite,
+    deepseek_v3,
+    glm4_moe,
+    phimoe,
+    llama4,
+    llama4_vlm,
+    gemma4
+);
 
 macro_rules! recurrent {
     ($($name:ident),* $(,)?) => {$(
@@ -164,7 +179,25 @@ macro_rules! recurrent {
     )*};
 }
 
-recurrent!(qwen3_next, qwen3_5, qwen3_5_moe, qwen3_5_vlm, mamba, falcon_mamba, mamba2, jamba, rwkv, lfm2, kimi_linear, zamba2, nemotron_h, nemotron_h_latent, falcon_h1, falcon_h1_norm, falcon_h1_gate);
+recurrent!(
+    qwen3_next,
+    qwen3_5,
+    qwen3_5_moe,
+    qwen3_5_vlm,
+    mamba,
+    falcon_mamba,
+    mamba2,
+    jamba,
+    rwkv,
+    lfm2,
+    kimi_linear,
+    zamba2,
+    nemotron_h,
+    nemotron_h_latent,
+    falcon_h1,
+    falcon_h1_norm,
+    falcon_h1_gate
+);
 
 // Qwen4-Exp's generic features (hyper-connection streams, hashed n-gram per-layer embeddings, sparse block attention,
 // delta nets at any ratio, a routed MoE): the named acceptance matrix is `tests/qwen4_exp.rs`; here every fixture
@@ -222,7 +255,20 @@ fn a_recurrent_program_is_calibrated_as_long_as_its_context() {
         misaka_palw_tir_lower::hl::build_program(&spec).expect("hl")
     };
     let short = vec![vec![1usize; 32]; 4];
-    for recurrent in ["mamba", "falcon_mamba", "mamba2", "jamba", "qwen3_5", "qwen3_next", "rwkv", "lfm2", "kimi_linear", "zamba2", "nemotron_h", "falcon_h1"] {
+    for recurrent in [
+        "mamba",
+        "falcon_mamba",
+        "mamba2",
+        "jamba",
+        "qwen3_5",
+        "qwen3_next",
+        "rwkv",
+        "lfm2",
+        "kimi_linear",
+        "zamba2",
+        "nemotron_h",
+        "falcon_h1",
+    ] {
         let hl = hl_of(recurrent);
         assert!(fidelity::check_calibration_length(&hl, &short, 64).is_err(), "{recurrent}");
         assert_eq!(fidelity::check_calibration_length(&hl, &short, 32), Ok(Some(32)), "{recurrent}");

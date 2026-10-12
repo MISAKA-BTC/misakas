@@ -74,7 +74,11 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self.at.checked_add(n).filter(|end| *end <= self.bytes.len()).ok_or_else(|| format!("the image is truncated at byte {}", self.at))?;
+        let end = self
+            .at
+            .checked_add(n)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or_else(|| format!("the image is truncated at byte {}", self.at))?;
         let out = &self.bytes[self.at..end];
         self.at = end;
         Ok(out)
@@ -112,7 +116,8 @@ impl<'a> Reader<'a> {
         let mut elements = 1usize;
         for _ in 0..rank {
             let d = self.u32()? as usize;
-            elements = elements.checked_mul(d).filter(|e| *e <= MAX_TENSOR_ELEMENTS).ok_or("a tensor too large to be a witness value")?;
+            elements =
+                elements.checked_mul(d).filter(|e| *e <= MAX_TENSOR_ELEMENTS).ok_or("a tensor too large to be a witness value")?;
             shape.push(d);
         }
         let bytes = self.take(elements.checked_mul(dtype.width()).ok_or("a tensor too large")?)?;

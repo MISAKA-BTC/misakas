@@ -90,7 +90,8 @@ impl RemoteCheckpoint {
             Some(n) => {
                 let bytes = me.get(&index_url, 0..n)?;
                 let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| LowerError::weights(format!("index: {e}")))?;
-                let wm = v.get("weight_map").and_then(|w| w.as_object()).ok_or_else(|| LowerError::weights("index has no weight_map"))?;
+                let wm =
+                    v.get("weight_map").and_then(|w| w.as_object()).ok_or_else(|| LowerError::weights("index has no weight_map"))?;
                 let shards: BTreeSet<&str> = wm.values().filter_map(|x| x.as_str()).collect();
                 let urls: Vec<String> = shards.iter().map(|s| format!("{base}{s}")).collect();
                 for (name, shard) in wm {
@@ -310,7 +311,10 @@ mod tests {
     fn a_remote_repository_is_read_by_ranges_and_equals_the_local_one() {
         let big: Vec<f32> = (0..4096).map(|i| i as f32).collect();
         let (fetcher, _) = repo(&[
-            ("model-00001-of-00002.safetensors", vec![("x.weight", "F32", vec![4, 1024], f32b(&big)), ("n.weight", "F32", vec![2], f32b(&[1.0, 2.0]))]),
+            (
+                "model-00001-of-00002.safetensors",
+                vec![("x.weight", "F32", vec![4, 1024], f32b(&big)), ("n.weight", "F32", vec![2], f32b(&[1.0, 2.0]))],
+            ),
             ("model-00002-of-00002.safetensors", vec![("y.weight", "BF16", vec![2, 3], vec![0u8; 12])]),
         ]);
         let ck = RemoteCheckpoint::open(Box::new(fetcher), "https://example.invalid/m").unwrap();
@@ -400,7 +404,8 @@ mod tests {
                 }
             }
         });
-        let ck = RemoteCheckpoint::open(Box::new(CurlFetcher::new()), &format!("http://127.0.0.1:{port}/m")).expect("opens over loopback");
+        let ck =
+            RemoteCheckpoint::open(Box::new(CurlFetcher::new()), &format!("http://127.0.0.1:{port}/m")).expect("opens over loopback");
         assert_eq!(ck.names(), vec!["x.weight"]);
         // The header cost kilobytes of a 8 KiB file; one row costs one row.
         let before = served.load(Ordering::Relaxed);

@@ -440,7 +440,8 @@ impl Params {
         let from_daa = self.palw_gen_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
         let (v5_daa, caps) = self.palw_gen_lane_mirror_v1();
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_gen_from_daa(from_daa).with_fp_job_v5_from_daa(v5_daa).with_gen_max_inflight_claims(caps);
+            bundle.state =
+                bundle.state.clone().with_gen_from_daa(from_daa).with_fp_job_v5_from_daa(v5_daa).with_gen_max_inflight_claims(caps);
         }
     }
 

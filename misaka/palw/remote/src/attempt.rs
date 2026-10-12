@@ -24,8 +24,8 @@
 use crate::template::{AcceptedTemplate, TemplatePolicy, TemplateRefusal, recheck_before_submit};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_attempt_v2::{
-    PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptChainFactsV1, PalwAttemptEnvelopeV2, PalwAttemptExecutionV1,
-    PalwAttemptUnsignedV2, attempt_id_v2, class_ticket_v3, palw_attempt_from_execution_v1, palw_job_anchor_v1,
+    PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptChainFactsV1, PalwAttemptEnvelopeV2,
+    PalwAttemptExecutionV1, PalwAttemptUnsignedV2, attempt_id_v2, class_ticket_v3, palw_attempt_from_execution_v1, palw_job_anchor_v1,
 };
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
@@ -148,7 +148,8 @@ pub fn mount_attempt(
     // Then the network's, against a header carrying a dummy signature of the right length (the signature is outside the priced bytes).
     let mut probe = template_header.clone();
     probe.nonce = nonce;
-    probe.palw_commitment = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; params.signature_len] }.encode_wire();
+    probe.palw_commitment =
+        PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; params.signature_len] }.encode_wire();
     if !network_draw(&probe, nonce, params.single_lottery) {
         return Ok(None);
     }
@@ -185,9 +186,14 @@ impl AttemptSigner for MlDsaAttemptSigner {
         self.keypair.verification_key.as_ref().to_vec()
     }
     fn sign_attempt_id(&self, attempt_id: &Hash64) -> Result<Vec<u8>, String> {
-        libcrux_ml_dsa::ml_dsa_87::sign(&self.keypair.signing_key, attempt_id.as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT, [0x5Au8; 32])
-            .map(|s| s.as_ref().to_vec())
-            .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &self.keypair.signing_key,
+            attempt_id.as_byte_slice(),
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .map(|s| s.as_ref().to_vec())
+        .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))
     }
 }
 
@@ -297,9 +303,10 @@ mod tests {
         let (exec, signer) = (&mut Exec { calls: Cell::new(0), anchors: Default::default() }, Signer { signed: Cell::new(0) });
         let hdr = header(100);
         let mut cursor = None;
-        let mounted = mount_attempt(&t, &hdr, &params(u128::MAX), 7_708, 3_000, h(31), h(30), &mut cursor, exec, &signer, &|_, _, _| true)
-            .unwrap()
-            .expect("both lotteries pass");
+        let mounted =
+            mount_attempt(&t, &hdr, &params(u128::MAX), 7_708, 3_000, h(31), h(30), &mut cursor, exec, &signer, &|_, _, _| true)
+                .unwrap()
+                .expect("both lotteries pass");
         assert_eq!(signer.signed.get(), 1, "signed exactly once, after the draw");
         assert_eq!(exec.calls.get(), 1);
         // The header carries the signed envelope the chain decodes, bound to THIS position.
@@ -308,7 +315,10 @@ mod tests {
         assert_eq!(env.signature, mounted.attempt_id.as_byte_slice()[..8].to_vec());
         assert_eq!(mounted.attempt.trace_retention_daa, 100 + 3_000, "the chain's retention pin: the block's own DAA plus the window");
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&hdr);
-        assert_eq!(mounted.attempt.challenge, kaspa_consensus_core::palw_attempt_v2::challenge_v2(h(20), pre_pow, hdr.timestamp, 0, h(30), &params(0).bond));
+        assert_eq!(
+            mounted.attempt.challenge,
+            kaspa_consensus_core::palw_attempt_v2::challenge_v2(h(20), pre_pow, hdr.timestamp, 0, h(30), &params(0).bond)
+        );
         assert_eq!(exec.anchors.borrow()[0], palw_job_anchor_v1(h(20), pre_pow, h(30), &params(0).bond, 0));
     }
 
@@ -319,9 +329,17 @@ mod tests {
         let hdr = header(100);
         let mut cursor = None;
         // The class lottery loses (target 0).
-        assert!(mount_attempt(&t, &hdr, &params(0), 7_708, 3_000, h(31), h(30), &mut cursor, exec, &signer, &|_, _, _| true).unwrap().is_none());
+        assert!(
+            mount_attempt(&t, &hdr, &params(0), 7_708, 3_000, h(31), h(30), &mut cursor, exec, &signer, &|_, _, _| true)
+                .unwrap()
+                .is_none()
+        );
         // The network lottery loses.
-        assert!(mount_attempt(&t, &hdr, &params(u128::MAX), 7_708, 3_000, h(31), h(30), &mut cursor, exec, &signer, &|_, _, _| false).unwrap().is_none());
+        assert!(
+            mount_attempt(&t, &hdr, &params(u128::MAX), 7_708, 3_000, h(31), h(30), &mut cursor, exec, &signer, &|_, _, _| false)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(signer.signed.get(), 0, "a lost draw is never signed");
         // The same template resumed at the next bucket each time: two draws, two distinct anchors; a different template starts over.
         let anchors = exec.anchors.borrow().clone();
@@ -369,7 +387,10 @@ mod tests {
             })
         };
         assert!(ready_to_publish(&t, &obs(100, 5), &policy, 120).is_ok());
-        assert!(matches!(ready_to_publish(&t, &obs(100, 5), &policy, 140), Err(AttemptError::Template(TemplateRefusal::Stale { .. }))));
+        assert!(matches!(
+            ready_to_publish(&t, &obs(100, 5), &policy, 140),
+            Err(AttemptError::Template(TemplateRefusal::Stale { .. }))
+        ));
         assert!(matches!(ready_to_publish(&t, &obs(120, 6), &policy, 125), Err(AttemptError::Template(TemplateRefusal::ChainMoved))));
     }
 }

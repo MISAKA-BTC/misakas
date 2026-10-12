@@ -135,7 +135,8 @@ fn main() {
         }
         // The floor's class id, for `misaka-palw-fp-rail --print-identity --class-id` (the leg's executor serves this class).
         let class_path = outbox.join("floor.class");
-        std::fs::write(&class_path, hex_of(backend.profile().shape_profile_id())).unwrap_or_else(|e| die(format!("{}: {e}", class_path.display())));
+        std::fs::write(&class_path, hex_of(backend.profile().shape_profile_id()))
+            .unwrap_or_else(|e| die(format!("{}: {e}", class_path.display())));
         let path = outbox.join("fp-lane.obj");
         std::fs::write(&path, borsh::to_vec(&lane).unwrap_or_else(|e| die(e)))
             .unwrap_or_else(|e| die(format!("{}: {e}", path.display())));

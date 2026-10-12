@@ -42,7 +42,9 @@ fn a_zamba2_config_reads_as_mamba_layers_with_a_shared_branch_on_the_hybrid_ones
     assert!((pb.attn.scale - (pb.attn.head_dim as f64 / 2.0).powf(-0.5)).abs() < 1e-15, "the scale is (head_dim / 2)^-1/2");
     assert_eq!(pb.lowrank.map(|l| (l.rank, l.attn)), Some((4, true)));
     let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
-    for want in ["ATTN_SHARED_BLOCK_V1", "EMBED_CARRY_V1", "LAYER_PRE_BRANCH_V1", "LINEAR_LOWRANK_ADAPTER_V1", "TENSOR_NAME_ALTERNATIVES_V1"] {
+    for want in
+        ["ATTN_SHARED_BLOCK_V1", "EMBED_CARRY_V1", "LAYER_PRE_BRANCH_V1", "LINEAR_LOWRANK_ADAPTER_V1", "TENSOR_NAME_ALTERNATIVES_V1"]
+    {
         assert!(ids.contains(&want), "{want} in {ids:?}");
     }
 }

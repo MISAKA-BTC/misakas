@@ -44,7 +44,10 @@ impl CellRunPursuitV1 {
             class_id: capture.binding.class.class_id(&capture.binding.artifact_root),
             job: claim,
         };
-        let planning_bytes = (capture.binding.class.program.len() as u64).checked_mul(64).and_then(|n| n.checked_add(super::PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1)).ok_or("the planning program envelope overflows")?;
+        let planning_bytes = (capture.binding.class.program.len() as u64)
+            .checked_mul(64)
+            .and_then(|n| n.checked_add(super::PALW_TIR_SHARD_CELL_SCRATCH_BYTES_V1))
+            .ok_or("the planning program envelope overflows")?;
         let planning = ledger.reserve(key.clone(), planning_bytes).map_err(|e| e.to_string())?;
         let space =
             kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&capture.binding.class).map_err(|e| e.to_string())?;
@@ -55,7 +58,11 @@ impl CellRunPursuitV1 {
                     if !wanted.contains_key(&index) && wanted.len() >= MAX_LEAVES {
                         return Err("the node's requested cell leaf budget is full".into());
                     }
-                    if u32::try_from(index).ok().and_then(kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_index_v1).is_none() {
+                    if u32::try_from(index)
+                        .ok()
+                        .and_then(kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_index_v1)
+                        .is_none()
+                    {
                         return Err("a requested cell leaf exceeds the signed off-chain run address space".into());
                     }
                     let leaf = space.leaf_at(&capture.binding.job_context, index).ok_or("a requested cell leaf is outside the job")?;
@@ -208,8 +215,7 @@ fn decode_requested_run_v1(
     let mut preimages = Vec::with_capacity(sizes.len());
     for max in sizes {
         let version = u16::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
-        let coord =
-            kaspa_consensus_core::palw_step::PalwStepCoordinateV1::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
         let value_count = u32_at(&mut r)?;
         let length = u32_at(&mut r)?;
         if length > *max || length as usize > r.len() {

@@ -100,12 +100,19 @@ fn m1_a_merged_admitted_attempt_records_the_anchor_past_the_fence_and_a_refused_
     let (below, _, below_skips) = fold_with_merged(&s5, &q, &ctx(6, 200, 6), None, &merged, &safety(&q, 20_000));
     assert!(below_skips.is_empty());
     assert!(below.round_seed_anchor().is_none(), "below the fence a merged attempt is never an anchor");
-    assert!(below.claim(&attempt_id_v2(&a.attempt)).is_some() && past.claim(&attempt_id_v2(&a.attempt)).is_some(), "admitted either way: the fence moves the anchor only");
+    assert!(
+        below.claim(&attempt_id_v2(&a.attempt)).is_some() && past.claim(&attempt_id_v2(&a.attempt)).is_some(),
+        "admitted either way: the fence moves the anchor only"
+    );
 
     // The latest admitted attempt of the block wins: the own attempt first, then the mergeset in order.
     let own = (&b, h64(0xE7));
     let (own_then_merged, _, _) = fold_with_merged(&s5, &p, &ctx(6, 200, 6), Some(own), &merged, &safety(&p, 20_000));
-    assert_eq!(own_then_merged.round_seed_anchor(), Some(&anchor(2, block(60), 0xE6)), "own first, merged after: the merged one is the last");
+    assert_eq!(
+        own_then_merged.round_seed_anchor(),
+        Some(&anchor(2, block(60), 0xE6)),
+        "own first, merged after: the merged one is the last"
+    );
     let (own_only, _, _) = fold_with_merged(&s5, &p, &ctx(6, 200, 6), Some(own), &[], &safety(&p, 20_000));
     assert_eq!(own_only.round_seed_anchor(), Some(&anchor(2, block(6), 0xE7)), "an own attempt alone is as it always was");
     let two = [(&a, block(60), h64(0xE6)), (&b, block(61), h64(0xE8))];
@@ -123,14 +130,11 @@ fn m1_a_merged_admitted_attempt_records_the_anchor_past_the_fence_and_a_refused_
 /// The window chain: span 1's Final is snapshotted at span 2 for span 4 (a one-span maturity); `anchor_in` is the span an attempt-carrying
 /// block records the anchor in (`None`: no span carries one); `open_at` the DAA of the block that opens the span the snapshot is due at or
 /// later. Returns the states of the blocks that open span 2, an in-between span and the due span.
-fn chain_to(
-    p: &PalwStateParamsV2,
-    anchor_in: Option<u64>,
-    open_at: u64,
-) -> (PalwChainStateV2, PalwChainStateV2, PalwChainStateV2) {
+fn chain_to(p: &PalwStateParamsV2, anchor_in: Option<u64>, open_at: u64) -> (PalwChainStateV2, PalwChainStateV2, PalwChainStateV2) {
     let (s5, _) = round_final_in_span_1(p);
     let attempt_block = |parent: &PalwChainStateV2, daa: u64, word: u64, nonce: u64, open_round: u64| {
-        fold_with_merged(parent, p, &ctx(word, daa, word), Some((&attempt(40, nonce), h64(0xE0 + word))), &[], &safety(p, open_round)).0
+        fold_with_merged(parent, p, &ctx(word, daa, word), Some((&attempt(40, nonce), h64(0xE0 + word))), &[], &safety(p, open_round))
+            .0
     };
     let plain = |parent: &PalwChainStateV2, daa: u64, word: u64, open_round: u64| {
         fold_with_merged(parent, p, &ctx(word, daa, word), None, &[], &safety(p, open_round)).0
@@ -159,7 +163,11 @@ fn m2_m3_the_anchor_survives_the_span_boundary_and_seeds_the_snapshot_a_span_the
     // M3: span 4 opens with no anchor of span 3, and the due snapshot is seeded all the same, by the anchor of span 2.
     let schedule = s8.round_schedule(4).expect("seeded by the window's anchor").clone();
     let (score, frontier) = s7.safe_frontier();
-    assert_eq!(schedule.seed, palw_execution_span_seed_v1(&recorded, 4, score, frontier), "the seed is the anchor's execution, the span and the frontier");
+    assert_eq!(
+        schedule.seed,
+        palw_execution_span_seed_v1(&recorded, 4, score, frontier),
+        "the seed is the anchor's execution, the span and the frontier"
+    );
     assert!(s8.round_pending_snapshot().is_none(), "the snapshot is spent");
     assert_eq!(s8.round_seed_anchor(), Some(&recorded), "and the anchor stays for the next reader");
 

@@ -5269,7 +5269,9 @@ impl Serializer for GetPalwSettlementResponse {
 impl Deserializer for GetPalwSettlementResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !(1..=3).contains(&version) { return Err(std::io::Error::other("unknown PALW settlement response version")); }
+        if !(1..=3).contains(&version) {
+            return Err(std::io::Error::other("unknown PALW settlement response version"));
+        }
         Ok(Self {
             available: load!(bool, reader)?,
             sink_daa: load!(u64, reader)?,
@@ -5283,10 +5285,14 @@ impl Deserializer for GetPalwSettlementResponse {
             dns_retired_at: if version >= 2 { load!(Option<u64>, reader)? } else { None },
             native_settlement: if version >= 2 {
                 load!(Option<String>, reader)?.map(|s| serde_json::from_str(&s)).transpose().map_err(std::io::Error::other)?
-            } else { None },
+            } else {
+                None
+            },
             native_readiness: if version >= 3 {
                 load!(Option<String>, reader)?.map(|s| serde_json::from_str(&s)).transpose().map_err(std::io::Error::other)?
-            } else { None },
+            } else {
+                None
+            },
         })
     }
 }
@@ -5383,7 +5389,9 @@ impl Serializer for GetPrecommitDutyResponse {
         store!(u64, &self.held_epoch, writer)?;
         store!(String, &self.held_anchor, writer)?;
         serialize!(Vec<RpcPrecommitDue>, &self.due, writer)?;
-        if self.retired_at.is_some() { store!(Option<u64>, &self.retired_at, writer)?; }
+        if self.retired_at.is_some() {
+            store!(Option<u64>, &self.retired_at, writer)?;
+        }
         Ok(())
     }
 }
@@ -5391,7 +5399,9 @@ impl Serializer for GetPrecommitDutyResponse {
 impl Deserializer for GetPrecommitDutyResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if version != 1 && version != 2 { return Err(std::io::Error::other("unknown precommit duty response version")); }
+        if version != 1 && version != 2 {
+            return Err(std::io::Error::other("unknown precommit duty response version"));
+        }
         Ok(Self {
             available: load!(bool, reader)?,
             round_active: load!(bool, reader)?,
@@ -6640,11 +6650,7 @@ impl Serializer for RpcPalwPanelHoldReasonCount {
 impl Deserializer for RpcPalwPanelHoldReasonCount {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
-        Ok(Self {
-            code: load!(String, reader)?,
-            message: load!(String, reader)?,
-            seats: load!(u32, reader)?,
-        })
+        Ok(Self { code: load!(String, reader)?, message: load!(String, reader)?, seats: load!(u32, reader)? })
     }
 }
 
@@ -6990,11 +6996,7 @@ impl Serializer for GetPalwPanelSeatsResponse {
 impl Deserializer for GetPalwPanelSeatsResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
-        Ok(Self {
-            available: load!(bool, reader)?,
-            tip_daa: load!(u64, reader)?,
-            seats: deserialize!(Vec<RpcPalwPanelSeat>, reader)?,
-        })
+        Ok(Self { available: load!(bool, reader)?, tip_daa: load!(u64, reader)?, seats: deserialize!(Vec<RpcPalwPanelSeat>, reader)? })
     }
 }
 
@@ -8541,8 +8543,10 @@ mod palw_node_status_wire_tests {
         let back = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut framed).unwrap();
         assert!(framed.is_empty(), "the v6 decoder consumes exactly its framed diagnostics");
         assert!(back.import_session_available && !back.pruning_import_stable);
-        assert_eq!((back.import_session_epoch, back.import_session_point.as_str(), back.import_session_phase.as_str()),
-            (41, response.import_session_point.as_str(), "utxo-stream"));
+        assert_eq!(
+            (back.import_session_epoch, back.import_session_point.as_str(), back.import_session_phase.as_str()),
+            (41, response.import_session_point.as_str(), "utxo-stream")
+        );
         assert_eq!(back.verification, "unchanged-prefix");
         let v5 = version_five_bytes(&response);
         let old = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v5.as_slice()).unwrap();
@@ -8558,7 +8562,8 @@ mod palw_node_status_wire_tests {
         assert_eq!(prefix.verification, response.verification);
         assert_eq!(old_reader_frame.len(), wire.len() - v5.len());
         let mut json = serde_json::to_value(&response).unwrap();
-        for key in ["importSessionAvailable", "importSessionEpoch", "importSessionPoint", "importSessionPhase", "pruningImportStable"] {
+        for key in ["importSessionAvailable", "importSessionEpoch", "importSessionPoint", "importSessionPhase", "pruningImportStable"]
+        {
             json.as_object_mut().unwrap().remove(key);
         }
         let old_json: GetPalwNodeStatusResponse = serde_json::from_value(json).unwrap();
@@ -13531,7 +13536,6 @@ impl Deserializer for GetPalwKernelRowsResponse {
     }
 }
 
-
 /// **`getPalwKernelFinals` (op 212)**: every Final the kernel route holds, in canonical order, with the beacon's fact for it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13652,7 +13656,6 @@ impl Deserializer for GetPalwKernelFinalsResponse {
         })
     }
 }
-
 
 /// **`getPalwModelRefutationSeals` (op 213, RFC02-T)**: one bond's candidate-refutation seal rows.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

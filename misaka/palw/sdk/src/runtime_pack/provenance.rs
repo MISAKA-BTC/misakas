@@ -28,13 +28,21 @@ pub fn provenance_of(meta: &str) -> Provenance {
     if let Some(f) = m.get("frontend") {
         let a = &f["adapter"];
         let adapter = match a["kind"].as_str() {
-            Some("built-in") | Some("user-file") => format!("{} adapter `{}` {}", a["kind"].as_str().unwrap_or(""), a["id"].as_str().unwrap_or(""), short(&a["hash"])),
+            Some("built-in") | Some("user-file") => {
+                format!("{} adapter `{}` {}", a["kind"].as_str().unwrap_or(""), a["id"].as_str().unwrap_or(""), short(&a["hash"]))
+            }
             _ => "no adapter (the standard decoder template)".to_string(),
         };
-        lines.push(format!("frontend         level {}, {}, spec {}", f["level"].as_str().unwrap_or("?"), adapter, short(&f["spec_digest"])));
+        lines.push(format!(
+            "frontend         level {}, {}, spec {}",
+            f["level"].as_str().unwrap_or("?"),
+            adapter,
+            short(&f["spec_digest"])
+        ));
     }
     if let Some(s) = m.get("scope") {
-        let left: Vec<&str> = s["excluded"].as_array().map(|a| a.iter().filter_map(|e| e["what"].as_str()).collect()).unwrap_or_default();
+        let left: Vec<&str> =
+            s["excluded"].as_array().map(|a| a.iter().filter_map(|e| e["what"].as_str()).collect()).unwrap_or_default();
         lines.push(format!(
             "scope            {} → {}; {}",
             s["input"].as_str().unwrap_or("?"),
@@ -42,11 +50,16 @@ pub fn provenance_of(meta: &str) -> Provenance {
             if left.is_empty() { "nothing left out".to_string() } else { format!("NOT computed: {}", left.join(", ")) }
         ));
         if s["text_only"] == true {
-            lines.push("                 (this class is the model's text decoder only: a prompt cannot carry an image or audio)".to_string());
+            lines.push(
+                "                 (this class is the model's text decoder only: a prompt cannot carry an image or audio)".to_string(),
+            );
         }
     }
     if let Some(q) = m["quant"]["descriptors"].as_array().filter(|a| !a.is_empty()) {
-        lines.push(format!("quant formats    {}", q.iter().map(|d| format!("{} {}", d["name"].as_str().unwrap_or(""), short(&d["digest"]))).collect::<Vec<_>>().join(", ")));
+        lines.push(format!(
+            "quant formats    {}",
+            q.iter().map(|d| format!("{} {}", d["name"].as_str().unwrap_or(""), short(&d["digest"]))).collect::<Vec<_>>().join(", ")
+        ));
     }
     if let Some(math) = m.get("math") {
         let plat = math["platform"].as_str().map(|p| format!(" (built on {p}: only that platform rebuilds it)")).unwrap_or_default();
@@ -67,7 +80,11 @@ pub fn provenance_of(meta: &str) -> Provenance {
         lines.push(format!("calibration      statistics {}", short(&c["digest"])));
     }
     let keep = ["frontend", "scope", "quant", "math", "converter", "calibration", "policy", "logits_scale"];
-    let json = Value::Object(m.as_object().map(|o| o.iter().filter(|(k, _)| keep.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default());
+    let json = Value::Object(
+        m.as_object()
+            .map(|o| o.iter().filter(|(k, _)| keep.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default(),
+    );
     Provenance { lines, json }
 }
 
@@ -92,7 +109,10 @@ mod tests {
         let all = p.lines.join("\n");
         assert!(all.contains("level B, built-in adapter `vlm-llama` abababababababab"), "{all}");
         assert!(all.contains("NOT computed: vision tower, multimodal projector") && all.contains("text decoder only"), "{all}");
-        assert!(all.contains("Q4_K efefefefefefefef") && all.contains("math             libm-v1") && all.contains("legacy greedy-only"), "{all}");
+        assert!(
+            all.contains("Q4_K efefefefefefefef") && all.contains("math             libm-v1") && all.contains("legacy greedy-only"),
+            "{all}"
+        );
         assert_eq!(p.json["scope"]["text_only"], true);
         // An artifact built before the record existed prints nothing rather than guessing.
         assert!(provenance_of("{}").lines.is_empty() && provenance_of("not json").lines.is_empty());

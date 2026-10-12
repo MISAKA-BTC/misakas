@@ -13,7 +13,9 @@ use misaka_palw_tir_lower::quantfmt::QuantRegistry;
 use misaka_palw_tir_lower::spec::ModelSpec;
 use misaka_palw_tir_lower::weights::expr::{parse_weight_expr, to_expr};
 use misaka_palw_tir_lower::weights::stream::{eval_src_rows, row_blocks, src_row_space};
-use misaka_palw_tir_lower::weights::{Binding, Checkpoint, MapSource, Resolver, Tensor, TensorSource, check_weights, eval_src, layers_of_param};
+use misaka_palw_tir_lower::weights::{
+    Binding, Checkpoint, MapSource, Resolver, Tensor, TensorSource, check_weights, eval_src, layers_of_param,
+};
 use misaka_palw_tir_lower::{hf_config, hf_weights, hl, parse_config_str};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,8 +97,10 @@ fn assert_same_params(
     let mut n = 0;
     for (pi, d) in pa.params.iter().enumerate() {
         for l in layers(pa, pi) {
-            let x = eval_src(&ba.srcs[pi], &ra, l, &none).unwrap_or_else(|e| panic!("{what}: `{}` {l:?} (original layout): {e}", d.name));
-            let y = eval_src(&bb.srcs[pi], &rb, l, &none).unwrap_or_else(|e| panic!("{what}: `{}` {l:?} (re-laid layout): {e}", d.name));
+            let x =
+                eval_src(&ba.srcs[pi], &ra, l, &none).unwrap_or_else(|e| panic!("{what}: `{}` {l:?} (original layout): {e}", d.name));
+            let y =
+                eval_src(&bb.srcs[pi], &rb, l, &none).unwrap_or_else(|e| panic!("{what}: `{}` {l:?} (re-laid layout): {e}", d.name));
             assert_eq!(x, y, "{what}: `{}` {l:?}", d.name);
             n += 1;
         }
@@ -149,7 +153,8 @@ fn dbrx_flat_experts_bind_by_expression() {
     };
     // The roles of the three expert tensors are NOT named: the expressions make them unnecessary.
     let names = json!({"moe.router": "{p}layers.{L}.block_sparse_moe.gate"});
-    let (spec1, prog1, bind1) = read(&cfg, Some(adapter("mixtral", Some(names.clone()), weights("")))).unwrap_or_else(|e| panic!("{e}"));
+    let (spec1, prog1, bind1) =
+        read(&cfg, Some(adapter("mixtral", Some(names.clone()), weights("")))).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(spec1.hf.weights.len(), 3);
     let compared = assert_same_params("dbrx-style experts", &prog0, &bind0, &ck, &prog1, &bind1, &relaid);
     assert!(compared > 10, "{compared}");
@@ -214,9 +219,14 @@ fn a_fused_shared_expert_binds_by_row_ranges() {
     }
     let mut fused = 0;
     for l in 0..spec0.layers.len() {
-        let (g, u) = (format!("model.layers.{l}.mlp.shared_expert.gate_proj.weight"), format!("model.layers.{l}.mlp.shared_expert.up_proj.weight"));
+        let (g, u) = (
+            format!("model.layers.{l}.mlp.shared_expert.gate_proj.weight"),
+            format!("model.layers.{l}.mlp.shared_expert.up_proj.weight"),
+        );
         if ck.shape(&g).is_some() {
-            relaid.0.insert(format!("model.layers.{l}.mlp.shared_fused.weight"), cat_rows(&[ck.load(&g).unwrap(), ck.load(&u).unwrap()]));
+            relaid
+                .0
+                .insert(format!("model.layers.{l}.mlp.shared_fused.weight"), cat_rows(&[ck.load(&g).unwrap(), ck.load(&u).unwrap()]));
             fused += 1;
         }
     }
@@ -278,14 +288,16 @@ fn a_size_one_axis_is_a_reshape_step_never_a_silent_squeeze() {
 #[test]
 fn the_enumerated_layouts_are_expressions() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf");
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.path()).filter(|d| d.join("config.json").exists()).collect();
+    let mut dirs: Vec<PathBuf> =
+        std::fs::read_dir(&root).unwrap().flatten().map(|e| e.path()).filter(|d| d.join("config.json").exists()).collect();
     dirs.sort();
     assert!(dirs.len() >= 60, "{} fixtures", dirs.len());
     let mut ops: BTreeSet<String> = BTreeSet::new();
     let (mut checked, mut failed) = (0usize, Vec::new());
     for dir in &dirs {
         let name = dir.file_name().unwrap().to_string_lossy().to_string();
-        let spec = parse_config_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let spec =
+            parse_config_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
         let prog = hl::build_program(&spec).unwrap_or_else(|e| panic!("{name}: {e}"));
         let binding = hf_weights::bind(&spec, &prog).unwrap_or_else(|e| panic!("{name}: {e}"));
         for (d, src) in prog.params.iter().zip(&binding.srcs) {
@@ -330,7 +342,18 @@ fn the_enumerated_layouts_are_expressions() {
     assert!(failed.is_empty(), "{} of {} bindings do not round-trip:\n{}", failed.len(), checked + failed.len(), failed.join("\n"));
     // The fixtures use every step of the grammar (the three maps are `neg_exp`, RWKV's rescale and — only in a
     // test of its own — `scale`): the round trip covers the surface, not a corner of it.
-    for want in ["transpose", "reshape", "rows", "take", "take.strided", "take.per_layer", "stack", "pad_rows", "map.neg_exp", "map.rescale_by_layer"] {
+    for want in [
+        "transpose",
+        "reshape",
+        "rows",
+        "take",
+        "take.strided",
+        "take.per_layer",
+        "stack",
+        "pad_rows",
+        "map.neg_exp",
+        "map.rescale_by_layer",
+    ] {
         assert!(ops.contains(want), "no fixture binding uses `{want}`: {ops:?}");
     }
     assert!(checked > 1000, "{checked}");
@@ -364,21 +387,42 @@ fn the_three_corpus_families_that_needed_weights_as_data_are_level_b_now() {
         let after = run("adapter.json");
         assert_eq!(after.result, ReportResult::Lowerable, "{id}: {}", after.render());
         assert_eq!(after.level, Level::B, "{id}");
-        assert!(after.weight_errors.is_empty() && after.unread_tensors.is_empty(), "{id}: {:?} {:?}", after.weight_errors, after.unread_tensors);
-        assert!(after.features.iter().any(|f| f.id == "WEIGHTS_EXPR_V1"), "{id}: {:?}", after.features.iter().map(|f| &f.id).collect::<Vec<_>>());
+        assert!(
+            after.weight_errors.is_empty() && after.unread_tensors.is_empty(),
+            "{id}: {:?} {:?}",
+            after.weight_errors,
+            after.unread_tensors
+        );
+        assert!(
+            after.features.iter().any(|f| f.id == "WEIGHTS_EXPR_V1"),
+            "{id}: {:?}",
+            after.features.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
         assert!(!after.new_consensus_primitive_required && !after.new_court_kernel_required, "{id}");
         // The pack carries them now: with no adapter given, the built-in one claims the class and says the same.
         let auto = analyze(&cfg, Some(&tensors), &ReadOptions::default());
         assert_eq!(auto.result, ReportResult::Lowerable, "{id}: {}", auto.render());
         assert_eq!(auto.level, Level::B, "{id}");
-        assert!(matches!(&auto.adapter, misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id: a, .. } if a.starts_with(&id[..4])), "{id}: {:?}", auto.adapter);
+        assert!(
+            matches!(&auto.adapter, misaka_palw_tir_lower::hf_schema::AdapterSource::BuiltIn { id: a, .. } if a.starts_with(&id[..4])),
+            "{id}: {:?}",
+            auto.adapter
+        );
         // Before: refused, with the numbers (a missing tensor, or a shape the graph does not accept).
         let before = run("before.json");
-        assert!(matches!(before.result, ReportResult::NotLowerable { .. }), "{id}: the names-only adapter must not pass:\n{}", before.render());
+        assert!(
+            matches!(before.result, ReportResult::NotLowerable { .. }),
+            "{id}: the names-only adapter must not pass:\n{}",
+            before.render()
+        );
         assert!(!before.weight_errors.is_empty(), "{id}: {}", before.render());
     }
     // The shape of the "before" error is what an author sees: for ERNIE it names the fix.
     let cfg: Value = serde_json::from_str(&fr01("ernie4_5_moe", "config.json")).unwrap();
-    let b = analyze(&cfg, Some(&index_of("ernie4_5_moe")), &ReadOptions { adapter: AdapterChoice::Text(fr01("ernie4_5_moe", "before.json")) });
+    let b = analyze(
+        &cfg,
+        Some(&index_of("ernie4_5_moe")),
+        &ReadOptions { adapter: AdapterChoice::Text(fr01("ernie4_5_moe", "before.json")) },
+    );
     assert!(b.render().contains("size-1"), "{}", b.render());
 }

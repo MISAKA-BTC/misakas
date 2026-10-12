@@ -89,7 +89,8 @@ pub fn palw_anchor_window_jury_cut_span_v1(anchor_span: u64) -> u64 {
 /// (`target − 1 − maturity_spans`: the snapshot's target is the span after the one that took it, plus the maturity). A snapshot taken
 /// in the anchor's own span is seeded by it, as the rule has always allowed (the opening block anchors the snapshot it took).
 pub fn palw_anchor_window_seeds_snapshot_v1(anchor_span: u64, span_now: u64, window: u64, target: u64, maturity_spans: u64) -> bool {
-    palw_anchor_window_admits_v1(anchor_span, span_now, window) && anchor_span >= target.saturating_sub(1).saturating_sub(maturity_spans)
+    palw_anchor_window_admits_v1(anchor_span, span_now, window)
+        && anchor_span >= target.saturating_sub(1).saturating_sub(maturity_spans)
 }
 
 /// **The Activation Pool's (a), generalised: the latest span a drawn juror's readiness proof may have LANDED in to be paid for its preparation**
@@ -164,7 +165,9 @@ impl Params {
             ));
         }
         if !below(self.palw_model_registry) {
-            return Err(PalwModeV2Error::Invalid("palw_anchor_window_v1 needs palw_model_registry at or below it: a Candidate is a registry row"));
+            return Err(PalwModeV2Error::Invalid(
+                "palw_anchor_window_v1 needs palw_model_registry at or below it: a Candidate is a registry row",
+            ));
         }
         Ok(())
     }

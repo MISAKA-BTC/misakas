@@ -26,12 +26,12 @@
 
 use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1};
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT13_DAA, PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA,
-    PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
-    TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
-    palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
-    palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_INT13_DAA,
+    PALW_T12_MODEL_COURT_WINDOW_FENCES_V1, PALW_T12_TIR_FENCE2_DAA, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_DAA,
+    PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1,
+    palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params,
+    palw_t12_release_v3_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 

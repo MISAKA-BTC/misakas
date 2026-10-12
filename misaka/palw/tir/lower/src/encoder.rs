@@ -194,7 +194,9 @@ pub fn sentence_transformers(dir: &std::path::Path) -> Result<Option<SentenceTra
                     ["cls"] => StPooling::Cls,
                     ["mean"] => StPooling::Mean,
                     ["lasttoken"] => StPooling::LastToken,
-                    other => return Err(LowerError::not_lowerable(format!("sentence-transformers pooling {other:?} is not modelled"))),
+                    other => {
+                        return Err(LowerError::not_lowerable(format!("sentence-transformers pooling {other:?} is not modelled")));
+                    }
                 });
                 if c["include_prompt"].as_bool() == Some(false) {
                     return Err(LowerError::not_lowerable("sentence-transformers `include_prompt: false` is not modelled"));
@@ -383,8 +385,22 @@ pub fn cross_pipeline(tower: StageDecl, max_trip: u32) -> TirPipelineV1 {
         version: 1,
         stages: vec![
             tower,
-            StageDecl { name: "cross_kv".into(), program: 1, trip: TripRule::Fixed { n: 1 }, max_trip: 1, tokens: None, bind: vec![Binding::StageFinal { stage: 0 }] },
-            StageDecl { name: "text".into(), program: 2, trip: TripRule::TextStream, max_trip, tokens: None, bind: vec![Binding::StageFinal { stage: 1 }] },
+            StageDecl {
+                name: "cross_kv".into(),
+                program: 1,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }],
+            },
+            StageDecl {
+                name: "text".into(),
+                program: 2,
+                trip: TripRule::TextStream,
+                max_trip,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 1 }],
+            },
         ],
         output_stage: 2,
     }

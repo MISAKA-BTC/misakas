@@ -382,11 +382,7 @@ mod tests {
                     let (derived, mut header) = candidate.next_public_source_hash_header_v1().unwrap().unwrap();
                     assert_eq!(derived, source);
                     header.update(&tile.preimage.values_le);
-                    assert_eq!(
-                        header.finish(),
-                        tile.opening.leaf_hash,
-                        "owned header preserves the exact original wholeleaf hash"
-                    );
+                    assert_eq!(header.finish(), tile.opening.leaf_hash, "owned header preserves the exact original wholeleaf hash");
                     let next =
                         candidate.authenticated_public_source_actions_v1(seed, &tile.opening, &tile.preimage.values_le).unwrap();
                     for action in &next {

@@ -309,7 +309,9 @@ pub trait ConsensusViewV1 {
     /// Explicit native retirement authority; terminal receipts alone cannot compact data.
     /// The production host returns this only after its complete monetary/DA dependency
     /// retirement funnel removed the claim from BOTH current and parent native states.
-    fn retired_claim(&self, _claim: &Hash64) -> Option<PanelRetirementAuthorityV1> { None }
+    fn retired_claim(&self, _claim: &Hash64) -> Option<PanelRetirementAuthorityV1> {
+        None
+    }
     /// The host's receipt clock for a currently bound claim; `None` (the default) is the engine's own
     /// `bound_daa + receipt_window_daa`.
     fn receipt_clock(&self, _claim: &Hash64) -> Option<ReceiptClockV1> {

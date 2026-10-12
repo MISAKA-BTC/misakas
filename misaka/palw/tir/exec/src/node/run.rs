@@ -275,8 +275,7 @@ impl<'a> TirClassRunnerV1<'a> {
         };
         let h_tile = space.layout.h_tile as usize;
         let memory_need = super::memory::tir_executor_storage_need_v1(space, self.plan, ctx)?;
-        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
-            "tir-executor", self.class_id, ctx, memory_need)?;
+        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?;
         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
         exec.set_hist_tail(h_tile);
         if self.fused {
@@ -284,8 +283,7 @@ impl<'a> TirClassRunnerV1<'a> {
         }
         let first_position = match start {
             None => 0,
-            Some(point) => point.position.checked_add(1).filter(|p| *p <= job.positions)
-                .ok_or("a resume point past the job's end")?,
+            Some(point) => point.position.checked_add(1).filter(|p| *p <= job.positions).ok_or("a resume point past the job's end")?,
         };
         let end = match until {
             None => job.positions,
@@ -305,8 +303,8 @@ impl<'a> TirClassRunnerV1<'a> {
         }
         let first_index = space.running_total(&job, first_position) as u64;
         // A one-position replay must not reserve hashes for the rest of the whole job.
-        let range_leaves = (space.running_total(&job, end) as u64).checked_sub(first_index)
-            .ok_or("a replay leaf range runs backwards")?;
+        let range_leaves =
+            (space.running_total(&job, end) as u64).checked_sub(first_index).ok_or("a replay leaf range runs backwards")?;
         let mut hashes = Vec::new();
         hashes.try_reserve_exact(range_leaves.min(1 << 24) as usize).map_err(|_| "cannot reserve replay hash storage")?;
         let mut emit = Emitter {

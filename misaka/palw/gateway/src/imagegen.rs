@@ -28,7 +28,7 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PROMPT_MODE_USER, PalwFpC
 use kaspa_consensus_core::palw_gen_class_v1::PalwGenClassRecordV1;
 use kaspa_consensus_core::palw_gen_close_v1::PalwGenTensorBindingV1;
 use kaspa_consensus_core::palw_gen_job_v1::{
-    PalwGenBodyV1, PalwGenImageBodyV1, PalwGenJobV1, PalwJobEnvelopeV1, palw_gen_job_resolve_class_v1, PALW_GEN_JOB_VERSION_V1,
+    PALW_GEN_JOB_VERSION_V1, PalwGenBodyV1, PalwGenImageBodyV1, PalwGenJobV1, PalwJobEnvelopeV1, palw_gen_job_resolve_class_v1,
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
 use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -40,7 +40,18 @@ use misaka_palw_tir::pipeline::PipelineParams;
 /// Most images one request may ask for (each is its own job, claim and run).
 pub const MAX_IMAGES_PER_REQUEST: u16 = 4;
 const SEED_DOMAIN: &[u8] = b"misaka-palw/gateway/image-seed/v1";
-const KNOWN_KEYS: &[&str] = &["prompt_token_ids", "negative_prompt_token_ids", "n", "size", "steps", "guidance_scale", "seed", "model", "response_format", "user"];
+const KNOWN_KEYS: &[&str] = &[
+    "prompt_token_ids",
+    "negative_prompt_token_ids",
+    "n",
+    "size",
+    "steps",
+    "guidance_scale",
+    "seed",
+    "model",
+    "response_format",
+    "user",
+];
 
 /// What a person asked for, parsed (nothing canonicalised yet).
 #[derive(Clone, Debug, PartialEq)]
@@ -60,7 +71,9 @@ fn ids(body: &serde_json::Value, key: &str) -> Result<Vec<u32>, String> {
         Some(serde_json::Value::Array(items)) => items
             .iter()
             .enumerate()
-            .map(|(i, v)| v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| format!("{key}[{i}] is not a token id (a u32)")))
+            .map(|(i, v)| {
+                v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| format!("{key}[{i}] is not a token id (a u32)"))
+            })
             .collect(),
         Some(_) => Err(format!("{key} must be an array of token ids")),
     }
@@ -82,14 +95,20 @@ pub fn parse(body: &serde_json::Value) -> Result<ImageRequest, String> {
     }
     let n = match object.get("n") {
         None => 1,
-        Some(v) => v.as_u64().filter(|n| (1..=u64::from(MAX_IMAGES_PER_REQUEST)).contains(n)).ok_or(format!("n must be 1..={MAX_IMAGES_PER_REQUEST}"))? as u16,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (1..=u64::from(MAX_IMAGES_PER_REQUEST)).contains(n))
+            .ok_or(format!("n must be 1..={MAX_IMAGES_PER_REQUEST}"))? as u16,
     };
     let size = match object.get("size") {
         None | Some(serde_json::Value::Null) => None,
         Some(v) => {
             let text = v.as_str().ok_or("size must be a string like \"16x16\"")?;
             let (w, h) = text.split_once('x').ok_or("size must be WxH, like \"16x16\"")?;
-            Some((h.parse::<u32>().map_err(|_| "size height is not a number")?, w.parse::<u32>().map_err(|_| "size width is not a number")?))
+            Some((
+                h.parse::<u32>().map_err(|_| "size height is not a number")?,
+                w.parse::<u32>().map_err(|_| "size width is not a number")?,
+            ))
         }
     };
     let steps = match object.get("steps") {
@@ -111,7 +130,15 @@ pub fn parse(body: &serde_json::Value) -> Result<ImageRequest, String> {
             Some(out)
         }
     };
-    Ok(ImageRequest { prompt_ids: ids(body, "prompt_token_ids")?, negative_ids: ids(body, "negative_prompt_token_ids")?, n, size, steps, guidance_scale, seed })
+    Ok(ImageRequest {
+        prompt_ids: ids(body, "prompt_token_ids")?,
+        negative_ids: ids(body, "negative_prompt_token_ids")?,
+        n,
+        size,
+        steps,
+        guidance_scale,
+        seed,
+    })
 }
 
 /// **R's key for a request that named none**: a pure function of the request's canonical digest. Deterministic, so a retry is the same image;
@@ -202,12 +229,14 @@ pub fn plan(
     let prompt_hash = if request.prompt_ids.is_empty() {
         Hash64::default()
     } else {
-        prompt_token_ids_commitment_v1(form, &request.prompt_ids).map_err(|e| format!("the prompt does not commit in this network's form: {e:?}"))?
+        prompt_token_ids_commitment_v1(form, &request.prompt_ids)
+            .map_err(|e| format!("the prompt does not commit in this network's form: {e:?}"))?
     };
     let negative_hash = if request.negative_ids.is_empty() {
         Hash64::default()
     } else {
-        prompt_token_ids_commitment_v1(form, &request.negative_ids).map_err(|e| format!("the negative prompt does not commit: {e:?}"))?
+        prompt_token_ids_commitment_v1(form, &request.negative_ids)
+            .map_err(|e| format!("the negative prompt does not commit: {e:?}"))?
     };
     let mut jobs = Vec::with_capacity(request.n as usize);
     for k in 0..request.n {
@@ -269,7 +298,8 @@ pub fn run<P: PipelineParams>(
     let work = held.run_tensor(job, &request.prompt_ids, &request.negative_ids, &[], form)?;
     let binding = work.binding.clone();
     let output = work.output();
-    let canonical_bytes = output.spec.canonical_bytes(&output.values).map_err(|e| format!("the output has no canonical bytes: {e:?}"))?;
+    let canonical_bytes =
+        output.spec.canonical_bytes(&output.values).map_err(|e| format!("the output has no canonical bytes: {e:?}"))?;
     let carried: Vec<u32> = if job.envelope.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA {
         request.prompt_ids.iter().chain(&request.negative_ids).copied().collect()
     } else {
@@ -368,7 +398,11 @@ mod tests {
             output: OutputSpecV1::image_rgb8(IMAGE_HW, IMAGE_HW),
             offers: PalwGenOffersV1 {
                 steps: COUNTS.to_vec(),
-                profile: PalwGenProfileOffersV1::Image(PalwGenImageOffersV1 { sampler_id: Hash64::from_bytes([0x5D; 64]), guidance: None, steps_scalar: Some(0) }),
+                profile: PalwGenProfileOffersV1::Image(PalwGenImageOffersV1 {
+                    sampler_id: Hash64::from_bytes([0x5D; 64]),
+                    guidance: None,
+                    steps_scalar: Some(0),
+                }),
                 scalars: vec![PalwGenScalarOfferV1 { lo: 0, hi: COUNTS.len() as i64 - 1 }],
                 max_prompt_tokens: (L - 2) as u32,
                 max_negative_tokens: 0,
@@ -383,15 +417,22 @@ mod tests {
         (PALW_DRILL_GEN_V1_ENTRY.set)(&mut params, Some(ForkActivation::new(1)));
         (PALW_HELD_CLOSE_CHUNKS_ENTRY_V1.set)(&mut params, Some(ForkActivation::new(1)));
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
-        let declared = gen_declare_layout_v1(&params, bundle, &spec, &weights, &GenLayoutChoiceV1 { tile_len: 16, output_tile: None, h_chunk: 16, checkpoint_interval: 1 })
-            .unwrap_or_else(|e| panic!("declare: {e}"));
+        let declared = gen_declare_layout_v1(
+            &params,
+            bundle,
+            &spec,
+            &weights,
+            &GenLayoutChoiceV1 { tile_len: 16, output_tile: None, h_chunk: 16, checkpoint_interval: 1 },
+        )
+        .unwrap_or_else(|e| panic!("declare: {e}"));
         let row = declared.row.clone().expect("the class derives a registry row");
         Some(Class { row, declared, weights })
     }
 
     fn held(c: &Class, tag: &str) -> (GenHeldClassV1<misaka_palw_tir_artifact::PalwTirContainerV2>, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!("misaka-gw-imagegen-{}-{tag}.palwtir2", std::process::id()));
-        gen_write_declared_container_v1(&path, &c.declared, &c.weights, "{\"model_id\":\"palw-fixture/sd3-tiny\"}".to_string()).expect("the container");
+        gen_write_declared_container_v1(&path, &c.declared, &c.weights, "{\"model_id\":\"palw-fixture/sd3-tiny\"}".to_string())
+            .expect("the container");
         (GenHeldClassV1::hold_container(c.row.clone(), &path).expect("the worker holds the class"), path)
     }
 
@@ -450,14 +491,24 @@ mod tests {
         // R: both images share the request's seed; the index is R's position.
         let seeds: Vec<_> = jobs.iter().map(|j| j.seed).collect();
         assert_eq!(seeds, vec![[0x33; 32], [0x33; 32]]);
-        let indices: Vec<u16> = jobs.iter().map(|j| match &j.body { PalwGenBodyV1::Image(b) => b.image_index, _ => unreachable!() }).collect();
+        let indices: Vec<u16> = jobs
+            .iter()
+            .map(|j| match &j.body {
+                PalwGenBodyV1::Image(b) => b.image_index,
+                _ => unreachable!(),
+            })
+            .collect();
         assert_eq!(indices, vec![0, 1]);
         assert_ne!(jobs[0].id(), jobs[1].id());
         let sig = vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
-        let claims: Vec<ImageClaim> = jobs.iter().map(|j| run(&held, j, &parsed, FORM, sig.clone()).expect("the worker runs it")).collect();
+        let claims: Vec<ImageClaim> =
+            jobs.iter().map(|j| run(&held, j, &parsed, FORM, sig.clone()).expect("the worker runs it")).collect();
         for c in &claims {
             assert_eq!(c.binding.committed_execution_root, c.binding.execution_root());
-            assert_eq!(c.payload.commitment.execution_root, c.binding.committed_execution_root, "the lane's execution root is the binding's");
+            assert_eq!(
+                c.payload.commitment.execution_root, c.binding.committed_execution_root,
+                "the lane's execution root is the binding's"
+            );
             // The output is the canonical tensor: IMAGE_HW x IMAGE_HW x 3 bytes after the header.
             assert!(c.canonical_bytes.len() >= (IMAGE_HW * IMAGE_HW * 3) as usize);
             // A seat replays from the material the panel received and agrees.
@@ -469,7 +520,10 @@ mod tests {
         assert_ne!(claims[0].binding.output_root, claims[1].binding.output_root);
         // Determinism: the same job runs to the same roots.
         let again = run(&held, &jobs[0], &parsed, FORM, sig.clone()).unwrap();
-        assert_eq!((again.binding.committed_execution_root, again.binding.output_root), (claims[0].binding.committed_execution_root, claims[0].binding.output_root));
+        assert_eq!(
+            (again.binding.committed_execution_root, again.binding.output_root),
+            (claims[0].binding.committed_execution_root, claims[0].binding.output_root)
+        );
         assert_eq!(again.canonical_bytes, claims[0].canonical_bytes);
         // The tensor lane's stateless rules, test-armed: admissible to the door that carries the fence, refused by name by the one that does not.
         let payload = &claims[0].payload;
@@ -483,11 +537,18 @@ mod tests {
         assert_eq!(response["data"].as_array().unwrap().len(), 2);
         assert_eq!(response["data"][0]["misaka"]["status"], "committed");
         assert_eq!(response["data"][0]["misaka"]["final"], false);
-        assert_eq!(response["data"][0]["misaka"]["fp_claim_id"], faster_hex::hex_string(fp_claim_id_v3(&claims[0].payload.commitment).as_byte_slice()).as_str());
+        assert_eq!(
+            response["data"][0]["misaka"]["fp_claim_id"],
+            faster_hex::hex_string(fp_claim_id_v3(&claims[0].payload.commitment).as_byte_slice()).as_str()
+        );
         let _ = std::fs::remove_file(path);
     }
 
-    fn validate_gen_door(bytes: &[u8], ladder: u64, gen_door: bool) -> Result<(), kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error> {
+    fn validate_gen_door(
+        bytes: &[u8],
+        ladder: u64,
+        gen_door: bool,
+    ) -> Result<(), kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error> {
         kaspa_consensus_core::palw_gen_claim_v1::validate_palw_fp_commitment_tx_gen_door_v1(
             bytes,
             false,

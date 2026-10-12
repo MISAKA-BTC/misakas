@@ -49,11 +49,21 @@ fn the_ple_table_is_produced_by_blocks_never_whole() {
         // 64 elements a block: a few rows of the table at a time.
         let opts = StreamOpts { defer_min_elems: 0, block_elems: 64 };
         let mut sink = Count::default();
-        let m = materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &opts, &mut sink, &quiet).unwrap();
+        let m =
+            materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &opts, &mut sink, &quiet).unwrap();
         assert!(!m.stats.whole.iter().any(|n| n == &table.name), "{name}: the table was loaded whole for a fill: {:?}", m.stats.whole);
-        assert!(m.stats.by_blocks >= mapped.len(), "{name}: {} instances by blocks of {} mapped params", m.stats.by_blocks, mapped.len());
+        assert!(
+            m.stats.by_blocks >= mapped.len(),
+            "{name}: {} instances by blocks of {} mapped params",
+            m.stats.by_blocks,
+            mapped.len()
+        );
         // What was ever resident of the table is a block of rows (the widest run a block touches), not the table.
-        assert!(m.stats.max_block_f32_bytes * 4 < table_f32_bytes.max(1) || table_f32_bytes <= 4 * 64 * 4, "{name}: {} of {table_f32_bytes}", m.stats.max_block_f32_bytes);
+        assert!(
+            m.stats.max_block_f32_bytes * 4 < table_f32_bytes.max(1) || table_f32_bytes <= 4 * 64 * 4,
+            "{name}: {} of {table_f32_bytes}",
+            m.stats.max_block_f32_bytes
+        );
         assert!(sink.bytes > 0);
     }
 }

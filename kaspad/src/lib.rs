@@ -2,8 +2,6 @@
 pub mod args;
 pub mod chain_participation_store;
 pub mod daemon;
-#[cfg(feature = "private-integration-config")]
-pub mod private_integration;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
 pub mod palw_agent;
@@ -22,46 +20,48 @@ pub mod palw_drill;
 pub mod palw_dump;
 pub mod palw_duties;
 pub mod palw_economics;
+pub mod palw_exec_slice_producer;
 /// ADR-0152 v3.1 N10 / §7.3 P2-8c: the automatic `PanelFalseValidV2` filer. See the module's own header.
 pub mod palw_filer_false_valid;
-mod palw_tokenizer_witness;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
 /// RFC-0003 §II.2.1: the seat's receipt and a party's court objects for a pipeline class's V5 claim (dormant).
 pub mod palw_gen_seat;
 pub mod palw_heartbeat_miner;
-pub mod palw_improve_watch;
 /// int-10.2 D1: the ledger every kaspad on one host reserves against together (node policy).
 pub mod palw_host_ledger;
+pub mod palw_improve_watch;
 pub mod palw_lane_watch;
-/// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
-pub mod palw_licence_order;
 /// LG14-B (RFC-0014 §4–§5 on the legacy V2 route): the public localizer and the producer's responder for the legacy held DA units.
 pub mod palw_legacy_held_v2;
+/// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
+pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 /// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
 /// (node policy).
 pub mod palw_prefill_run;
 pub mod palw_producer;
-pub mod palw_rider_outbox;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;
-/// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
-pub mod palw_readiness_escalation;
-pub mod palw_root_fetch;
 #[cfg(test)]
 mod palw_producer_t12_tests;
+/// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
+pub mod palw_readiness_escalation;
 pub mod palw_receipt_pool;
 pub mod palw_retention;
+pub mod palw_rider_outbox;
+pub mod palw_root_fetch;
 pub mod palw_round_producer;
-pub mod palw_exec_slice_producer;
 /// 2026-10-01 (F2): which claim a seat replays next — closest to quorum first, claims already at quorum
 /// last (node policy).
 pub mod palw_seat_schedule;
+mod palw_tokenizer_witness;
 pub mod palw_verified_resync;
+#[cfg(feature = "private-integration-config")]
+pub mod private_integration;
 pub mod validator_service;
 
 #[cfg(test)]

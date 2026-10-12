@@ -102,7 +102,8 @@ fn every_ruleset_leaves_all_three_dormant_and_no_flag_day_list_names_them() {
             let listed = p.palw_fences_v1();
             for fence in NAMES {
                 assert!(
-                    listed.iter().any(|(n, a)| *n == fence && a.map(|a| a.daa_score()) == kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA),
+                    listed.iter().any(|(n, a)| *n == fence
+                        && a.map(|a| a.daa_score()) == kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA),
                     "{name}: {fence} arms at the int-12 flag day"
                 );
             }

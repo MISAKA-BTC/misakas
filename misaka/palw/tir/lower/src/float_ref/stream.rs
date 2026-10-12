@@ -159,8 +159,9 @@ impl LazyParam for StreamedLazy {
     fn load(&self) -> Result<Tensor> {
         let r = self.resolver();
         let d = &self.prog.params[self.p as usize];
-        let (t, _) = bind_one(&self.binding.srcs[self.p as usize], &r, self.ml)
-            .map_err(|e| LowerError::weights(format!("param `{}`{}: {e}", d.name, self.ml.map(|l| format!(" layer {l}")).unwrap_or_default())))?;
+        let (t, _) = bind_one(&self.binding.srcs[self.p as usize], &r, self.ml).map_err(|e| {
+            LowerError::weights(format!("param `{}`{}: {e}", d.name, self.ml.map(|l| format!(" layer {l}")).unwrap_or_default()))
+        })?;
         check_shape(&d.name, &t, &d.shape)?;
         Ok(t)
     }

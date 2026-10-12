@@ -173,7 +173,11 @@ pub fn scope_of(config: &Value, spec: Option<&ModelSpec>, tensors: Option<&Tenso
         let mut by_prefix: std::collections::BTreeMap<String, usize> = Default::default();
         if let Some(t) = tensors {
             for (name, e) in &t.tensors {
-                let hit = r.tensor_prefixes.iter().find(|p| name.starts_with(p.as_str())).or_else(|| r.tensor_contains.iter().find(|p| name.contains(p.as_str())));
+                let hit = r
+                    .tensor_prefixes
+                    .iter()
+                    .find(|p| name.starts_with(p.as_str()))
+                    .or_else(|| r.tensor_contains.iter().find(|p| name.contains(p.as_str())));
                 if let Some(p) = hit {
                     n += 1;
                     *by_prefix.entry(p.clone()).or_default() += 1;
@@ -245,7 +249,10 @@ mod tests {
         assert!(s.text_only);
         assert_eq!(s.modalities_left_out(), vec!["vision"]);
         let v = s.excluded.iter().find(|e| e.kind == "vision").expect("vision");
-        assert!(v.evidence.contains(&"config.vision_config".to_string()) && v.evidence.iter().any(|e| e.starts_with("tensors vision_tower.*")));
+        assert!(
+            v.evidence.contains(&"config.vision_config".to_string())
+                && v.evidence.iter().any(|e| e.starts_with("tensors vision_tower.*"))
+        );
         assert_eq!(v.tensors, 2);
         let p = s.excluded.iter().find(|e| e.kind == "projector").expect("projector");
         assert_eq!(p.tensors, 1);
@@ -277,7 +284,9 @@ mod tests {
 
     #[test]
     fn the_glob_is_a_case_insensitive_star_and_nothing_else() {
-        assert!(glob("*mmproj*.gguf", "MMProj-x.GGUF") && glob("a*c", "abbbc") && !glob("a*c", "abbbd") && !glob("*.gguf", "x.gguf.bak"));
+        assert!(
+            glob("*mmproj*.gguf", "MMProj-x.GGUF") && glob("a*c", "abbbc") && !glob("a*c", "abbbd") && !glob("*.gguf", "x.gguf.bak")
+        );
     }
 
     #[test]

@@ -16,7 +16,9 @@ use kaspa_consensus_core::palw_economic_safety_v1::PALW_T12_PERMIT_FEE_CEILING_S
 use kaspa_consensus_core::palw_economics_ledger_v1::palw_rate_priced_reward_v1;
 use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1};
 use kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1;
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -39,7 +41,8 @@ fn per_draw(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> u128 {
 #[test]
 fn a4_sompi_per_real_mac_eq_by_class_at_the_t12_genesis_targets() {
     let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("floor");
-    let hybrid = qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN36_35B_A3B })).expect("hybrid");
+    let hybrid =
+        qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN36_35B_A3B })).expect("hybrid");
     let dense = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..QWEN25_1_5B }).expect("dense");
     let (fp, fd) = PALW_RC_BASE0_CANONICAL;
     let (hp, hd) = qwen36_held_canonical_v1(512);

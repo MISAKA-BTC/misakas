@@ -1206,7 +1206,11 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
     use PalwConsensusObjectV2 as O;
     use PalwLifecycleKindFenceV1 as F;
     match object {
-        O::ObjectiveOffence { kind, evidence, .. } if crate::palw_staged_court_state_v1::palw_is_staged_evidence_v1(*kind,evidence) => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
+        O::ObjectiveOffence { kind, evidence, .. }
+            if crate::palw_staged_court_state_v1::palw_is_staged_evidence_v1(*kind, evidence) =>
+        {
+            PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1)
+        }
 
         // LG14-B's guarded arms: an int-12 kind carrying the appended `PalwDaUnitV1::LegacyHeldV2` (the live build cannot decode it)
         // is owned by `palw_legacy_held_da_v2` (`PALW_INT12_WIRE_CHANGES_V1`'s `CarriedAppended`).
@@ -1349,18 +1353,25 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
             PalwLifecycleKindOwnerV1::Fence(F::ProviderCourtV1)
         }
         // Lane LG14-B: the legacy held DA — demand, answer, leaf recompute (157–159).
-        O::LegacyHeldDemandedV2 { .. } | O::LegacyHeldAnsweredV2 { .. } | O::LegacyLeafRecomputedV2 { .. }
-            | O::LegacyHeldAnswerDeclaredV2 { .. } | O::LegacyHeldAnswerChunkV2 { .. } => {
-            PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2)
-        }
+        O::LegacyHeldDemandedV2 { .. }
+        | O::LegacyHeldAnsweredV2 { .. }
+        | O::LegacyLeafRecomputedV2 { .. }
+        | O::LegacyHeldAnswerDeclaredV2 { .. }
+        | O::LegacyHeldAnswerChunkV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         // Lane BUDGET: a bond's capital assignment (140).
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
         O::ExecWorkRootOpenedV2 { .. } | O::ExecOriginRecordedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ExecPayloadV2),
-        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1),
+        O::PublicCourtStreamOpenedV1 { .. } | O::PublicCourtStreamLeafV1 { .. } | O::PublicCourtStreamMoveV1 { .. } => {
+            PalwLifecycleKindOwnerV1::Fence(F::StagedPublicCourtV1)
+        }
         // Lane LG14-A: the dispute reservation and its release (154, 155).
-        O::DisputeReservedV1 { .. } | O::DisputeReleasedV1 { .. } | O::DisputeReacquiredV1 { .. } | O::ObjectiveEvidenceDeclaredV1 { .. } | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
+        O::DisputeReservedV1 { .. }
+        | O::DisputeReleasedV1 { .. }
+        | O::DisputeReacquiredV1 { .. }
+        | O::ObjectiveEvidenceDeclaredV1 { .. }
+        | O::ObjectiveEvidenceChunkV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyPublicFilerV1),
     }
 }
 
@@ -2104,7 +2115,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     // 38/39 are G14R's verifier pay (reserved, not yet used).
     // codex RFC-7 (lane R6781): the per-attempt beacon source opt-in under its own dormant fence (codex used 21; renumbered).
-    a2_row(PalwA2SlotV1::KernelInner { lo: 40, hi: 40 }, "palw_beacon_source_opt_in_v1", "RFC-7 OptInBeaconSource (per-attempt source)", true),
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 40, hi: 40 },
+        "palw_beacon_source_opt_in_v1",
+        "RFC-7 OptInBeaconSource (per-attempt source)",
+        true,
+    ),
     // codex RFC-0002 final (`codex/rfc02-review-completion`, merged by RFC02-T 2026-10-11): its 36–55 moved +5 to 41–60 (36/37 RFC02-T,
     // 38/39 G14R reserved, 40 RFC-7).
     a2_row(PalwA2SlotV1::KernelInner { lo: 41, hi: 44 }, "palw_panel_free_v1", "RFC-0002 protected flat candidate v6", true),
@@ -2302,7 +2318,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // RFC02-T (2026-10-11): the refutation seals — kernel route aux table 64 (`(bond, slot)` rows), and their deposits in the bond
     // committed sum and withdrawal gate. Below the fence no row exists and every sum and root is unchanged.
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 64 refutation seals (and their deposits in palw_bond_committed_v1)" },
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux table 64 refutation seals (and their deposits in palw_bond_committed_v1)",
+        },
         "palw_model_refutation_seal_v1",
         "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
@@ -2310,7 +2328,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // RFC02-T (2026-10-11): the P0 residual on the kernel route's own FileProof — the sealed-bounty rule: kernel ledger table 27 kind 4 (held
     // bounties, root extension only once non-empty) and `LedgerEventV1` 40–41. No new object kind; below the fence no row is written.
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel ledger table 27 kind 4 VerifierPayRowV1::HeldBounty (sealed-bounty rule); LedgerEventV1 40–41" },
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel ledger table 27 kind 4 VerifierPayRowV1::HeldBounty (sealed-bounty rule); LedgerEventV1 40–41",
+        },
         "palw_model_refutation_seal_v1",
         "RFC-0002 P0 residual: kernel FileProof re-encoding (RFC02-T)",
         true,
@@ -2348,12 +2368,21 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "session-owned legacy answer assembly (delta 202, tail 0xF1, root block legacy_answers/v2)" },
+        PalwA2SlotV1::StateEncoding {
+            what: "session-owned legacy answer assembly (delta 202, tail 0xF1, root block legacy_answers/v2)",
+        },
         "palw_legacy_held_da_v2",
         "LG14-B multipart answers",
         true,
     ),
-    a2_row(PalwA2SlotV1::StateEncoding { what: "reservation-owned terminal evidence (deltas 203/205, tail 0xF2, root terminal_evidence/v1)" }, "palw_legacy_public_filer_v1", "LG14 terminal objective evidence", true),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "reservation-owned terminal evidence (deltas 203/205, tail 0xF2, root terminal_evidence/v1)",
+        },
+        "palw_legacy_public_filer_v1",
+        "LG14 terminal objective evidence",
+        true,
+    ),
     // ---- kinds the live build decodes, judged anew past a fence (ADR-0175, `pre`) ----
     a2_row(
         PalwA2SlotV1::Int12RefusedByName {
@@ -2816,7 +2845,7 @@ pub(crate) mod tests {
     /// What this layer owns is the shape: carried material rides, missing material does not.
     #[test]
     fn a_class_registration_rides_only_when_it_carries_what_checks_it() {
-        use crate::palw_base0_profile::{base0_profile_v1, rc_job_context, PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY};
+        use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
         use crate::palw_state_v2::PalwClassAdmissionCarriageV2;
 
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's own graph");
@@ -2968,8 +2997,8 @@ pub(crate) mod tests {
     /// extracted is the object carried, byte for byte.
     #[test]
     fn certification_objects_ride_and_extract_unchanged() {
-        use crate::palw_base0_profile::{base0_profile_v1, PALW_RC_BASE0_GEOMETRY};
-        use crate::palw_e2e_adjudicability::{palw_e2e_family_id_v1, PalwE2eDrillEvidenceV1};
+        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use crate::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, palw_e2e_family_id_v1};
         use crate::palw_state_v2::{PalwCertificationEvidenceV1, PalwCertifiedLaneV1};
 
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
@@ -3006,7 +3035,7 @@ pub(crate) mod tests {
     #[test]
     fn derived_artifacts_ride_signed_and_shaped_and_extract_unchanged() {
         use crate::palw_derived_v1::{
-            kind, PalwDerivedArtifactV1, PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, PALW_DERIVED_V1_SIGNATURE_LEN, PALW_DERIVED_V1_VERSION,
+            PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, PALW_DERIVED_V1_SIGNATURE_LEN, PALW_DERIVED_V1_VERSION, PalwDerivedArtifactV1, kind,
         };
         let object = PalwDerivedArtifactV1 {
             version: PALW_DERIVED_V1_VERSION,
@@ -3658,9 +3687,9 @@ pub(crate) mod tests {
             // tag: its `Head` variants ride inside tags 68 and 87, classified in `PALW_INT12_WIRE_CHANGES_V1`).
             for fence in PalwLifecycleKindFenceV1::ALL {
                 let owns_a_tag = PALW_LIFECYCLE_NEW_KINDS_V1.iter().any(|(_, _, f)| *f == fence);
-                let owns_a_form = PALW_INT12_WIRE_CHANGES_V1.iter().any(|(_, c)| {
-                    matches!(c, PalwInt12WireChangeV1::CarriedAppended { fence: f, .. } if *f == fence.params_field())
-                });
+                let owns_a_form = PALW_INT12_WIRE_CHANGES_V1
+                    .iter()
+                    .any(|(_, c)| matches!(c, PalwInt12WireChangeV1::CarriedAppended { fence: f, .. } if *f == fence.params_field()));
                 assert!(owns_a_tag || owns_a_form, "{} owns a kind or an appended form", fence.params_field());
             }
         }
@@ -3817,19 +3846,31 @@ pub(crate) mod tests {
             attributed_contradiction_objects(contradiction)
         }
 
-        fn attributed_contradiction_objects(contradiction: crate::palw_offence_v1::PalwPanelContradictionV1) -> Vec<PalwConsensusObjectV2> {
+        fn attributed_contradiction_objects(
+            contradiction: crate::palw_offence_v1::PalwPanelContradictionV1,
+        ) -> Vec<PalwConsensusObjectV2> {
             let mut samples = Vec::new();
             let mut v1: crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 = zeros();
             v1.contradiction = contradiction.clone();
             let mut v2: crate::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 = zeros();
             v2.contradiction = contradiction.clone();
             use crate::palw_offence_v1::PalwOffenceKindV1 as K;
-            for (kind, evidence) in [(K::PanelFalseValid, borsh::to_vec(&v1).unwrap()),
-                (K::PanelFalseValidV2, borsh::to_vec(&v2).unwrap())] {
-                samples.push(PalwConsensusObjectV2::ObjectiveOffence { kind, accused: bond(), evidence_id: Hash64::default(), evidence });
+            for (kind, evidence) in
+                [(K::PanelFalseValid, borsh::to_vec(&v1).unwrap()), (K::PanelFalseValidV2, borsh::to_vec(&v2).unwrap())]
+            {
+                samples.push(PalwConsensusObjectV2::ObjectiveOffence {
+                    kind,
+                    accused: bond(),
+                    evidence_id: Hash64::default(),
+                    evidence,
+                });
             }
             samples.push(crate::palw_offence_attribution_v1::palw_executor_refuted_object_v1(
-                    bond(), Hash64::default(), contradiction, None));
+                bond(),
+                Hash64::default(),
+                contradiction,
+                None,
+            ));
             samples
         }
 
@@ -3858,7 +3899,15 @@ pub(crate) mod tests {
             let cases = [
                 (16, C::RegisteredTableMismatch { binding: zeros(), job: Box::new(zeros()) }),
                 (17, C::PrefixStateMismatch { binding: zeros(), job: Box::new(zeros()), tiles: vec![] }),
-                (18, C::TokenizerTableMismatch { binding: zeros(), job: Box::new(zeros()), tokenizer_bytes: vec![0], table_opening: zeros() }),
+                (
+                    18,
+                    C::TokenizerTableMismatch {
+                        binding: zeros(),
+                        job: Box::new(zeros()),
+                        tokenizer_bytes: vec![0],
+                        table_opening: zeros(),
+                    },
+                ),
                 (19, C::StagedCourt { reference: zeros() }),
             ];
             for (tag, contradiction) in cases {
@@ -3868,9 +3917,13 @@ pub(crate) mod tests {
                     // Legacy V1 evidence remains opaque even for19. V2/Executor staged19
                     // is an explicitly guarded new form, undecodable below its F8 fence.
                     use crate::palw_offence_v1::PalwOffenceKindV1 as K;
-                    let staged = tag == 19 && !matches!(&object, PalwConsensusObjectV2::ObjectiveOffence { kind: K::PanelFalseValid, .. });
-                    let expected_owner = if staged { PalwLifecycleKindOwnerV1::Fence(PalwLifecycleKindFenceV1::StagedPublicCourtV1) }
-                        else { PalwLifecycleKindOwnerV1::Int12 };
+                    let staged =
+                        tag == 19 && !matches!(&object, PalwConsensusObjectV2::ObjectiveOffence { kind: K::PanelFalseValid, .. });
+                    let expected_owner = if staged {
+                        PalwLifecycleKindOwnerV1::Fence(PalwLifecycleKindFenceV1::StagedPublicCourtV1)
+                    } else {
+                        PalwLifecycleKindOwnerV1::Int12
+                    };
                     assert_eq!(palw_lifecycle_kind_owner_v1(&object), expected_owner);
                     let payload = payload_of(&object);
                     let mut undecodable = borsh::to_vec(&PALW_LIFECYCLE_TX_VERSION_V2).unwrap();
@@ -3880,7 +3933,8 @@ pub(crate) mod tests {
                         assert_eq!(validate_palw_lifecycle_tx(&payload, tolerate), expected);
                     }
                     let unarmed = PalwLifecycleKindFencesV1::default();
-                    let armed = unarmed.with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)))
+                    let armed = unarmed
+                        .with(PalwLifecycleKindFenceV1::LegacyPublicFilerV1, Some(ForkActivation::new(1_000)))
                         .with(PalwLifecycleKindFenceV1::StagedPublicCourtV1, Some(ForkActivation::new(1_000)));
                     for at in [999, 1_000] {
                         // Header context is a second-stage check: below the owner fence
@@ -3921,7 +3975,10 @@ pub(crate) mod tests {
             let mut head_job = zero_filled_kind(87);
             let PalwConsensusObjectV2::GenTensorCommitted { job, .. } = &mut head_job else { unreachable!("tag 87") };
             job.body = crate::palw_gen_job_v1::PalwGenBodyV1::Head(crate::palw_task_heads_v1::PalwGenHeadBodyV1 {
-                input: crate::palw_gen_job_v1::PalwGenEmbeddingInputV1::Text { token_ids_hash: Hash64::from_bytes([1; 64]), tokens: 4 },
+                input: crate::palw_gen_job_v1::PalwGenEmbeddingInputV1::Text {
+                    token_ids_hash: Hash64::from_bytes([1; 64]),
+                    tokens: 4,
+                },
                 task: crate::palw_task_heads_v1::PALW_HEAD_TASK_SEQUENCE_V1,
                 position: 0,
                 output: 3,
@@ -4647,10 +4704,16 @@ pub(crate) mod tests {
         #[test]
         fn native_fp_metadata_equivalence_requires_the_exact_skipped_field() {
             let field = "#[borsh(skip)]public_job:Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,";
-            assert_eq!(native_fp_metadata_wire_equivalent(&format!("FreePromptCommitted{{{field}claim:Hash64}}")),
-                Ok("FreePromptCommitted{claim:Hash64}".into()));
-            for wrong in [field.replace("#[borsh(skip)]", ""), field.replace("Option<Box", "Vec<Box"),
-                format!("{field}{field}"), "claim:Hash64".into()] {
+            assert_eq!(
+                native_fp_metadata_wire_equivalent(&format!("FreePromptCommitted{{{field}claim:Hash64}}")),
+                Ok("FreePromptCommitted{claim:Hash64}".into())
+            );
+            for wrong in [
+                field.replace("#[borsh(skip)]", ""),
+                field.replace("Option<Box", "Vec<Box"),
+                format!("{field}{field}"),
+                "claim:Hash64".into(),
+            ] {
                 assert!(native_fp_metadata_wire_equivalent(&wrong).is_err());
             }
         }
@@ -4680,7 +4743,9 @@ pub(crate) mod tests {
                     if !name.is_empty() {
                         let declared = if name == "FreePromptCommitted" {
                             native_fp_metadata_wire_equivalent(segment).expect("LG14-A native field changes no int-12 carrier bytes")
-                        } else { segment.to_string() };
+                        } else {
+                            segment.to_string()
+                        };
                         out.insert(name, declared);
                     }
                     start = i + 1;

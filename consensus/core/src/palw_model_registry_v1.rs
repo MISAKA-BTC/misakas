@@ -601,7 +601,11 @@ pub fn palw_lifecycle_step_v1(
         // **RFC-0007 Part IV.2**: a capped class returns to the ordinary walk — at `Probation`, where `Prefetching` would have put it —
         // once holders are seated (`ready_enough`); not before, and never to `Held`: a capped class has no panel to lose.
         Capped { since_daa } => {
-            if ready_enough && panel_drawable { Probation { probes_passed: 0 } } else { Capped { since_daa } }
+            if ready_enough && panel_drawable {
+                Probation { probes_passed: 0 }
+            } else {
+                Capped { since_daa }
+            }
         }
         Probation { probes_passed } => {
             if !panel_drawable || overloaded {
@@ -746,11 +750,10 @@ pub fn palw_lifecycle_step_resilient_v1(
     let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
     let failed = memory.probation_failed();
     // The failed bonds survive a step only inside the probation, and never the reset they caused.
-    let keep_bonds = |next: PalwModelLifecycleV1, held: Option<u32>| PalwProbationMemoryV1 {
-        held_probes_passed: held,
-        failed_bonds: if failed { Vec::new() } else { memory.failed_bonds.clone() },
-    }
-    .with_state(next);
+    let keep_bonds = |next: PalwModelLifecycleV1, held: Option<u32>| {
+        PalwProbationMemoryV1 { held_probes_passed: held, failed_bonds: if failed { Vec::new() } else { memory.failed_bonds.clone() } }
+            .with_state(next)
+    };
     match state {
         Probation { probes_passed } => {
             if overloaded {
@@ -1000,8 +1003,12 @@ impl PalwBondMaturityFoldV1 {
     /// anchor: `now_daa − window`, the window widened so the floor is no later than the second
     /// clock's (`palw_settled_anchor_floor_daa_v1` at the escaped depth), saturating at 0.
     pub fn registered_by_daa(&self, state: &crate::palw_state_v2::PalwChainStateV2, window_court: u64, now_daa: u64) -> u64 {
-        let depth =
-            crate::palw_state_v2::palw_second_clock_depth_v1(self.settled_anchor_depth, state.recent_anchor_daas(), now_daa, window_court);
+        let depth = crate::palw_state_v2::palw_second_clock_depth_v1(
+            self.settled_anchor_depth,
+            state.recent_anchor_daas(),
+            now_daa,
+            window_court,
+        );
         let settled = depth.and_then(|depth| crate::palw_panel_v2::palw_settled_anchor_floor_daa_v1(state, now_daa, depth));
         let window = crate::palw_panel_v2::palw_bond_maturity_window_v2(now_daa, self.window_daa, settled);
         crate::palw_panel_v2::palw_seat_maturity_floor_v1(now_daa, Some(window)).unwrap_or(0)
@@ -2044,8 +2051,8 @@ pub fn palw_model_registry_read_v2(
     };
     // Stage 1 (rcore/cap-s1): past F-R the fold holds the measured room under ρ × the shipped room
     // (`panel_rate_v1`'s clamp), so the readout reads the shipped demand beside it.
-    let shipped_demand = (rate_rule && room_v2)
-        .then(|| crate::palw_state_v2::palw_panel_demand_read_v1(state, params, u32::from(g.seat_count)));
+    let shipped_demand =
+        (rate_rule && room_v2).then(|| crate::palw_state_v2::palw_panel_demand_read_v1(state, params, u32::from(g.seat_count)));
     let rho = u128::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, tip_daa));
     let (panel_inflight_replay, panel_horizon_spans) = if rate_rule {
         (terms.values().copied().fold(0u128, u128::saturating_add).div_ceil(wt::PALW_PANEL_DEMAND_SCALE_V1), 1)
@@ -2064,7 +2071,11 @@ pub fn palw_model_registry_read_v2(
             expected_forwards_q32: shadow.map(|t| wt::palw_expected_forwards_q32_v1(ccu_of(class_id), t.work)).unwrap_or(0),
             work_ticket_target: shadow.map(|t| wt::palw_work_ticket_target_v1(ccu_of(class_id), t.work)).unwrap_or(0),
             class_target: state.class_target(class_id).map(|t| t.target).unwrap_or(0),
-            roots_in_force: if params.audit_1004_active_at(tip_daa) { state.class_roots_in_force(class_id, tip_daa) } else { Vec::new() },
+            roots_in_force: if params.audit_1004_active_at(tip_daa) {
+                state.class_roots_in_force(class_id, tip_daa)
+            } else {
+                Vec::new()
+            },
             panel_room: if *class_id == base {
                 0
             } else {
@@ -2446,7 +2457,9 @@ mod tests {
             window_fits_receipt: fits,
             span_stable: true,
             // ADR-0145 §7: the `Candidate` arm's only input, and this fixture starts past it.
-            admission_jury_seated: false, capped_entry: false, };
+            admission_jury_seated: false,
+            capped_entry: false,
+        };
         for from in [Probation { probes_passed: 9 }, ActiveLimited { stable_epochs: 9 }, Active] {
             assert_eq!(palw_lifecycle_step_v1(from, &obs(false, true), &k, &G), Held, "{from:?}: does not fit → Held");
         }
@@ -2650,7 +2663,9 @@ mod tests {
             // Every fixture below this line walks a class that is already past `Candidate`, and
             // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            admission_jury_seated: false, capped_entry: false, };
+            admission_jury_seated: false,
+            capped_entry: false,
+        };
         let mut s = Registered;
         s = palw_lifecycle_step_v1(s, &PalwLifecycleObservationV1 { manifest: PalwManifestVerdictV1Flag::Invalid, ..calm(0) }, &k, &G);
         assert_eq!(s, Registered, "an invalid manifest never leaves registration");
@@ -2734,7 +2749,9 @@ mod tests {
             cap_ok: true,
             window_fits_receipt: true,
             span_stable: failed == 0,
-            admission_jury_seated: false, capped_entry: false, };
+            admission_jury_seated: false,
+            capped_entry: false,
+        };
         let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0));
         let none = PalwProbationMemoryV1::default();
         let step = |s, o: &PalwLifecycleObservationV1, m: &PalwProbationMemoryV1| palw_lifecycle_step_resilient_v1(s, o, &k, &G, m);
@@ -2881,7 +2898,16 @@ mod tests {
         let base = Hash64::from_u64_word(1);
         for fold_v2 in [false, true] {
             let old = PalwReadinessPolicyV1::at(&fold(fold_v2), now, base, false);
-            assert_eq!(old, PalwReadinessPolicyV1 { now_daa: now, max_age_daa: v1_age, base_class_id: base, readiness_v2: false, root_keyed: false });
+            assert_eq!(
+                old,
+                PalwReadinessPolicyV1 {
+                    now_daa: now,
+                    max_age_daa: v1_age,
+                    base_class_id: base,
+                    readiness_v2: false,
+                    root_keyed: false
+                }
+            );
             for (proved, version) in [(now, 1), (now - v2_age - 1, 1), (now - v1_age, 1), (now - v1_age - 1, 1), (now - v2_age - 1, 2)]
             {
                 assert_eq!(
@@ -3008,7 +3034,9 @@ mod tests {
             // Every fixture below this line walks a class that is already past `Candidate`, and
             // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            admission_jury_seated: false, capped_entry: false, };
+            admission_jury_seated: false,
+            capped_entry: false,
+        };
         assert_eq!(
             palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G),
             Active,

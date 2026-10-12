@@ -95,9 +95,9 @@ mod vlm;
 mod imagegen;
 // Test support: an in-process worker over the floor engine, and the e2e suites that drive the whole chat path against it.
 #[cfg(test)]
-mod testkit;
-#[cfg(test)]
 mod e2e;
+#[cfg(test)]
+mod testkit;
 // A gateway request all the way into a consensus fold, on testnet-12's shipped ruleset and on a copy with the decode rules test-armed.
 #[cfg(test)]
 mod e2e_chain;
@@ -339,14 +339,16 @@ impl SidecarRuntime {
         let mut applied: Vec<String> = Vec::new();
         let mut not_applied: Vec<serde_json::Value> = Vec::new();
         if let Some(g) = &self.generation {
-            if chat.max_tokens.is_none() && chat.max_completion_tokens.is_none()
+            if chat.max_tokens.is_none()
+                && chat.max_completion_tokens.is_none()
                 && let Some(n) = g.max_new_tokens
             {
                 chat.max_tokens = Some(n);
                 applied.push("max_new_tokens".to_string());
             }
             let sampler = facts.fp_decode_rules_armed;
-            let reason = "palw_fp_decode_rules is not armed on this network (ADR-0082 Decision 11): a sampler default would be refused";
+            let reason =
+                "palw_fp_decode_rules is not armed on this network (ADR-0082 Decision 11): a sampler default would be refused";
             macro_rules! fill {
                 ($field:ident, $name:literal) => {
                     if let Some(v) = g.$field
@@ -385,7 +387,8 @@ impl SidecarRuntime {
             }
             for (name, present) in [("top_p", g.top_p.is_some()), ("top_k", g.top_k.is_some())] {
                 if present {
-                    not_applied.push(serde_json::json!({ "field": name, "reason": "this lane has no rule for it (ADR-0096 Decision 4)" }));
+                    not_applied
+                        .push(serde_json::json!({ "field": name, "reason": "this lane has no rule for it (ADR-0096 Decision 4)" }));
                 }
             }
         }
@@ -717,7 +720,15 @@ impl ResidentWorker {
         let request_hash = fp_worker_request_hash_v3(&payload);
         write_framed(&mut self.stdin, &payload).map_err(|e| format!("cannot write the job frame: {e}"))?;
         self.stdin.flush().map_err(|e| format!("cannot flush the job frame: {e}"))?;
-        worker_stream::read_committed_run(&mut self.stdin, &mut self.stdout, request, request_hash, prompt_ids_form, on_token, cancelled)
+        worker_stream::read_committed_run(
+            &mut self.stdin,
+            &mut self.stdout,
+            request,
+            request_hash,
+            prompt_ids_form,
+            on_token,
+            cancelled,
+        )
     }
 
     /// **RFC-0001 §2.6/§2.7: one job, answered with no commitment.** The same request, behind the
@@ -777,8 +788,10 @@ impl ResidentWorker {
         requests: &[PalwFpWorkerRequestV3],
         on_token: &mut dyn FnMut(usize, u32, &[u8]),
     ) -> Result<AnswerBatchRun, String> {
-        let payloads: Vec<Vec<u8>> =
-            requests.iter().map(|r| borsh::to_vec(r).map_err(|e| format!("cannot serialize a worker request: {e}"))).collect::<Result<_, _>>()?;
+        let payloads: Vec<Vec<u8>> = requests
+            .iter()
+            .map(|r| borsh::to_vec(r).map_err(|e| format!("cannot serialize a worker request: {e}")))
+            .collect::<Result<_, _>>()?;
         let hashes: Vec<Hash64> = payloads.iter().map(|p| fp_worker_request_hash_v3(p)).collect();
         let mut framed = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_ANSWER_BATCH_MAGIC_V1.to_vec();
         framed.extend_from_slice(&borsh::to_vec(&payloads).map_err(|e| format!("cannot serialize the batch: {e}"))?);
@@ -1525,7 +1538,11 @@ fn prepare_request(
         shape_profile_id: manifest.shape_profile_id,
         trace_scheme_id: manifest.trace_scheme_id,
         decode: if constraint.is_some() { None } else { admitted.decode.clone() },
-        stop_texts: if constraint.is_some() { Vec::new() } else { admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect() },
+        stop_texts: if constraint.is_some() {
+            Vec::new()
+        } else {
+            admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect()
+        },
         constraint,
     };
     Ok(PreparedJob { plan, decode_limit, request, anchor_daa })
@@ -2400,7 +2417,8 @@ fn handle_chat_candidates(
         "total_tokens": prompt_tokens + completion_tokens,
     });
     merged["misaka"]["n"] = serde_json::json!(n);
-    merged["misaka"]["candidate_seed_rule"] = serde_json::json!("sha256(\"misaka.palw.fp.n-candidate-seed.v1\" || base_seed || u32_le(i))");
+    merged["misaka"]["candidate_seed_rule"] =
+        serde_json::json!("sha256(\"misaka.palw.fp.n-candidate-seed.v1\" || base_seed || u32_le(i))");
     merged["misaka"]["candidates"] = serde_json::Value::Array(candidate_reports);
     Ok(merged)
 }
@@ -2765,7 +2783,13 @@ fn main() {
         let Ok(mut stream) = stream else { continue };
         if connections.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
             connections.fetch_sub(1, Ordering::AcqRel);
-            respond_with(&mut stream, "503 Service Unavailable", &error_body("connection cap reached"), Some(serving::RETRY_AFTER_CONNECTION_SECS), &[]);
+            respond_with(
+                &mut stream,
+                "503 Service Unavailable",
+                &error_body("connection cap reached"),
+                Some(serving::RETRY_AFTER_CONNECTION_SECS),
+                &[],
+            );
             continue;
         }
         let (config, identity, worker, chain_source) =
@@ -2857,7 +2881,10 @@ enum Early {
 
 /// Whether the body asks for a streamed delivery (read leniently: a malformed body is refused later, by the entrance).
 fn streaming_requested(body: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|v| v.get("stream").and_then(serde_json::Value::as_bool)).unwrap_or(false)
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("stream").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
 }
 
 /// **Place a committed claim's evidence with the configured providers** (see [`evidence`]): `Ok` carries the placement report; `Err` is the
@@ -2869,7 +2896,8 @@ fn publish_job_evidence(
 ) -> Result<serde_json::Value, String> {
     let job_id = fp_job_id_v3(&result.job);
     let capture = evidence::read_capture(&config.outbox, &job_id).map_err(|e| format!("evidence could not be built: {e}"))?;
-    let built = evidence::build(commitment, &result.prompt_token_ids, &capture).map_err(|e| format!("evidence could not be built: {e}"))?;
+    let built =
+        evidence::build(commitment, &result.prompt_token_ids, &capture).map_err(|e| format!("evidence could not be built: {e}"))?;
     let opened = misaka_palw_remote::transport::open_providers_v1(&config.evidence_providers);
     let refs: Vec<&dyn misaka_palw_remote::transport::EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
     match evidence::publish(&built, &refs, config.evidence_min_copies) {
@@ -2895,16 +2923,21 @@ fn begin_idempotent<'a>(services: &'a Services, request: &HttpRequest) -> Result
             "409 Conflict",
             "a request with this Idempotency-Key is still running; retry shortly and you will receive its response".into(),
         )),
-        idempotency::Begin::Conflict => Err(Early::Refuse(
-            "409 Conflict",
-            "this Idempotency-Key was used for a different request; a key names one request".into(),
-        )),
-        idempotency::Begin::Overloaded => Err(Early::Refuse("503 Service Unavailable", "the idempotency table is full of running requests".into())),
+        idempotency::Begin::Conflict => {
+            Err(Early::Refuse("409 Conflict", "this Idempotency-Key was used for a different request; a key names one request".into()))
+        }
+        idempotency::Begin::Overloaded => {
+            Err(Early::Refuse("503 Service Unavailable", "the idempotency table is full of running requests".into()))
+        }
     }
 }
 
 /// The status of a finished job's completion id, read from the outbox (and the chain, when a node can be asked).
-fn status_of_completion(config: &Config, chain_source: &chain::ChainSource, id: &str) -> Option<(status::StatusReport, status::LocalFacts)> {
+fn status_of_completion(
+    config: &Config,
+    chain_source: &chain::ChainSource,
+    id: &str,
+) -> Option<(status::StatusReport, status::LocalFacts)> {
     let stem = status::stem_of_completion_id(id)?;
     let local = status::read_local_facts(&config.outbox, &stem)?;
     let observer: Option<&dyn status::ClaimObserver> = chain_source.can_submit().then_some(chain_source as &dyn status::ClaimObserver);
@@ -2953,7 +2986,9 @@ fn replay_stored(
         sink.delta(text);
     }
     let delta = match message.get("tool_calls").and_then(serde_json::Value::as_array) {
-        Some(calls) => serde_json::json!({ "tool_calls": calls.iter().enumerate().map(|(i, c)| { let mut c = c.clone(); c["index"] = serde_json::json!(i); c }).collect::<Vec<_>>() }),
+        Some(calls) => {
+            serde_json::json!({ "tool_calls": calls.iter().enumerate().map(|(i, c)| { let mut c = c.clone(); c["index"] = serde_json::json!(i); c }).collect::<Vec<_>>() })
+        }
         None => serde_json::json!({}),
     };
     sink.chunk(delta, body["choices"][0]["finish_reason"].clone());
@@ -3155,7 +3190,19 @@ fn serve_connection(
                 let ticket = services.book.begin(&stream_id);
                 let mut sink = SseSink { stream, id: stream_id, model, started: false, broken: false };
                 sink.head();
-                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink, &ctx);
+                let outcome = handle_chat(
+                    config,
+                    identity,
+                    worker,
+                    budget,
+                    &facts,
+                    chain_source,
+                    &chat,
+                    &admitted,
+                    admitted.sampling,
+                    &mut sink,
+                    &ctx,
+                );
                 match outcome {
                     Ok(body) => {
                         drop(ticket);
@@ -3207,7 +3254,19 @@ fn serve_connection(
                     handle_chat_candidates(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, &ctx)
                 } else {
                     let mut sink = BufferedSink;
-                    handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, &admitted, admitted.sampling, &mut sink, &ctx)
+                    handle_chat(
+                        config,
+                        identity,
+                        worker,
+                        budget,
+                        &facts,
+                        chain_source,
+                        &chat,
+                        &admitted,
+                        admitted.sampling,
+                        &mut sink,
+                        &ctx,
+                    )
                 };
                 match outcome {
                     Ok(body) => {
@@ -3254,7 +3313,11 @@ fn serve_connection(
             let _queue_place = match serving::QueueGate::try_reserve(in_flight, 1, in_flight_cap(worker.processes())) {
                 Ok(guard) => guard,
                 Err(_) => {
-                    respond(stream, "503 Service Unavailable", &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"));
+                    respond(
+                        stream,
+                        "503 Service Unavailable",
+                        &error_body("the in-flight queue is full; the worker slots are busy and the queue behind them is bounded"),
+                    );
                     return;
                 }
             };
@@ -3288,7 +3351,11 @@ fn serve_connection(
             } else if let Some((report, local)) = status_of_completion(config, chain_source, id) {
                 respond(stream, "200 OK", &report.to_json(&local));
             } else {
-                respond(stream, "404 Not Found", &error_body("no request under that id: it is neither streaming here nor in this gateway's outbox"));
+                respond(
+                    stream,
+                    "404 Not Found",
+                    &error_body("no request under that id: it is neither streaming here nor in this gateway's outbox"),
+                );
             }
         }
         // **The output receipt of a committed answer** (see `receipt`): sealed when the answer was committed, with the carrier txid added
@@ -3306,7 +3373,9 @@ fn serve_connection(
                 None => respond(
                     stream,
                     "404 Not Found",
-                    &error_body("no receipt under that id: the answer was not committed (no claim, no receipt) or this gateway never issued it"),
+                    &error_body(
+                        "no receipt under that id: the answer was not committed (no claim, no receipt) or this gateway never issued it",
+                    ),
                 ),
             }
         }
@@ -3374,7 +3443,8 @@ mod tests {
     #[test]
     fn a_response_format_is_committed_only_where_the_fence_is_armed_and_beside_no_sampler_controls() {
         let body = |extra: serde_json::Value| {
-            let mut v = serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }], "response_format": { "type": "json_object" } });
+            let mut v =
+                serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }], "response_format": { "type": "json_object" } });
             v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             serde_json::to_vec(&v).unwrap()
         };
@@ -3383,7 +3453,8 @@ mod tests {
         let admit = |facts: &chain::ChainFacts, extra| surface::parse_and_admit(&body(extra), facts).map(|(_, a)| a);
         let ok = admit(&armed, serde_json::json!({})).expect("admitted");
         let bytes = committed_constraint_v1(&ok, &armed, ok.sampling).unwrap().expect("committed on an armed network");
-        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&bytes).expect("the bytes are an admitted constraint");
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(&bytes)
+            .expect("the bytes are an admitted constraint");
         let advisory = admit(&dormant, serde_json::json!({})).expect("admitted");
         assert_eq!(committed_constraint_v1(&advisory, &dormant, advisory.sampling).unwrap(), None, "dormant: advisory, as before");
         let plain = surface::parse_and_admit(

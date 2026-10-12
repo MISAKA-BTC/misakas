@@ -625,7 +625,8 @@ impl Generator {
             // Priority entries and the mass-overflow stash bypass the context's
             // iterator. Recheck them too when generating from a live wallet.
             if self.inner.source_utxo_context.as_ref().is_none_or(|source| {
-                source.processor().network_id().ok() == Some(self.inner.network_id) && source.is_entry_spendable(&entry)
+                source.processor().network_id().ok() == Some(self.inner.network_id)
+                    && source.is_entry_spendable(&entry)
                     && Some(source.processor().utxo_observation_generation()) == self.inner.source_utxo_generation
             }) {
                 return Some(entry);

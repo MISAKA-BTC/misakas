@@ -16,7 +16,9 @@
 //! request by name at the run, not by dropping the image.
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::palw_gen_class_v1::{PalwGenImageInputRefV1, PALW_GEN_POOLING_CLS_V1, PALW_GEN_POOLING_LAST_V1, PALW_GEN_POOLING_MEAN_V1};
+use kaspa_consensus_core::palw_gen_class_v1::{
+    PALW_GEN_POOLING_CLS_V1, PALW_GEN_POOLING_LAST_V1, PALW_GEN_POOLING_MEAN_V1, PalwGenImageInputRefV1,
+};
 use kaspa_consensus_core::palw_gen_job_v1::{
     PALW_GEN_JOB_VERSION_V1, PalwGenBodyV1, PalwGenEmbeddingBodyV1, PalwGenEmbeddingInputV1, PalwGenJobV1, PalwJobEnvelopeV1,
 };
@@ -61,7 +63,9 @@ pub fn parse_image_tensor_part(at: &str, members: &Map<String, Value>) -> Result
     match members.get("format").and_then(Value::as_str) {
         Some("u8_hwc_rgb") => {}
         Some(other) => {
-            return Err(format!("{at}: format {other:?} is refused by name: the only form is \"u8_hwc_rgb\" (decoded 8-bit RGB, rows top to bottom)"));
+            return Err(format!(
+                "{at}: format {other:?} is refused by name: the only form is \"u8_hwc_rgb\" (decoded 8-bit RGB, rows top to bottom)"
+            ));
         }
         None => return Err(format!("{at}: `format` is missing: say \"u8_hwc_rgb\"")),
     }
@@ -71,7 +75,12 @@ pub fn parse_image_tensor_part(at: &str, members: &Map<String, Value>) -> Result
         return Err(format!("{at}: {h}x{w} is {expected} pixel bytes and the cap is {MAX_IMAGE_BYTES}"));
     }
     if data.len() != expected * 2 {
-        return Err(format!("{at}: `data` is {} hex characters and {h}x{w}x3 is {} bytes ({} characters)", data.len(), expected, expected * 2));
+        return Err(format!(
+            "{at}: `data` is {} hex characters and {h}x{w}x3 is {} bytes ({} characters)",
+            data.len(),
+            expected,
+            expected * 2
+        ));
     }
     let mut rgb = vec![0u8; expected];
     faster_hex::hex_decode(data.as_bytes(), &mut rgb).map_err(|e| format!("{at}: `data` is not hex: {e}"))?;
@@ -139,7 +148,11 @@ pub fn v5_job_v1(
     if images.is_empty() {
         return Err("a V5 job carries images or a source: a text-only job is V4".to_string());
     }
-    Ok(kaspa_consensus_core::palw_fp_job_v5::PalwFreePromptJobV5 { v4, images: image_slot_refs_per_slot_v1(images, tile_lens)?, source: None })
+    Ok(kaspa_consensus_core::palw_fp_job_v5::PalwFreePromptJobV5 {
+        v4,
+        images: image_slot_refs_per_slot_v1(images, tile_lens)?,
+        source: None,
+    })
 }
 
 /// **The worker's request frame for a V5 job** (`misaka_palw_base0::gen_worker`): the job, the prompt's ids and the images'
@@ -278,7 +291,10 @@ mod tests {
         let envelope = PalwJobEnvelopeV1 {
             network_domain: Hash64::from_bytes([1; 64]),
             class_id: Hash64::from_bytes([2; 64]),
-            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([3; 64]), 0),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_bytes([3; 64]),
+                0,
+            ),
             executor_pubkey: vec![4; 32],
             operator_id: Hash64::from_bytes([5; 64]),
             anchor_block: Hash64::from_bytes([6; 64]),
@@ -310,7 +326,9 @@ mod tests {
         use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
         use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V4_VERSION, PalwFreePromptJobV3};
         use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
-        use misaka_palw_base0::gen_worker::{GenHeldClassV1, GenSeatJudgmentV1, PalwGenWorkerAnswerV1, gen_seat_judge_v1, gen_worker_answer_v1};
+        use misaka_palw_base0::gen_worker::{
+            GenHeldClassV1, GenSeatJudgmentV1, PalwGenWorkerAnswerV1, gen_seat_judge_v1, gen_worker_answer_v1,
+        };
         const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
         let fx = misaka_palw_base0::gen_worker::gen_toy_vlm_fixture_v1().expect("the toy vision class");
         let held = GenHeldClassV1::hold(fx.row.clone(), fx.params.clone()).expect("the class's weights are its root");
@@ -320,8 +338,8 @@ mod tests {
             { "type": "text", "text": "what is this" },
             { "type": IMAGE_TENSOR_PART, "h": fx.image.h, "w": fx.image.w, "format": "u8_hwc_rgb", "data": faster_hex::hex_string(&fx.image.rgb) },
         ] }] });
-        let (_, admitted) =
-            crate::surface::parse_and_admit(&serde_json::to_vec(&body).unwrap(), &crate::chain::ChainFacts::default()).expect("the entrance admits it");
+        let (_, admitted) = crate::surface::parse_and_admit(&serde_json::to_vec(&body).unwrap(), &crate::chain::ChainFacts::default())
+            .expect("the entrance admits it");
         assert_eq!(admitted.images.len(), 1);
         assert_eq!((admitted.images[0].h, admitted.images[0].w, &admitted.images[0].rgb), (fx.image.h, fx.image.w, &fx.image.rgb));
 
@@ -331,7 +349,10 @@ mod tests {
             version: PALW_FP_V4_VERSION,
             network_domain: Hash64::from_bytes([1; 64]),
             class_id: fx.row.class_id,
-            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([3; 64]), 0),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_bytes([3; 64]),
+                0,
+            ),
             executor_pubkey: vec![4; 32],
             operator_id: Hash64::from_bytes([5; 64]),
             anchor_block: Hash64::from_bytes([6; 64]),
@@ -351,7 +372,10 @@ mod tests {
         };
         let slot_tiles: Vec<u32> = fx.row.class.offers.images.iter().map(|s| s.tile_len).collect();
         let job = v5_job_v1(v4.clone(), &admitted.images, &slot_tiles).expect("a V5 job");
-        assert_eq!(job.images[0], kaspa_consensus_core::palw_gen_close_v1::palw_gen_image_input_ref_v1(&fx.image, fx.image_tile_len).unwrap());
+        assert_eq!(
+            job.images[0],
+            kaspa_consensus_core::palw_gen_close_v1::palw_gen_image_input_ref_v1(&fx.image, fx.image_tile_len).unwrap()
+        );
 
         // The worker: one request frame in, the claim's binding out.
         let request = gen_worker_request_v1(job.clone(), prompt.clone(), &admitted.images);
@@ -366,7 +390,8 @@ mod tests {
         assert_eq!(judged, GenSeatJudgmentV1::Valid);
         let mut other = admitted.images.clone();
         other[0].rgb[0] ^= 1;
-        let (refused, _) = gen_worker_answer_v1(&held, &borsh::to_vec(&gen_worker_request_v1(job.clone(), prompt.clone(), &other)).unwrap(), FORM);
+        let (refused, _) =
+            gen_worker_answer_v1(&held, &borsh::to_vec(&gen_worker_request_v1(job.clone(), prompt.clone(), &other)).unwrap(), FORM);
         assert!(matches!(&refused, PalwGenWorkerAnswerV1::Refused { why } if why.contains("image 0")), "{refused:?}");
         // A reference taken at another tile length is another root.
         let wrong = v5_job_v1(v4, &admitted.images, &[slot_tiles[0] * 2]).unwrap();
@@ -382,16 +407,22 @@ mod tests {
     /// and a seat judges it `Valid`; other pixels are refused by name.
     #[test]
     fn an_image_embedding_claim_runs_end_to_end_on_the_tiny_vision_encoder() {
-        use misaka_palw_base0::gen_tensor_worker::{PalwGenTensorAnswerV1, PalwGenTensorRequestV1, gen_tensor_answer_v1, gen_tensor_seat_judge_v1};
+        use misaka_palw_base0::gen_tensor_worker::{
+            PalwGenTensorAnswerV1, PalwGenTensorRequestV1, gen_tensor_answer_v1, gen_tensor_seat_judge_v1,
+        };
         use misaka_palw_base0::gen_worker::{GenHeldClassV1, GenSeatJudgmentV1, GenWireImageV1};
-        const FORM: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        const FORM: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 =
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
         let fx = misaka_palw_base0::gen_worker::gen_toy_embedding_fixture_v1().expect("the toy vision encoder");
         let held = GenHeldClassV1::hold(fx.row.clone(), fx.params.clone()).expect("held");
         let image = DecodedImageV1 { h: fx.image.h, w: fx.image.w, rgb: fx.image.rgb.clone() };
         let envelope = PalwJobEnvelopeV1 {
             network_domain: Hash64::from_bytes([0xD0; 64]),
             class_id: fx.row.class_id,
-            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_bytes([7; 64]), 3),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_bytes([7; 64]),
+                3,
+            ),
             executor_pubkey: vec![0xAB; 8],
             operator_id: Hash64::from_bytes([0x0E; 64]),
             anchor_block: Hash64::from_bytes([0xA1; 64]),
@@ -400,8 +431,12 @@ mod tests {
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA,
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         };
-        let job = embedding_image_claim_job_v1(EmbeddingClaimFactsV1 { envelope, pooling: PALW_GEN_POOLING_CLS_V1, dims: 4 }, &image, fx.image_tile_len)
-            .expect("an embedding job");
+        let job = embedding_image_claim_job_v1(
+            EmbeddingClaimFactsV1 { envelope, pooling: PALW_GEN_POOLING_CLS_V1, dims: 4 },
+            &image,
+            fx.image_tile_len,
+        )
+        .expect("an embedding job");
         let request = |img: &DecodedImageV1| PalwGenTensorRequestV1 {
             job: job.clone(),
             prompt_ids: vec![],

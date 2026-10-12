@@ -44,9 +44,10 @@ fn pwu_rule_is_derived(object: &PalwConsensusObjectV2) -> bool {
 #[test]
 fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
     // The shipped t12 bundle, so every fence position is the one the fleet is running.
-    let params = kaspa_consensus_core::config::params::Params::from(
-        kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12),
-    );
+    let params = kaspa_consensus_core::config::params::Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+        kaspa_consensus_core::network::NetworkType::Testnet,
+        12,
+    ));
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         panic!("testnet-12 is a ConsensusV2 network")
     };
@@ -56,7 +57,11 @@ fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
     for object in bundle.genesis_objects.iter().cloned() {
         if let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = &object {
             let leaves = declared_leaves(&object);
-            println!("  class {:.16}…  declared_leaves_per_draw={leaves}  derived_rule={}", class_id.to_string(), pwu_rule_is_derived(&object));
+            println!(
+                "  class {:.16}…  declared_leaves_per_draw={leaves}  derived_rule={}",
+                class_id.to_string(),
+                pwu_rule_is_derived(&object)
+            );
             rows.push((*class_id, leaves));
         }
     }
@@ -82,7 +87,10 @@ fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
         match bundle.genesis_objects.iter().find_map(|o| match o {
             PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
             _ => None,
-        }) { Some(k) => k, None => panic!("t12 registers bonds at genesis") },
+        }) {
+            Some(k) => k,
+            None => panic!("t12 registers bonds at genesis"),
+        },
     )
     .expect("the 2M held registration derives");
     let descriptor = PalwCanonicalClassDescriptorV1::of(&profile, kaspa_consensus_core::Hash64::default()).expect("one weight format");
@@ -93,10 +101,9 @@ fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
     println!("  derived MAC-eq per draw    {derived_per_draw}");
 
     println!("\n=== the floor row, both units (the basis) ===");
-    let floor_profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .expect("the floor profile derives");
+    let floor_profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor profile derives");
     let floor_canonical = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
     let floor_descriptor =
         PalwCanonicalClassDescriptorV1::of(&floor_profile, kaspa_consensus_core::Hash64::default()).expect("one weight format");
@@ -109,24 +116,25 @@ fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
     println!("\n=== the two units, side by side, for the 2M row ===");
     let declared_2m = 27_002_967_184u128;
     let scaled = derived_per_draw * (floor_declared as u128) / floor_derived;
-    println!("  A. its OWN declared leaves         {declared_2m} -> {} sompi = {:.2} MSK", declared_2m * 5, (declared_2m * 5) as f64 / 1e8);
+    println!(
+        "  A. its OWN declared leaves         {declared_2m} -> {} sompi = {:.2} MSK",
+        declared_2m * 5,
+        (declared_2m * 5) as f64 / 1e8
+    );
     println!("  B. renormalised by the floor       {scaled} -> {} sompi = {:.2} MSK", scaled * 5, (scaled * 5) as f64 / 1e8);
     println!("  ratio B/A                          {:.2}x", scaled as f64 / declared_2m as f64);
 
     let per_claim = scaled * 5;
-    assert_eq!(
-        per_claim, LIVE_PER_CLAIM_SOMPI,
-        "the renormalised reservation is the per_claim the live seats printed"
-    );
-    assert!(
-        per_claim > ceiling,
-        "this is the wedge: one claim needs {per_claim} against a ceiling of {ceiling}"
-    );
+    assert_eq!(per_claim, LIVE_PER_CLAIM_SOMPI, "the renormalised reservation is the per_claim the live seats printed");
+    assert!(per_claim > ceiling, "this is the wedge: one claim needs {per_claim} against a ceiling of {ceiling}");
 
     println!("\n=== what the fleet needs ===");
     let needed_one = per_claim * 1000 / MAX_EXPOSURE_RATIO_PERMILLE;
     println!("  collateral for ONE in-flight 2M claim  {needed_one} sompi = {:.2} MSK", needed_one as f64 / 1e8);
-    println!("  shipped                                {T12_WEDGED_COLLATERAL_SOMPI} sompi = {:.2} MSK", T12_WEDGED_COLLATERAL_SOMPI as f64 / 1e8);
+    println!(
+        "  shipped                                {T12_WEDGED_COLLATERAL_SOMPI} sompi = {:.2} MSK",
+        T12_WEDGED_COLLATERAL_SOMPI as f64 / 1e8
+    );
     println!("  short by                               {:.2}x", needed_one as f64 / T12_WEDGED_COLLATERAL_SOMPI as f64);
 
     // **And the shipped card now clears it.** This is the assertion that says the fleet can mine;
@@ -223,11 +231,19 @@ fn the_collateral_each_row_needs_in_the_runtime_unit() {
     println!("  collateral       {collateral} sompi = {:.2} MSK", collateral as f64 / 1e8);
     println!("  shipped          {T12_WEDGED_COLLATERAL_SOMPI} sompi = {:.2} MSK", T12_WEDGED_COLLATERAL_SOMPI as f64 / 1e8);
     println!("  factor           {:.2}x", collateral as f64 / T12_WEDGED_COLLATERAL_SOMPI as f64);
-    println!("  8 seats          {:.2} MSK  ({:.4}% of the 10B cap)", (collateral * 8) as f64 / 1e8, (collateral * 8) as f64 / 1e8 / 1e10 * 100.0);
+    println!(
+        "  8 seats          {:.2} MSK  ({:.4}% of the 10B cap)",
+        (collateral * 8) as f64 / 1e8,
+        (collateral * 8) as f64 / 1e8 / 1e10 * 100.0
+    );
 
     println!("\n=== the minimal alternative: one 2M claim in flight, at 500 permille ===");
     let one = dense * 5 * 1000 / MAX_EXPOSURE_RATIO_PERMILLE;
-    println!("  collateral       {one} sompi = {:.2} MSK  ({:.2}x shipped)", one as f64 / 1e8, one as f64 / T12_WEDGED_COLLATERAL_SOMPI as f64);
+    println!(
+        "  collateral       {one} sompi = {:.2} MSK  ({:.2}x shipped)",
+        one as f64 / 1e8,
+        one as f64 / T12_WEDGED_COLLATERAL_SOMPI as f64
+    );
 }
 
 /// **Why the collateral is sized on the RENORMALISED reservation and not on the raw fork weight.**

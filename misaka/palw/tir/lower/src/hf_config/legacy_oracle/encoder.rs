@@ -46,7 +46,8 @@ pub(crate) fn clip_text(p: &mut P, projection: bool) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
                 residual: pre_norm(norm),
-                pre_branch: None, post_scale: 1.0,
+                pre_branch: None,
+                post_scale: 1.0,
             }
         })
         .collect();
@@ -184,7 +185,8 @@ pub(crate) fn bert_like(p: &mut P, flavor: BertFlavor) -> Result<ArchSpec> {
                 mixer: Mixer::Attention(at),
                 ffn: Ffn::Mlp(plain_mlp(inter, act, true)),
                 residual: Residual::PostNorm { mixer_norm: norm, ffn_norm: norm },
-                pre_branch: None, post_scale: 1.0,
+                pre_branch: None,
+                post_scale: 1.0,
             }
         })
         .collect();
@@ -260,9 +262,8 @@ pub(crate) fn bert_like(p: &mut P, flavor: BertFlavor) -> Result<ArchSpec> {
     };
     // A task head or the pooler (`pooler.dense`, `cls.*`, `lm_head.*`, DistilBERT's `vocab_*`) is
     // not part of the encoder; a `…ForMaskedLM` checkpoint nests the encoder under its own prefix.
-    p.ignored_prefixes.extend(
-        ["pooler.", "cls.", "lm_head.", "vocab_transform.", "vocab_layer_norm.", "vocab_projector."].map(String::from),
-    );
+    p.ignored_prefixes
+        .extend(["pooler.", "cls.", "lm_head.", "vocab_transform.", "vocab_layer_norm.", "vocab_projector."].map(String::from));
     let aliases: Vec<(String, String)> = match flavor {
         BertFlavor::MPNet => vec![("".into(), "mpnet.".into())],
         BertFlavor::DistilBert => vec![("".into(), "distilbert.".into())],

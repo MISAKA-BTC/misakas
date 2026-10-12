@@ -134,10 +134,7 @@ pub struct TirBlockAddressV1 {
 
 /// The weight products a class can be asked about, in a fixed order: `(occurrence, node)` of every weight `MatMul`, occurrences in schedule order.
 /// A site's position here is its ordinal on the wire.
-pub fn tir_weight_sites_v1(
-    plan: &misaka_palw_tir_exec::TirPlan,
-    analysis: &crate::analysis::TirSketchAnalysisV1,
-) -> Vec<(u16, u16)> {
+pub fn tir_weight_sites_v1(plan: &misaka_palw_tir_exec::TirPlan, analysis: &crate::analysis::TirSketchAnalysisV1) -> Vec<(u16, u16)> {
     let mut sites = Vec::new();
     for (occ, &(block, _)) in plan.occurrences.iter().enumerate() {
         for site in &analysis.blocks[block as usize].matmuls {
@@ -161,7 +158,9 @@ pub fn tir_block_address_v1(
     let (occ, node) = *tir_weight_sites_v1(plan, analysis).get(ordinal as usize)?;
     let (blk, _) = plan.occurrences[occ as usize];
     let site = analysis.site(blk, node)?;
-    let TirMatMulKindV1::Weight { side, source: TirWeightSourceV1::Static(misaka_palw_tir::Ref::Param(j)) } = site.kind else { return None };
+    let TirMatMulKindV1::Weight { side, source: TirWeightSourceV1::Static(misaka_palw_tir::Ref::Param(j)) } = site.kind else {
+        return None;
+    };
     let np = &plan.blocks[blk as usize].nodes[node as usize];
     let g = crate::geom::TirCheckGeomV1::new(side, &np.in_types[0], &np.in_types[1], 1, 0);
     if !g.plain_weight() {

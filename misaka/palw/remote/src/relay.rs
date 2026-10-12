@@ -29,7 +29,9 @@ pub enum NodeOutcome {
     AlreadyKnown,
     Refused(String),
     /// The node answered success for an id that is not ours: it relayed something else, or lied.
-    Tampered { returned: Hash64 },
+    Tampered {
+        returned: Hash64,
+    },
     Unreachable(String),
 }
 
@@ -150,7 +152,8 @@ pub fn check_fp_carrier_v1(tx: &Transaction) -> Result<CheckedFpCarrierV1, Strin
     if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
         return Err(format!("the transaction rides subnetwork {}, not the free-prompt commitment's", tx.subnetwork_id));
     }
-    let payload: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).map_err(|e| format!("the payload does not decode: {e}"))?;
+    let payload: PalwFpCommitmentTxPayloadV3 =
+        borsh::from_slice(&tx.payload).map_err(|e| format!("the payload does not decode: {e}"))?;
     let claim_id = payload.claim_id();
     let executor_pubkey = payload.commitment.job.executor_pubkey.clone();
     if !matches!(
@@ -164,7 +167,8 @@ pub fn check_fp_carrier_v1(tx: &Transaction) -> Result<CheckedFpCarrierV1, Strin
     ) {
         return Err("the claim signature does not verify under the executor key the commitment names".into());
     }
-    let funding_pubkey = funding_pubkey_of_carrier_v1(tx).ok_or("the carrier does not have one funding input signed with <signature> <pubkey>")?;
+    let funding_pubkey =
+        funding_pubkey_of_carrier_v1(tx).ok_or("the carrier does not have one funding input signed with <signature> <pubkey>")?;
     Ok(CheckedFpCarrierV1 { claim_id, executor_pubkey, funding_pubkey })
 }
 
@@ -381,7 +385,8 @@ mod tests {
         assert!(matches!(broadcast_signed_tx(&tx, Some(&wrong), &refs, 2), Err(RelayFailure::Preflight(_))));
         // A flipped claim-signature bit: refused before any node is asked.
         let mut bad = tx.clone();
-        let mut payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&bad.payload).unwrap();
+        let mut payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
+            borsh::from_slice(&bad.payload).unwrap();
         payload.signature[10] ^= 1;
         bad.payload = borsh::to_vec(&payload).unwrap();
         bad.finalize();

@@ -426,8 +426,14 @@ fn bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary()
         for (kind, index) in selected {
             kinds.insert(kind);
             let expected = build_tir_cone_refutation_v1(&honest.binding, index, &own, &rules).unwrap();
-            let (actual, meter) = build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules,
-                misaka_palw_tir_exec::node::tir_court_builder_limits_v1(&rules)).unwrap();
+            let (actual, meter) = build_tir_cone_refutation_bounded_v1(
+                &honest.binding,
+                index,
+                &own,
+                &rules,
+                misaka_palw_tir_exec::node::tir_court_builder_limits_v1(&rules),
+            )
+            .unwrap();
             assert_eq!(actual, expected, "{} {kind}: bounded cone retains canonical wire", case.name);
             let mut exact = PalwTirBuilderWorkLimitsV1 {
                 evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: meter.work.elements, max_terms: meter.work.terms },
@@ -441,8 +447,11 @@ fn bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary()
             exact.max_target_requests += 1;
             if meter.source_reads > 0 {
                 exact.max_source_reads -= 1;
-                assert!(build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).is_err(),
-                    "{} {kind}: source-only history copies and zero states are bounded too", case.name);
+                assert!(
+                    build_tir_cone_refutation_bounded_v1(&honest.binding, index, &own, &rules, exact).is_err(),
+                    "{} {kind}: source-only history copies and zero states are bounded too",
+                    case.name
+                );
             }
             maximum_reads = maximum_reads.max(meter.source_reads);
             moves += 1;
@@ -464,27 +473,32 @@ fn replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_m
         let runner = TirClassRunnerV1::new(&f.space, &f.plan, &tparams, f.class.class_id(&f.artifact_root)).unwrap();
         let honest = runner.retain(&f.class, f.artifact_root, &f.ctx, &f.prompt, CAP).unwrap();
         let mut dense = BTreeMap::<u32, Vec<(u64, PalwStepTileLeafV1)>>::new();
-        runner.run(&f.ctx, &f.prompt, CAP, true, &mut |leaf| {
-            dense.entry(leaf.position).or_default().push((leaf.index, leaf.preimage.clone()));
-        }).unwrap();
+        runner
+            .run(&f.ctx, &f.prompt, CAP, true, &mut |leaf| {
+                dense.entry(leaf.position).or_default().push((leaf.index, leaf.preimage.clone()));
+            })
+            .unwrap();
         let own = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap();
         let job = f.space.job_shape(&f.ctx).unwrap();
         for (position, leaves) in &dense {
-            assert_eq!(f.space.lane_count_at_position_v1(&job, *position),
+            assert_eq!(
+                f.space.lane_count_at_position_v1(&job, *position),
                 leaves.iter().map(|(_, leaf)| u128::from(leaf.value_count)).sum::<u128>(),
-                "{}: nonallocating lane accounting matches every actual emitted commit/checkpoint/history", case.name);
+                "{}: nonallocating lane accounting matches every actual emitted commit/checkpoint/history",
+                case.name
+            );
             let requested = own.replay_requested_storage_v1(*position).unwrap();
             maximum_requested = maximum_requested.max(requested);
-            let tight = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
-                .with_replay_limits_v1(4096, requested);
+            let tight =
+                TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap().with_replay_limits_v1(4096, requested);
             for (index, expected) in leaves {
                 assert_eq!(tight.step_leaf(*index).as_ref(), Some(expected), "{}: exact budget position {position}", case.name);
             }
-            let below = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
-                .with_replay_limits_v1(4096, requested - 1);
+            let below =
+                TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap().with_replay_limits_v1(4096, requested - 1);
             assert_eq!(below.step_leaf(leaves[0].0), None, "one-less requested storage refuses even a single cached position");
-            let no_positions = TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap()
-                .with_replay_limits_v1(0, usize::MAX);
+            let no_positions =
+                TirEvidenceV1::own(&runner, &honest, &inventory, case.form, CAP).unwrap().with_replay_limits_v1(0, usize::MAX);
             assert_eq!(no_positions.step_leaf(leaves[0].0), None, "replay span cap refuses before source materialization");
             positions += 1;
         }

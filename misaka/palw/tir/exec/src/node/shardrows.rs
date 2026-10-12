@@ -29,7 +29,9 @@ pub trait TirRowFetcherV1 {
     /// A fetch-local immutable source, when this provider can hold one. Repeated
     /// chunks then share its artifact/tree rather than rebuilding the whole inventory.
     /// Historical/custom single-call providers retain their existing behavior.
-    fn open_session_v1(&self) -> Result<Option<Box<dyn TirRowFetcherV1 + '_>>, String> { Ok(None) }
+    fn open_session_v1(&self) -> Result<Option<Box<dyn TirRowFetcherV1 + '_>>, String> {
+        Ok(None)
+    }
     /// An opening for each leaf of `leaves`, in order.
     fn open_rows(&self, leaves: &[u32]) -> Result<Vec<PalwArtifactOpeningV1>, String>;
 }
@@ -105,13 +107,17 @@ pub fn fetch_shard_params_v1(
             if opening.leaf_index != *want {
                 return Err(format!("the holder opened leaf {} for leaf {want}", opening.leaf_index));
             }
-            verify_artifact_opening_v1(&opening, artifact_root).map_err(|e| format!("leaf {want} does not open the registered root: {e}"))?;
+            verify_artifact_opening_v1(&opening, artifact_root)
+                .map_err(|e| format!("leaf {want} does not open the registered root: {e}"))?;
             let Some(j) = program.params.iter().position(|d| d.name == opening.operand.tensor_name) else {
                 return Err(format!("leaf {want} names a tensor the program does not declare"));
             };
             leaves += 1;
             bytes += opening.operand.bytes.len() as u64;
-            pieces.entry((j as u16, opening.operand.layer)).or_default().push((opening.operand.row_start, opening.operand.bytes.clone()));
+            pieces
+                .entry((j as u16, opening.operand.layer))
+                .or_default()
+                .push((opening.operand.row_start, opening.operand.bytes.clone()));
             kept.insert(*want, opening);
         }
     }
@@ -127,7 +133,8 @@ pub fn fetch_shard_params_v1(
             tensor_bytes.extend_from_slice(&b);
         }
         let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
-        map.tensors.insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &tensor_bytes).map_err(|e| format!("param {}: {e}", d.name))?);
+        map.tensors
+            .insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &tensor_bytes).map_err(|e| format!("param {}: {e}", d.name))?);
     }
     let plan = TirPlan::compile(&program).map_err(|e| e.to_string())?;
     let params = TirParams::from_map_lenient(&plan, &map).map_err(|e| e.to_string())?;
@@ -182,12 +189,15 @@ impl TirShardHoldingV1 {
     }
 
     fn with_runs<R>(
-        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        inputs: &super::cell::TirRunInputsV1,
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
         f: impl FnOnce(&super::evidence::TirEvidenceV1<'_>) -> Result<R, String>,
     ) -> Result<R, String> {
         let runner = super::run::TirClassRunnerV1::new(&self.space, &self.plan, &self.params, self.class_id)?;
-        let store = super::evidence::TirEvidenceV1::runs(&runner, capture, inputs, self, rules.prompt_form, rules.max_step_leaf_count)?;
+        let store =
+            super::evidence::TirEvidenceV1::runs(&runner, capture, inputs, self, rules.prompt_form, rules.max_step_leaf_count)?;
         f(&store)
     }
 
@@ -195,10 +205,13 @@ impl TirShardHoldingV1 {
     /// for the pinned prompt/trace; missing leaf/hash inputs produce Unavailable.
     #[allow(clippy::too_many_arguments)]
     pub fn verify_cells_from_runs(
-        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        inputs: &super::cell::TirRunInputsV1,
         cells: &[super::cell::TirCellV1],
         prompt_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-        cap: u64, backend: &mut dyn super::cell::KernelBackendV1,
+        cap: u64,
+        backend: &mut dyn super::cell::KernelBackendV1,
     ) -> Result<super::cell::TirCellVerdictV1, String> {
         use super::cell::{CpuKernelBackendV1, KernelBackendV1, TirCellRequestV1, TirCellVerdictV1};
         super::backend::tir_authenticate_capture_metadata_v1(capture, self.class_id, prompt_form, cap)?;
@@ -206,9 +219,20 @@ impl TirShardHoldingV1 {
         let tokens = super::cell::tokens_of_capture_v1(capture);
         let (mut leaves, mut positions) = (0u64, 0u32);
         for cell in cells {
-            let request = TirCellRequestV1 { space: &self.space, plan: &self.plan, params: &self.params,
-                class_id: self.class_id, ctx: &capture.binding.job_context, cell, tokens: &tokens, inputs, fused: false };
-            let verdict = backend.verify_cell(&request).unwrap_or_else(|_| CpuKernelBackendV1.verify_cell(&request).expect("the CPU verifier runs every cell"));
+            let request = TirCellRequestV1 {
+                space: &self.space,
+                plan: &self.plan,
+                params: &self.params,
+                class_id: self.class_id,
+                ctx: &capture.binding.job_context,
+                cell,
+                tokens: &tokens,
+                inputs,
+                fused: false,
+            };
+            let verdict = backend
+                .verify_cell(&request)
+                .unwrap_or_else(|_| CpuKernelBackendV1.verify_cell(&request).expect("the CPU verifier runs every cell"));
             match verdict {
                 TirCellVerdictV1::Verified { leaves: n, positions: p } => {
                     leaves = leaves.checked_add(n).ok_or("the sparse cell leaf total overflows")?;
@@ -221,46 +245,75 @@ impl TirShardHoldingV1 {
     }
 
     pub fn cone_close_from_runs(
-        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
-        index: u64, rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        inputs: &super::cell::TirRunInputsV1,
+        index: u64,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2, String> {
         self.with_runs(capture, inputs, rules, |store| {
             let refutation = store.cone_refutation(index, rules).map_err(|e| e.to_string())?;
             let mut proof = kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
-            proof.tir_strip_program_v1(); Ok(proof)
+            proof.tir_strip_program_v1();
+            Ok(proof)
         })
     }
 
     pub fn named_leaf_close_from_runs(
-        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
-        index: u64, rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        inputs: &super::cell::TirRunInputsV1,
+        index: u64,
+        rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2, String> {
         self.with_runs(capture, inputs, rules, |store| {
-            let refutation = kaspa_consensus_core::palw_tir_court_v1::build_tir_named_leaf_refutation_v1(&capture.binding, index, store).map_err(|e| e.to_string())?;
+            let refutation =
+                kaspa_consensus_core::palw_tir_court_v1::build_tir_named_leaf_refutation_v1(&capture.binding, index, store)
+                    .map_err(|e| e.to_string())?;
             let mut proof = kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation: Box::new(refutation) };
-            proof.tir_strip_program_v1(); Ok(proof)
+            proof.tir_strip_program_v1();
+            Ok(proof)
         })
     }
 
     pub fn dissect_round_from_runs(
-        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        inputs: &super::cell::TirRunInputsV1,
         phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
         self.with_runs(capture, inputs, rules, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_bounded_v1(&capture.binding, phase, self.space.layout.h_tile, store, rules,
-                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_bounded_v1(
+                &capture.binding,
+                phase,
+                self.space.layout.h_tile,
+                store,
+                rules,
+                super::backend::tir_court_builder_limits_v1(rules),
+            )
+            .map(|(object, _)| object)
+            .map_err(|e| e.to_string())
         })
     }
 
     pub fn dissect_bottom_from_runs(
-        &self, capture: &super::backend::TirCaptureV1, inputs: &super::cell::TirRunInputsV1,
+        &self,
+        capture: &super::backend::TirCaptureV1,
+        inputs: &super::cell::TirRunInputsV1,
         phase: &kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectPhaseV1,
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirConeRefutationV1, String> {
         self.with_runs(capture, inputs, rules, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(&capture.binding, phase, store, rules,
-                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(
+                &capture.binding,
+                phase,
+                store,
+                rules,
+                super::backend::tir_court_builder_limits_v1(rules),
+            )
+            .map(|(object, _)| object)
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -273,8 +326,15 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirRootClaimV1, String> {
         self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_root_claim_bounded_v1(&capture.binding, index, store, rules,
-                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_root_claim_bounded_v1(
+                &capture.binding,
+                index,
+                store,
+                rules,
+                super::backend::tir_court_builder_limits_v1(rules),
+            )
+            .map(|(object, _)| object)
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -289,9 +349,15 @@ impl TirShardHoldingV1 {
     ) -> Result<kaspa_consensus_core::palw_tir_dissect_v1::PalwTirDissectRoundV1, String> {
         self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
             kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_round_bounded_v1(
-                &capture.binding, phase, self.space.layout.h_tile, store, rules,
+                &capture.binding,
+                phase,
+                self.space.layout.h_tile,
+                store,
+                rules,
                 super::backend::tir_court_builder_limits_v1(rules),
-            ).map(|(object, _)| object).map_err(|e| e.to_string())
+            )
+            .map(|(object, _)| object)
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -304,8 +370,15 @@ impl TirShardHoldingV1 {
         rules: &kaspa_consensus_core::palw_tir_court_v1::PalwTirCourtRulesV1,
     ) -> Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirConeRefutationV1, String> {
         self.with_store(capture, rules.prompt_form, rules.max_step_leaf_count, |store| {
-            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(&capture.binding, phase, store, rules,
-                super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object).map_err(|e| e.to_string())
+            kaspa_consensus_core::palw_tir_court_v1::build_tir_dissect_bottom_bounded_v1(
+                &capture.binding,
+                phase,
+                store,
+                rules,
+                super::backend::tir_court_builder_limits_v1(rules),
+            )
+            .map(|(object, _)| object)
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -476,7 +549,10 @@ impl TirRowPursuitV1 {
             return refuse(self, "the reply is not a list of openings".into());
         };
         if openings.is_empty() || openings.len() as u32 > count.min(PALW_TIR_ROWS_PER_REPLY_MAX_V1) {
-            return refuse(self, format!("a reply of {} rows to an ask for {count} (1 ..= {PALW_TIR_ROWS_PER_REPLY_MAX_V1})", openings.len()));
+            return refuse(
+                self,
+                format!("a reply of {} rows to an ask for {count} (1 ..= {PALW_TIR_ROWS_PER_REPLY_MAX_V1})", openings.len()),
+            );
         }
         let mut proven = Vec::with_capacity(openings.len());
         for (i, opening) in openings.into_iter().enumerate() {

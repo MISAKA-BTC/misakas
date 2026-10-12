@@ -2644,7 +2644,11 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
     }
 
-    async fn sync_pruning_point_utxoset(&mut self, consensus: &ConsensusProxy, import_session: PruningImportSessionV1) -> Result<(), ProtocolError> {
+    async fn sync_pruning_point_utxoset(
+        &mut self,
+        consensus: &ConsensusProxy,
+        import_session: PruningImportSessionV1,
+    ) -> Result<(), ProtocolError> {
         let pruning_point = import_session.point;
         info!("downloading the pruning point utxoset, this can take a little while.");
         self.router
@@ -2714,7 +2718,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             .map_err(|_| ProtocolError::Other("invalid EVM execution header in PruningPointEvmState"))?;
         let snapshot: kaspa_consensus_core::evm::EvmStateSnapshot = borsh::from_slice(&msg.evm_state_snapshot)
             .map_err(|_| ProtocolError::Other("invalid EVM state snapshot in PruningPointEvmState"))?;
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_evm_state_for_session(import_session, header, snapshot)).await?;
+        consensus
+            .clone()
+            .spawn_blocking(move |c| c.import_pruning_point_evm_state_for_session(import_session, header, snapshot))
+            .await?;
         info!("imported the EVM state of the pruning point {}", pruning_point);
         Ok(())
     }
@@ -2752,7 +2759,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot = borsh::from_slice(&msg.overlay_snapshot)
             .map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot_for_session(import_session, snapshot)).await?;
+        consensus
+            .clone()
+            .spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot_for_session(import_session, snapshot))
+            .await?;
         info!("imported the overlay snapshot of the pruning point {}", pruning_point);
         Ok(())
     }
@@ -2820,8 +2830,14 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !msg.found {
             return Err(ProtocolError::PruningSidecarUnavailable("PALW state", pruning_point.to_string()));
         }
-        if msg.chunked || !msg.snapshot_root.is_empty() || msg.chunk_count != 0 || msg.total_bytes != 0
-            || msg.chunk_index != 0 || !msg.chunk_hash.is_empty() || msg.pruning_point_hash.is_some() {
+        if msg.chunked
+            || !msg.snapshot_root.is_empty()
+            || msg.chunk_count != 0
+            || msg.total_bytes != 0
+            || msg.chunk_index != 0
+            || !msg.chunk_hash.is_empty()
+            || msg.pruning_point_hash.is_some()
+        {
             return Err(ProtocolError::Other("legacy PALW snapshot reply carries unnegotiated chunk metadata"));
         }
         // Bounded before deserializing, like the overlay beside it: the carriage is bonds, classes
@@ -2831,7 +2847,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // ≈ 57 MB state), it covers the class declarations beside the carriage (they were unbounded in total), and it is asked of the
         // whole message before either is decoded.
         const MAX_PALW_STATE_BYTES: usize = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES;
-        let total_bytes = msg.palw_state.len().saturating_add(msg.class_carriages.iter().map(|e| e.carriage.len()).fold(0usize, usize::saturating_add));
+        let total_bytes = msg
+            .palw_state
+            .len()
+            .saturating_add(msg.class_carriages.iter().map(|e| e.carriage.len()).fold(0usize, usize::saturating_add));
         if msg.palw_state.len() > MAX_PALW_STATE_BYTES || total_bytes > MAX_PALW_STATE_BYTES {
             return Err(ProtocolError::Other("PruningPointPalwState exceeds the accepted size cap"));
         }

@@ -26,8 +26,8 @@ use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
-use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::Config;
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_panel_beacon_v1::challenge::policy::reference_policy_v1;
 use kaspa_consensus_core::palw_panel_beacon_v1::challenge::{
@@ -38,7 +38,8 @@ use kaspa_consensus_core::palw_permissionless_panel_v1::{
     BeaconProofV1, BeaconRequestV1, BondIdV1, ClaimPhaseV3, PalwPermissionlessPanelV1, PanelPolicyV1,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    PalwBlockContextV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelV3BeaconSourceV1, PalwStateCarriageV2,
+    PalwBlockContextV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelV3BeaconSourceV1,
+    PalwStateCarriageV2,
 };
 use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
@@ -100,7 +101,12 @@ fn reference_source() -> PalwPanelV3BeaconSourceV1 {
             final_path: FinalPathV1::PanelIndependent,
         })
         .collect();
-    PalwPanelV3BeaconSourceV1::Reference { events, eligible_profiles: BTreeSet::from([PROFILE]), works: Vec::new(), sealed: Vec::new() }
+    PalwPanelV3BeaconSourceV1::Reference {
+        events,
+        eligible_profiles: BTreeSet::from([PROFILE]),
+        works: Vec::new(),
+        sealed: Vec::new(),
+    }
 }
 
 /// testnet-12 with harness cards and the permissionless Panel armed at [`FENCE`] on a copy of the params (see the module doc).
@@ -111,7 +117,8 @@ fn reference_source() -> PalwPanelV3BeaconSourceV1 {
 fn armed(fence: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (mut config, bundle, premine, floats) = t12_with_harness_cards();
     let Some(at) = fence else { return (config, bundle, premine, floats) };
-    config.params.palw_permissionless_panel_v1 = Some(PalwPermissionlessPanelV1 { activation: ForkActivation::new(at), policy: engine_policy() });
+    config.params.palw_permissionless_panel_v1 =
+        Some(PalwPermissionlessPanelV1 { activation: ForkActivation::new(at), policy: engine_policy() });
     config.params.sync_palw_permissionless_panel_v1();
     assert!(config.params.validate_palw_v2().is_err(), "the real validator still refuses what this test bypasses");
     let PalwConsensusMode::ConsensusV2(armed) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
@@ -288,7 +295,6 @@ async fn run_a() -> Run {
     Run { a, config, bundle, premine, floats, legacy, v3, bind_parent, bind_block }
 }
 
-
 /// Fork-choice facts of `blocks` as `chain` holds them (for a failing assertion's context).
 fn dump(chain: &T12Chain, blocks: &[(&str, &Block)]) {
     let vp = chain.vp();
@@ -345,7 +351,8 @@ async fn t12_a_v3_claim_binds_on_a_heartbeat_with_no_named_operator_while_lane_a
 
     // The node's read (what RPC op 220 serves) is the pure function of this tip's state: the V3 claim reads as bound with the
     // binding's seed and seats, the legacy claim as lane A's, and an unknown id is named, not silently absent.
-    let observed = vp.palw_panel_v3_observation_v1_impl(vec![run.v3, run.legacy, Hash64::from_u64_word(77)], 0).expect("a V2 node answers");
+    let observed =
+        vp.palw_panel_v3_observation_v1_impl(vec![run.v3, run.legacy, Hash64::from_u64_word(77)], 0).expect("a V2 node answers");
     assert_eq!(
         observed,
         kaspa_consensus_core::palw_permissionless_panel_v1::panel_v3_observation_v1(
@@ -364,7 +371,10 @@ async fn t12_a_v3_claim_binds_on_a_heartbeat_with_no_named_operator_while_lane_a
     assert!(observed.overview.active && observed.overview.bound == observed.overview.tracked_claims, "{:?}", observed.overview);
     let listed = vp.palw_panel_v3_observation_v1_impl(Vec::new(), 0).unwrap();
     assert_eq!(listed.claims.len() as u32, listed.overview.tracked_claims, "no id named: the tracked claims");
-    assert!(listed.claims.iter().all(|c| c.rule == "permissionlessV3" && c.claim_id != run.legacy), "the legacy claim is not the engine's");
+    assert!(
+        listed.claims.iter().all(|c| c.rule == "permissionlessV3" && c.claim_id != run.legacy),
+        "the legacy claim is not the engine's"
+    );
     assert!(listed.claims.iter().any(|c| c.claim_id == run.v3));
     assert!(observed.to_json().contains("\"permissionlessV3\""));
 

@@ -16,8 +16,8 @@ use kaspa_consensus_core::palw_canonical_work_v1::{
 };
 use kaspa_consensus_core::palw_chain_weight::{PalwBlockWeightV1, PalwChainWeightParamsV1, chain_weights_v1, compare_tips_v1};
 use kaspa_consensus_core::palw_economic_compute_v1::{
-    PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_attempted_compute_per_claim_v1,
-    palw_expected_attempts_q32_v1, palw_job_economic_compute_v1, palw_network_expected_attempts_q32_v1,
+    PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_attempted_compute_per_claim_v1, palw_expected_attempts_q32_v1,
+    palw_job_economic_compute_v1, palw_network_expected_attempts_q32_v1,
 };
 use kaspa_consensus_core::palw_economic_payout_v1::{
     PALW_ECONOMIC_PAYOUT_DEVNET_V1, PalwEconomicPayoutFoldV1, palw_attempted_ccu_v1, palw_cap_utilization_permille_v1,
@@ -27,7 +27,9 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{
     PALW_EXECUTION_QUANTUM_V1, palw_execution_canonical_work_id_v1, palw_execution_quantum_count_v1,
 };
 use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1, palw_ticket_admits_v1};
-use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B, PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -385,7 +387,11 @@ fn chain_weights_and_tip_comparison() {
     let b = |pwu: u64, stage: PalwWorkRampStageV1| Some(PalwBlockWeightV1 { pwu, stage });
 
     let honest = vec![b(100, PalwWorkRampStageV1::Final), b(100, PalwWorkRampStageV1::Final), b(100, PalwWorkRampStageV1::Final)];
-    let private = vec![b(100, PalwWorkRampStageV1::Provisional), b(100, PalwWorkRampStageV1::Provisional), b(100, PalwWorkRampStageV1::Provisional)];
+    let private = vec![
+        b(100, PalwWorkRampStageV1::Provisional),
+        b(100, PalwWorkRampStageV1::Provisional),
+        b(100, PalwWorkRampStageV1::Provisional),
+    ];
 
     let hw = chain_weights_v1(&honest, &params).expect("honest");
     let pw = chain_weights_v1(&private, &params).expect("private");

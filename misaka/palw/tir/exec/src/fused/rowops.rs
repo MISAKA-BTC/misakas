@@ -10,9 +10,9 @@
 //! The operands are static-shaped rows (`[n]` or `[rows, n]`), `x` an `i16` (L2) or `i16`/`i32` (RMS) tensor, `ε` an `i64`
 //! one-element tensor. Where the plan proves a node of the region can fail it is not fused ([`super::enable`]).
 
+use crate::elem::Buf;
 use misaka_palw_tir::arith;
 use misaka_palw_tir::builder::BlockBuilder;
-use crate::elem::Buf;
 use misaka_palw_tir::program::Node;
 use misaka_palw_tir::{DType, Ref, TensorType, TirResult};
 use rayon::prelude::*;

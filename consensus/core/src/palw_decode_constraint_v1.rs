@@ -184,7 +184,11 @@ impl PalwDecodeConstraintV1 {
     pub fn validate_form(&self, version: u16, max_nodes: usize, max_bytes: usize) -> Result<(), PalwDecodeConstraintError> {
         let bad = PalwDecodeConstraintError::Invalid;
         if self.version != version {
-            return Err(bad(if version == PALW_DECODE_CONSTRAINT_VERSION_V1 { "the header version is not 1" } else { "the header version is not the form's" }));
+            return Err(bad(if version == PALW_DECODE_CONSTRAINT_VERSION_V1 {
+                "the header version is not 1"
+            } else {
+                "the header version is not the form's"
+            }));
         }
         if self.frames.is_empty() {
             return Err(bad("an automaton has at least one frame"));
@@ -269,12 +273,7 @@ impl PalwDecodeConstraintV1 {
     }
 
     /// [`Self::from_bytes`] under a form's own header version and bounds ([`Self::validate_form`]).
-    pub fn from_bytes_form(
-        bytes: &[u8],
-        version: u16,
-        max_nodes: usize,
-        max_bytes: usize,
-    ) -> Result<Self, PalwDecodeConstraintError> {
+    pub fn from_bytes_form(bytes: &[u8], version: u16, max_nodes: usize, max_bytes: usize) -> Result<Self, PalwDecodeConstraintError> {
         if bytes.len() > max_bytes {
             return Err(PalwDecodeConstraintError::TooLarge(bytes.len()));
         }
@@ -1700,12 +1699,16 @@ pub(crate) mod tests {
 
     /// Public-proof fixture: a self-consistent binding under the constrained FP descriptor,
     /// with public row/table openings. No producer execution or secret state is supplied.
-    pub(crate) fn public_constrained_case_for_tests_v1(fault: bool) -> (crate::palw_step_leg::PalwStepBindingV2, PalwConstrainedDecodeAccusationV1) {
+    pub(crate) fn public_constrained_case_for_tests_v1(
+        fault: bool,
+    ) -> (crate::palw_step_leg::PalwStepBindingV2, PalwConstrainedDecodeAccusationV1) {
         let constraint = bracket_digit();
         let table = token_table();
         let rows = constrained_rows(6);
         let mut ids = honest_run(&constraint, &rows, PalwDecodeSamplingV2::GREEDY);
-        if fault { ids[1] = b'x' as u32; }
+        if fault {
+            ids[1] = b'x' as u32;
+        }
         let mut binding = constrained_binding(&rows, &ids);
         let mut job = constrained_job(&constraint, &table);
         job.class_id = binding.shape_profile.shape_profile_id();
@@ -1720,10 +1723,12 @@ pub(crate) mod tests {
             cu_ruleset_id: binding.job_context.cu_ruleset_id,
         };
         binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
-            &job, &class,
+            &job,
+            &class,
             &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, ids.len() as u32),
             &binding.job_context.network_id,
-        ).unwrap();
+        )
+        .unwrap();
         binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows[..ids.len()], &ids).unwrap();
         crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
         crate::palw_step_leg::verify_binding_v1(&binding).unwrap();
@@ -1731,10 +1736,9 @@ pub(crate) mod tests {
         (binding, proof)
     }
 
-    pub(crate) fn public_flat_constrained_case_for_tests_v1(fault: bool) -> (
-        crate::palw_step_leg::PalwStepBindingV2,
-        crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1,
-    ) {
+    pub(crate) fn public_flat_constrained_case_for_tests_v1(
+        fault: bool,
+    ) -> (crate::palw_step_leg::PalwStepBindingV2, crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1) {
         let (mut binding, proof) = public_constrained_case_for_tests_v1(fault);
         let mut job = proof.job;
         binding.shape_profile.logits_scheme_id = crate::palw_step_refute::flat_logits_scheme_id_v1();
@@ -1751,17 +1755,27 @@ pub(crate) mod tests {
         let ids = proof.pin.generated_token_ids[..2].to_vec();
         let rows = constrained_rows(6)[..ids.len()].to_vec();
         binding.job_context = crate::palw_fp_execution_v3::palw_fp_job_context_v3(
-            &job, &class,
+            &job,
+            &class,
             &crate::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&job, ids.len() as u32),
             &binding.job_context.network_id,
-        ).unwrap();
+        )
+        .unwrap();
         binding.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, &rows, &ids);
         crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
         crate::palw_step_leg::verify_binding_v1(&binding).unwrap();
-        (binding, crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1 {
-            pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: ids },
-            position: 1, job, renderings: proof.renderings, eog: proof.eog, witness: None, beat_lane: None,
-        })
+        (
+            binding,
+            crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1 {
+                pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: ids },
+                position: 1,
+                job,
+                renderings: proof.renderings,
+                eog: proof.eog,
+                witness: None,
+                beat_lane: None,
+            },
+        )
     }
 
     /// **The court's third arm, as an accusation**: an honest constrained run clears at every position (the stop included, with
@@ -1792,7 +1806,10 @@ pub(crate) mod tests {
         assert_eq!(check_constrained_decode_token_v1(&binding, &a, cap()).map(|v| v.fault), Ok(fault_at(1)));
         // A later position is not adjudicated from a dead prefix.
         let later = accusation(&job, &table, &binding, &rows, &altered, 2, &[], None);
-        assert!(matches!(check_constrained_decode_token_v1(&binding, &later, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        assert!(matches!(
+            check_constrained_decode_token_v1(&binding, &later, cap()),
+            Err(PalwStepRefuteError::InputSetNotCanonical(_))
+        ));
         // The stop rule: the lowest EOG id committed where a digit WAS admitted is a lie — convicted only with a witness lane.
         let mut early_stop = ids.clone();
         early_stop[1] = EOG_LOW;
@@ -1802,7 +1819,10 @@ pub(crate) mod tests {
         let witnessed = accusation(&job, &table, &binding, &rows, &early_stop, 1, &[b'3' as u32], Some(b'3' as u32));
         assert_eq!(check_constrained_decode_token_v1(&binding, &witnessed, cap()).map(|v| v.fault), Ok(fault_at(1)));
         let bogus = accusation(&job, &table, &binding, &rows, &early_stop, 1, &[b'x' as u32], Some(b'x' as u32));
-        assert!(matches!(check_constrained_decode_token_v1(&binding, &bogus, cap()), Err(PalwStepRefuteError::NoFaultFound)), "a witness the constraint forbids");
+        assert!(
+            matches!(check_constrained_decode_token_v1(&binding, &bogus, cap()), Err(PalwStepRefuteError::NoFaultFound)),
+            "a witness the constraint forbids"
+        );
         // The HIGH eog id where the lowest is due is not the rule's token even when nothing is admitted.
         let mut wrong_eog = ids.clone();
         wrong_eog[3] = EOG_HIGH;
@@ -1826,14 +1846,37 @@ pub(crate) mod tests {
         // Another job (another constraint) does not hash to the context's job id.
         let mut other_job = ok.clone();
         other_job.job.job_nonce = [9; 32];
-        assert!(matches!(check_constrained_decode_token_v1(&binding, &other_job, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        assert!(matches!(
+            check_constrained_decode_token_v1(&binding, &other_job, cap()),
+            Err(PalwStepRefuteError::InputSetNotCanonical(_))
+        ));
         // A rendering altered after it was opened no longer opens against the claim's root.
-        let mut forged = accusation(&job, &table, &binding, &rows, &{ let mut a = ids.clone(); a[1] = b'x' as u32; a }, 1, &[], None);
+        let mut forged = accusation(
+            &job,
+            &table,
+            &binding,
+            &rows,
+            &{
+                let mut a = ids.clone();
+                a[1] = b'x' as u32;
+                a
+            },
+            1,
+            &[],
+            None,
+        );
         forged.renderings.iter_mut().find(|r| r.id == b'x' as u32).unwrap().rendering = Some(b"3".to_vec());
-        let altered_ids = { let mut a = ids.clone(); a[1] = b'x' as u32; a };
+        let altered_ids = {
+            let mut a = ids.clone();
+            a[1] = b'x' as u32;
+            a
+        };
         let b2 = claim_binding(&job, &rows, &altered_ids);
         forged.pin = one_disclosure_pin(&b2.job_context, &rows, &altered_ids, 1);
-        assert!(matches!(check_constrained_decode_token_v1(&b2, &forged, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))), "a forged rendering would convict an honest `3`");
+        assert!(
+            matches!(check_constrained_decode_token_v1(&b2, &forged, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
+            "a forged rendering would convict an honest `3`"
+        );
         // A forged end-of-generation list.
         let mut eog = ok.clone();
         eog.eog.ids.push(7);
@@ -1841,12 +1884,18 @@ pub(crate) mod tests {
         // A prefix id with no opened rendering.
         let mut missing = ok.clone();
         missing.renderings.retain(|r| r.id != ids[0]);
-        assert!(matches!(check_constrained_decode_token_v1(&binding, &missing, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        assert!(matches!(
+            check_constrained_decode_token_v1(&binding, &missing, cap()),
+            Err(PalwStepRefuteError::InputSetNotCanonical(_))
+        ));
         // A claim that is not a constrained job.
         let mut plain = ok.clone();
         plain.job.version = crate::palw_freeprompt_v3::PALW_FP_V3_VERSION;
         plain.job.tail = None;
-        assert!(matches!(check_constrained_decode_token_v1(&binding, &plain, cap()), Err(PalwStepRefuteError::InputSetNotCanonical(_))));
+        assert!(matches!(
+            check_constrained_decode_token_v1(&binding, &plain, cap()),
+            Err(PalwStepRefuteError::InputSetNotCanonical(_))
+        ));
         // The two-disclosure arm: a committed digit that a higher-keyed admitted digit beats.
         let sampling = PalwDecodeSamplingV2::GREEDY;
         let mut rows2 = constrained_rows(6);
@@ -1877,9 +1926,11 @@ pub(crate) mod tests {
     /// public pin and EOG opening, without a witness of an admitted lane or own replay values.
     #[test]
     fn public_constrained_post_stop_fault_uses_the_first_authenticated_eog_and_keeps_legacy_behavior() {
-        use crate::palw_step_refute::{check_constrained_decode_token_at_v2, check_constrained_flat_decode_token_at_v2,
-            check_constrained_flat_decode_token_v1, flat_logits_scheme_id_v1, base0_logits_trace_root_v1, PalwBase0DecodeTokensV1};
         use crate::palw_fp_constraint_job_v1::PalwConstrainedFlatDecodeAccusationV1;
+        use crate::palw_step_refute::{
+            PalwBase0DecodeTokensV1, base0_logits_trace_root_v1, check_constrained_decode_token_at_v2,
+            check_constrained_flat_decode_token_at_v2, check_constrained_flat_decode_token_v1, flat_logits_scheme_id_v1,
+        };
         let c = bracket_digit();
         let table = token_table();
         let rows = constrained_rows(6);
@@ -1888,24 +1939,37 @@ pub(crate) mod tests {
         assert_eq!(honest[3], EOG_LOW);
         for suffix in [false, true] {
             let mut ids = honest.clone();
-            if suffix { ids.push(b'x' as u32); }
+            if suffix {
+                ids.push(b'x' as u32);
+            }
             let mut job = constrained_job(&c, &table);
             let binding = claim_binding(&job, &rows, &ids);
             let a = accusation(&job, &table, &binding, &rows, &ids, 3, &[], None);
             assert!(matches!(check_constrained_decode_token_v1(&binding, &a, cap()), Err(PalwStepRefuteError::NoFaultFound)));
             let verdict = check_constrained_decode_token_at_v2(&binding, &a, cap(), true);
-            if suffix { assert_eq!(verdict.map(|v| v.fault), Ok(fault_at(3))); }
-            else { assert!(matches!(verdict, Err(PalwStepRefuteError::NoFaultFound))); }
+            if suffix {
+                assert_eq!(verdict.map(|v| v.fault), Ok(fault_at(3)));
+            } else {
+                assert!(matches!(verdict, Err(PalwStepRefuteError::NoFaultFound)));
+            }
             for edit in 0..2 {
                 let mut bad = a.clone();
-                if edit == 0 { bad.pin.generated_token_ids[0] ^= 1; }
-                else { bad.eog.opening.leaf_hash = Hash64::default(); }
+                if edit == 0 {
+                    bad.pin.generated_token_ids[0] ^= 1;
+                } else {
+                    bad.eog.opening.leaf_hash = Hash64::default();
+                }
                 assert!(check_constrained_decode_token_at_v2(&binding, &bad, cap(), true).is_err());
             }
             if suffix {
                 let later = accusation(&job, &table, &binding, &rows, &ids, 4, &[], None);
-                assert!(matches!(check_constrained_decode_token_at_v2(&binding, &later, cap(), true),
-                    Err(PalwStepRefuteError::InputSetNotCanonical(_))), "challenge the first EOG, not a dead suffix");
+                assert!(
+                    matches!(
+                        check_constrained_decode_token_at_v2(&binding, &later, cap(), true),
+                        Err(PalwStepRefuteError::InputSetNotCanonical(_))
+                    ),
+                    "challenge the first EOG, not a dead suffix"
+                );
             }
             let mut flat = binding.clone();
             flat.shape_profile.logits_scheme_id = flat_logits_scheme_id_v1();
@@ -1916,12 +1980,20 @@ pub(crate) mod tests {
             crate::palw_step_refute::tests::rebind_committed_root(&mut flat);
             let flat_a = PalwConstrainedFlatDecodeAccusationV1 {
                 pin: PalwBase0DecodeTokensV1 { logits_rows: rows[..ids.len()].to_vec(), generated_token_ids: ids },
-                position: 3, job, renderings: a.renderings, eog: a.eog, witness: None, beat_lane: None,
+                position: 3,
+                job,
+                renderings: a.renderings,
+                eog: a.eog,
+                witness: None,
+                beat_lane: None,
             };
             assert!(matches!(check_constrained_flat_decode_token_v1(&flat, &flat_a, cap()), Err(PalwStepRefuteError::NoFaultFound)));
             let verdict = check_constrained_flat_decode_token_at_v2(&flat, &flat_a, cap(), true);
-            if suffix { assert_eq!(verdict.map(|v| v.fault), Ok(fault_at(3))); }
-            else { assert!(matches!(verdict, Err(PalwStepRefuteError::NoFaultFound))); }
+            if suffix {
+                assert_eq!(verdict.map(|v| v.fault), Ok(fault_at(3)));
+            } else {
+                assert!(matches!(verdict, Err(PalwStepRefuteError::NoFaultFound)));
+            }
         }
     }
 

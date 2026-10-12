@@ -3665,7 +3665,10 @@ impl Args {
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_riders: m.get_one::<u32>("palw-riders").copied().unwrap_or(defaults.palw_riders),
             palw_redemption_auth_dir: m.get_one::<String>("palw-redemption-auth-dir").cloned().or(defaults.palw_redemption_auth_dir),
-            palw_evidence_provider_dir: m.get_one::<String>("palw-evidence-provider-dir").cloned().or(defaults.palw_evidence_provider_dir),
+            palw_evidence_provider_dir: m
+                .get_one::<String>("palw-evidence-provider-dir")
+                .cloned()
+                .or(defaults.palw_evidence_provider_dir),
             palw_attempt_retention_minutes: m
                 .get_one::<u64>("palw-attempt-retention-minutes")
                 .copied()
@@ -3748,7 +3751,10 @@ impl Args {
             palw_drill_tamper_eval: m.get_one::<String>("palw-drill-tamper-eval").cloned(),
             palw_tir_fused_kernels: m.get_one::<bool>("palw-tir-fused-kernels").copied().unwrap_or(defaults.palw_tir_fused_kernels),
             palw_tir_metal: m.get_one::<bool>("palw-tir-metal").copied().unwrap_or(defaults.palw_tir_metal),
-            palw_no_seat_conformance: m.get_one::<bool>("palw-no-seat-conformance").copied().unwrap_or(defaults.palw_no_seat_conformance),
+            palw_no_seat_conformance: m
+                .get_one::<bool>("palw-no-seat-conformance")
+                .copied()
+                .unwrap_or(defaults.palw_no_seat_conformance),
             palw_drill_fence4_at: m.get_one::<u64>("palw-drill-fence4-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_boundary: m.get_one::<String>("palw-drill-tamper-boundary").cloned(),

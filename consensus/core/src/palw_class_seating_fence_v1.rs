@@ -90,7 +90,10 @@ impl PalwClassSeatingFenceV1 {
         PalwClassSeatingMirrorV1 {
             from_daa: self.activation.daa_score(),
             independent_floor: self.independent_floor,
-            raise: self.raise.filter(|r| r.activation != ForkActivation::never()).map(|r| (r.activation.daa_score(), r.independent_floor)),
+            raise: self
+                .raise
+                .filter(|r| r.activation != ForkActivation::never())
+                .map(|r| (r.activation.daa_score(), r.independent_floor)),
         }
     }
 
@@ -199,15 +202,15 @@ impl Params {
                  first condition, asked through the one function",
             ));
         }
-        let pool_ok = self.palw_activation_pool.is_some_and(|p| p.activation != ForkActivation::never() && p.activation.daa_score() <= at);
+        let pool_ok =
+            self.palw_activation_pool.is_some_and(|p| p.activation != ForkActivation::never() && p.activation.daa_score() <= at);
         if !pool_ok {
             return Err(PalwModeV2Error::Invalid(
                 "palw_class_seating needs palw_activation_pool in force at or below it: the base population the independence floor \
                  reads is the pool's (the panel's collateral floor), the one the admission jury draws from",
             ));
         }
-        let audit_ok =
-            self.palw_audit_2026_09_23.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
+        let audit_ok = self.palw_audit_2026_09_23.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
         if !audit_ok {
             return Err(PalwModeV2Error::Invalid(
                 "palw_class_seating needs palw_audit_2026_09_23 in force at or below it: the readiness predicate it counts with \

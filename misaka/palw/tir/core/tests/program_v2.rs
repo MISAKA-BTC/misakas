@@ -448,25 +448,37 @@ fn an_element_count_past_u64_is_refused_by_name_and_never_panics() {
     let huge = vec![big; 4];
     type Edit = Box<dyn Fn(&mut TirProgramV2)>;
     let cases: Vec<(&str, Edit)> = vec![
-        ("an input", Box::new({
-            let huge = huge.clone();
-            move |p| p.inputs[1].shape = huge.clone()
-        })),
-        ("a param", Box::new({
-            let huge = huge.clone();
-            move |p| p.params[0].shape = huge.clone()
-        })),
-        ("a state", Box::new({
-            let huge = huge.clone();
-            move |p| p.states[0].shape = huge.clone()
-        })),
-        ("a node's type", Box::new({
-            let huge = huge.clone();
-            move |p| {
-                use misaka_palw_tir::types::Dim;
-                p.blocks[0].nodes[0].out.shape = huge.iter().map(|d| Dim::Fixed(*d)).collect();
-            }
-        })),
+        (
+            "an input",
+            Box::new({
+                let huge = huge.clone();
+                move |p| p.inputs[1].shape = huge.clone()
+            }),
+        ),
+        (
+            "a param",
+            Box::new({
+                let huge = huge.clone();
+                move |p| p.params[0].shape = huge.clone()
+            }),
+        ),
+        (
+            "a state",
+            Box::new({
+                let huge = huge.clone();
+                move |p| p.states[0].shape = huge.clone()
+            }),
+        ),
+        (
+            "a node's type",
+            Box::new({
+                let huge = huge.clone();
+                move |p| {
+                    use misaka_palw_tir::types::Dim;
+                    p.blocks[0].nodes[0].out.shape = huge.iter().map(|d| Dim::Fixed(*d)).collect();
+                }
+            }),
+        ),
     ];
     for (what, edit) in cases {
         let mut p = base.clone();

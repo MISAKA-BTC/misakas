@@ -58,7 +58,8 @@ async fn t12_an_ir_step_demand_is_signed_by_its_accuser_and_refused_below_the_fe
             PalwDaUnitV1::TirRowNode { level: 0, index: 7 },
             PalwDaUnitV1::TirRowNode { level: 22, index: 0 },
         ] {
-            let signed = palw_tir_step_accusation_object_v1(&domain, claim, unit, chain.bonds[card], LADDER, sign).expect("the builder");
+            let signed =
+                palw_tir_step_accusation_object_v1(&domain, claim, unit, chain.bonds[card], LADDER, sign).expect("the builder");
             if !fence2 {
                 let refused = gate(&signed).expect_err("below the fence");
                 assert!(refused.contains("palw_tir_fence2 is not in force"), "{refused}");
@@ -100,7 +101,10 @@ async fn t12_an_ir_step_demand_is_signed_by_its_accuser_and_refused_below_the_fe
                 PalwDaUnitV1::TirRowNode { level: 23, index: 0 },
                 PalwDaUnitV1::TirRowNode { level: 0, index: 1 << 22 },
             ] {
-                assert!(palw_tir_step_accusation_object_v1(&domain, claim, unit, chain.bonds[card], LADDER, sign).is_err(), "{unit:?}");
+                assert!(
+                    palw_tir_step_accusation_object_v1(&domain, claim, unit, chain.bonds[card], LADDER, sign).is_err(),
+                    "{unit:?}"
+                );
             }
             // The builder holds the unit to the ladder it is given: the same leaf is one a held network's
             // seat may file.

@@ -79,7 +79,9 @@ impl AgreedView {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Halt {
-    #[error("only {responding} distinct node(s) answered and agree on the checkpoint, {needed} are required (unreachable or unsynced: {silent:?})")]
+    #[error(
+        "only {responding} distinct node(s) answered and agree on the checkpoint, {needed} are required (unreachable or unsynced: {silent:?})"
+    )]
     TooFewNodes { responding: usize, needed: usize, silent: Vec<String> },
     #[error("nodes disagree on the network: {0:?}")]
     NetworkMismatch(Vec<(String, String)>),
@@ -228,7 +230,11 @@ mod tests {
             Err(Halt::TooFewNodes { responding: 1, silent, .. }) => assert_eq!(silent.len(), 2),
             other => panic!("{other:?}"),
         }
-        let three = [node("a", 6_000, CheckpointStatus::OnChain), node("b", 6_001, CheckpointStatus::OnChain), node("behind", 100, CheckpointStatus::Unknown)];
+        let three = [
+            node("a", 6_000, CheckpointStatus::OnChain),
+            node("b", 6_001, CheckpointStatus::OnChain),
+            node("behind", 100, CheckpointStatus::Unknown),
+        ];
         assert!(agree(&refs(&three), &policy()).is_ok());
     }
 
@@ -256,7 +262,11 @@ mod tests {
 
     #[test]
     fn an_agreed_view_is_labelled_unverified_remote_state_however_many_nodes_agree() {
-        let nodes = [node("a", 6_000, CheckpointStatus::OnChain), node("b", 6_001, CheckpointStatus::OnChain), node("c", 6_002, CheckpointStatus::OnChain)];
+        let nodes = [
+            node("a", 6_000, CheckpointStatus::OnChain),
+            node("b", 6_001, CheckpointStatus::OnChain),
+            node("c", 6_002, CheckpointStatus::OnChain),
+        ];
         let v = agree(&refs(&nodes), &policy()).unwrap();
         let p = v.provenance();
         assert!(!p.is_proven());

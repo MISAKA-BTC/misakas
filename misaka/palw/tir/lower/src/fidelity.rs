@@ -54,7 +54,11 @@ pub fn gguf_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
 /// The quant-format descriptors a model's quantised weights are read with — a GGUF's tensor types (from
 /// its header alone), a pre-quantised checkpoint's format — as `(name, digest)` in name order: what a
 /// runtime pack pins. A float checkpoint uses none.
-pub fn quant_descriptors_used(path: &std::path::Path, prep: &Prepared, reg: &crate::quantfmt::QuantRegistry) -> Result<Vec<(String, String)>> {
+pub fn quant_descriptors_used(
+    path: &std::path::Path,
+    prep: &Prepared,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<Vec<(String, String)>> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     match gguf_path(path) {
         Some(g) => {
@@ -76,7 +80,12 @@ pub fn quant_descriptors_used(path: &std::path::Path, prep: &Prepared, reg: &cra
 
 /// [`prepare_with`] reading the config through the adapter `read` names (a user-supplied adapter file,
 /// a built-in by id, none).
-pub fn prepare_read(config_text: &str, read: &crate::hf_schema::ReadOptions, opts: &LowerOpts, reg: &crate::quantfmt::QuantRegistry) -> Result<Prepared> {
+pub fn prepare_read(
+    config_text: &str,
+    read: &crate::hf_schema::ReadOptions,
+    opts: &LowerOpts,
+    reg: &crate::quantfmt::QuantRegistry,
+) -> Result<Prepared> {
     prepare_spec(crate::hf_config::parse_config_str_read(config_text, read, reg)?, opts)
 }
 
@@ -142,7 +151,9 @@ pub fn open_model_full(
     reg: &crate::quantfmt::QuantRegistry,
     read: &crate::hf_schema::ReadOptions,
 ) -> Result<Opened> {
-    let level_of = |a: &crate::model::AdapterSource| if matches!(a, crate::model::AdapterSource::None) { crate::model::Level::A } else { crate::model::Level::B };
+    let level_of = |a: &crate::model::AdapterSource| {
+        if matches!(a, crate::model::AdapterSource::None) { crate::model::Level::A } else { crate::model::Level::B }
+    };
     match gguf_path(path) {
         Some(g) => {
             let m = crate::gguf::GgufModel::open_with(&g, reg)?;
@@ -165,16 +176,23 @@ pub fn open_model_full(
             let r = crate::hf_schema::read_model_with(&config, None, read, reg).map_err(|f| f.error)?;
             let spec_digest = crate::model::spec_digest(&r.spec);
             let prepared = prepare_spec(r.spec.clone(), opts)?;
-            let frontend = Frontend { config, level: level_of(&r.adapter), adapter: r.adapter, assumed_defaults: r.assumed_defaults, spec_digest };
+            let frontend = Frontend {
+                config,
+                level: level_of(&r.adapter),
+                adapter: r.adapter,
+                assumed_defaults: r.assumed_defaults,
+                spec_digest,
+            };
             let ck = crate::weights::Checkpoint::open(path)?;
             // A format that serves packed tensors as float ones (MXFP4 experts): the model reads the float export's names.
-            let source: Box<dyn crate::weights::TensorSource + Sync> = match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
-                Some(q) => {
-                    let (f, params) = q.fmt.binding().expect("a described format");
-                    Box::new(crate::weights::described::DescribedSource::new_with(Box::new(ck), f, params, &q.module_params)?)
-                }
-                None => Box::new(ck),
-            };
+            let source: Box<dyn crate::weights::TensorSource + Sync> =
+                match prepared.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()) {
+                    Some(q) => {
+                        let (f, params) = q.fmt.binding().expect("a described format");
+                        Box::new(crate::weights::described::DescribedSource::new_with(Box::new(ck), f, params, &q.module_params)?)
+                    }
+                    None => Box::new(ck),
+                };
             Ok(Opened { prepared, source, frontend, gguf: false })
         }
     }

@@ -167,7 +167,8 @@ fn a_newcomer_is_a_ready_seat_below_the_fence_and_not_until_its_own_window_past_
     for ((daa, _, rows), (_, _, released)) in armed.iter().zip(&shipped) {
         let counted = *daa < FENCE || *daa >= REGISTERED + window;
         println!("DAA {daa:>5}: armed {rows:?}, released {released:?} — newcomer counted {counted}");
-        for ((state, ready, rpc, reason), (released_state, released_ready, released_rpc, released_reason)) in rows.iter().zip(released) {
+        for ((state, ready, rpc, reason), (released_state, released_ready, released_rpc, released_reason)) in rows.iter().zip(released)
+        {
             assert_eq!(*ready, 8 + counted as u32, "DAA {daa}: the eight genesis seats, and the newcomer iff mature");
             assert_eq!(*rpc, *ready, "DAA {daa}: the RPC counts what the fold wrote");
             assert_eq!(*reason, (!counted).then_some(PALW_SEAT_NOT_READY_IMMATURE_V1), "DAA {daa}: the newcomer's reason");

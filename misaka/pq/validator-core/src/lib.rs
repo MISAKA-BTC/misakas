@@ -427,7 +427,8 @@ fn build_funded_overlay_tx_with(
     let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
     let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
 
-    let mut sig_data = signer.sign_message(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).map_err(|e| format!("the funding signature: {e}"))?;
+    let mut sig_data =
+        signer.sign_message(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).map_err(|e| format!("the funding signature: {e}"))?;
     sig_data.push(SIG_HASH_ALL.to_u8());
     let signature_script = ScriptBuilder::new()
         .add_data(&sig_data)
@@ -1081,10 +1082,7 @@ impl ValidatorKey {
         let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
         let bytes = kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_payload_encode_v1(&payload, tail);
         if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
-            return Err(format!(
-                "evaluation claim payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap",
-                bytes.len()
-            ));
+            return Err(format!("evaluation claim payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap", bytes.len()));
         }
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
@@ -1105,12 +1103,16 @@ impl ValidatorKey {
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
-        let signature =
-            self.sign_with_context(fp_claim_id_v3(&payload.commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
+        let signature = self
+            .sign_with_context(fp_claim_id_v3(&payload.commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT)
+            .to_vec();
         let payload = PalwFpCommitmentTxPayloadV3 { signature, ..payload };
         let bytes = borsh::to_vec(&payload).map_err(|e| format!("cannot serialize the tensor commitment: {e}"))?;
         if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
-            return Err(format!("tensor commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap", bytes.len()));
+            return Err(format!(
+                "tensor commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap",
+                bytes.len()
+            ));
         }
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
@@ -2501,8 +2503,18 @@ mod tests {
         let funding = fentry(u64::MAX / 2, 0, false);
 
         let recording = Recording { key: &key, asked: RefCell::new(Vec::new()) };
-        let tx = build_fp_commitment_tx_with(&recording, network_domain, form, commitment.clone(), ids.clone(), price(), fop(9, 0), &funding, SF_FEE)
-            .expect("builds through a signer");
+        let tx = build_fp_commitment_tx_with(
+            &recording,
+            network_domain,
+            form,
+            commitment.clone(),
+            ids.clone(),
+            price(),
+            fop(9, 0),
+            &funding,
+            SF_FEE,
+        )
+        .expect("builds through a signer");
         let asked = recording.asked.borrow();
         assert_eq!(asked.len(), 2, "the claim id and the funding sighash — nothing else is signed");
         assert_eq!((asked[0].0, asked[0].1.as_slice()), (64, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT));
@@ -2517,7 +2529,8 @@ mod tests {
 
         // A key-less measuring signer: same size, so the same mass and the same fee.
         let measure = LengthOnlySigner { public_key: key.public_key().to_vec() };
-        let probe = build_fp_commitment_tx_with(&measure, network_domain, form, commitment, ids, price(), fop(9, 0), &funding, SF_FEE).unwrap();
+        let probe = build_fp_commitment_tx_with(&measure, network_domain, form, commitment, ids, price(), fop(9, 0), &funding, SF_FEE)
+            .unwrap();
         assert_eq!(probe.payload.len(), tx.payload.len());
         assert_eq!(probe.inputs[0].signature_script.len(), tx.inputs[0].signature_script.len());
     }
@@ -3537,9 +3550,8 @@ mod rfc9_sighash_audit {
     fn built() -> (Transaction, UtxoEntry, ValidatorKey) {
         let k = key();
         let (op, entry) = funding(&k);
-        let tx = k
-            .build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![7u8; 300], op, &entry, 1_234, false)
-            .expect("builds");
+        let tx =
+            k.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![7u8; 300], op, &entry, 1_234, false).expect("builds");
         (tx, entry, k)
     }
 
@@ -3609,7 +3621,11 @@ mod rfc9_sighash_audit {
         let bond = TransactionOutpoint::new(Hash64::from_bytes([0xB1; 64]), 0);
         let builder_bond = TransactionOutpoint::new(Hash64::from_bytes([0xB2; 64]), 0);
         // The cap and an empty range are refused before anything is signed.
-        assert!(executor.build_redemption_authorization_v4(domain, claim, bond, 0, 4, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS + 1, u64::MAX).is_err());
+        assert!(
+            executor
+                .build_redemption_authorization_v4(domain, claim, bond, 0, 4, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS + 1, u64::MAX)
+                .is_err()
+        );
         assert!(executor.build_redemption_authorization_v4(domain, claim, bond, 2, 2, 100, u64::MAX).is_err());
         let (auth, auth_sig) = executor.build_redemption_authorization_v4(domain, claim, bond, 0, 4, 750, u64::MAX).unwrap();
         let (pph, ts, nonce) = (Hash64::from_bytes([0xE5; 64]), 1_700_000u64, 77u64);
@@ -3629,7 +3645,9 @@ mod rfc9_sighash_audit {
         let verify = |k: &[u8], m: &[u8], s: &[u8], c: &[u8]| kaspa_txscript::verify_mldsa87_with_context(k, m, s, c).unwrap_or(false);
         // The same authorization as the stand-alone bundle a miner hands out: self-checking with the real verifier.
         let bundle = executor.build_redemption_bundle_v4(domain, claim, bond, 0, 4, 750, u64::MAX).unwrap();
-        bundle.validate_v4(domain, |k, m, s, c| kaspa_txscript::verify_mldsa87_with_context(k, m, s, c).unwrap_or(false)).expect("bundle");
+        bundle
+            .validate_v4(domain, |k, m, s, c| kaspa_txscript::verify_mldsa87_with_context(k, m, s, c).unwrap_or(false))
+            .expect("bundle");
         let decoded = kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(&bundle.encode()).unwrap();
         assert_eq!(decoded, bundle);
         env.validate_stateless_v4(domain, pph, ts, nonce).expect("stateless");
@@ -3661,12 +3679,8 @@ mod rfc9_sighash_audit {
         let mut other_sig = k.sign_with_context(h.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
         other_sig.push(SIG_HASH_ALL.to_u8());
         let mut resigned = tx.clone();
-        resigned.inputs[0].signature_script = ScriptBuilder::new()
-            .add_data(&other_sig)
-            .unwrap()
-            .add_data(k.public_key())
-            .unwrap()
-            .drain();
+        resigned.inputs[0].signature_script =
+            ScriptBuilder::new().add_data(&other_sig).unwrap().add_data(k.public_key()).unwrap().drain();
         assert_ne!(resigned.inputs[0].signature_script, tx.inputs[0].signature_script);
         assert!(verifies(&resigned, &entry));
         assert_eq!(fresh_id(&resigned), id, "the id is the same: a relay re-signing or re-encoding cannot mint another identity");

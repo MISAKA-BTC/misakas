@@ -30,7 +30,8 @@ fn rfc02t_flat_pursuit_counts_position_node_and_leaf_halvings_and_the_sealed_fil
 
 #[test]
 fn rfc02t_flat_pursuit_at_the_actual_qwen25_pilot_shapes() {
-    let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+    let bytes =
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
     let program = TirProgramV1::decode_canonical(bytes).unwrap();
     let (l, o) = (policy(), opv_example());
     match flat_resource_scope_v5(&program, 32, None) {

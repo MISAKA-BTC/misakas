@@ -107,7 +107,8 @@ impl TiledFixture {
             profile.clone(),
             (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
             misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
-        ).unwrap();
+        )
+        .unwrap();
         let (native_context, _) = native.job_for_anchor(Hash64::default()).unwrap();
         canonical.model_profile_id = native_context.model_profile_id;
         canonical.runtime_manifest_hash = native_context.runtime_manifest_hash;
@@ -148,9 +149,9 @@ impl TiledFixture {
             chain.config.params.net.to_string().into_bytes(),
             true,
         );
-        registry.resolve_or_chain(self.profile.shape_profile_id(), self.root, |id| {
-            chain.tc.palw_registered_class_carriage_v1(id)
-        }).unwrap()
+        registry
+            .resolve_or_chain(self.profile.shape_profile_id(), self.root, |id| chain.tc.palw_registered_class_carriage_v1(id))
+            .unwrap()
     }
 
     pub async fn register(&self, chain: &mut Chain, floats: &mut [Funding]) {
@@ -223,7 +224,10 @@ impl TiledFixture {
                 token_table_root: self.table.root(),
                 rendering_rule: kaspa_consensus_core::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
                 raw_tokenizer_bytes: std::fs::metadata(self.path.parent().unwrap().join("tokenizer.json")).unwrap().len(),
-                tokenizer_key_events: kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_key_events_v1(&std::fs::read(self.path.parent().unwrap().join("tokenizer.json")).unwrap()).unwrap(),
+                tokenizer_key_events: kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_key_events_v1(
+                    &std::fs::read(self.path.parent().unwrap().join("tokenizer.json")).unwrap(),
+                )
+                .unwrap(),
                 prefix_state_relation: Some(PalwPrefixStateRelationV1::DenseInt32KvV1),
             };
             let message = palw_class_semantics_message_v1(chain.network_domain, &declaration);
@@ -307,17 +311,20 @@ impl TiledFixture {
             assert_eq!(true_prefix.prefix_tokens, 2);
             job.version = if fault == Some(6) {
                 kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_INHERIT_VERSION
-            } else { kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION };
+            } else {
+                kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION
+            };
             job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
-            job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 {
-                state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix
-            }));
+            job.tail =
+                Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xBAD17), ..true_prefix }));
             assert!(backend.verify_prefix_state_v1(&job, &ids).is_err(), "the actual holder rejects the false named prefix");
         } else {
             // Use the same DFA as the flat fixture, with the actual tokenizer-derived table.
             selection_constraint_job_with_table(&mut job, self.table.clone());
         }
-        if fault==Some(4) {super::terminal::enlarge_selection_job_v1(&mut job);}
+        if fault == Some(4) {
+            super::terminal::enlarge_selection_job_v1(&mut job);
+        }
         let mask = palw_fp_constraint_mask_for_host_v1(&job, Some(self.table.clone())).unwrap();
         let run = palw_fp_with_constraint_scope_v1(mask, || {
             backend.execute_free_prompt(&job, &ids.iter().map(|id| *id as usize).collect::<Vec<_>>())
@@ -329,7 +336,9 @@ impl TiledFixture {
         let rows = retained.logits_rows();
         let mut generated = retained.generated_token_ids().to_vec();
         assert_eq!(generated.len(), 4);
-        if !prefix_fault { assert!(generated.iter().all(|id| *id == 0 || *id == PALW_LOGITS_TILE_LANES as u32)); }
+        if !prefix_fault {
+            assert!(generated.iter().all(|id| *id == 0 || *id == PALW_LOGITS_TILE_LANES as u32));
+        }
         generated[2] = match fault {
             Some(1) => 2,
             Some(2) => self.profile.vocab_size - 1,
@@ -369,7 +378,7 @@ impl TiledFixture {
         // The native DA session also draws a unit beside the named binding. Answer this
         // authenticated initial-row tile before testing withholding at the selected row.
         events.insert(PalwDaUnitV1::Event { row: 0, tile: 1 }, logits_event_disclosure_v1(&binding, rows, &generated, 0, 1).unwrap());
-        for tile in 0..=u8::from(matches!(fault,Some(3)|Some(4))) {
+        for tile in 0..=u8::from(matches!(fault, Some(3) | Some(4))) {
             events.insert(
                 PalwDaUnitV1::Event { row: 2, tile },
                 logits_event_disclosure_v1(&binding, rows, &generated, 2, tile).unwrap(),
@@ -388,13 +397,13 @@ impl TiledFixture {
     /// Build only the signed-public CKW payloads from producer retention. The caller stores
     /// these beside its public answer candidates; no capture/backend enters the outsider service.
     pub fn prefix_kernel_answers(
-        &self, chain: &Chain,
+        &self,
+        chain: &Chain,
         commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         ids: &[u32],
     ) -> std::collections::BTreeMap<
         kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2,
-        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
-         kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2),
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2),
     > {
         use kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2;
         let backend = self.backend(chain);
@@ -407,23 +416,36 @@ impl TiledFixture {
         let retained = misaka_palw_base0::produce::base0_material_decode_any_v1(&run.outcome.material).unwrap();
         let binding = retained.binding();
         let named = kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job).unwrap();
-        let plan = kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&self.profile, named.prefix_tokens).unwrap();
+        let plan =
+            kaspa_consensus_core::palw_prefix_state_court_v1::PalwPrefixKvPlanV1::of_profile(&self.profile, named.prefix_tokens)
+                .unwrap();
         let roots = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
-            execution_root: commitment.execution_root, trace_root: commitment.trace_root,
+            execution_root: commitment.execution_root,
+            trace_root: commitment.trace_root,
             output_root: Some(commitment.output_root),
             anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_canonical_anchor_v1(job),
             attempt_draw: None,
             job_pin: Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment)),
         };
         let form = kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(
-            chain.config.params.palw_prompt_ids_form_v1(), &self.profile);
+            chain.config.params.palw_prompt_ids_form_v1(),
+            &self.profile,
+        );
         let mut answers = std::collections::BTreeMap::new();
         for ordinal in 0..plan.tile_count {
             let (coordinate, _) = plan.coordinate(&self.profile, ordinal).unwrap();
-            let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&self.profile, &binding.job_context, &coordinate).unwrap();
+            let leaf =
+                kaspa_consensus_core::palw_step::canonical_step_leaf_index(&self.profile, &binding.job_context, &coordinate).unwrap();
             let unit = PalwLegacyHeldUnitV2::KernelWitness { leaf };
             let payload = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
-                backend.as_ref(), &run.outcome.material, ids, roots, form, &unit).unwrap();
+                backend.as_ref(),
+                &run.outcome.material,
+                ids,
+                roots,
+                form,
+                &unit,
+            )
+            .unwrap();
             answers.insert(unit, payload);
         }
         assert_eq!(answers.len() as u64, plan.tile_count);

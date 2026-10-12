@@ -1145,7 +1145,11 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
         let mut batch = rocksdb::WriteBatch::default();
         a.vp().update_evm_canonical_heads(&mut batch, a.config.params.genesis.hash);
         a.vp().db.write(batch).unwrap();
-        assert_eq!(a.vp().evm_heads_store.read().native_snapshot().unwrap(), Some(still.clone()), "rollback cannot erase a sticky alarm");
+        assert_eq!(
+            a.vp().evm_heads_store.read().native_snapshot().unwrap(),
+            Some(still.clone()),
+            "rollback cannot erase a sticky alarm"
+        );
         assert_eq!(a.vp().evm_heads_store.read().native_finalized_publication().unwrap(), publication);
     }
     assert_eq!(readiness_of(&a).stop, Some(SettlementStopV1::FinalizedConflict), "prime the advisory memo before resync");
@@ -1192,7 +1196,11 @@ async fn rfc12_x7_a_finalized_conflict_is_sticky_and_only_a_validated_import_cle
         (rebuilt.generation, rebuilt.latest, rebuilt.safe, rebuilt.finalized),
         (z3[0].header.hash, Some(z3[0].header.hash), None, None)
     );
-    assert_eq!(rebuilt.stop, Some(SettlementStopV1::FrontierNotCovered), "reconstruction built it from the chain; the conflict is gone");
+    assert_eq!(
+        rebuilt.stop,
+        Some(SettlementStopV1::FrontierNotCovered),
+        "reconstruction built it from the chain; the conflict is gone"
+    );
 }
 
 /// A test publication names a real canonical block, but is not a genuine Final-work certificate.
@@ -1419,8 +1427,12 @@ async fn rfc12_import_a_valid_execution_of_another_block_cannot_clear_the_incide
     let ordinary = snapshot_of(&a).unwrap();
     let positive = NativeSettlementSnapshotV1 { safe: ordinary.latest, finalized: ordinary.latest, stop: None, ..ordinary };
     publish_native(&a, positive.clone());
-    let incident =
-        NativeSettlementSnapshotV1 { safe: None, finalized: None, stop: Some(SettlementStopV1::FinalizedConflict), ..positive.clone() };
+    let incident = NativeSettlementSnapshotV1 {
+        safe: None,
+        finalized: None,
+        stop: Some(SettlementStopV1::FinalizedConflict),
+        ..positive.clone()
+    };
     publish_native(&a, incident.clone());
     let heads = a.vp().evm_heads_store.read().get().unwrap();
     assert_eq!(readiness_of(&a).stop, incident.stop);
@@ -1560,8 +1572,12 @@ async fn rfc12_import_conflicting_existing_rows_preserve_incident_and_flat_head(
     let ordinary = snapshot_of(&a).unwrap();
     let positive = NativeSettlementSnapshotV1 { safe: ordinary.latest, finalized: ordinary.latest, stop: None, ..ordinary };
     publish_native(&a, positive.clone());
-    let incident =
-        NativeSettlementSnapshotV1 { safe: None, finalized: None, stop: Some(SettlementStopV1::FinalizedConflict), ..positive.clone() };
+    let incident = NativeSettlementSnapshotV1 {
+        safe: None,
+        finalized: None,
+        stop: Some(SettlementStopV1::FinalizedConflict),
+        ..positive.clone()
+    };
     publish_native(&a, incident.clone());
     assert_eq!(readiness_of(&a).stop, incident.stop);
     let ptr = a.vp().evm_latest_state_ptr_store.read().get().unwrap().unwrap();
@@ -1772,7 +1788,10 @@ async fn rfc12_cache_a_former_pruning_boundary_cannot_hide_missing_delta_after_c
     let warm = a.vp().native_evaluate(sink).snapshot;
     a.vp().native_rows.lock().clear();
     let cold = a.vp().native_evaluate(sink);
-    assert_eq!((cold.snapshot.safe, cold.snapshot.finalized, cold.snapshot.stop), (None, None, Some(SettlementStopV1::MissingHistory)));
+    assert_eq!(
+        (cold.snapshot.safe, cold.snapshot.finalized, cold.snapshot.stop),
+        (None, None, Some(SettlementStopV1::MissingHistory))
+    );
     assert!(matches!(cold.detail, super::super::native_settlement::NativeDetail::Stopped(
         SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(hash) }
     ) if hash == boundary.header.hash));
@@ -2026,20 +2045,27 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     let vp = rig.vp();
     let before_snapshot = vp.pruning_point_overlay_snapshot();
     let before_stable = rig.api().is_pruning_utxoset_stable();
-    let err = vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone())
+    let err = vp
+        .import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone())
         .expect_err("a valid historic snapshot cannot authorize its own target");
-    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedOverlayPruningPointMismatch(incoming, established)
-        if incoming == overlay_anchor.header.hash && established == rig.config.params.genesis.hash), "unauthorized target is refused by name: {err}");
+    assert!(
+        matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedOverlayPruningPointMismatch(incoming, established)
+        if incoming == overlay_anchor.header.hash && established == rig.config.params.genesis.hash),
+        "unauthorized target is refused by name: {err}"
+    );
     assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record), "unauthorized replacement cannot erase the exit");
     assert_eq!(vp.pruning_point_overlay_snapshot(), before_snapshot, "unauthorized replacement cannot change the stored snapshot");
     assert_eq!(rig.api().is_pruning_utxoset_stable(), before_stable, "unauthorized replacement cannot change the marker");
-    rig.api().import_pruning_points(vec![
-        rig.api().get_header(rig.config.params.genesis.hash).unwrap(),
-        rig.api().get_header(overlay_anchor.header.hash).unwrap(),
-    ]).expect("history authorizes the historic retry target");
+    rig.api()
+        .import_pruning_points(vec![
+            rig.api().get_header(rig.config.params.genesis.hash).unwrap(),
+            rig.api().get_header(overlay_anchor.header.hash).unwrap(),
+        ])
+        .expect("history authorizes the historic retry target");
     vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).expect("verified historic import");
     assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record), "historic import cannot erase the later exit");
-    vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).expect("same verified import is idempotent");
+    vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone())
+        .expect("same verified import is idempotent");
     assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&record));
     assert_eq!(
         vp.reserve_balance_store.get(overlay_anchor.header.hash).unwrap_or(0),
@@ -2057,7 +2083,10 @@ async fn rfc12_x11_a_historical_bond_exits_after_retirement_and_a_new_bond_is_re
     vp.db.write(corrupt).unwrap();
     let before_snapshot = vp.pruning_point_overlay_snapshot().unwrap();
     let err = vp.import_pruning_point_overlay_snapshot(overlay_anchor.header.hash, historic_overlay.clone()).unwrap_err();
-    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedOverlayExistingStateMismatch(_, _)), "conflicting money is refused by name: {err}");
+    assert!(
+        matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedOverlayExistingStateMismatch(_, _)),
+        "conflicting money is refused by name: {err}"
+    );
     assert_eq!(rig.api().get_stake_bond(bond_outpoint).as_ref(), Some(&bad_bond), "refusal writes no bond row");
     assert_eq!(vp.pruning_point_overlay_snapshot().unwrap().snapshot, before_snapshot.snapshot, "refusal writes no snapshot");
     assert!(rig.api().is_pruning_utxoset_stable(), "a refused import cannot modify the completion marker");
@@ -3082,7 +3111,9 @@ async fn rfc12_process_sidecar_crash_worker() {
         let mut carriage = None;
         let import_session = rig.api().begin_pruning_point_import(point).unwrap();
         match kind.as_str() {
-            "evm" => rig.api().import_pruning_point_evm_state_for_session(import_session, evm_header.clone(), evm_state.clone()).unwrap(),
+            "evm" => {
+                rig.api().import_pruning_point_evm_state_for_session(import_session, evm_header.clone(), evm_state.clone()).unwrap()
+            }
             "palw" => {
                 let imported = pending_carriage.unwrap();
                 rig.api().import_pruning_point_palw_state_for_session(import_session, imported.clone()).unwrap();
@@ -3146,14 +3177,22 @@ async fn rfc12_process_sidecar_crash_worker() {
     let retry = consensus.begin_pruning_point_import(manifest.point).unwrap();
     assert!(retry.epoch > stale.epoch);
     let refused = |result: kaspa_consensus_core::errors::pruning::PruningImportResult<()>| {
-        assert!(matches!(result, Err(kaspa_consensus_core::errors::pruning::PruningImportError::PruningImportSessionRefused { .. })),
-            "a delayed previous-process operation is refused before any ledger write: {result:?}");
+        assert!(
+            matches!(result, Err(kaspa_consensus_core::errors::pruning::PruningImportError::PruningImportSessionRefused { .. })),
+            "a delayed previous-process operation is refused before any ledger write: {result:?}"
+        );
     };
     // Root-verified serving/import bytes are the same as the successful seed.
     match kind.as_str() {
         "evm" => {
-            refused(consensus.import_pruning_point_evm_state_for_session(stale, manifest.evm_header.clone(), manifest.evm_state.clone()));
-            consensus.import_pruning_point_evm_state_for_session(retry, manifest.evm_header.clone(), manifest.evm_state.clone()).unwrap();
+            refused(consensus.import_pruning_point_evm_state_for_session(
+                stale,
+                manifest.evm_header.clone(),
+                manifest.evm_state.clone(),
+            ));
+            consensus
+                .import_pruning_point_evm_state_for_session(retry, manifest.evm_header.clone(), manifest.evm_state.clone())
+                .unwrap();
             let checkpoint = vp.evm_state_checkpoint_store.get(manifest.point).unwrap().unwrap();
             assert_eq!(checkpoint.decode_snapshot().unwrap(), manifest.evm_state);
         }
@@ -3217,7 +3256,6 @@ fn rfc12_process_crash_before_utxo_clear_requires_recovery_for_every_sidecar() {
     std::fs::remove_dir(root).unwrap();
 }
 
-
 #[tokio::test]
 async fn rfc12_partial_import_invalidates_same_sink_memo_until_completion() {
     use kaspa_consensus_core::palw_native_readiness_v1::{HistoryGapV1, SafeWaitV1};
@@ -3231,9 +3269,10 @@ async fn rfc12_partial_import_invalidates_same_sink_memo_until_completion() {
     assert!(a.api().get_evm_canonical_heads().is_err());
     assert!(a.api().get_native_settlement_snapshot().is_err());
     let partial = readiness_of(&a);
-    assert_eq!(partial.stopped_early, Some(SafeWaitV1::MissingHistory {
-        gap: HistoryGapV1::PruningImportIncomplete, block: Some(pruning),
-    }));
+    assert_eq!(
+        partial.stopped_early,
+        Some(SafeWaitV1::MissingHistory { gap: HistoryGapV1::PruningImportIncomplete, block: Some(pruning) })
+    );
     assert_eq!(a.chain.sink(), sink);
     // This test edits no ledger: its marker-only seam isolates memo invalidation.
     a.api().set_pruning_utxoset_stable_flag(true).expect("epoch-zero control changed no ledger");
@@ -3259,7 +3298,11 @@ async fn rfc12_utxo_import_verifies_the_actual_staged_table_before_replacing_vir
         legitimate_stream.combine(&MuHash::from_utxo(outpoint, entry));
     }
     let mut check = legitimate_stream.clone();
-    assert_eq!(check.finalize(), rig.api().get_header(point).unwrap().utxo_commitment, "the original stream really matches the pinned header");
+    assert_eq!(
+        check.finalize(),
+        rig.api().get_header(point).unwrap().utxo_commitment,
+        "the original stream really matches the pinned header"
+    );
     let before_virtual: Vec<_> = vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect();
     let token = rig.api().begin_pruning_point_import(point).unwrap();
     rig.api().clear_pruning_utxo_set_for_session(token).unwrap();
@@ -3269,9 +3312,15 @@ async fn rfc12_utxo_import_verifies_the_actual_staged_table_before_replacing_vir
     changed.amount = changed.amount.checked_add(1).unwrap();
     rig.api().append_imported_pruning_point_utxos_for_session(token, &[(staged[0].0, changed)], &mut MuHash::new()).unwrap();
     let err = rig.api().import_pruning_point_utxo_set_for_session(token, legitimate_stream).unwrap_err();
-    assert!(matches!(err, PruningImportError::ImportedMultisetHashMismatch(expected, got) if expected != got), "the actual table root is refused by name: {err}");
-    assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_virtual,
-        "the authentic argument cannot authorize copying a different staged balance");
+    assert!(
+        matches!(err, PruningImportError::ImportedMultisetHashMismatch(expected, got) if expected != got),
+        "the actual table root is refused by name: {err}"
+    );
+    assert_eq!(
+        vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(),
+        before_virtual,
+        "the authentic argument cannot authorize copying a different staged balance"
+    );
     assert!(!rig.api().is_pruning_utxoset_stable(), "the inconsistent stream remains incomplete");
 }
 
@@ -3284,13 +3333,25 @@ async fn rfc12_durable_import_sessions_serialize_streams_and_close_without_legac
     let p = parts(None);
     let rig = Rig::new(&p, 0x12_ee21_0000);
     let point = rig.config.params.genesis.hash;
-    let original: Vec<_> = rig.vp().pruning_meta_stores.read().utxo_set.iterator()
-        .map(|row| { let (outpoint, entry) = row.unwrap(); (outpoint, (*entry).clone()) }).collect();
+    let original: Vec<_> = rig
+        .vp()
+        .pruning_meta_stores
+        .read()
+        .utxo_set
+        .iterator()
+        .map(|row| {
+            let (outpoint, entry) = row.unwrap();
+            (outpoint, (*entry).clone())
+        })
+        .collect();
     let before = sorted_process_utxos(rig.api());
     let point_header = rig.api().get_header(point).unwrap();
     assert!(rig.api().is_pruning_utxoset_stable());
     rig.api().import_pruning_points(vec![point_header.clone()]).unwrap();
-    assert!(!rig.api().is_pruning_utxoset_stable(), "legacy staging context writes persist incomplete before UTXO/sidecar replacement");
+    assert!(
+        !rig.api().is_pruning_utxoset_stable(),
+        "legacy staging context writes persist incomplete before UTXO/sidecar replacement"
+    );
     assert_eq!(sorted_process_utxos(rig.api()), before);
     let stale = rig.api().begin_pruning_point_import(point).unwrap();
     let is_refused = |result: kaspa_consensus_core::errors::pruning::PruningImportResult<()>| {

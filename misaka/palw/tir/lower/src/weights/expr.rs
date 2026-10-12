@@ -99,12 +99,16 @@ fn template_vars(param: &str, t: &str) -> Result<BTreeSet<char>> {
                 } else if t[i..].starts_with("{p}") {
                     return Err(bad(
                         param,
-                        format!("`{t}`: `{{p}}` is the adapter's tensor-name prefix; it is substituted when the adapter defines the variable `p`"),
+                        format!(
+                            "`{t}`: `{{p}}` is the adapter's tensor-name prefix; it is substituted when the adapter defines the variable `p`"
+                        ),
                     ));
                 } else {
                     return Err(bad(
                         param,
-                        format!("`{t}`: a `{{` must open a variable of one capital letter (`{{L}}` layer, `{{E}}`, `{{H}}`, `{{S}}`, …) and `}}`"),
+                        format!(
+                            "`{t}`: a `{{` must open a variable of one capital letter (`{{L}}` layer, `{{E}}`, `{{H}}`, `{{S}}`, …) and `}}`"
+                        ),
                     ));
                 }
             }
@@ -150,7 +154,10 @@ fn apply_step(
     };
     let ops: Vec<&str> = o.keys().map(String::as_str).filter(|k| OPS.contains(k)).collect();
     if ops.len() != 1 {
-        return Err(bad(param, format!("a step has exactly one operation of {OPS:?}; this one has the keys {:?}", o.keys().collect::<Vec<_>>())));
+        return Err(bad(
+            param,
+            format!("a step has exactly one operation of {OPS:?}; this one has the keys {:?}", o.keys().collect::<Vec<_>>()),
+        ));
     }
     let op = ops[0];
     let own = [op];
@@ -232,7 +239,12 @@ fn apply_step(
             // A stack of one is an added leading axis whatever the name says; a longer stack of a name that does
             // not use the variable would be `count` copies of one tensor — always a mistake.
             if count > 1 && !used.contains(&var) {
-                return Err(bad(param, format!("stack binds {{{var}}} to 0..{count}, but the tensor name does not use it: every copy would be the same tensor")));
+                return Err(bad(
+                    param,
+                    format!(
+                        "stack binds {{{var}}} to 0..{count}, but the tensor name does not use it: every copy would be the same tensor"
+                    ),
+                ));
             }
             if !bound.insert(var) {
                 return Err(bad(param, format!("{{{var}}} is bound by two stack steps")));
@@ -245,10 +257,12 @@ fn apply_step(
                 Value::String(s) if s == "neg_exp" => MapFn::NegExp,
                 Value::String(s) if s == "tanh" => MapFn::Tanh,
                 Value::Object(m) if m.len() == 1 => match m.iter().next() {
-                    Some((k, v)) if k == "scale" => MapFn::Scale(
-                        v.as_f64().filter(|c| c.is_finite()).ok_or_else(|| bad(param, "map.scale is a finite number"))?,
-                    ),
-                    Some((k, v)) if k == "rescale_by_layer" => MapFn::RescaleByLayer { every: positive(param, "map.rescale_by_layer", v)? },
+                    Some((k, v)) if k == "scale" => {
+                        MapFn::Scale(v.as_f64().filter(|c| c.is_finite()).ok_or_else(|| bad(param, "map.scale is a finite number"))?)
+                    }
+                    Some((k, v)) if k == "rescale_by_layer" => {
+                        MapFn::RescaleByLayer { every: positive(param, "map.rescale_by_layer", v)? }
+                    }
                     _ => return Err(bad(param, "map is \"neg_exp\", {\"scale\": c} or {\"rescale_by_layer\": n}")),
                 },
                 _ => return Err(bad(param, "map is \"neg_exp\", {\"scale\": c} or {\"rescale_by_layer\": n}")),
@@ -461,12 +475,16 @@ mod tests {
 
     #[test]
     fn a_repeat_step_spreads_a_per_head_value_over_the_head_channels() {
-        let s = parse(json!(["a_log", {"reshape": [3]}, {"map": "neg_exp"}, {"take": {"axis": 0, "repeat": 2, "groups": 3}}])).unwrap();
+        let s =
+            parse(json!(["a_log", {"reshape": [3]}, {"map": "neg_exp"}, {"take": {"axis": 0, "repeat": 2, "groups": 3}}])).unwrap();
         assert_eq!(s, Src::t("a_log").reshape(vec![3]).map(MapFn::NegExp).take(0, Pick::Repeat { each: 2, groups: 3 }));
         assert_eq!(Pick::Repeat { each: 2, groups: 3 }.indices_at(None).unwrap(), vec![0, 0, 1, 1, 2, 2]);
         assert_eq!(Pick::Repeat { each: 2, groups: 3 }.count(), 6);
         // The expression is written back as the same JSON.
-        assert_eq!(super::to_expr(&s).unwrap(), json!(["a_log", {"reshape": [3]}, {"map": "neg_exp"}, {"take": {"axis": 0, "repeat": 2, "groups": 3}}]));
+        assert_eq!(
+            super::to_expr(&s).unwrap(),
+            json!(["a_log", {"reshape": [3]}, {"map": "neg_exp"}, {"take": {"axis": 0, "repeat": 2, "groups": 3}}])
+        );
         for bad_expr in [
             json!(["a", {"take": {"axis": 0, "repeat": 0, "groups": 3}}]),
             json!(["a", {"take": {"axis": 0, "repeat": 2}}]),

@@ -4,17 +4,17 @@
 
 mod common;
 
+use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::cross::{self, STATES_PARAM, XKV_PARAM};
 use misaka_palw_tir_lower::lower::{IntTensor, LowerOpts, lower, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
-use misaka_palw_tir_lower::{fidelity};
-use std::sync::Arc;
 use misaka_palw_tir_lower::spec::CrossStatesSpec;
 use misaka_palw_tir_lower::weights::Checkpoint;
 use misaka_palw_tir_lower::{hf_weights, hl, parse_config_str};
 use std::path::Path;
+use std::sync::Arc;
 
 pub fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf/mllama")
@@ -25,7 +25,12 @@ fn cross() -> serde_json::Value {
 }
 
 fn states_of(c: &serde_json::Value) -> Vec<Vec<f32>> {
-    c["cross_states"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect()).collect()
+    c["cross_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect())
+        .collect()
 }
 
 /// The float reference with the states bound equals transformers over the whole prompt, every checkpoint tensor read (the cross
@@ -141,7 +146,8 @@ fn stages() -> Stages {
     let (hl0, b0) = cross::hl_cross_kv(&spec).expect("stage 0 HL");
     let (params0, _) = ParamStore::from_source(&hl0, &b0, &ck).expect("stage 0 params");
     let kv = cross::lower_cross_kv(&hl0, &spec, UNIT).expect("lower stage 0");
-    let mat0 = materialise(&kv, &hl0, &Resident(Arc::new(params0)), &stats, &QuantPolicy::default(), &quiet).expect("materialise stage 0");
+    let mat0 =
+        materialise(&kv, &hl0, &Resident(Arc::new(params0)), &stats, &QuantPolicy::default(), &quiet).expect("materialise stage 0");
     Stages {
         spec,
         text,

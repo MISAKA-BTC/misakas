@@ -79,7 +79,8 @@ fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, St
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(r) => r,
         Err(p) => {
-            let m = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+            let m =
+                p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
             Err(format!("{what}: {m}"))
         }
     }

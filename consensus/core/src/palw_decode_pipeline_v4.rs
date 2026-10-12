@@ -750,7 +750,10 @@ pub struct PalwFpDecoderV1 {
     /// **ADR-0096 Decision 7: the constraint's mask and where the committed prefix has taken its automaton** — `Some` for a
     /// constrained job (version 6) whose host opened a constraint scope. The state is `None` once a committed id left the
     /// automaton (a dead prefix, which an honest run never reaches).
-    constraint: Option<(std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>, Option<crate::palw_decode_constraint_v1::PalwConstraintStateV1>)>,
+    constraint: Option<(
+        std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>,
+        Option<crate::palw_decode_constraint_v1::PalwConstraintStateV1>,
+    )>,
 }
 
 impl PalwFpDecoderV1 {
@@ -816,7 +819,10 @@ impl PalwFpDecoderV1 {
             let (lane, ends) = mask.select(state.as_ref(), row, position, &sampling);
             self.commit(lane);
             if ends && self.stop.is_none() {
-                self.stop = Some(PalwFpDecodeStopV1 { executed: self.generated.len() as u32, reason: PalwFpDecodeStopReasonV1::NoAdmissibleLane });
+                self.stop = Some(PalwFpDecodeStopV1 {
+                    executed: self.generated.len() as u32,
+                    reason: PalwFpDecodeStopReasonV1::NoAdmissibleLane,
+                });
             } else if ends {
                 // The budget ended the run at this very token; the budget is the reason, the end-of-generation id is the answer's tail.
             }
@@ -1185,7 +1191,11 @@ enum PalwFpReplayKindV1 {
     /// A seat's check: the claim's pipeline over its committed answer.
     Pipeline { config: DecodeConfigV4, sampling: PalwDecodeSamplingV2, committed: Vec<u32> },
     /// A seat's check of a constrained claim (ADR-0096 Decision 7): the mask over the committed prefix, then the key.
-    Constraint { mask: std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>, sampling: PalwDecodeSamplingV2, committed: Vec<u32> },
+    Constraint {
+        mask: std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1>,
+        sampling: PalwDecodeSamplingV2,
+        committed: Vec<u32>,
+    },
     /// The executor's own replay: the committed ids, fed back.
     Forced(Vec<u32>),
 }
@@ -1197,7 +1207,9 @@ impl PalwFpReplayRuleV1 {
         if job.is_constraint() {
             // The scope the seat opened holds the mask; a host without one has nothing to judge the claim by.
             let mask = crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_v1()?;
-            return Some(Self { kind: PalwFpReplayKindV1::Constraint { mask, sampling: job.sampling_v2(), committed: committed.to_vec() } });
+            return Some(Self {
+                kind: PalwFpReplayKindV1::Constraint { mask, sampling: job.sampling_v2(), committed: committed.to_vec() },
+            });
         }
         let config = job.decode.as_ref().filter(|_| job.decodes_under_v4_rules())?.clone();
         Some(Self { kind: PalwFpReplayKindV1::Pipeline { config, sampling: job.sampling_v2(), committed: committed.to_vec() } })

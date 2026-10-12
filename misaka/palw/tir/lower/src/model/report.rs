@@ -6,10 +6,13 @@
 //! same data serialises as JSON (`--json`) for the tools that wrap it (header-only preflight, the t12
 //! admission conditions).
 
-use super::features::{Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, sd3_features, vae_features, vision_features};
+use super::features::{
+    Area, FeatureInfo, FeatureUse, Lowering, Requirement, cnn_features, encdec_features, feature_info, sd3_features, vae_features,
+    vision_features,
+};
 use crate::hf_schema::{
-    AdapterSource, DiffusersRoute, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_diffusers, is_encoder_decoder, is_vision_tower, read_cnn, read_diffusers, read_encdec,
-    read_vision,
+    AdapterSource, DiffusersRoute, Level, MissingItem, ReadOptions, TensorIndex, is_cnn, is_diffusers, is_encoder_decoder,
+    is_vision_tower, read_cnn, read_diffusers, read_encdec, read_vision,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -44,7 +47,9 @@ pub enum ReportResult {
     /// Every feature is supported and the config lowers; admission (`tir_admit_v1`) is judged
     /// separately, on the lowered program.
     Lowerable,
-    NotLowerable { reason: String },
+    NotLowerable {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -153,7 +158,9 @@ fn weights_check(spec: &crate::spec::ModelSpec, t: &TensorIndex) -> (Vec<String>
     // A tied head reads the embedding table; some checkpoints save the same matrix a second time as `lm_head.weight`
     // (HF loads both into the one tied parameter): that copy is not a feature the reading is missing.
     let tied_copy = |n: &String| {
-        matches!(spec.output, crate::spec::OutputSpec::Logits) && spec.head.tied && (n == "lm_head.weight" || n.ends_with(".lm_head.weight"))
+        matches!(spec.output, crate::spec::OutputSpec::Logits)
+            && spec.head.tied
+            && (n == "lm_head.weight" || n.ends_with(".lm_head.weight"))
     };
     (rep.unused.into_iter().filter(|n| !tied_copy(n)).collect(), rep.errors)
 }
@@ -292,7 +299,11 @@ struct DataRead {
 
 /// [`analyze`] for a model an adapter of a DATA kind reads (`vision`, `cnn`): the adapter builds the spec, the features are
 /// listed, and the tensor index is run through the spec's binding.
-fn analyze_data(config: &Value, tensors: Option<&TensorIndex>, read: Result<DataRead, crate::hf_schema::ReadFailure>) -> ArchitectureReport {
+fn analyze_data(
+    config: &Value,
+    tensors: Option<&TensorIndex>,
+    read: Result<DataRead, crate::hf_schema::ReadFailure>,
+) -> ArchitectureReport {
     let model_type = model_type_of(config);
     let architectures = architectures_of(config);
     match read {
@@ -325,13 +336,19 @@ fn analyze_data(config: &Value, tensors: Option<&TensorIndex>, read: Result<Data
                 });
             }
             if !weight_errors.is_empty() {
-                missing.push(MissingItem { what: "the checkpoint does not fit the reading".to_string(), why: short_list(&weight_errors, 3), general_primitive: None });
+                missing.push(MissingItem {
+                    what: "the checkpoint does not fit the reading".to_string(),
+                    why: short_list(&weight_errors, 3),
+                    general_primitive: None,
+                });
             }
             let level = if missing.is_empty() { Level::B } else { Level::C };
             let result = if missing.is_empty() {
                 ReportResult::Lowerable
             } else {
-                ReportResult::NotLowerable { reason: format!("missing: {}", missing.iter().map(|m| m.what.clone()).collect::<Vec<_>>().join(", ")) }
+                ReportResult::NotLowerable {
+                    reason: format!("missing: {}", missing.iter().map(|m| m.what.clone()).collect::<Vec<_>>().join(", ")),
+                }
             };
             ArchitectureReport {
                 scope: super::scope::scope_of(config, None, None, &[]),
@@ -646,7 +663,11 @@ impl ArchitectureReport {
     /// The human report.
     pub fn render(&self) -> String {
         let mut o = String::new();
-        let _ = writeln!(o, "model_type      {}   (informational only: it selects no code)", self.model_type.as_deref().unwrap_or("(none)"));
+        let _ = writeln!(
+            o,
+            "model_type      {}   (informational only: it selects no code)",
+            self.model_type.as_deref().unwrap_or("(none)")
+        );
         if !self.architectures.is_empty() {
             let _ = writeln!(o, "architectures   {}", self.architectures.join(", "));
         }
@@ -690,7 +711,11 @@ impl ArchitectureReport {
             let _ = writeln!(o, "assumed class defaults (confirm against the class): {}", self.assumed_defaults.join(", "));
         }
         if !self.unmapped_config_keys.is_empty() {
-            let _ = writeln!(o, "unmapped config keys (a key that might change the math is refused, not ignored): {}", self.unmapped_config_keys.join(", "));
+            let _ = writeln!(
+                o,
+                "unmapped config keys (a key that might change the math is refused, not ignored): {}",
+                self.unmapped_config_keys.join(", ")
+            );
         }
         for m in &self.missing {
             let _ = write!(o, "missing: {} — {}", m.what, m.why);
@@ -721,7 +746,11 @@ impl ArchitectureReport {
             let _ = writeln!(
                 o,
                 "{}",
-                if self.new_consensus_primitive_required { "A new consensus primitive is required" } else { "No new consensus primitive required" }
+                if self.new_consensus_primitive_required {
+                    "A new consensus primitive is required"
+                } else {
+                    "No new consensus primitive required"
+                }
             );
             let _ = writeln!(
                 o,

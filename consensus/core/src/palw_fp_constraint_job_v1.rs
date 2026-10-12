@@ -25,7 +25,9 @@ use crate::Hash64;
 use crate::palw_decode_constraint_v1::{
     PalwConstraintStateV1, PalwDecodeConstraintV1, constraint_admits_lane_v1, constraint_id_v1, constraint_state_after_v1,
 };
-use crate::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFpDecodeRulesV1, PalwFpJobTailV1, PalwFpV3Error, PalwFreePromptJobV3};
+use crate::palw_freeprompt_v3::{
+    PalwFpCommitmentTxPayloadV3, PalwFpDecodeRulesV1, PalwFpJobTailV1, PalwFpV3Error, PalwFreePromptJobV3,
+};
 use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use std::sync::Arc;
 
@@ -44,10 +46,8 @@ impl crate::config::params::Params {
     /// **The fence's mirror** on the V2 bundle's state params (`fp_decode_constraint_from_daa`), which the fold reads.
     /// `None` where the fence is not armed (or is `never()`).
     pub fn sync_palw_fp_decode_constraint_v1(&mut self) {
-        let from_daa = self
-            .palw_fp_decode_constraint
-            .filter(|f| *f != crate::config::params::ForkActivation::never())
-            .map(|f| f.daa_score());
+        let from_daa =
+            self.palw_fp_decode_constraint.filter(|f| *f != crate::config::params::ForkActivation::never()).map(|f| f.daa_score());
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_fp_decode_constraint_from_daa(from_daa);
         }
@@ -55,7 +55,8 @@ impl crate::config::params::Params {
 }
 
 /// The drill's one-entry list.
-pub const PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] = &[PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY];
+pub const PALW_DRILL_FP_DECODE_CONSTRAINT_FENCES_V1: &[crate::config::params::PalwPostLaunchFenceV1] =
+    &[PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY];
 
 /// **The constrained job's version**: 6 — the number ADR-0096 Decision 8 reserved (7 is V4, 8 V5, 9 an evaluation job, 10 a
 /// tensor job, 11 a prefix-state job).
@@ -130,12 +131,8 @@ impl PalwTokenTableV1 {
     /// The table's Merkle leaves: one per id (a presence byte, the id, the rendering), then one for the sorted
     /// end-of-generation ids — index `vocab`.
     pub fn leaf_hashes(&self) -> Vec<Hash64> {
-        let mut leaves: Vec<Hash64> = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(id, entry)| table_leaf_hash_v1(id as u32, entry.as_deref()))
-            .collect();
+        let mut leaves: Vec<Hash64> =
+            self.entries.iter().enumerate().map(|(id, entry)| table_leaf_hash_v1(id as u32, entry.as_deref())).collect();
         leaves.push(table_eog_leaf_hash_v1(&self.eog_token_ids));
         leaves
     }
@@ -143,19 +140,26 @@ impl PalwTokenTableV1 {
     /// **The table's root** — the Merkle root of [`Self::leaf_hashes`] (the step tree's fold, so one fold spells every tree
     /// the court opens). What a constrained job's tail names and a seat and the court hold the table to.
     pub fn root(&self) -> Hash64 {
-        crate::palw_step_leg::step_merkle_root_capped_v1(&self.leaf_hashes(), PALW_TOKEN_TABLE_MAX_LEAVES_V1).expect("a token table has between 1 and 2^25 - 1 ids")
+        crate::palw_step_leg::step_merkle_root_capped_v1(&self.leaf_hashes(), PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+            .expect("a token table has between 1 and 2^25 - 1 ids")
     }
 
     /// The opening of one id's rendering against [`Self::root`].
     pub fn opening_of(&self, id: u32) -> Option<PalwTokenTableOpeningV1> {
         let entry = self.entries.get(id as usize)?;
-        let opening = crate::palw_step_leg::step_opening_capped_v1(&self.leaf_hashes(), u64::from(id), PALW_TOKEN_TABLE_MAX_LEAVES_V1).ok()?;
+        let opening =
+            crate::palw_step_leg::step_opening_capped_v1(&self.leaf_hashes(), u64::from(id), PALW_TOKEN_TABLE_MAX_LEAVES_V1).ok()?;
         Some(PalwTokenTableOpeningV1 { id, rendering: entry.clone(), opening })
     }
 
     /// The opening of the end-of-generation list against [`Self::root`].
     pub fn eog_opening(&self) -> Option<PalwTokenTableEogOpeningV1> {
-        let opening = crate::palw_step_leg::step_opening_capped_v1(&self.leaf_hashes(), self.entries.len() as u64, PALW_TOKEN_TABLE_MAX_LEAVES_V1).ok()?;
+        let opening = crate::palw_step_leg::step_opening_capped_v1(
+            &self.leaf_hashes(),
+            self.entries.len() as u64,
+            PALW_TOKEN_TABLE_MAX_LEAVES_V1,
+        )
+        .ok()?;
         let mut ids = self.eog_token_ids.clone();
         ids.sort_unstable();
         Some(PalwTokenTableEogOpeningV1 { ids, opening })
@@ -328,7 +332,8 @@ impl PalwTokenTableOpeningV1 {
         self.opening.leaf_index == u64::from(self.id)
             && self.id < vocab
             && self.opening.leaf_hash == table_leaf_hash_v1(self.id, self.rendering.as_deref())
-            && crate::palw_step_leg::step_opening_root_capped_v1(u64::from(vocab) + 1, &self.opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1).is_ok_and(|r| r == *root)
+            && crate::palw_step_leg::step_opening_root_capped_v1(u64::from(vocab) + 1, &self.opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+                .is_ok_and(|r| r == *root)
     }
 }
 
@@ -344,7 +349,8 @@ impl PalwTokenTableEogOpeningV1 {
         self.opening.leaf_index == u64::from(vocab)
             && self.ids.windows(2).all(|w| w[0] < w[1])
             && self.opening.leaf_hash == table_eog_leaf_hash_v1(&self.ids)
-            && crate::palw_step_leg::step_opening_root_capped_v1(u64::from(vocab) + 1, &self.opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1).is_ok_and(|r| r == *root)
+            && crate::palw_step_leg::step_opening_root_capped_v1(u64::from(vocab) + 1, &self.opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+                .is_ok_and(|r| r == *root)
     }
 
     /// The lowest end-of-generation id the opened list names.
@@ -447,10 +453,18 @@ impl PalwConstraintMaskV1 {
     /// **Decision 7's selection at one position**: the argmax over the admitted lanes under the job's greedy key, or the
     /// lowest end-of-generation id when no lane is admitted (`true` in the second field: the run stops here). A dead
     /// `state` (a prefix the automaton does not admit) selects as if nothing were admitted.
-    pub fn select(&self, state: Option<&PalwConstraintStateV1>, row: &[i32], position: u32, sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2) -> (u32, bool) {
+    pub fn select(
+        &self,
+        state: Option<&PalwConstraintStateV1>,
+        row: &[i32],
+        position: u32,
+        sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+    ) -> (u32, bool) {
         let admitted = state.map(|s| self.admitted_lanes(s, row.len()));
         let lane = admitted.as_ref().and_then(|admitted| {
-            crate::palw_decode_constraint_v1::decode_token_select_v3(row, &sampling.seed, position, sampling.temperature_q, |j| admitted[j])
+            crate::palw_decode_constraint_v1::decode_token_select_v3(row, &sampling.seed, position, sampling.temperature_q, |j| {
+                admitted[j]
+            })
         });
         match lane {
             Some(lane) => (lane as u32, false),
@@ -505,7 +519,8 @@ pub fn palw_fp_constraint_scope_ready_v1(job: &PalwFreePromptJobV3) -> Result<()
     }
     let bytes = palw_fp_constraint_tail_v1(job).ok_or_else(|| "a constrained job without its constraint".to_string())?;
     let scope = palw_fp_constraint_scope_v1().ok_or_else(|| {
-        "this job carries a decode constraint (ADR-0096) and this host holds no token table for it: file Incapable, not a verdict".to_string()
+        "this job carries a decode constraint (ADR-0096) and this host holds no token table for it: file Incapable, not a verdict"
+            .to_string()
     })?;
     let constraint = palw_constraint_of_bytes_v1(bytes).map_err(|e| e.to_string())?;
     if scope.constraint != constraint {
@@ -547,7 +562,9 @@ pub fn palw_fp_constraint_tail_v1(job: &PalwFreePromptJobV3) -> Option<&Vec<u8>>
 
 /// A constraint's bytes parsed under whichever form their header names (both bounds; the height rule for the second form is
 /// the header-context door's).
-pub fn palw_constraint_of_bytes_v1(bytes: &[u8]) -> Result<PalwDecodeConstraintV1, crate::palw_fp_constraint_v2::PalwConstraintFormErrorV1> {
+pub fn palw_constraint_of_bytes_v1(
+    bytes: &[u8],
+) -> Result<PalwDecodeConstraintV1, crate::palw_fp_constraint_v2::PalwConstraintFormErrorV1> {
     crate::palw_fp_constraint_v2::palw_constraint_admitted_v1(bytes, true)
 }
 
@@ -721,13 +738,14 @@ mod tests {
     use super::*;
     use crate::constants::TX_VERSION;
     use crate::palw_decode_constraint_v1::{
-        PalwConstraintActionV1, PalwConstraintEdgeV1, PalwConstraintFrameV1, PalwConstraintNodeV1, PALW_DECODE_CONSTRAINT_VERSION_V1,
+        PALW_DECODE_CONSTRAINT_VERSION_V1, PalwConstraintActionV1, PalwConstraintEdgeV1, PalwConstraintFrameV1, PalwConstraintNodeV1,
     };
     use crate::palw_decode_pipeline_v4::{PalwFpDecodeStopReasonV1, PalwFpDecoderV1};
     use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
     use crate::palw_fp_objects_v3::{PalwFpClassCapsV1, PalwFpDerivedWorkCapV1, palw_fp_objects_from_accepted_txs_by_class_v1};
     use crate::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, fp_job_id_v3, fp_trace_manifest_v3,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, fp_job_id_v3,
+        fp_trace_manifest_v3,
     };
     use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
     use crate::tx::{Transaction, TransactionId, TransactionOutpoint};
@@ -740,7 +758,10 @@ mod tests {
     fn ab_or_ba() -> PalwDecodeConstraintV1 {
         let node = |accepting, edges: Vec<(u8, u16)>| PalwConstraintNodeV1 {
             accepting,
-            edges: edges.into_iter().map(|(b, to)| PalwConstraintEdgeV1 { lo: b, hi: b, action: PalwConstraintActionV1::Goto(to) }).collect(),
+            edges: edges
+                .into_iter()
+                .map(|(b, to)| PalwConstraintEdgeV1 { lo: b, hi: b, action: PalwConstraintActionV1::Goto(to) })
+                .collect(),
         };
         let c = PalwDecodeConstraintV1 {
             version: PALW_DECODE_CONSTRAINT_VERSION_V1,
@@ -779,7 +800,9 @@ mod tests {
         assert_eq!(a.root(), b.root(), "the rendering tree does not authenticate its tokenizer label");
         for reverse in [false, true] {
             let set = PalwTokenTableSetV1::default();
-            for t in if reverse { [b.clone(), a.clone()] } else { [a.clone(), b.clone()] } { set.register(t); }
+            for t in if reverse { [b.clone(), a.clone()] } else { [a.clone(), b.clone()] } {
+                set.register(t);
+            }
             assert_eq!(set.for_root_and_tokenizer(&a.root(), &a.tokenizer_id).as_deref(), Some(&a));
             assert_eq!(set.for_root_and_tokenizer(&b.root(), &b.tokenizer_id).as_deref(), Some(&b));
             assert!(set.for_root_and_tokenizer(&a.root(), &h64(0x72)).is_none());
@@ -856,7 +879,9 @@ mod tests {
         other.compiler_id = h64(0x97);
         assert_ne!(fp_job_id_v3(&j), fp_job_id_v3(&job(other.to_bytes(), 8)), "the constraint is inside the id");
         assert!(palw_fp_payload_is_constraint_v1(&borsh::to_vec(&payload(bytes)).unwrap()));
-        assert!(!palw_fp_payload_is_constraint_v1(&borsh::to_vec(&palw_fp_constraint_stand_in_v1(&payload(ab_or_ba().to_bytes()))).unwrap()));
+        assert!(!palw_fp_payload_is_constraint_v1(
+            &borsh::to_vec(&palw_fp_constraint_stand_in_v1(&payload(ab_or_ba().to_bytes()))).unwrap()
+        ));
     }
 
     #[test]
@@ -866,7 +891,11 @@ mod tests {
         assert_eq!(t.digest(), same.digest(), "the digest does not cover the tokenizer id");
         let other = PalwTokenTableV1 { eog_token_ids: vec![4], ..(*t).clone() };
         assert_ne!(t.digest(), other.digest());
-        assert_eq!((t.rendering(0), t.rendering(5), t.rendering(99)), (Some(&b"a"[..]), None, None), "an eog id and an unknown id render nothing");
+        assert_eq!(
+            (t.rendering(0), t.rendering(5), t.rendering(99)),
+            (Some(&b"a"[..]), None, None),
+            "an eog id and an unknown id render nothing"
+        );
         let j = job(ab_or_ba().to_bytes(), 8);
         assert!(PalwConstraintMaskV1::for_job(&j, t.clone()).is_ok());
         assert!(PalwConstraintMaskV1::for_job(&j, Arc::new(same)).unwrap_err().contains("another tokenizer"));
@@ -880,7 +909,10 @@ mod tests {
         assert!(PalwConstraintMaskV1::for_job(&j, Arc::new(no_eog.clone())).unwrap_err().contains("not the table the job names"));
         assert!(PalwConstraintMaskV1::for_job(&j_no_eog, Arc::new(no_eog)).unwrap_err().contains("end-of-generation"));
         assert!(palw_fp_constraint_mask_for_host_v1(&j, None).is_err(), "no table, no mask");
-        assert_eq!(palw_fp_constraint_mask_for_host_v1(&PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, tail: None, ..j }, None).unwrap(), None);
+        assert_eq!(
+            palw_fp_constraint_mask_for_host_v1(&PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, tail: None, ..j }, None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -921,7 +953,10 @@ mod tests {
             (0..3).map(|r| rule.select(&row, r)).collect()
         });
         assert_eq!(ids, committed);
-        assert!(crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(&j, &committed).is_none(), "a host with no scope has no rule");
+        assert!(
+            crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(&j, &committed).is_none(),
+            "a host with no scope has no rule"
+        );
     }
 
     fn tx(bytes: Vec<u8>) -> Transaction {
@@ -933,15 +968,32 @@ mod tests {
         let bytes = ab_or_ba().to_bytes();
         let wire = borsh::to_vec(&payload(bytes.clone())).unwrap();
         let door = |constraint_door: bool, rules: PalwFpDecodeRulesV1| {
-            validate_palw_fp_commitment_tx_under_v9(&wire, false, PalwPromptIdsFormV1::Flat, 1 << 26, rules, false, false, false, false, constraint_door)
+            validate_palw_fp_commitment_tx_under_v9(
+                &wire,
+                false,
+                PalwPromptIdsFormV1::Flat,
+                1 << 26,
+                rules,
+                false,
+                false,
+                false,
+                false,
+                constraint_door,
+            )
         };
         assert!(door(true, PalwFpDecodeRulesV1::Dormant).is_ok(), "the door is open where the ruleset carries the fence");
         assert!(door(true, PalwFpDecodeRulesV1::Active).is_ok(), "a constrained job is a V3 job whatever the decode rules say");
-        assert!(matches!(door(false, PalwFpDecodeRulesV1::Dormant), Err(PalwFpV3Error::UnsupportedVersion { got: 6, .. })), "shut: refused by name");
+        assert!(
+            matches!(door(false, PalwFpDecodeRulesV1::Dormant), Err(PalwFpV3Error::UnsupportedVersion { got: 6, .. })),
+            "shut: refused by name"
+        );
         // Its own shape.
         // (A version-6 payload carrying decode rules is not a wire form at all: its job decodes no decode tail.)
         let junk = payload(vec![9, 9, 9]);
-        assert!(validate_palw_fp_constraint_commitment_tx_v1(&borsh::to_vec(&junk).unwrap(), false, PalwPromptIdsFormV1::Flat, 1 << 26).is_err());
+        assert!(
+            validate_palw_fp_constraint_commitment_tx_v1(&borsh::to_vec(&junk).unwrap(), false, PalwPromptIdsFormV1::Flat, 1 << 26)
+                .is_err()
+        );
         // The height door.
         assert_eq!(palw_fp_constraint_refusal_at_v1(&wire, false, false), Some(PalwFpConstraintHeightRefusalV1::BelowConstraint));
         assert_eq!(palw_fp_constraint_refusal_at_v1(&wire, true, false), None);
@@ -965,7 +1017,8 @@ mod tests {
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
                     prefix_state_armed: false,
-                    prefix_inherit_armed: false, prefix_inherit_class_safe: false,
+                    prefix_inherit_armed: false,
+                    prefix_inherit_class_safe: false,
                     constraint_armed: armed,
                     constraint_v2_armed: v2,
                     tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,

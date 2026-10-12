@@ -15,7 +15,13 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn judged(height: u64) -> Options {
-    Options { depth: Depth::Shape, network: Some("testnet-12".into()), height: Some(height), pipeline_admission: true, ..Options::default() }
+    Options {
+        depth: Depth::Shape,
+        network: Some("testnet-12".into()),
+        height: Some(height),
+        pipeline_admission: true,
+        ..Options::default()
+    }
 }
 
 fn head_fence(r: &Report) -> bool {
@@ -24,7 +30,9 @@ fn head_fence(r: &Report) -> bool {
 
 #[test]
 fn an_image_classifier_is_declared_and_judged_as_the_dormant_head_profiles_image_task() {
-    for (name, kind) in [("vit_cls", "image:vision"), ("resnet_cls", "image:cnn"), ("convnext_cls", "image:cnn"), ("mobilenet_v2_cls", "image:cnn")] {
+    for (name, kind) in
+        [("vit_cls", "image:vision"), ("resnet_cls", "image:cnn"), ("convnext_cls", "image:cnn"), ("mobilenet_v2_cls", "image:cnn")]
+    {
         let r = run(&fixture(name), &judged(9_000)).expect("preflight");
         let codes: Vec<_> = r.blockers().iter().map(|b| (b.code.clone(), b.arg.clone())).collect();
         assert!(r.blockers().iter().all(|b| b.code != "PIPELINE_CLASS_UNDECLARED"), "{name}: {codes:?}");

@@ -120,7 +120,8 @@ impl PalwImproveSignerV1<'_> {
         lister: PalwBondKeyV2,
         payload: kaspa_consensus_core::palw_adapter_class_v1::PalwAdapterClassListingV1,
     ) -> PalwConsensusObjectV2 {
-        let message = kaspa_consensus_core::palw_adapter_class_v1::palw_adapter_listing_message_v1(&self.network_domain, &payload, &lister);
+        let message =
+            kaspa_consensus_core::palw_adapter_class_v1::palw_adapter_listing_message_v1(&self.network_domain, &payload, &lister);
         let signature = self.sign(message, kaspa_consensus_core::palw_adapter_class_v1::PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1);
         PalwConsensusObjectV2::AdapterClassListed { payload: Box::new(payload), lister, signature }
     }
@@ -508,7 +509,9 @@ pub mod spec {
                 let c = field(o, "canary_failed")?;
                 Ok(PalwRollbackCauseV1::CanaryFailed { claim: hash_of(c, "claim")?, item: hash_of(c, "item")? })
             }
-            o if o.get("licence_violation").is_some() => Ok(PalwRollbackCauseV1::LicenceViolation { challenge: hash_of(o, "licence_violation")? }),
+            o if o.get("licence_violation").is_some() => {
+                Ok(PalwRollbackCauseV1::LicenceViolation { challenge: hash_of(o, "licence_violation")? })
+            }
             _ => Err("a cause is \"owner\", {later_regression}, {canary_failed} or {licence_violation}".into()),
         }
     }
@@ -647,8 +650,12 @@ pub mod spec {
                 s.safety_dataset = Hash64::default();
             }
             if let Some(j) = e.get("judge_set") {
-                s.judge_set =
-                    j.as_array().ok_or("`eval.judge_set` is not an array")?.iter().map(|h| hash(h.as_str().ok_or("a judge is not a string")?)).collect::<Result<_, _>>()?;
+                s.judge_set = j
+                    .as_array()
+                    .ok_or("`eval.judge_set` is not an array")?
+                    .iter()
+                    .map(|h| hash(h.as_str().ok_or("a judge is not a string")?))
+                    .collect::<Result<_, _>>()?;
             }
             // A judged stage's specification (spec 17 §17.8.5): `null` (or no key) leaves the example's, which has none.
             for (key, slot) in [("judge", &mut s.judge), ("pairwise", &mut s.pairwise)] {
@@ -720,7 +727,9 @@ pub mod spec {
                 c.base_licence_class = hash_of(pr, "base_licence_class")?;
             }
         }
-        for (slot, k) in [(&mut p.rollback_epochs, "rollback_epochs"), (&mut p.vest_epochs, "vest_epochs"), (&mut p.ban_epochs, "ban_epochs")] {
+        for (slot, k) in
+            [(&mut p.rollback_epochs, "rollback_epochs"), (&mut p.vest_epochs, "vest_epochs"), (&mut p.ban_epochs, "ban_epochs")]
+        {
             set_u32(slot, v, k)?;
         }
         Ok(p)
@@ -769,7 +778,8 @@ mod tests {
 
         // Tag 70.
         let policy = kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_example_v1();
-        let PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, signature } = s.policy(line, 1, Some(policy.clone())) else {
+        let PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, signature } = s.policy(line, 1, Some(policy.clone()))
+        else {
             panic!("tag 70")
         };
         let message = palw_improvement_policy_message_v1(domain, &line, 1, payload.policy.as_ref());
@@ -782,10 +792,17 @@ mod tests {
         let reference = improve_exact_key_reference_v1(&line, &[7, 8], &salt);
         let case = improve_hard_case_v1(line, 0, vec![1, 2, 3], reference, PalwCaseSourceV1::Setter, None);
         assert_eq!(palw_hard_case_form_v1(&case), Ok(()));
-        let PalwConsensusObjectV2::HardCaseSubmitted { payload, submitter, signature } = s.hard_case(bond(3), case) else { panic!("tag 71") };
+        let PalwConsensusObjectV2::HardCaseSubmitted { payload, submitter, signature } = s.hard_case(bond(3), case) else {
+            panic!("tag 71")
+        };
         let message = palw_improve_material_message_v1(71, &domain, payload.as_ref(), Some(&submitter));
         assert!(verifies(&public, message, &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
-        assert!(!verifies(&public, palw_improve_material_message_v1(72, &domain, payload.as_ref(), Some(&submitter)), &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
+        assert!(!verifies(
+            &public,
+            palw_improve_material_message_v1(72, &domain, payload.as_ref(), Some(&submitter)),
+            &signature,
+            PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1
+        ));
 
         // Tags 73, 74, 75: one set, two reveals that open its commitments.
         let set = improve_setter_set_v1(line, 2, vec![vec![1, 2], vec![3]], vec![vec![9], vec![]], salt).unwrap();
@@ -796,15 +813,34 @@ mod tests {
         let PalwConsensusObjectV2::SetterSetCommitted { payload, setter, signature } = s.setter_set(bond(4), set.commitment) else {
             panic!("tag 73")
         };
-        assert!(verifies(&public, palw_improve_material_message_v1(73, &domain, payload.as_ref(), Some(&setter)), &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
+        assert!(verifies(
+            &public,
+            palw_improve_material_message_v1(73, &domain, payload.as_ref(), Some(&setter)),
+            &signature,
+            PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1
+        ));
         assert!(matches!(improve_setter_prompts_object_v1(set.prompts), PalwConsensusObjectV2::SetterSetRevealed { .. }));
         assert!(matches!(improve_setter_keys_object_v1(set.keys), PalwConsensusObjectV2::SetterKeysRevealed { .. }));
 
         // Tag 76.
-        let dataset = improve_dataset_v1(line, Hash64::from_bytes([5; 64]), 10, vec![Hash64::from_bytes([9; 64]), Hash64::from_bytes([8; 64])], 0b101, Hash64::from_bytes([6; 64]));
+        let dataset = improve_dataset_v1(
+            line,
+            Hash64::from_bytes([5; 64]),
+            10,
+            vec![Hash64::from_bytes([9; 64]), Hash64::from_bytes([8; 64])],
+            0b101,
+            Hash64::from_bytes([6; 64]),
+        );
         assert_eq!(palw_dataset_form_v1(&dataset), Ok(()), "sorted licence classes, the id derived");
-        let PalwConsensusObjectV2::DatasetRegistered { payload, registrant, signature } = s.dataset(bond(5), dataset) else { panic!("tag 76") };
-        assert!(verifies(&public, palw_improve_material_message_v1(76, &domain, payload.as_ref(), Some(&registrant)), &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
+        let PalwConsensusObjectV2::DatasetRegistered { payload, registrant, signature } = s.dataset(bond(5), dataset) else {
+            panic!("tag 76")
+        };
+        assert!(verifies(
+            &public,
+            palw_improve_material_message_v1(76, &domain, payload.as_ref(), Some(&registrant)),
+            &signature,
+            PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1
+        ));
 
         // Tags 77, 78.
         let artifact = PalwTeachingArtifactV1 {
@@ -829,8 +865,15 @@ mod tests {
         // Tag 79: signed by the rights holder's own key, which the licence names.
         let licence = improve_licence_v1(public.clone(), Hash64::from_bytes([7; 64]), vec![3, 1, 3], 1, 5, 10_000);
         assert_eq!(palw_teacher_licence_form_v1(&licence), Ok(()));
-        let PalwConsensusObjectV2::TeacherLicenceRegistered { payload, signature } = s.licence(licence).unwrap() else { panic!("tag 79") };
-        assert!(verifies(&public, palw_improve_material_message_v1(79, &domain, payload.as_ref(), None), &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
+        let PalwConsensusObjectV2::TeacherLicenceRegistered { payload, signature } = s.licence(licence).unwrap() else {
+            panic!("tag 79")
+        };
+        assert!(verifies(
+            &public,
+            palw_improve_material_message_v1(79, &domain, payload.as_ref(), None),
+            &signature,
+            PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1
+        ));
         let stranger = improve_licence_v1(vec![0; 2592], Hash64::from_bytes([7; 64]), vec![], 1, 5, 10_000);
         assert!(s.licence(stranger).is_err(), "a licence signed by another key than the one it names");
 
@@ -847,12 +890,24 @@ mod tests {
             line,
             2,
             Hash64::from_bytes([0xC1; 64]),
-            PalwTirArtifactRefV1::Composite { parent_class: Hash64::from_bytes([1; 64]), parent_root: Hash64::from_bytes([2; 64]), adapter_root: Hash64::from_bytes([3; 64]), p: 40 },
+            PalwTirArtifactRefV1::Composite {
+                parent_class: Hash64::from_bytes([1; 64]),
+                parent_root: Hash64::from_bytes([2; 64]),
+                adapter_root: Hash64::from_bytes([3; 64]),
+                p: 40,
+            },
             layout,
             PalwCandidateDeclarationsV1 { datasets: vec![], licences: vec![], teacher_classes: 0 },
         );
-        let PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature } = s.candidate(bond(7), candidate) else { panic!("tag 80") };
-        assert!(verifies(&public, palw_candidate_submission_message_v1(&domain, payload.as_ref(), &submitter), &signature, PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1));
+        let PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature } = s.candidate(bond(7), candidate) else {
+            panic!("tag 80")
+        };
+        assert!(verifies(
+            &public,
+            palw_candidate_submission_message_v1(&domain, payload.as_ref(), &submitter),
+            &signature,
+            PALW_IMPROVE_CANDIDATE_MLDSA87_CONTEXT_V1
+        ));
 
         // Tag 81.
         let rollback = PalwLineageRollbackV1 {
@@ -861,8 +916,15 @@ mod tests {
             to_class: Hash64::from_bytes([9; 64]),
             cause: kaspa_consensus_core::palw_improve_state_v1::PalwRollbackCauseV1::Owner,
         };
-        let PalwConsensusObjectV2::LineageHeadRolledBack { payload, signature, .. } = s.rollback(bond(8), rollback) else { panic!("tag 81") };
-        assert!(verifies(&public, palw_improvement_rollback_message_v1(domain, payload.as_ref()), &signature, PALW_IMPROVE_ROLLBACK_MLDSA87_CONTEXT));
+        let PalwConsensusObjectV2::LineageHeadRolledBack { payload, signature, .. } = s.rollback(bond(8), rollback) else {
+            panic!("tag 81")
+        };
+        assert!(verifies(
+            &public,
+            palw_improvement_rollback_message_v1(domain, payload.as_ref()),
+            &signature,
+            PALW_IMPROVE_ROLLBACK_MLDSA87_CONTEXT
+        ));
     }
 
     /// **The JSON specs**: a policy is the example with the spec's values over it and passes the chain's
@@ -888,7 +950,11 @@ mod tests {
         assert_eq!(policy.eval.n, 8);
         assert_eq!(policy.fees.eval_fee_per_job, 10);
         assert_eq!(policy.fees.registration_fee, 100_000_000, "the example's value stands where the spec says nothing");
-        assert_eq!(palw_improvement_policy_check_v1(&policy, &PALW_DRILL_IMPROVE_CEILINGS_V1, None), Ok(()), "the drill's ceilings admit it");
+        assert_eq!(
+            palw_improvement_policy_check_v1(&policy, &PALW_DRILL_IMPROVE_CEILINGS_V1, None),
+            Ok(()),
+            "the drill's ceilings admit it"
+        );
         assert!(spec::policy(&serde_json::json!({ "windows": { "grid": "wide" } })).is_err());
         assert!(spec::policy(&serde_json::json!({ "eval": { "stages": [{ "kind": "nonsense" }] } })).is_err());
 
@@ -898,11 +964,16 @@ mod tests {
         .expect("a case");
         let (key, salt) = opened.expect("the key and its salt come back");
         assert_eq!((key, salt), (vec![5, 6], Hash64::from_bytes([9; 64])));
-        assert_eq!(case.reference, improve_exact_key_reference_v1(&Hash64::from_bytes([1; 64]), &[5, 6], &Hash64::from_bytes([9; 64])));
+        assert_eq!(
+            case.reference,
+            improve_exact_key_reference_v1(&Hash64::from_bytes([1; 64]), &[5, 6], &Hash64::from_bytes([9; 64]))
+        );
         assert_eq!(palw_hard_case_form_v1(&case), Ok(()));
         assert!(spec::hard_case(&serde_json::json!({ "line": hex(1), "prompt": [1], "reference": { "wat": 1 } })).is_err());
 
-        let (set, salt) = spec::setter_set(&serde_json::json!({ "line": hex(1), "epoch": 1, "prompts": [[1, 2], [3]], "keys": [[7], [8]] })).expect("a set");
+        let (set, salt) =
+            spec::setter_set(&serde_json::json!({ "line": hex(1), "epoch": 1, "prompts": [[1, 2], [3]], "keys": [[7], [8]] }))
+                .expect("a set");
         assert_eq!(palw_setter_prompts_open_v1(&set.commitment, &set.prompts), Ok(()));
         assert_eq!(set.prompts.salt, salt, "a drawn salt is the reveal's");
 
@@ -919,7 +990,10 @@ mod tests {
         assert_eq!(palw_teaching_artifact_form_v1(&artifact), Ok(()));
         let d = spec::declarations(&serde_json::json!({ "datasets": [[hex(1), 600]], "teacher_classes": 4 })).expect("declarations");
         assert_eq!(d.datasets, vec![(Hash64::from_bytes([1; 64]), 600)]);
-        assert_eq!(spec::rollback_cause(&serde_json::json!("owner")).unwrap(), kaspa_consensus_core::palw_improve_state_v1::PalwRollbackCauseV1::Owner);
+        assert_eq!(
+            spec::rollback_cause(&serde_json::json!("owner")).unwrap(),
+            kaspa_consensus_core::palw_improve_state_v1::PalwRollbackCauseV1::Owner
+        );
         assert!(spec::rollback_cause(&serde_json::json!("whim")).is_err());
         assert!(spec::hash("abc").is_err());
         assert_eq!(spec::bond(&format!("{}:3", hex(2))).unwrap().0.index, 3);

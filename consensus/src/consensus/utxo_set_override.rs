@@ -32,7 +32,10 @@ fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEn
         // Re-derive the complete set; no caller-supplied monetary row is trusted.
         // The unchanged M-07 comparison below checks these against Params.
         return kaspa_consensus_core::config::private_population::derive_private_population_v1(salt, profile)
-            .expect("validated private population factory").utxos.into_iter().collect();
+            .expect("validated private population factory")
+            .utxos
+            .into_iter()
+            .collect();
     }
 
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
@@ -120,7 +123,10 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
         // is not its construction contract.
         #[cfg(feature = "private-integration-config")]
         if config.private_population.is_some() {
-            assert_eq!(config.params.genesis.utxo_commitment, hardcoded_commitment, "private population must preserve M-07 commitment pinning");
+            assert_eq!(
+                config.params.genesis.utxo_commitment, hardcoded_commitment,
+                "private population must preserve M-07 commitment pinning"
+            );
             assert_eq!(config.params.genesis.hash, hardcoded_hash, "private population must preserve M-07 genesis pinning");
         }
         let _ = (hardcoded_commitment, hardcoded_hash);
@@ -398,7 +404,10 @@ mod tests {
 #[cfg(all(test, feature = "private-integration-config"))]
 mod private_population_tests {
     use super::*;
-    use kaspa_consensus_core::config::{drill::PalwDrillSaltV1, private_population::{PrivatePopulationV1, derive_private_population_v1}};
+    use kaspa_consensus_core::config::{
+        drill::PalwDrillSaltV1,
+        private_population::{PrivatePopulationV1, derive_private_population_v1},
+    };
 
     #[test]
     fn private_factory_initial_loader_preserves_m07_and_supply() {
@@ -414,7 +423,9 @@ mod private_population_tests {
         set_genesis_utxo_commitment_from_config(&mut config);
         assert_eq!(config.params.genesis.hash, pinned);
         config.params.genesis.utxo_commitment = kaspa_hashes::Hash64::from_bytes([9; 64]);
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| set_genesis_utxo_commitment_from_config(&mut config))).is_err(),
-            "private feature must not bypass the actual genesis commitment guard");
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| set_genesis_utxo_commitment_from_config(&mut config))).is_err(),
+            "private feature must not bypass the actual genesis commitment guard"
+        );
     }
 }

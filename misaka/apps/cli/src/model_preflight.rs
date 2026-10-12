@@ -116,8 +116,9 @@ pub async fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) ->
         let reader = crate::palw_derived::connect(ctx).await?;
         let answer = reader.client.get_palw_model_registry().await;
         let _ = reader.client.disconnect().await;
-        let registry =
-            answer.map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelRegistry: {e} (a node built before ADR-0135 does not serve it)")))?;
+        let registry = answer.map_err(|e| {
+            CliError::new(exit::CONNECTION, format!("getPalwModelRegistry: {e} (a node built before ADR-0135 does not serve it)"))
+        })?;
         if !registry.available {
             return Err(CliError::new(exit::GENERIC, "the node keeps no PALW class state (not a ConsensusV2 network)"));
         }
@@ -128,7 +129,8 @@ pub async fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) ->
         }
         Some(facts)
     } else if let Some(p) = &a.node_facts {
-        let text = std::fs::read_to_string(p).map_err(|e| CliError::new(exit::CONFIG, format!("--node-facts {}: {e}", p.display())))?;
+        let text =
+            std::fs::read_to_string(p).map_err(|e| CliError::new(exit::CONFIG, format!("--node-facts {}: {e}", p.display())))?;
         Some(misaka_palw_sdk::preflight::node::NodeFacts::parse(&text).map_err(|e| CliError::new(exit::CONFIG, e))?)
     } else {
         None
@@ -170,11 +172,9 @@ pub async fn model_preflight(ctx: &Ctx, input: &Path, a: &ModelPreflightArgs) ->
         None
     };
     let report = match remote_base {
-        Some(base) if base.starts_with("http://") => misaka_palw_sdk::preflight::run_remote(
-            &base,
-            &misaka_palw_sdk::preflight::remote::HttpRangeFetcher::default(),
-            &opts,
-        ),
+        Some(base) if base.starts_with("http://") => {
+            misaka_palw_sdk::preflight::run_remote(&base, &misaka_palw_sdk::preflight::remote::HttpRangeFetcher::default(), &opts)
+        }
         Some(base) => misaka_palw_sdk::preflight::run_remote(&base, &misaka_palw_tir_lower::weights::CurlFetcher::new(), &opts),
         None => run(input, &opts),
     }

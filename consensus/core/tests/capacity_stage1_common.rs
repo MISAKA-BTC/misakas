@@ -163,7 +163,8 @@ impl Sim {
             }
             Some(class_id) => {
                 let pwu = class_pwu(&self.c.p, &self.c.s, class_id, daa);
-                let (env, key, id) = junk_attempt(class_id, bond_key(n), pubkey_of(n), &operator_pubkey_of(n), pwu, seed, 0x5_0000 + seed);
+                let (env, key, id) =
+                    junk_attempt(class_id, bond_key(n), pubkey_of(n), &operator_pubkey_of(n), pwu, seed, 0x5_0000 + seed);
                 (env, key, id, Hash64::default())
             }
         }
@@ -197,8 +198,9 @@ impl Sim {
             (Err(err), Some(_)) => {
                 *self.skips.entry(format!("(block) {}", reason_key(&err.to_string()))).or_insert(0) += 1;
                 let e = c.extras_at(daa);
-                let (child, delta, skips) = fold_with(&c.p, &c.sp, &parent, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e)
-                    .unwrap_or_else(|err| panic!("the block at DAA {daa} folds without the attempt: {err}"));
+                let (child, delta, skips) =
+                    fold_with(&c.p, &c.sp, &parent, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e)
+                        .unwrap_or_else(|err| panic!("the block at DAA {daa} folds without the attempt: {err}"));
                 (child, delta, skips, None, None)
             }
             (Err(err), None) => panic!("the block at DAA {daa} folds: {err}"),
@@ -221,9 +223,11 @@ impl Sim {
     /// refusal, the state untouched) where [`Sim::block`] would panic.
     pub fn try_block(&mut self, daa: u64, objects: Vec<PalwConsensusObjectV2>) -> Result<(), String> {
         self.reready();
-        let x = PalwBlockContextV2 { block: h(0xD1FF_0000_0000 + self.blue + 1), daa_score: daa, blue_score: self.blue + 1, subsidy: 0 };
+        let x =
+            PalwBlockContextV2 { block: h(0xD1FF_0000_0000 + self.blue + 1), daa_score: daa, blue_score: self.blue + 1, subsidy: 0 };
         let e = self.c.extras_at(daa);
-        fold_with(&self.c.p, &self.c.sp, &self.c.s, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e).map_err(|err| err.to_string())?;
+        fold_with(&self.c.p, &self.c.sp, &self.c.s, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e)
+            .map_err(|err| err.to_string())?;
         self.block(daa, objects, None);
         Ok(())
     }
@@ -231,7 +235,14 @@ impl Sim {
     /// A copy of this simulation standing on the same tip (the same rules, blue counter and model),
     /// with an empty tape — a trial branch.
     pub fn fork(&self) -> Sim {
-        let c = Chain { p: self.c.p.clone(), sp: self.c.sp.clone(), s: self.c.s.clone(), daa: self.c.daa, room: self.c.room, attribution: self.c.attribution };
+        let c = Chain {
+            p: self.c.p.clone(),
+            sp: self.c.sp.clone(),
+            s: self.c.s.clone(),
+            daa: self.c.daa,
+            room: self.c.room,
+            attribution: self.c.attribution,
+        };
         Sim { c, blue: self.blue, model: self.model, skips: BTreeMap::new(), tape: Vec::new(), base: self.c.s.clone() }
     }
 
@@ -281,7 +292,10 @@ impl Sim {
 
     /// `claim` licensed by a `Valid` from each of `seats` in the next block.
     pub fn license(&mut self, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)], bound: u64) {
-        self.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: seats.iter().map(|(k, _)| valid(claim, *k, bound)).collect() }]);
+        self.step(vec![PalwConsensusObjectV2::ReceiptLicensed {
+            claim,
+            receipts: seats.iter().map(|(k, _)| valid(claim, *k, bound)).collect(),
+        }]);
         assert!(matches!(self.c.claim(&claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the licence folds");
     }
 
@@ -325,7 +339,11 @@ pub fn panel_seats(c: &Chain, model: Option<Hash64>) -> Vec<(PalwBondKeyV2, Hash
 /// reads the verdict, never the proof).
 pub fn guilty_close(session_id: Hash64) -> PalwConsensusObjectV2 {
     let PalwConsensusObjectV2::CourtClosed { proof, .. } = court_cleared(session_id) else { unreachable!("a close") };
-    PalwConsensusObjectV2::CourtClosed { session_id, verdict: kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty, proof }
+    PalwConsensusObjectV2::CourtClosed {
+        session_id,
+        verdict: kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty,
+        proof,
+    }
 }
 
 /// A skip reason with every bond key elided (`PalwBondKeyV2(..)` → `<bond>`), first 110 characters.

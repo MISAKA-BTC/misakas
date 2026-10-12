@@ -515,7 +515,13 @@ mod tests {
     }
 
     fn facts(reserved: u128, escrow: u64, pwu: u64, slash: u64) -> PalwClaimFraudFactsV1 {
-        PalwClaimFraudFactsV1 { reserved, escrowed_reward: escrow, exposure_pwu: pwu, slash_value_per_pwu: slash, extra_economic_rights_sompi: 0 }
+        PalwClaimFraudFactsV1 {
+            reserved,
+            escrowed_reward: escrow,
+            exposure_pwu: pwu,
+            slash_value_per_pwu: slash,
+            extra_economic_rights_sompi: 0,
+        }
     }
 
     #[test]
@@ -743,7 +749,10 @@ mod tests {
         assert_eq!(palw_claim_extra_economic_rights_v1(&sample_claim()), 0);
         let derived = PalwClaimFraudFactsV1::from_claim(&sample_claim(), 5);
         assert_eq!(derived.extra_economic_rights_sompi, 0);
-        assert_eq!(palw_max_fraud_gain_v1(&derived), derived.escrowed_reward as u128 + palw_fork_weight_sompi_v1(derived.exposure_pwu, 5));
+        assert_eq!(
+            palw_max_fraud_gain_v1(&derived),
+            derived.escrowed_reward as u128 + palw_fork_weight_sompi_v1(derived.exposure_pwu, 5)
+        );
     }
 
     fn sample_claim() -> crate::palw_state_v2::PalwClaimStateV2 {

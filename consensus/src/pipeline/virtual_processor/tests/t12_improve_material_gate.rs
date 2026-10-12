@@ -184,7 +184,10 @@ async fn t12_an_adapter_class_listing_is_gated_by_its_fence_its_signature_and_it
         params.palw_improvement_v1 = Some(PalwImprovementFenceV1::drill_v1(ForkActivation::new(0)));
         params.sync_palw_improvement_v1();
         if arm_adapter {
-            (kaspa_consensus_core::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_ENTRY.set)(&mut params, Some(ForkActivation::new(0)));
+            (kaspa_consensus_core::palw_adapter_class_v1::PALW_DRILL_ADAPTER_CLASS_V1_ENTRY.set)(
+                &mut params,
+                Some(ForkActivation::new(0)),
+            );
         }
         let armed = ConfigBuilder::new(params).skip_proof_of_work().build();
         armed.params.validate_palw_v2().expect("a runnable ruleset");
@@ -219,7 +222,11 @@ async fn t12_an_adapter_class_listing_is_gated_by_its_fence_its_signature_and_it
         let listing = |key: usize| Obj::AdapterClassListed {
             payload: Box::new(payload.clone()),
             lister: chain.bonds[3],
-            signature: sign(&TestConsensus::palw_v2_registry_keypair(key as u64).signing_key, &message, PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1),
+            signature: sign(
+                &TestConsensus::palw_v2_registry_keypair(key as u64).signing_key,
+                &message,
+                PALW_ADAPTER_LISTING_MLDSA87_CONTEXT_V1,
+            ),
         };
         if !arm {
             let err = gate(&listing(3)).expect_err("below the fence");

@@ -18,10 +18,7 @@ impl UtxoIterator {
         let generation = utxo_context.processor().utxo_observation_generation();
         let network_id = utxo_context.processor().network_id().ok();
         utxo_context.refresh_mature_coinbases();
-        Self {
-            entries: utxo_context.context().mature.clone(), cursor: 0, context: utxo_context.clone(),
-            network_id, generation,
-        }
+        Self { entries: utxo_context.context().mature.clone(), cursor: 0, context: utxo_context.clone(), network_id, generation }
     }
 }
 

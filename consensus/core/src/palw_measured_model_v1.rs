@@ -365,7 +365,9 @@ pub struct PalwMeasureInputsV1<'a> {
 /// it needs the `Params`. The held admission decides the regime the walls are read under (`palw_fit_regime_for_v1`): a network that arms
 /// `palw_held_context` judges a held class by the held clock, not the ladder's (`PalwHeldAdmissionV1::default()` is the shipped reading).
 pub type PalwCourtForV1<'a> =
-    &'a dyn Fn(&PalwShapeProfileV3) -> (Option<PalwKaryCourtV1>, PalwPromptIdsFormV1, crate::palw_class_admission_v2::PalwHeldAdmissionV1);
+    &'a dyn Fn(
+        &PalwShapeProfileV3,
+    ) -> (Option<PalwKaryCourtV1>, PalwPromptIdsFormV1, crate::palw_class_admission_v2::PalwHeldAdmissionV1);
 
 fn hex(h: Hash64) -> String {
     h.as_byte_slice().iter().map(|b| format!("{b:02x}")).collect()

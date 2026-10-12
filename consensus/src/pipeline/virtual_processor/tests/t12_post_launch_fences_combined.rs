@@ -81,7 +81,10 @@ fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine)
         params.palw_floor_reserve_active_at(H) && !params.palw_floor_reserve_active_at(H - 1),
         "the floor reserve is live from {H}, not below"
     );
-    assert!(params.palw_real_clock_tick_active_at(H) && !params.palw_real_clock_tick_active_at(H - 1), "and so is the real clock tick");
+    assert!(
+        params.palw_real_clock_tick_active_at(H) && !params.palw_real_clock_tick_active_at(H - 1),
+        "and so is the real clock tick"
+    );
     let operators = params.palw_operator_anchor.as_ref().expect("lane A is listed").operators.len();
     assert_eq!(operators, 8, "lane A trusts every genesis bond, testnet-12's armed value");
     // Phase 2b's five are live from `H` and not below it too — V02's two lock fences with the fold's
@@ -253,7 +256,11 @@ async fn every_post_launch_fence_at_one_height_is_crossed_with_the_clock_running
         armed_bundle.state.floor_reserve_active_at(H) && !armed_bundle.state.floor_reserve_active_at(H - 1),
         "the fold's mirror of the floor reserve fence is {H}"
     );
-    assert!(state.floor_state_v1().is_default(), "no REAL work anywhere: the floor state never left Idle ({})", state.floor_state_v1());
+    assert!(
+        state.floor_state_v1().is_default(),
+        "no REAL work anywhere: the floor state never left Idle ({})",
+        state.floor_state_v1()
+    );
     assert!(
         kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state).floor_state.is_none(),
         "and the carriage carries no floor state: an all-floor chain roots as one without the rule"

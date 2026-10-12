@@ -104,11 +104,18 @@ pub struct ConvOp {
 pub enum CnnOp {
     Conv(ConvOp),
     /// Max pooling (`-inf` padding).
-    MaxPool { k: usize, stride: usize, pad: usize },
+    MaxPool {
+        k: usize,
+        stride: usize,
+        pad: usize,
+    },
     /// An activation on its own (not fused into a convolution).
     Act(Act),
     /// A LayerNorm over the channels of every position (ConvNeXt's): the checkpoint's `{name}.weight` and `{name}.bias`.
-    ChannelNorm { name: String, eps: f64 },
+    ChannelNorm {
+        name: String,
+        eps: f64,
+    },
     /// `act(main(x) + shortcut(x))`; an empty shortcut is the identity.
     Residual {
         main: Vec<CnnOp>,
@@ -189,7 +196,13 @@ fn window_out(n: usize, k: usize, s: usize, p_total: usize, d: usize) -> Option<
 
 /// TensorFlow's "SAME" padding along one axis: `(before, after)`.
 fn tf_pad(n: usize, k: usize, s: usize) -> (usize, usize) {
-    let along = if s != 0 && n % s == 0 { k.saturating_sub(s) } else if s != 0 { k.saturating_sub(n % s) } else { 0 };
+    let along = if s != 0 && n % s == 0 {
+        k.saturating_sub(s)
+    } else if s != 0 {
+        k.saturating_sub(n % s)
+    } else {
+        0
+    };
     (along / 2, along - along / 2)
 }
 
@@ -218,7 +231,11 @@ impl Win {
     }
     /// The output extent over `inp`, `None` when the window does not fit.
     fn out(&self, inp: Geo, c: usize) -> Option<Geo> {
-        Some(Geo { h: window_out(inp.h, self.kh, self.sh, self.ph0 + self.ph1, self.dh)?, w: window_out(inp.w, self.kw, self.sw, self.pw0 + self.pw1, self.dw)?, c })
+        Some(Geo {
+            h: window_out(inp.h, self.kh, self.sh, self.ph0 + self.ph1, self.dh)?,
+            w: window_out(inp.w, self.kw, self.sw, self.pw0 + self.pw1, self.dw)?,
+            c,
+        })
     }
     /// The table's name: the geometry in and out and the window.
     fn table_name(&self, inp: Geo, out: Geo) -> String {
@@ -239,7 +256,18 @@ impl ConvOp {
             let pw = self.pad_w.unwrap_or(self.pad);
             ((self.pad, self.pad), (pw, pw))
         };
-        Win { kh: self.k, kw, sh: self.stride, sw, ph0, ph1, pw0, pw1, dh: self.dilation, dw: self.dilation_w.unwrap_or(self.dilation) }
+        Win {
+            kh: self.k,
+            kw,
+            sh: self.stride,
+            sw,
+            ph0,
+            ph1,
+            pw0,
+            pw1,
+            dh: self.dilation,
+            dw: self.dilation_w.unwrap_or(self.dilation),
+        }
     }
 
     /// Taps per output channel and input channel (`kh · kw`).
@@ -305,10 +333,19 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
             CnnOp::Conv(c) => {
                 let w = c.win_at(geo);
                 if c.tf_same && (w.dh != 1 || w.dw != 1) {
-                    return Err(LowerError::bad(format!("convolution `{}`: TensorFlow SAME padding with a dilation other than 1", c.name)));
+                    return Err(LowerError::bad(format!(
+                        "convolution `{}`: TensorFlow SAME padding with a dilation other than 1",
+                        c.name
+                    )));
                 }
-                if [w.kh, w.kw, w.sh, w.sw, w.dh, w.dw, c.groups, c.cout, c.cin].contains(&0) || c.cin % c.groups != 0 || c.cout % c.groups != 0 {
-                    return Err(LowerError::bad(format!("convolution `{}`: kernel, stride, dilation, groups and channels must be positive and divisible", c.name)));
+                if [w.kh, w.kw, w.sh, w.sw, w.dh, w.dw, c.groups, c.cout, c.cin].contains(&0)
+                    || c.cin % c.groups != 0
+                    || c.cout % c.groups != 0
+                {
+                    return Err(LowerError::bad(format!(
+                        "convolution `{}`: kernel, stride, dilation, groups and channels must be positive and divisible",
+                        c.name
+                    )));
                 }
                 if w.kh.max(w.kw) > MAX_KERNEL
                     || w.sh.max(w.sw) > MAX_STRIDE
@@ -323,18 +360,32 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
                     )));
                 }
                 if c.cin != geo.c {
-                    return Err(LowerError::bad(format!("convolution `{}` reads {} channels, its input has {}", c.name, c.cin, geo.c)));
+                    return Err(LowerError::bad(format!(
+                        "convolution `{}` reads {} channels, its input has {}",
+                        c.name, c.cin, geo.c
+                    )));
                 }
                 if c.groups != 1 && !(c.groups == c.cin && c.cin == c.cout) {
-                    return Err(LowerError::not_lowerable(format!("convolution `{}`: groups = {} (only 1 and depthwise are lowered)", c.name, c.groups)));
+                    return Err(LowerError::not_lowerable(format!(
+                        "convolution `{}`: groups = {} (only 1 and depthwise are lowered)",
+                        c.name, c.groups
+                    )));
                 }
                 let Some(g) = w.out(geo, c.cout) else {
-                    return Err(LowerError::not_lowerable(format!("convolution `{}`: a {}×{} input is smaller than its window", c.name, geo.h, geo.w)));
+                    return Err(LowerError::not_lowerable(format!(
+                        "convolution `{}`: a {}×{} input is smaller than its window",
+                        c.name, geo.h, geo.w
+                    )));
                 };
                 check_extent(&format!("convolution `{}`", c.name), g, w.taps())?;
                 // The weight matrix `[k·k·C_in, C_out]` and the gathered columns' taps are TIR dimensions too.
                 if w.taps().saturating_mul(c.cin) > MAX_ELEMS {
-                    return Err(LowerError::not_lowerable(format!("convolution `{}`: {} taps over {} channels is past 2^24", c.name, w.taps(), c.cin)));
+                    return Err(LowerError::not_lowerable(format!(
+                        "convolution `{}`: {} taps over {} channels is past 2^24",
+                        c.name,
+                        w.taps(),
+                        c.cin
+                    )));
                 }
                 (format!("c{n}"), PKind::Conv(c.clone()), g)
             }
@@ -343,7 +394,9 @@ fn plan_ops(ops: &[CnnOp], mut geo: Geo, counter: &mut usize) -> Result<(Vec<PNo
                     return Err(LowerError::bad("a max pool's window and stride must be positive"));
                 }
                 if *k > MAX_KERNEL || *stride > MAX_STRIDE {
-                    return Err(LowerError::not_lowerable(format!("a max pool past the bounds (window {MAX_KERNEL}, stride {MAX_STRIDE})")));
+                    return Err(LowerError::not_lowerable(format!(
+                        "a max pool past the bounds (window {MAX_KERNEL}, stride {MAX_STRIDE})"
+                    )));
                 }
                 if *pad * 2 > *k {
                     return Err(LowerError::bad("a max pool's padding must be at most half its window"));
@@ -408,14 +461,20 @@ fn plan(spec: &CnnSpec) -> Result<Plan> {
         return Err(LowerError::bad(format!("{}: an input of {}×{} and {} ops", spec.architecture, spec.h, spec.w, spec.ops.len())));
     }
     if spec.h as usize * spec.w as usize > MAX_ELEMS {
-        return Err(LowerError::not_lowerable(format!("{}: an input of {}×{} pixels (more than 2^24 positions)", spec.architecture, spec.h, spec.w)));
+        return Err(LowerError::not_lowerable(format!(
+            "{}: an input of {}×{} pixels (more than 2^24 positions)",
+            spec.architecture, spec.h, spec.w
+        )));
     }
     if spec.std.iter().any(|s| *s <= 0.0 || !s.is_finite()) || spec.mean.iter().any(|m| !m.is_finite()) {
         return Err(LowerError::bad("a normalisation mean or std that is not finite and positive"));
     }
     if let Some(h) = &spec.head {
         if matches!(spec.out, CnnOut::Map) {
-            return Err(LowerError::bad(format!("{}: a classifier head reads the pooled row, not the feature map", spec.architecture)));
+            return Err(LowerError::bad(format!(
+                "{}: a classifier head reads the pooled row, not the feature map",
+                spec.architecture
+            )));
         }
         if h.labels == 0 || h.labels > MAX_CHANNELS {
             return Err(LowerError::not_lowerable(format!("{}: a classifier of {} labels", spec.architecture, h.labels)));
@@ -424,7 +483,12 @@ fn plan(spec: &CnnSpec) -> Result<Plan> {
     let mut counter = 0;
     let (nodes, last) = plan_ops(&spec.ops, Geo { h: spec.h as usize, w: spec.w as usize, c: 3 }, &mut counter)?;
     if let Some(big) = nodes.iter().find(|n| estimate(n) > MAX_UNIT) {
-        return Err(LowerError::not_lowerable(format!("{}: unit `{}` is about {} nodes — a block has 512 and a unit is never split", spec.architecture, big.id, estimate(big))));
+        return Err(LowerError::not_lowerable(format!(
+            "{}: unit `{}` is about {} nodes — a block has 512 and a unit is never split",
+            spec.architecture,
+            big.id,
+            estimate(big)
+        )));
     }
     // Pack: the pre block also holds the normalisation (about 14 nodes).
     let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
@@ -440,7 +504,11 @@ fn plan(spec: &CnnSpec) -> Result<Plan> {
     }
     groups.push(start..nodes.len());
     if groups.len() + 1 > MAX_BLOCKS {
-        return Err(LowerError::not_lowerable(format!("{}: about {} blocks of 400 nodes (a program has at most {MAX_BLOCKS})", spec.architecture, groups.len() + 1)));
+        return Err(LowerError::not_lowerable(format!(
+            "{}: about {} blocks of 400 nodes (a program has at most {MAX_BLOCKS})",
+            spec.architecture,
+            groups.len() + 1
+        )));
     }
     Ok(Plan { nodes, last, groups })
 }
@@ -523,17 +591,29 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
     use crate::hl::{Block, BlockRole, CarryDecl, HlType, Init, Node, ParamDecl, Ref};
     let p = plan(spec)?;
     let table = param_table(spec, &p);
-    let params: Vec<ParamDecl> = table.iter().map(|(n, sh, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: false, init: Init::Normal(0.1) }).collect();
+    let params: Vec<ParamDecl> = table
+        .iter()
+        .map(|(n, sh, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: false, init: Init::Normal(0.1) })
+        .collect();
     // The params a block's nodes read: those named after the ids of its nodes (`c3.w`, `n5.gain`, `c3.ls`).
     let group_params = |range: std::ops::Range<usize>| -> Vec<Ref> {
         let mut ids = std::collections::BTreeSet::new();
         walk_nodes(&p.nodes[range], &mut |n| {
             ids.insert(n.id.clone());
         });
-        table.iter().enumerate().filter(|(_, (name, _, _))| name.split('.').next().is_some_and(|id| ids.contains(id))).map(|(i, _)| Ref::Param(i as u32)).collect()
+        table
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _, _))| name.split('.').next().is_some_and(|id| ids.contains(id)))
+            .map(|(i, _)| Ref::Param(i as u32))
+            .collect()
     };
-    let post_params: Vec<Ref> =
-        table.iter().enumerate().filter(|(_, (name, _, _))| name.starts_with("pnorm.") || name.starts_with("classifier.")).map(|(i, _)| Ref::Param(i as u32)).collect();
+    let post_params: Vec<Ref> = table
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _, _))| name.starts_with("pnorm.") || name.starts_with("classifier."))
+        .map(|(i, _)| Ref::Param(i as u32))
+        .collect();
     let anchor = |inputs: Vec<Ref>| Node {
         op: crate::hl::Op::Scale { c: 1.0 },
         inputs,
@@ -542,13 +622,28 @@ pub fn hl_program(spec: &CnnSpec) -> Result<(HlProgram, Binding)> {
         site: None,
         writes: vec![],
     };
-    let mut blocks = vec![Block { name: "pre".into(), role: BlockRole::Pre, nodes: vec![anchor(group_params(p.groups[0].clone()))], outputs: vec![Ref::Node(0, 0)] }];
+    let mut blocks = vec![Block {
+        name: "pre".into(),
+        role: BlockRole::Pre,
+        nodes: vec![anchor(group_params(p.groups[0].clone()))],
+        outputs: vec![Ref::Node(0, 0)],
+    }];
     let mut schedule = Vec::new();
     for (g, range) in p.groups.iter().enumerate().skip(1) {
-        blocks.push(Block { name: format!("g{g}"), role: BlockRole::Layer, nodes: vec![anchor(group_params(range.clone()))], outputs: vec![Ref::Node(0, 0)] });
+        blocks.push(Block {
+            name: format!("g{g}"),
+            role: BlockRole::Layer,
+            nodes: vec![anchor(group_params(range.clone()))],
+            outputs: vec![Ref::Node(0, 0)],
+        });
         schedule.push((blocks.len() - 1) as u16);
     }
-    blocks.push(Block { name: "post".into(), role: BlockRole::Post, nodes: vec![anchor(post_params)], outputs: vec![Ref::Node(0, 0)] });
+    blocks.push(Block {
+        name: "post".into(),
+        role: BlockRole::Post,
+        nodes: vec![anchor(post_params)],
+        outputs: vec![Ref::Node(0, 0)],
+    });
     let post = blocks.len() - 1;
     let hl = HlProgram {
         architecture: spec.architecture.clone(),
@@ -596,8 +691,13 @@ fn window_index(inp: Geo, out: Geo, w: &Win) -> Vec<u32> {
         for ow in 0..out.w {
             for kh in 0..w.kh {
                 for kw in 0..w.kw {
-                    let (ih, iw) = ((oh * w.sh + kh * w.dh) as isize - w.ph0 as isize, (ow * w.sw + kw * w.dw) as isize - w.pw0 as isize);
-                    v.push(if ih < 0 || iw < 0 || ih >= inp.h as isize || iw >= inp.w as isize { pad_row } else { (ih as usize * inp.w + iw as usize) as u32 });
+                    let (ih, iw) =
+                        ((oh * w.sh + kh * w.dh) as isize - w.ph0 as isize, (ow * w.sw + kw * w.dw) as isize - w.pw0 as isize);
+                    v.push(if ih < 0 || iw < 0 || ih >= inp.h as isize || iw >= inp.w as isize {
+                        pad_row
+                    } else {
+                        (ih as usize * inp.w + iw as usize) as u32
+                    });
                 }
             }
         }
@@ -609,7 +709,13 @@ fn window_index(inp: Geo, out: Geo, w: &Win) -> Vec<u32> {
 
 /// A convolution's folded float weights `[cout][taps]` (`(cin/groups, kh, kw)` order) and bias `[cout]`: the batch norm folded
 /// exactly (`BN_FOLD_V1`).
-fn folded(c: &ConvOp, w: &[f32], bias: Option<&[f32]>, bn: Option<(&[f32], &[f32], &[f32], &[f32])>, layer_scale: Option<&[f32]>) -> (Vec<f32>, Vec<f64>) {
+fn folded(
+    c: &ConvOp,
+    w: &[f32],
+    bias: Option<&[f32]>,
+    bn: Option<(&[f32], &[f32], &[f32], &[f32])>,
+    layer_scale: Option<&[f32]>,
+) -> (Vec<f32>, Vec<f64>) {
     let taps = c.cin / c.groups * c.taps();
     let mut out = w.to_vec();
     let mut b = vec![0f64; c.cout];
@@ -737,7 +843,10 @@ pub(super) fn conv1d_out_len(t: usize, c: &ConvOp) -> Option<usize> {
 /// A 1-D convolution of `x` (`[T][C_in]` rows) in `f64`: the checkpoint's `weight` (`[C_out, C_in, k]`, flat) and `bias`.
 pub(super) fn conv1d_float(x: &[Vec<f64>], c: &ConvOp, w: &[f32], bias: Option<&[f32]>) -> Result<Vec<Vec<f64>>> {
     let inp = Geo { h: 1, w: x.len(), c: c.cin };
-    let out = c.win_at(inp).out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {} frames are shorter than its window", c.name, x.len())))?;
+    let out = c
+        .win_at(inp)
+        .out(inp, c.cout)
+        .ok_or_else(|| LowerError::bad(format!("convolution `{}`: {} frames are shorter than its window", c.name, x.len())))?;
     let (fw, fb) = folded(c, w, bias, None, None);
     Ok(conv_float(x, inp, out, c, &fw, &fb))
 }
@@ -745,16 +854,35 @@ pub(super) fn conv1d_float(x: &[Vec<f64>], c: &ConvOp, w: &[f32], bias: Option<&
 /// A 1-D convolution as the program: `x` is `[T, C_in]` rows of codes, the result `[T_out, C_out]` narrowed as `want` says. The
 /// HL params are `{id}.w` (`[C_out, C_in·k]`) and, with a bias, `{id}.b`.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn lower_conv1d(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, id: &str, c: &ConvOp, t: usize, want: &Want, relu: bool) -> Result<Val> {
+pub(super) fn lower_conv1d(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    id: &str,
+    c: &ConvOp,
+    t: usize,
+    want: &Want,
+    relu: bool,
+) -> Result<Val> {
     let inp = Geo { h: 1, w: t, c: c.cin };
-    let out = c.win_at(inp).out(inp, c.cout).ok_or_else(|| LowerError::bad(format!("convolution `{}`: {t} frames are shorter than its window", c.name)))?;
+    let out = c
+        .win_at(inp)
+        .out(inp, c.cout)
+        .ok_or_else(|| LowerError::bad(format!("convolution `{}`: {t} frames are shorter than its window", c.name)))?;
     let n = PNode { id: id.to_string(), op: PKind::Conv(c.clone()), inp, out };
     lower_conv(b, cx, lb, x, &n, c, want, relu)
 }
 
 /// The float network over one canonical image (`u8` HWC): the output rows, and, when `stats` is given, every site's statistics
 /// under the lowering's names (`pre.in`, `pre.c0`, `L0.r5.sum`, `post.out`, …).
-pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image: &[u8], mut stats: Option<&mut BTreeMap<String, SiteStat>>) -> Result<Vec<Vec<f64>>> {
+pub fn float_forward(
+    hl: &HlProgram,
+    spec: &CnnSpec,
+    params: &ParamStore,
+    image: &[u8],
+    mut stats: Option<&mut BTreeMap<String, SiteStat>>,
+) -> Result<Vec<Vec<f64>>> {
     let p = plan(spec)?;
     let (h, w) = (spec.h as usize, spec.w as usize);
     if image.len() != h * w * 3 {
@@ -779,17 +907,28 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
                     }
                 }
                 e.absmax = e.absmax.max(row);
-                if i == 0 { e.pos0_absmax = e.pos0_absmax.max(row) } else { e.rest_absmax = e.rest_absmax.max(row) }
+                if i == 0 {
+                    e.pos0_absmax = e.pos0_absmax.max(row)
+                } else {
+                    e.rest_absmax = e.rest_absmax.max(row)
+                }
                 e.count += r.len() as u64;
             }
         }
     };
     // The input's per-channel normalisation.
-    let mut x: Vec<Vec<f64>> = (0..h * w).map(|i| (0..3).map(|c| (image[i * 3 + c] as f64 / 255.0 - spec.mean[c]) / spec.std[c]).collect()).collect();
+    let mut x: Vec<Vec<f64>> =
+        (0..h * w).map(|i| (0..3).map(|c| (image[i * 3 + c] as f64 / 255.0 - spec.mean[c]) / spec.std[c]).collect()).collect();
     observe("pre.in".into(), &x);
     /// A value and its activation, observed under the names the lowering reads: a ReLU is a clamp inside the narrowing
     /// (one site: the activated value), a table activation is a site of its own after the pre-activation one.
-    fn activated(pre: &[Vec<f64>], act: Option<Act>, id: &str, prefix: &str, observe: &mut dyn FnMut(String, &[Vec<f64>])) -> Vec<Vec<f64>> {
+    fn activated(
+        pre: &[Vec<f64>],
+        act: Option<Act>,
+        id: &str,
+        prefix: &str,
+        observe: &mut dyn FnMut(String, &[Vec<f64>]),
+    ) -> Vec<Vec<f64>> {
         let post: Vec<Vec<f64>> = pre.iter().map(|r| r.iter().map(|v| act.map_or(*v, |a| apply_act(a, *v))).collect()).collect();
         match act {
             Some(a) if !matches!(a, Act::Relu | Act::Identity) => {
@@ -813,11 +952,22 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
                     let w = get(&pn(&n.id, "w"))?;
                     let bias = if c.bias { Some(get(&pn(&n.id, "b"))?) } else { None };
                     let bn = match &c.bn {
-                        Some(_) => Some((get(&pn(&n.id, "bn.gain"))?, get(&pn(&n.id, "bn.bias"))?, get(&pn(&n.id, "bn.mean"))?, get(&pn(&n.id, "bn.var"))?)),
+                        Some(_) => Some((
+                            get(&pn(&n.id, "bn.gain"))?,
+                            get(&pn(&n.id, "bn.bias"))?,
+                            get(&pn(&n.id, "bn.mean"))?,
+                            get(&pn(&n.id, "bn.var"))?,
+                        )),
                         None => None,
                     };
                     let ls = if c.layer_scale.is_some() { Some(get(&pn(&n.id, "ls"))?) } else { None };
-                    let (fw, fb) = folded(c, &w, bias.as_deref(), bn.as_ref().map(|(a, b, m, v)| (&a[..], &b[..], &m[..], &v[..])), ls.as_deref());
+                    let (fw, fb) = folded(
+                        c,
+                        &w,
+                        bias.as_deref(),
+                        bn.as_ref().map(|(a, b, m, v)| (&a[..], &b[..], &m[..], &v[..])),
+                        ls.as_deref(),
+                    );
                     let pre = conv_float(&x, n.inp, n.out, c, &fw, &fb);
                     activated(&pre, c.act, &n.id, prefix, observe)
                 }
@@ -825,7 +975,15 @@ pub fn float_forward(hl: &HlProgram, spec: &CnnSpec, params: &ParamStore, image:
                     let idx = window_index(n.inp, n.out, &Win::square(*k, *stride, *pad, 1));
                     let kk = k * k;
                     let rows: Vec<Vec<f64>> = (0..n.out.rows())
-                        .map(|po| (0..n.inp.c).map(|ch| (0..kk).filter_map(|t| x.get(idx[po * kk + t] as usize).map(|r| r[ch])).fold(f64::NEG_INFINITY, f64::max)).collect())
+                        .map(|po| {
+                            (0..n.inp.c)
+                                .map(|ch| {
+                                    (0..kk)
+                                        .filter_map(|t| x.get(idx[po * kk + t] as usize).map(|r| r[ch]))
+                                        .fold(f64::NEG_INFINITY, f64::max)
+                                })
+                                .collect()
+                        })
                         .collect();
                     observe(format!("{prefix}{}", n.id), &rows);
                     rows
@@ -902,7 +1060,16 @@ fn codes_want(site: &str) -> Want {
 }
 
 /// The narrowing `N(x; m, s, z)` into `[lo, hi]` of `dt`.
-fn narrow_into(b: &mut BlockBuilder<'_>, x: tir::Ref, m: tir::Ref, s: tir::Ref, z: Option<tir::Ref>, lo: i64, hi: i64, dt: DType) -> tir::Ref {
+fn narrow_into(
+    b: &mut BlockBuilder<'_>,
+    x: tir::Ref,
+    m: tir::Ref,
+    s: tir::Ref,
+    z: Option<tir::Ref>,
+    lo: i64,
+    hi: i64,
+    dt: DType,
+) -> tir::Ref {
     b.narrow(x, &tir::library::Narrowing::new(m, s, z), lo, hi, dt)
 }
 
@@ -923,7 +1090,16 @@ impl WeightCodes {
 }
 
 /// A convolution: rows `x` (`i16` codes, `[P_in, C_in]`) to rows `[P_out, C_out]` narrowed as `want` says (`lo` 0 under a ReLU).
-fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, c: &ConvOp, want: &Want, relu: bool) -> Result<Val> {
+fn lower_conv(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    n: &PNode,
+    c: &ConvOp,
+    want: &Want,
+    relu: bool,
+) -> Result<Val> {
     let hl = cx.hl;
     let (inp, out) = (n.inp, n.out);
     let id = n.id.clone();
@@ -943,9 +1119,15 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
     let cols = b.gather(padded, idx, 0, 0); // [P_out, k·k, C_in]
     let depthwise = c.groups > 1;
     let taps = c.cin / c.groups * kk;
-    let (wp, bp) = (super::bidir::hl_param(hl, &pn(&id, "w"))?, if c.bias { Some(super::bidir::hl_param(hl, &pn(&id, "b"))?) } else { None });
+    let (wp, bp) =
+        (super::bidir::hl_param(hl, &pn(&id, "w"))?, if c.bias { Some(super::bidir::hl_param(hl, &pn(&id, "b"))?) } else { None });
     let bnp = match &c.bn {
-        Some(_) => Some([pn(&id, "bn.gain"), pn(&id, "bn.bias"), pn(&id, "bn.mean"), pn(&id, "bn.var")].map(|s| super::bidir::hl_param(hl, &s)).into_iter().collect::<Result<Vec<u32>>>()?),
+        Some(_) => Some(
+            [pn(&id, "bn.gain"), pn(&id, "bn.bias"), pn(&id, "bn.mean"), pn(&id, "bn.var")]
+                .map(|s| super::bidir::hl_param(hl, &s))
+                .into_iter()
+                .collect::<Result<Vec<u32>>>()?,
+        ),
         None => None,
     };
     // The folded, quantised weight in the matmul's layout, and the per-row scales: made from the float params by every fill
@@ -967,10 +1149,13 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
             None => None,
         };
         let bn = match &bnp {
-            Some(ids) => Some([fc.f(ids[0])?.data.clone(), fc.f(ids[1])?.data.clone(), fc.f(ids[2])?.data.clone(), fc.f(ids[3])?.data.clone()]),
+            Some(ids) => {
+                Some([fc.f(ids[0])?.data.clone(), fc.f(ids[1])?.data.clone(), fc.f(ids[2])?.data.clone(), fc.f(ids[3])?.data.clone()])
+            }
             None => None,
         };
-        let (fw, fb) = folded(&cc, &w, bias.as_deref(), bn.as_ref().map(|v| (&v[0][..], &v[1][..], &v[2][..], &v[3][..])), ls.as_deref());
+        let (fw, fb) =
+            folded(&cc, &w, bias.as_deref(), bn.as_ref().map(|v| (&v[0][..], &v[1][..], &v[2][..], &v[3][..])), ls.as_deref());
         let codes = if wide {
             let q = crate::quant::quantize_rows16(&fw, cout, taps);
             WeightCodes { codes: q.codes, scales: q.scales, wide: true }
@@ -1074,7 +1259,16 @@ fn lower_conv(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n
 }
 
 /// Max pooling: the windows gathered from the rows and a padding row of the code floor, `ReduceMax` over the taps.
-fn lower_maxpool(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, n: &PNode, k: usize, stride: usize, pad: usize) -> Result<Val> {
+fn lower_maxpool(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    n: &PNode,
+    k: usize,
+    stride: usize,
+    pad: usize,
+) -> Result<Val> {
     let xc = super::bidir::codes_rows(b, cx, lb, x)?;
     let kk = k * k;
     let c = xc.len;
@@ -1134,7 +1328,14 @@ fn lower_channel_norm(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x:
 }
 
 /// One node of a branch, from `x`; `last_want` is where the branch's final value should land when it is a convolution's.
-fn lower_nodes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, nodes: &[PNode], mut x: Val, last_want: Option<&Want>) -> Result<Val> {
+fn lower_nodes(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    nodes: &[PNode],
+    mut x: Val,
+    last_want: Option<&Want>,
+) -> Result<Val> {
     for (i, n) in nodes.iter().enumerate() {
         let last = i + 1 == nodes.len();
         x = match &n.op {
@@ -1163,10 +1364,14 @@ fn lower_nodes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, nodes: &[
                 let sum_key = ScaleKey::site(vec![format!("{}.sum", n.id)], true);
                 let sum_want = Want { dt: DType::I32, key: sum_key.clone() };
                 let xin = super::bidir::codes_rows(b, cx, lb, &x)?;
-                let to_sum = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: Val| -> Result<Val> { coerce(b, cx, lb, &v, DType::I32, &sum_key) };
+                let to_sum = |b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: Val| -> Result<Val> {
+                    coerce(b, cx, lb, &v, DType::I32, &sum_key)
+                };
                 let m = lower_nodes(b, cx, lb, main, xin.clone(), Some(&sum_want))?;
                 let m = if m.dt == DType::I32 && m.key.same(&sum_key) { m } else { to_sum(b, cx, lb, m)? };
-                let s = if shortcut.is_empty() { to_sum(b, cx, lb, xin)? } else {
+                let s = if shortcut.is_empty() {
+                    to_sum(b, cx, lb, xin)?
+                } else {
                     let s = lower_nodes(b, cx, lb, shortcut, x.clone(), Some(&sum_want))?;
                     if s.dt == DType::I32 && s.key.same(&sum_key) { s } else { to_sum(b, cx, lb, s)? }
                 };
@@ -1177,7 +1382,8 @@ fn lower_nodes(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, nodes: &[
                 let table_act = act.filter(|a| !is_clamp_act(*a) && *a != Act::Identity);
                 let out_key = if *act == Some(Act::Relu6) { relu6_key() } else { site_key(&n.id) };
                 let (kk, ko) = (sum_key.clone(), out_key.clone());
-                let (mm, ss) = decl_ms(b, cx, lb, &format!("{}.out", n.id), 1, Arc::new(move |fc| Ok(vec![fc.scale(&kk)? / fc.scale(&ko)?])))?;
+                let (mm, ss) =
+                    decl_ms(b, cx, lb, &format!("{}.out", n.id), 1, Arc::new(move |fc| Ok(vec![fc.scale(&kk)? / fc.scale(&ko)?])))?;
                 let (lo, hi) = super::code_bounds(DType::I16);
                 let r = narrow_into(b, sum.r, mm, ss, None, if relu { 0 } else { lo }, hi, DType::I16);
                 b.commit(r);
@@ -1261,7 +1467,17 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
                     let mean = b.div(sum, n, Rounding::HalfAwayFromZero, DType::I64);
                     let mean = b.clamp(mean, i32::MIN as i64, i32::MAX as i64, DType::I32);
                     let mean = rows_val(mean, DType::I32, x.key.clone(), g.c, "pool");
-                    let v = super::bidir::norm_rows_kind(&mut b, cx, &mut lb, &mean, NormKind::Layer, *eps, "pnorm", true, &Want { dt: DType::I32, key: ok.clone() })?;
+                    let v = super::bidir::norm_rows_kind(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &mean,
+                        NormKind::Layer,
+                        *eps,
+                        "pnorm",
+                        true,
+                        &Want { dt: DType::I32, key: ok.clone() },
+                    )?;
                     Val { site: "out".into(), ..v }
                 }
                 CnnOut::GlobalAvg => {
@@ -1306,21 +1522,38 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
             let mut x = match role {
                 BlockRole::Pre => {
                     let (h, w) = (spec.h as usize, spec.w as usize);
-                    let img = decl(&mut b, cx, &lb, IMAGE_PARAM, DType::I16, &[h, w, 3], false, input_fill(DType::I16, vec![h, w, 3]))?;
+                    let img =
+                        decl(&mut b, cx, &lb, IMAGE_PARAM, DType::I16, &[h, w, 3], false, input_fill(DType::I16, vec![h, w, 3]))?;
                     let rows = b.reshape_fixed(img, &[(h * w) as u32, 3]);
                     // (px/255 − mean)/std per channel, to codes at the input's calibrated scale.
                     let (mean, std) = (spec.mean, spec.std);
                     let key = site_key("in");
                     let k1 = key.clone();
-                    let (m, s) = decl_ms(&mut b, cx, &lb, "in", 3, Arc::new(move |fc| {
-                        let sy = fc.scale(&k1)?;
-                        Ok((0..3).map(|c| 1.0 / (255.0 * std[c]) / sy).collect())
-                    }))?;
+                    let (m, s) = decl_ms(
+                        &mut b,
+                        cx,
+                        &lb,
+                        "in",
+                        3,
+                        Arc::new(move |fc| {
+                            let sy = fc.scale(&k1)?;
+                            Ok((0..3).map(|c| 1.0 / (255.0 * std[c]) / sy).collect())
+                        }),
+                    )?;
                     let k2 = key.clone();
-                    let z = decl(&mut b, cx, &lb, "in.z", DType::I64, &[3], false, Arc::new(move |fc| {
-                        let sy = fc.scale(&k2)?;
-                        Ok(IntTensor::i64(vec![3], (0..3).map(|c| (-mean[c] / std[c] / sy).round() as i64).collect()))
-                    }))?;
+                    let z = decl(
+                        &mut b,
+                        cx,
+                        &lb,
+                        "in.z",
+                        DType::I64,
+                        &[3],
+                        false,
+                        Arc::new(move |fc| {
+                            let sy = fc.scale(&k2)?;
+                            Ok(IntTensor::i64(vec![3], (0..3).map(|c| (-mean[c] / std[c] / sy).round() as i64).collect()))
+                        }),
+                    )?;
                     let (lo, hi) = super::code_bounds(DType::I16);
                     let q = narrow_into(&mut b, rows, m, s, Some(z), lo, hi, DType::I16);
                     b.commit(q);
@@ -1334,7 +1567,14 @@ fn cnn_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, spec: &CnnSpe
             let out = ensure_node(&mut b, &out);
             note_resid(cx, &lb, &out);
             note_site(cx, tb, &out);
-            let n = b.shape(out.r).iter().map(|d| match d { Dim::Fixed(n) => *n as usize, Dim::H => 0 }).product::<usize>();
+            let n = b
+                .shape(out.r)
+                .iter()
+                .map(|d| match d {
+                    Dim::Fixed(n) => *n as usize,
+                    Dim::H => 0,
+                })
+                .product::<usize>();
             let carried = pack(&mut b, out.r, n, e);
             Ok((b.finish(&[carried]), None))
         }
@@ -1398,10 +1638,20 @@ pub fn lower_cnn_opts(hl: &HlProgram, spec: &CnnSpec, opts: &LowerOpts) -> Resul
     let out_node = out_node.ok_or_else(|| LowerError::eval("internal: no output node"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], out_node);
-    tir::validate::validate(&program).map_err(|e| LowerError::not_lowerable(format!("{}: the network's program is not in normal form: {e}", spec.architecture)))?;
+    tir::validate::validate(&program)
+        .map_err(|e| LowerError::not_lowerable(format!("{}: the network's program is not in normal form: {e}", spec.architecture)))?;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
+    Ok(Lowered {
+        program,
+        fills: cx.fills,
+        row_params: cx.row_params,
+        resid_sites,
+        logits_key,
+        block_map,
+        site_nodes: cx.site_nodes,
+        budget_fallbacks: vec![],
+    })
 }
 
 // ───────────────────────────── from a spec value ─────────────────────────────
@@ -1412,7 +1662,9 @@ impl CnnSpec {
     pub fn validate(&self) -> Result<()> {
         let p = plan(self)?;
         let mut total_w = 0usize;
-        convs(&p.nodes, &mut |_, c| total_w = total_w.saturating_add(c.cout.saturating_mul(c.cin / c.groups).saturating_mul(c.taps())));
+        convs(&p.nodes, &mut |_, c| {
+            total_w = total_w.saturating_add(c.cout.saturating_mul(c.cin / c.groups).saturating_mul(c.taps()))
+        });
         if total_w > 1 << 36 {
             return Err(LowerError::bad(format!("{}: {total_w} convolution weights", self.architecture)));
         }

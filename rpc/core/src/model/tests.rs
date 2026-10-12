@@ -1710,7 +1710,9 @@ mod mockery {
     impl Mock for GetPalwSettlementResponse {
         fn mock() -> Self {
             GetPalwSettlementResponse {
-                dns_retired_at: None, native_settlement: None, native_readiness: None,
+                dns_retired_at: None,
+                native_settlement: None,
+                native_readiness: None,
                 available: mock(),
                 sink_daa: mock(),
                 daa_score: mock(),
@@ -1997,14 +1999,21 @@ mod mockery {
 
     impl Mock for RpcPalwPanelHoldReason {
         fn mock() -> Self {
-            RpcPalwPanelHoldReason { code: "NO_ARTIFACT".to_string(), message: "this node does not hold a converted artifact".to_string() }
+            RpcPalwPanelHoldReason {
+                code: "NO_ARTIFACT".to_string(),
+                message: "this node does not hold a converted artifact".to_string(),
+            }
         }
     }
     test!(RpcPalwPanelHoldReason);
 
     impl Mock for RpcPalwPanelHoldReasonCount {
         fn mock() -> Self {
-            RpcPalwPanelHoldReasonCount { code: "NO_ARTIFACT".to_string(), message: "this node does not hold a converted artifact".to_string(), seats: mock() }
+            RpcPalwPanelHoldReasonCount {
+                code: "NO_ARTIFACT".to_string(),
+                message: "this node does not hold a converted artifact".to_string(),
+                seats: mock(),
+            }
         }
     }
     test!(RpcPalwPanelHoldReasonCount);
@@ -2717,7 +2726,11 @@ mod mockery {
 
     impl Mock for GetPalwExecV2StatusResponse {
         fn mock() -> Self {
-            GetPalwExecV2StatusResponse { available: mock(), observation_version: mock(), json: format!("{{\"version\":{}}}", mock::<u32>()) }
+            GetPalwExecV2StatusResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
         }
     }
     test!(GetPalwExecV2StatusResponse);
@@ -2731,7 +2744,11 @@ mod mockery {
 
     impl Mock for GetPalwPanelV3StatusResponse {
         fn mock() -> Self {
-            GetPalwPanelV3StatusResponse { available: mock(), observation_version: mock(), json: format!("{{\"version\":{}}}", mock::<u32>()) }
+            GetPalwPanelV3StatusResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
         }
     }
     test!(GetPalwPanelV3StatusResponse);
@@ -2926,13 +2943,7 @@ mod mockery {
 
     impl Mock for GetPalwKernelFinalsResponse {
         fn mock() -> Self {
-            GetPalwKernelFinalsResponse {
-                available: mock(),
-                tip_daa: mock(),
-                finals: mock(),
-                total: mock(),
-                ledger_root: mock_hex(),
-            }
+            GetPalwKernelFinalsResponse { available: mock(), tip_daa: mock(), finals: mock(), total: mock(), ledger_root: mock_hex() }
         }
     }
     test!(GetPalwKernelFinalsResponse);
@@ -3540,7 +3551,10 @@ mod native_settlement_wire_tests {
         assert_eq!(decoded.dns_retired_at, Some(5));
         assert!(!decoded.settled);
         bytes[0] = 4;
-        assert!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(), "a version this build does not know");
+        assert!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(),
+            "a version this build does not know"
+        );
         bytes[0] = 3;
         assert!(
             <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(),
@@ -3558,7 +3572,12 @@ mod native_settlement_wire_tests {
         native_stopped_readiness_v1(
             h(9),
             (100, 90),
-            PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
+            PalwSettlementPolicyV1 {
+                settled_anchor_depth: 2,
+                unique_mature_work: 20,
+                max_operator_permille: 600,
+                max_class_permille: 600,
+            },
             native_maturity_report_v1(3_000, 120),
             SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(h(4)) },
             FinalizedReadinessV1 {
@@ -3609,7 +3628,10 @@ mod native_settlement_wire_tests {
         let mut bytes = Vec::new();
         Serializer::serialize(&only, &mut bytes).unwrap();
         assert_eq!(bytes[0], 3);
-        assert_eq!(<GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap().native_readiness, Some(readiness.clone()));
+        assert_eq!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap().native_readiness,
+            Some(readiness.clone())
+        );
         // JSON: the key is absent when there is no readiness and camelCase when there is.
         let json = serde_json::to_value(&v2).unwrap();
         assert!(json.get("nativeReadiness").is_none());

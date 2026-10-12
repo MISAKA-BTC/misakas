@@ -161,9 +161,7 @@ impl ParamStore {
         if let Some(t) = self.lazy_cache.lock().unwrap_or_else(|e| e.into_inner()).held.get(&key) {
             return crate::weights::slice_rows(t, rows);
         }
-        self.lazy_entry(p, layer)
-            .ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))?
-            .rows(rows)
+        self.lazy_entry(p, layer).ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))?.rows(rows)
     }
 
     pub fn get(&self, p: u32, layer: Option<usize>) -> Result<&Tensor> {
@@ -570,7 +568,10 @@ impl<'a> Session<'a> {
                 let xv = x(0)?;
                 let (n, bsz) = (xv.len(), *block);
                 if bsz == 0 || n % bsz != 0 || p.data.len() != n * bsz {
-                    return Err(LowerError::eval(format!("a block linear of block {bsz} over {n} values with a param of {}", p.data.len())));
+                    return Err(LowerError::eval(format!(
+                        "a block linear of block {bsz} over {n} values with a param of {}",
+                        p.data.len()
+                    )));
                 }
                 let y: Vec<f32> = (0..n)
                     .map(|r| {
@@ -670,7 +671,11 @@ impl<'a> Session<'a> {
             Op::StreamMix { n_in, n_out, transpose } => {
                 let (v, c) = (x(0)?, x(1)?);
                 if v.len() % n_in != 0 || c.len() != n_in * n_out {
-                    return Err(LowerError::eval(format!("StreamMix: {} values over {n_in} streams, {} coefficients for {n_out}×{n_in}", v.len(), c.len())));
+                    return Err(LowerError::eval(format!(
+                        "StreamMix: {} values over {n_in} streams, {} coefficients for {n_out}×{n_in}",
+                        v.len(),
+                        c.len()
+                    )));
                 }
                 let d = v.len() / n_in;
                 let coef = |i: usize, j: usize| if *transpose { c[j * n_out + i] } else { c[i * n_in + j] } as f64;
@@ -712,7 +717,12 @@ impl<'a> Session<'a> {
                 let (s0, s1, s2) = (scale.data[0] as f64, scale.data[1] as f64, scale.data[2] as f64);
                 let pre: Vec<f32> = (0..hc).map(|i| (sg(m[i] as f64 * s0 + base.data[i] as f64) + eps) as f32).collect();
                 let post: Vec<f32> = (0..hc).map(|i| (2.0 * sg(m[hc + i] as f64 * s1 + base.data[hc + i] as f64)) as f32).collect();
-                let comb = sinkhorn(&(0..hc * hc).map(|i| m[2 * hc + i] as f64 * s2 + base.data[2 * hc + i] as f64).collect::<Vec<_>>(), hc, *iters, *eps);
+                let comb = sinkhorn(
+                    &(0..hc * hc).map(|i| m[2 * hc + i] as f64 * s2 + base.data[2 * hc + i] as f64).collect::<Vec<_>>(),
+                    hc,
+                    *iters,
+                    *eps,
+                );
                 let comb: Vec<f32> = comb.into_iter().map(|v| v as f32).collect();
                 for (sub, v) in [("pre", &pre), ("post", &post), ("comb", &comb)] {
                     self.sub_site(prefix, &node.site, sub, v);
@@ -736,7 +746,9 @@ impl<'a> Session<'a> {
                 Ok(vec![vec![]])
             }
             Op::WindowPool { ratio, dim, overlap } => {
-                let (Ref::State(sk), Ref::State(sg)) = (ins[0], ins[1]) else { return Err(LowerError::eval("WindowPool without its buffers")) };
+                let (Ref::State(sk), Ref::State(sg)) = (ins[0], ins[1]) else {
+                    return Err(LowerError::eval("WindowPool without its buffers"));
+                };
                 let ape = self.param(ins[2], layer)?;
                 let m = *ratio;
                 let cin = dim * if *overlap { 2 } else { 1 };
@@ -745,7 +757,9 @@ impl<'a> Session<'a> {
                 }
                 let (kvb, gb) = (self.fixed_mut(sk, lyr).clone(), self.fixed_mut(sg, lyr).clone());
                 let prev = if *overlap {
-                    let (Ref::State(pk), Ref::State(pg)) = (ins[4], ins[5]) else { return Err(LowerError::eval("WindowPool without its overlap states")) };
+                    let (Ref::State(pk), Ref::State(pg)) = (ins[4], ins[5]) else {
+                        return Err(LowerError::eval("WindowPool without its overlap states"));
+                    };
                     Some((pk, pg, self.fixed_mut(pk, lyr).clone(), self.fixed_mut(pg, lyr).clone()))
                 } else {
                     None
@@ -762,7 +776,10 @@ impl<'a> Session<'a> {
                         }
                     }
                     for j in 0..m {
-                        rows.push((gb[j * cin + off + ch] as f64 + ape.data[j * cin + off + ch] as f64, kvb[j * cin + off + ch] as f64));
+                        rows.push((
+                            gb[j * cin + off + ch] as f64 + ape.data[j * cin + off + ch] as f64,
+                            kvb[j * cin + off + ch] as f64,
+                        ));
                     }
                     let mx = rows.iter().fold(f64::NEG_INFINITY, |a, (g, _)| a.max(*g));
                     let den: f64 = rows.iter().map(|(g, _)| (g - mx).exp()).sum();
@@ -773,7 +790,8 @@ impl<'a> Session<'a> {
                     && (pos + 1) % m == 0
                 {
                     let dimu = *dim;
-                    let (nk, ng): (Vec<f32>, Vec<f32>) = (0..m * dimu).map(|i| (kvb[(i / dimu) * cin + i % dimu], gb[(i / dimu) * cin + i % dimu])).unzip();
+                    let (nk, ng): (Vec<f32>, Vec<f32>) =
+                        (0..m * dimu).map(|i| (kvb[(i / dimu) * cin + i % dimu], gb[(i / dimu) * cin + i % dimu])).unzip();
                     *self.fixed_mut(pk, lyr) = nk;
                     *self.fixed_mut(pg, lyr) = ng;
                 }
@@ -805,7 +823,9 @@ impl<'a> Session<'a> {
                 one(top_k_indices(&scores, *top).into_iter().map(|i| i as f32).collect())
             }
             Op::EntryAttention { heads, head_dim, ratio, blocks, scale, select } => {
-                let (Ref::State(hs), Ref::State(es)) = (ins[1], ins[2]) else { return Err(LowerError::eval("EntryAttention without its states")) };
+                let (Ref::State(hs), Ref::State(es)) = (ins[1], ins[2]) else {
+                    return Err(LowerError::eval("EntryAttention without its states"));
+                };
                 let q = x(0)?.to_vec();
                 let sinks = self.param(ins[3], layer)?.data.clone();
                 let window = match self.prog.states[hs as usize].kind {
@@ -820,8 +840,10 @@ impl<'a> Session<'a> {
                 let chosen: Option<std::collections::BTreeSet<usize>> =
                     if *select { Some(x(5)?.iter().map(|v| *v as usize).collect()) } else { None };
                 let hd = *head_dim;
-                let entry_rows: Vec<&[f32]> =
-                    (0..count).filter(|t| chosen.as_ref().is_none_or(|c| c.contains(t))).map(|t| &store[t * hd..(t + 1) * hd]).collect();
+                let entry_rows: Vec<&[f32]> = (0..count)
+                    .filter(|t| chosen.as_ref().is_none_or(|c| c.contains(t)))
+                    .map(|t| &store[t * hd..(t + 1) * hd])
+                    .collect();
                 let mut out = vec![0f32; heads * hd];
                 for h in 0..*heads {
                     let qh = &q[h * hd..(h + 1) * hd];
@@ -924,7 +946,8 @@ impl<'a> Session<'a> {
                 let complete_old = pos / ratio;
                 let completing = (pos + 1) % ratio == 0;
                 let score = |key: &[f32]| -> f64 {
-                    (0..*heads).map(|h| (0..*dim).map(|j| q[h * dim + j] as f64 * key[j] as f64).sum::<f64>().max(0.0)).sum::<f64>() / (*dim as f64).sqrt()
+                    (0..*heads).map(|h| (0..*dim).map(|j| q[h * dim + j] as f64 * key[j] as f64).sum::<f64>().max(0.0)).sum::<f64>()
+                        / (*dim as f64).sqrt()
                 };
                 let scores: Vec<f64> = (0..*blocks)
                     .map(|b| {
@@ -1020,7 +1043,21 @@ impl<'a> Session<'a> {
                 let lat: &[Vec<f32>] = self.hist.get(&(ls, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let kr: &[Vec<f32>] = self.hist.get(&(rs, lyr)).map(Vec::as_slice).unwrap_or(&[]);
                 let (mut qt, mut ctx) = (Vec::new(), Vec::new());
-                let out = mla_traced_keep(&q, &kvb.data, lat, kr, *heads, *nope, *rope, *v_dim, *kv_lora, *scale, keep.as_deref(), &mut qt, &mut ctx);
+                let out = mla_traced_keep(
+                    &q,
+                    &kvb.data,
+                    lat,
+                    kr,
+                    *heads,
+                    *nope,
+                    *rope,
+                    *v_dim,
+                    *kv_lora,
+                    *scale,
+                    keep.as_deref(),
+                    &mut qt,
+                    &mut ctx,
+                );
                 // The absorbed query and the latent context: where an integer MLA narrows.
                 self.sub_site(prefix, &node.site, "qt", &qt);
                 self.sub_site(prefix, &node.site, "latent_ctx", &ctx);
@@ -1044,7 +1081,11 @@ impl<'a> Session<'a> {
                 let Ref::State(s) = ins[5] else { return Err(LowerError::eval("GDN without state")) };
                 let (q, k, v, g, beta) = (x(0)?.to_vec(), x(1)?.to_vec(), x(2)?.to_vec(), x(3)?.to_vec(), x(4)?.to_vec());
                 if g.len() != if *channel_decay { v_heads * dk } else { *v_heads } {
-                    return Err(LowerError::eval(format!("internal: a gated delta's decay has {} values, not {}", g.len(), if *channel_decay { v_heads * dk } else { *v_heads })));
+                    return Err(LowerError::eval(format!(
+                        "internal: a gated delta's decay has {} values, not {}",
+                        g.len(),
+                        if *channel_decay { v_heads * dk } else { *v_heads }
+                    )));
                 }
                 let st = self.fixed_mut(s, lyr);
                 let mut deltas = Vec::new();
@@ -1113,7 +1154,10 @@ impl<'a> Session<'a> {
                 one(wkv7(&vs[0], &vs[1], &vs[2], &vs[3], &vs[4], &vs[5], st, *heads, *head_size))
             }
             Op::CrossAttention { heads, kv_heads, head_dim, scale, rows, k_norm, .. } => {
-                let cs = self.cross_states.clone().ok_or_else(|| LowerError::eval("a cross-attention layer needs `Session::cross_states`"))?;
+                let cs = self
+                    .cross_states
+                    .clone()
+                    .ok_or_else(|| LowerError::eval("a cross-attention layer needs `Session::cross_states`"))?;
                 if cs.len() != *rows {
                     return Err(LowerError::eval(format!("{} rows of cross states for a program of {rows}", cs.len())));
                 }
@@ -1143,7 +1187,10 @@ impl<'a> Session<'a> {
                 for h in 0..*heads {
                     let g = h / group;
                     let qh = &q[h * hd..(h + 1) * hd];
-                    let logits: Vec<f64> = ks.iter().map(|k| qh.iter().zip(&k[g * hd..(g + 1) * hd]).map(|(a, b)| *a as f64 * *b as f64).sum::<f64>() * scale).collect();
+                    let logits: Vec<f64> = ks
+                        .iter()
+                        .map(|k| qh.iter().zip(&k[g * hd..(g + 1) * hd]).map(|(a, b)| *a as f64 * *b as f64).sum::<f64>() * scale)
+                        .collect();
                     let m = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                     let e: Vec<f64> = logits.iter().map(|l| (l - m).exp()).collect();
                     let z: f64 = e.iter().sum();
@@ -1211,7 +1258,10 @@ impl<'a> Session<'a> {
                 let (idx, mut w) = route_hashed(&logits, sel_bias.as_deref(), hash_row.as_deref(), router, *experts, *top_k);
                 // Gemma-4: a learned per-expert scale on each selected weight.
                 if router.per_expert_scale {
-                    let pes = self.param(ins[1 + usize::from(router.selection_bias) + usize::from(router.scoring == Scoring::SqrtSoftplusHash)], layer)?;
+                    let pes = self.param(
+                        ins[1 + usize::from(router.selection_bias) + usize::from(router.scoring == Scoring::SqrtSoftplusHash)],
+                        layer,
+                    )?;
                     for (wj, e) in w.iter_mut().zip(&idx) {
                         *wj *= pes.data[*e];
                     }
@@ -1295,7 +1345,13 @@ impl<'a> Session<'a> {
                 }
                 // `MLP_MOE_ZERO_EXPERT_V1`: the identity experts' share, `z · x` (the input after the expert params).
                 if *identity {
-                    let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+                    let n_params = if !*gated {
+                        2
+                    } else if *bias {
+                        6
+                    } else {
+                        3
+                    };
                     let z = x(3 + n_params)?[0] as f64;
                     for (yy, v) in y.iter_mut().zip(&xv) {
                         *yy += z * *v as f64;
@@ -1304,7 +1360,13 @@ impl<'a> Session<'a> {
                     out_all.extend_from_slice(&xv);
                 }
                 if *out_bias {
-                    let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+                    let n_params = if !*gated {
+                        2
+                    } else if *bias {
+                        6
+                    } else {
+                        3
+                    };
                     let at = 3 + n_params + usize::from(*identity);
                     let bv = self.param(ins[at], layer)?;
                     for (yy, b) in y.iter_mut().zip(&bv.data) {
@@ -1382,14 +1444,15 @@ pub fn erf(x: f64) -> f64 {
         sum * 2.0 / std::f64::consts::PI.sqrt()
     } else {
         let t = 1.0 / (1.0 + 0.5 * a);
-        let e = t
-            * crate::detmath::exp(-a * a - 1.265_512_23
+        let e = t * crate::detmath::exp(
+            -a * a - 1.265_512_23
                 + t * (1.000_023_68
                     + t * (0.374_091_96
                         + t * (0.096_784_18
                             + t * (-0.186_288_06
                                 + t * (0.278_868_07
-                                    + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77)))))))));
+                                    + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77)))))))),
+        );
         1.0 - e
     };
     if x < 0.0 { -r } else { r }
@@ -1746,7 +1809,16 @@ pub fn causal_conv(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, c
 /// `(k − 1)·dilation` rows of `ch` (oldest first), tap `t < k − 1` reads its row `t·dilation`, the
 /// last tap the input. Zeros before the sequence start.
 #[allow(clippy::too_many_arguments)]
-pub fn causal_conv_dilated(x: &[f32], st: &mut Vec<f32>, w: &[f32], b: Option<&[f32]>, ch: usize, k: usize, dil: usize, a: Option<Act>) -> Vec<f32> {
+pub fn causal_conv_dilated(
+    x: &[f32],
+    st: &mut Vec<f32>,
+    w: &[f32],
+    b: Option<&[f32]>,
+    ch: usize,
+    k: usize,
+    dil: usize,
+    a: Option<Act>,
+) -> Vec<f32> {
     let mut out = vec![0f32; ch];
     for c in 0..ch {
         let mut s = 0f64;
@@ -2024,7 +2096,14 @@ pub fn sqrt_softplus(x: f64) -> f64 {
 }
 
 /// [`route`] with the row of the frozen token table a hash router reads (`tid2eid[token]`).
-pub fn route_hashed(logits: &[f32], sel_bias: Option<&[f32]>, hash_row: Option<&[usize]>, r: &RouterSpec, e: usize, k: usize) -> (Vec<usize>, Vec<f32>) {
+pub fn route_hashed(
+    logits: &[f32],
+    sel_bias: Option<&[f32]>,
+    hash_row: Option<&[usize]>,
+    r: &RouterSpec,
+    e: usize,
+    k: usize,
+) -> (Vec<usize>, Vec<f32>) {
     let l: Vec<f64> = logits.iter().map(|x| *x as f64).collect();
     if r.scoring == Scoring::SparseMixer {
         return sparsemixer(&l, r.jitter_eps, r.scale);
@@ -2084,7 +2163,9 @@ pub fn route_hashed(logits: &[f32], sel_bias: Option<&[f32]>, hash_row: Option<&
         // Softmax weights are the choice scores — masked experts (DeepSeek-V2's group-limited greedy) weigh 0 — unless a
         // selection bias made the choice scores something else: then the weights stay the unbiased probabilities.
         Scoring::Softmax if sel_bias.is_none() => idx.iter().map(|i| choice[*i]).collect(),
-        Scoring::Softmax | Scoring::Sigmoid | Scoring::SqrtSoftplus | Scoring::SqrtSoftplusHash => idx.iter().map(|i| scores[*i]).collect(),
+        Scoring::Softmax | Scoring::Sigmoid | Scoring::SqrtSoftplus | Scoring::SqrtSoftplusHash => {
+            idx.iter().map(|i| scores[*i]).collect()
+        }
         Scoring::TopKThenSigmoid => idx.iter().map(|i| 1.0 / (1.0 + (-(l[*i] as f32)).exp()) as f64).collect(),
     };
     if r.normalize {

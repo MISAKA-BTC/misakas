@@ -122,7 +122,9 @@ fn check(name: &str) {
         Ok(s) => s,
         Err(_) => {
             let v: serde_json::Value = serde_json::from_str(&cfg).expect("config json");
-            misaka_palw_tir_lower::hf_schema::read_encdec(&v, &misaka_palw_tir_lower::hf_schema::ReadOptions::default()).unwrap_or_else(|e| panic!("{name}: {e}")).spec
+            misaka_palw_tir_lower::hf_schema::read_encdec(&v, &misaka_palw_tir_lower::hf_schema::ReadOptions::default())
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+                .spec
         }
     };
     let ck = Checkpoint::open(&dir).expect("checkpoint");
@@ -179,12 +181,34 @@ fn check(name: &str) {
     let d2 = encoder::encdec_decoder_v2(&dlw, LMAX).expect("decoder v2");
     let e_params = encoder::lifted_params(&elw.program, &[encdec::IDS_PARAM, encdec::COUNT_PARAM], &emat.params);
     let d_params = encoder::lifted_params(&dlw.program, &[encdec::XKV_PARAM, encdec::ENC_COUNT_PARAM], &dmat.params);
-    let rule = TokenRule { prefix: vec![], source: TokenSource::Negative, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: LMAX }) };
+    let rule =
+        TokenRule { prefix: vec![], source: TokenSource::Negative, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: LMAX }) };
     let pipe = encoder::encdec_pipeline(rule, MAX_TRIP);
     let programs = [e2.clone(), d2.clone()];
     let params = ByProgram(vec![&e_params, &d_params]);
     if std::env::var_os("ENCDEC_DIAG").is_some() {
-        diagnose(name, &s, &ck, &Stages { ehl: &ehl, ebind: &ebind, dhl: &dhl, dbind: &dbind, e2: &e2, d2: &d2, e_params: &e_params, d_params: &d_params, dlw: &dlw, elw: &elw, es: &es, emat: &emat, ds: &ds, dmat: &dmat }, &recs[0]);
+        diagnose(
+            name,
+            &s,
+            &ck,
+            &Stages {
+                ehl: &ehl,
+                ebind: &ebind,
+                dhl: &dhl,
+                dbind: &dbind,
+                e2: &e2,
+                d2: &d2,
+                e_params: &e_params,
+                d_params: &d_params,
+                dlw: &dlw,
+                elw: &elw,
+                es: &es,
+                emat: &emat,
+                ds: &ds,
+                dmat: &dmat,
+            },
+            &recs[0],
+        );
     }
     // 4. Generate, replay, and the teacher-forced logits.
     let (mut same, mut total, mut agree, mut t_all, mut kl_sum, mut ties) = (0, 0, 0, 0, 0f64, Vec::new());
@@ -199,15 +223,28 @@ fn check(name: &str) {
             let id = argmax(&logits.data) as u32;
             if k == budget { TextSelectV1::Last(id) } else { TextSelectV1::Next(id) }
         };
-        let (run, got) = tir::pipeline::run_text_pipeline(&pipe, &programs, &params, &NoDraws, &job, &mut select).expect("text pipeline");
+        let (run, got) =
+            tir::pipeline::run_text_pipeline(&pipe, &programs, &params, &NoDraws, &job, &mut select).expect("text pipeline");
         let got: Vec<usize> = got.iter().map(|t| *t as usize).collect();
         let prefix = got.iter().zip(&want).take_while(|(a, b)| a == b).count();
-        let replay = tir::pipeline::run_pipeline(&pipe, &programs, &params, &NoDraws, &PipelineJob { generated: got.iter().map(|t| *t as u32).collect(), ..job.clone() })
-            .expect("replay");
+        let replay = tir::pipeline::run_pipeline(
+            &pipe,
+            &programs,
+            &params,
+            &NoDraws,
+            &PipelineJob { generated: got.iter().map(|t| *t as u32).collect(), ..job.clone() },
+        )
+        .expect("replay");
         assert_eq!(replay.output, run.output, "{name}: the replay differs from the generating run");
         let hf = rows_of(&rec["logits"]);
-        let tf = tir::pipeline::run_pipeline(&pipe, &programs, &params, &NoDraws, &PipelineJob { generated: want.iter().map(|t| *t as u32).collect(), ..job.clone() })
-            .expect("teacher-forced run");
+        let tf = tir::pipeline::run_pipeline(
+            &pipe,
+            &programs,
+            &params,
+            &NoDraws,
+            &PipelineJob { generated: want.iter().map(|t| *t as u32).collect(), ..job.clone() },
+        )
+        .expect("teacher-forced run");
         let (a, kls, rows, t) = compare(name, "teacher-forced on HF's stream", &tf.output, dmat.logits_scale, &hf);
         // Where the generation departs, its stream is HF's up to there: the teacher-forced row.
         if prefix < want.len() {
@@ -217,7 +254,8 @@ fn check(name: &str) {
         let rnd = ids_of(&rec["random_decoder_ids"]);
         let mut fed: Vec<u32> = rnd[1..].iter().map(|t| *t as u32).collect();
         fed.push(0);
-        let rr = tir::pipeline::run_pipeline(&pipe, &programs, &params, &NoDraws, &PipelineJob { generated: fed, ..job.clone() }).expect("random stream");
+        let rr = tir::pipeline::run_pipeline(&pipe, &programs, &params, &NoDraws, &PipelineJob { generated: fed, ..job.clone() })
+            .expect("random stream");
         let (a2, kls2, _, t2) = compare(name, "on a random stream", &rr.output, dmat.logits_scale, &rows_of(&rec["random_logits"]));
         agree += a + a2;
         kl_sum += kls + kls2;
@@ -264,13 +302,16 @@ fn check(name: &str) {
         inputs.constant.insert(1, count_t.to_tir());
         let xkv = einterp.run_positions(&e_params, &inputs, 1).expect("the integer encoder").remove(0).output;
         let ep6 = with_inputs(&elw.program, &emat.params, &[(encdec::IDS_PARAM, ids_t), (encdec::COUNT_PARAM, count_t.clone())]);
-        let dp6 = with_inputs(&dlw.program, &dmat.params, &[(encdec::XKV_PARAM, int_tensor(&xkv)), (encdec::ENC_COUNT_PARAM, count_t)]);
+        let dp6 =
+            with_inputs(&dlw.program, &dmat.params, &[(encdec::XKV_PARAM, int_tensor(&xkv)), (encdec::ENC_COUNT_PARAM, count_t)]);
         let stream: Vec<u32> = ids_of(&rec["decoder_input_ids"]).iter().map(|t| *t as u32).collect();
         let last = stream.len() as u32 - 1;
         let n3 = three_ways(&elw.program, &ep6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: encoder, three implementations: {e}"));
-        let n3d = three_ways(&dlw.program, &dp6, &[stream.iter().map(|t| *t as usize).collect()]).unwrap_or_else(|e| panic!("{name}: decoder, three implementations: {e}"));
+        let n3d = three_ways(&dlw.program, &dp6, &[stream.iter().map(|t| *t as usize).collect()])
+            .unwrap_or_else(|e| panic!("{name}: decoder, three implementations: {e}"));
         let ce = court_coverage(&elw.program, &ep6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: encoder, court: {e}"));
-        let cd = court_coverage(&dlw.program, &dp6, &stream, &[0, 1, last], &[1, 3]).unwrap_or_else(|e| panic!("{name}: decoder, court: {e}"));
+        let cd = court_coverage(&dlw.program, &dp6, &stream, &[0, 1, last], &[1, 3])
+            .unwrap_or_else(|e| panic!("{name}: decoder, court: {e}"));
         let mut prims: std::collections::BTreeSet<&str> = ce.primitives.keys().copied().collect();
         prims.extend(cd.primitives.keys().copied());
         eprintln!(
@@ -285,7 +326,10 @@ fn check(name: &str) {
         );
         assert!(ce.commits > 0 && cd.commits > 0);
     }
-    assert!(worst < 2.0, "{name}: the integer stage differs from HF where HF's top-2 margin is {worst}× its logit error, not a tie within its noise");
+    assert!(
+        worst < 2.0,
+        "{name}: the integer stage differs from HF where HF's top-2 margin is {worst}× its logit error, not a tie within its noise"
+    );
 }
 
 #[test]
@@ -387,7 +431,8 @@ fn t5_encoder_rows_match_hf() {
         let got: Vec<f64> = out.data[..src.len() * d].iter().map(|c| *c as f64 * emat.logits_scale).collect();
         let want = rows_of(&rec["encoder_hidden"]).concat();
         let r = rel(&got, &want);
-        let cos = got.iter().zip(&want).map(|(a, b)| a * b).sum::<f64>() / (got.iter().map(|a| a * a).sum::<f64>().sqrt() * want.iter().map(|a| a * a).sum::<f64>().sqrt());
+        let cos = got.iter().zip(&want).map(|(a, b)| a * b).sum::<f64>()
+            / (got.iter().map(|a| a * a).sum::<f64>().sqrt() * want.iter().map(|a| a * a).sum::<f64>().sqrt());
         eprintln!("t5_encoder integer rows vs HF ({} real of {LMAX}): cosine {cos:.6}, rel {r:.2e}", src.len());
         assert!(cos > 0.999, "cosine {cos}, rel {r}");
     }
@@ -399,11 +444,17 @@ fn t5_encoder_rows_match_hf() {
         let p6 = with_inputs(
             &elw.program,
             &emat.params,
-            &[(encdec::IDS_PARAM, IntTensor::idx(vec![LMAX as usize], padded)), (encdec::COUNT_PARAM, IntTensor::idx(vec![], vec![src.len() as u32]))],
+            &[
+                (encdec::IDS_PARAM, IntTensor::idx(vec![LMAX as usize], padded)),
+                (encdec::COUNT_PARAM, IntTensor::idx(vec![], vec![src.len() as u32])),
+            ],
         );
         let n3 = three_ways(&elw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("three implementations: {e}"));
         let c = court_coverage(&elw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("court: {e}"));
-        eprintln!("t5_encoder COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes)", c.commits, c.nodes);
+        eprintln!(
+            "t5_encoder COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes)",
+            c.commits, c.nodes
+        );
         assert!(c.commits > 0);
     }
     // 5. Admission.
@@ -476,7 +527,17 @@ fn diagnose(name: &str, s: &encdec::EncDecSpec, ck: &Checkpoint, st: &Stages<'_>
             continue;
         }
         let empty = ParamStore::default();
-        let sc = FillCtx::for_scales(st.ehl, &empty, c.layer.map(|l| l as usize), &prefix, st.es, st.emat.resid_scale, &QuantPolicy::default()).scale(key).unwrap();
+        let sc = FillCtx::for_scales(
+            st.ehl,
+            &empty,
+            c.layer.map(|l| l as usize),
+            &prefix,
+            st.es,
+            st.emat.resid_scale,
+            &QuantPolicy::default(),
+        )
+        .scale(key)
+        .unwrap();
         let (mut dd, mut bb) = (0f64, 0f64);
         for (r, row) in rows.iter().enumerate() {
             for (j, fv) in row.iter().enumerate() {
@@ -510,7 +571,9 @@ fn diagnose(name: &str, s: &encdec::EncDecSpec, ck: &Checkpoint, st: &Stages<'_>
             if f.len() != c.value.data.len() {
                 continue;
             }
-            let sc = FillCtx::for_scales(st.dhl, &empty, c.layer.map(|l| l as usize), &prefix, st.ds, st.dmat.resid_scale, &policy).scale(key).unwrap();
+            let sc = FillCtx::for_scales(st.dhl, &empty, c.layer.map(|l| l as usize), &prefix, st.ds, st.dmat.resid_scale, &policy)
+                .scale(key)
+                .unwrap();
             let e = acc.entry(k).or_insert((0.0, 0.0));
             for (iv, fv) in c.value.data.iter().zip(f) {
                 e.0 += (*iv as f64 * sc - fv).powi(2);
@@ -531,7 +594,8 @@ fn a_real_long_t5_local_base_lowers_and_names_its_admission() {
     const L: u32 = 512;
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/encdec/long-t5-local-base.json");
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).expect("config")).expect("json");
-    let r = misaka_palw_tir_lower::hf_schema::read_encdec(&v, &misaka_palw_tir_lower::hf_schema::ReadOptions::default()).expect("the longt5 adapter reads it");
+    let r = misaka_palw_tir_lower::hf_schema::read_encdec(&v, &misaka_palw_tir_lower::hf_schema::ReadOptions::default())
+        .expect("the longt5 adapter reads it");
     let s = r.spec;
     assert_eq!(s.enc_local_radius, Some(127));
     let ((ehl, _), (dhl, _)) = encdec::hl_programs(&s, L as usize, &|_| false).expect("hl programs");
@@ -541,11 +605,20 @@ fn a_real_long_t5_local_base_lowers_and_names_its_admission() {
     let d2 = encoder::encdec_decoder_v2(&dlw, L).expect("decoder v2");
     let rule = TokenRule { prefix: vec![], source: TokenSource::Negative, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: L }) };
     let pipe = encoder::encdec_pipeline(rule, L);
-    let verdict = match tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[e2.encode(), d2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1()) {
+    let verdict = match tir::admit_v2::tir_admit_pipeline_v1(
+        &pipe.encode(),
+        &[e2.encode(), d2.encode()],
+        &misaka_palw_tir_lower::admission::default_inputs(),
+        &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+    ) {
         Ok(pa) => format!("ADMITTED: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves),
         Err(e) => format!("REFUSED by name: {e}"),
     };
-    eprintln!("long-t5-local-base at L = {L}: encoder {} nodes, decoder {} nodes; {verdict}", e2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), d2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>());
+    eprintln!(
+        "long-t5-local-base at L = {L}: encoder {} nodes, decoder {} nodes; {verdict}",
+        e2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(),
+        d2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>()
+    );
 }
 
 /// **Real configurations** (hand-written from the hub, `tests/configs/encdec/`), no weights: both
@@ -563,7 +636,8 @@ fn real_encoder_decoders_lower_and_are_admitted() {
         let dlw = encdec::lower_decoder(&dhl, &s, L, L).expect("lower decoder");
         let e2 = encoder::encdec_encoder_v2(&elw, s.vocab as u32, L).expect("encoder v2");
         let d2 = encoder::encdec_decoder_v2(&dlw, L).expect("decoder v2");
-        let rule = TokenRule { prefix: vec![], source: TokenSource::Negative, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: L }) };
+        let rule =
+            TokenRule { prefix: vec![], source: TokenSource::Negative, suffix: vec![], pad: Some(TokenPad { id: 0, to_len: L }) };
         let pipe = encoder::encdec_pipeline(rule, L);
         let pa = tir::admit_v2::tir_admit_pipeline_v1(
             &pipe.encode(),

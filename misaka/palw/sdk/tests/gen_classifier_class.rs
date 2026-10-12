@@ -25,11 +25,11 @@ use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::embedding::embedding_row_v2;
 use misaka_palw_tir_lower::encoder::{self, EncoderOutput};
 use misaka_palw_tir_lower::fidelity;
-use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::ParamStore;
-use misaka_palw_tir_lower::hf_schema::{read_model, ReadOptions};
+use misaka_palw_tir_lower::float_ref::stream::Resident;
+use misaka_palw_tir_lower::hf_schema::{ReadOptions, read_model};
 use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Padded, Pooling};
-use misaka_palw_tir_lower::lower::{materialise, IntParams, LowerOpts};
+use misaka_palw_tir_lower::lower::{IntParams, LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
 use std::path::{Path, PathBuf};
@@ -162,7 +162,13 @@ fn assert_gate_passes(name: &str, p: &Pieces) {
     assert_eq!((k.shipped.as_str(), k.hypothetical.as_str()), ("KERNEL_NOT_ACTIVE", "ELIGIBLE_AT"), "{name}: {k:?}");
     eprintln!(
         "{name}: classifier class {} ({} label(s), pooling tag {}): canonical job {} step leaves, widest {}; kernel {} {}",
-        d.class_id, p.labels, p.pooling, admitted.entry.canonical_step_leaf_count, admitted.entry.max_step_leaf_count, k.kernel, k.hypothetical
+        d.class_id,
+        p.labels,
+        p.pooling,
+        admitted.entry.canonical_step_leaf_count,
+        admitted.entry.max_step_leaf_count,
+        k.kernel,
+        k.hypothetical
     );
 }
 

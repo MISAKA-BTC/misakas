@@ -14,11 +14,11 @@ use misaka_palw_tir_artifact::chunks::ChunkStore;
 use misaka_palw_tir_lower::calib::stats_digest;
 use misaka_palw_tir_lower::convert::{ConvertOpts, convert_to_container};
 use misaka_palw_tir_lower::detmath::{MathMode, set_mode};
+use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::stream::Streamed;
 use misaka_palw_tir_lower::lower::{IntData, LowerOpts, StreamOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
-use misaka_palw_tir_lower::fidelity;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 

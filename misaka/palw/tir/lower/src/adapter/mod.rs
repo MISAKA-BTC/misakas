@@ -235,24 +235,40 @@ impl Adapter {
     }
 
     pub fn model_types(&self) -> Vec<&str> {
-        self.value.pointer("/match/model_types").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
+        self.value
+            .pointer("/match/model_types")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
     }
 
     /// The architectures of WRAPPER models whose component this adapter reads (`match.tower_of`: a VLM's vision tower). They are
     /// not `match.architectures`: a wrapper is still a text model for the reader, the component is reached by name.
     pub fn tower_of(&self) -> Vec<&str> {
-        self.value.pointer("/match/tower_of").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
+        self.value
+            .pointer("/match/tower_of")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
     }
 
     /// The architectures whose MASKED-LM reading this adapter is (`match.masked_lm_of`: `BertForMaskedLM` → `bert-mlm`). They are
     /// not `match.architectures`: a `…ForMaskedLM` checkpoint is also read as its encoder (a sentence embedder such as MPNet's
     /// `all-mpnet-base-v2`), so the head's reading is chosen by the TASK (`fill-mask`), never by the architecture alone.
     pub fn masked_lm_of(&self) -> Vec<&str> {
-        self.value.pointer("/match/masked_lm_of").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
+        self.value
+            .pointer("/match/masked_lm_of")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
     }
 
     /// Remote-code modules (`auto_map` targets) this adapter models.
     pub fn remote_code(&self) -> Vec<&str> {
-        self.value.get("remote_code").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
+        self.value
+            .get("remote_code")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
     }
 }

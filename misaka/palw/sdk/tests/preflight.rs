@@ -307,7 +307,10 @@ fn the_chain_conditions_are_shown_as_needed_against_limit_at_a_height() {
     }
     let w = r.chain.iter().find(|c| c.id == "court_window").expect("window");
     assert!(w.needed.expect("needed") < w.limit.expect("limit"), "{w:?}");
-    assert!(r.seat.as_ref().is_some_and(|s| s.tiers.iter().all(|t| t.fits)) && r.forecast.as_ref().is_some_and(|f| f.required_ready_seats == 7));
+    assert!(
+        r.seat.as_ref().is_some_and(|s| s.tiers.iter().all(|t| t.fits))
+            && r.forecast.as_ref().is_some_and(|f| f.required_ready_seats == 7)
+    );
     // The JSON carries no path and no clock.
     let json = r.to_json();
     assert!(!json.contains(dir.to_string_lossy().as_ref()) && !json.contains("timestamp"));
@@ -455,7 +458,17 @@ fn a_sentencepiece_wordpiece_or_tiktoken_file_is_a_tokenizer_and_nothing_else_is
     std::fs::write(dir.join("merges.txt"), "a b\n").expect("merges");
     std::fs::write(dir.join("special_tokens_map.json"), "{}").expect("map");
     assert!(missing(&dir), "merges and a special-token map are not a tokenizer");
-    for name in ["spiece.model", "sentencepiece.bpe.model", "sentencepiece.model", "tokenizer.model", "vocab.txt", "tekken.json", "cl100k_base.tiktoken", "vocab.json", "tokenizer.json"] {
+    for name in [
+        "spiece.model",
+        "sentencepiece.bpe.model",
+        "sentencepiece.model",
+        "tokenizer.model",
+        "vocab.txt",
+        "tekken.json",
+        "cl100k_base.tiktoken",
+        "vocab.json",
+        "tokenizer.json",
+    ] {
         std::fs::write(dir.join(name), b"x").expect("tokenizer");
         assert!(!missing(&dir), "{name} is a tokenizer");
         std::fs::remove_file(dir.join(name)).expect("remove");
@@ -497,7 +510,11 @@ fn a_pytorch_model_bin_is_judged_like_the_safetensors_it_was_saved_from() {
         let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
         assert_eq!(r.verdict.convert.status, StageStatus::Ok, "{name}: {}", r.render());
         assert_eq!(r.tensors.checked, "shapes", "{name}");
-        assert_eq!((r.tensors.bound, r.tensors.missing_total, r.tensors.shape_mismatch_total), (reference.tensors.bound, 0, 0), "{name}");
+        assert_eq!(
+            (r.tensors.bound, r.tensors.missing_total, r.tensors.shape_mismatch_total),
+            (reference.tensors.bound, 0, 0),
+            "{name}"
+        );
         assert_eq!(r.model.as_ref().map(|m| m.spec_digest.clone()), reference.model.as_ref().map(|m| m.spec_digest.clone()), "{name}");
         assert_eq!(r.source.shards.len(), shards, "{name}");
         // The same weights, in bytes, and none of the tensor data read.
@@ -518,7 +535,13 @@ fn a_pytorch_file_the_reader_refuses_is_format_unsupported_with_its_reason() {
         std::fs::write(dir.join("tokenizer.json"), "{}").expect("tokenizer");
         std::fs::copy(fixture("torch").join(file), dir.join("pytorch_model.bin")).expect("bin");
         let r = run(&dir, &opts(Depth::Headers)).expect("preflight");
-        let b = r.verdict.convert.blockers.iter().find(|b| b.code == "FORMAT_UNSUPPORTED").unwrap_or_else(|| panic!("{file}: {}", r.render()));
+        let b = r
+            .verdict
+            .convert
+            .blockers
+            .iter()
+            .find(|b| b.code == "FORMAT_UNSUPPORTED")
+            .unwrap_or_else(|| panic!("{file}: {}", r.render()));
         assert!(b.evidence.iter().any(|e| e.contains(why)), "{file}: {:?}", b.evidence);
         assert!(b.safe_paths.iter().any(|p| p.contains("safetensors")), "{file}: {:?}", b.safe_paths);
         assert_eq!(r.verdict.convert.status, StageStatus::Blocked);
@@ -544,7 +567,10 @@ fn a_key_ignored_for_a_transformers_class_is_refused_again_when_the_checkpoint_c
     let _ = std::fs::remove_dir_all(dir);
     // The same keys and a q_norm tensor no Llama has: refused.
     let dir = edited_header_copy(&fixture("hf/llama"), "ignored-withdrawn", &|h| {
-        h.insert("model.layers.0.self_attn.q_norm.weight".into(), serde_json::json!({"dtype": "BF16", "shape": [8], "data_offsets": [0, 16]}));
+        h.insert(
+            "model.layers.0.self_attn.q_norm.weight".into(),
+            serde_json::json!({"dtype": "BF16", "shape": [8], "data_offsets": [0, 16]}),
+        );
     });
     let text = std::fs::read_to_string(dir.join("config.json")).expect("config");
     let mut c: serde_json::Value = serde_json::from_str(&text).expect("json");

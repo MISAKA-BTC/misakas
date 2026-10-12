@@ -87,7 +87,8 @@ fn claims_to_kill_the_lane(collaterals: &[u64], duty: u128, ratio: u32, seat_cou
     let room = |load: &[u128]| collaterals.iter().zip(load).filter(|(c, l)| palw_seat_has_headroom_v1(**c, **l, duty, ratio)).count();
     let mut trail = Vec::new();
     for k in 1..=64u64 {
-        let mut order: Vec<usize> = (0..collaterals.len()).filter(|i| palw_seat_has_headroom_v1(collaterals[*i], load[*i], duty, ratio)).collect();
+        let mut order: Vec<usize> =
+            (0..collaterals.len()).filter(|i| palw_seat_has_headroom_v1(collaterals[*i], load[*i], duty, ratio)).collect();
         order.sort_by_key(|i| load[*i]);
         assert!(order.len() >= seat_count, "claim {k} cannot be seated: the lane was already dead");
         for i in order.into_iter().take(seat_count) {
@@ -163,20 +164,44 @@ fn dos_repro_3a_2m_collateral_and_lane_kill() {
     println!("  admissible pwu (derived)       = {pwu}, claim attempts = {attempts}");
     println!("  claim.reserved                 = {reserved} sompi = {:.2} MSK", msk(reserved));
     println!("  + option A escrow on its bond  = {:.2} MSK -> reservation {:.2} MSK", msk(escrow as u128), msk(producer_reservation));
-    println!("  collateral #9 asks per claim   = {:.2} MSK (ceiling {ratio} permille; before: {:.2} MSK)", msk(attacker_posted_per_claim), msk(reserved * 1000 / ratio as u128));
+    println!(
+        "  collateral #9 asks per claim   = {:.2} MSK (ceiling {ratio} permille; before: {:.2} MSK)",
+        msk(attacker_posted_per_claim),
+        msk(reserved * 1000 / ratio as u128)
+    );
     println!("  forfeited at the 2nd timeout   = {:.2} MSK (#10; before: 0)", msk(producer_reservation));
     println!("  claim life <= 2 x (bind+recv)  = {claim_life_daa} DAA");
     println!("DEFENDER cost");
     println!("  seat duty per seat (runtime)   = {seat_duty} sompi = {:.2} MSK", msk(seat_duty));
-    println!("  genesis bond collateral        = {:.2} MSK, ceiling {:.2} MSK -> 2M duties one bond holds = {duties_per_bond} (before: 1)", msk(genesis_collateral as u128), msk(ceiling));
+    println!(
+        "  genesis bond collateral        = {:.2} MSK, ceiling {:.2} MSK -> 2M duties one bond holds = {duties_per_bond} (before: 1)",
+        msk(genesis_collateral as u128),
+        msk(ceiling)
+    );
     println!("  a bond fits ONE duty? {fits_first}  a SECOND? {fits_second}  a THIRD? {fits_third}");
-    println!("  after ONE bound 2M claim: bonds with 2M headroom = {after_one} of {} (before: 2 of 7 -> lane dead)", collaterals.len());
-    println!("  concurrent junk 2M claims that close the lane BY SEAT HEADROOM (spread panels) = {kill}; headroom after each = {trail:?}");
-    println!("  the 2M row's max_inflight_claims = {max_inflight}: ONE junk claim in flight refuses every honest 2M claim BY ADMISSION (3d)");
-    println!("  honest collateral pinned       = {seat_count} x {:.2} = {:.2} MSK per junk claim", msk(seat_duty), msk(defender_pinned));
-    println!("  FullSeat replay each seat sets up = {:.2} GiB (node policy; consensus admission reads no memory term)", seat_working_set as f64 / GIB);
+    println!(
+        "  after ONE bound 2M claim: bonds with 2M headroom = {after_one} of {} (before: 2 of 7 -> lane dead)",
+        collaterals.len()
+    );
+    println!(
+        "  concurrent junk 2M claims that close the lane BY SEAT HEADROOM (spread panels) = {kill}; headroom after each = {trail:?}"
+    );
+    println!(
+        "  the 2M row's max_inflight_claims = {max_inflight}: ONE junk claim in flight refuses every honest 2M claim BY ADMISSION (3d)"
+    );
+    println!(
+        "  honest collateral pinned       = {seat_count} x {:.2} = {:.2} MSK per junk claim",
+        msk(seat_duty),
+        msk(defender_pinned)
+    );
+    println!(
+        "  FullSeat replay each seat sets up = {:.2} GiB (node policy; consensus admission reads no memory term)",
+        seat_working_set as f64 / GIB
+    );
     println!("AMPLIFICATION");
-    println!("  pinned / claim.reserved = {amp_on_reserved:.2}x (before: 15x);  pinned / producer reservation = {amp_on_reservation:.2}x");
+    println!(
+        "  pinned / claim.reserved = {amp_on_reserved:.2}x (before: 15x);  pinned / producer reservation = {amp_on_reservation:.2}x"
+    );
     println!(
         "  to close the lane by headroom alone: {kill} claims, {:.2} MSK posted, {:.2} MSK forfeited if withheld, {:.2} MSK honest pinned",
         msk(attacker_posted_per_claim * kill as u128),
@@ -214,14 +239,24 @@ fn full_seat_working_set_2m(p: &kaspa_consensus_core::config::params::Params) ->
         },
     )
     .unwrap();
-    let (pf, dc) = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX);
+    let (pf, dc) = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1(
+        kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX,
+    );
     let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(&prof, pf, dc);
     let ladder = kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(court_ladder, &prof);
     let leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&prof, &job, ladder).unwrap_or(0);
     let limits = PalwRuntimeLimitsV1 { threads: 8, prefill_run_positions: 16 };
-    palw_resource_profile_v1(&prof, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat, limits, PalwCaptureRetentionV1::Fold { retain_level: 12 })
-        .map(|profile| profile.working_set_bytes())
-        .unwrap_or(0)
+    palw_resource_profile_v1(
+        &prof,
+        &job,
+        leaves,
+        PalwRuntimeProfileV1::A16KvI16,
+        PalwResourceRoleV1::FullSeat,
+        limits,
+        PalwCaptureRetentionV1::Fold { retain_level: 12 },
+    )
+    .map(|profile| profile.working_set_bytes())
+    .unwrap_or(0)
 }
 
 #[test]
@@ -263,8 +298,13 @@ fn dos_repro_3b_the_2m_class_is_gated_until_active() {
         Err(e) => println!("junk 2M attempt REFUSED at admission: {e:?}"),
     }
 
-    assert!(matches!(g.model_lifecycle(&id2m).map(|r| r.state.clone()), Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Prefetching)),
-        "the shipped 2M row opens Prefetching");
+    assert!(
+        matches!(
+            g.model_lifecycle(&id2m).map(|r| r.state.clone()),
+            Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Prefetching)
+        ),
+        "the shipped 2M row opens Prefetching"
+    );
     assert!(
         matches!(folded, Err(PalwStateV2Error::ClassNotAdmitting { .. })),
         "a junk 2M attempt on genesis is refused ClassNotAdmitting; got {folded:?}"
@@ -288,14 +328,23 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     let attacker_collateral = at_least_the_floor(&p, per.collateral);
     let bonds = genesis_bonds(&p);
     let seats_a: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
-    let seats_b: Vec<(PalwBondKeyV2, Hash64)> = [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
+    let seats_b: Vec<(PalwBondKeyV2, Hash64)> =
+        [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
 
     let mut s: PalwChainStateV2 =
-        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default())
+            .unwrap()
+            .0;
     let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 1, 0x5EED);
     let mut daa = 1_001u64;
     let mut blue = 2u64;
-    let step = |s: &PalwChainStateV2, daa: u64, blue: u64, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, sub: u64| {
+    let step = |s: &PalwChainStateV2,
+                daa: u64,
+                blue: u64,
+                objs: &[PalwConsensusObjectV2],
+                work: PalwBlockWorkV3<'_>,
+                key: Hash64,
+                sub: u64| {
         fold(&p, &sp, s, &ctx(0x7000 + blue, daa, blue, sub), objs, work, key).unwrap_or_else(|e| panic!("DAA {daa}: {e:?}")).0
     };
     s = step(&s, daa, blue, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
@@ -304,7 +353,15 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     // Panel #1 binds; the producer serves nothing.
     daa += 1;
     blue += 1;
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats_of(&seats_a) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats_of(&seats_a) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
     let other_after_bind: u128 = bonds.iter().map(|(k, _, _)| s.reserved_exposure(k)).sum();
     let receipt_window = sp.receipt_window_for_claim_v1(
         &s,
@@ -322,7 +379,15 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     // Panel #2 binds on the redraw; producer withholds again.
     daa += 1;
     blue += 1;
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA2), seats: seats_of(&seats_b) }], PalwBlockWorkV3::None, Hash64::default(), 0);
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA2), seats: seats_of(&seats_b) }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    );
 
     // Second receipt window lapses -> void at ReceiptTimeout.
     daa += receipt_window + 1;
@@ -335,7 +400,12 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     let seats_posted: u64 = bonds.iter().map(|(_, _, c)| *c).sum();
 
     println!("=== repro 3c: a bound junk claim is charged at its second receipt timeout (FIXED: #10) ===");
-    println!("producer posts {:.2} MSK (#9: reserved {reserved} + escrow {} at {} permille)", msk(attacker_collateral as u128), per.escrow, per.ratio_permille);
+    println!(
+        "producer posts {:.2} MSK (#9: reserved {reserved} + escrow {} at {} permille)",
+        msk(attacker_collateral as u128),
+        per.escrow,
+        per.ratio_permille
+    );
     println!("reserved on OTHER bonds after bind #1 = {other_after_bind} ({:.2} MSK)", msk(other_after_bind));
     println!("phase after first receipt window (redraw) = {phase_after_first}");
     println!("final phase = {final_phase:?}");
@@ -343,8 +413,10 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     println!("seats' collateral {seats_posted} -> {seats_collateral} (charged {})", seats_posted - seats_collateral);
     println!("the next wave: {:.2} MSK left backs {} more attempt(s)", msk(attacker_after as u128), attacker_after / per.collateral);
 
-    assert!(matches!(final_phase, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })),
-        "the withheld claim voids at ReceiptTimeout, got {final_phase:?}");
+    assert!(
+        matches!(final_phase, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })),
+        "the withheld claim voids at ReceiptTimeout, got {final_phase:?}"
+    );
     assert_eq!(charge, per.reservation, "#10: the producer forfeits weight + escrow");
     assert!(charge >= other_after_bind, "and pays at least what it pinned on others");
     // The premise, restated in attempts re-funded: the producer can no longer post exactly one
@@ -389,7 +461,8 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
 
     // The 2M row made Active (the only non-folded step).
     let mut carriage = PalwStateCarriageV2::from_state(&g);
-    carriage.model_lifecycles.get_mut(&id2m).expect("the 2M row").state = kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Active;
+    carriage.model_lifecycles.get_mut(&id2m).expect("the 2M row").state =
+        kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Active;
     let g = carriage.into_state(&sp, None).expect("a consistent carriage");
     let max_inflight = g.model_lifecycle(&id2m).unwrap().profile.max_inflight_claims;
 
@@ -397,13 +470,18 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     let honest = genesis_bonds(&p);
     let seat_2m = palw_panel_seat_exposure_v1(per.reserved, per.escrow as u64, seat_count, economy.reward_multiple_permille);
     let attacker_collateral = at_least_the_floor(&p, per.collateral);
-    let mut s = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+    let mut s =
+        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default())
+            .unwrap()
+            .0;
     // An honest producer: the first genesis bond, with its own keys.
     let exec = b
         .genesis_objects
         .iter()
         .find_map(|o| match o {
-            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => Some((*bond, pubkey.clone(), operator_pubkey.clone())),
+            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => {
+                Some((*bond, pubkey.clone(), operator_pubkey.clone()))
+            }
             _ => None,
         })
         .unwrap();
@@ -412,7 +490,14 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     let bind = |s: &PalwChainStateV2, id: Hash64, anchor: u64| -> Option<PalwConsensusObjectV2> {
         let mut order: Vec<&(PalwBondKeyV2, Hash64, u64)> = honest
             .iter()
-            .filter(|(k, _, _)| palw_seat_has_headroom_v1(s.bond(k).unwrap().collateral, s.reserved_exposure(k) + s.registration_exposure(k), seat_2m, ratio))
+            .filter(|(k, _, _)| {
+                palw_seat_has_headroom_v1(
+                    s.bond(k).unwrap().collateral,
+                    s.reserved_exposure(k) + s.registration_exposure(k),
+                    seat_2m,
+                    ratio,
+                )
+            })
             .collect();
         order.sort_by_key(|(k, _, _)| s.reserved_exposure(k));
         (order.len() >= seat_count).then(|| {
@@ -425,7 +510,15 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     // refused, with the reason.
     let probe = |s: &PalwChainStateV2, daa: u64, blue: u64| -> Option<String> {
         let (henv, hkey, _) = junk_attempt(id2m, exec.0, exec.1.clone(), &exec.2, pwu2m, 0x4D00 + daa, 0x4D_0000 + daa);
-        match fold(&p, &sp, s, &ctx(0x3E_0000 + blue, daa + 1, blue + 1, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&henv), hkey) {
+        match fold(
+            &p,
+            &sp,
+            s,
+            &ctx(0x3E_0000 + blue, daa + 1, blue + 1, T12_BLOCK_SUBSIDY_SOMPI),
+            &[],
+            PalwBlockWorkV3::Attempt(&henv),
+            hkey,
+        ) {
             Err(e) => Some(format!("{e:?}")),
             Ok((_, _, skips)) if !skips.is_empty() => Some(skips[0].1.clone()),
             Ok(_) => None,
@@ -436,8 +529,11 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     let mut daa = 1_001u64;
     let mut blue = 2u64;
     probes.push((daa - 1, "before the junk claim", probe(&s, daa - 1, blue - 1)));
-    let (env, key, id) = junk_attempt(id2m, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu2m, 0x3D01, 0x3D01_0000);
-    let (next, _, skips) = fold(&p, &sp, &s, &ctx(0x3D_0000 + blue, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key).unwrap();
+    let (env, key, id) =
+        junk_attempt(id2m, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu2m, 0x3D01, 0x3D01_0000);
+    let (next, _, skips) =
+        fold(&p, &sp, &s, &ctx(0x3D_0000 + blue, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
+            .unwrap();
     assert!(skips.is_empty(), "an attacker sized by #9 is admitted: {skips:?}");
     s = next;
     let accepted = daa;
@@ -493,7 +589,9 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     let honest_after: u64 = honest.iter().map(|(k, _, _)| s.bond(k).unwrap().collateral).sum();
     let honest_posted: u64 = honest.iter().map(|(_, _, c)| *c).sum();
 
-    println!("=== repro 3d: ONE junk 2M claim on the fixed code (2M row set Active via the carriage; max_inflight_claims {max_inflight}) ===");
+    println!(
+        "=== repro 3d: ONE junk 2M claim on the fixed code (2M row set Active via the carriage; max_inflight_claims {max_inflight}) ==="
+    );
     println!(
         "per 2M junk claim: reserved {:.2} + escrow {:.2} = {:.2} MSK on the producer; #9 asks {:.2} MSK posted; seat duty {:.2} MSK",
         msk(per.reserved),
@@ -513,7 +611,10 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     );
     println!("2M receipt window = {receipt_window} DAA (the row's verification window)");
     for (d, what, r) in &probes {
-        println!("  honest 2M attempt at DAA {d:>6} ({what}): {}", r.as_deref().map(|r| r.split(" {").next().unwrap_or(r)).unwrap_or("admitted"));
+        println!(
+            "  honest 2M attempt at DAA {d:>6} ({what}): {}",
+            r.as_deref().map(|r| r.split(" {").next().unwrap_or(r)).unwrap_or("admitted")
+        );
     }
     println!("2M lane closed to an honest claim: {dead} DAA (accepted {accepted} -> voided {voided_at})");
     println!("honest collateral {honest_posted} -> {honest_after}");
@@ -526,7 +627,10 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
         "while the junk claim is in flight every honest 2M attempt is refused ClassInflightCapped: {probes:?}"
     );
     assert!(probes.last().unwrap().2.is_none(), "the void reopens the lane: {:?}", probes.last());
-    assert!(matches!(phase, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })), "withheld to the second ReceiptTimeout: {phase:?}");
+    assert!(
+        matches!(phase, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })),
+        "withheld to the second ReceiptTimeout: {phase:?}"
+    );
     assert_eq!(binds, 2, "bound twice (the redraw)");
     assert!(dead >= 2 * receipt_window, "closed for two receipt windows");
     assert_eq!(honest_after, honest_posted, "no honest bond is charged");

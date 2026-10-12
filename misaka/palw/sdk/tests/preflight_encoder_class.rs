@@ -119,7 +119,9 @@ fn a_span_head_over_token_types_is_declared_with_pair_segments() {
 /// for a small encoder at its declared context. Reported, never merged into the generative verdict (`register`/`mine` do not read it).
 #[test]
 fn every_encoder_class_reports_its_k2_tir_v5_route_beside_the_generative_verdict() {
-    for rel in ["hf-enc/bert", "hf-cls/bert_cls", "hf-heads/bert_tokcls", "hf-heads/bert_qa", "hf-heads/distilbert_qa", "hf-heads/roberta_qa"] {
+    for rel in
+        ["hf-enc/bert", "hf-cls/bert_cls", "hf-heads/bert_tokcls", "hf-heads/bert_qa", "hf-heads/distilbert_qa", "hf-heads/roberta_qa"]
+    {
         let r = run(&with_tokenizer(&fixture(rel), "k2"), &judged(9_000)).expect("preflight");
         let k = r.kernel.as_ref().unwrap_or_else(|| panic!("{rel}: no kernel route"));
         eprintln!("{rel}: {k:?}");
@@ -187,10 +189,15 @@ fn a_base_tokenizer_of_the_same_vocabulary_replaces_the_missing_tokenizer_blocke
     // The fixture directory carries no tokenizer file.
     let bare = run(&dir, &judged(9_000)).expect("preflight");
     assert!(missing(&bare), "{:?}", bare.blockers().iter().map(|b| &b.code).collect::<Vec<_>>());
-    let offer = |v: u64| Options { base_tokenizer: Some(BaseTokenizerV1 { base: "org/base-bert".into(), vocab_size: v }), ..judged(9_000) };
+    let offer =
+        |v: u64| Options { base_tokenizer: Some(BaseTokenizerV1 { base: "org/base-bert".into(), vocab_size: v }), ..judged(9_000) };
     let bound = run(&dir, &offer(vocab)).expect("preflight");
     assert!(!missing(&bound), "{:?}", bound.blockers().iter().map(|b| &b.code).collect::<Vec<_>>());
-    assert!(bound.notes.iter().any(|n| n.starts_with("TOKENIZER_BOUND_FROM_BASE") && n.contains("org/base-bert")), "{:?}", bound.notes);
+    assert!(
+        bound.notes.iter().any(|n| n.starts_with("TOKENIZER_BOUND_FROM_BASE") && n.contains("org/base-bert")),
+        "{:?}",
+        bound.notes
+    );
     let wrong = run(&dir, &offer(vocab + 1)).expect("preflight");
     assert!(missing(&wrong), "another vocabulary is not the base's tokenizer for this table");
 }
@@ -205,7 +212,9 @@ fn a_masked_lm_repository_is_the_head_class_for_fill_mask_and_the_encoder_otherw
         let dir = with_tokenizer(&fixture(rel), "mlm");
         let fill_mask = Options { task: Some("fill-mask".into()), ..judged(9_000) };
         let r = run(&dir, &fill_mask).expect("preflight");
-        let p = r.pipeline.as_ref().unwrap_or_else(|| panic!("{rel}: the declared class is reported: {:?}", r.blockers().iter().map(|b| &b.code).collect::<Vec<_>>()));
+        let p = r.pipeline.as_ref().unwrap_or_else(|| {
+            panic!("{rel}: the declared class is reported: {:?}", r.blockers().iter().map(|b| &b.code).collect::<Vec<_>>())
+        });
         assert_eq!(p.kind, "encoder:masked_lm", "{rel}");
         assert!(head_fence(&r) && !r.registrable(), "{rel}");
         assert!(r.notes.iter().any(|n| n.contains("masked_lm head, [12, 64]")), "{rel}: {:?}", r.notes);

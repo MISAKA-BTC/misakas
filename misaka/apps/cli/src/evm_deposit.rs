@@ -173,7 +173,10 @@ pub async fn deposit_lock(
             if destination.system {
                 println!("              WARNING: a system or precompile address — almost certainly a mistake");
             }
-            println!("Amount      : {} BILI   Claim tip: {claim_tip_sompi} sompi   Fee: {fee_sompi} sompi", sompi_to_msk(amount_sompi));
+            println!(
+                "Amount      : {} BILI   Claim tip: {claim_tip_sompi} sompi   Fee: {fee_sompi} sompi",
+                sompi_to_msk(amount_sompi)
+            );
             println!("Refund after: DAA {timeout_daa_score} (to this key)");
             match &txid {
                 Some(t) => {

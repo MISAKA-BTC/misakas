@@ -67,7 +67,8 @@ pub fn palw_root_validated_v1(
     attestations: &[(Hash64, PalwRootAttestationV1)],
 ) -> bool {
     let mut passing: Vec<&Hash64> = Vec::new();
-    let reference = attestations.iter().find(|(_, a)| a.class_id == *class_id && a.root == *root).map(|(_, a)| (a.format, a.manifest_digest));
+    let reference =
+        attestations.iter().find(|(_, a)| a.class_id == *class_id && a.root == *root).map(|(_, a)| (a.format, a.manifest_digest));
     let Some(reference) = reference else { return false };
     for (operator, a) in attestations {
         if a.class_id != *class_id || a.root != *root || Some(operator) == publisher_operator {
@@ -89,10 +90,14 @@ pub enum PalwRootStageV1 {
     /// Published; claims refused. Possession and Validation accumulate.
     Candidate,
     /// Possessed and validated; claims allowed up to the canary limit until `since_daa + PALW_ROOT_CANARY_MIN_DAA_V1`.
-    Canary { since_daa: u64 },
+    Canary {
+        since_daa: u64,
+    },
     Active,
     /// Immediately out of force; claims already accepted keep the root they named. `fallback` is the root to return to.
-    Revoked { at_daa: u64 },
+    Revoked {
+        at_daa: u64,
+    },
 }
 
 /// What moves a stage.

@@ -1195,7 +1195,8 @@ async fn sanity_test() {
                     };
                     assert!(rpc_client.get_palw_reward_vesting_call(None, two).await.is_err());
                     for (after, exec_after) in [("x", ""), ("", "x")] {
-                        let bad = GetPalwRewardVestingRequest { after: after.into(), exec_after: exec_after.into(), ..Default::default() };
+                        let bad =
+                            GetPalwRewardVestingRequest { after: after.into(), exec_after: exec_after.into(), ..Default::default() };
                         assert!(rpc_client.get_palw_reward_vesting_call(None, bad).await.is_err());
                     }
                     let bad = GetPalwRewardVestingRequest { claim_id: "not-hex".into(), ..Default::default() };
@@ -1287,10 +1288,12 @@ async fn sanity_test() {
                 tst!(op, {
                     // G14 (op 210): a malformed claim id is an error before any state is read; a well-formed read on a network that
                     // holds no kernel route answers `available: false`.
-                    assert!(rpc_client
-                        .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "not-hex".to_string() })
-                        .await
-                        .is_err());
+                    assert!(
+                        rpc_client
+                            .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "not-hex".to_string() })
+                            .await
+                            .is_err()
+                    );
                     let read = rpc_client
                         .get_palw_kernel_claim_call(None, GetPalwKernelClaimRequest { claim_id: "00".repeat(64) })
                         .await
@@ -1340,16 +1343,29 @@ async fn sanity_test() {
                 tst!(op, {
                     // RFC-0009 remote verification (op 202): a collection the state does not name, and a malformed block hash, are errors
                     // before any proof is built. Simnet has no PALW V2 bundle, so a well-formed request has no state to prove either.
-                    assert!(rpc_client
-                        .get_palw_state_proof_call(None, GetPalwStateProofRequest { block_hash: String::new(), collection: "nope".to_string() })
-                        .await
-                        .is_err());
-                    assert!(rpc_client
-                        .get_palw_state_proof_call(None, GetPalwStateProofRequest { block_hash: "zz".to_string(), collection: "bonds".to_string() })
-                        .await
-                        .is_err());
+                    assert!(
+                        rpc_client
+                            .get_palw_state_proof_call(
+                                None,
+                                GetPalwStateProofRequest { block_hash: String::new(), collection: "nope".to_string() }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    assert!(
+                        rpc_client
+                            .get_palw_state_proof_call(
+                                None,
+                                GetPalwStateProofRequest { block_hash: "zz".to_string(), collection: "bonds".to_string() }
+                            )
+                            .await
+                            .is_err()
+                    );
                     let read = rpc_client
-                        .get_palw_state_proof_call(None, GetPalwStateProofRequest { block_hash: String::new(), collection: "classes".to_string() })
+                        .get_palw_state_proof_call(
+                            None,
+                            GetPalwStateProofRequest { block_hash: String::new(), collection: "classes".to_string() },
+                        )
                         .await
                         .unwrap();
                     assert!(!read.available && read.rows.is_empty());
@@ -1379,10 +1395,12 @@ async fn sanity_test() {
                 tst!(op, {
                     // G14 phase 3 (op 230): a malformed class id is an error before any state is read; a well-formed read on a network
                     // that holds no such class answers `found: false`.
-                    assert!(rpc_client
-                        .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "not-hex".to_string() })
-                        .await
-                        .is_err());
+                    assert!(
+                        rpc_client
+                            .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "not-hex".to_string() })
+                            .await
+                            .is_err()
+                    );
                     let read = rpc_client
                         .get_palw_onboarding_call(None, GetPalwOnboardingRequest { class_id: "00".repeat(64) })
                         .await
@@ -1395,10 +1413,15 @@ async fn sanity_test() {
                 tst!(op, {
                     // Onboarding P0 (op 231): a malformed class id is an error before any state is read; a well-formed read on a
                     // network that holds no such class answers `found: false`, no rows.
-                    assert!(rpc_client
-                        .get_palw_conformance_evidence_call(None, GetPalwConformanceEvidenceRequest { class_id: "not-hex".to_string() })
-                        .await
-                        .is_err());
+                    assert!(
+                        rpc_client
+                            .get_palw_conformance_evidence_call(
+                                None,
+                                GetPalwConformanceEvidenceRequest { class_id: "not-hex".to_string() }
+                            )
+                            .await
+                            .is_err()
+                    );
                     let read = rpc_client
                         .get_palw_conformance_evidence_call(None, GetPalwConformanceEvidenceRequest { class_id: "00".repeat(64) })
                         .await

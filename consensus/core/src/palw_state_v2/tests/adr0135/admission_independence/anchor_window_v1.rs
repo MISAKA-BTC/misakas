@@ -253,7 +253,11 @@ fn m3_the_juries_population_is_cut_at_the_anchors_span_so_a_bond_registered_afte
         "the cut is DAA 790: no operator was registered when the seed existed, so no jury can be drawn from them"
     );
     let after = run(810);
-    assert_eq!(after.kimi(), PalwModelLifecycleV1::Prefetching, "the cut is DAA 810: the operators registered at 800 are the population");
+    assert_eq!(
+        after.kimi(),
+        PalwModelLifecycleV1::Prefetching,
+        "the cut is DAA 810: the operators registered at 800 are the population"
+    );
 }
 
 #[test]

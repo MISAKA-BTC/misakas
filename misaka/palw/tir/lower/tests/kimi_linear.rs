@@ -57,11 +57,15 @@ fn a_channel_wise_decay_forgets_each_key_channel_at_its_own_rate() {
 #[test]
 fn a_kimi_linear_config_reads_as_delta_attention_and_latent_attention_without_rotation() {
     let s = parse_config_str(&tiny()).unwrap();
-    let kinds: Vec<&str> = s.layers.iter().map(|l| match &l.mixer {
-        Mixer::Kda(_) => "kda",
-        Mixer::Mla(m) if m.rope.is_none() => "mla-nope",
-        _ => "other",
-    }).collect();
+    let kinds: Vec<&str> = s
+        .layers
+        .iter()
+        .map(|l| match &l.mixer {
+            Mixer::Kda(_) => "kda",
+            Mixer::Mla(m) if m.rope.is_none() => "mla-nope",
+            _ => "other",
+        })
+        .collect();
     assert_eq!(kinds, ["kda", "kda", "mla-nope", "kda"]);
     let ids: Vec<&str> = s.features().iter().map(|u| u.id.0).collect();
     for want in ["MIXER_KDA_V1", "MIXER_MLA_NOPE_V1", "CONV_DEPTHWISE_CAUSAL_V1"] {
@@ -81,7 +85,11 @@ fn a_kimi_linear_config_reads_as_delta_attention_and_latent_attention_without_ro
 fn a_kimi_linear_config_that_rotates_the_latent_attention_or_changes_the_router_is_refused_by_name() {
     for (from, to, needle) in [
         ("\"model_type\": \"kimi_linear\"", "\"model_type\": \"kimi_linear\", \"mla_use_nope\": false", "mla_use_nope"),
-        ("\"model_type\": \"kimi_linear\"", "\"model_type\": \"kimi_linear\", \"moe_router_activation_func\": \"softmax\"", "moe_router_activation_func"),
+        (
+            "\"model_type\": \"kimi_linear\"",
+            "\"model_type\": \"kimi_linear\", \"moe_router_activation_func\": \"softmax\"",
+            "moe_router_activation_func",
+        ),
         ("\"model_type\": \"kimi_linear\"", "\"model_type\": \"kimi_linear\", \"moe_layer_freq\": 2", "moe_layer_freq"),
         ("\"model_type\": \"kimi_linear\"", "\"model_type\": \"kimi_linear\", \"num_nextn_predict_layers\": 1", "multi-token"),
     ] {

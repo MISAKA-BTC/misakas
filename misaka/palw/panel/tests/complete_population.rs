@@ -440,19 +440,38 @@ fn retired_population_four_100k_seals_refuse_the_fifth_and_native_retirement_reu
         s = retirement_advance(&s, s.daa() + 1, &v);
         s = retirement_advance(&s, s.daa() + 1, &v);
         let r = s.claim(&c.claim_id).unwrap();
-        if n < 4 { assert_eq!(r.snapshot.as_ref().unwrap().candidates.len(), 100_000); }
-        else { assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. })); assert!(r.snapshot.is_none()); }
+        if n < 4 {
+            assert_eq!(r.snapshot.as_ref().unwrap().candidates.len(), 100_000);
+        } else {
+            assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. }));
+            assert!(r.snapshot.is_none());
+        }
     }
-    let count = |s: &PermissionlessPanelStateV1| s.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|p| p.candidates.len()).sum::<usize>();
+    let count = |s: &PermissionlessPanelStateV1| {
+        s.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|p| p.candidates.len()).sum::<usize>()
+    };
     assert_eq!(count(&s), 400_000);
-    eprintln!("[rfc06-retention] four_seals_candidates={} encoded_bytes={} elapsed_ms={}", count(&s), borsh::object_length(&s).unwrap(), begun.elapsed().as_millis());
-    v.terminal.insert(distinct_claim(0).claim_id); v.retired.insert(distinct_claim(0).claim_id);
-    s = retirement_advance(&s, s.daa() + 1, &v); assert_eq!(count(&s), 300_000);
+    eprintln!(
+        "[rfc06-retention] four_seals_candidates={} encoded_bytes={} elapsed_ms={}",
+        count(&s),
+        borsh::object_length(&s).unwrap(),
+        begun.elapsed().as_millis()
+    );
+    v.terminal.insert(distinct_claim(0).claim_id);
+    v.retired.insert(distinct_claim(0).claim_id);
+    s = retirement_advance(&s, s.daa() + 1, &v);
+    assert_eq!(count(&s), 300_000);
     assert!(s.work_id_rows().contains(&distinct_claim(0).work_id));
     let c = distinct_claim(5);
     s = retirement_advance(&s, s.daa() + 1, &v).admit(&[c.clone()]).unwrap().0;
-    s = retirement_advance(&s, s.daa() + 1, &v); s = retirement_advance(&s, s.daa() + 1, &v);
+    s = retirement_advance(&s, s.daa() + 1, &v);
+    s = retirement_advance(&s, s.daa() + 1, &v);
     assert_eq!(s.claim(&c.claim_id).unwrap().snapshot.as_ref().unwrap().candidates.len(), 100_000);
     assert_eq!(count(&s), 400_000);
-    eprintln!("[rfc06-retention] reclaimed_and_resealed_candidates={} encoded_bytes={} elapsed_ms={}", count(&s), borsh::object_length(&s).unwrap(), begun.elapsed().as_millis());
+    eprintln!(
+        "[rfc06-retention] reclaimed_and_resealed_candidates={} encoded_bytes={} elapsed_ms={}",
+        count(&s),
+        borsh::object_length(&s).unwrap(),
+        begun.elapsed().as_millis()
+    );
 }

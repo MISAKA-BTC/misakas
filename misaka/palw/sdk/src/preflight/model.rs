@@ -303,11 +303,16 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                 // The file is not a model: it is an adapter over one (llama.cpp's `convert_lora_to_gguf`). Composing a GGUF adapter with its
                 // base is not built; it is not an architecture the frontend failed to map.
                 blockers.push(
-                    Blocker::new(Stage::Convert, "ADAPTER_REFUSED", "the GGUF is a LoRA adapter, which this build does not compose with a base")
-                        .evidence([short(&why)])
-                        .safe([
-                            "a PEFT adapter (adapter_config.json and adapter_model.safetensors) over its Hugging Face base is composed".to_string(),
-                        ]),
+                    Blocker::new(
+                        Stage::Convert,
+                        "ADAPTER_REFUSED",
+                        "the GGUF is a LoRA adapter, which this build does not compose with a base",
+                    )
+                    .evidence([short(&why)])
+                    .safe([
+                        "a PEFT adapter (adapter_config.json and adapter_model.safetensors) over its Hugging Face base is composed"
+                            .to_string(),
+                    ]),
                 );
             } else if src.kind == InputKind::Gguf {
                 blockers.push(
@@ -387,7 +392,11 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
                         Ok(misaka_palw_tir_lower::model::route::ImageShapeV1::NotDeclarable(why)) => {
                             RoutedClass::Undeclarable { why, kind, adapter }
                         }
-                        Err(why) => RoutedClass::Undeclarable { why: format!("the image class cannot be lowered shape-only: {why}"), kind, adapter },
+                        Err(why) => RoutedClass::Undeclarable {
+                            why: format!("the image class cannot be lowered shape-only: {why}"),
+                            kind,
+                            adapter,
+                        },
                     });
                 } else {
                     routed = Some(RoutedClass::Undeclarable {
@@ -568,7 +577,12 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     // class, so the ignoring is withdrawn: the key is refused as it always was.
     let ignored_keys: Vec<String> = model
         .as_ref()
-        .map(|m| m.assumed_defaults.iter().filter_map(|a| a.strip_prefix("ignored `").and_then(|r| r.split('`').next()).map(str::to_string)).collect())
+        .map(|m| {
+            m.assumed_defaults
+                .iter()
+                .filter_map(|a| a.strip_prefix("ignored `").and_then(|r| r.split('`').next()).map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     if !ignored_keys.is_empty() && tensors.unused_total > 0 {
         blockers.push(
@@ -614,9 +628,7 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
 
     // ---- the tokenizer ------------------------------------------------------------------------------------------------------------
     let tokenizer_known = match src.kind {
-        InputKind::HfDirectory => {
-            Some(src.files.iter().any(|f| misaka_palw_tir_lower::artifact::is_tokenizer_file(&f.name)))
-        }
+        InputKind::HfDirectory => Some(src.files.iter().any(|f| misaka_palw_tir_lower::artifact::is_tokenizer_file(&f.name))),
         InputKind::Gguf => src.gguf_file.as_ref().map(|g| g.meta.contains_key("tokenizer.ggml.tokens")),
         _ => None,
     };
@@ -625,10 +637,8 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
     let declared_vocab = src.config.as_ref().and_then(|c| {
         c.get("vocab_size").or_else(|| c.get("text_config").and_then(|t| t.get("vocab_size"))).and_then(serde_json::Value::as_u64)
     });
-    let base_tokenizer = opts
-        .base_tokenizer
-        .as_ref()
-        .filter(|bt| src.kind == InputKind::HfDirectory && declared_vocab == Some(bt.vocab_size));
+    let base_tokenizer =
+        opts.base_tokenizer.as_ref().filter(|bt| src.kind == InputKind::HfDirectory && declared_vocab == Some(bt.vocab_size));
     if tokenizer_known == Some(false) && needs_tokenizer && base_tokenizer.is_some() {
         let bt = base_tokenizer.expect("checked");
         notes.push(format!(
@@ -644,7 +654,8 @@ pub fn analyze(src: &Source, opts: &Options, reg: &QuantRegistry, adapter_text: 
             )
             .safe([
                 "download tokenizer.json (a few MB) from the model repository".to_string(),
-                "or bind the tokenizer of the base model it was fine-tuned from: the class commits to the bytes of one tokenizer file".to_string(),
+                "or bind the tokenizer of the base model it was fine-tuned from: the class commits to the bytes of one tokenizer file"
+                    .to_string(),
             ]),
         );
     }
@@ -892,20 +903,22 @@ fn tensor_check(
         let no_entries = BTreeMap::new();
         let entries = prep.spec.hf.quant.as_ref().map_or(&no_entries, |q| &q.module_params);
         match prep.spec.hf.quant.as_ref().filter(|q| q.fmt.is_virtual()).and_then(|q| q.fmt.binding()) {
-            Some((f, params)) => match misaka_palw_tir_lower::weights::described::DescribedSource::new_with(Box::new(hs), f, params, entries) {
-                Ok(d) => {
-                    info.checked = "shapes".into();
-                    Some(check_weights(&prep.hl, &prep.binding, &d))
-                }
-                Err(e) => {
-                    info.checked = format!("skipped: {}", short(&e.to_string()));
-                    notes.push(format!(
+            Some((f, params)) => {
+                match misaka_palw_tir_lower::weights::described::DescribedSource::new_with(Box::new(hs), f, params, entries) {
+                    Ok(d) => {
+                        info.checked = "shapes".into();
+                        Some(check_weights(&prep.hl, &prep.binding, &d))
+                    }
+                    Err(e) => {
+                        info.checked = format!("skipped: {}", short(&e.to_string()));
+                        notes.push(format!(
                         "the packed tensors' shapes could not be derived from the headers alone ({}): the tensor check ran when their small role tensors are on disk",
                         short(&e.to_string())
                     ));
-                    None
+                        None
+                    }
                 }
-            },
+            }
             None => {
                 info.checked = "shapes".into();
                 Some(check_weights(&prep.hl, &prep.binding, &hs))

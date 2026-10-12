@@ -46,11 +46,11 @@ use kaspa_consensus_core::palw_artifact::{
     PalwArtifactInventoryDigestV1, PalwArtifactInventoryStreamV1, PalwArtifactInventorySummaryV1, PalwArtifactInventoryV1,
     PalwArtifactOperandV1, PalwArtifactRowDigestV1, PalwInventoryError, artifact_leaf_parts_v1,
 };
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
 use kaspa_consensus_core::palw_base0_ops::ScaleParams;
 use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
 use kaspa_consensus_core::palw_shard_plan_v1::PalwInventoryRowMetaV1;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::artifact::{ArtifactError, Base0ArtifactV1};
 use crate::operands::{BASE0_LAYER_PREFIX, Base0OperandV1, OperandError, base0_resolve_operand_v1};
@@ -101,8 +101,7 @@ fn rope_row_bytes(table: &crate::rope::RopeTableV1, d_head: usize, position: usi
 /// Process-local A16 inventory digests. Pairing a held 2M class walks one rotary row per position
 /// per rope node; the panel then rebuilds the same object at submit. The root is a function of
 /// `(artifact digest, profile id)`, so the second walk is the first walk's answer kept.
-fn a16_inventory_digest_cache_v1()
--> &'static Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>> {
+fn a16_inventory_digest_cache_v1() -> &'static Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>> {
     static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -275,9 +274,8 @@ pub fn a16_readiness_leaves_streamed_v1(
             name: format!("leaf {out} is outside an inventory of {leaf_count}"),
         }));
     }
-    let root = frontier
-        .root()
-        .ok_or(InventoryBuildError::NotCanonical(kaspa_consensus_core::palw_artifact::PalwInventoryError::Empty))?;
+    let root =
+        frontier.root().ok_or(InventoryBuildError::NotCanonical(kaspa_consensus_core::palw_artifact::PalwInventoryError::Empty))?;
     let opened = draw.iter().map(|i| (*i, kept.remove(i).expect("every drawn position was kept"))).collect();
     Ok((root, leaf_count, opened))
 }
@@ -636,8 +634,7 @@ pub(crate) fn a16_inventory_groups_v1(
             // tied head — the same aliasing the arm does.
             for variant in ["", ".sink0"] {
                 let triple = format!("{name}.a16{variant}");
-                let store_key =
-                    if name == "output.weight" { format!("token_embd.weight.a16{variant}") } else { triple.clone() };
+                let store_key = if name == "output.weight" { format!("token_embd.weight.a16{variant}") } else { triple.clone() };
                 if holds(&store_key, layer) {
                     claim(&mut groups, triple, layer, slot);
                 }
@@ -742,7 +739,6 @@ pub(crate) fn a16_visit_inventory_rows_gated_v1(
         store.iter().find(|(n, _)| *n == key).map(|(_, b)| b.as_slice())
     };
     let missing = |name: &str| InventoryBuildError::Operand(OperandError::UnknownTensor { name: name.to_string() });
-
 
     // A per-lane triple table for a `Fixed`-width site: the store's own table where it holds one,
     // the single triple expanded across the width where it holds one triple — the engine's own

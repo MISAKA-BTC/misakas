@@ -55,8 +55,8 @@ pub(crate) fn replay_envelope_from_verified_scope_v9(
     scope_root: Digest,
     encoder: Option<&EncoderBindingV1>,
 ) -> Result<FlatReplayEnvelopeV9, DismissalV1> {
-    let mut reference = crate::flat_replay6::replay_costs_v6(program, scope.max_positions, scope_root, encoder)
-        .map_err(DismissalV1::NotAuthentic)?;
+    let mut reference =
+        crate::flat_replay6::replay_costs_v6(program, scope.max_positions, scope_root, encoder).map_err(DismissalV1::NotAuthentic)?;
     let pr = crate::element::PreparedV1::without_scope(program, encoder).map_err(DismissalV1::NotAuthentic)?;
     let (mut topk_work, mut aux, mut reads) = (0u128, 0u128, 63u128);
     for (s, (b, _)) in pr.w.occurrences.iter().enumerate() {

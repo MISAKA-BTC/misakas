@@ -9,12 +9,12 @@ mod common;
 
 use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder::{self, EncoderOutput};
+use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
-use misaka_palw_tir_lower::fidelity;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -29,7 +29,8 @@ struct Seq {
 }
 
 fn outputs(name: &str) -> Vec<Seq> {
-    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture_dir(name).join("outputs.json")).expect("outputs")).expect("json");
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture_dir(name).join("outputs.json")).expect("outputs")).expect("json");
     v["sequences"]
         .as_array()
         .expect("sequences")
@@ -127,13 +128,9 @@ fn clip_text_encoder_matches_its_hf_fixture() {
     // 4. Admission: the program and the pipeline, at the legacy court's ceilings.
     let inputs = misaka_palw_tir_lower::admission::default_inputs();
     let a = tir::admit_v2::tir_admit_program_v2(&p2, &inputs).expect("tir_admit_v2");
-    let pa = tir::admit_v2::tir_admit_pipeline_v1(
-        &pipe.encode(),
-        &[p2.encode()],
-        &inputs,
-        &tir::admit_v2::TirJobCeilingsV1::open_v1(),
-    )
-    .expect("tir_admit_pipeline_v1");
+    let pa =
+        tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
+            .expect("tir_admit_pipeline_v1");
     eprintln!(
         "clip_text admitted: {} cones; pipeline job cost {:?}, {} step leaves, cone work {}, output interval {:?}",
         a.view.cones.len(),
@@ -202,12 +199,16 @@ fn bidir_case(name: &str, pad: u32, pooling: misaka_palw_tir_lower::lower::bidir
     let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
     for (p, want) in &seqs {
         let mut inputs = tir::interp_v2::MapInputs::default();
-        inputs.constant.insert(0, tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect()).unwrap());
+        inputs
+            .constant
+            .insert(0, tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect()).unwrap());
         inputs.constant.insert(1, tir::Tensor::scalar(tir::DType::Idx, p.count as i128).unwrap());
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let out = &run[0].output;
-        let job = tir::pipeline::PipelineJob { prompt: p.ids[1..p.count - 1].iter().map(|t| *t as u32).collect(), ..Default::default() };
-        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&params2), &NoRandom, &job).expect("pipeline");
+        let job =
+            tir::pipeline::PipelineJob { prompt: p.ids[1..p.count - 1].iter().map(|t| *t as u32).collect(), ..Default::default() };
+        let pr =
+            tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&params2), &NoRandom, &job).expect("pipeline");
         assert_eq!(pr.output.data, out.data, "{name}: the pipeline differs from the program");
         let got: Vec<f64> = out.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
         let (c, r) = (cosine(&got, want), rel(&got, want));
@@ -223,14 +224,21 @@ fn bidir_case(name: &str, pad: u32, pooling: misaka_palw_tir_lower::lower::bidir
         let p6 = common::with_inputs(&lw.program, &mat.params, &[(bidir::IDS_PARAM, ids), (bidir::COUNT_PARAM, count)]);
         let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
         let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
-        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        eprintln!(
+            "{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives",
+            c.commits,
+            c.nodes,
+            c.elements,
+            c.primitives.len()
+        );
         assert!(c.commits > 0);
     }
     // 5. Admission of the program and the pipeline.
     let inputs = misaka_palw_tir_lower::admission::default_inputs();
     tir::admit_v2::tir_admit_program_v2(&p2, &inputs).expect("tir_admit_v2");
-    let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
-        .expect("tir_admit_pipeline_v1");
+    let pa =
+        tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
+            .expect("tir_admit_pipeline_v1");
     eprintln!("{name} admitted: job {:?}, {} step leaves, cone work {}", pa.job_cost, pa.job_step_leaves, pa.cone_work);
 }
 
@@ -353,7 +361,8 @@ fn a_decoder_as_a_last_token_embedder_matches_its_hf_fixture() {
         let run = interp.run(&mat.params, &tir::interp_v2::MapInputs::default(), &toks).expect("v2 run");
         let out = &run.last().unwrap().output;
         let job = tir::pipeline::PipelineJob { prompt: toks[..toks.len() - 1].to_vec(), ..Default::default() };
-        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&mat.params), &NoRandom, &job).expect("pipeline");
+        let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &OneProgram(&mat.params), &NoRandom, &job)
+            .expect("pipeline");
         assert_eq!(pr.output.data, out.data);
         let got: Vec<f64> = out.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
         let (c, r) = (cosine(&got, &s.embeds), rel(&got, &s.embeds));
@@ -395,8 +404,13 @@ fn real_encoders_lower_and_are_admitted_at_128_to_512_tokens() {
             let p2 = encoder::bidir_v2(&lw, spec.vocab_size as u32, lmax).expect("v2");
             let pipe = encoder::bidir_pipeline(vec![], vec![], pad, lmax);
             let inputs = misaka_palw_tir_lower::admission::default_inputs();
-            let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
-                .unwrap_or_else(|e| panic!("{name} at {lmax}: tir_admit_pipeline_v1: {e}"));
+            let pa = tir::admit_v2::tir_admit_pipeline_v1(
+                &pipe.encode(),
+                &[p2.encode()],
+                &inputs,
+                &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+            )
+            .unwrap_or_else(|e| panic!("{name} at {lmax}: tir_admit_pipeline_v1: {e}"));
             let nodes: usize = p2.blocks.iter().map(|b| b.nodes.len()).sum();
             let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
             let commits: usize = p2.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();

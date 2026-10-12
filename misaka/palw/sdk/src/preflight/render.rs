@@ -455,7 +455,12 @@ impl Report {
         }
         if let Some(full) = &self.full {
             let _ = writeln!(o);
-            let _ = writeln!(o, "full            pack {}{}", full.pack, full.pack_digest.as_deref().map(|d| format!(" ({})", &d[..16.min(d.len())])).unwrap_or_default());
+            let _ = writeln!(
+                o,
+                "full            pack {}{}",
+                full.pack,
+                full.pack_digest.as_deref().map(|d| format!(" ({})", &d[..16.min(d.len())])).unwrap_or_default()
+            );
             for c in &full.checks {
                 let _ = writeln!(o, "  {:<7} {:<18} {}", c.status, c.name, c.detail);
             }

@@ -259,20 +259,26 @@ fn parse_at(value: &Value, path: &str, depth: usize, ctx: &Ctx<'_>) -> Result<Sc
     if ctx.v2
         && let Some(reference) = members.get("$ref")
     {
-        if let Some(extra) = members.keys().find(|k| k.as_str() != "$ref" && !(k.as_str() == "$defs" && path.is_empty()) && !IGNORED_KEYWORDS.contains(&k.as_str())) {
-            return Err(format!("`{extra}` sits beside `$ref` at {path:?}: a reference carries no sibling keyword in the second subset"));
+        if let Some(extra) = members
+            .keys()
+            .find(|k| k.as_str() != "$ref" && !(k.as_str() == "$defs" && path.is_empty()) && !IGNORED_KEYWORDS.contains(&k.as_str()))
+        {
+            return Err(format!(
+                "`{extra}` sits beside `$ref` at {path:?}: a reference carries no sibling keyword in the second subset"
+            ));
         }
-        let target = reference
-            .as_str()
-            .and_then(|r| r.strip_prefix("#/$defs/"))
-            .ok_or_else(|| format!("`$ref` at {path:?} is not a `#/$defs/<name>` reference: references outside the root's `$defs` are refused"))?;
+        let target = reference.as_str().and_then(|r| r.strip_prefix("#/$defs/")).ok_or_else(|| {
+            format!("`$ref` at {path:?} is not a `#/$defs/<name>` reference: references outside the root's `$defs` are refused")
+        })?;
         if ctx.stack.iter().any(|n| n == target) {
             return Err(format!(
                 "`$ref` {target:?} at {path:?} is recursive: a recursive schema is a pushdown the sixteen-frame depth cannot bound, so                  only non-recursive references compile"
             ));
         }
         if ctx.expansions.get() >= MAX_REF_EXPANSIONS_V2 {
-            return Err(format!("the schema expands more than {MAX_REF_EXPANSIONS_V2} references: a diamond of references is an exponential automaton"));
+            return Err(format!(
+                "the schema expands more than {MAX_REF_EXPANSIONS_V2} references: a diamond of references is an exponential automaton"
+            ));
         }
         ctx.expansions.set(ctx.expansions.get() + 1);
         let definition = ctx.defs.get(target).ok_or_else(|| format!("`$ref` {target:?} at {path:?} names no entry of `$defs`"))?;
@@ -458,11 +464,17 @@ fn parse_union(
         || own.exclusive_maximum.is_some()
         || own.types.as_ref().is_some_and(|t| t.as_slice() != [JsonType::Object]);
     if own_has_other {
-        return Err(format!("`{keyword}` at {path:?} carries a sibling keyword other than `type: \"object\"`: a union is its branches and nothing else"));
+        return Err(format!(
+            "`{keyword}` at {path:?} carries a sibling keyword other than `type: \"object\"`: a union is its branches and nothing else"
+        ));
     }
-    let items = list.as_array().ok_or_else(|| format!("`{keyword}` at {path:?} is {} where a list of schemas was expected", kind_of(list)))?;
+    let items =
+        list.as_array().ok_or_else(|| format!("`{keyword}` at {path:?} is {} where a list of schemas was expected", kind_of(list)))?;
     if items.len() < 2 || items.len() > MAX_UNION_BRANCHES_V2 {
-        return Err(format!("`{keyword}` at {path:?} has {} branches: a discriminated union has 2..={MAX_UNION_BRANCHES_V2}", items.len()));
+        return Err(format!(
+            "`{keyword}` at {path:?} has {} branches: a discriminated union has 2..={MAX_UNION_BRANCHES_V2}",
+            items.len()
+        ));
     }
     let mut branches: Vec<Schema> = Vec::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
@@ -471,7 +483,9 @@ fn parse_union(
             return Err(format!("`{keyword}` branch {i} at {path:?} is not `type: \"object\"`: a branch is a closed object"));
         }
         if !matches!(branch.additional_properties, Some(AdditionalProperties::Forbidden)) {
-            return Err(format!("`{keyword}` branch {i} at {path:?} is not closed (`additionalProperties: false`): an open branch could repeat the discriminator"));
+            return Err(format!(
+                "`{keyword}` branch {i} at {path:?} is not closed (`additionalProperties: false`): an open branch could repeat the discriminator"
+            ));
         }
         branches.push(branch);
     }
@@ -484,8 +498,12 @@ fn parse_union(
             _ => None,
         }
     };
-    let candidates: Vec<&String> =
-        branches[0].properties.iter().map(|(n, _)| n).filter(|n| branches.iter().all(|b| value_of(b, n).is_some() && b.required.contains(n))).collect();
+    let candidates: Vec<&String> = branches[0]
+        .properties
+        .iter()
+        .map(|(n, _)| n)
+        .filter(|n| branches.iter().all(|b| value_of(b, n).is_some() && b.required.contains(n)))
+        .collect();
     let discriminator = match candidates.as_slice() {
         [one] => (*one).clone(),
         [] => {
@@ -495,7 +513,10 @@ fn parse_union(
             ));
         }
         many => {
-            return Err(format!("`{keyword}` at {path:?} has {} candidate discriminators ({many:?}): exactly one property may play the role", many.len()));
+            return Err(format!(
+                "`{keyword}` at {path:?} has {} candidate discriminators ({many:?}): exactly one property may play the role",
+                many.len()
+            ));
         }
     };
     let mut out = Vec::with_capacity(branches.len());
@@ -559,7 +580,9 @@ fn validate_at(schema: &Schema, value: &Value, path: &str, errors: &mut Vec<Stri
                         union.branches.iter().map(|b| b.value.as_str()).collect::<Vec<_>>().join(", ")
                     )),
                 },
-                _ => errors.push(format!("at {path:?}: the union's discriminator `{}` is missing or not a string", union.discriminator)),
+                _ => {
+                    errors.push(format!("at {path:?}: the union's discriminator `{}` is missing or not a string", union.discriminator))
+                }
             },
             other => errors.push(format!("at {path:?}: expected object, got {}", kind_of(other))),
         }
@@ -658,12 +681,18 @@ fn validate_at(schema: &Schema, value: &Value, path: &str, errors: &mut Vec<Stri
             if let Some(min) = schema.exclusive_minimum
                 && f <= min
             {
-                errors.push(format!("at {path:?}: {n} is not above the exclusive minimum {}", crate::canonical::es_number_to_string(min)));
+                errors.push(format!(
+                    "at {path:?}: {n} is not above the exclusive minimum {}",
+                    crate::canonical::es_number_to_string(min)
+                ));
             }
             if let Some(max) = schema.exclusive_maximum
                 && f >= max
             {
-                errors.push(format!("at {path:?}: {n} is not below the exclusive maximum {}", crate::canonical::es_number_to_string(max)));
+                errors.push(format!(
+                    "at {path:?}: {n} is not below the exclusive maximum {}",
+                    crate::canonical::es_number_to_string(max)
+                ));
             }
         }
         Value::Bool(_) | Value::Null => {}

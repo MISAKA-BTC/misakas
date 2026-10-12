@@ -807,7 +807,15 @@ impl KernelRouteObjectV1 {
         if tag == TAG_REGISTER_FLAT_MODEL_CANDIDATE_V9 {
             bounded_flat_candidate_v9(rest).map_err(|e| bad(RefusalKindV1::Malformed, e))?;
         }
-        if matches!(tag, TAG_POST_FLAT_MODEL_VECTOR_V7 | TAG_REVEAL_FLAT_MODEL_PROOF_V7 | TAG_ANSWER_FLAT_MODEL_UNIT_V7 | TAG_POST_FLAT_MODEL_VECTOR_V9 | TAG_REVEAL_FLAT_MODEL_PROOF_V9 | TAG_ANSWER_FLAT_MODEL_UNIT_V9) {
+        if matches!(
+            tag,
+            TAG_POST_FLAT_MODEL_VECTOR_V7
+                | TAG_REVEAL_FLAT_MODEL_PROOF_V7
+                | TAG_ANSWER_FLAT_MODEL_UNIT_V7
+                | TAG_POST_FLAT_MODEL_VECTOR_V9
+                | TAG_REVEAL_FLAT_MODEL_PROOF_V9
+                | TAG_ANSWER_FLAT_MODEL_UNIT_V9
+        ) {
             let prefix = if matches!(tag, TAG_ANSWER_FLAT_MODEL_UNIT_V7 | TAG_ANSWER_FLAT_MODEL_UNIT_V9) { 65 } else { 129 };
             let count = rest
                 .get(prefix..prefix + 4)
@@ -822,7 +830,8 @@ impl KernelRouteObjectV1 {
             return Err(bad(RefusalKindV1::Malformed, "invalid mixed-court public unit kind/index".into()));
         }
         if tag == TAG_DEMAND_FLAT_MODEL_UNIT_V9
-            && (rest.get(74).is_none_or(|kind| *kind > 3) || (matches!(rest[74], 0 | 3) && rest.get(75..83) != Some(&[0u8; 8][..]))) {
+            && (rest.get(74).is_none_or(|kind| *kind > 3) || (matches!(rest[74], 0 | 3) && rest.get(75..83) != Some(&[0u8; 8][..])))
+        {
             return Err(bad(RefusalKindV1::Malformed, "invalid typed9 public unit kind/index".into()));
         }
         let object: Self =
@@ -1164,7 +1173,9 @@ mod tests {
             assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
             assert_ne!(o.name(), "Unknown");
         }
-        let tags: Vec<u8> = (1..=18).chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1, TAG_OPT_IN_BEACON_SOURCE_V1]).collect();
+        let tags: Vec<u8> = (1..=18)
+            .chain([TAG_SPEC_V1, TAG_COMMIT_CLAIM_SALTED_V1, TAG_REGISTER_CONFORMANCE_CLASS_V1, TAG_OPT_IN_BEACON_SOURCE_V1])
+            .collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!((38..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "38/39 are reserved for G14R, not allocated");

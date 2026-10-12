@@ -368,7 +368,9 @@ impl PruningProofManager {
                 match self.pruning_samples_store.pruning_sample_from_pov(header.hash).optional().map_err(unavailable)? {
                     None => true,
                     Some(recorded) if recorded == expected => false,
-                    Some(recorded) => return Err(PruningImportError::ImportedPruningPointHistoryMismatch(header.hash, recorded, expected)),
+                    Some(recorded) => {
+                        return Err(PruningImportError::ImportedPruningPointHistoryMismatch(header.hash, recorded, expected));
+                    }
                 }
             };
             insert_samples.push(needs_sample);

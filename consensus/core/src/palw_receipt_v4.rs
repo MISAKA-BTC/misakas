@@ -77,10 +77,11 @@ pub const fn palw_receipt_spend_v4_value_v1() -> [u64; 1] {
 /// **The fence's entry for a flag-day list** (testnet-12's int-13 list, `PALW_T12_INT13_FENCES_V1`): the fence is a bare height — no
 /// bundle mirror, the processor reads `Params::palw_receipt_spend_v4_active_at` — so the entry sets that one field. Its prerequisites
 /// (`palw_audit_2026_09_11`, `palw_audit_2026_09_23`) are asked by [`Params::validate_palw_receipt_spend_v4`].
-pub const PALW_T12_RECEIPT_SPEND_V4_ENTRY: crate::config::params::PalwPostLaunchFenceV1 = crate::config::params::PalwPostLaunchFenceV1 {
-    name: "palw_receipt_spend_v4",
-    set: |params, at| params.palw_receipt_spend_v4 = at,
-};
+pub const PALW_T12_RECEIPT_SPEND_V4_ENTRY: crate::config::params::PalwPostLaunchFenceV1 =
+    crate::config::params::PalwPostLaunchFenceV1 {
+        name: "palw_receipt_spend_v4",
+        set: |params, at| params.palw_receipt_spend_v4 = at,
+    };
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwReceiptV4Error {
@@ -339,11 +340,21 @@ impl PalwReceiptSpendEnvelopeV4 {
     {
         let s = &self.spend;
         let auth_msg = redeem_auth_id_v4(&s.authorization);
-        if !verify_mldsa87(&s.executor_pubkey, auth_msg.as_byte_slice(), &s.authorization_signature, PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT) {
+        if !verify_mldsa87(
+            &s.executor_pubkey,
+            auth_msg.as_byte_slice(),
+            &s.authorization_signature,
+            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+        ) {
             return Err(PalwReceiptV4Error::SignatureInvalid);
         }
         let spend_msg = fp_spend_id_v4(s);
-        if !verify_mldsa87(&s.builder_pubkey, spend_msg.as_byte_slice(), &self.builder_signature, PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT) {
+        if !verify_mldsa87(
+            &s.builder_pubkey,
+            spend_msg.as_byte_slice(),
+            &self.builder_signature,
+            PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT,
+        ) {
             return Err(PalwReceiptV4Error::SignatureInvalid);
         }
         Ok(())
@@ -431,7 +442,12 @@ impl PalwRedemptionAuthBundleV4 {
         if a.builder_fee_bps > PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS {
             return Err(PalwReceiptV4Error::FeeAboveCap { bps: a.builder_fee_bps, cap: PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS });
         }
-        if !verify_mldsa87(&self.executor_pubkey, redeem_auth_id_v4(a).as_byte_slice(), &self.signature, PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT) {
+        if !verify_mldsa87(
+            &self.executor_pubkey,
+            redeem_auth_id_v4(a).as_byte_slice(),
+            &self.signature,
+            PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT,
+        ) {
             return Err(PalwReceiptV4Error::SignatureInvalid);
         }
         Ok(())
@@ -477,7 +493,11 @@ pub fn check_palw_receipt_spend_admission_v5(
     // The range may not name quanta the claim does not have (the fold refuses an out-of-range index anyway; named here first).
     if let crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source {
         if spend.quantum_index >= *quanta {
-            return Err(PalwFpAdmissionV3Error::QuantumOutOfRange { claim: spend.claim_id, index: spend.quantum_index, quanta: *quanta });
+            return Err(PalwFpAdmissionV3Error::QuantumOutOfRange {
+                claim: spend.claim_id,
+                index: spend.quantum_index,
+                quanta: *quanta,
+            });
         }
     }
 
@@ -742,7 +762,9 @@ mod tests {
         let auth_msg = redeem_auth_id_v4(&e.spend.authorization);
         let spend_msg = fp_spend_id_v4(&e.spend);
         let exact = |key: &[u8], msg: &[u8], _sig: &[u8], ctx: &[u8]| {
-            (key == e.spend.executor_pubkey.as_slice() && msg == auth_msg.as_byte_slice() && ctx == PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT)
+            (key == e.spend.executor_pubkey.as_slice()
+                && msg == auth_msg.as_byte_slice()
+                && ctx == PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT)
                 || (key == e.spend.builder_pubkey.as_slice()
                     && msg == spend_msg.as_byte_slice()
                     && ctx == PALW_RECEIPT_V4_SPEND_MLDSA87_CONTEXT)
@@ -776,7 +798,11 @@ mod tests {
             }
         }
         assert_eq!(palw_receipt_v4_split_v1(10_000, 500), (9_500, 500));
-        assert_eq!(palw_receipt_v4_split_v1(19, 500), (19, 0), "below one fee unit the builder gets nothing: the miner keeps the dust");
+        assert_eq!(
+            palw_receipt_v4_split_v1(19, 500),
+            (19, 0),
+            "below one fee unit the builder gets nothing: the miner keeps the dust"
+        );
         assert_eq!(palw_receipt_v4_split_v1(1_000, 0), (1_000, 0));
     }
 

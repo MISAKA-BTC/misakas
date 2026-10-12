@@ -16,8 +16,11 @@ fn spec(with: bool) -> ModelSpec {
     let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/tiny/llama.json")).unwrap();
     let mut s = parse_config_str(&cfg).unwrap();
     if with {
-        s.head.transform =
-            Some(HeadTransformSpec { bias: true, act: Act::Gelu, norm: NormSpec { kind: NormKind::Layer, eps: 1e-5, gain: Gain::W, bias: true } });
+        s.head.transform = Some(HeadTransformSpec {
+            bias: true,
+            act: Act::Gelu,
+            norm: NormSpec { kind: NormKind::Layer, eps: 1e-5, gain: Gain::W, bias: true },
+        });
         s.hf.names.insert("head.transform.dense".into(), "head.transform.dense".into());
         s.hf.names.insert("head.transform.norm".into(), "head.transform.norm".into());
     }
@@ -27,7 +30,10 @@ fn spec(with: bool) -> ModelSpec {
 #[test]
 fn a_head_transform_is_dense_act_norm_before_the_head() {
     let (plain, with) = (spec(false), spec(true));
-    assert!(with.features().iter().any(|f| f.id.0 == "HEAD_TRANSFORM_V1") && !plain.features().iter().any(|f| f.id.0 == "HEAD_TRANSFORM_V1"));
+    assert!(
+        with.features().iter().any(|f| f.id.0 == "HEAD_TRANSFORM_V1")
+            && !plain.features().iter().any(|f| f.id.0 == "HEAD_TRANSFORM_V1")
+    );
     let (p0, p1) = (hl::build_program(&plain).unwrap(), hl::build_program(&with).unwrap());
     p1.validate().unwrap();
     let names: Vec<&str> = p1.params.iter().map(|d| d.name.as_str()).collect();

@@ -29,7 +29,9 @@ use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_FP_DECODE_RULES_POST_LAUNCH_FENCE_V1, Params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwFpIntervalVerdictV1};
-use kaspa_consensus_core::palw_fp_objects_v3::{PalwFpClassCapsV1, PalwFpDerivedWorkCapV1, palw_fp_objects_from_accepted_txs_by_class_v1};
+use kaspa_consensus_core::palw_fp_objects_v3::{
+    PalwFpClassCapsV1, PalwFpDerivedWorkCapV1, palw_fp_objects_from_accepted_txs_by_class_v1,
+};
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PalwFpCommitmentTxPayloadV3, PalwFpDecodeRulesV1, PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3, fp_job_id_v3,
 };
@@ -58,7 +60,12 @@ fn t12_with_v4() -> Params {
     p
 }
 
-fn fold_at(p: &Params, parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]) -> Result<PalwChainStateV2, PalwStateV2Error> {
+fn fold_at(
+    p: &Params,
+    parent: &PalwChainStateV2,
+    c: &PalwBlockContextV2,
+    objects: &[PalwConsensusObjectV2],
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let sp = bundle(p).state;
     let f = flags(p, c.daa_score);
     let mut e = extras(p, c.daa_score);
@@ -134,7 +141,8 @@ fn chain(p: &Params) -> (PalwChainStateV2, Hash64) {
     let g = genesis_state(p);
     let s = fold_at(p, &g, &ctx(1, 100, 1, 0), &[bond_obj(1, at_least_the_floor(p, 100_000_000_000))]).expect("the executor bonds");
     let s = seed_prereqs(p, &s);
-    let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
+    let publish =
+        PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
     let s = fold_at(p, &s, &ctx(2, 101, 2, 0), &[publish]).expect("the floor publishes its graph");
     (s, floor)
 }
@@ -179,7 +187,12 @@ fn walk(p: &Params, s: &PalwChainStateV2, tx: &Transaction, rules: PalwFpDecodeR
 
 /// **The node's claim row** for a claim in the fold's state — the fields `GetPalwFreePromptClaim` returns (`rpc/service`), from the same
 /// `PalwClaimStateV2`.
-fn claim_row(s: &PalwChainStateV2, id: &Hash64, sink: Hash64, daa: u64) -> (kaspa_rpc_core::GetPalwFreePromptClaimResponse, ChainObservation) {
+fn claim_row(
+    s: &PalwChainStateV2,
+    id: &Hash64,
+    sink: Hash64,
+    daa: u64,
+) -> (kaspa_rpc_core::GetPalwFreePromptClaimResponse, ChainObservation) {
     let row = match s.claim(id) {
         None => kaspa_rpc_core::GetPalwFreePromptClaimResponse::default(),
         Some(c) => {
@@ -230,7 +243,8 @@ struct Produced {
 fn produce(p: &Params, w: &FloorWorker, dir: &std::path::Path, decode_rules: bool, request: &serde_json::Value) -> Produced {
     let (mut cfg, mut id, mut facts) = (config(dir), identity(&w.profile), certified_facts(decode_rules));
     // The gateway's identity is the chain fixture's executor: the bond the fold knows, its key, its operator, the network's domain.
-    id.network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
+    id.network_domain =
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
     id.executor_bond = bond_key(1).0;
     id.bond_txid_hex = id.executor_bond.transaction_id.to_string();
     id.executor_pubkey = pubkey_of(1);
@@ -242,10 +256,15 @@ fn produce(p: &Params, w: &FloorWorker, dir: &std::path::Path, decode_rules: boo
     let body = crate::testkit::chat(&cfg, &id, w, &facts, &source, request, &serving::AlwaysPresent).expect("the gateway answers");
     assert_eq!(body["misaka"]["committed"], true, "{}", body["misaka"]["not_committed_because"]);
     let stem = format!("fp-job-{}", &body["misaka"]["fp_job_id"].as_str().unwrap()[..16]);
-    let commitment: PalwFreePromptCommitmentV3 = borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
+    let commitment: PalwFreePromptCommitmentV3 =
+        borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
     let result: PalwFpWorkerResultV3 = borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.result.borsh"))).unwrap()).unwrap();
     let capture = crate::evidence::read_capture(dir, &fp_job_id_v3(&commitment.job)).expect("the retained capture");
-    assert_eq!(fp_claim_id_v3(&commitment).to_string(), body["misaka"]["fp_claim_id"].as_str().unwrap(), "the response names the claim the outbox holds");
+    assert_eq!(
+        fp_claim_id_v3(&commitment).to_string(),
+        body["misaka"]["fp_claim_id"].as_str().unwrap(),
+        "the response names the claim the outbox holds"
+    );
     Produced { body, commitment, result, capture, stem }
 }
 
@@ -275,7 +294,8 @@ fn submit(dir: &std::path::Path, produced: &Produced, chain_daa: u64) -> (Transa
             Ok(tx.id().to_string())
         }
     }
-    let submitted = futures_lite_block_on(misaka_palw_fp_submit::execute_handoff(&plan, &tx, Some(&retention), Accept)).expect("the handoff");
+    let submitted =
+        futures_lite_block_on(misaka_palw_fp_submit::execute_handoff(&plan, &tx, Some(&retention), Accept)).expect("the handoff");
     (tx, submitted)
 }
 
@@ -321,7 +341,9 @@ fn seats_replay(w: &FloorWorker, produced: &Produced) {
         // A seat recomputes the checkpoint root of the prefix the opening covers from the ids it holds, as the base0 e2e does.
         if let Some((_, covered, _)) = misaka_palw_base0::fp_interval::base0_fp_interval_opening_anchor_v1(&opening) {
             let ctx = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().binding.job_context;
-            backend.checkpoint_root_for_context_v1(&ctx, ids, &produced.result.output_token_ids, covered).expect("the seat recomputes");
+            backend
+                .checkpoint_root_for_context_v1(&ctx, ids, &produced.result.output_token_ids, covered)
+                .expect("the seat recomputes");
         }
         let verdict = backend.verify_fp_interval_opening_under_job_v1(
             &opening,
@@ -344,7 +366,11 @@ fn a_v3_gateway_request_becomes_a_claim_the_fold_holds_a_receipt_the_chain_confi
     let w = FloorWorker::new(&dir.join("traces"), FORM);
     let request = serde_json::json!({ "messages": [{ "role": "user", "content": "hi" }], "max_tokens": 4 });
     let produced = produce(&p, &w, &dir, false, &request);
-    assert_eq!(produced.commitment.job.version, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION, "the live lane: FP Job V3");
+    assert_eq!(
+        produced.commitment.job.version,
+        kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+        "the live lane: FP Job V3"
+    );
 
     // ---- submit: fp-submit's plan and handoff ----
     let (tx, submitted) = submit(&dir, &produced, 105);
@@ -352,7 +378,11 @@ fn a_v3_gateway_request_becomes_a_claim_the_fold_holds_a_receipt_the_chain_confi
     assert_eq!(submitted.claim_id, claim_id);
     let material = submitted.material_path.expect("the material was committed beside the retention dir after the node accepted");
     assert!(material.exists());
-    let partials = std::fs::read_dir(dir.join("retention")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".partial")).count();
+    let partials = std::fs::read_dir(dir.join("retention"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".partial"))
+        .count();
     assert_eq!(partials, 0, "after the node accepted, every staged file took its real name");
 
     // ---- the node: the extraction walk, then the fold ----
@@ -360,7 +390,10 @@ fn a_v3_gateway_request_becomes_a_claim_the_fold_holds_a_receipt_the_chain_confi
     assert_eq!(objects.len(), 1, "the carrier is stateless-admissible and the walk opens one claim");
     let s = fold_at(&p, &s, &ctx(3, 112, 3, 0), &objects).expect("the real fold opens the gateway's claim");
     let claim = s.claim(&claim_id).expect("THE CLAIM IS VISIBLE in the state");
-    assert_eq!((claim.output_root, claim.execution_root, claim.trace_root), (produced.commitment.output_root, produced.commitment.execution_root, produced.commitment.trace_root));
+    assert_eq!(
+        (claim.output_root, claim.execution_root, claim.trace_root),
+        (produced.commitment.output_root, produced.commitment.execution_root, produced.commitment.trace_root)
+    );
     assert_eq!(claim.work_leaves, produced.commitment.work_leaves);
     assert_eq!(claim.bond, bond_key(1), "and it names the gateway's executor bond");
 
@@ -368,7 +401,9 @@ fn a_v3_gateway_request_becomes_a_claim_the_fold_holds_a_receipt_the_chain_confi
     let (row, observation) = claim_row(&s, &claim_id, h(0x51), 113);
     let sealed = receipt::ReceiptV1::from_json(&produced.body["misaka"]["receipt"]).unwrap().with_txid(Some(submitted.txid.clone()));
     match receipt::check_against_chain(&sealed, &row).expect("the node's row agrees with the receipt the user holds") {
-        receipt::ChainStanding::Agrees { phase, label } => assert_eq!((phase.as_str(), label), ("provisional", "UNVERIFIED_REMOTE_STATE")),
+        receipt::ChainStanding::Agrees { phase, label } => {
+            assert_eq!((phase.as_str(), label), ("provisional", "UNVERIFIED_REMOTE_STATE"))
+        }
         other => panic!("{other:?}"),
     }
     // ... and the user's output recomputes to the committed root from the retained job context.
@@ -409,16 +444,28 @@ fn a_v3_gateway_request_becomes_a_claim_the_fold_holds_a_receipt_the_chain_confi
     seats_replay(&w, &produced);
     let bonds = genesis_bonds(&p);
     let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
-    let s = fold_at(&p, &s, &ctx(4, 113, 4, 0), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats }]).expect("the panel binds");
+    let s = fold_at(&p, &s, &ctx(4, 113, 4, 0), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h(0xA1), seats }])
+        .expect("the panel binds");
     let receipts: Vec<PalwSeatReceiptV2> = bonds[0..3]
         .iter()
-        .map(|(k, _, _)| PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 114, signature: Vec::new() })
+        .map(|(k, _, _)| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: *k,
+            signed_daa: 114,
+            signature: Vec::new(),
+        })
         .collect();
-    let s = fold_at(&p, &s, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }]).expect("the Valid quorum licenses");
+    let s = fold_at(&p, &s, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }])
+        .expect("the Valid quorum licenses");
     assert!(matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     let (_, licensed) = claim_row(&s, &claim_id, h(0x52), 120);
     let report = status::status_with_chain(&local, Some(&Observe(licensed)), 60, None);
-    assert_eq!((report.status, report.chain_state.as_deref()), (status::RequestStatus::Submitted, Some("Licensed")), "licensed is still not final");
+    assert_eq!(
+        (report.status, report.chain_state.as_deref()),
+        (status::RequestStatus::Submitted, Some("Licensed")),
+        "licensed is still not final"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -442,7 +489,11 @@ fn a_v4_gateway_request_is_carried_only_past_the_test_armed_fence_credited_decod
     let job = &produced.commitment.job;
     assert_eq!(job.version, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION, "past the fence every job is V4");
     let decode = job.decode.as_ref().expect("a V4 job carries its decode config");
-    assert_eq!((decode.repeat_penalty_q, decode.presence_penalty_q), (131_072, 1 << 23), "the gateway normalized the request's floats to the frozen fixed point");
+    assert_eq!(
+        (decode.repeat_penalty_q, decode.presence_penalty_q),
+        (131_072, 1 << 23),
+        "the gateway normalized the request's floats to the frozen fixed point"
+    );
     assert_eq!(decode.stop_sequences, vec![vec![126, 126, 126]], "the stop string was spelled into token ids by the worker");
     assert_eq!((job.temperature_q, job.sampling_seed), (1 << 23, [0x3C; 32]));
     let (tx, _submitted) = submit(&dir, &produced, 105);
@@ -459,7 +510,12 @@ fn a_v4_gateway_request_is_carried_only_past_the_test_armed_fence_credited_decod
     let unarmed = palw_t12_shipped_params();
     let (s_unarmed, _) = chain(&unarmed);
     let s_unarmed = fold_at(&unarmed, &s_unarmed, &ctx(3, 112, 3, 0), &objects).expect("the unarmed fold prices it too");
-    assert!(claim.pwu < s_unarmed.claim(&claim_id).expect("priced unarmed").pwu, "D10: prefill is priced at zero ({} !< {})", claim.pwu, s_unarmed.claim(&claim_id).unwrap().pwu);
+    assert!(
+        claim.pwu < s_unarmed.claim(&claim_id).expect("priced unarmed").pwu,
+        "D10: prefill is priced at zero ({} !< {})",
+        claim.pwu,
+        s_unarmed.claim(&claim_id).unwrap().pwu
+    );
     // The receipt's decode-rule digest is the V4 rule, and a seat replays the sampled, penalized, stopped run to Valid.
     let sealed = receipt::ReceiptV1::from_json(&produced.body["misaka"]["receipt"]).unwrap();
     assert_eq!(sealed.body.decode_config_digest, receipt::decode_rule_digest(job));

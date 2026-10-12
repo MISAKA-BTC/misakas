@@ -871,7 +871,9 @@ pub mod transport {
 #[cfg(unix)]
 pub mod sidecar {
     use super::transport::SignerClient;
-    use kaspa_consensus_core::dns_finality::{HostId, SignerMessageDigest, SignerMetadata, SignerRequest, SigningPurpose, validator_id_from_pubkey};
+    use kaspa_consensus_core::dns_finality::{
+        HostId, SignerMessageDigest, SignerMetadata, SignerRequest, SigningPurpose, validator_id_from_pubkey,
+    };
     use kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT;
     use kaspa_consensus_core::palw_receipt_v4::PALW_RECEIPT_V4_AUTH_MLDSA87_CONTEXT;
     use kaspa_hashes::Hash64;
@@ -906,7 +908,9 @@ pub mod sidecar {
         }
 
         fn sign_message(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
-            let digest: [u8; 64] = message.try_into().map_err(|_| format!("the sidecar signs 64-byte digests, this message is {} bytes", message.len()))?;
+            let digest: [u8; 64] = message
+                .try_into()
+                .map_err(|_| format!("the sidecar signs 64-byte digests, this message is {} bytes", message.len()))?;
             let digest = Hash64::from_bytes(digest);
             let (purpose, message_digest) = if context == PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT {
                 (SigningPurpose::PalwFpCommitmentV3, SignerMessageDigest::PalwFpCommitmentV3(digest))
@@ -1697,7 +1701,8 @@ mod tests {
         assert_eq!(through_sidecar.outputs, in_process_tx.outputs);
         assert_eq!(through_sidecar.inputs[0].previous_outpoint, in_process_tx.inputs[0].previous_outpoint);
         assert_eq!(through_sidecar.inputs[0].signature_script.len(), in_process_tx.inputs[0].signature_script.len());
-        let decoded: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&through_sidecar.payload).unwrap();
+        let decoded: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
+            borsh::from_slice(&through_sidecar.payload).unwrap();
         let in_process_decoded: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
             borsh::from_slice(&in_process_tx.payload).unwrap();
         assert_eq!(decoded.commitment, in_process_decoded.commitment);
@@ -1722,7 +1727,10 @@ mod tests {
         let sig_len = 4627 + 1;
         // <push sig‖hashtype> <push pubkey>: skip the 3-byte PUSHDATA2 framing of the signature.
         let sig = &script[3..3 + sig_len - 1];
-        assert!(in_process.verify_with_context(sighash.as_bytes().as_slice(), sig, MLDSA87_TX_CONTEXT), "the daemon's funding signature verifies");
+        assert!(
+            in_process.verify_with_context(sighash.as_bytes().as_slice(), sig, MLDSA87_TX_CONTEXT),
+            "the daemon's funding signature verifies"
+        );
 
         // The adapter is not a "sign these bytes" door: another context is refused before the wire, and a wrongly sized message too.
         assert!(sidecar.sign_message(&[0u8; 64], b"misaka-palw/some-other-context").is_err());

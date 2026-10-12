@@ -122,7 +122,10 @@ mod tests {
     fn pooling_refuses_by_name() {
         assert_eq!(palw_embedding_pool_v1(&[], PalwEmbeddingPoolV1::Mean), Err("no positions to pool"));
         assert_eq!(palw_embedding_pool_v1(&[vec![]], PalwEmbeddingPoolV1::Mean), Err("a hidden row of zero or too many dimensions"));
-        assert_eq!(palw_embedding_pool_v1(&[vec![1, 2], vec![1]], PalwEmbeddingPoolV1::LastToken), Err("hidden rows of different widths"));
+        assert_eq!(
+            palw_embedding_pool_v1(&[vec![1, 2], vec![1]], PalwEmbeddingPoolV1::LastToken),
+            Err("hidden rows of different widths")
+        );
         let wide = vec![0i32; PALW_EMBEDDING_MAX_DIMS_V1 + 1];
         assert!(palw_embedding_pool_v1(&[wide], PalwEmbeddingPoolV1::Mean).is_err());
         assert_eq!(PalwEmbeddingPoolV1::from_tag(2), None);

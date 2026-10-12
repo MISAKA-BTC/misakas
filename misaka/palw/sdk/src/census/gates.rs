@@ -9,8 +9,8 @@
 //!   shape depth for `admit`). `pack` needs the weights and `seat`/`final` a chain: in a census they are never `PASS`.
 
 use super::codes::{self, Gate, GateStatus};
-use super::onboarding::{GapClassV1, classify_census_code_v1};
 use super::listing::{ArtifactKind, ListingV1, SelectedV1, StrataV1, TaskV1, select, strata_of, task_of, torch_checkpoint_only};
+use super::onboarding::{GapClassV1, classify_census_code_v1};
 use super::rights::{RightsPolicy, RightsV1, rights_of};
 use super::store::{self, Fetched};
 use super::tasks::Profile;
@@ -86,7 +86,17 @@ fn fail(gate: Gate, mut f: Vec<Found>, depth: &str) -> GateResultV1 {
 }
 
 fn pass(gate: Gate, depth: &str, evidence: Vec<String>) -> GateResultV1 {
-    GateResultV1 { gate, status: GateStatus::Pass, blocking: None, arg: None, codes: vec![], evidence, depth: Some(depth.into()), class: None, class_reason: None }
+    GateResultV1 {
+        gate,
+        status: GateStatus::Pass,
+        blocking: None,
+        arg: None,
+        codes: vec![],
+        evidence,
+        depth: Some(depth.into()),
+        class: None,
+        class_reason: None,
+    }
 }
 
 fn not_run(gate: Gate, why: &str, evidence: Vec<String>) -> GateResultV1 {
@@ -780,7 +790,12 @@ pub fn evaluate(l: &ListingV1, fetched: Option<&Fetched>, ctx: &CensusContext) -
         && let Some(t) = fetched.and_then(store::base_task_of)
     {
         let r = super::tasks::task_row(t);
-        task = TaskV1 { task: t.to_string(), group: r.group.to_string(), profile: r.profile, source: "inferred:base-architecture".into() };
+        task = TaskV1 {
+            task: t.to_string(),
+            group: r.group.to_string(),
+            profile: r.profile,
+            source: "inferred:base-architecture".into(),
+        };
     }
     let strata = strata_of(l, &task, &sel);
     let rights = rights_of(l, ctx.policy);
@@ -1321,12 +1336,21 @@ mod tests {
     fn a_pytorch_checkpoint_is_not_run_never_an_unsupported_format() {
         for sib in [
             vec!["config.json", "pytorch_model.bin"],
-            vec!["config.json", "pytorch_model.bin.index.json", "pytorch_model-00001-of-00002.bin", "pytorch_model-00002-of-00002.bin"],
+            vec![
+                "config.json",
+                "pytorch_model.bin.index.json",
+                "pytorch_model-00001-of-00002.bin",
+                "pytorch_model-00002-of-00002.bin",
+            ],
             vec!["config.json", "pytorch_model-00001-of-00002.bin"],
         ] {
             let r = evaluate(&listing(Some("text-generation"), &sib), None, &ctx());
             let lo = gate(&r.technical, Gate::Lower);
-            assert_eq!((lo.status, lo.blocking.as_deref(), lo.arg.as_deref()), (GateStatus::NotRun, Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY), Some("pytorch")), "{sib:?}");
+            assert_eq!(
+                (lo.status, lo.blocking.as_deref(), lo.arg.as_deref()),
+                (GateStatus::NotRun, Some(codes::NOT_RUN_NEEDS_PICKLE_DIRECTORY), Some("pytorch")),
+                "{sib:?}"
+            );
             assert_eq!(lo.class, Some(GapClassV1::NotRun));
             assert!(!lo.class.unwrap().is_semantic_gap());
             assert!(!r.shape_ready, "unmeasured is not ready");

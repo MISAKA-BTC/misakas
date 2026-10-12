@@ -137,6 +137,13 @@ fn print_block_nodes() {
             .iter()
             .filter_map(|r| if let misaka_palw_tir::Ref::Param(j) = r { Some(p.params[*j as usize].name.clone()) } else { None })
             .collect();
-        eprintln!("{i:>4} {:<10} {:?} {}{} {:?}", n.prim.name(), n.out.shape, if n.commit { "COMMIT " } else { "" }, ins.join(","), pn);
+        eprintln!(
+            "{i:>4} {:<10} {:?} {}{} {:?}",
+            n.prim.name(),
+            n.out.shape,
+            if n.commit { "COMMIT " } else { "" },
+            ins.join(","),
+            pn
+        );
     }
 }

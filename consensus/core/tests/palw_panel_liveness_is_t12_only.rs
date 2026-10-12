@@ -62,7 +62,11 @@ fn validate_all(p: &Params) -> Result<(), String> {
 #[test]
 fn the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
     for (name, p) in presets() {
-        assert_eq!((p.palw_panel_unavailable_expiry, p.palw_panel_fast_switch, p.palw_seat_availability), (None, None, None), "{name}");
+        assert_eq!(
+            (p.palw_panel_unavailable_expiry, p.palw_panel_fast_switch, p.palw_seat_availability),
+            (None, None, None),
+            "{name}"
+        );
         assert_eq!(mirrors(&p), (None, None, None), "{name}: the fold's mirrors are empty");
         for fence in [C, D, E] {
             assert!(p.palw_fences_v1().iter().any(|(n, f)| *n == fence && f.is_none()), "{name}: {fence} is on the fork-id list");
@@ -141,7 +145,9 @@ fn each_fence_needs_its_prerequisites_at_or_below_it_and_its_mirror() {
     // A field armed without its mirror disagrees with the bundle; a mirror without the field is refused.
     let mut unsynced = base.clone();
     unsynced.palw_seat_availability = Some(ForkActivation::new(h));
-    assert!(format!("{:?}", unsynced.validate_palw_seat_availability_v1().unwrap_err()).contains("disagrees with the V2 bundle's mirror"));
+    assert!(
+        format!("{:?}", unsynced.validate_palw_seat_availability_v1().unwrap_err()).contains("disagrees with the V2 bundle's mirror")
+    );
     let mut orphan = base.clone();
     if let PalwConsensusMode::ConsensusV2(bundle) = &mut orphan.palw_consensus_mode {
         bundle.state = bundle.state.clone().with_panel_unavailable_expiry_mirror(Some(h));

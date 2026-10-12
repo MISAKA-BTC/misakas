@@ -12,7 +12,9 @@ pub(in crate::palw_panel) const RAW: &[u8] = br#"{"model":{"vocab":{"a":0,"b":1}
 
 // Use an actual floor disclosure for the profile/legs, then commit the prospective
 // registered constraint descriptor. No producer capture or injected court verdict is read.
-pub(in crate::palw_panel) fn prospective_table(table_fault: bool) -> (PalwOffenceTargetV1, PalwStepBindingV2, PalwFreePromptJobV3, PalwTokenTableV1) {
+pub(in crate::palw_panel) fn prospective_table(
+    table_fault: bool,
+) -> (PalwOffenceTargetV1, PalwStepBindingV2, PalwFreePromptJobV3, PalwTokenTableV1) {
     let backend = crate::palw_panel::seat_s_tests::floor_backend();
     let (mut job, ids) = crate::palw_panel::seat_s_tests::floor_fp_job(&backend);
     let run = backend.execute_free_prompt(&job, &ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();

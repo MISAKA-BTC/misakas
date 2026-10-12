@@ -62,9 +62,12 @@ pub fn transformers_version() -> &'static str {
 /// check's to judge, and a static scan of the modelling code does not speak for it.
 pub fn is_storage_marker(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
-    ["quant", "bnb", "awq", "gptq", "mlx", "gguf", "torchao", "hqq", "fp8", "fp4", "int4", "int8", "nf4", "bits", "bit", "load_in", "exl2", "exl3"]
-        .iter()
-        .any(|m| k.contains(m))
+    [
+        "quant", "bnb", "awq", "gptq", "mlx", "gguf", "torchao", "hqq", "fp8", "fp4", "int4", "int8", "nf4", "bits", "bit", "load_in",
+        "exl2", "exl3",
+    ]
+    .iter()
+    .any(|m| k.contains(m))
 }
 
 /// Whether the table knows `model_type` and, when `arch` is given, lists that class as one of its modelling classes.
@@ -99,11 +102,22 @@ mod tests {
 
     #[test]
     fn a_key_no_transformers_llama_reads_is_never_read_and_one_it_reads_is_not() {
-        let junk = k(&["depth_alpha_enabled", "shard_idx", "organization", "moe_intermediate_size", "predict_special_tokens", "freeze_mm_mlp_adapter"]);
+        let junk = k(&[
+            "depth_alpha_enabled",
+            "shard_idx",
+            "organization",
+            "moe_intermediate_size",
+            "predict_special_tokens",
+            "freeze_mm_mlp_adapter",
+        ]);
         assert_eq!(never_read(Some("LlamaForCausalLM"), "llama", &junk), junk);
         // What LlamaConfig defines or llama's modelling reads stays: head_dim, sliding_window (shared masking), rope_theta, mlp_bias.
         let read = k(&["head_dim", "sliding_window", "rope_theta", "mlp_bias", "attention_bias", "pretraining_tp", "hidden_act"]);
-        assert!(never_read(Some("LlamaForCausalLM"), "llama", &read).is_empty(), "{:?}", never_read(Some("LlamaForCausalLM"), "llama", &read));
+        assert!(
+            never_read(Some("LlamaForCausalLM"), "llama", &read).is_empty(),
+            "{:?}",
+            never_read(Some("LlamaForCausalLM"), "llama", &read)
+        );
     }
 
     #[test]
@@ -129,7 +143,16 @@ mod tests {
 
     #[test]
     fn a_storage_format_marker_is_never_inert_whatever_the_scan_says() {
-        for key in ["quantization", "quantization_config", "load_in_4bit", "bnb_4bit_quant_type", "bits", "awq_version", "mlx_group", "gguf_file"] {
+        for key in [
+            "quantization",
+            "quantization_config",
+            "load_in_4bit",
+            "bnb_4bit_quant_type",
+            "bits",
+            "awq_version",
+            "mlx_group",
+            "gguf_file",
+        ] {
             assert!(is_storage_marker(key), "{key}");
             assert!(never_read(Some("LlamaForCausalLM"), "llama", &k(&[key])).is_empty() || !is_storage_marker(key), "{key}");
         }

@@ -45,7 +45,9 @@ pub enum CheckpointError {
     UnknownSigner(Vec<u8>),
     #[error("the checkpoint's signature does not verify")]
     BadSignature,
-    #[error("the checkpoint was issued at DAA {issued} and the chain is at {now}: older than the allowed {max_age} — a fresh signed checkpoint is required")]
+    #[error(
+        "the checkpoint was issued at DAA {issued} and the chain is at {now}: older than the allowed {max_age} — a fresh signed checkpoint is required"
+    )]
     Stale { issued: u64, now: u64, max_age: u64 },
     #[error("the checkpoint is issued in the future of the chain view ({issued} > {now})")]
     FromTheFuture { issued: u64, now: u64 },
@@ -112,12 +114,24 @@ mod tests {
     #[test]
     fn stale_future_foreign_and_forged_checkpoints_are_refused_by_name() {
         let ok = sign(signed(5_000, 5_100));
-        assert!(matches!(verify_signed_checkpoint(&ok, &TRUSTED(), "testnet-12", 9_000, 500, toy), Err(CheckpointError::Stale { .. })));
-        assert!(matches!(verify_signed_checkpoint(&ok, &TRUSTED(), "testnet-12", 5_000, 500, toy), Err(CheckpointError::FromTheFuture { .. })));
-        assert!(matches!(verify_signed_checkpoint(&ok, &TRUSTED(), "mainnet", 5_150, 500, toy), Err(CheckpointError::WrongNetwork { .. })));
+        assert!(matches!(
+            verify_signed_checkpoint(&ok, &TRUSTED(), "testnet-12", 9_000, 500, toy),
+            Err(CheckpointError::Stale { .. })
+        ));
+        assert!(matches!(
+            verify_signed_checkpoint(&ok, &TRUSTED(), "testnet-12", 5_000, 500, toy),
+            Err(CheckpointError::FromTheFuture { .. })
+        ));
+        assert!(matches!(
+            verify_signed_checkpoint(&ok, &TRUSTED(), "mainnet", 5_150, 500, toy),
+            Err(CheckpointError::WrongNetwork { .. })
+        ));
         assert!(matches!(verify_signed_checkpoint(&ok, &[], "testnet-12", 5_150, 500, toy), Err(CheckpointError::UnknownSigner(_))));
         let mut forged = ok.clone();
         forged.checkpoint.daa_score = 4_000; // changes the digest the signature was made over
-        assert!(matches!(verify_signed_checkpoint(&forged, &TRUSTED(), "testnet-12", 5_150, 500, toy), Err(CheckpointError::BadSignature)));
+        assert!(matches!(
+            verify_signed_checkpoint(&forged, &TRUSTED(), "testnet-12", 5_150, 500, toy),
+            Err(CheckpointError::BadSignature)
+        ));
     }
 }

@@ -25,8 +25,8 @@ use kaspa_consensus_core::config::drill::{
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
     PALW_T12_DECODE_RULES_FENCES_V1, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params,
-    SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
+    Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
     palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
     palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
@@ -46,7 +46,8 @@ use kaspa_consensus_core::palw_improve_state_v1::{
 };
 use kaspa_consensus_core::palw_improve_v1::{
     PALW_DRILL_IMPROVE_CEILINGS_V1, PALW_DRILL_IMPROVE_FENCES_V1, PALW_DRILL_IMPROVE_V1_ENTRY, PALW_IMPROVE_COURT_VERSION_V1,
-    PALW_T12_IMPROVE_CEILINGS_V1, PalwImprovementCeilingsV1, PalwImprovementFenceV1, palw_improve_scoring_set_id_v1, palw_improve_sign_table_id_v1,
+    PALW_T12_IMPROVE_CEILINGS_V1, PalwImprovementCeilingsV1, PalwImprovementFenceV1, palw_improve_scoring_set_id_v1,
+    palw_improve_sign_table_id_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{
     PalwBondKeyV2, PalwConsensusObjectV2, palw_improvement_object_name_v1, palw_object_is_gen_v1, palw_object_is_improvement_v1,
@@ -180,7 +181,11 @@ fn every_ruleset_leaves_it_dormant_but_testnet12s_int11_release_which_arms_it_at
     let decode_names: Vec<&str> = PALW_T12_DECODE_RULES_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(decode_names, ["palw_fp_decode_rules"]);
     assert!(palw_t12_release_v5_params().palw_fp_decode_rules.is_none(), "dormant on the int-10 release");
-    assert_eq!(palw_t12_shipped_params().palw_fp_decode_rules, PALW_T12_INT11_FLAG_DAY_DAA.map(ForkActivation::new), "armed at H by the int-11 list");
+    assert_eq!(
+        palw_t12_shipped_params().palw_fp_decode_rules,
+        PALW_T12_INT11_FLAG_DAY_DAA.map(ForkActivation::new),
+        "armed at H by the int-11 list"
+    );
     let names: Vec<&str> = PALW_DRILL_IMPROVE_FENCES_V1.iter().map(|f| f.name).collect();
     assert_eq!(names, ["palw_improvement_v1"]);
 }

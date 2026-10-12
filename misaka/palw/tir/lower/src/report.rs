@@ -4,11 +4,11 @@
 //! `EXCEEDS`, `NEEDS_PRIMITIVE`) arrive with TIR expansion and the verifier in Gate 2.
 
 use crate::error::{LowerError, Result};
+use crate::hf_weights;
 use crate::hl::{self, HlProgram, cost};
 use crate::rope::RopeStyle;
 use crate::spec::*;
 use crate::weights::{self, Checkpoint, IndexOnly, WeightReport};
-use crate::hf_weights;
 use std::fmt::Write;
 use std::path::Path;
 
@@ -189,9 +189,14 @@ fn mixer(m: &Mixer) -> String {
         Mixer::RwkvTime(r) => format!("RWKV-{} time mix, attention dim {}", r.version, r.attn_dim),
         Mixer::ShortConv(c) => format!("gated short convolution, kernel {}", c.kernel),
         Mixer::None => "none (the layer is its FFN)".into(),
-        Mixer::CrossAttention(c) => format!("cross-attention to vision states, {}q/{}kv × {} (skipped without states)", c.heads, c.kv_heads, c.head_dim),
+        Mixer::CrossAttention(c) => {
+            format!("cross-attention to vision states, {}q/{}kv × {} (skipped without states)", c.heads, c.kv_heads, c.head_dim)
+        }
         Mixer::Parallel(bs) => {
-            format!("parallel: {}", bs.iter().map(|b| format!("[{}]×{}→×{}", mixer(&b.mixer), b.in_scale, b.out_scale)).collect::<Vec<_>>().join(" + "))
+            format!(
+                "parallel: {}",
+                bs.iter().map(|b| format!("[{}]×{}→×{}", mixer(&b.mixer), b.in_scale, b.out_scale)).collect::<Vec<_>>().join(" + ")
+            )
         }
         Mixer::SharedKv(a) => format!(
             "shared-KV attention {} heads × {} (K = V), q rank {}, o {} groups × {}, window {}{}",
@@ -259,7 +264,9 @@ fn ffn(f: &Ffn) -> String {
         Ffn::RwkvChannel(c) => format!("RWKV-{} channel mix {}", c.version, c.intermediate),
         Ffn::MlpMoe(mm) => format!("{} beside {}", ffn(&Ffn::Mlp(mm.mlp.clone())), ffn(&Ffn::Moe(mm.moe.clone()))),
         Ffn::MlpShortcut(sc) => match &sc.side {
-            ShortcutSide::Produce(m) => format!("{}, its MoE carried to the next layer: {}", ffn(&Ffn::Mlp(sc.mlp.clone())), ffn(&Ffn::Moe(m.clone()))),
+            ShortcutSide::Produce(m) => {
+                format!("{}, its MoE carried to the next layer: {}", ffn(&Ffn::Mlp(sc.mlp.clone())), ffn(&Ffn::Moe(m.clone())))
+            }
             ShortcutSide::Consume => format!("{} plus the previous layer's carried MoE", ffn(&Ffn::Mlp(sc.mlp.clone()))),
         },
     }
@@ -295,7 +302,9 @@ fn residual(r: &Residual) -> String {
         ),
         Residual::HyperConnection { ple } => format!(
             "hyper-connections{}",
-            ple.as_ref().map(|p| format!(", n-gram per-layer embedding ({}-grams × {} heads)", p.ngram_size, p.heads_per_ngram)).unwrap_or_default()
+            ple.as_ref()
+                .map(|p| format!(", n-gram per-layer embedding ({}-grams × {} heads)", p.ngram_size, p.heads_per_ngram))
+                .unwrap_or_default()
         ),
     }
 }

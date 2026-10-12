@@ -68,8 +68,8 @@ fn run(name: &str) -> Result<Outcome, String> {
         return Err(format!("checkpoint tensors the program never reads: {unused:?}"));
     }
     // The float reference (the dequantised weights) against transformers with the same weights.
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     let tokens: Vec<usize> = meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
     let want: Vec<Vec<f64>> = meta["logits_full"]
         .as_array()
@@ -93,7 +93,8 @@ fn run(name: &str) -> Result<Outcome, String> {
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &quiet).map_err(|e| e.to_string())?;
     let measure = |lw: &lower::Lowered| -> Result<(Metrics, usize, usize), String> {
-        let mat = materialise(lw, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+        let mat =
+            materialise(lw, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
         let il: Vec<Vec<Vec<f64>>> = eval
             .iter()
             .map(|s| fidelity::int_logits(&lw.program, &mat.params, s, mat.logits_scale, &|_| {}))

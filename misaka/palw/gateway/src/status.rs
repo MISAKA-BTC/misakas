@@ -113,7 +113,9 @@ pub fn read_local_facts(outbox: &Path, stem: &str) -> Option<LocalFacts> {
         expired: outbox.join(format!("{stem}.commitment-unsigned.borsh{}", misaka_palw_fp_submit::EXPIRED_SUFFIX)).exists(),
         ..LocalFacts::default()
     };
-    if let Some(rail) = std::fs::read(outbox.join(format!("{stem}.rail.json"))).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+    if let Some(rail) =
+        std::fs::read(outbox.join(format!("{stem}.rail.json"))).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+    {
         facts.rail_txid = rail.get("submitted").and_then(serde_json::Value::as_str).map(str::to_string);
         facts.rail_relayed = rail.get("relayed").is_some_and(|r| !r.is_null());
     }
@@ -194,7 +196,9 @@ pub fn derive_status(local: &LocalFacts, chain: Option<&ChainSighting>) -> Statu
                 p,
                 "the chain's claim row is Final and finality_depth DAA deep; the label says how this was learned",
             ),
-            TrackState::Void { .. } => report(RequestStatus::Voided, Some(name), p, "the chain voided the claim; the answer is not a result"),
+            TrackState::Void { .. } => {
+                report(RequestStatus::Voided, Some(name), p, "the chain voided the claim; the answer is not a result")
+            }
             TrackState::Misattributed { .. } => report(
                 RequestStatus::Misattributed,
                 Some(name),
@@ -341,8 +345,14 @@ pub fn status_from_book(book: &RequestBook, id: &str) -> Option<StatusReport> {
             "tokens shown so far are provisional: no commitment exists until the run ends, and nothing here is a result",
         ));
     }
-    book.was_cancelled(id)
-        .then(|| report(RequestStatus::Cancelled, None, None, "the client left before the answer was committed; nothing was written and no claim exists"))
+    book.was_cancelled(id).then(|| {
+        report(
+            RequestStatus::Cancelled,
+            None,
+            None,
+            "the client left before the answer was committed; nothing was written and no claim exists",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -357,7 +367,14 @@ mod tests {
         TransactionOutpoint::new(h(9), 0)
     }
     fn committed() -> LocalFacts {
-        LocalFacts { committed: true, claim_id: Some(h(1)), job_id: Some(h(2)), output_root: Some(h(3)), executor_bond: Some(bond()), ..Default::default() }
+        LocalFacts {
+            committed: true,
+            claim_id: Some(h(1)),
+            job_id: Some(h(2)),
+            output_root: Some(h(3)),
+            executor_bond: Some(bond()),
+            ..Default::default()
+        }
     }
     struct Fixed(ChainObservation, usize);
     impl ClaimObserver for Fixed {
@@ -376,7 +393,12 @@ mod tests {
             sink: h(7),
             virtual_daa: daa,
             tx_in_mempool: mempool,
-            claim: claim.map(|(b, phase)| ClaimObs { executor_bond: TransactionOutpoint::new(h(b), 0), accepted_block: h(5), accepted_daa: 100, phase }),
+            claim: claim.map(|(b, phase)| ClaimObs {
+                executor_bond: TransactionOutpoint::new(h(b), 0),
+                accepted_block: h(5),
+                accepted_daa: 100,
+                phase,
+            }),
         }
     }
 
@@ -432,7 +454,11 @@ mod tests {
         let pooled = Fixed(obs(100, true, None), 1);
         let r = status_with_chain(&local, Some(&pooled), 60, None);
         assert_eq!((r.status, r.chain_state.as_deref()), (RequestStatus::Submitted, Some("Relayed")));
-        for phase in [ClaimPhaseObs::Provisional, ClaimPhaseObs::ReceiptLicensed { licensed_daa: 110 }, ClaimPhaseObs::Challengeable { ends_daa: 400 }] {
+        for phase in [
+            ClaimPhaseObs::Provisional,
+            ClaimPhaseObs::ReceiptLicensed { licensed_daa: 110 },
+            ClaimPhaseObs::Challengeable { ends_daa: 400 },
+        ] {
             let r = status_with_chain(&local, Some(&Fixed(obs(120, false, Some((9, phase))), 1)), 60, None);
             assert_eq!(r.status, RequestStatus::Submitted, "{r:?}");
             assert!(!r.is_final());
@@ -498,8 +524,16 @@ mod tests {
         assert!(facts.committed && facts.claim_id == Some(h(1)) && !facts.expired && facts.rail_txid.is_none());
         assert_eq!(derive_status(&facts, None).status, RequestStatus::Committed);
         // The rail's record makes it `submitted`; the retired marker is reported.
-        std::fs::write(d.join("fp-job-aaaaaaaaaaaaaaaa.rail.json"), serde_json::json!({ "submitted": "tx1", "relayed": null }).to_string()).unwrap();
-        std::fs::write(d.join(format!("fp-job-aaaaaaaaaaaaaaaa.commitment-unsigned.borsh{}", misaka_palw_fp_submit::EXPIRED_SUFFIX)), b"").unwrap();
+        std::fs::write(
+            d.join("fp-job-aaaaaaaaaaaaaaaa.rail.json"),
+            serde_json::json!({ "submitted": "tx1", "relayed": null }).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            d.join(format!("fp-job-aaaaaaaaaaaaaaaa.commitment-unsigned.borsh{}", misaka_palw_fp_submit::EXPIRED_SUFFIX)),
+            b"",
+        )
+        .unwrap();
         let facts = read_local_facts(&d, "fp-job-aaaaaaaaaaaaaaaa").unwrap();
         assert_eq!((facts.rail_txid.as_deref(), facts.expired), (Some("tx1"), true));
         assert_eq!(derive_status(&facts, None).status, RequestStatus::Submitted);

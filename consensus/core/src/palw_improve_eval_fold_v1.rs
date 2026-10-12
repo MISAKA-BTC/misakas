@@ -1859,11 +1859,12 @@ mod tests {
                     held: false,
                     derived_work: crate::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
-            prefix_state_armed: false,
-            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
-            constraint_armed: false,
-            constraint_v2_armed: false,
-            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
+                    prefix_state_armed: false,
+                    prefix_inherit_armed: false,
+                    prefix_inherit_class_safe: false,
+                    constraint_armed: false,
+                    constraint_v2_armed: false,
+                    tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
                 false,
@@ -1904,8 +1905,9 @@ mod tests {
         let (public_state, public_delta) = at_with(&s, &public_params, 1_600, &public_extras, |b| {
             apply_object(b, &ctx(1_600), &carried.object).expect("the ordinary extracted evaluation job folds with public metadata");
         });
-        let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(original), .. } = &carried.object
-            else { panic!("ordinary evaluation extractor supplies its original commitment") };
+        let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(original), .. } = &carried.object else {
+            panic!("ordinary evaluation extractor supplies its original commitment")
+        };
         let wire = borsh::to_vec(original.as_ref()).unwrap();
         assert_eq!(public_state.fp_public_jobs.get(id), Some(&wire));
         public_state.assert_public_fp_jobs_consistency_v1(&public_params).unwrap();

@@ -1390,7 +1390,10 @@ mod tests {
         assert!(a16_attn_scores_fast(&q, &[i16::MIN, 1], 1, 1, 2, &[p]).is_err(), "i16::MIN is not a code");
         assert!(a16_attn_scores_fast(&q, &[A16_CODE_MAX as i32 + 1, 1], 1, 1, 2, &[p]).is_err(), "32,768 is not a code");
         assert!(a16_attn_scores_fast(&q, &[-(A16_CODE_MAX as i16), 1i16], 1, 1, 2, &[p]).is_ok(), "-32,767 is");
-        assert!(a16_attn_fused_uniform_fast(&q, &[1i16, 1], &[i16::MIN, 1], 1, 1, 2, p, 16, p, p).is_err(), "and so on the value side");
+        assert!(
+            a16_attn_fused_uniform_fast(&q, &[1i16, 1], &[i16::MIN, 1], 1, 1, 2, p, 16, p, p).is_err(),
+            "and so on the value side"
+        );
     }
 
     /// The fused kernel refuses exactly where the composition does: a code out of range on any

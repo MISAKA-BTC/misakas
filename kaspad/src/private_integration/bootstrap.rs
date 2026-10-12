@@ -183,7 +183,10 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
     let binding = artifact.signed_artifact_binding(domain, bond, &signer).map_err(|e| e.to_string())?;
     let statement = statement::for_code_fixture(&expected, &artifact, file_digest);
     write_new(&output.join("code-fixture-commitment.borsh"), &borsh::to_vec(&statement).map_err(|e| e.to_string())?)?;
-    write_new(&output.join("code-fixture-provenance.json"), &serde_json::to_vec_pretty(&statement::scope()).map_err(|e| e.to_string())?)?;
+    write_new(
+        &output.join("code-fixture-provenance.json"),
+        &serde_json::to_vec_pretty(&statement::scope()).map_err(|e| e.to_string())?,
+    )?;
     for (name, object) in
         [("native-registration.borsh", registration), ("signed-registration.borsh", envelope), ("artifact-binding.borsh", binding)]
     {
@@ -262,7 +265,8 @@ mod tests {
         assert_eq!(manifest["statementRoot"], faster_hex::hex_string(&statement.statement_root()));
         assert_eq!(statement.candidate_id, manifest["class"].as_str().unwrap().parse::<Hash64>().unwrap().as_bytes());
         assert_eq!(statement.commitment_object_id, None, "the local statement claims no prior inclusion");
-        let scope: serde_json::Value = serde_json::from_slice(&fs::read(output.join("code-fixture-provenance.json")).unwrap()).unwrap();
+        let scope: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("code-fixture-provenance.json")).unwrap()).unwrap();
         assert_eq!(scope["independentImplementationClaim"], false);
         assert_eq!(scope["trainedModelVerified"], false);
         let envelope: PalwConsensusObjectV2 = borsh::from_slice(&fs::read(output.join("signed-registration.borsh")).unwrap()).unwrap();

@@ -146,7 +146,11 @@ fn t22_t35_t36_s1_strikes_one_per_epoch_and_the_third_inside_the_window_escalate
         for id in [a, b] {
             let r = record(&c, &id).expect("a DaDefault record per claim");
             let full = palw_claim_bond_reservation_v1(&c.sp, &c.claim(&id)).unwrap();
-            assert_eq!((u128::from(r.amount), u128::from(r.collected), r.claim_id), (full, full, id), "nominal = collected = the forfeit");
+            assert_eq!(
+                (u128::from(r.amount), u128::from(r.collected), r.claim_id),
+                (full, full, id),
+                "nominal = collected = the forfeit"
+            );
         }
         // C, a later epoch.
         let c_id = bound_floor_claim(&mut c, 0x5A03);
@@ -171,7 +175,10 @@ fn t22_t35_t36_s1_strikes_one_per_epoch_and_the_third_inside_the_window_escalate
         let e_id = bound_floor_claim(&mut c, 0x5A05);
         let c0 = collateral(&c, &producer);
         let (d4, extra) = default(&mut c, &[e_id]);
-        assert!(d4 - d1 > PALW_RCORE_STRIKE_WINDOW_DAA_V1 && d4 - d2 <= PALW_RCORE_STRIKE_WINDOW_DAA_V1, "the premise: d₁ ages out, d₂ does not");
+        assert!(
+            d4 - d1 > PALW_RCORE_STRIKE_WINDOW_DAA_V1 && d4 - d2 <= PALW_RCORE_STRIKE_WINDOW_DAA_V1,
+            "the premise: d₁ ages out, d₂ does not"
+        );
         assert_eq!(c.s.withholding_strikes(&producer), Some(&[d2, d3, d4][..]), "the old strike is dropped when the next is written");
         assert_eq!(extra, palw_rcore_s1s2_action_v1(c0, g_of(&c, &e_id)), "three live strikes: the action again");
         // T36: no status, no tombstone — the producer is Active and produces.
@@ -223,8 +230,9 @@ fn t22_s0_prime_the_second_failed_panel_forfeits_the_commitment_and_nothing_else
 /// A standalone `ExecutorEquivocation` (kind 0) against `bond`, its certificate's job context naming
 /// `class` — the fold reads the class from it; the acceptance layer verified the certificate.
 fn equivocation(bond: PalwBondKeyV2, class: Hash64) -> PalwConsensusObjectV2 {
-    let floor = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
-        .expect("the floor profile");
+    let floor =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor profile");
     let mut job_context = kaspa_consensus_core::palw_base0_profile::rc_job_context(&floor, 512, 256);
     job_context.shape_profile_id = class;
     let attestation = |root: u64| kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
@@ -280,21 +288,30 @@ fn t76_eq_takes_min_c_3_g_eq_and_licensing_continues() {
         let g_2m = palw_eq_cap_basis_v1(&c.s, &c.sp, &e, &x, &id2m);
         assert_eq!(palw_eq_cap_basis_v1(&c.s, &c.sp, &e, &x, &h(0xDEAD_C1A5)), g_floor, "an unknown class prices the base class");
         let (c1, c2) = (collateral(&c, &first), collateral(&c, &second));
-        c.step_at(daa, &[equivocation(first, floor), equivocation(second, id2m)], PalwBlockWorkV3::None, Hash64::default(), T12_BLOCK_SUBSIDY_SOMPI);
+        c.step_at(
+            daa,
+            &[equivocation(first, floor), equivocation(second, id2m)],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            T12_BLOCK_SUBSIDY_SOMPI,
+        );
         for (bond, before, g, class) in [(first, c1, g_floor, floor), (second, c2, g_2m, id2m)] {
             let debit = u128::from(before - collateral(&c, &bond));
             let PalwConsensusObjectV2::ObjectiveOffence { evidence_id, .. } = equivocation(bond, class) else { unreachable!() };
-            let row = c
-                .s
-                .consumed_offence(&palw_offence_id_v1(PalwOffenceKindV1::ExecutorEquivocation, &bond.0, &evidence_id))
-                .expect("one kind-0 record")
-                .clone();
+            let row =
+                c.s.consumed_offence(&palw_offence_id_v1(PalwOffenceKindV1::ExecutorEquivocation, &bond.0, &evidence_id))
+                    .expect("one kind-0 record")
+                    .clone();
             assert!(matches!(c.s.bond(&bond).unwrap().status, PalwBondStatusV2::Active), "armed={armed}: no status change");
             assert_eq!((row.claim_id, row.execution_root), (Hash64::default(), Hash64::default()), "a key, no claim, no root");
             if armed {
                 let cap = palw_rcore_eq_cap_v1(before, g);
                 assert_eq!(debit, cap, "min(C₀, 3·G_eq)");
-                assert_eq!((u128::from(row.amount), u128::from(row.collected)), (cap, cap), "nominal, and collected: the bond's gate is shut");
+                assert_eq!(
+                    (u128::from(row.amount), u128::from(row.collected)),
+                    (cap, cap),
+                    "nominal, and collected: the bond's gate is shut"
+                );
                 assert!(cap < u128::from(before), "a genesis bond keeps most of its stake");
                 println!(
                     "T76 {}: G_eq {:.4} MSK, 3·G_eq {:.4} MSK (ADR §3.6: {}); C₀ {:.2} MSK",
@@ -318,8 +335,14 @@ fn t76_eq_takes_min_c_3_g_eq_and_licensing_continues() {
             // Licensing continues: both equivocators sit on a floor panel that licenses.
             let id = bound_floor_claim(&mut c, 0x76A1);
             let bound = c.daa;
-            c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
-            assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the panel with both equivocators licenses");
+            c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+                claim: id,
+                receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+            }]);
+            assert!(
+                matches!(c.claim(&id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+                "the panel with both equivocators licenses"
+            );
             for bond in [first, second] {
                 assert!(c.s.slashable_lock(bond, id).is_some(), "each equivocator backs its Valid");
             }
@@ -352,7 +375,13 @@ fn r2_a_bond_whose_gate_is_open_collects_nothing() {
     assert!(!gate(&open), "the premise: the retiring bond's gate is open");
     assert!(gate(&shut), "the premise: the active one's is shut");
     let before = [collateral(&c, &open), collateral(&c, &shut)];
-    c.step_at(at, &[equivocation(open, floor), equivocation(shut, floor)], PalwBlockWorkV3::None, Hash64::default(), T12_BLOCK_SUBSIDY_SOMPI);
+    c.step_at(
+        at,
+        &[equivocation(open, floor), equivocation(shut, floor)],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        T12_BLOCK_SUBSIDY_SOMPI,
+    );
     for (i, bond) in [open, shut].into_iter().enumerate() {
         let debit = u128::from(before[i] - collateral(&c, &bond));
         assert!(debit > 0, "both are debited");
@@ -397,7 +426,10 @@ fn t81_a_post_final_da_default_records_its_claim_and_collected_and_s3_rides_the_
     let id = c.floor_claim(0x81A1);
     let seats = c.floor_seats();
     let bound = c.bind(id, &seats);
-    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats[..3].iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats[..3].iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
     c.step(&[bond_obj(1, 20_000 * MSK)]);
     c.step(&[accuse(id, bond_key(1), 0)]);
     c.finalize(id);
@@ -450,7 +482,10 @@ fn s2_a_court_default_is_charged_as_a_fraud_and_writes_no_court_conviction() {
         let id = c.floor_claim(0x5D01);
         let seats = c.floor_seats();
         let bound = c.bind(id, &seats);
-        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+            claim: id,
+            receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+        }]);
         let claim = c.claim(&id);
         let at = c.daa;
         c.s = edited(&c.sp, &c.s, |carriage| {
@@ -555,7 +590,8 @@ fn open_a_pair(c: &mut Chain, id: Hash64, line: u64) {
             (floor, root),
             kaspa_consensus_core::palw_model_lines_v1::PalwArtifactOwnerV1 { class_id: floor, line_id: h(line), version: 1 },
         );
-        k.model_markets.insert(h(line), kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::seed_v1(at, 100_000 * MSK, h(line + 1)));
+        k.model_markets
+            .insert(h(line), kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::seed_v1(at, 100_000 * MSK, h(line + 1)));
     });
 }
 
@@ -577,7 +613,11 @@ fn run_out_moved(c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2) -> u64 {
         fold_with(&c.p, &c.sp, &parent, &x, &[], PalwBlockWorkV3::None, Hash64::default(), &e).expect("the default's block folds");
     assert!(skips.is_empty());
     assert_eq!(kaspa_consensus_core::palw_state_v2::apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child);
-    assert_eq!(kaspa_consensus_core::palw_state_v2::revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "the delta reverts");
+    assert_eq!(
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(&child, &delta, &c.sp).expect("reverts"),
+        parent,
+        "the delta reverts"
+    );
     let reloaded = PalwStateCarriageV2::from_state(&child).into_state(&c.sp, Some(child.state_root())).expect("reloads");
     assert_eq!(reloaded, child, "reload is the state");
     c.s = child;
@@ -621,7 +661,10 @@ fn g_freeze_every_conviction_reads_the_licence_time_gain() {
         let id = c.floor_claim(seed);
         let bound = c.bind(id, &seats);
         let g_res = licence_g_res(c, &id);
-        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats[..3].iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+            claim: id,
+            receipts: seats[..3].iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+        }]);
         let claim = c.claim(&id);
         assert_eq!(claim.rcore.g_res_sompi, g_res, "the licence records the G_res it priced with");
         for (seat, _) in &seats[..3] {
@@ -662,7 +705,11 @@ fn g_freeze_every_conviction_reads_the_licence_time_gain() {
         c.finalize(b);
     }
     assert!(matches!(c.claim(&b).phase, PalwClaimPhaseV2::Final { .. }), "B is Final");
-    assert_eq!(c.s.panel_liability(&b).expect("the Final's row").g_res_sompi, g_b, "the Final block copies the licence value, not the live one");
+    assert_eq!(
+        c.s.panel_liability(&b).expect("the Final's row").g_res_sompi,
+        g_b,
+        "the Final block copies the licence value, not the live one"
+    );
     assert!(live_g_res(&c, &b) > g_b);
     let (producer, _, _) = floor_producer(&c.p);
     // The Final block wrote B's real vesting row (the vesting flag is landed); it is unmatured.

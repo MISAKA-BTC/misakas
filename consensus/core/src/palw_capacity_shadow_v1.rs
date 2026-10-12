@@ -604,9 +604,9 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
         // Lane PL part C (ADR-0166): nobody is convicted of an expiry the verifiers caused or the chain cannot attribute.
         PalwVoidReasonV2::PanelUnavailable => PalwCapacityVoidAttributionV1::Undetected,
         // RFC-0010: a seal, a beacon or a population the chain could not provide is nobody's conviction.
-        PalwVoidReasonV2::SealUnavailable
-        | PalwVoidReasonV2::BeaconUnavailable
-        | PalwVoidReasonV2::PermissionlessNoCapablePanel => PalwCapacityVoidAttributionV1::Undetected,
+        PalwVoidReasonV2::SealUnavailable | PalwVoidReasonV2::BeaconUnavailable | PalwVoidReasonV2::PermissionlessNoCapablePanel => {
+            PalwCapacityVoidAttributionV1::Undetected
+        }
         // RFC-0008 v2: a timeout is not a detected fraud.
         PalwVoidReasonV2::WorkRootExpired => PalwCapacityVoidAttributionV1::Undetected,
         // RFC-0008 v2 amendment 1: a conviction on a slice's kernel claim ended the claim, whose own outcome was never observed; a slice
@@ -2107,7 +2107,11 @@ mod tests {
         assert_eq!(frozen(21), (true, false, true, 1), "the producer of the claim the finding voided, by the seat's class");
         assert_eq!(frozen(102), (true, false, true, 1));
         assert_eq!(frozen(23), (false, false, false, 0), "a finding that restated an earlier void does not charge the producer");
-        assert_eq!(frozen(24), (true, false, false, 1), "a DA default: the producer by its DaDefault record alone — a TIER freeze (decision 1)");
+        assert_eq!(
+            frozen(24),
+            (true, false, false, 1),
+            "a DA default: the producer by its DaDefault record alone — a TIER freeze (decision 1)"
+        );
         assert_eq!(frozen(103), (true, false, true, 1), "the default's covering signer");
         assert_eq!(shadow.convictions_total, 6);
 
@@ -2299,15 +2303,23 @@ mod tests {
                 .state()
         };
         let options = PalwCapacityShadowOptionsV1 { adversaries: vec![adversary(14, Naive)], ..Default::default() };
-        let shadow =
-            palw_capacity_shadow_with_v1(&campaign(PalwOffenceKindV1::DaDefault, PalwVoidReasonV2::ProducerWithholding), &params(), NOW, &options);
+        let shadow = palw_capacity_shadow_with_v1(
+            &campaign(PalwOffenceKindV1::DaDefault, PalwVoidReasonV2::ProducerWithholding),
+            &params(),
+            NOW,
+            &options,
+        );
         let row = named(&shadow, Naive);
         assert_eq!(counts(row), (3, 1, 0, 2, 0, 0, 0, Some(333)), "decision 1: the DA default is a miss for the credit");
         assert!(row.unpriced_by_route.contains(&("da-default", 1)), "{:?}", row.unpriced_by_route);
         assert!(shadow.steps.iter().all(|s| s.q_alarm), "333‰ < 500‰");
         // Two proven verdicts: both count, the court default does not.
-        let shadow =
-            palw_capacity_shadow_with_v1(&campaign(PalwOffenceKindV1::CourtConviction, PalwVoidReasonV2::CourtFraud), &params(), NOW, &options);
+        let shadow = palw_capacity_shadow_with_v1(
+            &campaign(PalwOffenceKindV1::CourtConviction, PalwVoidReasonV2::CourtFraud),
+            &params(),
+            NOW,
+            &options,
+        );
         assert_eq!(counts(named(&shadow, Naive)), (3, 2, 0, 1, 0, 0, 0, Some(666)));
         assert!(shadow.steps.iter().all(|s| !s.q_alarm), "666‰ ≥ 500‰ at an uncredited step");
     }

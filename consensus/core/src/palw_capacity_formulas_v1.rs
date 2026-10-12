@@ -434,7 +434,10 @@ pub fn palw_capacity_tier_at_min_bond_v1(min_collateral_sompi: u64, e_sompi: u12
 /// decision 1 (S1 tier-class; a first default adds no tier, X11) that is `Tier(0)`. Lane D replaces this
 /// pricing with an all-or-nothing credit (v3's audit door, D-23), and the shadow follows it there (D.9).
 pub fn palw_capacity_conviction_floor_v1(min_collateral_sompi: u64, e_sompi: u128) -> PalwCapacityConvictionFloorV1 {
-    PalwCapacityConvictionFloorV1::Tier(crate::palw_aggregate_liability_v1::palw_credit_conviction_floor_v1(min_collateral_sompi, e_sompi))
+    PalwCapacityConvictionFloorV1::Tier(crate::palw_aggregate_liability_v1::palw_credit_conviction_floor_v1(
+        min_collateral_sompi,
+        e_sompi,
+    ))
 }
 
 /// **Does a step's credit lower the escrow slot at all?** Lane escrow's `palw_escrow_credit_applies_v1`
@@ -638,9 +641,9 @@ pub fn palw_capacity_void_reason_keeps_obligation_v1(reason: crate::palw_state_v
         // obligation is neither held nor charged.
         PalwVoidReasonV2::PanelUnavailable => false,
         // RFC-0010: the permissionless Panel's non-fraud terminations hold nothing (the reservation returns at once).
-        PalwVoidReasonV2::SealUnavailable
-        | PalwVoidReasonV2::BeaconUnavailable
-        | PalwVoidReasonV2::PermissionlessNoCapablePanel => false,
+        PalwVoidReasonV2::SealUnavailable | PalwVoidReasonV2::BeaconUnavailable | PalwVoidReasonV2::PermissionlessNoCapablePanel => {
+            false
+        }
         // RFC-0008 v2: an expired work session is nobody's abandonment that a conviction proves — the reservation returns at once.
         PalwVoidReasonV2::WorkRootExpired => false,
         // RFC-0008 v2 amendment 1: a session ended by a slice's kernel conviction or default holds nothing on the root (the charge is the

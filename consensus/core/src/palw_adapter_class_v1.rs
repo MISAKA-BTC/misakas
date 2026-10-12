@@ -8,14 +8,13 @@ use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
 /// **The entry a drill arms `palw_adapter_class_v1` with** (`--palw-drill-adapter-class-v1-at`,
 /// [`crate::config::drill`]). In NO testnet-12 flag-day list: dormant on every network.
-pub const PALW_DRILL_ADAPTER_CLASS_V1_ENTRY: PalwPostLaunchFenceV1 =
-    PalwPostLaunchFenceV1 {
-        name: "palw_adapter_class_v1",
-        set: |params, at| {
-            params.palw_adapter_class_v1 = at;
-            params.sync_palw_adapter_class_v1();
-        },
-    };
+pub const PALW_DRILL_ADAPTER_CLASS_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_adapter_class_v1",
+    set: |params, at| {
+        params.palw_adapter_class_v1 = at;
+        params.sync_palw_adapter_class_v1();
+    },
+};
 
 /// The drill's one-entry list.
 pub const PALW_DRILL_ADAPTER_CLASS_V1_FENCES_V1: &[PalwPostLaunchFenceV1] = &[PALW_DRILL_ADAPTER_CLASS_V1_ENTRY];
@@ -106,7 +105,11 @@ pub struct PalwAdapterClassListingV1 {
 
 /// **The message a lister bond signs**: the network domain, the payload whole and the lister — so a listing can
 /// be neither replayed on another network nor lifted onto another bond.
-pub fn palw_adapter_listing_message_v1(network_domain: &Hash64, payload: &PalwAdapterClassListingV1, lister: &PalwBondKeyV2) -> Hash64 {
+pub fn palw_adapter_listing_message_v1(
+    network_domain: &Hash64,
+    payload: &PalwAdapterClassListingV1,
+    lister: &PalwBondKeyV2,
+) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_ADAPTER_LISTING_MESSAGE_DOMAIN_V1).to_state();
     state.update(network_domain.as_byte_slice());
     state.update(&borsh::to_vec(payload).expect("a payload is borsh-serializable"));

@@ -269,14 +269,21 @@ mod tests {
         let (coinbase_daa, pov) = (1_000u64, 1_100u64);
         let settled = |p: &NetworkParams| {
             let anchor = p.dns_confirmed_anchor_daa();
-            let s = DnsCoinbaseSettlement { long_maturity_daa: p.coinbase_settlement_long_maturity_daa(), confirmed_anchor_daa: (anchor > 0).then_some(anchor) };
+            let s = DnsCoinbaseSettlement {
+                long_maturity_daa: p.coinbase_settlement_long_maturity_daa(),
+                confirmed_anchor_daa: (anchor > 0).then_some(anchor),
+            };
             coinbase_spend_settled(coinbase_daa, pov, 0, Some(&s))
         };
         assert!(!settled(&params), "no anchor and 100 DAA old: held");
         params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((true, 1_050))));
         assert!(settled(&params), "a live anchor past the coinbase accelerates it");
         params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((false, 1_050))));
-        assert_eq!(params.dns_confirmed_anchor_daa(), 0, "a retired/unavailable confirmation clears the shortcut, whatever the stale value");
+        assert_eq!(
+            params.dns_confirmed_anchor_daa(),
+            0,
+            "a retired/unavailable confirmation clears the shortcut, whatever the stale value"
+        );
         assert!(!settled(&params), "and the coinbase is held again");
         params.set_dns_confirmed_anchor_daa(dns_shortcut_after_poll(Some((true, 1_050))));
         assert!(settled(&params), "a fresh authoritative observation can restore the shortcut");

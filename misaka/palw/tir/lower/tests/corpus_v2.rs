@@ -35,7 +35,7 @@ use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::float_ref::{ParamStore, Session};
 use misaka_palw_tir_lower::hf_schema::{AdapterChoice, ModelRead, ReadFailure, ReadOptions, TensorIndex, read_model};
 use misaka_palw_tir_lower::lower::{IntParams, LowerOpts, materialise};
-use misaka_palw_tir_lower::model::{analyze, feature_info, ArchitectureReport, FeatureStatus};
+use misaka_palw_tir_lower::model::{ArchitectureReport, FeatureStatus, analyze, feature_info};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::spec::{Confidence, ModelSpec, Reference};
 use misaka_palw_tir_lower::weights::Checkpoint;
@@ -125,7 +125,11 @@ fn tensor_index(heavy: Option<&Path>, spec_dir: &Path) -> Option<TensorIndex> {
         return None;
     }
     Some(TensorIndex::from_shapes(o.iter().map(|(k, e)| {
-        let shape = e.get("shape").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect()).unwrap_or_default();
+        let shape = e
+            .get("shape")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect())
+            .unwrap_or_default();
         (k.clone(), shape)
     })))
 }
@@ -212,7 +216,10 @@ fn all_supported(read: &ModelRead) -> (bool, Vec<String>) {
     let mut missing = Vec::new();
     for u in read.spec.features() {
         let ok = match feature_info(u.id.0) {
-            Some(i) => matches!(i.lowering, misaka_palw_tir_lower::model::Lowering::Implemented) && matches!(i.protocol, misaka_palw_tir_lower::model::Requirement::None),
+            Some(i) => {
+                matches!(i.lowering, misaka_palw_tir_lower::model::Lowering::Implemented)
+                    && matches!(i.protocol, misaka_palw_tir_lower::model::Requirement::None)
+            }
             None => false,
         };
         if !ok {
@@ -251,11 +258,8 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     // Level A reads with the built-in template; PALW_CORPUS_STANDARD=<file> reads with a CANDIDATE template
     // instead (a data file extending `standard-decoder`): the measurement of a Level A uplift.
     let standard: Option<String> = std::env::var("PALW_CORPUS_STANDARD").ok().and_then(|p| std::fs::read_to_string(p).ok());
-    let none = read_model(
-        cfg,
-        tensors,
-        &ReadOptions { adapter: standard.clone().map(AdapterChoice::Text).unwrap_or(AdapterChoice::None) },
-    );
+    let none =
+        read_model(cfg, tensors, &ReadOptions { adapter: standard.clone().map(AdapterChoice::Text).unwrap_or(AdapterChoice::None) });
     let user_path = adapters_dir().join(format!("{}.json", e.id));
     let user_text = std::fs::read_to_string(&user_path).ok();
     // A built-in refusal (adapters/refusals.json) is checked BEFORE any adapter, so a third party's
@@ -266,7 +270,11 @@ fn read_stage(e: &Entry, cfg: &Value, tensors: Option<&TensorIndex>) -> Reads {
     let bypass = refusal.is_some();
     // FR-25 (accepted): a user adapter may override a built-in refusal, and the report says so, naming the refusal.
     let refusal_note: Option<String> = refusal.as_ref().filter(|_| user_text.is_some()).map(|(missing, why)| {
-        format!("user adapter overrides built-in refusal: {}{}", missing.join(", "), if why.is_empty() { String::new() } else { format!(" ({})", short(why, 160)) })
+        format!(
+            "user adapter overrides built-in refusal: {}{}",
+            missing.join(", "),
+            if why.is_empty() { String::new() } else { format!(" ({})", short(why, 160)) }
+        )
     });
     let user_cfg: Value = if bypass {
         let mut c = cfg.clone();
@@ -497,7 +505,8 @@ fn three_way_and_court(p: &tir::TirProgramV1, params: &IntParams, eval: &[Vec<us
     for ((j, layer), t) in tensors {
         let d = &p2.params[*j as usize];
         let shape = d.shape.iter().map(|x| *x as u64).collect();
-        let t2 = misaka_palw_tir_ref2::Tensor::from_le_bytes(d.dtype, shape, &t.le_bytes()).map_err(|e| format!("ref2 tensor: {e:?}"))?;
+        let t2 =
+            misaka_palw_tir_ref2::Tensor::from_le_bytes(d.dtype, shape, &t.le_bytes()).map_err(|e| format!("ref2 tensor: {e:?}"))?;
         if d.dtype != ref2_dtype(p.params[*j as usize].dtype) {
             return Err("ref2 and the reference disagree on a param's dtype".into());
         }
@@ -524,7 +533,8 @@ fn three_way_and_court(p: &tir::TirProgramV1, params: &IntParams, eval: &[Vec<us
         for (pos, tok) in seq.iter().enumerate() {
             let before = st1.clone();
             let o1 = interp.step(params, &mut st1, *tok as u32).map_err(|e| format!("reference at {pos}: {e}"))?;
-            let (o2, next) = misaka_palw_tir_ref2::eval::step(&p2, &params2, &st2, *tok as u64).map_err(|e| format!("ref2 at {pos}: {e:?}"))?;
+            let (o2, next) =
+                misaka_palw_tir_ref2::eval::step(&p2, &params2, &st2, *tok as u64).map_err(|e| format!("ref2 at {pos}: {e:?}"))?;
             st2 = next;
             let mut sink = Collect(Vec::new());
             exec.step(*tok as u32, &mut sink).map_err(|e| format!("exec at {pos}: {e}"))?;
@@ -533,15 +543,24 @@ fn three_way_and_court(p: &tir::TirProgramV1, params: &IntParams, eval: &[Vec<us
             if *l1 != o2.logits.data || *l1 != xl.to_i128s() {
                 return Err(format!("three-way: position {pos}: the logits differ"));
             }
-            let c1: Vec<Commit> = o1.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())).collect();
+            let c1: Vec<Commit> =
+                o1.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())).collect();
             let c2: Vec<Commit> = o2.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.data.clone())).collect();
             let mut c3 = sink.0;
             c3.sort_by_key(|c| c.0);
             if c1 != c2 {
-                return Err(format!("three-way: position {pos}: reference and ref2 commit differently ({} vs {} commits)", c1.len(), c2.len()));
+                return Err(format!(
+                    "three-way: position {pos}: reference and ref2 commit differently ({} vs {} commits)",
+                    c1.len(),
+                    c2.len()
+                ));
             }
             if c1 != c3 {
-                return Err(format!("three-way: position {pos}: reference and exec commit differently ({} vs {} commits)", c1.len(), c3.len()));
+                return Err(format!(
+                    "three-way: position {pos}: reference and exec commit differently ({} vs {} commits)",
+                    c1.len(),
+                    c3.len()
+                ));
             }
             positions += 1;
 
@@ -567,49 +586,72 @@ fn three_way_and_court(p: &tir::TirProgramV1, params: &IntParams, eval: &[Vec<us
                             let v = o1
                                 .commits
                                 .iter()
-                                .find(|c| c.block == pb && c.layer == pl && c.node == *n && c.slot >= bases[occ - 1] && c.slot < bases[occ - 1] + pn)
+                                .find(|c| {
+                                    c.block == pb
+                                        && c.layer == pl
+                                        && c.node == *n
+                                        && c.slot >= bases[occ - 1]
+                                        && c.slot < bases[occ - 1] + pn
+                                })
                                 .ok_or_else(|| format!("no carry-out commit for occurrence {}", occ - 1));
                             v.map(|v| (k as u8, v.value.clone()))
                         })
                         .collect::<Result<_, _>>()?
                 };
                 let is_layer = layer.is_some();
-                let fixed: BTreeMap<u16, Tensor> = p
-                    .states
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, tir::StateKind::Fixed { .. }))
-                    .map(|(j, s)| {
-                        let v = before
-                            .fixed
-                            .get(&(j as u16, *layer))
-                            .cloned()
-                            .unwrap_or_else(|| Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>()));
-                        (j as u16, v)
-                    })
-                    .collect();
+                let fixed: BTreeMap<u16, Tensor> =
+                    p.states
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, tir::StateKind::Fixed { .. }))
+                        .map(|(j, s)| {
+                            let v =
+                                before.fixed.get(&(j as u16, *layer)).cloned().unwrap_or_else(|| {
+                                    Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>())
+                                });
+                            (j as u16, v)
+                        })
+                        .collect();
                 let hist_prior: BTreeMap<u16, Vec<Tensor>> = p
                     .states
                     .iter()
                     .enumerate()
                     .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, tir::StateKind::Hist { .. }))
-                    .map(|(j, _)| (j as u16, before.hist.get(&(j as u16, *layer)).map(|r| r.iter().cloned().collect()).unwrap_or_default()))
+                    .map(|(j, _)| {
+                        (j as u16, before.hist.get(&(j as u16, *layer)).map(|r| r.iter().cloned().collect()).unwrap_or_default())
+                    })
                     .collect();
                 for (node, value) in &commits {
                     let mut supplied = commits.clone();
                     supplied.remove(node);
-                    let env = ConeEnv { token: Some(*tok as u32), pos: before.pos, carry_in: carry_in.clone(), fixed: fixed.clone(), hist_prior: hist_prior.clone(), supplied };
-                    let got = interp
-                        .eval_cone(*block, *layer, *node, params, &env)
-                        .map_err(|e| format!("court: block {block} layer {layer:?} node {node} at pos {}: the cone does not evaluate: {e}", before.pos))?;
+                    let env = ConeEnv {
+                        token: Some(*tok as u32),
+                        pos: before.pos,
+                        carry_in: carry_in.clone(),
+                        fixed: fixed.clone(),
+                        hist_prior: hist_prior.clone(),
+                        supplied,
+                    };
+                    let got = interp.eval_cone(*block, *layer, *node, params, &env).map_err(|e| {
+                        format!(
+                            "court: block {block} layer {layer:?} node {node} at pos {}: the cone does not evaluate: {e}",
+                            before.pos
+                        )
+                    })?;
                     if &got != value {
-                        return Err(format!("court: block {block} layer {layer:?} node {node} at pos {}: the cone gives a different value", before.pos));
+                        return Err(format!(
+                            "court: block {block} layer {layer:?} node {node} at pos {}: the cone gives a different value",
+                            before.pos
+                        ));
                     }
                     cones += 1;
                     let gx = misaka_palw_tir_exec::eval_cone(&plan, &xparams, *block, *layer, *node, &env)
                         .map_err(|e| format!("court (exec): block {block} layer {layer:?} node {node}: {e}"))?;
                     if &gx != value {
-                        return Err(format!("court (exec): block {block} layer {layer:?} node {node} at pos {}: the cone gives a different value", before.pos));
+                        return Err(format!(
+                            "court (exec): block {block} layer {layer:?} node {node} at pos {}: the cone gives a different value",
+                            before.pos
+                        ));
                     }
                     cone_exec += 1;
                     *cone_by_prim_kind.entry(p.blocks[*block as usize].nodes[*node as usize].prim.name()).or_default() += 1;
@@ -648,7 +690,13 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
         let rows = meta["rows"].as_u64().ok_or("rows")? as usize;
         spec.cross_states = Some(misaka_palw_tir_lower::spec::CrossStatesSpec { rows });
         let d = spec.hidden_size;
-        let ints: Vec<i32> = meta["cross_states"].as_array().ok_or("cross_states")?.iter().flat_map(|r| r.as_array().cloned().unwrap_or_default()).map(|x| (x.as_f64().unwrap_or(0.0) / unit).round() as i32).collect();
+        let ints: Vec<i32> = meta["cross_states"]
+            .as_array()
+            .ok_or("cross_states")?
+            .iter()
+            .flat_map(|r| r.as_array().cloned().unwrap_or_default())
+            .map(|x| (x.as_f64().unwrap_or(0.0) / unit).round() as i32)
+            .collect();
         let states: Vec<Vec<f32>> = ints.chunks(d).map(|r| r.iter().map(|q| (*q as f64 * unit) as f32).collect()).collect();
         let tokens: Vec<usize> = meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
         let hl = misaka_palw_tir_lower::hl::build_program(&spec).map_err(|e| e.to_string())?;
@@ -657,12 +705,18 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
         if !unused.is_empty() {
             return Err(format!("checkpoint tensors the program never reads: {}", short(&format!("{unused:?}"), 300)));
         }
-        let want: Vec<Vec<f64>> = meta["logits_full"].as_array().ok_or("logits")?.iter().map(|r| r.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()).unwrap_or_default()).collect();
+        let want: Vec<Vec<f64>> = meta["logits_full"]
+            .as_array()
+            .ok_or("logits")?
+            .iter()
+            .map(|r| r.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()).unwrap_or_default())
+            .collect();
         let mut sess = Session::new(&hl, &params);
         sess.cross_states = Some(states.clone());
         let got = sess.run(&tokens).map_err(|e| format!("float reference: {e}"))?;
         let scale = want.iter().flatten().fold(1.0f64, |m, v| m.max(v.abs()));
-        let max_abs = got.iter().zip(&want).flat_map(|(g, w)| g.iter().zip(w).map(|(a, b)| (*a as f64 - b).abs())).fold(0f64, f64::max);
+        let max_abs =
+            got.iter().zip(&want).flat_map(|(g, w)| g.iter().zip(w).map(|(a, b)| (*a as f64 - b).abs())).fold(0f64, f64::max);
         let rel = max_abs / scale;
         if rel > 1e-4 {
             return Err(format!("float reference with declared states vs HF: max|Δ|/scale {rel:.2e}"));
@@ -708,12 +762,15 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
             }
         }
         let quiet = |_: usize, _: usize| {};
-        let text = lower(&hl, &LowerOpts { max_window: Some(64), ..LowerOpts::default() }).map_err(|e| format!("lower the text stage: {e}"))?;
-        let mat = materialise(&text, &hl, &Resident(Arc::new(params)), &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+        let text = lower(&hl, &LowerOpts { max_window: Some(64), ..LowerOpts::default() })
+            .map_err(|e| format!("lower the text stage: {e}"))?;
+        let mat = materialise(&text, &hl, &Resident(Arc::new(params)), &stats, &QuantPolicy::default(), &quiet)
+            .map_err(|e| format!("materialise: {e}"))?;
         let (hl0, b0) = cross::hl_cross_kv(&spec).map_err(|e| e.to_string())?;
         let (p0, _) = ParamStore::from_source(&hl0, &b0, ck).map_err(|e| e.to_string())?;
         let kv = cross::lower_cross_kv(&hl0, &spec, unit).map_err(|e| format!("lower stage 0: {e}"))?;
-        let mat0 = materialise(&kv, &hl0, &Resident(Arc::new(p0)), &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise stage 0: {e}"))?;
+        let mat0 = materialise(&kv, &hl0, &Resident(Arc::new(p0)), &stats, &QuantPolicy::default(), &quiet)
+            .map_err(|e| format!("materialise stage 0: {e}"))?;
         let inputs = admission::default_inputs();
         for (name, p) in [("stage 0", &kv.program), ("text", &text.program)] {
             admission::admit(p, &inputs).map_err(|e| format!("{name}: tir_admit_v1 refuses: {e}"))?;
@@ -741,7 +798,10 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
     }
     let (hl, logits_scale, text, kv, p0, pt) = stages_opt.expect("cross stages");
     let s = stage(|| {
-        let params = ParamStore::from_source(&hl, &misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).map_err(|e| e.to_string())?, ck).map_err(|e| e.to_string())?.0;
+        let params =
+            ParamStore::from_source(&hl, &misaka_palw_tir_lower::hf_weights::bind(&spec, &hl).map_err(|e| e.to_string())?, ck)
+                .map_err(|e| e.to_string())?
+                .0;
         let mut sess = Session::new(&hl, &params);
         sess.cross_states = Some(states.clone());
         let fl = sess.run(&tokens).map_err(|e| e.to_string())?;
@@ -766,7 +826,6 @@ fn run_cross(read: &ModelRead, dir: &Path, ck: &Checkpoint) -> BTreeMap<&'static
     st.insert("cross_three_way_court", s);
     st
 }
-
 
 /// Per-class thresholds of integer-vs-float fidelity (as `tests/fidelity_tiny.rs`).
 fn thresholds(category: &str) -> (f64, f64) {
@@ -818,7 +877,10 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
         })
     );
     if !full || !dir.join("model.safetensors").exists() && !dir.join("model.safetensors.index.json").exists() {
-        st.insert("fixture", Stage { ok: true, ms: 0, data: json!({"available": false, "note": "no weights: lowering and admission only"}) });
+        st.insert(
+            "fixture",
+            Stage { ok: true, ms: 0, data: json!({"available": false, "note": "no weights: lowering and admission only"}) },
+        );
         return (st, failed);
     }
     let ck = match Checkpoint::open(dir) {
@@ -847,8 +909,10 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
     match &reference {
         Some(meta) if meta.get("tokens").is_some() => {
             let s = stage(|| {
-                let tokens: Vec<usize> = meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
-                let (key, which) = if meta.get("logits_decode").is_some() { ("logits_decode", "decode") } else { ("logits_full", "full") };
+                let tokens: Vec<usize> =
+                    meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
+                let (key, which) =
+                    if meta.get("logits_decode").is_some() { ("logits_decode", "decode") } else { ("logits_full", "full") };
                 let want: Vec<Vec<f64>> = meta[key]
                     .as_array()
                     .ok_or("logits")?
@@ -878,7 +942,9 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
                 }
                 let rel = max_abs / scale;
                 if top1_miss > 0 || rel > 1e-4 {
-                    return Err(format!("float reference vs HF ({which}): max|Δ|/scale {rel:.2e}, {top1_miss} argmax differences beyond a near-tie"));
+                    return Err(format!(
+                        "float reference vs HF ({which}): max|Δ|/scale {rel:.2e}, {top1_miss} argmax differences beyond a near-tie"
+                    ));
                 }
                 // FR-24: a remote-code architecture's reference is the registrant's / the corpus's own file run through trust_remote_code,
                 // not a transformers class: the stage passes and says what it was passed against.
@@ -886,7 +952,9 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
                 let mut j = json!({"positions": got.len(), "reference": which, "max_rel_vs_hf": rel, "near_ties": near_ties});
                 if remote {
                     j["reference_unverified"] = json!(true);
-                    j["reference_kind"] = json!("remote code (trust_remote_code, local files): the corpus's reconstruction of the repository's modelling file, not the repository's");
+                    j["reference_kind"] = json!(
+                        "remote code (trust_remote_code, local files): the corpus's reconstruction of the repository's modelling file, not the repository's"
+                    );
                 }
                 Ok(j)
             });
@@ -911,7 +979,8 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
         stage(|| {
             let calib = fidelity::random_sequences(vocab, 6, 32.min(max_len), 7);
             let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
-            let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+            let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
+                .map_err(|e| format!("materialise: {e}"))?;
             tir::interval::analyze_ranges(&prep.lowered.program).map_err(|e| format!("range analysis refuses the program: {e}"))?;
             let n = mat.params.tensors.len();
             mat_opt = Some(mat);
@@ -931,7 +1000,10 @@ fn run_decoder(e: &Entry, read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap
         let m = fidelity::compare(&fl, &il, &eval);
         let v = json!({"positions": m.positions, "top1": m.top1_agreement, "kl_mean": m.kl_mean, "kl_max": m.kl_max, "ppl_delta": m.ppl_delta, "min_top1": min_top1, "max_kl": max_kl});
         if m.top1_agreement < min_top1 || m.kl_mean > max_kl {
-            return Err(format!("integer vs float: top-1 {:.3} (min {min_top1}), KL {:.5} (max {max_kl})", m.top1_agreement, m.kl_mean));
+            return Err(format!(
+                "integer vs float: top-1 {:.3} (min {min_top1}), KL {:.5} (max {max_kl})",
+                m.top1_agreement, m.kl_mean
+            ));
         }
         Ok(v)
     });
@@ -987,8 +1059,17 @@ fn benign_key(k: &str) -> bool {
         || k.starts_with("router_aux")
         || matches!(
             k,
-            "use_cache" | "output_router_logits" | "output_attentions" | "output_hidden_states" | "pretraining_tp" | "attention_dropout" | "tie_word_embeddings_"
-                | "sliding_window_pattern_" | "use_return_dict" | "return_dict" | "torchscript"
+            "use_cache"
+                | "output_router_logits"
+                | "output_attentions"
+                | "output_hidden_states"
+                | "pretraining_tp"
+                | "attention_dropout"
+                | "tie_word_embeddings_"
+                | "sliding_window_pattern_"
+                | "use_return_dict"
+                | "return_dict"
+                | "torchscript"
         )
 }
 
@@ -1035,7 +1116,6 @@ fn rel_err(a: &[f64], b: &[f64]) -> f64 {
     d / b.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
-
 /// A bidirectional encoder (BERT family): lower with `lower::bidir`, admit the version-2 program,
 /// the float reference and the integer program against the HF embedding (mean pooled, normalised).
 fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str, Stage>, Option<&'static str>) {
@@ -1078,9 +1158,16 @@ fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str
             let pipe = encoder::bidir_pipeline(vec![], vec![], pad, lmax);
             tir::pipeline::validate_pipeline(&pipe, std::slice::from_ref(&p2)).map_err(|e| format!("pipeline normal form: {e}"))?;
             let a = tir::admit_v2::tir_admit_program_v2(&p2, &inputs).map_err(|e| format!("tir_admit_v2 refuses: {e}"))?;
-            let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &inputs, &tir::admit_v2::TirJobCeilingsV1::open_v1())
-                .map_err(|e| format!("tir_admit_pipeline_v1 refuses: {e}"))?;
-            Ok(json!({"cones": a.view.cones.len(), "job_macs": pa.job_cost.macs, "step_leaves": pa.job_step_leaves, "cone_work": pa.cone_work}))
+            let pa = tir::admit_v2::tir_admit_pipeline_v1(
+                &pipe.encode(),
+                &[p2.encode()],
+                &inputs,
+                &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+            )
+            .map_err(|e| format!("tir_admit_pipeline_v1 refuses: {e}"))?;
+            Ok(
+                json!({"cones": a.view.cones.len(), "job_macs": pa.job_cost.macs, "step_leaves": pa.job_step_leaves, "cone_work": pa.cone_work}),
+            )
         })
     );
     let ck = match Checkpoint::open(dir) {
@@ -1097,12 +1184,16 @@ fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str
     st.insert("fixture", Stage { ok: true, ms: 0, data: json!({"available": true}) });
     let seqs: Vec<(Padded, Vec<f64>)> = refm["sequences"]
         .as_array()
-        .map(|a| a.iter().filter_map(|s| {
-            let ids: Vec<usize> = s["padded"].as_array()?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
-            let count = s["count"].as_u64()? as usize;
-            let want: Vec<f64> = s["mean_normalized"].as_array()?.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
-            Some((Padded { ids, count }, want))
-        }).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| {
+                    let ids: Vec<usize> = s["padded"].as_array()?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
+                    let count = s["count"].as_u64()? as usize;
+                    let want: Vec<f64> = s["mean_normalized"].as_array()?.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
+                    Some((Padded { ids, count }, want))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let mut params_opt = None;
     fail_if!(
@@ -1141,14 +1232,17 @@ fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str
             let pe = loader.0.clone();
             for (i, body) in fidelity::random_sequences(spec.vocab_size, 8, lmax as usize - 2, 11).into_iter().enumerate() {
                 let n = 2 + (i % (lmax as usize - 2)) + 1;
-                let mut ids: Vec<usize> = std::iter::once(cls).chain(body.into_iter().take(n - 2)).chain(std::iter::once(sep)).collect();
+                let mut ids: Vec<usize> =
+                    std::iter::once(cls).chain(body.into_iter().take(n - 2)).chain(std::iter::once(sep)).collect();
                 let count = ids.len().min(lmax as usize);
                 ids.truncate(lmax as usize);
                 ids.resize(lmax as usize, pad as usize);
-                bidir::float_forward(&hl, spec, &cfg, &pe, &Padded { ids, count }, Some(&mut stats)).map_err(|e| format!("calibration: {e}"))?;
+                bidir::float_forward(&hl, spec, &cfg, &pe, &Padded { ids, count }, Some(&mut stats))
+                    .map_err(|e| format!("calibration: {e}"))?;
             }
             let quiet = |_: usize, _: usize| {};
-            let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+            let mat =
+                materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
             mat_opt = Some(mat);
             Ok(json!({}))
         })
@@ -1162,7 +1256,11 @@ fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str
             let mut worst = 1f64;
             for (p, want) in &seqs {
                 let mut inputs = tir::interp_v2::MapInputs::default();
-                inputs.constant.insert(0, tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect()).map_err(|e| e.to_string())?);
+                inputs.constant.insert(
+                    0,
+                    tir::Tensor::new(tir::DType::Idx, vec![lmax as usize], p.ids.iter().map(|t| *t as i128).collect())
+                        .map_err(|e| e.to_string())?,
+                );
                 inputs.constant.insert(1, tir::Tensor::scalar(tir::DType::Idx, p.count as i128).map_err(|e| e.to_string())?);
                 let run = interp.run_positions(&params2, &inputs, 1).map_err(|e| format!("v2 run: {e}"))?;
                 let got: Vec<f64> = run[0].output.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
@@ -1195,7 +1293,9 @@ fn run_bidir(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'static str
                 *by_prim.entry(k.clone()).or_default() += v.as_u64().unwrap_or(0);
             }
         }
-        court = Some(json!({"commit_points_replayed": replayed, "replayed_on_exec": exec_replayed, "all_equal": true, "by_terminal_primitive": by_prim}));
+        court = Some(
+            json!({"commit_points_replayed": replayed, "replayed_on_exec": exec_replayed, "all_equal": true, "by_terminal_primitive": by_prim}),
+        );
         Ok(json!({"positions": positions, "sequences": seqs.len(), "equal": true}))
     });
     let ok = s.ok;
@@ -1264,11 +1364,15 @@ fn run_causal_encoder(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'s
     st.insert("fixture", Stage { ok: true, ms: 0, data: json!({"available": true}) });
     let seqs: Vec<(Vec<usize>, Vec<f64>)> = refm["sequences"]
         .as_array()
-        .map(|a| a.iter().filter_map(|s| {
-            let toks: Vec<usize> = s["tokens"].as_array()?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
-            let want: Vec<f64> = s["embeds"].as_array()?.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
-            Some((toks, want))
-        }).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| {
+                    let toks: Vec<usize> = s["tokens"].as_array()?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
+                    let want: Vec<f64> = s["embeds"].as_array()?.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
+                    Some((toks, want))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     if seqs.is_empty() {
         st.insert("float_vs_hf", Stage { ok: true, ms: 0, data: json!({"skipped": "the reference has no `embeds`"}) });
@@ -1314,7 +1418,8 @@ fn run_causal_encoder(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'s
                 .map(|p| std::iter::once(bos).chain(p).chain(std::iter::once(eos)).collect())
                 .collect();
             let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
-            let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+            let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
+                .map_err(|e| format!("materialise: {e}"))?;
             mat_opt = Some(mat);
             Ok(json!({}))
         })
@@ -1325,7 +1430,8 @@ fn run_causal_encoder(read: &ModelRead, dir: &Path, full: bool) -> (BTreeMap<&'s
         stage(|| {
             let mut worst = 1f64;
             for (toks, want) in &seqs {
-                let rows = fidelity::int_logits(&prep.lowered.program, &mat.params, toks, mat.logits_scale, &|_| {}).map_err(|e| format!("integer run: {e}"))?;
+                let rows = fidelity::int_logits(&prep.lowered.program, &mat.params, toks, mat.logits_scale, &|_| {})
+                    .map_err(|e| format!("integer run: {e}"))?;
                 worst = worst.min(cosine(rows.last().ok_or("no rows")?, want));
             }
             if worst < 0.999 {
@@ -1391,15 +1497,22 @@ fn probe_core_route(e: &Entry, cfg_text: &str, tensors: Option<&TensorIndex>) ->
                             };
                             // Equal up to the last bits of a float: `1/sqrt(d)` built by the adapter's arithmetic and by `powf(-0.5)` differ by an ulp
                             // (reported in `ulp_only`); anything else is a real difference.
-                            let (va, vb) = (serde_json::to_value(&s).unwrap_or(Value::Null), serde_json::to_value(&r.spec).unwrap_or(Value::Null));
+                            let (va, vb) = (
+                                serde_json::to_value(&s).unwrap_or(Value::Null),
+                                serde_json::to_value(&r.spec).unwrap_or(Value::Null),
+                            );
                             fn near(a: &Value, b: &Value) -> bool {
                                 match (a, b) {
                                     (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
                                         (Some(x), Some(y)) => x == y || (x - y).abs() <= 1e-12 * x.abs().max(y.abs()),
                                         _ => x == y,
                                     },
-                                    (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| near(p, q)),
-                                    (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, p)| y.get(k).is_some_and(|q| near(p, q))),
+                                    (Value::Array(x), Value::Array(y)) => {
+                                        x.len() == y.len() && x.iter().zip(y).all(|(p, q)| near(p, q))
+                                    }
+                                    (Value::Object(x), Value::Object(y)) => {
+                                        x.len() == y.len() && x.iter().all(|(k, p)| y.get(k).is_some_and(|q| near(p, q)))
+                                    }
                                     _ => a == b,
                                 }
                             }
@@ -1412,13 +1525,19 @@ fn probe_core_route(e: &Entry, cfg_text: &str, tensors: Option<&TensorIndex>) ->
                                 Ok((admit(&enc.program)?, admit(&dec.program)?))
                             })();
                             match low {
-                                Ok((a, b)) => json!({"ok": equal && a["admitted"] == json!(true) && b["admitted"] == json!(true), "adapter": id, "spec_equals_rust_parser": equal, "ulp_only": equal && !exact, "spec_diff": if exact { Value::Null } else { json!(first_diff(&serde_json::to_value(&s).unwrap_or(Value::Null), &serde_json::to_value(&r.spec).unwrap_or(Value::Null), "")) }, "admit_encoder": a["admitted"], "admit_decoder": b["admitted"], "assumed_defaults": r.assumed_defaults}),
-                                Err(m) => json!({"ok": false, "adapter": id, "spec_equals_rust_parser": equal, "error": short(&m, 300)}),
+                                Ok((a, b)) => {
+                                    json!({"ok": equal && a["admitted"] == json!(true) && b["admitted"] == json!(true), "adapter": id, "spec_equals_rust_parser": equal, "ulp_only": equal && !exact, "spec_diff": if exact { Value::Null } else { json!(first_diff(&serde_json::to_value(&s).unwrap_or(Value::Null), &serde_json::to_value(&r.spec).unwrap_or(Value::Null), "")) }, "admit_encoder": a["admitted"], "admit_decoder": b["admitted"], "assumed_defaults": r.assumed_defaults})
+                                }
+                                Err(m) => {
+                                    json!({"ok": false, "adapter": id, "spec_equals_rust_parser": equal, "error": short(&m, 300)})
+                                }
                             }
                         }
                     }
                 })();
-                Ok(json!({"parser": "lower::encdec::parse_encdec (Rust, per family)", "adapter_route": adapter_route, "encoder": program_facts(&enc.program), "decoder": program_facts(&dec.program), "admit_encoder": a["admitted"], "admit_decoder": b["admitted"]}))
+                Ok(
+                    json!({"parser": "lower::encdec::parse_encdec (Rust, per family)", "adapter_route": adapter_route, "encoder": program_facts(&enc.program), "decoder": program_facts(&dec.program), "admit_encoder": a["admitted"], "admit_decoder": b["admitted"]}),
+                )
             }
             "vision" => {
                 let size = e.options.get("size").and_then(Value::as_u64).unwrap_or(28) as u32;
@@ -1426,7 +1545,9 @@ fn probe_core_route(e: &Entry, cfg_text: &str, tensors: Option<&TensorIndex>) ->
                 let (hl, _) = vision::hl_program(&s).map_err(|e| format!("hl: {e}"))?;
                 let lw = vision::lower_vision(&hl, &s).map_err(|e| format!("lower: {e}"))?;
                 let a = admit(&lw.program)?;
-                Ok(json!({"parser": "lower::vision::parse_vision (Rust, per family)", "program": program_facts(&lw.program), "admit": a["admitted"]}))
+                Ok(
+                    json!({"parser": "lower::vision::parse_vision (Rust, per family)", "program": program_facts(&lw.program), "admit": a["admitted"]}),
+                )
             }
             _ => Err("no core route".into()),
         }
@@ -1434,7 +1555,9 @@ fn probe_core_route(e: &Entry, cfg_text: &str, tensors: Option<&TensorIndex>) ->
     match r {
         Ok(Ok(v)) => json!({"core_route": true, "detail": v}),
         Ok(Err(m)) => json!({"core_route": false, "error": short(&m, 400)}),
-        Err(p) => json!({"core_route": false, "error": short(&p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(), 300)}),
+        Err(p) => {
+            json!({"core_route": false, "error": short(&p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default(), 300)})
+        }
     }
 }
 
@@ -1453,7 +1576,8 @@ fn run_entry(e: &Entry, full: bool) -> Value {
     let t0 = Instant::now();
     let spec_dir = std::env::var("PALW_CORPUS_SPECS").map(PathBuf::from).unwrap_or_else(|_| corpus_dir().join("specs")).join(&e.id);
     let heavy = fixtures_root().map(|r| r.join(&e.id)).filter(|d| d.join("config.json").exists());
-    let cfg_path = heavy.as_ref().map(|d| d.join("config.json")).filter(|p| p.exists()).unwrap_or_else(|| spec_dir.join("config.json"));
+    let cfg_path =
+        heavy.as_ref().map(|d| d.join("config.json")).filter(|p| p.exists()).unwrap_or_else(|| spec_dir.join("config.json"));
     let mut out = serde_json::Map::new();
     out.insert("id".into(), json!(e.id));
     out.insert("category".into(), json!(e.category));
@@ -1485,7 +1609,11 @@ fn run_entry(e: &Entry, full: bool) -> Value {
         out.insert("core".into(), probe_core_route(e, &misaka_palw_tir_lower::hf_config::sanitize_json(&cfg_text), tensors.as_ref()));
     }
     // The data routes of the kinds without a pipeline stage here: an adapter of the kind's own reader, lowered and admitted.
-    let data_route = if matches!(e.route.as_str(), "encdec" | "vision" | "audio" | "diffusion") { Some(probe_data_route(&cfg, tensors.as_ref(), heavy.as_deref())) } else { None };
+    let data_route = if matches!(e.route.as_str(), "encdec" | "vision" | "audio" | "diffusion") {
+        Some(probe_data_route(&cfg, tensors.as_ref(), heavy.as_deref()))
+    } else {
+        None
+    };
     if let Some(d) = &data_route {
         out.insert("data_route".into(), d.clone());
     }
@@ -1497,7 +1625,10 @@ fn run_entry(e: &Entry, full: bool) -> Value {
     if reads.candidates.is_empty() {
         failed = Some("read".into());
     } else if !pipeline {
-        stages.insert("route".into(), json!({"ok": true, "note": format!("route `{}` has no pipeline stage in this harness yet (read stage only)", e.route)}));
+        stages.insert(
+            "route".into(),
+            json!({"ok": true, "note": format!("route `{}` has no pipeline stage in this harness yet (read stage only)", e.route)}),
+        );
         level = reads.candidates[0].level.to_string();
         via = reads.candidates[0].via.clone();
     }
@@ -1515,22 +1646,28 @@ fn run_entry(e: &Entry, full: bool) -> Value {
         let n: usize = d["programs"].as_array().map(|a| a.len()).unwrap_or(0);
         stages.insert("route".into(), json!({"ok": true, "note": format!("data route: read by the adapter of its own kind, {n} program(s) lowered and admitted; weights stages are the lowering crate's tests")}));
         level = "B".to_string();
-        via = format!("built-in {} adapter `{}` (read + lower + admit)", d["kind"].as_str().unwrap_or("?"), d["adapter"].as_str().unwrap_or("?"));
+        via = format!(
+            "built-in {} adapter `{}` (read + lower + admit)",
+            d["kind"].as_str().unwrap_or("?"),
+            d["adapter"].as_str().unwrap_or("?")
+        );
         failed = None;
     }
     if pipeline {
         for (ci, c) in reads.candidates.iter().enumerate() {
-            let run = catch_unwind(AssertUnwindSafe(|| {
-                match e.route.as_str() {
-                    "encoder-bidir" => run_bidir(&c.read, dir, full),
-                    "encoder-causal" => run_causal_encoder(&c.read, dir, full),
-                    _ => run_decoder(e, &c.read, dir, full),
-                }
+            let run = catch_unwind(AssertUnwindSafe(|| match e.route.as_str() {
+                "encoder-bidir" => run_bidir(&c.read, dir, full),
+                "encoder-causal" => run_causal_encoder(&c.read, dir, full),
+                _ => run_decoder(e, &c.read, dir, full),
             }));
             let (st, f) = match run {
                 Ok(x) => x,
                 Err(p) => {
-                    let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                    let msg = p
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_default();
                     let mut m = BTreeMap::new();
                     m.insert("panic", Stage { ok: false, ms: 0, data: json!({"error": short(&msg, 500)}) });
                     (m, Some("panic"))
@@ -1559,11 +1696,17 @@ fn run_entry(e: &Entry, full: bool) -> Value {
     // Convention search: a decoder class nothing above could read or hold is given one more route, an
     // adapter SYNTHESIZED from the standard template and a finite set of conventions (data, not Rust).
     let mut synthesized: Value = Value::Null;
-    if level == "C" && matches!(e.route.as_str(), "decoder") && e.hf_arch.ends_with("ForCausalLM") && std::env::var("PALW_CORPUS_NO_SYNTH").is_err() {
+    if level == "C"
+        && matches!(e.route.as_str(), "decoder")
+        && e.hf_arch.ends_with("ForCausalLM")
+        && std::env::var("PALW_CORPUS_NO_SYNTH").is_err()
+    {
         let (cands, blocked_by) = synthesize(&cfg, tensors.as_ref());
         let mut tried = Vec::new();
         'search: for (what, text) in &cands {
-            let Ok(read) = read_model(&cfg, tensors.as_ref(), &ReadOptions { adapter: AdapterChoice::Text(text.clone()) }) else { continue };
+            let Ok(read) = read_model(&cfg, tensors.as_ref(), &ReadOptions { adapter: AdapterChoice::Text(text.clone()) }) else {
+                continue;
+            };
             if !all_supported(&read).0 {
                 continue;
             }
@@ -1611,7 +1754,8 @@ fn run_entry(e: &Entry, full: bool) -> Value {
 }
 
 fn selected(m: &Manifest) -> Vec<Entry> {
-    let only: Option<BTreeSet<String>> = std::env::var("PALW_CORPUS_ONLY").ok().map(|s| s.split(',').map(|x| x.trim().to_string()).collect());
+    let only: Option<BTreeSet<String>> =
+        std::env::var("PALW_CORPUS_ONLY").ok().map(|s| s.split(',').map(|x| x.trim().to_string()).collect());
     m.entries.iter().filter(|e| only.as_ref().is_none_or(|o| o.contains(&e.id))).cloned().collect()
 }
 
@@ -1654,9 +1798,9 @@ fn run_all(full: bool) -> Value {
 }
 
 fn write_report(v: &Value) {
-    let path = std::env::var("PALW_CORPUS_REPORT").map(PathBuf::from).unwrap_or_else(|_| {
-        PathBuf::from(option_env!("CARGO_TARGET_TMPDIR").unwrap_or("/tmp")).join("corpus-report.json")
-    });
+    let path = std::env::var("PALW_CORPUS_REPORT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(option_env!("CARGO_TARGET_TMPDIR").unwrap_or("/tmp")).join("corpus-report.json"));
     std::fs::write(&path, serde_json::to_vec_pretty(v).expect("json")).expect("write report");
     eprintln!("report: {}", path.display());
 }
@@ -1717,15 +1861,32 @@ fn corpus_v2_full() {
 fn no_court_or_ir_source_names_a_model() {
     let root = crate_dir().join("..");
     let banned = [
-        "llama", "qwen", "mistral", "gemma", "deepseek", "mamba", "rwkv", "mixtral", "falcon", "phi3", "bert", "t5", "whisper", "stable_diffusion",
-        "gpt2", "gptneox", "olmo", "granite", "cohere", "glm", "kimi", "minimax", "jamba", "yolo",
+        "llama",
+        "qwen",
+        "mistral",
+        "gemma",
+        "deepseek",
+        "mamba",
+        "rwkv",
+        "mixtral",
+        "falcon",
+        "phi3",
+        "bert",
+        "t5",
+        "whisper",
+        "stable_diffusion",
+        "gpt2",
+        "gptneox",
+        "olmo",
+        "granite",
+        "cohere",
+        "glm",
+        "kimi",
+        "minimax",
+        "jamba",
+        "yolo",
     ];
-    let dirs = [
-        "misaka/palw/tir/core/src",
-        "misaka/palw/tir/exec/src",
-        "testing/reference/palw-tir-ref2/src",
-        "consensus/core/src",
-    ];
+    let dirs = ["misaka/palw/tir/core/src", "misaka/palw/tir/exec/src", "testing/reference/palw-tir-ref2/src", "consensus/core/src"];
     let mut offenders: Vec<String> = Vec::new();
     let mut scanned = 0usize;
     for d in dirs {
@@ -1751,12 +1912,8 @@ fn no_court_or_ir_source_names_a_model() {
             // code and strings only: skip doc and line comments (a comment may cite a family as an example)
             // and test modules (a tripwire test lists the very words)
             let text = text.split("#[cfg(test)]").next().unwrap_or("").to_string();
-            let code: String = text
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n")
-                .to_ascii_lowercase();
+            let code: String =
+                text.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n").to_ascii_lowercase();
             for b in banned {
                 // word-ish match to avoid `bert` in `albert`-free code: require non-alphanumeric neighbours
                 let mut from = 0;

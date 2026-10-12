@@ -1877,10 +1877,13 @@ async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_che
             Err(RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => Some(reason.to_lowercase()),
             // A-2: below the fence a PFS4 carriage is judged as the live build judges bytes it cannot read — here its
             // carriage-shape cap (8,192 bytes) refuses the V4 receipt carriage before admission is asked.
-            Err(RuleError::BadPalwCommitmentShape(reason)) if !armed => Some(format!("below the fence (shape): {}", reason.to_lowercase())),
+            Err(RuleError::BadPalwCommitmentShape(reason)) if !armed => {
+                Some(format!("below the fence (shape): {}", reason.to_lowercase()))
+            }
             _ => None,
         };
-        let signed_verdict = verdict(ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await.map(|_| ()));
+        let signed_verdict =
+            verdict(ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await.map(|_| ()));
         let junk_verdict = verdict(ctx.consensus.validate_and_insert_block(junk.to_immutable()).virtual_state_task.await.map(|_| ()));
         if !armed {
             // Both refused below the fence — by the fence's name, or by the live build's own carriage-shape cap (A-2); never
@@ -1888,7 +1891,8 @@ async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_che
             for reason in [signed_verdict, junk_verdict] {
                 let reason = reason.expect("a PFS4 header below the fence is refused");
                 assert!(
-                    (reason.contains("below") && reason.contains("palw_receipt_spend_v4")) || reason.starts_with("below the fence (shape)"),
+                    (reason.contains("below") && reason.contains("palw_receipt_spend_v4"))
+                        || reason.starts_with("below the fence (shape)"),
                     "refused below the fence, got: {reason}"
                 );
                 assert!(!reason.contains("signature"), "never for a signature below the fence: {reason}");
@@ -1897,7 +1901,10 @@ async fn rfc9_a_pfs4_receipt_header_is_refused_below_the_fence_and_signature_che
             let reason = junk_verdict.expect("a junk-signed PFS4 header is refused past the fence");
             assert!(reason.contains("signature"), "refused for its signature, got: {reason}");
             if let Some(reason) = signed_verdict {
-                assert!(!reason.contains("signature") && !reason.contains("below"), "real signatures get past this stage; got: {reason}");
+                assert!(
+                    !reason.contains("signature") && !reason.contains("below"),
+                    "real signatures get past this stage; got: {reason}"
+                );
             }
         }
     }
@@ -4296,17 +4303,28 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     // the live tip. The established import target is genesis until history is installed.
     let before_tip = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
     let before_stable = ctx.consensus.is_pruning_utxoset_stable();
-    let err = vp.import_pruning_point_palw_state(point, honest.clone()).expect_err("a different established target refuses even the real root");
-    assert!(matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwPruningPointMismatch(incoming, established)
-        if incoming == point && established == config.params.genesis.hash), "the target is refused by name: {err}");
+    let err = vp
+        .import_pruning_point_palw_state(point, honest.clone())
+        .expect_err("a different established target refuses even the real root");
+    assert!(
+        matches!(err, kaspa_consensus_core::errors::pruning::PruningImportError::ImportedPalwPruningPointMismatch(incoming, established)
+        if incoming == point && established == config.params.genesis.hash),
+        "the target is refused by name: {err}"
+    );
     let after_tip = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
-    assert_eq!((after_tip.0, after_tip.1.state_root()), (before_tip.0, before_tip.1.state_root()), "refusal leaves the live tip intact");
+    assert_eq!(
+        (after_tip.0, after_tip.1.state_root()),
+        (before_tip.0, before_tip.1.state_root()),
+        "refusal leaves the live tip intact"
+    );
     assert_eq!(vp.pruning_point_palw_state(tip).unwrap(), served, "refusal leaves the serving snapshot intact");
     assert_eq!(ctx.consensus.is_pruning_utxoset_stable(), before_stable, "refusal leaves completion intact");
-    ctx.consensus.import_pruning_points(vec![
-        ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
-        ctx.consensus.get_header(point).unwrap(),
-    ]).expect("the history API authorizes this import target");
+    ctx.consensus
+        .import_pruning_points(vec![
+            ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
+            ctx.consensus.get_header(point).unwrap(),
+        ])
+        .expect("the history API authorizes this import target");
 
     // Empty the store the way a pruned join leaves it, then import what the peer served.
     {
@@ -4511,10 +4529,12 @@ async fn the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block(
     };
     let honest = PalwStateCarriageV2::from_state(&state);
 
-    ctx.consensus.import_pruning_points(vec![
-        ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
-        ctx.consensus.get_header(point).unwrap(),
-    ]).expect("the history API authorizes this import target");
+    ctx.consensus
+        .import_pruning_points(vec![
+            ctx.consensus.get_header(config.params.genesis.hash).unwrap(),
+            ctx.consensus.get_header(point).unwrap(),
+        ])
+        .expect("the history API authorizes this import target");
 
     // Empty the store the way a pruned join leaves it, then import.
     {
@@ -12569,7 +12589,8 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
             }
             let unfunded = {
                 let mut tx = second.clone();
-                tx.inputs[0].previous_outpoint = TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0x51E), 0);
+                tx.inputs[0].previous_outpoint =
+                    TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0x51E), 0);
                 tx.finalize();
                 std::sync::Arc::new(tx)
             };
@@ -14739,7 +14760,8 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     v3.header.timestamp = ctx.simulated_time + 300;
     v3.header.nonce = 0xC3;
     v3.header.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
-    v3.header.palw_commitment = ctx.consensus.palw_v3_test_receipt_carriage_for(&v3.header, true, claim_id, 0, harness_bond, beacon.beacon_block);
+    v3.header.palw_commitment =
+        ctx.consensus.palw_v3_test_receipt_carriage_for(&v3.header, true, claim_id, 0, harness_bond, beacon.beacon_block);
     v3.header.finalize();
     let v3_hash = v3.header.hash;
     let _ = ctx.consensus.validate_and_insert_block(v3.to_immutable()).virtual_state_task.await;
@@ -14761,7 +14783,8 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     assert_eq!(payouts.len(), 1);
 
     // Two V4 siblings of ONE quantum: exactly one is entitled, and only that one has a payout entry (B-5's dedup runs on the fold view).
-    let gd_two = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a, v4_b]), anticone());
+    let gd_two =
+        GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v4_a, v4_b]), anticone());
     let unentitled_two = vp.palw_v2_unentitled_blues(&injected, &gd_two, &non_daa, &point);
     assert_eq!(unentitled_two.len(), 1, "one quantum, two V4 siblings: paid once");
     assert!(unentitled_two.contains(&v4_b) && !unentitled_two.contains(&v4_a), "the first in acceptance order wins");
@@ -14769,7 +14792,8 @@ async fn rfc9_a_v4_receipt_block_is_entitled_split_to_the_executors_payout_and_p
     assert_eq!(payouts_two.keys().copied().collect::<Vec<_>>(), vec![v4_a], "the refused double spend has no payout entry");
 
     // A V3 and a V4 spend of the SAME quantum are the same double spend: paid once, whichever is first.
-    let gd_mixed = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v3_hash, v4_a]), anticone());
+    let gd_mixed =
+        GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![v3_hash, v4_a]), anticone());
     let unentitled_mixed = vp.palw_v2_unentitled_blues(&injected, &gd_mixed, &non_daa, &point);
     assert_eq!(unentitled_mixed.len(), 1, "V3 and V4 share one spent-quantum ledger: paid once");
     assert!(unentitled_mixed.contains(&v4_a));
@@ -16850,9 +16874,9 @@ mod hb_fork_choice_probe;
 mod t12_h1_carrier_gate;
 mod t12_held_leaf_challenge_gate;
 // RFC-0007 Part I (tags 91, 92): the verification vertex and its equivocation at the gate.
-mod t12_vertex_gate;
 mod t12_mesh_gate;
 mod t12_offence_attribution_gate;
+mod t12_vertex_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.
 mod t12_rcore_skeleton_gate;
@@ -17406,11 +17430,13 @@ async fn the_round_templates_merge_depth_predicate_names_the_stale_tip_the_valid
     // A tip a blue kosherizes is empty — and the validator accepts it (`bounded_merge_depth_test`'s kosherizing block).
     let kosherized = vec![stale_chain[stale_chain.len() - 3], selected_chain[selected_chain.len() - 3]];
     assert!(asks(kosherized.clone()).is_empty(), "within the window the predicate names nothing");
-    consensus.add_header_only_block_with_parents(102.into(), kosherized).await.expect("the validator accepts what the predicate passes");
+    consensus
+        .add_header_only_block_with_parents(102.into(), kosherized)
+        .await
+        .expect("the validator accepts what the predicate passes");
 
     consensus.shutdown(wait_handles);
 }
-
 
 /// Private fixture only: the production presets intentionally assign no retirement fence.
 #[tokio::test]
@@ -17598,8 +17624,11 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     let original_position = vp.pruning_meta_stores.read().utxoset_position().unwrap();
     let before_utxos: Vec<_> = vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect();
     let err = ctx.consensus.import_pruning_point_utxo_set(point, MuHash::new()).unwrap_err();
-    assert!(matches!(err, PruningImportError::ImportedUtxoPruningPointMismatch(incoming, target)
-        if incoming == point && target == genesis), "wrong target is refused before root or money writes: {err}");
+    assert!(
+        matches!(err, PruningImportError::ImportedUtxoPruningPointMismatch(incoming, target)
+        if incoming == point && target == genesis),
+        "wrong target is refused before root or money writes: {err}"
+    );
     assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
     assert!(ctx.consensus.is_pruning_utxoset_stable());
@@ -17607,20 +17636,31 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
     // Even the established target cannot complete after the virtual generation
     // moved away. A failed completion leaves recovery visibly incomplete.
     ctx.consensus.set_pruning_utxoset_stable_flag(false);
-    assert!(matches!(ctx.consensus.complete_pruning_point_import(genesis),
-        Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))));
+    assert!(matches!(
+        ctx.consensus.complete_pruning_point_import(genesis),
+        Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))
+    ));
     assert!(!ctx.consensus.is_pruning_utxoset_stable());
-    ctx.consensus.import_pruning_points(vec![ctx.consensus.get_header(genesis).unwrap(), ctx.consensus.get_header(point).unwrap()]).unwrap();
-    assert!(matches!(ctx.consensus.complete_pruning_point_import(point),
-        Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))), "old UTXO position does not complete a new target");
+    ctx.consensus
+        .import_pruning_points(vec![ctx.consensus.get_header(genesis).unwrap(), ctx.consensus.get_header(point).unwrap()])
+        .unwrap();
+    assert!(
+        matches!(
+            ctx.consensus.complete_pruning_point_import(point),
+            Err(PruningImportError::PruningPointImportGenerationMismatch(_, _))
+        ),
+        "old UTXO position does not complete a new target"
+    );
     assert!(!ctx.consensus.is_pruning_utxoset_stable());
 
     // A corrupt/missing stored target produces a typed refusal, never a header
     // unwrap panic. This final seam changes no UTXO or executed state.
     let missing = BlockHash::from_u64_word(0x12_eeff_0001);
     vp.pruning_point_store.write().set(missing, 2).unwrap();
-    assert!(matches!(ctx.consensus.import_pruning_point_utxo_set(missing, MuHash::new()),
-        Err(PruningImportError::PruningPointImportContextUnavailable(_, _))));
+    assert!(matches!(
+        ctx.consensus.import_pruning_point_utxo_set(missing, MuHash::new()),
+        Err(PruningImportError::PruningPointImportContextUnavailable(_, _))
+    ));
     assert_eq!(vp.pruning_meta_stores.read().utxoset_position().unwrap(), original_position);
     assert_eq!(vp.virtual_stores.read().utxo_set.iterator().map(|row| row.unwrap()).collect::<Vec<_>>(), before_utxos);
 }

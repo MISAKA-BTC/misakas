@@ -31,8 +31,7 @@ use std::collections::BTreeMap;
 
 use crate::Hash64;
 use crate::palw_artifact::{
-    PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1,
-    verify_artifact_opening_v1,
+    PalwArtifactMerkleFrontierV1, PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_parts_v1, verify_artifact_opening_v1,
 };
 use crate::palw_tir_artifact_v1::{
     PalwTirInventoryError, PalwTirInventoryRowV1, palw_tir_inventory_leaf_count_v1, palw_tir_visit_inventory_rows_v1,
@@ -303,7 +302,8 @@ pub fn palw_gen_open_leaves_named_v1(
         return Ok(Vec::new());
     }
     // One build of the tree for every opening of the cone (see `open_artifact_leaves_v1`).
-    crate::palw_artifact::open_artifact_leaves_v1(&operands, &wanted).ok_or(PalwTirInventoryError::IndexOutOfRange { index: wanted[0], count })
+    crate::palw_artifact::open_artifact_leaves_v1(&operands, &wanted)
+        .ok_or(PalwTirInventoryError::IndexOutOfRange { index: wanted[0], count })
 }
 
 /// Why carried param openings are refused (the close then convicts nobody).

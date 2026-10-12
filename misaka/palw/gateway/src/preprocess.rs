@@ -101,7 +101,9 @@ impl PreprocessRecordV1 {
                 pre.extend_from_slice(&pad);
             }
         }
-        for n in [self.source_h, self.source_w, self.target_h, self.target_w, self.placed.y, self.placed.x, self.placed.h, self.placed.w] {
+        for n in
+            [self.source_h, self.source_w, self.target_h, self.target_w, self.placed.y, self.placed.x, self.placed.h, self.placed.w]
+        {
             pre.extend_from_slice(&n.to_le_bytes());
         }
         pre.extend_from_slice(self.source_digest.as_byte_slice());
@@ -156,15 +158,29 @@ pub fn resize_bilinear_q16(src: &[u8], sh: u32, sw: u32, dh: u32, dw: u32) -> Ve
 
 /// **Preprocess one picture to a slot's size.** Refuses a malformed picture (zero side, wrong byte count, over the entrance's caps) and a
 /// slot that is empty or past the caps, by name.
-pub fn preprocess(image: &DecodedImageV1, target_h: u32, target_w: u32, fit: Fit) -> Result<(DecodedImageV1, PreprocessRecordV1), String> {
+pub fn preprocess(
+    image: &DecodedImageV1,
+    target_h: u32,
+    target_w: u32,
+    fit: Fit,
+) -> Result<(DecodedImageV1, PreprocessRecordV1), String> {
     let (sh, sw) = (image.h, image.w);
     if sh == 0 || sw == 0 || sh > MAX_IMAGE_SIDE || sw > MAX_IMAGE_SIDE {
         return Err(format!("the picture is {sh}x{sw}: each side must be 1..={MAX_IMAGE_SIDE}"));
     }
     if image.rgb.len() != sh as usize * sw as usize * 3 {
-        return Err(format!("the picture is {sh}x{sw} and carries {} bytes where {} were expected", image.rgb.len(), sh as usize * sw as usize * 3));
+        return Err(format!(
+            "the picture is {sh}x{sw} and carries {} bytes where {} were expected",
+            image.rgb.len(),
+            sh as usize * sw as usize * 3
+        ));
     }
-    if target_h == 0 || target_w == 0 || target_h > MAX_IMAGE_SIDE || target_w > MAX_IMAGE_SIDE || target_h as usize * target_w as usize * 3 > MAX_IMAGE_BYTES {
+    if target_h == 0
+        || target_w == 0
+        || target_h > MAX_IMAGE_SIDE
+        || target_w > MAX_IMAGE_SIDE
+        || target_h as usize * target_w as usize * 3 > MAX_IMAGE_BYTES
+    {
         return Err(format!("the slot is {target_h}x{target_w}, outside what a slot may declare"));
     }
     let (canonical, placed) = match fit {
@@ -239,10 +255,18 @@ mod tests {
             if let Some(expect) = c["out_rgb_hex"].as_str() {
                 assert_eq!(faster_hex::hex_string(&out.rgb), expect, "{name}: the canonical pixels");
             }
-            assert_eq!(faster_hex::hex_string(&sha2::Sha256::digest(&out.rgb)), c["out_sha256"].as_str().unwrap(), "{name}: sha256 of the pixels");
+            assert_eq!(
+                faster_hex::hex_string(&sha2::Sha256::digest(&out.rgb)),
+                c["out_sha256"].as_str().unwrap(),
+                "{name}: sha256 of the pixels"
+            );
             let p = c["placed"].as_array().unwrap();
             let placed = [record.placed.y, record.placed.x, record.placed.h, record.placed.w];
-            assert_eq!(placed.map(u64::from), [p[0].as_u64().unwrap(), p[1].as_u64().unwrap(), p[2].as_u64().unwrap(), p[3].as_u64().unwrap()], "{name}: placement");
+            assert_eq!(
+                placed.map(u64::from),
+                [p[0].as_u64().unwrap(), p[1].as_u64().unwrap(), p[2].as_u64().unwrap(), p[3].as_u64().unwrap()],
+                "{name}: placement"
+            );
             assert_eq!((out.h, out.w), (dh, dw));
         }
     }
@@ -285,7 +309,10 @@ mod tests {
             for fit in [Fit::Stretch, Fit::Letterbox { pad: [0, 0, 0] }] {
                 let (out, rec) = preprocess(&src, th, tw, fit).unwrap();
                 assert_eq!((out.h, out.w, out.rgb.len()), (th, tw, th as usize * tw as usize * 3));
-                assert!(rec.placed.h >= 1 && rec.placed.w >= 1 && rec.placed.y + rec.placed.h <= th && rec.placed.x + rec.placed.w <= tw, "{rec:?}");
+                assert!(
+                    rec.placed.h >= 1 && rec.placed.w >= 1 && rec.placed.y + rec.placed.h <= th && rec.placed.x + rec.placed.w <= tw,
+                    "{rec:?}"
+                );
             }
         }
     }
@@ -298,7 +325,10 @@ mod tests {
         let mut other_pixels = image.clone();
         other_pixels.rgb[0] ^= 1;
         let digests = [
-            ("one changed byte of the raw picture", preprocess(&other_pixels, 4, 4, Fit::Letterbox { pad: [0, 0, 0] }).unwrap().1.digest()),
+            (
+                "one changed byte of the raw picture",
+                preprocess(&other_pixels, 4, 4, Fit::Letterbox { pad: [0, 0, 0] }).unwrap().1.digest(),
+            ),
             ("another pad colour", preprocess(&image, 4, 4, Fit::Letterbox { pad: [1, 0, 0] }).unwrap().1.digest()),
             ("stretch instead of letterbox", preprocess(&image, 4, 4, Fit::Stretch).unwrap().1.digest()),
             ("another slot size", preprocess(&image, 4, 5, Fit::Letterbox { pad: [0, 0, 0] }).unwrap().1.digest()),

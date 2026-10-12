@@ -707,11 +707,8 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     // attempts anywhere; with the work target armed they are pinned near `W0 / CCU`, so this is
     // bounded by `W0` per claim, and what it buys is that the reservation and `claim.pwu` are of
     // one order — the registrant's canonical job can no longer sell weight at a 230x discount.
-    let attempts = if budget_fences.audit_2026_09_23_active {
-        crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw)
-    } else {
-        1
-    };
+    let attempts =
+        if budget_fences.audit_2026_09_23_active { crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw) } else { 1 };
     let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))
@@ -798,7 +795,8 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     if let Some(read) =
         crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, &bond_key, bond.collateral, ctx.daa_score)
     {
-        read.admits_v1().map_err(|refusal| PalwAdmissionV2Error::IssuanceCapped { bond: bond_key, refusal: format!("{refusal:?}") })?;
+        read.admits_v1()
+            .map_err(|refusal| PalwAdmissionV2Error::IssuanceCapped { bond: bond_key, refusal: format!("{refusal:?}") })?;
     }
     // 8b′. **ADR-0164 F-EM: the DAA's PALW reward budget**, the fold's own reading of the rooted ledger at this block's DAA.
     if state_params.capacity_emission_active_at(ctx.daa_score)
@@ -960,15 +958,19 @@ pub fn check_palw_attempt_da_pins_v1(
     // root. Which count a class owes is the stateful half ([`check_palw_attempt_witness_pin_v1`], where the class profile is read);
     // here, with no state, the shape: a count of 1 under the v1 root or `2..=1 + max` under the v2 one.
     if state_params.witness_manifest_active_at(daa_score) {
-        crate::palw_mesh_v1::palw_witness_manifest_shape_ok_v1(attempt.trace_root, attempt.trace_chunk_count, attempt.trace_manifest_root)
-            .map_err(|refusal| match refusal {
-                crate::palw_mesh_v1::WitnessPinRefusalV1::CountOutOfRange { count } => {
-                    PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: count, canonical: 1 }
-                }
-                crate::palw_mesh_v1::WitnessPinRefusalV1::ManifestNotDerived { claimed, derived } => {
-                    PalwAdmissionV2Error::TraceManifestNotDerived { claimed, derived }
-                }
-            })?;
+        crate::palw_mesh_v1::palw_witness_manifest_shape_ok_v1(
+            attempt.trace_root,
+            attempt.trace_chunk_count,
+            attempt.trace_manifest_root,
+        )
+        .map_err(|refusal| match refusal {
+            crate::palw_mesh_v1::WitnessPinRefusalV1::CountOutOfRange { count } => {
+                PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: count, canonical: 1 }
+            }
+            crate::palw_mesh_v1::WitnessPinRefusalV1::ManifestNotDerived { claimed, derived } => {
+                PalwAdmissionV2Error::TraceManifestNotDerived { claimed, derived }
+            }
+        })?;
         let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
         if attempt.trace_retention_daa != derived {
             return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
@@ -1692,8 +1694,9 @@ mod tests {
         let env = attempt(100, 1);
         check_palw_attempt_admission_v2(&state, &dormant, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
             .expect("below the height the weight alone fits the ceiling");
-        let err = check_palw_attempt_admission_v2(&state, &armed, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
-            .expect_err("past it the escrow does not fit beside the weight");
+        let err =
+            check_palw_attempt_admission_v2(&state, &armed, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
+                .expect_err("past it the escrow does not fit beside the weight");
         assert!(
             matches!(err, PalwAdmissionV2Error::ExposureCeilingExceeded { claim, ceiling: 500, .. } if claim == 500 + 62_000),
             "{err:?}"
@@ -1947,7 +1950,8 @@ mod tests {
         assert_eq!(rider_pwu, palw_attempt_derived_pwu_v1(u128::MAX, 9), "one expected attempt where W ≤ W0");
         assert_ne!(lead_pwu, rider_pwu, "or this proves nothing");
         // The function IS the admission's: the rider carrying its own pwu admits at the rider's floor, the lead's pwu is refused there.
-        check_fenced(&state, &c, &derived_class_attempt_admitting(rider_pwu, target), rider).expect("the producer-derived rider is taken");
+        check_fenced(&state, &c, &derived_class_attempt_admitting(rider_pwu, target), rider)
+            .expect("the producer-derived rider is taken");
         assert_eq!(
             check_fenced(&state, &c, &derived_class_attempt(lead_pwu, 7), rider).unwrap_err(),
             PalwAdmissionV2Error::PwuClaimNotDerived { claimed: lead_pwu, derived: rider_pwu },

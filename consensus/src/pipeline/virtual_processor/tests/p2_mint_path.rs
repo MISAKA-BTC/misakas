@@ -338,7 +338,9 @@ async fn p2_dns_settlement_uses_the_held_virtual_snapshot_with_a_writer_queued()
     let held = vp.virtual_stores.read();
     let daa = held.state.get().unwrap().daa_score;
     let stores = vp.virtual_stores.clone();
-    let writer = std::thread::spawn(move || { let _write = stores.write(); });
+    let writer = std::thread::spawn(move || {
+        let _write = stores.write();
+    });
     let deadline = Instant::now() + Duration::from_secs(2);
     while vp.virtual_stores.try_read().is_some() && Instant::now() < deadline {
         std::thread::yield_now();
@@ -346,11 +348,15 @@ async fn p2_dns_settlement_uses_the_held_virtual_snapshot_with_a_writer_queued()
     let queued = vp.virtual_stores.try_read().is_none();
     let (old_tx, old_rx) = mpsc::channel();
     let old_vp = vp.clone();
-    let control = std::thread::spawn(move || { old_tx.send(old_vp.dns_coinbase_settlement()).unwrap(); });
+    let control = std::thread::spawn(move || {
+        old_tx.send(old_vp.dns_coinbase_settlement()).unwrap();
+    });
     let control_waited = old_rx.recv_timeout(Duration::from_millis(50)).is_err();
     let (tx, rx) = mpsc::channel();
     let worker_vp = vp.clone();
-    let worker = std::thread::spawn(move || { tx.send(worker_vp.dns_coinbase_settlement_at(Some(daa))).unwrap(); });
+    let worker = std::thread::spawn(move || {
+        tx.send(worker_vp.dns_coinbase_settlement_at(Some(daa))).unwrap();
+    });
     let result = rx.recv_timeout(Duration::from_secs(2));
     // Release and join before asserting, so the negative control cannot strand a DB-owning thread.
     drop(held);

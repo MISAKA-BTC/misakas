@@ -33,13 +33,13 @@ use kaspa_consensus_core::palw_gen_close_v1::{
 };
 use kaspa_consensus_core::palw_gen_court_v1::PalwGenCloseRefusalV1;
 use kaspa_consensus_core::palw_gen_job_v1::PalwGenJobV1;
-use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
 use kaspa_consensus_core::palw_gen_step_v1::{
     PalwGenLeafCoordV1, PalwGenLeafKindV1, PalwGenLeafV1, PalwGenStepSpaceV1, palw_gen_leaf_path_v1, palw_gen_stage_root_v1,
     palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1,
 };
 use kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1;
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenRandomV1, palw_gen_execute_tensor_v1};
+use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1;
 use misaka_palw_gen::OutputSpecV1;
 use misaka_palw_tir::interp::{MapParams, ParamSource};
@@ -477,16 +477,21 @@ fn hashes(v: &Value) -> Vec<Hash64> {
 
 fn coord_of(v: &Value) -> PalwGenLeafCoordV1 {
     let kind = match v["kind"].as_str().unwrap() {
-        "commit" => {
-            PalwGenLeafKindV1::Commit { occurrence: v["occurrence"].as_u64().unwrap() as u16, node: v["node"].as_u64().unwrap() as u16 }
-        }
-        "state" => PalwGenLeafKindV1::State {
-            state: v["state"].as_u64().unwrap() as u16,
-            layer: v["layer"].as_u64().map(|x| x as u16),
+        "commit" => PalwGenLeafKindV1::Commit {
+            occurrence: v["occurrence"].as_u64().unwrap() as u16,
+            node: v["node"].as_u64().unwrap() as u16,
         },
+        "state" => {
+            PalwGenLeafKindV1::State { state: v["state"].as_u64().unwrap() as u16, layer: v["layer"].as_u64().map(|x| x as u16) }
+        }
         k => panic!("a coordinate kind {k}"),
     };
-    PalwGenLeafCoordV1 { stage: v["stage"].as_u64().unwrap() as u8, pos: v["pos"].as_u64().unwrap() as u32, kind, tile: v["tile"].as_u64().unwrap() as u32 }
+    PalwGenLeafCoordV1 {
+        stage: v["stage"].as_u64().unwrap() as u8,
+        pos: v["pos"].as_u64().unwrap() as u32,
+        kind,
+        tile: v["tile"].as_u64().unwrap() as u32,
+    }
 }
 
 /// A source vector's weights, per program (the toy pipelines state them).
@@ -515,7 +520,12 @@ fn weights_of(src: &Value, programs: &[TirProgramV2]) -> Weights {
 /// The pipeline job a claim of the file runs: the accepted steps and scalars, the ids and the images as given.
 fn claim_job_of(c: &Value) -> PipelineJob {
     let inputs = &c["inputs"];
-    assert_eq!(c["accepted"]["negative_tokens"].as_u64().unwrap(), 0, "{}: the corpus tensor classes take no negative prompt", c["name"]);
+    assert_eq!(
+        c["accepted"]["negative_tokens"].as_u64().unwrap(),
+        0,
+        "{}: the corpus tensor classes take no negative prompt",
+        c["name"]
+    );
     PipelineJob {
         prompt: u32s(&inputs["prompt_token_ids"]),
         negative: vec![],
@@ -574,7 +584,8 @@ fn the_tensor_claim_vectors_hold_against_the_consensus_layer() {
     for e in entries {
         let name = e["name"].as_str().unwrap();
         let (class, root) = class_of(e);
-        palw_gen_class_preflight_v1(&class, &fence).unwrap_or_else(|err| panic!("{name}: the class does not pass the preflight: {err}"));
+        palw_gen_class_preflight_v1(&class, &fence)
+            .unwrap_or_else(|err| panic!("{name}: the class does not pass the preflight: {err}"));
         assert_eq!(class.class_id(&root).as_byte_slice(), &h64v(&e["class_id_hex"])[..], "{name}: the class id");
         assert_eq!(borsh::to_vec(&class.layouts).unwrap(), hexv(&e["layouts_borsh_hex"]), "{name}: layouts borsh");
         assert_eq!(borsh::to_vec(&class.output).unwrap(), hexv(&e["output_borsh_hex"]), "{name}: output borsh");
@@ -636,11 +647,16 @@ fn the_tensor_claim_vectors_hold_against_the_consensus_layer() {
         let out = t.output.as_ref().expect("a tensor claim has an output");
         assert_eq!(out.root.as_byte_slice(), &h64v(&cl["output"]["output_root_hex"])[..], "{name}: the output root");
         assert_eq!(out.tile_len as u64, cl["output"]["tile_len"].as_u64().unwrap(), "{name}: the output tile length");
-        let execution = palw_gen_tensor_execution_root_v1(&job.id(), &class.class_id(&root), t.space.leaf_count(), &t.claim.step_root, &out.root);
+        let execution =
+            palw_gen_tensor_execution_root_v1(&job.id(), &class.class_id(&root), t.space.leaf_count(), &t.claim.step_root, &out.root);
         assert_eq!(execution.as_byte_slice(), &h64v(&cl["execution_root_hex"])[..], "{name}: the execution root");
         leaves += t.space.leaf_count();
     }
-    eprintln!("tensor claims: {} claims over {} classes, {leaves} step leaves hashed by the consensus layer's worker, every root equal", claims.len(), entries.len());
+    eprintln!(
+        "tensor claims: {} claims over {} classes, {leaves} step leaves hashed by the consensus layer's worker, every root equal",
+        claims.len(),
+        entries.len()
+    );
 }
 
 /// The consensus layer's close, rebuilt from a case of the file alone.
@@ -757,7 +773,8 @@ fn the_output_close_vectors_hold_against_the_consensus_layer() {
     for must in ["Convicted:Digest", "Convicted:Outside", "Convicted:LeafCount"] {
         assert!(words.contains_key(must), "no case for {must}");
     }
-    for must in ["Version", "NotTheClaims", "Binding", "NotTheOutputStepTile", "NotTheNarrowedLeaf", "LeafNotProven", "TileNotProven"] {
+    for must in ["Version", "NotTheClaims", "Binding", "NotTheOutputStepTile", "NotTheNarrowedLeaf", "LeafNotProven", "TileNotProven"]
+    {
         assert!(words.contains_key(&format!("Refused:{must}")), "no case for Refused:{must}");
     }
 }
@@ -782,7 +799,8 @@ fn the_output_tile_alignment_vectors_hold_against_the_consensus_layer() {
         let trips: Vec<u32> = stage_job_facts(&pipeline, &programs, &job).unwrap().iter().map(|f| f.trip).collect();
         let stage = a["output_stage"].as_u64().unwrap() as usize;
         assert_eq!(trips[stage] as u64, a["trip"].as_u64().unwrap(), "{name}: the output stage's trip");
-        let space = PalwGenStepSpaceV1::new(&pipeline, &programs, &class.layouts, &trips, job.prompt.len() as u32).expect("a step space");
+        let space =
+            PalwGenStepSpaceV1::new(&pipeline, &programs, &class.layouts, &trips, job.prompt.len() as u32).expect("a step space");
         let st = &space.stages[stage];
         let tile_len = a["tile_len"].as_u64().unwrap() as u32;
         for t in a["output_tiles"].as_array().unwrap() {
@@ -800,13 +818,15 @@ fn the_output_tile_alignment_vectors_hold_against_the_consensus_layer() {
     // `Rows`: the one-stage pipeline whose output node is a per-position row.
     let rows = &file["alignment_rows"];
     let program = TirProgramV2::decode_canonical(&hexv(&rows["program_borsh_hex"])).expect("the rows program");
-    let pipeline = TirPipelineV1::decode_canonical(&hexv(&rows["pipeline_hex"]), std::slice::from_ref(&program)).expect("the rows pipeline");
+    let pipeline =
+        TirPipelineV1::decode_canonical(&hexv(&rows["pipeline_hex"]), std::slice::from_ref(&program)).expect("the rows pipeline");
     let configs = rows["configs"].as_array().unwrap();
     assert!(!configs.is_empty());
     for cfg in configs {
         let layout = layout_of(&cfg["layout"]);
         let trip = cfg["trip"].as_u64().unwrap() as u32;
-        let space = PalwGenStepSpaceV1::new(&pipeline, std::slice::from_ref(&program), &[layout], &[trip], trip).expect("a step space");
+        let space =
+            PalwGenStepSpaceV1::new(&pipeline, std::slice::from_ref(&program), &[layout], &[trip], trip).expect("a step space");
         let tile_len = cfg["tile_len"].as_u64().unwrap() as u32;
         let st = &space.stages[0];
         for t in cfg["output_tiles"].as_array().unwrap() {

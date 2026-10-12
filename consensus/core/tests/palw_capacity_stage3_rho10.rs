@@ -29,8 +29,8 @@ use stage1::*;
 use kaspa_consensus_core::config::params::{
     PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO10_V1, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
     PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_3_V1,
-    PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
-    PALW_T12_POST_LAUNCH_FENCES_V3, PalwPostLaunchFenceV1, palw_t12_release_v6_params, palw_t12_shipped_params,
+    PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3,
+    PalwPostLaunchFenceV1, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1;
@@ -162,7 +162,10 @@ fn testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release() {
     assert_eq!(PALW_T12_POST_LAUNCH_FENCE_V3_DAA, Some(1_700), "the flag day's height");
     // …and the int-11 flag day (H = 5,300) over it: the ρ steps at the release's heights, nothing else.
     let mut want = arm_rho10(release(), FLAG_DAY);
-    kaspa_consensus_core::config::params::palw_t12_arm_int11_flag_day_at_v1(&mut want, kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA);
+    kaspa_consensus_core::config::params::palw_t12_arm_int11_flag_day_at_v1(
+        &mut want,
+        kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA,
+    );
     assert_eq!(ids(&shipped), ids(&want), "testnet-12 as shipped arms the package at 1,700 and the int-11 flag day at 5,300");
     for f in PALW_T12_CAPACITY_RHO10_FENCES_V1 {
         assert_eq!(fence_at(&shipped, f.name), Some(1_700), "{}: armed at 1,700", f.name);

@@ -952,12 +952,7 @@ impl PalwLegacyNodeViewV2<'_> {
         // Lane G14-L: a k-ary round answers the nodes UNDER its focus, never the focus itself — a node between the focus and its
         // lanes is folded from its children, each one a lane's (or a node wholly before the divergent leaf). Only where an answered
         // frontier lies below it: no recursion into a subtree public material does not reach.
-        if level == 0
-            || !self
-                .frontiers
-                .iter()
-                .any(|f| f.level < level && (f.index >> u32::from(level - f.level)) == index)
-        {
+        if level == 0 || !self.frontiers.iter().any(|f| f.level < level && (f.index >> u32::from(level - f.level)) == index) {
             return None;
         }
         let child = level - 1;
@@ -1155,7 +1150,9 @@ mod tests {
             edges: (0u8..128).map(|lo| PalwConstraintEdgeV1 { lo, hi: lo, action: PalwConstraintActionV1::Goto(0) }).collect(),
         };
         let constraint = PalwDecodeConstraintV1 {
-            version: PALW_DECODE_CONSTRAINT_VERSION_V1, compiler_id: h(910), start_frame: 0,
+            version: PALW_DECODE_CONSTRAINT_VERSION_V1,
+            compiler_id: h(910),
+            start_frame: 0,
             frames: vec![PalwConstraintFrameV1 { start: 0, nodes: vec![node; 100] }],
         };
         let bytes = constraint.to_bytes();
@@ -1163,20 +1160,37 @@ mod tests {
         PalwDecodeConstraintV1::from_bytes(&bytes).expect("canonical, well-formed constraint inside the actual admission ceiling");
         let ctx = &binding.job_context;
         let job = PalwFreePromptJobV3 {
-            version: PALW_FP_CONSTRAINT_VERSION, network_domain: h(900), class_id: binding.shape_profile.shape_profile_id(),
-            executor_bond: crate::tx::TransactionOutpoint::new(h(901), 0), executor_pubkey: vec![7; 2592],
-            operator_id: h(902), anchor_block: h(903), anchor_daa: 10, job_nonce: [4; 32], tokenizer_id: ctx.tokenizer_id,
-            prompt_token_ids_hash: ctx.prompt_token_ids_hash, prompt_tokens: ctx.declared_prefill_tokens,
-            decode_token_limit: ctx.exact_decode_tokens, max_context_tokens: ctx.max_context_tokens,
-            privacy_mode: PALW_FP_PRIVACY_PANEL_DA, prompt_mode: PALW_FP_PROMPT_MODE_USER, sampling_seed: [0;32],
-            temperature_q: 0, decode: None,
+            version: PALW_FP_CONSTRAINT_VERSION,
+            network_domain: h(900),
+            class_id: binding.shape_profile.shape_profile_id(),
+            executor_bond: crate::tx::TransactionOutpoint::new(h(901), 0),
+            executor_pubkey: vec![7; 2592],
+            operator_id: h(902),
+            anchor_block: h(903),
+            anchor_daa: 10,
+            job_nonce: [4; 32],
+            tokenizer_id: ctx.tokenizer_id,
+            prompt_token_ids_hash: ctx.prompt_token_ids_hash,
+            prompt_tokens: ctx.declared_prefill_tokens,
+            decode_token_limit: ctx.exact_decode_tokens,
+            max_context_tokens: ctx.max_context_tokens,
+            privacy_mode: PALW_FP_PRIVACY_PANEL_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
             tail: Some(PalwFpJobTailV1::Constraint(PalwFpConstraintTailV1 { constraint: bytes, table_root: h(911) })),
         };
         let length = borsh::object_length(&job).unwrap() as u64;
         assert!(length > 64 * 1024 && length < PALW_LEGACY_FP_JOB_MAX_BYTES_V2);
         assert_eq!(PALW_LEGACY_FP_JOB_MAX_BYTES_V2, 125_000);
-        for params in [&crate::config::params::MAINNET_PARAMS, &crate::config::params::TESTNET_PARAMS,
-            &crate::config::params::TESTNET11_PARAMS, &crate::config::params::SIMNET_PARAMS, &crate::config::params::DEVNET_PARAMS] {
+        for params in [
+            &crate::config::params::MAINNET_PARAMS,
+            &crate::config::params::TESTNET_PARAMS,
+            &crate::config::params::TESTNET11_PARAMS,
+            &crate::config::params::SIMNET_PARAMS,
+            &crate::config::params::DEVNET_PARAMS,
+        ] {
             assert!(params.max_block_mass / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR <= PALW_LEGACY_FP_JOB_MAX_BYTES_V2);
         }
         binding.job_context.job_id = fp_job_id_v3(&job);

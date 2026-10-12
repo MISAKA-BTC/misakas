@@ -157,9 +157,12 @@ fn retention_prune_plan_with_material_v1(
             .collect();
         for kind in [RetainedKindV1::Attempt, RetainedKindV1::Foreign] {
             let mut order: Vec<usize> = (0..claims.len())
-                .filter(|i| claims[*i].kind == kind && !doomed.contains(i)
-                    && !material_owed(&claims[*i].claim)
-                    && !chain(&claims[*i].claim).as_ref().is_some_and(|view| view.da_owed))
+                .filter(|i| {
+                    claims[*i].kind == kind
+                        && !doomed.contains(i)
+                        && !material_owed(&claims[*i].claim)
+                        && !chain(&claims[*i].claim).as_ref().is_some_and(|view| view.da_owed)
+                })
                 .collect();
             order.sort_by(|a, b| (rank[*a], age(&claims[*b])).cmp(&(rank[*b], age(&claims[*a]))));
             for i in order {
@@ -324,8 +327,9 @@ impl PalwRetentionJanitor {
                 phase: state.phase,
             })
         };
-        let owed = |claim: &Hash64| session.palw_material_income_hold_until_v1(*claim)
-            .is_some_and(|until| until == u64::MAX || now_daa < until);
+        let owed = |claim: &Hash64| {
+            session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until)
+        };
         let (doomed, short) = retention_prune_plan_with_material_v1(&claims, &chain, owed, self.attempt_horizon, free, reserve);
         let mut removed = 0usize;
         let mut bytes = 0u64;
@@ -419,8 +423,20 @@ mod tests {
     #[test]
     fn material_only_kernel_subject_pins_old_own_and_foreign_files_without_a_native_claim() {
         let claims = vec![
-            RetainedClaimV1 { claim: Hash64::from_u64_word(1), paths: vec![], bytes: 40, age: Some(Duration::MAX), kind: RetainedKindV1::Attempt },
-            RetainedClaimV1 { claim: Hash64::from_u64_word(2), paths: vec![], bytes: 30, age: Some(Duration::MAX), kind: RetainedKindV1::Foreign },
+            RetainedClaimV1 {
+                claim: Hash64::from_u64_word(1),
+                paths: vec![],
+                bytes: 40,
+                age: Some(Duration::MAX),
+                kind: RetainedKindV1::Attempt,
+            },
+            RetainedClaimV1 {
+                claim: Hash64::from_u64_word(2),
+                paths: vec![],
+                bytes: 30,
+                age: Some(Duration::MAX),
+                kind: RetainedKindV1::Foreign,
+            },
         ];
         let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| true, 60 * MIN, 0, 100);
         assert!(doomed.is_empty());

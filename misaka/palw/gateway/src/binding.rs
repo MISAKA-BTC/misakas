@@ -48,43 +48,193 @@ pub enum Bound {
 /// **The audit table.** Every row names a test below; `the_audit_table_names_only_tests_that_exist` holds the table to that.
 pub const AUDIT: &[BindingRow] = &[
     // ---- link 1: gateway input -> worker request ----
-    BindingRow { fact: "user message text", enters: "chat template -> segments -> ids -> job.prompt_token_ids_hash", test: "link_1_the_users_text_and_every_turn_around_it_reach_the_prompt_hash", bound: Bound::ViaCanonicalForm },
-    BindingRow { fact: "system / assistant turns, tools, tool_choice, response_format instruction", enters: "rendered into the turns before the template -> ids", test: "link_1_the_users_text_and_every_turn_around_it_reach_the_prompt_hash", bound: Bound::ViaCanonicalForm },
-    BindingRow { fact: "chat template (built-in, sidecar)", enters: "the segments the template emits -> ids; its id is NOT a claim field", test: "link_1_the_chat_template_changes_the_ids_and_its_id_is_not_committed", bound: Bound::ViaCanonicalForm },
-    BindingRow { fact: "max_tokens", enters: "request.decode_token_limit -> job.decode_token_limit", test: "link_1_the_sampling_and_decode_controls_each_reach_their_own_request_field", bound: Bound::InClaim },
-    BindingRow { fact: "temperature, seed (generation seed R for text)", enters: "request.temperature_q / sampling_seed -> job.temperature_q / sampling_seed", test: "link_1_the_sampling_and_decode_controls_each_reach_their_own_request_field", bound: Bound::InClaim },
-    BindingRow { fact: "repeat_penalty, frequency_penalty, presence_penalty, repeat_last_n, logit_bias, stop", enters: "request.decode (DecodeConfigV4, canonical) and request.stop_texts -> job.decode", test: "link_1_the_sampling_and_decode_controls_each_reach_their_own_request_field", bound: Bound::InClaim },
-    BindingRow { fact: "network, class, executor bond, executor key, operator", enters: "gateway identity -> request -> job", test: "link_1_identity_chain_anchor_and_privacy_enter_the_request", bound: Bound::InClaim },
-    BindingRow { fact: "anchor block / daa", enters: "chain facts at admission -> request -> job", test: "link_1_identity_chain_anchor_and_privacy_enter_the_request", bound: Bound::InClaim },
-    BindingRow { fact: "privacy mode", enters: "gateway config -> request -> job.privacy_mode", test: "link_1_identity_chain_anchor_and_privacy_enter_the_request", bound: Bound::InClaim },
-    BindingRow { fact: "job_nonce", enters: "fresh per request -> job.job_nonce (uniqueness only; no lottery meaning)", test: "link_1_the_nonce_is_fresh_per_request_and_nothing_else_is_random", bound: Bound::InClaim },
-    BindingRow { fact: "model name, user, metadata, store, stream, stream_options, identity-valued sampling knobs", enters: "NOT in the claim: presentation or delivery only (reported in misaka.ignored_fields)", test: "link_1_presentation_fields_are_not_bound_and_say_so", bound: Bound::NotBound },
+    BindingRow {
+        fact: "user message text",
+        enters: "chat template -> segments -> ids -> job.prompt_token_ids_hash",
+        test: "link_1_the_users_text_and_every_turn_around_it_reach_the_prompt_hash",
+        bound: Bound::ViaCanonicalForm,
+    },
+    BindingRow {
+        fact: "system / assistant turns, tools, tool_choice, response_format instruction",
+        enters: "rendered into the turns before the template -> ids",
+        test: "link_1_the_users_text_and_every_turn_around_it_reach_the_prompt_hash",
+        bound: Bound::ViaCanonicalForm,
+    },
+    BindingRow {
+        fact: "chat template (built-in, sidecar)",
+        enters: "the segments the template emits -> ids; its id is NOT a claim field",
+        test: "link_1_the_chat_template_changes_the_ids_and_its_id_is_not_committed",
+        bound: Bound::ViaCanonicalForm,
+    },
+    BindingRow {
+        fact: "max_tokens",
+        enters: "request.decode_token_limit -> job.decode_token_limit",
+        test: "link_1_the_sampling_and_decode_controls_each_reach_their_own_request_field",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "temperature, seed (generation seed R for text)",
+        enters: "request.temperature_q / sampling_seed -> job.temperature_q / sampling_seed",
+        test: "link_1_the_sampling_and_decode_controls_each_reach_their_own_request_field",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "repeat_penalty, frequency_penalty, presence_penalty, repeat_last_n, logit_bias, stop",
+        enters: "request.decode (DecodeConfigV4, canonical) and request.stop_texts -> job.decode",
+        test: "link_1_the_sampling_and_decode_controls_each_reach_their_own_request_field",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "network, class, executor bond, executor key, operator",
+        enters: "gateway identity -> request -> job",
+        test: "link_1_identity_chain_anchor_and_privacy_enter_the_request",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "anchor block / daa",
+        enters: "chain facts at admission -> request -> job",
+        test: "link_1_identity_chain_anchor_and_privacy_enter_the_request",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "privacy mode",
+        enters: "gateway config -> request -> job.privacy_mode",
+        test: "link_1_identity_chain_anchor_and_privacy_enter_the_request",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "job_nonce",
+        enters: "fresh per request -> job.job_nonce (uniqueness only; no lottery meaning)",
+        test: "link_1_the_nonce_is_fresh_per_request_and_nothing_else_is_random",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "model name, user, metadata, store, stream, stream_options, identity-valued sampling knobs",
+        enters: "NOT in the claim: presentation or delivery only (reported in misaka.ignored_fields)",
+        test: "link_1_presentation_fields_are_not_bound_and_say_so",
+        bound: Bound::NotBound,
+    },
     // ---- link 2: request -> job (the worker is never trusted about what it was asked) ----
-    BindingRow { fact: "every request field", enters: "validate_against_request refuses a result whose job differs from the request, field by field", test: "link_2_a_result_that_changes_any_requested_field_is_refused", bound: Bound::CheckedNotCommitted },
-    BindingRow { fact: "tokenizer_id", enters: "job.tokenizer_id (worker-supplied, in the claim) — held to the worker's manifest by the shared validate_against_manifest (P2)", test: "link_2_the_jobs_tokenizer_is_the_manifests", bound: Bound::CheckedNotCommitted },
-    BindingRow { fact: "stop strings (spelled by the worker into job.decode.stop_sequences)", enters: "the worker's spelling; validate_against_request caps the count and, since P2, requires at least one", test: "link_2_a_worker_that_drops_the_requested_stop_strings_is_caught_by_the_gateway", bound: Bound::CheckedNotCommitted },
-    BindingRow { fact: "prompt ids <-> job.prompt_token_ids_hash", enters: "validate_against_request re-hashes the returned ids under the network's form", test: "link_2_a_result_that_changes_any_requested_field_is_refused", bound: Bound::CheckedNotCommitted },
+    BindingRow {
+        fact: "every request field",
+        enters: "validate_against_request refuses a result whose job differs from the request, field by field",
+        test: "link_2_a_result_that_changes_any_requested_field_is_refused",
+        bound: Bound::CheckedNotCommitted,
+    },
+    BindingRow {
+        fact: "tokenizer_id",
+        enters: "job.tokenizer_id (worker-supplied, in the claim) — held to the worker's manifest by the shared validate_against_manifest (P2)",
+        test: "link_2_the_jobs_tokenizer_is_the_manifests",
+        bound: Bound::CheckedNotCommitted,
+    },
+    BindingRow {
+        fact: "stop strings (spelled by the worker into job.decode.stop_sequences)",
+        enters: "the worker's spelling; validate_against_request caps the count and, since P2, requires at least one",
+        test: "link_2_a_worker_that_drops_the_requested_stop_strings_is_caught_by_the_gateway",
+        bound: Bound::CheckedNotCommitted,
+    },
+    BindingRow {
+        fact: "prompt ids <-> job.prompt_token_ids_hash",
+        enters: "validate_against_request re-hashes the returned ids under the network's form",
+        test: "link_2_a_result_that_changes_any_requested_field_is_refused",
+        bound: Bound::CheckedNotCommitted,
+    },
     // ---- link 3: job -> claim id ----
-    BindingRow { fact: "every FP job field", enters: "fp_job_id_v3 hashes the whole canonical job; the claim id hashes the commitment, which contains the job", test: "link_3_every_job_field_changes_the_job_id_and_the_claim_id", bound: Bound::InClaim },
-    BindingRow { fact: "every DecodeConfigV4 field", enters: "inside the V4 job's borsh", test: "link_3_every_decode_config_field_changes_the_job_id", bound: Bound::InClaim },
+    BindingRow {
+        fact: "every FP job field",
+        enters: "fp_job_id_v3 hashes the whole canonical job; the claim id hashes the commitment, which contains the job",
+        test: "link_3_every_job_field_changes_the_job_id_and_the_claim_id",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "every DecodeConfigV4 field",
+        enters: "inside the V4 job's borsh",
+        test: "link_3_every_decode_config_field_changes_the_job_id",
+        bound: Bound::InClaim,
+    },
     // ---- link 4: result -> commitment ----
-    BindingRow { fact: "trace, output, schedule, execution roots; executed count; stop reason; work leaves; DA manifest root and chunk count", enters: "commitment fields; the sign gate refuses a commitment that differs from the result", test: "link_4_every_commitment_field_changes_the_claim_id_and_the_sign_gate_refuses_a_forged_one", bound: Bound::InClaim },
-    BindingRow { fact: "trace_retention_daa", enters: "commitment field (a chain-time promise; the gate checks only that it is not already expired)", test: "link_4_every_commitment_field_changes_the_claim_id_and_the_sign_gate_refuses_a_forged_one", bound: Bound::InClaim },
-    BindingRow { fact: "output token ids", enters: "output_root and execution_root (they hash the ids under the job context)", test: "link_4_the_executed_roots_follow_the_prompt_and_repeat_for_the_same_job", bound: Bound::InClaim },
-    BindingRow { fact: "rendered answer text (what the user reads)", enters: "NOT in the claim: it is the tokenizer's rendering of the committed ids; the receipt carries its digest", test: "link_4_the_rendering_is_not_a_claim_field_the_ids_are", bound: Bound::NotBound },
+    BindingRow {
+        fact: "trace, output, schedule, execution roots; executed count; stop reason; work leaves; DA manifest root and chunk count",
+        enters: "commitment fields; the sign gate refuses a commitment that differs from the result",
+        test: "link_4_every_commitment_field_changes_the_claim_id_and_the_sign_gate_refuses_a_forged_one",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "trace_retention_daa",
+        enters: "commitment field (a chain-time promise; the gate checks only that it is not already expired)",
+        test: "link_4_every_commitment_field_changes_the_claim_id_and_the_sign_gate_refuses_a_forged_one",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "output token ids",
+        enters: "output_root and execution_root (they hash the ids under the job context)",
+        test: "link_4_the_executed_roots_follow_the_prompt_and_repeat_for_the_same_job",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "rendered answer text (what the user reads)",
+        enters: "NOT in the claim: it is the tokenizer's rendering of the committed ids; the receipt carries its digest",
+        test: "link_4_the_rendering_is_not_a_claim_field_the_ids_are",
+        bound: Bound::NotBound,
+    },
     // ---- the generative path ----
-    BindingRow { fact: "FP Job V5 images / source", enters: "PalwFpV5TailV1 inside the V5 job's borsh -> fp_job_id_v5", test: "gen_a_v5_job_binds_each_image_reference_and_the_source", bound: Bound::InClaim },
-    BindingRow { fact: "tensor job envelope, seed (R), image / embedding body", enters: "PalwGenJobV1 borsh -> gen_job_id_v1", test: "gen_every_tensor_job_field_changes_the_job_id", bound: Bound::InClaim },
-    BindingRow { fact: "pipeline stages and edges, state transitions, generated ids / output digest", enters: "stage roots -> step root -> execution root (with the job id, class id, leaf count)", test: "gen_the_execution_roots_bind_every_stage_the_count_the_job_and_the_output", bound: Bound::InClaim },
+    BindingRow {
+        fact: "FP Job V5 images / source",
+        enters: "PalwFpV5TailV1 inside the V5 job's borsh -> fp_job_id_v5",
+        test: "gen_a_v5_job_binds_each_image_reference_and_the_source",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "tensor job envelope, seed (R), image / embedding body",
+        enters: "PalwGenJobV1 borsh -> gen_job_id_v1",
+        test: "gen_every_tensor_job_field_changes_the_job_id",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "pipeline stages and edges, state transitions, generated ids / output digest",
+        enters: "stage roots -> step root -> execution root (with the job id, class id, leaf count)",
+        test: "gen_the_execution_roots_bind_every_stage_the_count_the_job_and_the_output",
+        bound: Bound::InClaim,
+    },
     // ---- the vision-language path (RFC-0003 §II.4) ----
-    BindingRow { fact: "raw picture bytes (before preprocessing)", enters: "NOT in the claim (resampling is outside consensus): PreprocessRecordV1.source_digest in the VLM receipt — a byte the sampler never reads is in neither the pixels nor the job", test: "changing_the_picture_the_fit_or_the_prompt_moves_the_job_the_stage_roots_and_the_execution_root", bound: Bound::NotBound },
-    BindingRow { fact: "canonical pixels (slot size, tile length)", enters: "images[k].input_root inside the V5 job -> fp_job_id_v5 -> the claim id; the vision stage's root reads them", test: "a_picture_of_another_size_is_preprocessed_run_through_both_stages_and_judged_valid", bound: Bound::InClaim },
-    BindingRow { fact: "preprocessing algorithm, fit, pad, placement", enters: "the PreprocessRecordV1 digest sealed in the VLM receipt; pixels produced another way are refused by the worker and the seat", test: "the_receipt_binds_the_preprocessing_the_job_and_the_output_and_refuses_each_forgery", bound: Bound::CheckedNotCommitted },
+    BindingRow {
+        fact: "raw picture bytes (before preprocessing)",
+        enters: "NOT in the claim (resampling is outside consensus): PreprocessRecordV1.source_digest in the VLM receipt — a byte the sampler never reads is in neither the pixels nor the job",
+        test: "changing_the_picture_the_fit_or_the_prompt_moves_the_job_the_stage_roots_and_the_execution_root",
+        bound: Bound::NotBound,
+    },
+    BindingRow {
+        fact: "canonical pixels (slot size, tile length)",
+        enters: "images[k].input_root inside the V5 job -> fp_job_id_v5 -> the claim id; the vision stage's root reads them",
+        test: "a_picture_of_another_size_is_preprocessed_run_through_both_stages_and_judged_valid",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "preprocessing algorithm, fit, pad, placement",
+        enters: "the PreprocessRecordV1 digest sealed in the VLM receipt; pixels produced another way are refused by the worker and the seat",
+        test: "the_receipt_binds_the_preprocessing_the_job_and_the_output_and_refuses_each_forgery",
+        bound: Bound::CheckedNotCommitted,
+    },
     // ---- image generation (RFC-0003 §II.1) ----
-    BindingRow { fact: "image request: n, size, steps, guidance, prompt ids, negative ids", enters: "imagegen::plan -> PalwGenJobV1.body (image_index per image, steps, guidance_q, width/height, prompt hashes), each held to the class by palw_gen_job_resolve_class_v1 before it runs", test: "what_the_class_does_not_offer_is_refused_before_anything_runs", bound: Bound::InClaim },
-    BindingRow { fact: "generation seed R (images)", enters: "PalwGenJobV1.seed — the requester's, or a pure function of the request digest; never the anchor, a nonce, the clock or a verification beacon", test: "the_generation_seed_depends_on_the_request_alone_and_never_on_the_chain", bound: Bound::InClaim },
+    BindingRow {
+        fact: "image request: n, size, steps, guidance, prompt ids, negative ids",
+        enters: "imagegen::plan -> PalwGenJobV1.body (image_index per image, steps, guidance_q, width/height, prompt hashes), each held to the class by palw_gen_job_resolve_class_v1 before it runs",
+        test: "what_the_class_does_not_offer_is_refused_before_anything_runs",
+        bound: Bound::InClaim,
+    },
+    BindingRow {
+        fact: "generation seed R (images)",
+        enters: "PalwGenJobV1.seed — the requester's, or a pure function of the request digest; never the anchor, a nonce, the clock or a verification beacon",
+        test: "the_generation_seed_depends_on_the_request_alone_and_never_on_the_chain",
+        bound: Bound::InClaim,
+    },
     // ---- the evidence ----
-    BindingRow { fact: "evidence / DA root", enters: "EvidenceManifestV1 header must equal the claim's roots, chunk count and retention", test: "evidence_a_manifest_that_differs_from_the_claim_in_any_root_is_refused", bound: Bound::CheckedNotCommitted },
+    BindingRow {
+        fact: "evidence / DA root",
+        enters: "EvidenceManifestV1 header must equal the claim's roots, chunk count and retention",
+        test: "evidence_a_manifest_that_differs_from_the_claim_in_any_root_is_refused",
+        bound: Bound::CheckedNotCommitted,
+    },
 ];
 
 /// The audit table as the record document's Markdown (`cargo test -p misaka-palw-gateway print_the_audit_table -- --nocapture --ignored`).
@@ -169,18 +319,60 @@ mod tests {
     fn request_diff(a: &PalwFpWorkerRequestV3, b: &PalwFpWorkerRequestV3) -> BTreeSet<&'static str> {
         // Destructured WITHOUT `..`: a new request field is a compile error here until it has a name in this diff.
         let PalwFpWorkerRequestV3 {
-            version, network_domain, class_id, executor_bond, executor_pubkey, operator_id, anchor_block, anchor_daa, job_nonce,
-            decode_token_limit, max_context_tokens, privacy_mode, prompt_mode, sampling_seed, temperature_q, input, model_profile_id,
-            runtime_manifest_hash, runtime_class_id, shape_profile_id, trace_scheme_id, decode, stop_texts, constraint,
+            version,
+            network_domain,
+            class_id,
+            executor_bond,
+            executor_pubkey,
+            operator_id,
+            anchor_block,
+            anchor_daa,
+            job_nonce,
+            decode_token_limit,
+            max_context_tokens,
+            privacy_mode,
+            prompt_mode,
+            sampling_seed,
+            temperature_q,
+            input,
+            model_profile_id,
+            runtime_manifest_hash,
+            runtime_class_id,
+            shape_profile_id,
+            trace_scheme_id,
+            decode,
+            stop_texts,
+            constraint,
         } = a;
         let mut changed = BTreeSet::new();
         macro_rules! cmp {
             ($($f:ident),* $(,)?) => { $( if *$f != b.$f { changed.insert(stringify!($f)); } )* };
         }
         cmp!(
-            version, network_domain, class_id, executor_bond, executor_pubkey, operator_id, anchor_block, anchor_daa, job_nonce,
-            decode_token_limit, max_context_tokens, privacy_mode, prompt_mode, sampling_seed, temperature_q, input, model_profile_id,
-            runtime_manifest_hash, runtime_class_id, shape_profile_id, trace_scheme_id, decode, stop_texts, constraint,
+            version,
+            network_domain,
+            class_id,
+            executor_bond,
+            executor_pubkey,
+            operator_id,
+            anchor_block,
+            anchor_daa,
+            job_nonce,
+            decode_token_limit,
+            max_context_tokens,
+            privacy_mode,
+            prompt_mode,
+            sampling_seed,
+            temperature_q,
+            input,
+            model_profile_id,
+            runtime_manifest_hash,
+            runtime_class_id,
+            shape_profile_id,
+            trace_scheme_id,
+            decode,
+            stop_texts,
+            constraint,
         );
         changed
     }
@@ -224,7 +416,10 @@ mod tests {
         let mut asst = body("hi");
         asst["messages"] = serde_json::json!([{ "role": "user", "content": "hi" }, { "role": "assistant", "content": "a" }, { "role": "user", "content": "hi" }]);
         assert_eq!(changed(&base, &prepare(&cfg, &id, &w, &facts, &asst).unwrap()), set(&["input"]), "an assistant turn");
-        let tools = with(serde_json::json!({ "tools": [{ "type": "function", "function": { "name": "f", "parameters": {"type": "object"} } }] })).unwrap();
+        let tools = with(
+            serde_json::json!({ "tools": [{ "type": "function", "function": { "name": "f", "parameters": {"type": "object"} } }] }),
+        )
+        .unwrap();
         assert_eq!(changed(&base, &tools), set(&["input"]), "a tool list is text in the system turn");
         let format = with(serde_json::json!({ "response_format": { "type": "json_object" } })).unwrap();
         assert_eq!(changed(&base, &format), set(&["input"]), "an advisory response_format is an instruction in the system turn");
@@ -258,7 +453,10 @@ mod tests {
         let (w, dir) = worker();
         let (cfg, id, facts) = (config(&dir), identity(&w.profile), certified_facts(true));
         let base = prepare(&cfg, &id, &w, &facts, &body("hi")).unwrap();
-        assert_eq!(base.request.version, PALW_FP_V4_VERSION, "past the decode-rules fence every job is V4 (the no-op config when nothing was asked)");
+        assert_eq!(
+            base.request.version, PALW_FP_V4_VERSION,
+            "past the decode-rules fence every job is V4 (the no-op config when nothing was asked)"
+        );
         let with = |k: &str, v: serde_json::Value| {
             let mut b = body("hi");
             b[k] = v;
@@ -275,7 +473,11 @@ mod tests {
         };
         assert_eq!(changed(&base, &with("max_tokens", serde_json::json!(5))), set(&["decode_token_limit"]));
         let sampled = seeded(&[]);
-        assert_eq!(changed(&base, &sampled), set(&["temperature_q", "sampling_seed"]), "temperature and seed are the sampler's inputs (R for text)");
+        assert_eq!(
+            changed(&base, &sampled),
+            set(&["temperature_q", "sampling_seed"]),
+            "temperature and seed are the sampler's inputs (R for text)"
+        );
         assert_eq!(changed(&sampled, &seeded(&[("temperature", serde_json::json!(0.75))])), set(&["temperature_q"]));
         assert_eq!(changed(&sampled, &seeded(&[("seed", serde_json::json!("22".repeat(32)))])), set(&["sampling_seed"]));
         // The five decode-config families each land in `decode` (and the stop STRINGS in `stop_texts` for the class's tokenizer).
@@ -289,7 +491,11 @@ mod tests {
             assert_eq!(got, set(&["decode"]), "{what}");
         }
         let stopped = with("stop", serde_json::json!(["x"]));
-        assert_eq!(changed(&base, &stopped), set(&["stop_texts"]), "stop STRINGS travel as text: the class's tokenizer spells them into the job's decode config");
+        assert_eq!(
+            changed(&base, &stopped),
+            set(&["stop_texts"]),
+            "stop STRINGS travel as text: the class's tokenizer spells them into the job's decode config"
+        );
         // The window is a decode field only while a penalty is active.
         let windowed = {
             let mut b = body("hi");
@@ -313,10 +519,31 @@ mod tests {
         let (cfg, id, facts) = (config(&dir), identity(&w.profile), certified_facts(false));
         let base = prepare(&cfg, &id, &w, &facts, &body("hi")).unwrap();
         let r = &base.request;
-        assert_eq!((r.network_domain, r.class_id, r.executor_bond, &r.executor_pubkey, r.operator_id), (id.network_domain, id.class_id, id.executor_bond, &id.executor_pubkey, id.operator_id));
-        assert_eq!((r.anchor_block, r.anchor_daa, r.privacy_mode, r.prompt_mode), (facts.anchor_block, facts.anchor_daa, PALW_FP_PRIVACY_PUBLIC_DA, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER));
+        assert_eq!(
+            (r.network_domain, r.class_id, r.executor_bond, &r.executor_pubkey, r.operator_id),
+            (id.network_domain, id.class_id, id.executor_bond, &id.executor_pubkey, id.operator_id)
+        );
+        assert_eq!(
+            (r.anchor_block, r.anchor_daa, r.privacy_mode, r.prompt_mode),
+            (
+                facts.anchor_block,
+                facts.anchor_daa,
+                PALW_FP_PRIVACY_PUBLIC_DA,
+                kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER
+            )
+        );
         let m = JobRunner::manifest(&w);
-        assert_eq!((r.model_profile_id, r.runtime_manifest_hash, r.runtime_class_id, r.shape_profile_id, r.trace_scheme_id, r.max_context_tokens), (m.model_profile_id, m.runtime_manifest_hash, m.runtime_class_id, m.shape_profile_id, m.trace_scheme_id, m.n_ctx));
+        assert_eq!(
+            (
+                r.model_profile_id,
+                r.runtime_manifest_hash,
+                r.runtime_class_id,
+                r.shape_profile_id,
+                r.trace_scheme_id,
+                r.max_context_tokens
+            ),
+            (m.model_profile_id, m.runtime_manifest_hash, m.runtime_class_id, m.shape_profile_id, m.trace_scheme_id, m.n_ctx)
+        );
         // Each one moves its own field.
         let mut id2 = identity(&w.profile);
         id2.network_domain = Hash64::from_u64_word(1);
@@ -355,7 +582,11 @@ mod tests {
         let a = prepare(&cfg, &id, &w, &facts, &body("hi")).unwrap();
         let b = prepare(&cfg, &id, &w, &facts, &body("hi")).unwrap();
         assert_ne!(a.request.job_nonce, b.request.job_nonce, "uniqueness: a fresh nonce per request");
-        assert_eq!(request_diff(&a.request, &b.request), set(&["job_nonce"]), "and it is the ONLY field that differs between two identical requests");
+        assert_eq!(
+            request_diff(&a.request, &b.request),
+            set(&["job_nonce"]),
+            "and it is the ONLY field that differs between two identical requests"
+        );
         // Two requests are two claims (the nonce is in the job id); the claim id of ONE request is a function of that job alone.
         assert_ne!(a.request.job_nonce, [0u8; 32]);
     }
@@ -377,7 +608,11 @@ mod tests {
             let mut b = body("hi");
             b[k] = v;
             let got = prepare(&cfg, &id, &w, &facts, &b).unwrap_or_else(|e| panic!("{k}: {e}"));
-            assert_eq!(changed(&base, &got), BTreeSet::new(), "{k} is presentation or delivery: it changes nothing the claim contains");
+            assert_eq!(
+                changed(&base, &got),
+                BTreeSet::new(),
+                "{k} is presentation or delivery: it changes nothing the claim contains"
+            );
         }
         // And a knob that asks for something this lane has no rule for is refused, never silently dropped.
         let mut b = body("hi");
@@ -420,7 +655,10 @@ mod tests {
                 ("request_hash", Box::new(|r| r.request_hash = Hash64::from_u64_word(9))),
                 ("job.network_domain", Box::new(|r| r.job.network_domain = Hash64::from_u64_word(9))),
                 ("job.class_id", Box::new(|r| r.job.class_id = Hash64::from_u64_word(9))),
-                ("job.executor_bond", Box::new(|r| r.job.executor_bond = TransactionOutpoint::new(TransactionId::from_u64_word(9), 1))),
+                (
+                    "job.executor_bond",
+                    Box::new(|r| r.job.executor_bond = TransactionOutpoint::new(TransactionId::from_u64_word(9), 1)),
+                ),
                 ("job.executor_pubkey", Box::new(|r| r.job.executor_pubkey = vec![9; 32])),
                 ("job.operator_id", Box::new(|r| r.job.operator_id = Hash64::from_u64_word(9))),
                 ("job.anchor_block", Box::new(|r| r.job.anchor_block = Hash64::from_u64_word(9))),
@@ -437,7 +675,16 @@ mod tests {
                 ("prompt_token_ids", Box::new(|r| r.prompt_token_ids[0] ^= 1)),
                 ("job.version", Box::new(|r| r.job.version = PALW_FP_V3_VERSION + 100)),
                 ("decode_tokens_executed", Box::new(|r| r.decode_tokens_executed = 0)),
-                ("stop_reason", Box::new(|r| r.stop_reason = if r.stop_reason == PalwFpStopReasonV3::ExactBudgetReached { PalwFpStopReasonV3::EndOfGeneration } else { PalwFpStopReasonV3::ExactBudgetReached })),
+                (
+                    "stop_reason",
+                    Box::new(|r| {
+                        r.stop_reason = if r.stop_reason == PalwFpStopReasonV3::ExactBudgetReached {
+                            PalwFpStopReasonV3::EndOfGeneration
+                        } else {
+                            PalwFpStopReasonV3::ExactBudgetReached
+                        }
+                    }),
+                ),
                 ("trace_manifest_root", Box::new(|r| r.trace_manifest_root = Hash64::default())),
                 ("trace_chunk_count", Box::new(|r| r.trace_chunk_count += 1)),
                 ("output_token_ids length", Box::new(|r| r.output_token_ids.push(0))),
@@ -445,7 +692,10 @@ mod tests {
             for (what, mutate) in mutations {
                 let mut forged = result.clone();
                 mutate(&mut forged);
-                assert!(forged.validate_against_request(&request, h, FORM).is_err(), "v4={v4}: a result with a changed {what} must be refused");
+                assert!(
+                    forged.validate_against_request(&request, h, FORM).is_err(),
+                    "v4={v4}: a result with a changed {what} must be refused"
+                );
             }
             if v4 {
                 // The decode config: the request's fields verbatim; the worker may ADD spelled stop sequences and nothing else.
@@ -481,7 +731,10 @@ mod tests {
         // so every caller of `validate_against_request` (this gateway, the rail's sign gate, a drill client) refuses it.
         assert_eq!(
             dropped.validate_against_request(&request, hash_of(&request), FORM),
-            Err(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::StopStringsNotSpelled { asked: request.stop_texts.len(), have: 0 }),
+            Err(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::StopStringsNotSpelled {
+                asked: request.stop_texts.len(),
+                have: 0
+            }),
             "the floor is in the shared validator"
         );
         assert!(check_stop_texts_were_spelled(&request, &dropped).unwrap_err().contains("not spelled"));
@@ -499,7 +752,10 @@ mod tests {
         // tokenizer rule is dormant. A result stamped with another tokenizer binds its request perfectly well...
         let mut forged = result.clone();
         forged.job.tokenizer_id = Hash64::from_u64_word(0xBAD);
-        assert!(forged.validate_against_request(&request, hash_of(&request), FORM).is_ok(), "the gap this row closes: unchecked by the request binding");
+        assert!(
+            forged.validate_against_request(&request, hash_of(&request), FORM).is_ok(),
+            "the gap this row closes: unchecked by the request binding"
+        );
         // ... and the gateway now refuses it before a commitment is built on it.
         let err = check_result_against_manifest(&forged, manifest).unwrap_err();
         assert!(err.contains("tokenizer"), "{err}");
@@ -527,16 +783,57 @@ mod tests {
             let base = commitment_of(&result);
             // Exhaustive: a field added to the job is a compile error until it gets a mutation below.
             let PalwFreePromptJobV3 {
-                version, network_domain, class_id, executor_bond, executor_pubkey, operator_id, anchor_block, anchor_daa, job_nonce,
-                tokenizer_id, prompt_token_ids_hash, prompt_tokens, decode_token_limit, max_context_tokens, privacy_mode, prompt_mode,
-                sampling_seed, temperature_q, decode, tail,
+                version,
+                network_domain,
+                class_id,
+                executor_bond,
+                executor_pubkey,
+                operator_id,
+                anchor_block,
+                anchor_daa,
+                job_nonce,
+                tokenizer_id,
+                prompt_token_ids_hash,
+                prompt_tokens,
+                decode_token_limit,
+                max_context_tokens,
+                privacy_mode,
+                prompt_mode,
+                sampling_seed,
+                temperature_q,
+                decode,
+                tail,
             } = &base.job;
-            let _ = (version, network_domain, class_id, executor_bond, executor_pubkey, operator_id, anchor_block, anchor_daa, job_nonce, tokenizer_id, prompt_token_ids_hash, prompt_tokens, decode_token_limit, max_context_tokens, privacy_mode, prompt_mode, sampling_seed, temperature_q, decode, tail);
+            let _ = (
+                version,
+                network_domain,
+                class_id,
+                executor_bond,
+                executor_pubkey,
+                operator_id,
+                anchor_block,
+                anchor_daa,
+                job_nonce,
+                tokenizer_id,
+                prompt_token_ids_hash,
+                prompt_tokens,
+                decode_token_limit,
+                max_context_tokens,
+                privacy_mode,
+                prompt_mode,
+                sampling_seed,
+                temperature_q,
+                decode,
+                tail,
+            );
             let mutations: Vec<(&str, Box<dyn Fn(&mut PalwFreePromptJobV3)>)> = vec![
                 ("version", Box::new(|j| j.version += 1)),
                 ("network_domain", Box::new(|j| j.network_domain = Hash64::from_u64_word(9))),
                 ("class_id", Box::new(|j| j.class_id = Hash64::from_u64_word(9))),
-                ("executor_bond.txid", Box::new(|j| j.executor_bond = TransactionOutpoint::new(TransactionId::from_u64_word(9), j.executor_bond.index))),
+                (
+                    "executor_bond.txid",
+                    Box::new(|j| j.executor_bond = TransactionOutpoint::new(TransactionId::from_u64_word(9), j.executor_bond.index)),
+                ),
                 ("executor_bond.index", Box::new(|j| j.executor_bond.index += 1)),
                 ("executor_pubkey", Box::new(|j| j.executor_pubkey[0] ^= 1)),
                 ("operator_id", Box::new(|j| j.operator_id = Hash64::from_u64_word(9))),
@@ -574,7 +871,8 @@ mod tests {
         let base = commitment_of(&result);
         let decode = base.job.decode.clone().expect("a V4 job");
         // Exhaustive over `DecodeConfigV4`.
-        let DecodeConfigV4 { repeat_penalty_q, penalty_window, frequency_penalty_q, presence_penalty_q, logit_bias, stop_sequences } = &decode;
+        let DecodeConfigV4 { repeat_penalty_q, penalty_window, frequency_penalty_q, presence_penalty_q, logit_bias, stop_sequences } =
+            &decode;
         let _ = (repeat_penalty_q, penalty_window, frequency_penalty_q, presence_penalty_q, logit_bias, stop_sequences);
         let mutations: Vec<(&str, Box<dyn Fn(&mut DecodeConfigV4)>)> = vec![
             ("repeat_penalty_q", Box::new(|d| d.repeat_penalty_q += 1)),
@@ -606,10 +904,31 @@ mod tests {
         let base = commitment_of(&result);
         signable_claim_id(&base, &result).expect("the honest commitment passes the gate");
         let PalwFreePromptCommitmentV3 {
-            job, trace_root, output_root, schedule_root, execution_root, decode_tokens_executed, stop_reason, work_leaves,
-            trace_manifest_root, trace_chunk_count, trace_retention_daa,
+            job,
+            trace_root,
+            output_root,
+            schedule_root,
+            execution_root,
+            decode_tokens_executed,
+            stop_reason,
+            work_leaves,
+            trace_manifest_root,
+            trace_chunk_count,
+            trace_retention_daa,
         } = &base;
-        let _ = (job, trace_root, output_root, schedule_root, execution_root, decode_tokens_executed, stop_reason, work_leaves, trace_manifest_root, trace_chunk_count, trace_retention_daa);
+        let _ = (
+            job,
+            trace_root,
+            output_root,
+            schedule_root,
+            execution_root,
+            decode_tokens_executed,
+            stop_reason,
+            work_leaves,
+            trace_manifest_root,
+            trace_chunk_count,
+            trace_retention_daa,
+        );
         // (field, mutation, whether the gate can compare it to the result)
         let mutations: Vec<(&str, Box<dyn Fn(&mut PalwFreePromptCommitmentV3)>, bool)> = vec![
             ("job", Box::new(|c| c.job.job_nonce[0] ^= 1), true),
@@ -633,7 +952,10 @@ mod tests {
             }
             assert_ne!(fp_claim_id_v3(&base), fp_claim_id_v3(&forged), "{what} must be inside the claim id");
             if comparable {
-                assert!(signable_claim_id(&forged, &result).is_err(), "the sign gate must refuse a commitment whose {what} is not the execution's");
+                assert!(
+                    signable_claim_id(&forged, &result).is_err(),
+                    "the sign gate must refuse a commitment whose {what} is not the execution's"
+                );
             } else {
                 // The gate's only check on the promise: it is not already broken at the anchor.
                 assert!(signable_claim_id(&forged, &result).is_ok());
@@ -703,7 +1025,11 @@ mod tests {
         let v4 = result.job.clone();
         assert_eq!(v4.version, PALW_FP_V4_VERSION);
         let image = |n: u8| PalwGenImageInputRefV1 { input_root: Hash64::from_u64_word(u64::from(n)), h: 4, w: 4 };
-        let base = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(1), image(2)], source: Some(PalwGenSourceRefV1 { token_ids_hash: Hash64::from_u64_word(7), tokens: 3 }) };
+        let base = PalwFreePromptJobV5 {
+            v4: v4.clone(),
+            images: vec![image(1), image(2)],
+            source: Some(PalwGenSourceRefV1 { token_ids_hash: Hash64::from_u64_word(7), tokens: 3 }),
+        };
         let id = fp_job_id_v5(&base);
         let mutations: Vec<(&str, Box<dyn Fn(&mut PalwFreePromptJobV5)>)> = vec![
             ("images[0].input_root", Box::new(|j| j.images[0].input_root = Hash64::from_u64_word(99))),
@@ -711,9 +1037,12 @@ mod tests {
             ("images[1].w", Box::new(|j| j.images[1].w += 1)),
             ("image order", Box::new(|j| j.images.swap(0, 1))),
             ("an image added", Box::new(|j| j.images.push(image(3)))),
-            ("an image dropped", Box::new(|j| {
-                j.images.pop();
-            })),
+            (
+                "an image dropped",
+                Box::new(|j| {
+                    j.images.pop();
+                }),
+            ),
             ("source.token_ids_hash", Box::new(|j| j.source.as_mut().unwrap().token_ids_hash = Hash64::from_u64_word(8))),
             ("source.tokens", Box::new(|j| j.source.as_mut().unwrap().tokens += 1)),
             ("source dropped", Box::new(|j| j.source = None)),
@@ -770,11 +1099,57 @@ mod tests {
         use kaspa_consensus_core::palw_gen_job_v1::*;
         let base = tensor_job();
         // The envelope, exhaustively.
-        let PalwJobEnvelopeV1 { network_domain, class_id, executor_bond, executor_pubkey, operator_id, anchor_block, anchor_daa, job_nonce, privacy_mode, prompt_mode } = &base.envelope;
-        let _ = (network_domain, class_id, executor_bond, executor_pubkey, operator_id, anchor_block, anchor_daa, job_nonce, privacy_mode, prompt_mode);
+        let PalwJobEnvelopeV1 {
+            network_domain,
+            class_id,
+            executor_bond,
+            executor_pubkey,
+            operator_id,
+            anchor_block,
+            anchor_daa,
+            job_nonce,
+            privacy_mode,
+            prompt_mode,
+        } = &base.envelope;
+        let _ = (
+            network_domain,
+            class_id,
+            executor_bond,
+            executor_pubkey,
+            operator_id,
+            anchor_block,
+            anchor_daa,
+            job_nonce,
+            privacy_mode,
+            prompt_mode,
+        );
         let PalwGenBodyV1::Image(image) = &base.body else { unreachable!() };
-        let PalwGenImageBodyV1 { prompt_token_ids_hash, prompt_tokens, negative_token_ids_hash, negative_tokens, guidance_q, image_index, sampler_id, steps, width, height, output } = image;
-        let _ = (prompt_token_ids_hash, prompt_tokens, negative_token_ids_hash, negative_tokens, guidance_q, image_index, sampler_id, steps, width, height, output);
+        let PalwGenImageBodyV1 {
+            prompt_token_ids_hash,
+            prompt_tokens,
+            negative_token_ids_hash,
+            negative_tokens,
+            guidance_q,
+            image_index,
+            sampler_id,
+            steps,
+            width,
+            height,
+            output,
+        } = image;
+        let _ = (
+            prompt_token_ids_hash,
+            prompt_tokens,
+            negative_token_ids_hash,
+            negative_tokens,
+            guidance_q,
+            image_index,
+            sampler_id,
+            steps,
+            width,
+            height,
+            output,
+        );
         let mut mutations: Vec<(&str, Box<dyn Fn(&mut PalwGenJobV1)>)> = vec![
             ("version", Box::new(|j| j.version += 1)),
             ("seed (R)", Box::new(|j| j.seed[0] ^= 1)),
@@ -819,7 +1194,9 @@ mod tests {
             j
         };
         let text = embedding(PalwGenEmbeddingInputV1::Text { token_ids_hash: Hash64::from_u64_word(1), tokens: 3 });
-        let image_ref = |n: u64| embedding(PalwGenEmbeddingInputV1::Image(PalwGenImageInputRefV1 { input_root: Hash64::from_u64_word(n), h: 4, w: 4 }));
+        let image_ref = |n: u64| {
+            embedding(PalwGenEmbeddingInputV1::Image(PalwGenImageInputRefV1 { input_root: Hash64::from_u64_word(n), h: 4, w: 4 }))
+        };
         assert_ne!(text.id(), image_ref(1).id());
         assert_ne!(image_ref(1).id(), image_ref(2).id(), "the image's input_root is the image");
         let mut pooled = image_ref(1);
@@ -857,9 +1234,12 @@ mod tests {
             ("class", Box::new(|b| b.job.envelope.class_id = Hash64::from_u64_word(77))),
             ("a stage root (stage 0)", Box::new(|b| b.stage_roots[0] = Hash64::from_u64_word(77))),
             ("a stage root (the last stage)", Box::new(|b| b.stage_roots[2] = Hash64::from_u64_word(77))),
-            ("a stage dropped", Box::new(|b| {
-                b.stage_roots.pop();
-            })),
+            (
+                "a stage dropped",
+                Box::new(|b| {
+                    b.stage_roots.pop();
+                }),
+            ),
             ("stage order", Box::new(|b| b.stage_roots.swap(0, 1))),
             ("the leaf count", Box::new(|b| b.step_leaf_count += 1)),
             ("the output digest", Box::new(|b| b.output_root = Hash64::from_u64_word(77))),
@@ -867,13 +1247,21 @@ mod tests {
         for (what, mutate) in tensor_mutations {
             let mut forged = tensor.clone();
             mutate(&mut forged);
-            assert_ne!(forged.execution_root(), tensor.committed_execution_root, "tensor: {what} must change the execution root a claim committed");
+            assert_ne!(
+                forged.execution_root(),
+                tensor.committed_execution_root,
+                "tensor: {what} must change the execution root a claim committed"
+            );
         }
         // ---- the text pipeline (FP Job V5) claim ----
         let (_w, _dir, _request, result) = run_pair(true);
         let v5 = PalwFreePromptJobV5 {
             v4: result.job.clone(),
-            images: vec![kaspa_consensus_core::palw_gen_class_v1::PalwGenImageInputRefV1 { input_root: Hash64::from_u64_word(1), h: 4, w: 4 }],
+            images: vec![kaspa_consensus_core::palw_gen_class_v1::PalwGenImageInputRefV1 {
+                input_root: Hash64::from_u64_word(1),
+                h: 4,
+                w: 4,
+            }],
             source: None,
         };
         let text = PalwGenStepBindingV1::of(&v5, &roots, 100);
@@ -885,9 +1273,12 @@ mod tests {
             ("the leaf count", Box::new(|b| b.step_leaf_count += 1)),
             ("a generated id", Box::new(|b| b.generated[0] ^= 1)),
             ("generated ids appended", Box::new(|b| b.generated.push(0))),
-            ("generated ids dropped", Box::new(|b| {
-                b.generated.pop();
-            })),
+            (
+                "generated ids dropped",
+                Box::new(|b| {
+                    b.generated.pop();
+                }),
+            ),
         ];
         for (what, mutate) in text_mutations {
             let mut forged = text.clone();
@@ -906,7 +1297,17 @@ mod tests {
         let (_w, _dir, _request, result) = run_pair(false);
         let c = commitment_of(&result);
         let chunks = vec![vec![1u8; 64], vec![2u8; 32]];
-        let manifest = EvidenceManifestV1::build(c.job.network_domain, &c.job.executor_bond, &c.job.job_nonce, c.trace_root, c.output_root, c.execution_root, c.trace_chunk_count, c.trace_retention_daa, &chunks);
+        let manifest = EvidenceManifestV1::build(
+            c.job.network_domain,
+            &c.job.executor_bond,
+            &c.job.job_nonce,
+            c.trace_root,
+            c.output_root,
+            c.execution_root,
+            c.trace_chunk_count,
+            c.trace_retention_daa,
+            &chunks,
+        );
         manifest.validate_shape(&ManifestLimits::default()).expect("shape");
         let claim = ClaimRoots {
             network_domain: c.job.network_domain,
@@ -925,7 +1326,10 @@ mod tests {
             ("output_root", ClaimRoots { output_root: Hash64::from_u64_word(9), ..claim }),
             ("execution_root", ClaimRoots { execution_root: Hash64::from_u64_word(9), ..claim }),
             ("trace_chunk_count", ClaimRoots { trace_chunk_count: claim.trace_chunk_count + 1, ..claim }),
-            ("retention (the claim promises longer than the manifest)", ClaimRoots { retention_deadline: claim.retention_deadline + 1, ..claim }),
+            (
+                "retention (the claim promises longer than the manifest)",
+                ClaimRoots { retention_deadline: claim.retention_deadline + 1, ..claim },
+            ),
         ];
         for (what, other) in forged {
             assert!(manifest.verify_claim_binding(&other).is_err(), "a claim with a different {what} must not accept this manifest");

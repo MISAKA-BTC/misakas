@@ -638,7 +638,9 @@ mod tests {
                             let other = Hash64::from_u64_word(0xE810_0000 + round * 32 + n);
                             assert!(palw_attempt_prompt_root_memo_v1(&profile, &other, 8191, form).is_some());
                         }
-                    }).join().unwrap();
+                    })
+                    .join()
+                    .unwrap();
                 }
                 assert!(palw_attempt_prompt_root_memo_v1(&profile, &anchor, 262_143, form).is_some());
             }
@@ -666,10 +668,16 @@ mod tests {
                     }
                 });
             });
-            assert_eq!(work, PalwPromptRootWorkV2 {
-                recomputed_roots: 9, recomputed_prompt_ids: 9 * 8191, block_cache_hits: 27,
-                block_uncached_roots: 0, outside_block_calls: 0,
-            });
+            assert_eq!(
+                work,
+                PalwPromptRootWorkV2 {
+                    recomputed_roots: 9,
+                    recomputed_prompt_ids: 9 * 8191,
+                    block_cache_hits: 27,
+                    block_uncached_roots: 0,
+                    outside_block_calls: 0,
+                }
+            );
         }
     }
 
@@ -697,7 +705,9 @@ mod tests {
                             assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &a, 8191, form), Some(root));
                         });
                     })
-                }).join().unwrap();
+                })
+                .join()
+                .unwrap();
                 assert_eq!(separate.recomputed_roots, 1, "another thread starts cold, even for the same block");
                 assert_eq!(separate.outside_block_calls, 0);
             });
@@ -708,14 +718,21 @@ mod tests {
                 let n = PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1 as u32;
                 let root = palw_attempt_prompt_root_memo_v1(&profile, &a, n, form).unwrap();
                 for _ in 0..2 {
-                    assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &b, 1, form), palw_attempt_prompt_root_v1(&profile, &b, 1, form));
+                    assert_eq!(
+                        palw_attempt_prompt_root_memo_v1(&profile, &b, 1, form),
+                        palw_attempt_prompt_root_v1(&profile, &b, 1, form)
+                    );
                 }
                 PALW_BLOCK_PROMPT_ROOT_MEMO_V2.with(|memo| {
                     let memo = memo.borrow();
                     let memo = memo.as_ref().unwrap();
                     assert_eq!((memo.roots.len(), memo.retained_weight), (1, PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1));
                 });
-                assert_eq!(palw_attempt_prompt_root_memo_v1(&profile, &a, n, form), Some(root), "overflow cannot evict a budgeted root");
+                assert_eq!(
+                    palw_attempt_prompt_root_memo_v1(&profile, &a, n, form),
+                    Some(root),
+                    "overflow cannot evict a budgeted root"
+                );
             });
         });
         assert_eq!((work.recomputed_roots, work.block_uncached_roots, work.block_cache_hits), (3, 2, 1));

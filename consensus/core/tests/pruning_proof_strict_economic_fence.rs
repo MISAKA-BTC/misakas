@@ -145,11 +145,7 @@ fn armed_at_genesis_is_a_real_rule_difference_that_separates_identities() {
     let dormant = t12();
     let mut at_genesis = t12();
     at_genesis.palw_pruning_proof_strict_economic_win = Some(ForkActivation::always());
-    assert_ne!(
-        dormant.consensus_identity_id(),
-        at_genesis.consensus_identity_id(),
-        "a fence active at genesis separates identities"
-    );
+    assert_ne!(dormant.consensus_identity_id(), at_genesis.consensus_identity_id(), "a fence active at genesis separates identities");
 }
 
 #[test]

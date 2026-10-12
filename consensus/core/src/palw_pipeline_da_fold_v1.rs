@@ -572,7 +572,8 @@ mod tests {
             score: None,
         };
         run.s.improvement_eval_jobs.insert(job.key(), crate::palw_improve_eval_v1::PalwEvalJobStateV1 { job, claim: Some(claim) });
-        run.s.improvement_eval_claims = super::palw_improve_eval_fold_v1::palw_improve_eval_claims_index_v1(&run.s.improvement_eval_jobs);
+        run.s.improvement_eval_claims =
+            super::palw_improve_eval_fold_v1::palw_improve_eval_claims_index_v1(&run.s.improvement_eval_jobs);
         run.at(FENCE, &[demand(claim_id, unit, OTHER)], None);
         assert_eq!(run.session_units(&claim_id, OTHER), Some(vec![unit]));
         let (generative, gen_leaves) = gen_binding([9, 1030, 2]);

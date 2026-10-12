@@ -455,7 +455,11 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
 
     /// The answer's bytes under the job's rendering rule: `render_answer_v1` for every job, `render_answer_v2` for a constrained one.
     fn render_v1(&self, job: &PalwFreePromptJobV3, ids: &[u32]) -> Vec<u8> {
-        if job.is_constraint() { render_answer_v2(&self.tokenizer, ids, &self.manifest.eog_token_ids) } else { render_answer_v1(&self.tokenizer, ids) }
+        if job.is_constraint() {
+            render_answer_v2(&self.tokenizer, ids, &self.manifest.eog_token_ids)
+        } else {
+            render_answer_v1(&self.tokenizer, ids)
+        }
     }
 
     /// **The mask a constrained job runs under on this worker**, or why it cannot (`Ok(None)` for every other job): the
@@ -928,13 +932,15 @@ fn prepare_job_v1<B: PalwExecutionBackendV1>(
         // ADR-0096: the constraint is the request's; the table root is THIS worker's own table's — the gateway holds no tokenizer.
         tail: request.constraint.clone().map(|constraint| {
             kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(
-                kaspa_consensus_core::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 { constraint, table_root: rt.token_table_v1().root() },
+                kaspa_consensus_core::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 {
+                    constraint,
+                    table_root: rt.token_table_v1().root(),
+                },
             )
         }),
     };
     Ok((job, prompt_ids))
 }
-
 
 /// **One job, from a validated request to the result frame's contents.**
 ///
@@ -1170,7 +1176,8 @@ pub fn run_answer_batch_v1<B: PalwExecutionBackendV1>(
 /// The length of the stop sequence that ended `ids`, by the job's own decode config (V4 only).
 fn answer_stop_len_v1(job: &PalwFreePromptJobV3, ids: &[u32]) -> Option<u32> {
     job.decode.as_ref().filter(|_| job.decodes_under_v4_rules()).and_then(|decode| {
-        let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(decode, job.decode_token_limit, u32::MAX, ids).ok()?;
+        let stop = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(decode, job.decode_token_limit, u32::MAX, ids)
+            .ok()?;
         match stop.reason {
             kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {
                 decode.stop_sequences.get(index as usize).map(|s| s.len() as u32)
@@ -1190,12 +1197,17 @@ pub fn run_embed_v1<B: PalwExecutionBackendV1>(
 ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerEmbeddingV1, String> {
     use kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1;
     if request.version != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1 {
-        return Err(format!("embed request version {} is not {}", request.version, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1));
+        return Err(format!(
+            "embed request version {} is not {}",
+            request.version,
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_EMBED_REQUEST_VERSION_V1
+        ));
     }
     if request.class_id != rt.manifest.class_id || request.shape_profile_id != rt.manifest.shape_profile_id {
         return Err("the embed request names a class this worker does not serve".to_string());
     }
-    let pool = PalwEmbeddingPoolV1::from_tag(request.pool).ok_or_else(|| format!("pool tag {} is neither mean (0) nor last (1)", request.pool))?;
+    let pool = PalwEmbeddingPoolV1::from_tag(request.pool)
+        .ok_or_else(|| format!("pool tag {} is neither mean (0) nor last (1)", request.pool))?;
     let ids = prompt_ids_for_input_v1(&rt.tokenizer, &rt.manifest, &request.input)?;
     if let Some(at) = ids.iter().position(|t| *t >= rt.manifest.vocab) {
         return Err(format!("the prompt token at position {at} is outside the model's vocab ({})", rt.manifest.vocab));
@@ -1848,13 +1860,20 @@ mod tests {
         let v2 = render_answer_v2(rt.tokenizer(), &ids, &eog);
         assert_eq!(v2, render_answer_v1(rt.tokenizer(), &text), "the ids up to the first end-of-generation id");
         assert!(v1.len() > v2.len(), "v1 keeps the end-of-generation piece and everything after it");
-        assert_eq!(render_answer_v2(rt.tokenizer(), &text, &eog), render_answer_v1(rt.tokenizer(), &text), "no end-of-generation id, no cut");
+        assert_eq!(
+            render_answer_v2(rt.tokenizer(), &text, &eog),
+            render_answer_v1(rt.tokenizer(), &text),
+            "no end-of-generation id, no cut"
+        );
         // The runtime's per-job rule and pieces.
         let mut job = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
             network_domain: Hash64::from_u64_word(1),
             class_id: Hash64::from_u64_word(2),
-            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(3), 0),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_u64_word(3),
+                0,
+            ),
             executor_pubkey: vec![4],
             operator_id: Hash64::from_u64_word(5),
             anchor_block: Hash64::from_u64_word(6),
@@ -2564,7 +2583,11 @@ mod tests {
         let batch = batch.expect("the batch was answered");
         assert_eq!(batch.len(), requests.len());
         for k in 0..requests.len() {
-            assert_eq!(batch[k].request_hash, fp_worker_request_hash_v3(&borsh::to_vec(&requests[k]).unwrap()), "answer {k} binds its own request");
+            assert_eq!(
+                batch[k].request_hash,
+                fp_worker_request_hash_v3(&borsh::to_vec(&requests[k]).unwrap()),
+                "answer {k} binds its own request"
+            );
             assert_eq!(batch[k].output_token_ids, singles[k].output_token_ids, "request {k}: in-batch == alone");
             assert_eq!(batch[k].rendered, singles[k].rendered);
             assert_eq!(batch_tokens[k], batch[k].output_token_ids, "request {k}: its ids streamed under its own index");
@@ -2615,9 +2638,12 @@ mod tests {
         let mut out = Vec::new();
         run_v3_serve_v1(&rt, &mut input.as_slice(), &mut out, &temp).expect("the serve session ends cleanly");
         let frames = decode_frames_v1(&out).expect("the serve frames decode");
-        let embedded: Vec<_> = frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Embedded(e) = f { Some(e.clone()) } else { None }).collect();
-        let refused: Vec<String> =
-            frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Refused { reason } = f { Some(reason.clone()) } else { None }).collect();
+        let embedded: Vec<_> =
+            frames.iter().filter_map(|f| if let PalwFpWorkerFrameV1::Embedded(e) = f { Some(e.clone()) } else { None }).collect();
+        let refused: Vec<String> = frames
+            .iter()
+            .filter_map(|f| if let PalwFpWorkerFrameV1::Refused { reason } = f { Some(reason.clone()) } else { None })
+            .collect();
         assert_eq!(embedded.len(), 3);
         assert_eq!(embedded[0].raw.len(), 8, "the fixture's hidden width");
         assert_eq!(

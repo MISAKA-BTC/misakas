@@ -1307,7 +1307,10 @@ mod tests {
         // An audit leaf's result (a well-formed audit leaf passes the shape: the fence is the gate's), an unknown Held object and an
         // inverted Held range.
         for (leaf, want) in [
-            (PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(h(5)), leaf: 1, result: 2 }, E::AuditResultUnknown { index: 0, result: 2 }),
+            (
+                PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(h(5)), leaf: 1, result: 2 },
+                E::AuditResultUnknown { index: 0, result: 2 },
+            ),
             (
                 PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(h(5)), object: 9, first: 0, last: 1, digest: h(1) },
                 E::HeldObjectUnknown { index: 0, object: 9 },

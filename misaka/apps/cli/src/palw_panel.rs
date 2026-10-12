@@ -12,7 +12,7 @@
 use crate::bond;
 use crate::keys::KeySource;
 use crate::node::Ctx;
-use crate::wallet::{sompi_to_msk, connect};
+use crate::wallet::{connect, sompi_to_msk};
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_panel_view_v1::palw_parse_class_alias_v1;
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -106,11 +106,15 @@ fn render_class_chain(s: &RpcPalwClassPanelStatus) -> String {
     out.push_str(&format!("full + partial       {} + {}\n", s.full_seats_per_panel, s.partial_seats_per_panel));
     out.push_str(&format!("segmentCount         {}\n", s.segment_count));
     out.push_str(&format!("inflightClaims       {}\n", s.inflight_claims));
-    out.push_str(&format!("verificationMode     {} (S1 {}/{}, S3 {}/{}, S2 {}/{})\n",
+    out.push_str(&format!(
+        "verificationMode     {} (S1 {}/{}, S3 {}/{}, S2 {}/{})\n",
         s.verification_mode,
-        if s.s1_active { "active" } else { "scheduled" }, s.s1_scheduled_daa,
-        if s.s3_active { "active" } else { "scheduled" }, s.s3_scheduled_daa,
-        if s.s2_active { "active" } else { "scheduled" }, s.s2_scheduled_daa,
+        if s.s1_active { "active" } else { "scheduled" },
+        s.s1_scheduled_daa,
+        if s.s3_active { "active" } else { "scheduled" },
+        s.s3_scheduled_daa,
+        if s.s2_active { "active" } else { "scheduled" },
+        s.s2_scheduled_daa,
     ));
     if !s.missing.is_empty() {
         let missing: u32 = s.missing.iter().map(|m| m.seats).sum();
@@ -128,7 +132,12 @@ fn render_seats(class: &str, seats: &[RpcPalwPanelSeat]) -> String {
     for s in seats.iter().filter(|s| class.is_empty() || s.class_id == class || s.class_id.starts_with(class)) {
         let ready = if s.ready { "yes" } else { "no " };
         let proof = if s.readiness_proved_daa == 0 { "—".into() } else { s.readiness_proved_daa.to_string() };
-        let coll = s.collateral_available.parse::<u128>().ok().map(|n| fmt_msk(n.min(u128::from(u64::MAX)) as u64)).unwrap_or_else(|| s.collateral_available.clone());
+        let coll = s
+            .collateral_available
+            .parse::<u128>()
+            .ok()
+            .map(|n| fmt_msk(n.min(u128::from(u64::MAX)) as u64))
+            .unwrap_or_else(|| s.collateral_available.clone());
         out.push_str(&format!("{:<13} {ready}   {:<10} {:<18} {}\n", short_id(&s.seat_id), proof, coll, s.assigned));
         if let Some(h) = &s.hold {
             out.push_str(&format!("              {}\n", h.code));
@@ -225,10 +234,7 @@ pub async fn list(ctx: &Ctx, class: Option<&str>) -> CliResult {
         .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwPanelSeats: {e}")))?;
     match ctx.output {
         OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::json!({ "status": status, "seats": seats })
-            );
+            println!("{}", serde_json::json!({ "status": status, "seats": seats }));
         }
         OutputFormat::Human => {
             if !status.available || !status.found {
@@ -294,14 +300,7 @@ pub async fn assignments(ctx: &Ctx, claim: Option<&str>) -> CliResult {
     Ok(())
 }
 
-pub async fn join(
-    ctx: &Ctx,
-    ks: &KeySource,
-    bond: Option<&str>,
-    class: &str,
-    artifact: &str,
-    yes: bool,
-) -> CliResult {
+pub async fn join(ctx: &Ctx, ks: &KeySource, bond: Option<&str>, class: &str, artifact: &str, yes: bool) -> CliResult {
     let class_id = resolve_class(class)?;
     let nv = connect(ctx).await?;
     let mut declare = Vec::new();

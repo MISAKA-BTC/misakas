@@ -28,7 +28,11 @@ fn dir() -> PathBuf {
 
 fn third_party() -> Vec<(String, QuantFormat)> {
     let mut v = Vec::new();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir()).expect("tools/corpus/formats").filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir())
+        .expect("tools/corpus/formats")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
     files.sort();
     for p in files {
         let text = std::fs::read_to_string(&p).expect("read");
@@ -63,7 +67,8 @@ fn the_registry_with_them_reads_their_methods_and_refuses_what_they_do_not_descr
     let ok = parse_quant_config_with(&json!({"quant_method": "mlx", "bits": 4, "group_size": 64}), "X", "llama", &reg);
     assert!(ok.is_ok(), "{ok:?}");
     // an MLX mode this descriptor does not describe
-    let e = parse_quant_config_with(&json!({"quant_method": "mlx", "bits": 4, "group_size": 32, "mode": "mxfp4"}), "X", "llama", &reg).expect_err("mxfp4 mode");
+    let e = parse_quant_config_with(&json!({"quant_method": "mlx", "bits": 4, "group_size": 32, "mode": "mxfp4"}), "X", "llama", &reg)
+        .expect_err("mxfp4 mode");
     assert!(e.to_string().contains("affine"), "{e}");
     // bitsandbytes 8-bit is read (the built-in descriptor: it was promoted from this directory); so is 4-bit nf4
     let int8 = json!({"quant_method": "bitsandbytes", "load_in_8bit": true, "load_in_4bit": false, "llm_int8_threshold": 6.0, "llm_int8_has_fp16_weight": false});
@@ -93,7 +98,9 @@ fn fr33_mlx_announces_itself_without_a_quant_method_and_the_reader_names_it() {
 #[test]
 fn the_promoted_mlx_descriptor_decodes_the_transcribed_vectors_alike() {
     use misaka_palw_tir_lower::quantfmt::tensors::RoleTensor;
-    let unhex = |h: &str| -> Result<Vec<u8>, std::num::ParseIntError> { (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16)).collect() };
+    let unhex = |h: &str| -> Result<Vec<u8>, std::num::ParseIntError> {
+        (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16)).collect()
+    };
     let (_, transcribed) = third_party().into_iter().find(|(n, _)| n == "mlx_affine").expect("the transcription");
     let builtin = QuantRegistry::builtin().named("MLX_AFFINE").expect("built-in").clone();
     assert_ne!(builtin.digest(), transcribed.digest(), "two descriptors, one name");
@@ -109,7 +116,8 @@ fn the_promoted_mlx_descriptor_decodes_the_transcribed_vectors_alike() {
         let params = v.read_config(t.config.as_ref().expect("a config")).expect("reads").params;
         let shape = v.shape(&roles, &params).expect("shape");
         let got = v.decode_range(&roles, &params, 0..shape.iter().product()).expect("decodes");
-        let want: Vec<f32> = unhex(&t.values_f32_hex).expect("hex").chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let want: Vec<f32> =
+            unhex(&t.values_f32_hex).expect("hex").chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
         assert_eq!(got.len(), want.len(), "vector {n}");
         for (k, (g, w)) in got.iter().zip(&want).enumerate() {
             assert!(g.to_bits() == w.to_bits() || (*g == 0.0 && *w == 0.0), "vector {n} [{k}]: built-in {g}, transcription {w}");

@@ -113,7 +113,8 @@ pub const PALW_CAPACITY_REPLAY_SPEED_PERMILLE_V1: u32 = 2_000;
 
 /// **Attestations a claim's replay costs under Verification V2**: each segment `Valid` twice (the
 /// full seat and the unique partial holder), i.e. two whole replays across the panel.
-pub const PALW_CAPACITY_ATTESTERS_PER_SEGMENT_V1: u32 = crate::palw_verification_v2::PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT as u32;
+pub const PALW_CAPACITY_ATTESTERS_PER_SEGMENT_V1: u32 =
+    crate::palw_verification_v2::PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT as u32;
 
 /// **How the panel's replay is priced under the room rule in force** — one seat's replay a span, and
 /// the whole replays one claim costs the panel.
@@ -154,7 +155,13 @@ pub fn palw_replay_ccu_per_span_measured_v1(g: &PalwRegistryGlobalsV1) -> u128 {
 /// `per_seat` is one seat's replay a span at the target utilization
 /// ([`PalwReplayPricingV1::per_seat_per_span`]). V-I3: never above the measured replay × window ÷
 /// (attesters × eccu).
-pub fn palw_panel_capacity_v2(ready_eff: u128, per_seat_per_span: u128, window_spans: u64, eccu: u128, attesters_per_segment: u32) -> u64 {
+pub fn palw_panel_capacity_v2(
+    ready_eff: u128,
+    per_seat_per_span: u128,
+    window_spans: u64,
+    eccu: u128,
+    attesters_per_segment: u32,
+) -> u64 {
     crate::palw_work_target_v1::palw_panel_capacity_by_rate_v1(
         ready_eff.saturating_mul(per_seat_per_span),
         0,
@@ -219,7 +226,8 @@ pub fn palw_bond_room_cap_v1(room: u64, headroom: u64, me: usize, holders: &[Pal
     let live_room = room.saturating_sub(frozen_held);
     let pool = live_room.saturating_sub(headroom);
     let live_total: u128 = holders.iter().filter(|h| !h.frozen).map(|h| h.collateral as u128).fold(0, u128::saturating_add);
-    let share_of = |h: &PalwRoomHolderV1| palw_bond_room_share_v1(pool, h.collateral, live_total.saturating_sub(h.collateral as u128), false);
+    let share_of =
+        |h: &PalwRoomHolderV1| palw_bond_room_share_v1(pool, h.collateral, live_total.saturating_sub(h.collateral as u128), false);
     let live = || holders.iter().filter(|h| !h.frozen);
     let shares: u64 = live().map(share_of).fold(0u64, u64::saturating_add);
     let excess: u64 = live().map(|h| h.held.saturating_sub(share_of(h))).fold(0u64, u64::saturating_add);
@@ -375,7 +383,9 @@ mod tests {
         assert_eq!(palw_bond_room_share_v1(room, 1_000_000 * MSK, 1_000_000 * MSK as u128, false), 29);
         assert_eq!(palw_bond_room_share_v1(room, 13_000 * MSK, 1_000_000 * MSK as u128, false), 0, "below 1/room: slack only");
         assert_eq!(palw_bond_room_share_v1(room, 13_000 * MSK, 0, true), 0, "V-I5");
-        for (whole, n, honest) in [(988_000u64, 76u64, 1_000_000u64), (1_000_000, 10, 1_000_000), (390_000, 30, 13_000), (130_000, 2, 0)] {
+        for (whole, n, honest) in
+            [(988_000u64, 76u64, 1_000_000u64), (1_000_000, 10, 1_000_000), (390_000, 30, 13_000), (130_000, 2, 0)]
+        {
             let whole_share = palw_bond_room_share_v1(room, whole * MSK, honest as u128 * MSK as u128, false);
             let piece = whole / n;
             let pieces: u64 = (0..n)
@@ -438,7 +448,11 @@ mod tests {
             }
         }
         assert!(three.iter().map(|h| h.held).sum::<u64>() <= room);
-        assert_eq!(three[0].held, palw_bond_room_share_v1(room, 1_000_000, 939_063 + 988_000, false) + 1, "the honest bond: its share and the other unit");
+        assert_eq!(
+            three[0].held,
+            palw_bond_room_share_v1(room, 1_000_000, 939_063 + 988_000, false) + 1,
+            "the honest bond: its share and the other unit"
+        );
         // A frozen holder takes nothing, and what it holds is charged to the slack.
         let frozen = vec![h(1_000_000, 0), PalwRoomHolderV1 { collateral: 1_000_000, held: 10, frozen: true }];
         assert_eq!(palw_bond_room_cap_v1(room, 0, 1, &frozen), 0);
@@ -487,7 +501,9 @@ mod tests {
         let (bare, _) = race(0);
         let headroom = palw_floor_room_race_headroom_v1(66);
         let (admitted, mut holders) = race(headroom);
-        println!("twelve 13k racers beside a 10M flooder in a 66-claim floor: {bare} admitted with no headroom, {admitted} with {headroom}");
+        println!(
+            "twelve 13k racers beside a 10M flooder in a 66-claim floor: {bare} admitted with no headroom, {admitted} with {headroom}"
+        );
         assert!(bare < 12, "the rounding slack alone runs out: {bare}");
         assert_eq!(admitted, 12, "with the headroom every racer finds its single unit");
         assert!(holders.iter().map(|h| h.held).sum::<u64>() <= 66, "the room holds");

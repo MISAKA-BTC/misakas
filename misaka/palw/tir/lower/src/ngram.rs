@@ -317,7 +317,8 @@ mod tests {
                 for _ in 0..40 {
                     let len = 1 + (next() % 24) as usize;
                     // eos (=2) common enough to land in the middle of an n-gram
-                    let tokens: Vec<i64> = (0..len).map(|_| if next() % 4 == 0 { 2 } else { (next() % vocab as u64) as i64 }).collect();
+                    let tokens: Vec<i64> =
+                        (0..len).map(|_| if next() % 4 == 0 { 2 } else { (next() % vocab as u64) as i64 }).collect();
                     let batch = ids_batch(&t, &tokens);
                     let mut s = NgramStream::new(&t);
                     for (i, tok) in tokens.iter().enumerate() {

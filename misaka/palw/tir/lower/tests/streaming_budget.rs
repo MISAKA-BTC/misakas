@@ -17,11 +17,11 @@
 
 use misaka_palw_tir_artifact::PalwTirContainerV1;
 use misaka_palw_tir_artifact::chunks::{ChunkStore, write_container_v1_chunked};
+use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::stream::Streamed;
 use misaka_palw_tir_lower::lower::{ChunkSink, LowerOpts, StreamOpts, materialise_stream};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::{Checkpoint, TensorSource};
-use misaka_palw_tir_lower::fidelity;
 use rand::{Rng, SeedableRng};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Write;
@@ -181,7 +181,8 @@ fn write_checkpoint(dir: &Path, layers: usize) -> u64 {
             wm.insert(name.clone(), serde_json::json!(file));
         }
     }
-    std::fs::write(dir.join("model.safetensors.index.json"), serde_json::json!({"metadata": {}, "weight_map": wm}).to_string()).expect("index");
+    std::fs::write(dir.join("model.safetensors.index.json"), serde_json::json!({"metadata": {}, "weight_map": wm}).to_string())
+        .expect("index");
     total
 }
 
@@ -225,7 +226,8 @@ fn a_checkpoint_many_times_the_budget_converts_inside_it() {
         .expect("materialise_stream");
     let after_materialise = win.peak();
     let container = work.join("artifact.palwtir");
-    write_container_v1_chunked(&container, &prep.lowered.program, Vec::new(), [0u8; 64], "{}".into(), &store, &sink.artifact).expect("assemble");
+    write_container_v1_chunked(&container, &prep.lowered.program, Vec::new(), [0u8; 64], "{}".into(), &store, &sink.artifact)
+        .expect("assemble");
     let peak = win.peak();
     let mib = |b: usize| b as f64 / (1 << 20) as f64;
     eprintln!(

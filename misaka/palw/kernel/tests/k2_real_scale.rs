@@ -1347,7 +1347,8 @@ fn g14s_dense_moe_rows_of_4_windows_hide_flat_and_an_unbounded_scope_takes_no_cl
     // With G14-B merged, a context this large is refused EARLIER: its worst-case pursuit outlasts the 436-DAA lifetime ceiling, so
     // registration names PURSUIT_SCHEDULE and the per-claim scope gate is never reached for this class (both refusals hold; the
     // registration one comes first). Either way the class is never reward-bearing.
-    let registered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| W::new(big.program.clone(), big.params.clone(), positions)));
+    let registered =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| W::new(big.program.clone(), big.params.clone(), positions)));
     match registered {
         Err(panic) => {
             let why = panic.downcast_ref::<String>().cloned().unwrap_or_default();

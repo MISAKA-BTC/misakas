@@ -243,8 +243,8 @@ fn check_3_rfc0001_golden_selections_replay_through_domain_0() {
         assert_eq!(got, c.expected_lane, "processor_order {}: T {}", c.name, c.temperature_q);
         sampled += (c.temperature_q != 0) as usize;
     }
-    let noop: NoopFile =
-        serde_json::from_str(include_str!("../../../../consensus-vectors/fp-v4/v4_noop_equals_v3.json")).expect("v4_noop_equals_v3.json");
+    let noop: NoopFile = serde_json::from_str(include_str!("../../../../consensus-vectors/fp-v4/v4_noop_equals_v3.json"))
+        .expect("v4_noop_equals_v3.json");
     for (i, c) in noop.cases.iter().enumerate() {
         let seed = seed_from_hex(&c.seed);
         let values: Vec<Option<i32>> = c.row.iter().map(|v| Some(*v)).collect();

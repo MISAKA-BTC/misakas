@@ -49,7 +49,8 @@ fn same_config(mapped: &serde_json::Value, hf: &serde_json::Value) -> Result<(),
             _ => return Err(format!("config `{k}`: mapped {a:?}, built with {b:?}")),
         }
     }
-    let theta = |c: &serde_json::Value| c.get("rope_theta").or_else(|| c.pointer("/rope_parameters/rope_theta")).and_then(|v| v.as_f64());
+    let theta =
+        |c: &serde_json::Value| c.get("rope_theta").or_else(|| c.pointer("/rope_parameters/rope_theta")).and_then(|v| v.as_f64());
     if theta(mapped).unwrap_or(10000.0) != theta(hf).unwrap_or(10000.0) {
         return Err(format!("rope theta: mapped {:?}, built with {:?}", theta(mapped), theta(hf)));
     }
@@ -74,7 +75,8 @@ fn run(name: &str) -> Result<Outcome, String> {
     let dir = fixture_dir(name);
     let model = GgufModel::open(&dir.join("model.gguf")).map_err(|e| format!("open: {e}"))?;
     let hf_cfg: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("hf_config.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        serde_json::from_str(&std::fs::read_to_string(dir.join("hf_config.json")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     same_config(&model.config, &hf_cfg)?;
     let prep = model.prepare(&LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
     let quantised = prep.lowered.program.params.iter().filter(|p| p.name.ends_with(".qa")).count();
@@ -84,8 +86,8 @@ fn run(name: &str) -> Result<Outcome, String> {
     if !unused.is_empty() {
         return Err(format!("GGUF tensors the program never reads: {unused:?}"));
     }
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     let tokens: Vec<usize> = meta["tokens"].as_array().ok_or("tokens")?.iter().map(|t| t.as_u64().unwrap_or(0) as usize).collect();
     let want: Vec<Vec<f64>> = meta["logits_full"]
         .as_array()
@@ -109,7 +111,8 @@ fn run(name: &str) -> Result<Outcome, String> {
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &quiet).map_err(|e| e.to_string())?;
     let measure = |lw: &lower::Lowered| -> Result<(Metrics, usize), String> {
-        let mat = materialise(lw, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+        let mat =
+            materialise(lw, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
         let il: Vec<Vec<Vec<f64>>> = eval
             .iter()
             .map(|s| fidelity::int_logits(&lw.program, &mat.params, s, mat.logits_scale, &|_| {}))

@@ -242,7 +242,10 @@ impl<'a> Zip<'a> {
     /// The absolute offset of a stored member's data, after checking its local header against the directory.
     fn data_start(&mut self, m: &Member) -> Result<u64> {
         if m.method != 0 {
-            return Err(refuse(format!("member `{}` is compressed (method {}): a torch checkpoint stores its members", m.name, m.method)));
+            return Err(refuse(format!(
+                "member `{}` is compressed (method {}): a torch checkpoint stores its members",
+                m.name, m.method
+            )));
         }
         if m.flags & 1 != 0 {
             return Err(refuse(format!("member `{}` is encrypted", m.name)));
@@ -378,7 +381,18 @@ fn describe(k: &Kind) -> &'static str {
 
 impl<'a> Machine<'a> {
     fn new(data: &'a [u8], lim: Limits) -> Machine<'a> {
-        Machine { data, at: 0, lim, ops: 0, stack: Vec::new(), memo: Vec::new(), memo_count: 0, alloc: 0, storages: BTreeMap::new(), tensors: 0 }
+        Machine {
+            data,
+            at: 0,
+            lim,
+            ops: 0,
+            stack: Vec::new(),
+            memo: Vec::new(),
+            memo_count: 0,
+            alloc: 0,
+            storages: BTreeMap::new(),
+            tensors: 0,
+        }
     }
 
     fn charge(&mut self, bytes: u64) -> Result<()> {
@@ -432,7 +446,10 @@ impl<'a> Machine<'a> {
     // ---- reading the stream ----
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if n > self.data.len() - self.at {
-            return Err(refuse(format!("the pickle is cut short or a length prefix ({n}) is longer than the bytes left ({})", self.data.len() - self.at)));
+            return Err(refuse(format!(
+                "the pickle is cut short or a length prefix ({n}) is longer than the bytes left ({})",
+                self.data.len() - self.at
+            )));
         }
         let s = &self.data[self.at..self.at + n];
         self.at += n;
@@ -505,7 +522,11 @@ impl<'a> Machine<'a> {
     }
 
     fn memo_get(&mut self, idx: usize) -> Result<()> {
-        let v = self.memo.get(idx).and_then(|v| v.clone()).ok_or_else(|| refuse(format!("a memo get of index {idx}, which was never put")))?;
+        let v = self
+            .memo
+            .get(idx)
+            .and_then(|v| v.clone())
+            .ok_or_else(|| refuse(format!("a memo get of index {idx}, which was never put")))?;
         self.push(Item::V(v))
     }
 
@@ -535,7 +556,9 @@ impl<'a> Machine<'a> {
     fn global(&mut self, module: &str, name: &str) -> Result<()> {
         match glob_of(module, name) {
             Some(g) => self.push_val(Kind::Global(g)),
-            None => Err(refuse(format!("the pickle names `{module}.{name}`, which is not on the allowlist — it would be called when the file is loaded, and is not"))),
+            None => Err(refuse(format!(
+                "the pickle names `{module}.{name}`, which is not on the allowlist — it would be called when the file is loaded, and is not"
+            ))),
         }
     }
 
@@ -942,7 +965,9 @@ impl<'a> Machine<'a> {
                 b'b' => self.build()?,
                 b'Q' => self.persistent_load()?,
                 // Everything else constructs objects or reads outside the file: refused.
-                b'i' | b'o' | 0x81 | 0x92 => return Err(refuse("an opcode that instantiates a class (INST/OBJ/NEWOBJ) — refused, never run")),
+                b'i' | b'o' | 0x81 | 0x92 => {
+                    return Err(refuse("an opcode that instantiates a class (INST/OBJ/NEWOBJ) — refused, never run"));
+                }
                 b'P' => return Err(refuse("PERSID (a text persistent id)")),
                 0x82..=0x84 => return Err(refuse("an extension-registry opcode (EXT1/EXT2/EXT4)")),
                 0x8f..=0x91 => return Err(refuse("a set or frozenset")),
@@ -960,7 +985,12 @@ fn state_dict_of(top: &Val, lim: &Limits) -> Result<Vec<(String, Rc<TensorRef>)>
     let k = top.kind.borrow();
     let d = match &*k {
         Kind::Dict(d) => d,
-        other => return Err(refuse(format!("the pickle's object is {}, not a state dict (a mapping of names to tensors)", describe(other)))),
+        other => {
+            return Err(refuse(format!(
+                "the pickle's object is {}, not a state dict (a mapping of names to tensors)",
+                describe(other)
+            )));
+        }
     };
     if d.len() > lim.max_tensors {
         return Err(refuse(format!("a state dict of {} entries", d.len())));
@@ -974,7 +1004,9 @@ fn state_dict_of(top: &Val, lim: &Limits) -> Result<Vec<(String, Rc<TensorRef>)>
         match &*v.kind.borrow() {
             Kind::Tensor(t) => out.push((name, t.clone())),
             Kind::Dict(_) => {
-                return Err(refuse(format!("`{name}` holds a mapping: this is a training checkpoint (a wrapper around the weights), not a flat state dict")));
+                return Err(refuse(format!(
+                    "`{name}` holds a mapping: this is a training checkpoint (a wrapper around the weights), not a flat state dict"
+                )));
             }
             other => return Err(refuse(format!("`{name}` is {}, not a tensor", describe(other)))),
         }
@@ -1036,14 +1068,21 @@ pub fn read_header_with(path: &Path, lim: &Limits) -> Result<TorchHeader> {
             Some(x) => *x,
             None => {
                 let mname = format!("{prefix}data/{}", s.key);
-                let mem = z.members.get(&mname).cloned().ok_or_else(|| refuse(format!("tensor `{name}`: no member `{mname}` holds its storage")))?;
+                let mem = z
+                    .members
+                    .get(&mname)
+                    .cloned()
+                    .ok_or_else(|| refuse(format!("tensor `{name}`: no member `{mname}` holds its storage")))?;
                 let st = z.data_start(&mem)?;
                 starts.insert(s.key.clone(), (st, mem.size));
                 (st, mem.size)
             }
         };
         if s.numel.checked_mul(s.elem as u64) != Some(member_size) {
-            return Err(refuse(format!("tensor `{name}`: storage `{}` declares {} {} elements but its member holds {member_size} bytes", s.key, s.numel, s.dtype)));
+            return Err(refuse(format!(
+                "tensor `{name}`: storage `{}` declares {} {} elements but its member holds {member_size} bytes",
+                s.key, s.numel, s.dtype
+            )));
         }
         if !contiguous(&t.shape, &t.stride) {
             return Err(refuse(format!(
@@ -1051,9 +1090,17 @@ pub fn read_header_with(path: &Path, lim: &Limits) -> Result<TorchHeader> {
                 t.shape, t.stride
             )));
         }
-        let numel = t.shape.iter().try_fold(1u64, |a, d| a.checked_mul(*d)).filter(|n| *n <= 1 << 40).ok_or_else(|| refuse(format!("tensor `{name}`: an element count past 2^40")))?;
+        let numel = t
+            .shape
+            .iter()
+            .try_fold(1u64, |a, d| a.checked_mul(*d))
+            .filter(|n| *n <= 1 << 40)
+            .ok_or_else(|| refuse(format!("tensor `{name}`: an element count past 2^40")))?;
         if numel > 0 && t.offset.checked_add(numel).is_none_or(|e| e > s.numel) {
-            return Err(refuse(format!("tensor `{name}`: {numel} elements at storage offset {} run past its storage of {}", t.offset, s.numel)));
+            return Err(refuse(format!(
+                "tensor `{name}`: {numel} elements at storage offset {} run past its storage of {}",
+                t.offset, s.numel
+            )));
         }
         let begin = member_start + t.offset * s.elem as u64;
         let nbytes = numel * s.elem as u64;

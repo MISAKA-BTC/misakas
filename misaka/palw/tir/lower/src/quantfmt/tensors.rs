@@ -13,7 +13,9 @@
 //! A format of this layout is decoded one module at a time: its role tensors are resident (a module is
 //! one projection), the decode itself runs in batches of rows.
 
-use super::desc::{CodeDesc, CodeRange, ConfigDesc, DecodeDesc, LayoutDesc, ParamDesc, QuantFormatDesc, RoleDesc, SizeDesc, TableDesc, ValDesc};
+use super::desc::{
+    CodeDesc, CodeRange, ConfigDesc, DecodeDesc, LayoutDesc, ParamDesc, QuantFormatDesc, RoleDesc, SizeDesc, TableDesc, ValDesc,
+};
 use super::expr::{Col, DslError, Env, Mask, Name, Node, R, Scope, Table, compile, eval};
 use crate::prequant::QWeight;
 use rayon::prelude::*;
@@ -214,13 +216,19 @@ impl ConfigReader {
                     DslError(format!("{}: {name} = `{s}` (defined for {:?})", self.name, p.map.keys().collect::<Vec<_>>()))
                 })?),
                 Some(v) => Some(v.as_i64().or_else(|| v.as_bool().map(|b| b as i64)).ok_or_else(|| {
-                    DslError(format!("{}: quantization_config.{} is {v}, not an integer or a bool", self.name, p.config.as_deref().unwrap_or(name)))
+                    DslError(format!(
+                        "{}: quantization_config.{} is {v}, not an integer or a bool",
+                        self.name,
+                        p.config.as_deref().unwrap_or(name)
+                    ))
                 })?),
             };
             let v = match (from_cfg, p.default) {
                 (Some(v), _) => v,
                 (None, Some(d)) => d,
-                (None, None) => return Err(DslError(format!("{}: parameter `{name}` is not in the configuration and has no default", self.name))),
+                (None, None) => {
+                    return Err(DslError(format!("{}: parameter `{name}` is not in the configuration and has no default", self.name)));
+                }
             };
             if !p.allowed.is_empty() && !p.allowed.contains(&v) {
                 return Err(DslError(format!("{}: {name} = {v} (defined for {:?})", self.name, p.allowed)));
@@ -229,7 +237,6 @@ impl ConfigReader {
         }
         Ok(out)
     }
-
 }
 
 mod streamed;
@@ -313,7 +320,10 @@ pub(super) fn table(name: &str, t: &TableDesc) -> R<Table> {
 pub(super) fn compile_roles(roles: &[RoleDesc], lanes: &[&str]) -> R<Vec<Role>> {
     let mut rs: Vec<Role> = Vec::new();
     for RoleDesc { name, suffix, dtypes, required, rank } in roles {
-        let dts = dtypes.iter().map(|t| Rd::parse(t).ok_or_else(|| DslError(format!("role `{name}`: dtype `{t}`")))).collect::<R<Vec<_>>>()?;
+        let dts = dtypes
+            .iter()
+            .map(|t| Rd::parse(t).ok_or_else(|| DslError(format!("role `{name}`: dtype `{t}`"))))
+            .collect::<R<Vec<_>>>()?;
         if dts.is_empty() || *rank > 4 || lanes.contains(&name.as_str()) || rs.iter().any(|r: &Role| r.name == *name) {
             return Err(DslError(format!("role `{name}` is malformed or named like another")));
         }
@@ -334,7 +344,10 @@ pub(super) fn check_roles(name: &str, defs: &[Role], roles: &[Option<RoleTensor>
                 }
                 let rd = Rd::parse(&t.dtype).ok_or_else(|| DslError(format!("{name}: role `{}` is stored as {}", r.name, t.dtype)))?;
                 if !r.dtypes.contains(&rd) {
-                    return Err(DslError(format!("{name}: role `{}` is stored as {}, the format reads {:?}", r.name, t.dtype, r.dtypes)));
+                    return Err(DslError(format!(
+                        "{name}: role `{}` is stored as {}, the format reads {:?}",
+                        r.name, t.dtype, r.dtypes
+                    )));
                 }
                 let bytes = t.stored_bytes().ok_or_else(|| DslError(format!("{name}: role `{}` shape overflows", r.name)))?;
                 if !t.data.is_empty() && t.data.len() != bytes {
@@ -365,7 +378,10 @@ impl TensorsFormat {
                     return Err(DslError(format!("parameter `{n}` is read from a role: it has no `config`")));
                 }
                 if !rs.iter().any(|r| r.name == rj.role) {
-                    return Err(DslError(format!("parameter `{n}` is read from role `{}`, which the format does not declare", rj.role)));
+                    return Err(DslError(format!(
+                        "parameter `{n}` is read from role `{}`, which the format does not declare",
+                        rj.role
+                    )));
                 }
                 if !matches!(rj.kind.as_str(), "int" | "float" | "string") {
                     return Err(DslError(format!("parameter `{n}`: from_role.kind `{}` (int, float or string)", rj.kind)));
@@ -409,7 +425,8 @@ impl TensorsFormat {
         }
         let target = match target.as_str() {
             "integers" => {
-                let code: &CodeDesc = code.as_ref().ok_or_else(|| DslError("target `integers` declares decode.code {min, max}".into()))?;
+                let code: &CodeDesc =
+                    code.as_ref().ok_or_else(|| DslError("target `integers` declares decode.code {min, max}".into()))?;
                 let val = |v: &ValDesc, what: &str| -> R<Node> {
                     match v {
                         ValDesc::Int(n) => Ok(Node::Int(*n)),
@@ -425,7 +442,9 @@ impl TensorsFormat {
                     code,
                 }
             }
-            "floats" => Target::Floats { value: comp("decode.value", value)?.ok_or_else(|| DslError("target `floats` declares decode.value".into()))? },
+            "floats" => Target::Floats {
+                value: comp("decode.value", value)?.ok_or_else(|| DslError("target `floats` declares decode.value".into()))?,
+            },
             other => return Err(DslError(format!("decode.target `{other}` (integers or floats)"))),
         };
         let offset_term = comp("decode.offset_term", offset_term)?;
@@ -463,9 +482,10 @@ impl TensorsFormat {
     /// (`present(suffix)` gives its dtype) and in a dtype the role accepts. A format that decodes to
     /// floats lets a module the quantiser left alone be read as the plain float tensor it is.
     pub fn stores(&self, present: impl Fn(&str) -> Option<String>) -> bool {
-        self.roles.iter().filter(|r| r.required).all(|r| {
-            present(&r.suffix).is_some_and(|dt| Rd::parse(&dt).is_some_and(|d| r.dtypes.contains(&d)))
-        })
+        self.roles
+            .iter()
+            .filter(|r| r.required)
+            .all(|r| present(&r.suffix).is_some_and(|dt| Rd::parse(&dt).is_some_and(|d| r.dtypes.contains(&d))))
     }
 
     /// Whether the weight's columns are gathered through a group index (the lowering then orders its
@@ -491,7 +511,9 @@ impl TensorsFormat {
     pub fn layout(&self, params: &BTreeMap<String, i64>) -> R<TLayout> {
         let none: Vec<Option<RoleTensor>> = vec![None; self.roles.len()];
         let env = self.const_env(&none, params, None)?;
-        let ev = |n: &Node, what: &str| -> R<i64> { eval(n, &env, Mask(None)).and_then(|c| c.int_at(0)).map_err(|e| DslError(format!("{}: {what}: {e}", self.name))) };
+        let ev = |n: &Node, what: &str| -> R<i64> {
+            eval(n, &env, Mask(None)).and_then(|c| c.int_at(0)).map_err(|e| DslError(format!("{}: {what}: {e}", self.name)))
+        };
         let group = ev(&self.group_size, "decode.group.size")?;
         let group = usize::try_from(group).map_err(|_| DslError(format!("{}: a group size of {group}", self.name)))?;
         let order = match &self.order {
@@ -547,7 +569,12 @@ impl TensorsFormat {
         Ok((ev(&self.out, "out")?, ev(&self.inp, "inp")?))
     }
 
-    fn const_env<'a>(&'a self, roles: &'a [Option<RoleTensor>], params: &BTreeMap<String, i64>, wh: Option<(usize, usize, usize, usize)>) -> R<TEnv<'a>> {
+    fn const_env<'a>(
+        &'a self,
+        roles: &'a [Option<RoleTensor>],
+        params: &BTreeMap<String, i64>,
+        wh: Option<(usize, usize, usize, usize)>,
+    ) -> R<TEnv<'a>> {
         if roles.len() != self.roles.len() {
             return Err(DslError(format!("{}: {} role tensors for {} roles", self.name, roles.len(), self.roles.len())));
         }
@@ -599,7 +626,12 @@ impl TensorsFormat {
             };
             c.into_ints(inp)?
                 .into_iter()
-                .map(|v| u32::try_from(v).ok().filter(|v| (*v as usize) < ng).ok_or_else(|| DslError(format!("{}: a group index {v} outside [0, {ng})", self.name))))
+                .map(|v| {
+                    u32::try_from(v)
+                        .ok()
+                        .filter(|v| (*v as usize) < ng)
+                        .ok_or_else(|| DslError(format!("{}: a group index {v} outside [0, {ng})", self.name)))
+                })
                 .collect::<R<_>>()?
         };
         // Per (row, group): scale, zero, min.
@@ -619,7 +651,9 @@ impl TensorsFormat {
         };
         let mins = match min {
             None => None,
-            Some(m) => Some(eval(m, &gctx, Mask(None)).map_err(|e| DslError(format!("{}: decode.min: {e}", self.name)))?.into_floats(n)),
+            Some(m) => {
+                Some(eval(m, &gctx, Mask(None)).map_err(|e| DslError(format!("{}: decode.min: {e}", self.name)))?.into_floats(n))
+            }
         };
         // Codes, a batch of rows at a time.
         let step = (1usize << 18) / inp.max(1);
@@ -650,7 +684,19 @@ impl TensorsFormat {
         }
         let range = code.max - code.min + 1;
         let bits = (64 - ((range - 1).max(1) as u64).leading_zeros()) as u8;
-        Ok(QWeight { out, inp, group: gs, q: q16, scale: scales, zero: zeros, min: mins, gidx, bits, signed: code.min < 0, label: self.name.clone() })
+        Ok(QWeight {
+            out,
+            inp,
+            group: gs,
+            q: q16,
+            scale: scales,
+            zero: zeros,
+            min: mins,
+            gidx,
+            bits,
+            signed: code.min < 0,
+            label: self.name.clone(),
+        })
     }
 
     /// A module's tensors → `f32` `[out, inp]`.
@@ -695,17 +741,36 @@ impl TensorsFormat {
     fn geometry(&self, roles: &[Option<RoleTensor>], params: &BTreeMap<String, i64>) -> R<(usize, usize, usize, usize)> {
         for (r, t) in self.roles.iter().zip(roles) {
             match t {
-                None if r.required => return Err(DslError(format!("{}: the tensor for role `{}` ({}) is missing", self.name, r.name, r.suffix))),
+                None if r.required => {
+                    return Err(DslError(format!("{}: the tensor for role `{}` ({}) is missing", self.name, r.name, r.suffix)));
+                }
                 Some(t) => {
                     if t.shape.len() != r.rank {
-                        return Err(DslError(format!("{}: role `{}` has {} axes, the format says {}", self.name, r.name, t.shape.len(), r.rank)));
+                        return Err(DslError(format!(
+                            "{}: role `{}` has {} axes, the format says {}",
+                            self.name,
+                            r.name,
+                            t.shape.len(),
+                            r.rank
+                        )));
                     }
-                    let rd = Rd::parse(&t.dtype).ok_or_else(|| DslError(format!("{}: role `{}` is stored as {}", self.name, r.name, t.dtype)))?;
+                    let rd = Rd::parse(&t.dtype)
+                        .ok_or_else(|| DslError(format!("{}: role `{}` is stored as {}", self.name, r.name, t.dtype)))?;
                     if !r.dtypes.contains(&rd) {
-                        return Err(DslError(format!("{}: role `{}` is stored as {}, the format reads {:?}", self.name, r.name, t.dtype, r.dtypes)));
+                        return Err(DslError(format!(
+                            "{}: role `{}` is stored as {}, the format reads {:?}",
+                            self.name, r.name, t.dtype, r.dtypes
+                        )));
                     }
                     if t.data.len() != t.shape.iter().product::<usize>() * rd.size() {
-                        return Err(DslError(format!("{}: role `{}` holds {} bytes for shape {:?} of {}", self.name, r.name, t.data.len(), t.shape, t.dtype)));
+                        return Err(DslError(format!(
+                            "{}: role `{}` holds {} bytes for shape {:?} of {}",
+                            self.name,
+                            r.name,
+                            t.data.len(),
+                            t.shape,
+                            t.dtype
+                        )));
                     }
                 }
                 None => {}
@@ -713,8 +778,11 @@ impl TensorsFormat {
         }
         let (out, inp) = self.dims(roles, params)?;
         let env = self.const_env(roles, params, Some((out, inp, 0, 0)))?;
-        let gs = eval(&self.group_size, &env, Mask(None)).map_err(|e| DslError(format!("{}: decode.group.size: {e}", self.name)))?.int_at(0)?;
-        let gs = usize::try_from(gs).ok().filter(|g| *g > 0).ok_or_else(|| DslError(format!("{}: a group size of {gs}", self.name)))?;
+        let gs = eval(&self.group_size, &env, Mask(None))
+            .map_err(|e| DslError(format!("{}: decode.group.size: {e}", self.name)))?
+            .int_at(0)?;
+        let gs =
+            usize::try_from(gs).ok().filter(|g| *g > 0).ok_or_else(|| DslError(format!("{}: a group size of {gs}", self.name)))?;
         let ng = inp.div_ceil(gs);
         // The format's own consistency rules, with the group geometry known.
         let env = self.const_env(roles, params, Some((out, inp, gs, ng)))?;
@@ -783,7 +851,11 @@ impl JParser<'_> {
                         b'u' => {
                             let h = self.b.get(self.p..self.p + 4).ok_or("a short \\u escape")?;
                             self.p += 4;
-                            char::from_u32(u32::from_str_radix(std::str::from_utf8(h).map_err(|e| e.to_string())?, 16).map_err(|e| e.to_string())?).unwrap_or('\u{fffd}')
+                            char::from_u32(
+                                u32::from_str_radix(std::str::from_utf8(h).map_err(|e| e.to_string())?, 16)
+                                    .map_err(|e| e.to_string())?,
+                            )
+                            .unwrap_or('\u{fffd}')
                         }
                         other => return Err(format!("the escape \\{}", other as char)),
                     });
@@ -929,7 +1001,11 @@ fn role_param(fmt: &str, name: &str, p: &ParamDesc, defs: &[Role], roles: &[Opti
     let ri = defs.iter().position(|r| r.name == rj.role).expect("checked at compile time");
     let Some(t) = roles[ri].as_ref() else {
         // No module's tensors at all (a layout asked for from the parameters alone): a placeholder.
-        return if roles.iter().all(Option::is_none) { Ok(Col::CI(0)) } else { Err(DslError(format!("{fmt}: parameter `{name}` is read from role `{}`, which this module lacks", rj.role))) };
+        return if roles.iter().all(Option::is_none) {
+            Ok(Col::CI(0))
+        } else {
+            Err(DslError(format!("{fmt}: parameter `{name}` is read from role `{}`, which this module lacks", rj.role)))
+        };
     };
     if t.data.is_empty() {
         return Err(DslError(format!("{fmt}: parameter `{name}`: the document of role `{}` is not loaded", rj.role)));
@@ -952,7 +1028,11 @@ fn role_param(fmt: &str, name: &str, p: &ParamDesc, defs: &[Role], roles: &[Opti
             }
             Col::CF(f)
         }
-        ("string", J::Str(s)) => Col::CI(*p.map.get(&s.to_ascii_lowercase()).ok_or_else(|| DslError(format!("{fmt}: {name} = `{s}` (defined for {:?})", p.map.keys().collect::<Vec<_>>())))?),
+        ("string", J::Str(s)) => Col::CI(
+            *p.map
+                .get(&s.to_ascii_lowercase())
+                .ok_or_else(|| DslError(format!("{fmt}: {name} = `{s}` (defined for {:?})", p.map.keys().collect::<Vec<_>>())))?,
+        ),
         (k, other) => return Err(DslError(format!("{fmt}: `{}` is {other:?}, not a {k}", rj.path))),
     };
     if let (Col::CI(v), false) = (&col, p.allowed.is_empty())
@@ -1039,7 +1119,8 @@ impl<'a> TEnv<'a> {
         // A role's shape.
         if slot >= nr {
             let r = slot - nr;
-            let t = self.roles[r].as_ref().ok_or_else(|| DslError(format!("`dim_{}`: the role is absent", self.defs.roles[r].name)))?;
+            let t =
+                self.roles[r].as_ref().ok_or_else(|| DslError(format!("`dim_{}`: the role is absent", self.defs.roles[r].name)))?;
             let at = |axis: i64| -> R<i64> {
                 let dim = *usize::try_from(axis)
                     .ok()
@@ -1049,8 +1130,11 @@ impl<'a> TEnv<'a> {
             };
             // A dimension indexed by a lane is a column, never lane zero broadcast to the block.
             // The latter made conversion depend on read/chunk boundaries for valid descriptors.
-            return if let Col::CI(axis) = &index[0] { Ok(Col::CI(at(*axis)?)) }
-            else { (0..self.n).map(|k| if mask.on(k) { at(index[0].int_at(k)?) } else { Ok(0) }).collect::<R<Vec<_>>>().map(Col::I) };
+            return if let Col::CI(axis) = &index[0] {
+                Ok(Col::CI(at(*axis)?))
+            } else {
+                (0..self.n).map(|k| if mask.on(k) { at(index[0].int_at(k)?) } else { Ok(0) }).collect::<R<Vec<_>>>().map(Col::I)
+            };
         }
         let role = &self.defs.roles[slot];
         let t = self.roles[slot].as_ref().ok_or_else(|| DslError(format!("the tensor of role `{}` is absent", role.name)))?;
@@ -1060,7 +1144,11 @@ impl<'a> TEnv<'a> {
         let mut floats: Vec<f64> = Vec::new();
         for k in 0..self.n {
             if !mask.on(k) {
-                if rd.is_float() { floats.push(0.0) } else { ints.push(0) }
+                if rd.is_float() {
+                    floats.push(0.0)
+                } else {
+                    ints.push(0)
+                }
                 continue;
             }
             let mut flat = 0usize;
@@ -1112,7 +1200,6 @@ impl<'a> TEnv<'a> {
         Ok(if rd.is_float() { Col::F(floats) } else { Col::I(ints) })
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1187,7 +1274,9 @@ mod tests {
     #[test]
     fn a_parameter_read_from_a_tensor_has_a_type_a_default_and_a_range() {
         let defs = [doc_role("")];
-        let t = doc_tensor(r#"{"n": 64, "dtype": "bfloat16", "off": 0.30000000000000004, "b": true, "neg": -3, "frac": 1.5, "inf": 1e999}"#);
+        let t = doc_tensor(
+            r#"{"n": 64, "dtype": "bfloat16", "off": 0.30000000000000004, "b": true, "neg": -3, "frac": 1.5, "inf": 1e999}"#,
+        );
         let get = |name: &str, p: ParamDesc| role_param("T", name, &p, &defs, std::slice::from_ref(&t));
         assert!(matches!(get("n", pdesc("n", "int", None)), Ok(Col::CI(64))));
         assert!(matches!(get("d", pdesc("dtype", "string", None)), Ok(Col::CI(1))), "a string read through the parameter's map");
@@ -1211,7 +1300,9 @@ mod tests {
         assert!(get("n", p).unwrap_err().0.contains("defined for"));
         // The tensor's data is not loaded (a header-only role): an error, not a guess; no tensors at all: a placeholder for a layout-only evaluation.
         let header = Some(RoleTensor::header_only(vec![12], "U8"));
-        assert!(role_param("T", "n", &pdesc("n", "int", None), &defs, std::slice::from_ref(&header)).unwrap_err().0.contains("not loaded"));
+        assert!(
+            role_param("T", "n", &pdesc("n", "int", None), &defs, std::slice::from_ref(&header)).unwrap_err().0.contains("not loaded")
+        );
         assert!(matches!(role_param("T", "n", &pdesc("n", "int", None), &defs, &[None]), Ok(Col::CI(0))));
     }
 

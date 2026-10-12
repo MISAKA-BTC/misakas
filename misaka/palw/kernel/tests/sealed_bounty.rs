@@ -60,10 +60,7 @@ fn rfc02t_frozen_gap_r7_a_reencoded_copy_filed_first_takes_the_sealed_finders_bo
     // The finder files its sealed bytes; the copyist read them and its re-encoding is ordered first in the same block.
     let ev = w.block(
         13,
-        vec![
-            T::FileProof { accuser: COPYIST, claim: id, proof: copy },
-            T::FileProof { accuser: OUTSIDER, claim: id, proof },
-        ],
+        vec![T::FileProof { accuser: COPYIST, claim: id, proof: copy }, T::FileProof { accuser: OUTSIDER, claim: id, proof }],
     );
     let (_, reward, _) = convicted(&ev).expect("convicted");
     assert!(reward > 0);

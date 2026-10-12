@@ -37,7 +37,10 @@ fn qwen4_exp_is_level_b_with_every_feature_supported_and_nothing_new_required() 
     }
     assert!(r.features.iter().all(|f| f.status == FeatureStatus::Supported), "{:#?}", r.features);
     let text = r.render();
-    assert!(text.contains("informational only") && text.contains("level           B") && text.contains("built-in data file `qwen4-exp`"), "{text}");
+    assert!(
+        text.contains("informational only") && text.contains("level           B") && text.contains("built-in data file `qwen4-exp`"),
+        "{text}"
+    );
     assert!(text.contains("No new consensus primitive required") && text.contains("No new court kernel required"), "{text}");
     assert!(text.contains("SUPPORTED") && !text.contains("MISSING"), "{text}");
     eprintln!("{text}");
@@ -139,7 +142,10 @@ fn level_a_is_labelled_unconfirmed_until_a_reference_check_passes() {
     assert!(text.contains("level           A (unconfirmed)") && text.contains("class code, not configuration"), "{text}");
     assert!(text.contains("LOWERABLE (Level A (unconfirmed))"), "{text}");
     let v = serde_json::to_value(&r).expect("json");
-    assert_eq!((v["level"].as_str(), v["level_label"].as_str(), v["reference_confirmed"].as_bool()), (Some("A"), Some("A (unconfirmed)"), Some(false)));
+    assert_eq!(
+        (v["level"].as_str(), v["level_label"].as_str(), v["reference_confirmed"].as_bool()),
+        (Some("A"), Some("A (unconfirmed)"), Some(false))
+    );
     // A reference check on the same weights lifts the label; no other level was ever unconfirmed.
     let c = r.confirm_reference();
     assert_eq!(c.level_label, "A");
@@ -201,7 +207,11 @@ fn a_user_adapter_may_override_a_built_in_refusal_and_the_report_says_so() {
     }));
     // By default the class is refused, by the features it lacks.
     let by_default = analyze(&cfg, Some(&tensors), &ReadOptions::default());
-    assert!(matches!(by_default.result, ReportResult::NotLowerable { .. }) && by_default.overrides_refusal.is_none(), "{}", by_default.render());
+    assert!(
+        matches!(by_default.result, ReportResult::NotLowerable { .. }) && by_default.overrides_refusal.is_none(),
+        "{}",
+        by_default.render()
+    );
     assert!(by_default.missing.iter().any(|m| m.what == "SCALE_MUP_V1"), "{:?}", by_default.missing);
     // A built-in adapter chosen by id does not override a refusal either: the data must not contradict itself.
     let forced = analyze(&cfg, Some(&tensors), &ReadOptions { adapter: AdapterChoice::BuiltIn("deepseek-v3".into()) });

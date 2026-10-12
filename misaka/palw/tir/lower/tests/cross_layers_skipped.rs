@@ -46,7 +46,10 @@ fn mllama_text_only_matches_its_hf_fixture() {
 fn binding_image_rows_to_a_cross_attention_spec_is_refused_by_name() {
     let cfg = std::fs::read_to_string(dir().join("config.json")).expect("config");
     let spec = parse_config_str(&cfg).expect("mllama reads");
-    let opts = LowerOpts { image_rows: Some(ImageRows { rows: 4, width: 32, unit: 1.0 / 4096.0, placeholder: 63, mrope: None }), ..LowerOpts::default() };
+    let opts = LowerOpts {
+        image_rows: Some(ImageRows { rows: 4, width: 32, unit: 1.0 / 4096.0, placeholder: 63, mrope: None }),
+        ..LowerOpts::default()
+    };
     let e = fidelity::prepare_spec(spec, &opts).err().expect("refused").to_string();
     assert!(e.contains("ATTN_CROSS_V1"), "{e}");
 }

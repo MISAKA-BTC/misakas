@@ -20,7 +20,9 @@ mod stage1;
 use stage1::*;
 
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
-use kaspa_consensus_core::palw_network_room_v1::{PALW_NETWORK_H_L_DAA_V1, PalwNetworkBondV1, palw_network_share_admits_v1, palw_network_units_v1};
+use kaspa_consensus_core::palw_network_room_v1::{
+    PALW_NETWORK_H_L_DAA_V1, PalwNetworkBondV1, palw_network_share_admits_v1, palw_network_units_v1,
+};
 use std::collections::BTreeSet;
 
 /// testnet-12 with the capacity list at [`H`] but for `skip` (F-L's one step `(ρ, q)`).
@@ -166,8 +168,10 @@ fn key(i: u8) -> PalwBondKeyV2 {
 /// `share_level` (a class room's `room − headroom`; the level itself for the network).
 fn asks(level: u64, share_level: u64, b: &PalwBondKeyV2, bonds: &BTreeMap<PalwBondKeyV2, (u64, u64, bool)>) -> bool {
     let unlicensed: u64 = bonds.values().map(|(_, held, _)| *held).sum();
-    let others: BTreeMap<PalwBondKeyV2, PalwNetworkBondV1> =
-        bonds.iter().map(|(k, (units, held, registered))| (*k, PalwNetworkBondV1 { units: *units, held: *held, registered: *registered })).collect();
+    let others: BTreeMap<PalwBondKeyV2, PalwNetworkBondV1> = bonds
+        .iter()
+        .map(|(k, (units, held, registered))| (*k, PalwNetworkBondV1 { units: *units, held: *held, registered: *registered }))
+        .collect();
     let (units, held, registered) = bonds[b];
     palw_network_share_admits_v1(level, share_level, unlicensed, b, units, held, registered, &others).is_ok()
 }
@@ -215,12 +219,16 @@ fn n_ten_small_bonds_never_beat_one_bond_of_their_total_on_the_rule() {
     for _ in 0..10_000 {
         let level = 1 + rng.below(200);
         let share_level = if rng.below(2) == 0 { level } else { level - rng.below(level + 1) };
-        let others: Vec<(u64, u64, bool)> = (0..rng.below(4)).map(|_| (1 + rng.below(120), rng.below(level + 1), rng.below(10) < 6)).collect();
+        let others: Vec<(u64, u64, bool)> =
+            (0..rng.below(4)).map(|_| (1 + rng.below(120), rng.below(level + 1), rng.below(10) < 6)).collect();
         for (piece, whole) in [(u(13), u(130)), (u(100), u(1_000)), (u(26), u(260))] {
             let mut order = Lcg(rng.next());
             let split = fill_rule(level, share_level, &[piece; 10], &others, &mut order);
             let one = fill_rule(level, share_level, &[whole], &others, &mut Lcg(0));
-            assert!(split <= one, "10 × {piece} units took {split} > 1 × {whole}'s {one}: level {level} ({share_level} shared), others {others:?}");
+            assert!(
+                split <= one,
+                "10 × {piece} units took {split} > 1 × {whole}'s {one}: level {level} ({share_level} shared), others {others:?}"
+            );
             runs += 1;
             ties += u64::from(split == one);
         }
@@ -347,16 +355,26 @@ fn stage4_capacity(p: &Params, ours: &[(u64, u64)], licensed: usize, days: u64) 
     let binds = ids
         .iter()
         .enumerate()
-        .map(|(i, id)| PalwConsensusObjectV2::PanelBound { claim: *id, anchor: h(0xAC_0000 + (sim.c.daa << 8) + i as u64), seats: seats_of(&seats) })
+        .map(|(i, id)| PalwConsensusObjectV2::PanelBound {
+            claim: *id,
+            anchor: h(0xAC_0000 + (sim.c.daa << 8) + i as u64),
+            seats: seats_of(&seats),
+        })
         .collect();
     sim.step(binds);
     let bound = sim.c.daa;
     let licences = ids
         .iter()
-        .map(|id| PalwConsensusObjectV2::ReceiptLicensed { claim: *id, receipts: seats.iter().map(|(k, _)| valid(*id, *k, bound)).collect() })
+        .map(|id| PalwConsensusObjectV2::ReceiptLicensed {
+            claim: *id,
+            receipts: seats.iter().map(|(k, _)| valid(*id, *k, bound)).collect(),
+        })
         .collect();
     sim.step(licences);
-    assert!(ids.iter().all(|id| matches!(sim.c.claim(id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. })), "the competitor's licences fold");
+    assert!(
+        ids.iter().all(|id| matches!(sim.c.claim(id).phase, PalwClaimPhaseV2::ReceiptLicensed { .. })),
+        "the competitor's licences fold"
+    );
     println!(
         "  the competitor holds {} unlicensed, registered {:?}, before ours ask at DAA {}",
         held(&sim, 80),
@@ -397,7 +415,9 @@ fn stage4_gate_ten_13k_bonds_never_beat_one_130k_bond_through_the_fold() {
     for (label, p, licensed) in cases {
         let (split, split_skips) = stage4_capacity(&p, &pieces, licensed, 20);
         let (one, one_skips) = stage4_capacity(&p, &whole, licensed, 20);
-        println!("stage 4 gate, {label}:\n  10 × 13k {split:?}\n   1 × 130k {one:?}\n  pieces refused {split_skips:?}\n  whole refused {one_skips:?}");
+        println!(
+            "stage 4 gate, {label}:\n  10 × 13k {split:?}\n   1 × 130k {one:?}\n  pieces refused {split_skips:?}\n  whole refused {one_skips:?}"
+        );
         for (d, (s, w)) in split.iter().zip(&one).enumerate() {
             assert!(s <= w, "{label}: by DAA {} the pieces took {s} > the whole's {w}", d + 1);
         }

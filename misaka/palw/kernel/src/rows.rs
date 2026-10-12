@@ -186,7 +186,8 @@ impl KernelLedgerV1 {
         }
         for (k, row) in &self.flat_conformance_classes_v7 {
             rows.insert((TABLE_FLAT_CONFORMANCE_CLASSES_V7, bytes_of(k)), bytes_of(row));
-        }        for (k, row) in &self.flat_conformance_classes_v9 {
+        }
+        for (k, row) in &self.flat_conformance_classes_v9 {
             rows.insert((TABLE_FLAT_CONFORMANCE_CLASSES_V9, bytes_of(k)), bytes_of(row));
         }
         for (k, c) in &self.classes {
@@ -285,7 +286,7 @@ impl KernelLedgerV1 {
     /// implemented descriptors; its own rows are ignored). A row that does not decode, or a class record that does not rebuild,
     /// is an error — a consumer's stored rows are its own consensus state, so that is corruption, not an input.
     pub fn from_rows(template: &KernelLedgerV1, scalars: LedgerScalarsV1, rows: &LedgerRowsV1) -> Result<Self, String> {
-        crate::ledger::flat_candidate9::check_candidate_registry_import_v9(rows,&template.policy)?;
+        crate::ledger::flat_candidate9::check_candidate_registry_import_v9(rows, &template.policy)?;
         let mut l = KernelLedgerV1::genesis(template.policy, template.schedule.clone(), template.known.clone())?;
         // The OPV policy is configuration (a genesis constant): the template carries it, exactly as it carries the ledger's own.
         if let Some(p) = template.opv.policy {
@@ -450,11 +451,7 @@ impl KernelLedgerV1 {
             let (owner, record): (Digest, crate::ledger::flat_candidate7::FlatCandidateRecordV7) =
                 dec(&row, "flat-v7 conformance class")?;
             let class: Digest = dec(&key, "flat-v7 class key")?;
-            if record.id() != class
-                || l.opv.policy.is_none()
-                || !l.bonds.contains_key(&owner)
-                || l.classes.contains_key(&class)
-            {
+            if record.id() != class || l.opv.policy.is_none() || !l.bonds.contains_key(&owner) || l.classes.contains_key(&class) {
                 return Err("flat-v7 preparation lacks exact identity/policy/bond or duplicates execution".into());
             }
             record.checked()?.check_policy(&l)?;
@@ -708,8 +705,11 @@ pub fn root_of_rows(
         base
     };
     // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
-    let base =
-        if by_table.contains_key(&TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
+    let base = if by_table.contains_key(&TABLE_COURT_SCOPE_V1) {
+        court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1))
+    } else {
+        base
+    };
     // Fixed order, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's conformance
     // classes), 30 beacon sources, 31 EXEC reward holds, then codex's flat-v7 (table 0) and flat-v9 (table 19) registries.
     let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
@@ -729,10 +729,14 @@ pub fn root_of_rows(
     };
     let base = if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V7) {
         flat_conformance_root_extension_v7(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V7))
-    } else { base };
+    } else {
+        base
+    };
     if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
         flat_conformance_root_extension_v9(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V9))
-    } else { base }
+    } else {
+        base
+    }
 }
 
 pub fn flat_conformance_root_extension_v9(base: &Digest, table: &Digest) -> Digest {
@@ -746,7 +750,6 @@ pub fn flat_conformance_root_extension_v7(base: &Digest, table: &Digest) -> Dige
     h.update(base).update(table);
     finish(h)
 }
-
 
 /// `H(extension; root ‖ table 28)` (the court scope, G14-S).
 pub fn court_scope_root_extension_v1(base: &Digest, table: &Digest) -> Digest {

@@ -41,8 +41,15 @@ pub fn default_retry_after(status: &str) -> Option<u32> {
 
 /// **A response head** (status line, headers, blank line). `retry_after` overrides the status's default; a header value with
 /// a CR or LF is dropped rather than written (response splitting), though every caller passes constants.
-pub fn render_head(status: &str, content_type: &str, content_length: usize, retry_after: Option<u32>, extra: &[(&str, &str)]) -> String {
-    let mut head = format!("HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {content_length}\r\nconnection: close\r\n");
+pub fn render_head(
+    status: &str,
+    content_type: &str,
+    content_length: usize,
+    retry_after: Option<u32>,
+    extra: &[(&str, &str)],
+) -> String {
+    let mut head =
+        format!("HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {content_length}\r\nconnection: close\r\n");
     if let Some(secs) = retry_after.or_else(|| default_retry_after(status)) {
         head.push_str(&format!("retry-after: {secs}\r\n"));
     }

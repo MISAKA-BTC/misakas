@@ -101,14 +101,17 @@ pub(super) fn scratch_need_v1(capture_bytes: u64) -> Result<u64, String> {
 /// Includes collection entries, lanes, prompt/generated ids and the encoded class program.
 pub(super) fn capture_bytes_v1(capture: &TirCaptureV1) -> Result<u64, String> {
     let count = |n: usize| u64::try_from(n).map_err(|_| "the capture size exceeds u64".to_string());
-    let mut bytes = u64::try_from(borsh::object_length(&capture.binding).map_err(|e| e.to_string())?).map_err(|_| "the capture binding size exceeds u64")?;
+    let mut bytes = u64::try_from(borsh::object_length(&capture.binding).map_err(|e| e.to_string())?)
+        .map_err(|_| "the capture binding size exceeds u64")?;
     for leaf in &capture.leaves {
         bytes =
             bytes.checked_add(count(leaf.values_le.len())?).and_then(|n| n.checked_add(128)).ok_or("the capture size exceeds u64")?;
     }
     for row in &capture.logits_rows {
-        bytes = bytes.checked_add(count(row.len())?.checked_mul(4).ok_or("the capture logits size exceeds u64")?)
-            .and_then(|n| n.checked_add(32)).ok_or("the capture logits size exceeds u64")?;
+        bytes = bytes
+            .checked_add(count(row.len())?.checked_mul(4).ok_or("the capture logits size exceeds u64")?)
+            .and_then(|n| n.checked_add(32))
+            .ok_or("the capture logits size exceeds u64")?;
     }
     for n in [capture.prompt.len(), capture.generated.len()] {
         bytes = bytes

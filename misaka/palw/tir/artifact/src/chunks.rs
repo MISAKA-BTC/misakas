@@ -403,7 +403,10 @@ mod tests {
         let data: Vec<u8> = (0..n).map(|i| (i % 253) as u8).collect();
         let whole = put_instance(&s, 3, Some(1), &data).expect("whole");
         assert_eq!(whole.chunks.len(), 3);
-        assert_eq!(whole.chunks.iter().map(|c| c.len as usize).collect::<Vec<_>>(), vec![PALW_TIR_CHUNK_BYTES_V1, PALW_TIR_CHUNK_BYTES_V1, 12_345]);
+        assert_eq!(
+            whole.chunks.iter().map(|c| c.len as usize).collect::<Vec<_>>(),
+            vec![PALW_TIR_CHUNK_BYTES_V1, PALW_TIR_CHUNK_BYTES_V1, 12_345]
+        );
         for piece in [1usize, 7, 4096, PALW_TIR_CHUNK_BYTES_V1 - 1, PALW_TIR_CHUNK_BYTES_V1 + 1, 3 * PALW_TIR_CHUNK_BYTES_V1] {
             let mut w = InstanceWriter::new(&s, 3, Some(1));
             for c in data.chunks(piece) {
@@ -443,7 +446,8 @@ mod tests {
             art.insert(put_instance(&store, j, l, &bytes_of(&p, j, l)).expect("put"));
         }
         let chunked = d.join("chunked.palwtir");
-        let digest2 = write_container_v1_chunked(&chunked, &p, vec![1, 2], [9u8; 64], "{\"a\":1}".into(), &store, &art).expect("chunked");
+        let digest2 =
+            write_container_v1_chunked(&chunked, &p, vec![1, 2], [9u8; 64], "{\"a\":1}".into(), &store, &art).expect("chunked");
         assert_eq!(digest, digest2);
         assert_eq!(std::fs::read(&direct).expect("read"), std::fs::read(&chunked).expect("read"));
         assert_eq!(file_digest_v1(&chunked).expect("digest"), digest);

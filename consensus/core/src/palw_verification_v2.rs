@@ -40,19 +40,11 @@ impl PalwSegmentMaskV2 {
 
     /// Every segment of a `k`-segment cut.
     pub fn full(k: u16) -> Self {
-        if k >= 32 {
-            Self(u32::MAX)
-        } else {
-            Self((1u32 << k) - 1)
-        }
+        if k >= 32 { Self(u32::MAX) } else { Self((1u32 << k) - 1) }
     }
 
     pub fn single(index: u16) -> Self {
-        if index >= 32 {
-            Self::NONE
-        } else {
-            Self(1u32 << index)
-        }
+        if index >= 32 { Self::NONE } else { Self(1u32 << index) }
     }
 
     pub fn covers(self, index: u16) -> bool {

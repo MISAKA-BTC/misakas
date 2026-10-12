@@ -226,7 +226,10 @@ async fn a_chain_crossing_the_fence_is_the_launch_chain_for_a_floor_claim() {
     let launch = to_the_anchor(None).await;
     let armed = to_the_anchor(Some(FENCE)).await;
     let anchor_daa = armed.chain.daa_of(armed.anchor);
-    assert!(armed.accepted_daa < FENCE && FENCE <= anchor_daa, "the premise: the chain crosses the fence between the claim and its anchor");
+    assert!(
+        armed.accepted_daa < FENCE && FENCE <= anchor_daa,
+        "the premise: the chain crosses the fence between the claim and its anchor"
+    );
     let vp = armed.chain.vp();
     let armed_sp = armed.chain.bundle.state.clone();
     let launch_sp = launch.chain.bundle.state.clone();

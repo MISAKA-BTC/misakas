@@ -94,7 +94,9 @@ fn past_the_fence_a_legacy_family_registration_is_refused_by_name_and_below_it_i
     )
     .expect("the held hybrid row derives at 512");
     let chain = Chain::new(p.clone());
-    let fold_at = |daa: u64| chain.try_fold(&chain.s, &ctx(0xCA_0000 + daa, daa, daa, 0), &[object.clone()], PalwBlockWorkV3::None, Hash64::default());
+    let fold_at = |daa: u64| {
+        chain.try_fold(&chain.s, &ctx(0xCA_0000 + daa, daa, daa, 0), &[object.clone()], PalwBlockWorkV3::None, Hash64::default())
+    };
     let past = fold_at(AT + 20);
     match past {
         Err(PalwStateV2Error::TirRegistrationRefused(why)) => assert!(why.contains("palw_tir_only_v1"), "{why}"),
@@ -102,14 +104,19 @@ fn past_the_fence_a_legacy_family_registration_is_refused_by_name_and_below_it_i
     }
     // Below the fence the same object is not refused for this reason (it folds, or fails for something else).
     match fold_at(AT + 19) {
-        Err(PalwStateV2Error::TirRegistrationRefused(why)) if why.contains("palw_tir_only_v1") => panic!("refused below the fence: {why}"),
+        Err(PalwStateV2Error::TirRegistrationRefused(why)) if why.contains("palw_tir_only_v1") => {
+            panic!("refused below the fence: {why}")
+        }
         _ => {}
     }
     // And the shipped ruleset, which never arms it, never refuses it for this reason, at any height.
     let shipped = palw_t12_shipped_params();
     let chain = Chain::new(shipped);
-    match chain.try_fold(&chain.s, &ctx(0xCA_0000 + AT + 40, AT + 40, AT + 40, 0), &[object], PalwBlockWorkV3::None, Hash64::default()) {
-        Err(PalwStateV2Error::TirRegistrationRefused(why)) if why.contains("palw_tir_only_v1") => panic!("the dormant ruleset refuses it: {why}"),
+    match chain.try_fold(&chain.s, &ctx(0xCA_0000 + AT + 40, AT + 40, AT + 40, 0), &[object], PalwBlockWorkV3::None, Hash64::default())
+    {
+        Err(PalwStateV2Error::TirRegistrationRefused(why)) if why.contains("palw_tir_only_v1") => {
+            panic!("the dormant ruleset refuses it: {why}")
+        }
         _ => {}
     }
     let _ = sp;

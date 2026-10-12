@@ -327,10 +327,9 @@ pub(crate) enum PalwHoldLevelV1 {
 /// Log a hold at [`palw_hold_level_v1`]'s level; at ERROR it says how long nothing has been produced.
 fn log_producer_hold_v1(detail: &str, loud: bool, since_progress: std::time::Duration) {
     match palw_hold_level_v1(detail, loud, since_progress) {
-        PalwHoldLevelV1::Error => error!(
-            "[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}",
-            since_progress.as_secs() / 60
-        ),
+        PalwHoldLevelV1::Error => {
+            error!("[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}", since_progress.as_secs() / 60)
+        }
         PalwHoldLevelV1::Warn => warn!("[{PALW_PRODUCER}] holding: {detail}"),
         PalwHoldLevelV1::Info => info!("[{PALW_PRODUCER}] holding: {detail}"),
     }
@@ -535,15 +534,17 @@ pub(crate) fn palw_floor_anchor_duty_v1(
     stagger: u64,
 ) -> bool {
     use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2;
-    kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_v1(&kaspa_consensus_core::palw_real_share_v1::PalwFloorAnchorDutyInputV1 {
-        binder_due: facts.binder_due,
-        is_base_class: facts.is_base_class,
-        hold_is_class_not_admitting: *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2),
-        class_refusal: facts.class_admission_refusal.as_deref(),
-        due_slots,
-        after_slots,
-        stagger,
-    })
+    kaspa_consensus_core::palw_real_share_v1::palw_floor_anchor_duty_v1(
+        &kaspa_consensus_core::palw_real_share_v1::PalwFloorAnchorDutyInputV1 {
+            binder_due: facts.binder_due,
+            is_base_class: facts.is_base_class,
+            hold_is_class_not_admitting: *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2),
+            class_refusal: facts.class_admission_refusal.as_deref(),
+            due_slots,
+            after_slots,
+            stagger,
+        },
+    )
 }
 
 /// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
@@ -782,7 +783,8 @@ impl PalwProducerService {
         // the ERROR line ends in `— production disabled` (the phrase `misaka-cli`'s nodelog parses),
         // and the node, its seat and this producer's receipt lane keep running.
         let class_refusal = if refusal.is_none()
-            && let Some(why) = crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
+            && let Some(why) =
+                crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
         {
             let remedy = "Give it the artifact that class registered (convert it and check it with `palw-class manifest \
                           --check`), name a class one of its artifacts pairs with (`palw-class inspect <artifact>`), or drop \
@@ -1097,7 +1099,9 @@ impl PalwProducerService {
                                 Ok(Some(hash)) => {
                                     produced += 1;
                                     last_progress_at = std::time::Instant::now();
-                                    info!("[{PALW_PRODUCER}] produced REDEMPTION receipt block #{produced} {hash} (another miner's authorized quantum, mined)");
+                                    info!(
+                                        "[{PALW_PRODUCER}] produced REDEMPTION receipt block #{produced} {hash} (another miner's authorized quantum, mined)"
+                                    );
                                     self.flow_context.update_palw_runtime(|r| {
                                         r.receipt_blocks += 1;
                                         r.last_block = hash.to_string();
@@ -1107,7 +1111,8 @@ impl PalwProducerService {
                                 }
                                 Ok(None) => {}
                                 Err(err) => {
-                                    let stale = last_receipt_err_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                                    let stale =
+                                        last_receipt_err_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                                     if last_receipt_err.as_deref() != Some(err.as_str()) || stale {
                                         warn!("[{PALW_PRODUCER}] redemption: {err}");
                                         last_receipt_err = Some(err);
@@ -1238,7 +1243,9 @@ impl PalwProducerService {
             // (`binder_due`: an operator's attempt binds other bonds' claims). Read once per
             // `PALW_PRODUCER_DEBT_READ_SECS_V1`, off the loop.
             if !facts.binder_due {
-                if debt_read_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(crate::palw_producer_backpressure::PALW_PRODUCER_DEBT_READ_SECS_V1)) {
+                if debt_read_at.is_none_or(|at| {
+                    at.elapsed() >= std::time::Duration::from_secs(crate::palw_producer_backpressure::PALW_PRODUCER_DEBT_READ_SECS_V1)
+                }) {
                     debt_read_at = Some(std::time::Instant::now());
                     let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
                     let now_daa = facts.daa_score;
@@ -1247,7 +1254,12 @@ impl PalwProducerService {
                         .consensus()
                         .unguarded_session()
                         .spawn_blocking(move |c| {
-                            c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, false, 500)
+                            c.palw_claim_rows_v1(
+                                bond_key,
+                                kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor,
+                                false,
+                                500,
+                            )
                         })
                         .await
                     {
@@ -1276,7 +1288,8 @@ impl PalwProducerService {
             last_hold = None;
             last_hold_at = None;
             self.flow_context.update_palw_runtime(|r| r.set_producer("drawing", ""));
-            let outcome = self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, &mut Vec::new()).await;
+            let outcome =
+                self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor, None, &mut Vec::new()).await;
             let network_lost = self.network_draw_lost.load(std::sync::atomic::Ordering::Relaxed);
             self.flow_context.update_palw_runtime(|r| {
                 r.draws = draws + u64::from(outcome.is_ok());
@@ -1310,7 +1323,16 @@ impl PalwProducerService {
                             // otherwise has refused `PwuClaimNotDerived` (the batch never landed).
                             let rider_facts = rider_facts_v1(&facts, self.config.riders as usize);
                             if let Err(e) = self
-                                .produce_one(&session, &rider_facts, network_domain, bond, miner_data.clone(), &mut cursor, Some((claim, index, retention)), &mut built)
+                                .produce_one(
+                                    &session,
+                                    &rider_facts,
+                                    network_domain,
+                                    bond,
+                                    miner_data.clone(),
+                                    &mut cursor,
+                                    Some((claim, index, retention)),
+                                    &mut built,
+                                )
                                 .await
                             {
                                 warn!("[{PALW_PRODUCER}] rider {index} of {claim} not built: {e}");
@@ -1320,7 +1342,11 @@ impl PalwProducerService {
                         // **Lane PA, C-F2**: where the fold's per-share pwu is known, a batch short of its size was derived for a share it
                         // will not have — queue only a whole batch (the lead keeps its carve whole otherwise).
                         if !built.is_empty() && built.len() < self.config.riders as usize && !facts.rider_pwu.is_empty() {
-                            warn!("[{PALW_PRODUCER}] only {} of {} riders of lead {claim} were built: not queued (their pwu is derived for the whole batch)", built.len(), self.config.riders);
+                            warn!(
+                                "[{PALW_PRODUCER}] only {} of {} riders of lead {claim} were built: not queued (their pwu is derived for the whole batch)",
+                                built.len(),
+                                self.config.riders
+                            );
                             built.clear();
                         }
                         if !built.is_empty() {
@@ -1950,7 +1976,11 @@ impl PalwProducerService {
             }
             // The last bracket of the attempt (ADR-0151 follow-up): the material is on disk, the
             // execution's buffers are gone, and this is what the process holds after one attempt.
-            crate::palw_backends::log_memory_phase_v1(PALW_PRODUCER, "attempt returned and its material retained", crate::palw_backends::armed_ram_scale_pub_v1());
+            crate::palw_backends::log_memory_phase_v1(
+                PALW_PRODUCER,
+                "attempt returned and its material retained",
+                crate::palw_backends::armed_ram_scale_pub_v1(),
+            );
             // **And the answer envelope beside it** (ADR-0084 Decision 4): the anchor, the prompt
             // the anchor derives, and the answer's ids — what a seat on the interval arm needs when
             // this capture (748 MB on the graph-v5 class) does not fit the transport. Best-effort:
@@ -2297,10 +2327,14 @@ mod real_submit_delay_tests {
         let src = include_str!("palw_producer.rs");
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
         let template = src.find("let template_at = std::time::Instant::now();").expect("the clock starts at the template");
-        let hold = src.find("palw_drill_real_submit_wait_v1(self.config.drill_real_submit_delay, facts.is_base_class").expect("the hold");
+        let hold =
+            src.find("palw_drill_real_submit_wait_v1(self.config.drill_real_submit_delay, facts.is_base_class").expect("the hold");
         let submit = src.find("self.flow_context.submit_rpc_block(session, block))\n                .await\n                .ok_or_else(|| format!(\"{PALW_PRODUCER_EXITING}: block {hash}").expect("the attempt's submit");
         assert!(template < hold && hold < submit, "template, then the hold, then the submit");
-        assert!(src[hold..submit].contains("palw_until_exit_v1(&self.shutdown.listener, tokio::time::sleep(wait))"), "the hold yields to exit");
+        assert!(
+            src[hold..submit].contains("palw_until_exit_v1(&self.shutdown.listener, tokio::time::sleep(wait))"),
+            "the hold yields to exit"
+        );
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {"));
         assert!(daemon.contains("!config.palw_drill_genesis_salt.is_some() || !palw_private_drill"), "refused off a salted chain");
@@ -2327,10 +2361,18 @@ mod da_ladder_tests {
         let flag_day = params.palw_tir_fence2.expect("the DAA-3,600 flag day").daa_score();
         assert_eq!(flag_day, 3_600);
         for daa in [0, 2_000, flag_day - 1] {
-            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_STEP_LEG_MAX_LEAVES, "DAA {daa}: below the second IR fence");
+            assert_eq!(
+                palw_tir_da_answerable_leaves_v1(&params, daa),
+                PALW_STEP_LEG_MAX_LEAVES,
+                "DAA {daa}: below the second IR fence"
+            );
         }
         for daa in [flag_day, flag_day + 1, 5_000, u64::MAX / 2] {
-            assert_eq!(palw_tir_da_answerable_leaves_v1(&params, daa), PALW_HELD_STEP_LADDER_V1, "DAA {daa}: the network's held ladder");
+            assert_eq!(
+                palw_tir_da_answerable_leaves_v1(&params, daa),
+                PALW_HELD_STEP_LADDER_V1,
+                "DAA {daa}: the network's held ladder"
+            );
         }
         // The int-8 ruleset (no fence2) answers at 2^22 at every height; so does a ruleset with the fence and no held context.
         let int8 = palw_t12_release_v4_params();
@@ -2339,7 +2381,11 @@ mod da_ladder_tests {
         }
         let mut no_held = params.clone();
         no_held.palw_held_context = None;
-        assert_eq!(palw_tir_da_answerable_leaves_v1(&no_held, 5_000), PALW_STEP_LEG_MAX_LEAVES, "no held context: no ladder in the fold");
+        assert_eq!(
+            palw_tir_da_answerable_leaves_v1(&no_held, 5_000),
+            PALW_STEP_LEG_MAX_LEAVES,
+            "no held context: no ladder in the fold"
+        );
         let class = Hash64::from_bytes([0x70; 64]);
         assert!(palw_tir_da_ladder_refusal_v1(class, 1_260_000, PALW_STEP_LEG_MAX_LEAVES).is_none(), "SmolLM2 at 512");
         assert!(palw_tir_da_ladder_refusal_v1(class, PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_LEAVES).is_none(), "at the ladder");
@@ -2347,7 +2393,10 @@ mod da_ladder_tests {
         assert!(why.contains("will not produce") && why.contains(&class.to_string()), "{why}");
         assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_STEP_LEG_MAX_LEAVES).is_some(), "a 70B-shaped job below the fence");
         assert!(palw_tir_da_ladder_refusal_v1(class, 1 << 29, PALW_HELD_STEP_LADDER_V1).is_none(), "…and answerable from it");
-        assert!(palw_tir_da_ladder_refusal_v1(class, PALW_HELD_STEP_LADDER_V1 + 1, PALW_HELD_STEP_LADDER_V1).is_some(), "past the ladder");
+        assert!(
+            palw_tir_da_ladder_refusal_v1(class, PALW_HELD_STEP_LADDER_V1 + 1, PALW_HELD_STEP_LADDER_V1).is_some(),
+            "past the ladder"
+        );
         let src = include_str!("palw_producer.rs");
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
         let at = src
@@ -3111,7 +3160,10 @@ mod p6_tests {
         assert_eq!(hold, PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2));
         let detail = palw_producer_hold_detail_v1(&f, &hold, false);
         assert!(detail.contains(PALW_FLOOR_NOT_IDLE_MARKER_V1), "{detail}");
-        assert!(detail.contains("registry=\"") && detail.contains("the chain is probe") && detail.contains(&format!("DAA {CANDIDATE}")), "{detail}");
+        assert!(
+            detail.contains("registry=\"") && detail.contains("the chain is probe") && detail.contains(&format!("DAA {CANDIDATE}")),
+            "{detail}"
+        );
         assert_eq!(
             cli_sentence(&detail),
             kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
@@ -3135,7 +3187,8 @@ mod p6_tests {
             kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
             PalwStateV2Error::FloorNotIdle { class: h64(1), daa: 9, state: PalwFloorStateV1::default() }
         );
-        let other = "the model registry admits no new claim of this class now [class=2 registry=\"class … is Held under the model registry\"]";
+        let other =
+            "the model registry admits no new claim of this class now [class=2 registry=\"class … is Held under the model registry\"]";
         let hours = STARVED * 8;
         for since in [std::time::Duration::ZERO, STARVED, hours] {
             for loud in [false, true] {
@@ -3152,7 +3205,10 @@ mod p6_tests {
     /// [`PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1`] slots plus the bond's stagger; never for the ceiling hold (its own duty) or a REAL class.
     #[test]
     fn the_idle_only_hold_gives_way_to_anchor_duty_only_for_a_claim_that_has_waited() {
-        use super::{PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as AFTER, palw_floor_anchor_duty_stagger_v1 as stagger_of, palw_floor_anchor_duty_v1 as duty};
+        use super::{
+            PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as AFTER, palw_floor_anchor_duty_stagger_v1 as stagger_of,
+            palw_floor_anchor_duty_v1 as duty,
+        };
         use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2;
         use kaspa_consensus_core::palw_real_share_v1::PalwFloorStateV1;
         use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
@@ -3175,17 +3231,32 @@ mod p6_tests {
         assert!(!duty(&none_due, &floor_hold, 10_000, AFTER, 0), "no claim is due: no duty");
         let mut real_class = f.clone();
         real_class.is_base_class = false;
-        assert!(!duty(&real_class, &floor_hold, 10_000, AFTER, 0), "a REAL class is never held by the idle-only policy, so it has no duty to give way");
+        assert!(
+            !duty(&real_class, &floor_hold, 10_000, AFTER, 0),
+            "a REAL class is never held by the idle-only policy, so it has no duty to give way"
+        );
         let mut other = f.clone();
         other.class_admission_refusal = Some("class … is Prefetching under the model registry".to_string());
         assert!(!duty(&other, &floor_hold, 10_000, AFTER, 0), "another refusal of the floor holds");
         assert!(
-            !duty(&f, &PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2), 10_000, AFTER, 0),
+            !duty(
+                &f,
+                &PalwProducerHoldV1::NotReady(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2),
+                10_000,
+                AFTER,
+                0
+            ),
             "the ceiling hold has its own duty (palw_producer_binds_at_ceiling_v1), not this one"
         );
         // The stagger spreads operators over eight slots and never beyond.
-        let staggers: std::collections::BTreeSet<u64> =
-            (0..=255u64).map(|b| stagger_of(&kaspa_consensus_core::tx::TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([b as u8; 64]), index: 0 })).collect();
+        let staggers: std::collections::BTreeSet<u64> = (0..=255u64)
+            .map(|b| {
+                stagger_of(&kaspa_consensus_core::tx::TransactionOutpoint {
+                    transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([b as u8; 64]),
+                    index: 0,
+                })
+            })
+            .collect();
         assert_eq!(staggers, (0..8).collect(), "eight staggers, from the bond's transaction id");
         // And the worker feeds it the unbroken wait, resets it after the duty fires, and only on the branch that mines.
         let src = include_str!("palw_producer.rs");
@@ -3203,7 +3274,10 @@ mod p6_tests {
         let fire = src.find("} else if floor_duty {").expect("the duty branch");
         let tail = &src[fire..fire + 1200];
         assert!(tail.contains("anchor_duty_wait.fired(facts.daa_score);"), "one binder, then the wait starts again");
-        assert!(!tail[..tail.find("} else if let Err(hold) = ready {").expect("the hold branch")].contains("continue;"), "the duty branch mines");
+        assert!(
+            !tail[..tail.find("} else if let Err(hold) = ready {").expect("the hold branch")].contains("continue;"),
+            "the duty branch mines"
+        );
     }
 
     /// **DRILL ONLY: `--palw-drill-floor-ignore-policy` ignores exactly one refusal** — the floor class's idle-only one — and
@@ -3213,8 +3287,7 @@ mod p6_tests {
         use super::palw_drill_floor_policy_ignored_v1 as ignored;
         use kaspa_consensus_core::palw_real_share_v1::PalwFloorStateV1;
         use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
-        let floor_refusal =
-            PalwStateV2Error::FloorNotIdle { class: h64(1), daa: 7, state: PalwFloorStateV1::default() }.to_string();
+        let floor_refusal = PalwStateV2Error::FloorNotIdle { class: h64(1), daa: 7, state: PalwFloorStateV1::default() }.to_string();
         let other = "class … is Prefetching under the model registry";
         assert!(ignored(true, true, Some(&floor_refusal)), "the flag, the floor class, the idle-only refusal");
         assert!(!ignored(false, true, Some(&floor_refusal)), "no flag: the producer holds");
@@ -3225,7 +3298,9 @@ mod p6_tests {
         // a salted private drill only.
         let src = include_str!("palw_producer.rs");
         let src = &src[..src.find("\n#[cfg(test)]").expect("the tests")];
-        let bypass = src.find("palw_drill_floor_policy_ignored_v1(\n                self.config.drill_floor_ignore_policy,").expect("the bypass");
+        let bypass = src
+            .find("palw_drill_floor_policy_ignored_v1(\n                self.config.drill_floor_ignore_policy,")
+            .expect("the bypass");
         let ready = src.find("let ready = palw_producer_ready_v1(&facts,").expect("the readiness verdict");
         assert!(bypass < ready, "the refusal is cleared before the verdict is taken");
         assert!(src[bypass..ready].contains("facts.class_admission_refusal = None;"));

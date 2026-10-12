@@ -101,18 +101,20 @@ impl PalwRenderingResourcePlanV1 {
     /// One owner chooses one court. Every component covers the worst of each eligible
     /// predicate; this does not price many independent owners as a single shared deposit.
     pub fn cover(mut self, other: Self) -> Self {
-        self.prefix_tokens=self.prefix_tokens.max(other.prefix_tokens); self.vocab=self.vocab.max(other.vocab);
-        self.maximum_stream_bytes=self.maximum_stream_bytes.max(other.maximum_stream_bytes);
-        self.maximum_stream_leaves=self.maximum_stream_leaves.max(other.maximum_stream_leaves);
-        self.maximum_eog_bytes=self.maximum_eog_bytes.max(other.maximum_eog_bytes);
-        self.maximum_moves=self.maximum_moves.max(other.maximum_moves);
-        self.maximum_parser_steps=self.maximum_parser_steps.max(other.maximum_parser_steps);
-        self.maximum_blake_blocks=self.maximum_blake_blocks.max(other.maximum_blake_blocks);
-        self.inclusion_daa=self.inclusion_daa.max(other.inclusion_daa);
-        self.rent_sompi=self.rent_sompi.max(other.rent_sompi);
-        self.deposit_sompi=self.deposit_sompi.max(other.deposit_sompi);
-        self.row_bytes=self.row_bytes.max(other.row_bytes);
-        self.resident_ram_bytes=self.resident_ram_bytes.max(other.resident_ram_bytes); self
+        self.prefix_tokens = self.prefix_tokens.max(other.prefix_tokens);
+        self.vocab = self.vocab.max(other.vocab);
+        self.maximum_stream_bytes = self.maximum_stream_bytes.max(other.maximum_stream_bytes);
+        self.maximum_stream_leaves = self.maximum_stream_leaves.max(other.maximum_stream_leaves);
+        self.maximum_eog_bytes = self.maximum_eog_bytes.max(other.maximum_eog_bytes);
+        self.maximum_moves = self.maximum_moves.max(other.maximum_moves);
+        self.maximum_parser_steps = self.maximum_parser_steps.max(other.maximum_parser_steps);
+        self.maximum_blake_blocks = self.maximum_blake_blocks.max(other.maximum_blake_blocks);
+        self.inclusion_daa = self.inclusion_daa.max(other.inclusion_daa);
+        self.rent_sompi = self.rent_sompi.max(other.rent_sompi);
+        self.deposit_sompi = self.deposit_sompi.max(other.deposit_sompi);
+        self.row_bytes = self.row_bytes.max(other.row_bytes);
+        self.resident_ram_bytes = self.resident_ram_bytes.max(other.resident_ram_bytes);
+        self
     }
     /// Exact prospective duration from this accepted claim, with an explicitly retained reorg
     /// envelope. Saturation is a refusal, never a silently shorter lifetime.
@@ -202,20 +204,26 @@ impl PalwRenderingClaimTermsV1 {
     }
     /// A paid owner may enlarge future work only before the ORIGINAL opening deadline.
     /// The opening/acceptance clocks never move, so no replay buys a later opening door.
-    pub fn extend_paid_work_v1(&self,now:u64,actual:PalwRenderingResourcePlanV1)->Result<Self,String> {
-        if now<self.accepted_daa || now>=self.open_until_daa {
+    pub fn extend_paid_work_v1(&self, now: u64, actual: PalwRenderingResourcePlanV1) -> Result<Self, String> {
+        if now < self.accepted_daa || now >= self.open_until_daa {
             return Err("paid work extension is outside immutable opening clock".into());
         }
-        let collection=self.collect_until_daa.checked_sub(self.stream_until_daa).ok_or("bad collection clock")?;
-        let retention=self.material_until_daa.checked_sub(self.collect_until_daa).ok_or("bad retention clock")?;
-        let exit=self.bond_exit_after_daa.checked_sub(self.material_until_daa).ok_or("bad exit clock")?;
-        let plan=self.plan.cover(actual);
-        let stream=self.stream_until_daa.max(plan.deadline(self.open_until_daa)?);
-        let collect=stream.checked_add(collection).ok_or("paid collection extension overflows")?;
-        let material=collect.checked_add(retention).ok_or("paid material extension overflows")?;
-        let bond_exit=material.checked_add(exit).ok_or("paid participant exit extension overflows")?;
-        Ok(Self {plan,stream_until_daa:stream,collect_until_daa:collect,material_until_daa:material,
-            bond_exit_after_daa:bond_exit,..*self})
+        let collection = self.collect_until_daa.checked_sub(self.stream_until_daa).ok_or("bad collection clock")?;
+        let retention = self.material_until_daa.checked_sub(self.collect_until_daa).ok_or("bad retention clock")?;
+        let exit = self.bond_exit_after_daa.checked_sub(self.material_until_daa).ok_or("bad exit clock")?;
+        let plan = self.plan.cover(actual);
+        let stream = self.stream_until_daa.max(plan.deadline(self.open_until_daa)?);
+        let collect = stream.checked_add(collection).ok_or("paid collection extension overflows")?;
+        let material = collect.checked_add(retention).ok_or("paid material extension overflows")?;
+        let bond_exit = material.checked_add(exit).ok_or("paid participant exit extension overflows")?;
+        Ok(Self {
+            plan,
+            stream_until_daa: stream,
+            collect_until_daa: collect,
+            material_until_daa: material,
+            bond_exit_after_daa: bond_exit,
+            ..*self
+        })
     }
     /// Acceptance must use these prospective terms for EVERY liable producer/Panel bond and
     /// each mandatory public material row; a shorter ordinary clock cannot silently substitute.
@@ -235,24 +243,31 @@ mod claim_terms_tests {
     use super::*;
     #[test]
     fn paid_extension_preserves_first_opening_clock_and_monotonic_future_work() {
-        let config=PalwStagedPublicCourtConfigV1::network_v1();
-        let small=PalwTokenizerResourcePlanV1::derive_with_key_bound(16,0,config.prices).unwrap().court_envelope(17,config.prices).unwrap();
-        let large=PalwTokenizerResourcePlanV1::derive_with_key_bound(1<<30,1024,config.prices).unwrap().court_envelope(17,config.prices).unwrap();
-        let old=PalwRenderingClaimTermsV1::derive(100,small,100,100,20).unwrap();
-        assert!(old.extend_paid_work_v1(99,large).is_err());
-        assert!(old.extend_paid_work_v1(old.open_until_daa,large).is_err());
-        assert!(old.extend_paid_work_v1(old.open_until_daa+1,large).is_err());
-        let new=old.extend_paid_work_v1(old.open_until_daa-1,large).unwrap();
-        assert_eq!((new.accepted_daa,new.open_until_daa),(old.accepted_daa,old.open_until_daa));
-        assert!(new.stream_until_daa>old.stream_until_daa);
-        assert!(new.collect_until_daa>old.collect_until_daa);
-        assert!(new.material_until_daa>old.material_until_daa);
-        assert!(new.bond_exit_after_daa>old.bond_exit_after_daa);
-        assert!(new.check_holds(old.material_until_daa,old.bond_exit_after_daa,&[old.bond_exit_after_daa;5]).is_err());
-        assert!(new.check_holds(new.material_until_daa,new.bond_exit_after_daa,&[new.bond_exit_after_daa;5]).is_ok());
-        assert_eq!(new.extend_paid_work_v1(100,small).unwrap(),new);
-        let mut impossible=large;impossible.inclusion_daa=u64::MAX;
-        assert!(old.extend_paid_work_v1(100,impossible).is_err());
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let small = PalwTokenizerResourcePlanV1::derive_with_key_bound(16, 0, config.prices)
+            .unwrap()
+            .court_envelope(17, config.prices)
+            .unwrap();
+        let large = PalwTokenizerResourcePlanV1::derive_with_key_bound(1 << 30, 1024, config.prices)
+            .unwrap()
+            .court_envelope(17, config.prices)
+            .unwrap();
+        let old = PalwRenderingClaimTermsV1::derive(100, small, 100, 100, 20).unwrap();
+        assert!(old.extend_paid_work_v1(99, large).is_err());
+        assert!(old.extend_paid_work_v1(old.open_until_daa, large).is_err());
+        assert!(old.extend_paid_work_v1(old.open_until_daa + 1, large).is_err());
+        let new = old.extend_paid_work_v1(old.open_until_daa - 1, large).unwrap();
+        assert_eq!((new.accepted_daa, new.open_until_daa), (old.accepted_daa, old.open_until_daa));
+        assert!(new.stream_until_daa > old.stream_until_daa);
+        assert!(new.collect_until_daa > old.collect_until_daa);
+        assert!(new.material_until_daa > old.material_until_daa);
+        assert!(new.bond_exit_after_daa > old.bond_exit_after_daa);
+        assert!(new.check_holds(old.material_until_daa, old.bond_exit_after_daa, &[old.bond_exit_after_daa; 5]).is_err());
+        assert!(new.check_holds(new.material_until_daa, new.bond_exit_after_daa, &[new.bond_exit_after_daa; 5]).is_ok());
+        assert_eq!(new.extend_paid_work_v1(100, small).unwrap(), new);
+        let mut impossible = large;
+        impossible.inclusion_daa = u64::MAX;
+        assert!(old.extend_paid_work_v1(100, impossible).is_err());
     }
     #[test]
     fn long_stream_contract_refuses_any_shorter_liability_or_material_clock_and_overflow() {
@@ -346,23 +361,32 @@ pub struct PalwTokenizerResourcePlanV1 {
 impl PalwTokenizerResourcePlanV1 {
     /// Complete raw derivation plus one largest legal ORIGINAL table rendering. The declared
     /// table length is not trusted to reduce this envelope before its old flat leaf authenticates.
-    pub fn court_envelope(self, vocab:u32, p:PalwRenderingResourcePricesV1)->Result<PalwRenderingResourcePlanV1,String> {
-        let table=crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128;
-        let table_moves=table.div_ceil(65536)+2;
-        let moves=u128::from(self.maximum_moves)+table_moves;
-        let row=65536u128+2048;
-        let seed=crate::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1 as u128;
-        let table_carriers=table+table_moves*5632+seed;
-        Ok(PalwRenderingResourcePlanV1 {prefix_tokens:0,vocab,
-            maximum_stream_bytes:narrow(u128::from(self.exact_raw_bytes)+table)?, maximum_stream_leaves:1,
-            maximum_eog_bytes:0, maximum_moves:narrow(moves)?,
-            maximum_parser_steps:self.maximum_parser_steps,
-            maximum_blake_blocks:narrow(u128::from(self.maximum_blake_blocks)+table.div_ceil(128)*2+8)?,
-            inclusion_daa:narrow(moves*u128::from(p.inclusion_margin_daa))?,
-            rent_sompi:narrow(u128::from(self.rent_sompi)+table_carriers*u128::from(p.rent_per_stream_byte)
-                +row*u128::from(p.rent_per_row_byte))?,
-            deposit_sompi:narrow(moves*u128::from(p.deposit_per_move))?, row_bytes:narrow(row)?,
-            resident_ram_bytes:self.resident_ram_bytes.checked_add(2048).ok_or("tokenizer RAM overflow")?})
+    pub fn court_envelope(self, vocab: u32, p: PalwRenderingResourcePricesV1) -> Result<PalwRenderingResourcePlanV1, String> {
+        let table = crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128;
+        let table_moves = table.div_ceil(65536) + 2;
+        let moves = u128::from(self.maximum_moves) + table_moves;
+        let row = 65536u128 + 2048;
+        let seed = crate::palw_terminal_carriage_v1::PALW_TERMINAL_MAX_BYTES_V1 as u128;
+        let table_carriers = table + table_moves * 5632 + seed;
+        Ok(PalwRenderingResourcePlanV1 {
+            prefix_tokens: 0,
+            vocab,
+            maximum_stream_bytes: narrow(u128::from(self.exact_raw_bytes) + table)?,
+            maximum_stream_leaves: 1,
+            maximum_eog_bytes: 0,
+            maximum_moves: narrow(moves)?,
+            maximum_parser_steps: self.maximum_parser_steps,
+            maximum_blake_blocks: narrow(u128::from(self.maximum_blake_blocks) + table.div_ceil(128) * 2 + 8)?,
+            inclusion_daa: narrow(moves * u128::from(p.inclusion_margin_daa))?,
+            rent_sompi: narrow(
+                u128::from(self.rent_sompi)
+                    + table_carriers * u128::from(p.rent_per_stream_byte)
+                    + row * u128::from(p.rent_per_row_byte),
+            )?,
+            deposit_sompi: narrow(moves * u128::from(p.deposit_per_move))?,
+            row_bytes: narrow(row)?,
+            resident_ram_bytes: self.resident_ram_bytes.checked_add(2048).ok_or("tokenizer RAM overflow")?,
+        })
     }
     pub fn derive(exact_raw_bytes: u64, p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
         Self::derive_with_key_bound(exact_raw_bytes, exact_raw_bytes, p)
@@ -371,8 +395,11 @@ impl PalwTokenizerResourcePlanV1 {
     /// parser-derived event the court switches to raw-hash completion and only exposes
     /// objective overrun after authenticated EOF. Thus an understated bound cannot strand
     /// acquisition or grant semantic acceptance without doing the corresponding work.
-    pub fn derive_with_key_bound(exact_raw_bytes: u64, signed_key_bound: u64,
-        p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
+    pub fn derive_with_key_bound(
+        exact_raw_bytes: u64,
+        signed_key_bound: u64,
+        p: PalwRenderingResourcePricesV1,
+    ) -> Result<Self, String> {
         if p.inclusion_margin_daa == 0 {
             return Err("tokenizer obligation requires finite positive inclusion margin".into());
         }
@@ -413,19 +440,19 @@ mod tokenizer_resource_tests {
     use super::*;
     #[test]
     fn signed_event_bound_prices_complete_honest_or_authenticated_overrun_route() {
-        let prices=PalwStagedPublicCourtConfigV1::network_v1().prices;
-        let raw=256*1024*1024;
-        let bounded=PalwTokenizerResourcePlanV1::derive_with_key_bound(raw,1024,prices).unwrap();
-        let legacy=PalwTokenizerResourcePlanV1::derive(raw,prices).unwrap();
-        assert_eq!(bounded.maximum_key_proofs,1024);
-        assert!(bounded.maximum_carrier_bytes<400_000_000);
-        assert!(bounded.inclusion_daa<30_000);
-        assert!(bounded.maximum_moves<legacy.maximum_moves);
-        let none=PalwTokenizerResourcePlanV1::derive_with_key_bound(raw,0,prices).unwrap();
-        assert_eq!(none.maximum_key_proofs,0);
-        assert!(none.maximum_carrier_bytes>=raw);
+        let prices = PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let raw = 256 * 1024 * 1024;
+        let bounded = PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, 1024, prices).unwrap();
+        let legacy = PalwTokenizerResourcePlanV1::derive(raw, prices).unwrap();
+        assert_eq!(bounded.maximum_key_proofs, 1024);
+        assert!(bounded.maximum_carrier_bytes < 400_000_000);
+        assert!(bounded.inclusion_daa < 30_000);
+        assert!(bounded.maximum_moves < legacy.maximum_moves);
+        let none = PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, 0, prices).unwrap();
+        assert_eq!(none.maximum_key_proofs, 0);
+        assert!(none.maximum_carrier_bytes >= raw);
         // Huge overstatement cannot require more key proofs than exist in the raw preimage.
-        assert_eq!(PalwTokenizerResourcePlanV1::derive_with_key_bound(1,u64::MAX,prices).unwrap().maximum_key_proofs,1);
+        assert_eq!(PalwTokenizerResourcePlanV1::derive_with_key_bound(1, u64::MAX, prices).unwrap().maximum_key_proofs, 1);
     }
     #[test]
     fn raw_flat_hash_is_not_assigned_an_invented_file_cap_and_all_key_carriers_are_priced() {

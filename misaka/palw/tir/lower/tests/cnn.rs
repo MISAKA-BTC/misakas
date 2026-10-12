@@ -35,16 +35,34 @@ fn resnet_spec(cfg: &Value, size: (u32, u32), ms: ([f64; 3], [f64; 3]), out: Cnn
     let in_bottleneck = cfg["downsample_in_bottleneck"].as_bool().unwrap_or(false);
     let bn = |name: String| Some(BnOp { name, eps: 1e-5 });
     let conv = |name: &str, cin, cout, k, stride, act: Option<Act>, bnname: &str| {
-        CnnOp::Conv(ConvOp { name: name.into(), cin, cout, k, stride, pad: k / 2, dilation: 1, groups: 1, bias: false, bn: bn(bnname.into()), act, ..ConvOp::default() })
+        CnnOp::Conv(ConvOp {
+            name: name.into(),
+            cin,
+            cout,
+            k,
+            stride,
+            pad: k / 2,
+            dilation: 1,
+            groups: 1,
+            bias: false,
+            bn: bn(bnname.into()),
+            act,
+            ..ConvOp::default()
+        })
     };
-    let mut ops = vec![conv("embedder.embedder.convolution", 3, emb, 7, 2, Some(Act::Relu), "embedder.embedder.normalization"), CnnOp::MaxPool { k: 3, stride: 2, pad: 1 }];
+    let mut ops = vec![
+        conv("embedder.embedder.convolution", 3, emb, 7, 2, Some(Act::Relu), "embedder.embedder.normalization"),
+        CnnOp::MaxPool { k: 3, stride: 2, pad: 1 },
+    ];
     let mut in_ch = emb;
     for (s, (out_ch, depth)) in sizes.iter().zip(&depths).enumerate() {
         let stage_stride = if s == 0 && !first { 1 } else { 2 };
         for l in 0..*depth {
             let (cin, stride) = if l == 0 { (in_ch, stage_stride) } else { (*out_ch, 1) };
             let p = format!("encoder.stages.{s}.layers.{l}");
-            let c = |j: usize, cin, cout, k, stride, act| conv(&format!("{p}.layer.{j}.convolution"), cin, cout, k, stride, act, &format!("{p}.layer.{j}.normalization"));
+            let c = |j: usize, cin, cout, k, stride, act| {
+                conv(&format!("{p}.layer.{j}.convolution"), cin, cout, k, stride, act, &format!("{p}.layer.{j}.normalization"))
+            };
             let main = if bottleneck {
                 let red = out_ch / 4;
                 vec![
@@ -64,7 +82,18 @@ fn resnet_spec(cfg: &Value, size: (u32, u32), ms: ([f64; 3], [f64; 3]), out: Cnn
         }
         in_ch = *out_ch;
     }
-    CnnSpec { architecture: cfg["architectures"][0].as_str().unwrap().into(), h: size.0, w: size.1, mean: ms.0, std: ms.1, ops, out, ignored: vec![], aliases: vec![], head: None }
+    CnnSpec {
+        architecture: cfg["architectures"][0].as_str().unwrap().into(),
+        h: size.0,
+        w: size.1,
+        mean: ms.0,
+        std: ms.1,
+        ops,
+        out,
+        ignored: vec![],
+        aliases: vec![],
+        head: None,
+    }
 }
 
 struct Fixture {
@@ -80,13 +109,20 @@ fn load(name: &str) -> Fixture {
     let o: Value = serde_json::from_slice(&std::fs::read(dir.join("outputs.json")).expect("outputs")).expect("json");
     let arr = |v: &Value| -> [f64; 3] { [v[0].as_f64().unwrap(), v[1].as_f64().unwrap(), v[2].as_f64().unwrap()] };
     let size = (o["size"][0].as_u64().unwrap() as u32, o["size"][1].as_u64().unwrap() as u32);
-    let images = o["images"].as_array().unwrap().iter().map(|r| (r["hwc"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect(), r["outputs"].clone())).collect();
+    let images = o["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["hwc"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect(), r["outputs"].clone()))
+        .collect();
     Fixture { cfg, size, ms: (arr(&o["mean"]), arr(&o["std"])), images }
 }
 
 fn rows_of(v: &Value) -> Vec<Vec<f64>> {
     match v.as_array() {
-        Some(a) if a.first().is_some_and(|x| x.is_array()) => a.iter().map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()).collect(),
+        Some(a) if a.first().is_some_and(|x| x.is_array()) => {
+            a.iter().map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()).collect()
+        }
         Some(a) => vec![a.iter().map(|x| x.as_f64().unwrap()).collect()],
         None => panic!("not an array"),
     }
@@ -121,7 +157,11 @@ fn assert_blocks_share_no_params(name: &str, p: &tir::TirProgramV1) {
             }
         }
     }
-    let shared: Vec<String> = readers.iter().filter(|(j, b)| b.len() > 1 && !p.params[**j as usize].name.starts_with("cnn.idx.")).map(|(j, b)| format!("{} (blocks {b:?})", p.params[*j as usize].name)).collect();
+    let shared: Vec<String> = readers
+        .iter()
+        .filter(|(j, b)| b.len() > 1 && !p.params[**j as usize].name.starts_with("cnn.idx."))
+        .map(|(j, b)| format!("{} (blocks {b:?})", p.params[*j as usize].name))
+        .collect();
     assert!(shared.is_empty(), "{name}: params read by several blocks: {shared:?}");
 }
 
@@ -194,7 +234,12 @@ fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64, 
     // 3. The integer program.
     let lw = cnn::lower_cnn_opts(&hl, &spec, opts).expect("lower");
     assert_blocks_share_no_params(name, &lw.program);
-    eprintln!("{name}: conv_weight_bits {}: {} bytes of convolution weights, program {} bytes", opts.conv_weight_bits, conv_weight_bytes(&lw.program), lw.program.encode().len());
+    eprintln!(
+        "{name}: conv_weight_bits {}: {} bytes of convolution weights, program {} bytes",
+        opts.conv_weight_bits,
+        conv_weight_bytes(&lw.program),
+        lw.program.encode().len()
+    );
     let loader = Resident(Arc::new(params_f));
     let quiet = |_: usize, _: usize| {};
     let mat = materialise(&lw, &hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
@@ -204,12 +249,14 @@ fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64, 
     let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
     for (img, o) in &fx.images {
         let mut inputs = tir::interp_v2::MapInputs::default();
-        let t = tir::Tensor::new(tir::DType::I16, vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        let t = tir::Tensor::new(tir::DType::I16, vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i128).collect())
+            .unwrap();
         inputs.constant.insert(0, t);
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let want = rows_of(&o[key]);
         let width = want[0].len();
-        let got: Vec<Vec<f64>> = run[0].output.data.chunks(width).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
+        let got: Vec<Vec<f64>> =
+            run[0].output.data.chunks(width).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
         assert_eq!(got.len(), want.len(), "{name}: integer rows");
         let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
         let (mean, min) = (cos.iter().sum::<f64>() / cos.len() as f64, cos.iter().cloned().fold(1.0, f64::min));
@@ -238,31 +285,55 @@ fn check_spec(name: &str, fx: &Fixture, spec: CnnSpec, key: &str, min_cos: f64, 
         }
     }
     for (img, _) in &fx.images {
-        let job = tir::pipeline::PipelineJob { images: vec![tir::pipeline::JobImageV1 { h: spec.h, w: spec.w, rgb: img.clone() }], ..Default::default() };
+        let job = tir::pipeline::PipelineJob {
+            images: vec![tir::pipeline::JobImageV1 { h: spec.h, w: spec.w, rgb: img.clone() }],
+            ..Default::default()
+        };
         let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &One(&params2), &NoRandom, &job).expect("pipeline run");
         let mut inputs = tir::interp_v2::MapInputs::default();
-        let t = tir::Tensor::new(tir::DType::I16, vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        let t = tir::Tensor::new(tir::DType::I16, vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i128).collect())
+            .unwrap();
         inputs.constant.insert(0, t);
         let direct = interp.run_positions(&params2, &inputs, 1).expect("v2 run").remove(0).output;
         assert_eq!(pr.output, direct, "{name}: the pipeline differs from the program");
     }
-    let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1())
-        .expect("tir_admit_pipeline_v1");
+    let pa = tir::admit_v2::tir_admit_pipeline_v1(
+        &pipe.encode(),
+        &[p2.encode()],
+        &misaka_palw_tir_lower::admission::default_inputs(),
+        &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+    )
+    .expect("tir_admit_pipeline_v1");
     eprintln!("{name} pipeline (JobImage) admitted: job {:?}, {} step leaves", pa.job_cost, pa.job_step_leaves);
     // 6. The three implementations and the court on the network's version-1 view (the image an input param): every layer
     //    block's carry is a committed leaf the next block's cones start from.
     {
         let img = &fx.images[0].0;
-        let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+        let t = misaka_palw_tir_lower::lower::IntTensor::i16(
+            vec![spec.h as usize, spec.w as usize, 3],
+            img.iter().map(|v| *v as i16).collect(),
+        );
         let p6 = common::with_inputs(&lw.program, &mat.params, &[(cnn::IMAGE_PARAM, t)]);
         let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
         let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
-        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        eprintln!(
+            "{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives",
+            c.commits,
+            c.nodes,
+            c.elements,
+            c.primitives.len()
+        );
         assert!(c.commits > 0);
     }
     // 7. Admission of the program alone.
     let a = tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("tir_admit_v2");
-    eprintln!("{name} admitted: {} nodes in {} blocks, {} cones, {} params", p2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), p2.blocks.len(), a.view.cones.len(), p2.params.len());
+    eprintln!(
+        "{name} admitted: {} nodes in {} blocks, {} cones, {} params",
+        p2.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(),
+        p2.blocks.len(),
+        a.view.cones.len(),
+        p2.params.len()
+    );
     p2.blocks.len()
 }
 
@@ -272,7 +343,8 @@ fn resnet_basic_feature_map_matches_its_hf_fixture() {
 }
 
 fn real(name: &str) -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/cnn").join(format!("{name}.json"))).expect("config")
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/cnn").join(format!("{name}.json")))
+        .expect("config")
 }
 
 /// **The adapter is the Rust structure's data form**: `adapters/resnet.json` instantiates the same `CnnSpec` (every op,
@@ -280,7 +352,10 @@ fn real(name: &str) -> String {
 #[test]
 fn the_resnet_adapter_equals_the_rust_structure() {
     let ms = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]);
-    let mut cases: Vec<(String, String)> = ["resnet", "resnet_bottleneck"].iter().map(|n| (n.to_string(), std::fs::read_to_string(fixture_dir(n).join("config.json")).unwrap())).collect();
+    let mut cases: Vec<(String, String)> = ["resnet", "resnet_bottleneck"]
+        .iter()
+        .map(|n| (n.to_string(), std::fs::read_to_string(fixture_dir(n).join("config.json")).unwrap()))
+        .collect();
     cases.extend(["resnet-18", "resnet-50", "resnet-152"].iter().map(|n| (n.to_string(), real(n))));
     for (name, text) in cases {
         let cfg: Value = serde_json::from_str(&text).unwrap();
@@ -296,11 +371,13 @@ fn the_resnet_adapter_equals_the_rust_structure() {
             }
             want.aliases = vec![["".into(), "resnet.".into()]];
             let got = cnn::parse_cnn(&text, Some(size), None).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert!(serde_json::to_value(&got).unwrap() == serde_json::to_value(&want).unwrap(), "{name} at {size:?}: the adapter's spec differs from the Rust structure");
+            assert!(
+                serde_json::to_value(&got).unwrap() == serde_json::to_value(&want).unwrap(),
+                "{name} at {size:?}: the adapter's spec differs from the Rust structure"
+            );
         }
     }
 }
-
 
 #[test]
 fn resnet_bottleneck_feature_map_matches_its_hf_fixture() {
@@ -327,8 +404,13 @@ fn real_resnets_lower_and_are_admitted_at_224() {
         let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
         assert!(most <= 512 && p2.blocks.len() <= 16);
         let pipe = encoder::vision_pipeline();
-        let pa = tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1())
-            .unwrap_or_else(|e| panic!("{name}: tir_admit_pipeline_v1: {e}"));
+        let pa = tir::admit_v2::tir_admit_pipeline_v1(
+            &pipe.encode(),
+            &[p2.encode()],
+            &misaka_palw_tir_lower::admission::default_inputs(),
+            &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+        )
+        .unwrap_or_else(|e| panic!("{name}: tir_admit_pipeline_v1: {e}"));
         eprintln!(
             "{name} at 224: ADMITTED — {} blocks, {nodes} nodes (largest {most}), job {:.3e} MACs, {} step leaves, cone work {}",
             p2.blocks.len(),
@@ -410,7 +492,9 @@ fn a_deep_network_with_weights_on_the_int8_grid_follows_transformers_to_activati
 #[test]
 fn a_registrant_can_choose_i16_conv_weight_codes() {
     let wide = LowerOpts { conv_weight_bits: 16, ..LowerOpts::default() };
-    for (name, map, key) in [("mobilenet_v2", true, "last_hidden_state"), ("mobilenet_v2", false, "pooler_output"), ("convnext", false, "pooler_output")] {
+    for (name, map, key) in
+        [("mobilenet_v2", true, "last_hidden_state"), ("mobilenet_v2", false, "pooler_output"), ("convnext", false, "pooler_output")]
+    {
         check_adapter_opts(name, map, key, 0.9995, &wide);
     }
     // The bytes: the wide program's convolution weights are exactly twice the narrow one's.
@@ -450,12 +534,23 @@ fn real_convnext_and_mobilenet_configs_account_for_every_tensor_at_its_real_shap
         assert_eq!((r.level, &r.result), (Level::B, &ReportResult::Lowerable), "{name}: {}", r.render());
         assert!(r.unread_tensors.is_empty() && r.weight_errors.is_empty(), "{name}: {:?} {:?}", r.unread_tensors, r.weight_errors);
         assert!(!r.new_consensus_primitive_required && !r.new_court_kernel_required, "{name}");
-        eprintln!("{name}: Level B, {n} tensors accounted for; features {}", r.features.iter().map(|f| f.id.as_str()).collect::<Vec<_>>().join(" "));
+        eprintln!(
+            "{name}: Level B, {n} tensors accounted for; features {}",
+            r.features.iter().map(|f| f.id.as_str()).collect::<Vec<_>>().join(" ")
+        );
     }
 }
 
-const REAL_CNN_FAMILIES: [&str; 8] =
-    ["convnext-tiny-224", "convnext-base-224", "convnext-large-384", "mobilenet_v2_1.0_224", "mobilenet_v2_0.75_160", "mobilenet_v2_1.4_224", "mobilenet_v1_1.0_224", "mobilenet_v1_0.75_192"];
+const REAL_CNN_FAMILIES: [&str; 8] = [
+    "convnext-tiny-224",
+    "convnext-base-224",
+    "convnext-large-384",
+    "mobilenet_v2_1.0_224",
+    "mobilenet_v2_0.75_160",
+    "mobilenet_v2_1.4_224",
+    "mobilenet_v1_1.0_224",
+    "mobilenet_v1_0.75_192",
+];
 
 /// **Admission at the real shapes** (no weights read): each real ConvNeXt and MobileNet lowers to a handful of blocks inside the
 /// normal form's caps; its one-stage pipeline is admitted at the legacy court's ceilings, or refused by NAME of the ceiling it
@@ -472,7 +567,12 @@ fn real_convnexts_and_mobilenets_lower_and_are_admitted_or_refused_by_name() {
         let most = p2.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
         assert!(most <= 512 && p2.blocks.len() <= 16, "{name}: {} blocks, largest {most}", p2.blocks.len());
         let pipe = encoder::vision_pipeline();
-        let v = match tir::admit_v2::tir_admit_pipeline_v1(&pipe.encode(), &[p2.encode()], &misaka_palw_tir_lower::admission::default_inputs(), &tir::admit_v2::TirJobCeilingsV1::open_v1()) {
+        let v = match tir::admit_v2::tir_admit_pipeline_v1(
+            &pipe.encode(),
+            &[p2.encode()],
+            &misaka_palw_tir_lower::admission::default_inputs(),
+            &tir::admit_v2::TirJobCeilingsV1::open_v1(),
+        ) {
             Ok(pa) => format!(
                 "ADMITTED — {}x{} px, {} blocks, {nodes} nodes (largest {most}), job {:.3e} MACs, {} step leaves, cone work {}",
                 spec.h,
@@ -489,7 +589,15 @@ fn real_convnexts_and_mobilenets_lower_and_are_admitted_or_refused_by_name() {
     }
     for (name, v) in &verdicts {
         // Every refusal names a ceiling; none is "internal".
-        assert!(v.starts_with("ADMITTED") || v.contains("ceiling") || v.contains("exceed") || v.contains("cap") || v.contains("budget") || v.contains("too"), "{name}: {v}");
+        assert!(
+            v.starts_with("ADMITTED")
+                || v.contains("ceiling")
+                || v.contains("exceed")
+                || v.contains("cap")
+                || v.contains("budget")
+                || v.contains("too"),
+            "{name}: {v}"
+        );
     }
 }
 
@@ -521,7 +629,10 @@ fn a_network_with_tf_padding_hard_activations_channel_norm_and_layer_scale_follo
         CnnOp::Conv(conv("b1.dw", 8, 8, 3, 1, 8, false, Some(Act::Relu6))),
         CnnOp::Conv(ConvOp { k: 1, tf_same: false, ..conv("b1.pw", 8, 16, 1, 1, 1, false, Some(Act::HardSwish)) }),
         CnnOp::Residual {
-            main: vec![CnnOp::Conv(conv("b2.dw", 16, 16, 3, 1, 16, false, Some(Act::Relu6))), CnnOp::Conv(ConvOp { k: 1, tf_same: false, ..conv("b2.pw", 16, 16, 1, 1, 1, false, None) })],
+            main: vec![
+                CnnOp::Conv(conv("b2.dw", 16, 16, 3, 1, 16, false, Some(Act::Relu6))),
+                CnnOp::Conv(ConvOp { k: 1, tf_same: false, ..conv("b2.pw", 16, 16, 1, 1, 1, false, None) }),
+            ],
             shortcut: vec![],
             act: Some(Act::Relu6),
         },
@@ -547,7 +658,8 @@ fn a_network_with_tf_padding_hard_activations_channel_norm_and_layer_scale_follo
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(23);
     let mut tensors = Vec::new();
     walk_convs(&spec.ops, &mut |c| tensors.extend(random_conv_tensors(&mut rng, c)));
-    let vec_of = |rng: &mut rand_chacha::ChaCha8Rng, lo: f32, hi: f32| -> Vec<f32> { (0..16).map(|_| rng.gen_range(lo..hi)).collect() };
+    let vec_of =
+        |rng: &mut rand_chacha::ChaCha8Rng, lo: f32, hi: f32| -> Vec<f32> { (0..16).map(|_| rng.gen_range(lo..hi)).collect() };
     tensors.push(("b3.norm.weight".into(), vec![16], vec_of(&mut rng, 0.6, 1.4)));
     tensors.push(("b3.norm.bias".into(), vec![16], vec_of(&mut rng, -0.3, 0.3)));
     tensors.push(("b4.ls".into(), vec![16], vec_of(&mut rng, 0.3, 1.2)));
@@ -564,7 +676,9 @@ fn a_network_with_tf_padding_hard_activations_channel_norm_and_layer_scale_follo
     assert!(unused.is_empty(), "{unused:?}");
     let images = calib_images(&spec, 3);
     let reference = |img: &[u8]| -> Vec<Vec<f64>> {
-        let x: Vec<Vec<f64>> = (0..(spec.h * spec.w) as usize).map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect()).collect();
+        let x: Vec<Vec<f64>> = (0..(spec.h * spec.w) as usize)
+            .map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect())
+            .collect();
         let (m, hw) = naive.ops(&spec.ops, x, (spec.h as usize, spec.w as usize));
         assert_eq!(hw, (2, 2), "the maps shrink 17, 9, 9, 3, 2 under TensorFlow padding");
         let n = m.len() as f64;
@@ -595,7 +709,8 @@ fn a_network_with_tf_padding_hard_activations_channel_norm_and_layer_scale_follo
         inputs.constant.insert(0, t);
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let want = reference(img);
-        let got: Vec<Vec<f64>> = run[0].output.data.chunks(16).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
+        let got: Vec<Vec<f64>> =
+            run[0].output.data.chunks(16).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
         let c = cosine(&got[0], &want[0]);
         eprintln!("mobile-shaped net: integer vs the naive reference: cosine {c:.6}, rel {:.2e}", rel(&got.concat(), &want.concat()));
         assert!(c > 0.99, "cosine {c}");
@@ -641,7 +756,11 @@ fn random_conv_tensors(rng: &mut rand_chacha::ChaCha8Rng, c: &ConvOp) -> Vec<(St
     let kw = c.kw.unwrap_or(c.k);
     let taps = c.cin / c.groups * c.k * kw;
     let scale = 1.7 / (taps as f32).sqrt();
-    let mut v = vec![(format!("{}.weight", c.name), vec![c.cout, c.cin / c.groups, c.k, kw], (0..c.cout * taps).map(|_| rng.gen_range(-1.0f32..1.0) * scale).collect::<Vec<_>>())];
+    let mut v = vec![(
+        format!("{}.weight", c.name),
+        vec![c.cout, c.cin / c.groups, c.k, kw],
+        (0..c.cout * taps).map(|_| rng.gen_range(-1.0f32..1.0) * scale).collect::<Vec<_>>(),
+    )];
     if c.bias {
         v.push((format!("{}.bias", c.name), vec![c.cout], (0..c.cout).map(|_| rng.gen_range(-0.3f32..0.3)).collect()));
     }
@@ -713,11 +832,13 @@ impl Naive<'_> {
                     for ci in 0..cin_g {
                         for ky in 0..kh {
                             for kx in 0..kw {
-                                let (iy, ix) = ((oy * sh + ky * dh) as isize - ph0 as isize, (ox * sw + kx * dw) as isize - pw0 as isize);
+                                let (iy, ix) =
+                                    ((oy * sh + ky * dh) as isize - ph0 as isize, (ox * sw + kx * dw) as isize - pw0 as isize);
                                 if iy < 0 || ix < 0 || iy >= h as isize || ix >= w as isize {
                                     continue;
                                 }
-                                acc += x[iy as usize * w + ix as usize][g * cin_g + ci] * wt[((co * cin_g + ci) * kh + ky) * kw + kx] as f64;
+                                acc += x[iy as usize * w + ix as usize][g * cin_g + ci]
+                                    * wt[((co * cin_g + ci) * kh + ky) * kw + kx] as f64;
                             }
                         }
                     }
@@ -784,7 +905,10 @@ fn a_depthwise_separable_network_with_dilation_follows_a_naive_reference() {
         CnnOp::Conv(conv("b1.dw", 8, 8, 3, 1, 1, 1, 8, false, Some(Act::Relu))),
         CnnOp::Conv(conv("b1.pw", 8, 16, 1, 1, 0, 1, 1, false, Some(Act::Silu))),
         CnnOp::Residual {
-            main: vec![CnnOp::Conv(conv("b2.dw", 16, 16, 3, 1, 2, 2, 16, false, Some(Act::Relu))), CnnOp::Conv(conv("b2.pw", 16, 16, 1, 1, 0, 1, 1, false, None))],
+            main: vec![
+                CnnOp::Conv(conv("b2.dw", 16, 16, 3, 1, 2, 2, 16, false, Some(Act::Relu))),
+                CnnOp::Conv(conv("b2.pw", 16, 16, 1, 1, 0, 1, 1, false, None)),
+            ],
             shortcut: vec![],
             act: Some(Act::Relu),
         },
@@ -819,7 +943,9 @@ fn a_depthwise_separable_network_with_dilation_follows_a_naive_reference() {
     assert!(unused.is_empty(), "{unused:?}");
     let images = calib_images(&spec, 3);
     let reference = |img: &[u8]| -> Vec<Vec<f64>> {
-        let x: Vec<Vec<f64>> = (0..(spec.h * spec.w) as usize).map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect()).collect();
+        let x: Vec<Vec<f64>> = (0..(spec.h * spec.w) as usize)
+            .map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect())
+            .collect();
         naive.ops(&spec.ops, x, (spec.h as usize, spec.w as usize)).0
     };
     for img in &images {
@@ -843,15 +969,20 @@ fn a_depthwise_separable_network_with_dilation_follows_a_naive_reference() {
     let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
     for img in &images {
         let mut inputs = tir::interp_v2::MapInputs::default();
-        let t = tir::Tensor::new(tir::DType::I16, vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        let t = tir::Tensor::new(tir::DType::I16, vec![spec.h as usize, spec.w as usize, 3], img.iter().map(|v| *v as i128).collect())
+            .unwrap();
         inputs.constant.insert(0, t);
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let want = reference(img);
         let width = want[0].len();
-        let got: Vec<Vec<f64>> = run[0].output.data.chunks(width).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
+        let got: Vec<Vec<f64>> =
+            run[0].output.data.chunks(width).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
         let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
         let (mean, min) = (cos.iter().sum::<f64>() / cos.len() as f64, cos.iter().cloned().fold(1.0, f64::min));
-        eprintln!("depthwise net: integer vs the naive reference: cosine mean {mean:.6} min {min:.6}, rel {:.2e}", rel(&got.concat(), &want.concat()));
+        eprintln!(
+            "depthwise net: integer vs the naive reference: cosine mean {mean:.6} min {min:.6}, rel {:.2e}",
+            rel(&got.concat(), &want.concat())
+        );
         assert!(min > 0.99, "cosine min {min}");
     }
     tir::admit_v2::tir_admit_program_v2(&p2, &misaka_palw_tir_lower::admission::default_inputs()).expect("admitted");
@@ -900,7 +1031,8 @@ fn a_one_dimensional_convolution_stack_follows_a_naive_reference() {
     assert!(unused.is_empty(), "{unused:?}");
     let images = calib_images(&spec, 3);
     let reference = |img: &[u8]| -> Vec<Vec<f64>> {
-        let x: Vec<Vec<f64>> = (0..32).map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect()).collect();
+        let x: Vec<Vec<f64>> =
+            (0..32).map(|p| (0..3).map(|ch| (img[p * 3 + ch] as f64 / 255.0 - spec.mean[ch]) / spec.std[ch]).collect()).collect();
         naive.ops(&spec.ops, x, (1, 32)).0
     };
     for img in &images {
@@ -927,7 +1059,8 @@ fn a_one_dimensional_convolution_stack_follows_a_naive_reference() {
         inputs.constant.insert(0, t);
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let want = reference(img);
-        let got: Vec<Vec<f64>> = run[0].output.data.chunks(8).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
+        let got: Vec<Vec<f64>> =
+            run[0].output.data.chunks(8).map(|r| r.iter().map(|c| *c as f64 * mat.logits_scale).collect()).collect();
         let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
         let min = cos.iter().cloned().fold(1.0, f64::min);
         eprintln!("1-D stack: integer vs the naive reference: cosine min {min:.6}, rel {:.2e}", rel(&got.concat(), &want.concat()));
@@ -946,8 +1079,34 @@ fn a_grouped_convolution_that_is_not_depthwise_is_refused_by_name() {
         mean: [0.0; 3],
         std: [1.0; 3],
         ops: vec![
-            CnnOp::Conv(ConvOp { name: "stem".into(), cin: 3, cout: 4, k: 1, stride: 1, pad: 0, dilation: 1, groups: 1, bias: false, bn: None, act: None, ..ConvOp::default() }),
-            CnnOp::Conv(ConvOp { name: "g".into(), cin: 4, cout: 8, k: 3, stride: 1, pad: 1, dilation: 1, groups: 2, bias: false, bn: None, act: None, ..ConvOp::default() }),
+            CnnOp::Conv(ConvOp {
+                name: "stem".into(),
+                cin: 3,
+                cout: 4,
+                k: 1,
+                stride: 1,
+                pad: 0,
+                dilation: 1,
+                groups: 1,
+                bias: false,
+                bn: None,
+                act: None,
+                ..ConvOp::default()
+            }),
+            CnnOp::Conv(ConvOp {
+                name: "g".into(),
+                cin: 4,
+                cout: 8,
+                k: 3,
+                stride: 1,
+                pad: 1,
+                dilation: 1,
+                groups: 2,
+                bias: false,
+                bn: None,
+                act: None,
+                ..ConvOp::default()
+            }),
         ],
         out: CnnOut::Map,
         ignored: vec![],
@@ -1001,9 +1160,33 @@ fn the_architecture_report_names_a_resnets_features_and_checks_its_checkpoint() 
 #[test]
 fn hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated() {
     let conv = |k: usize, stride: usize, pad: usize, dilation: usize, cin: usize, cout: usize| {
-        CnnOp::Conv(ConvOp { name: "c".into(), cin, cout, k, stride, pad, dilation, groups: 1, bias: false, bn: None, act: None, ..ConvOp::default() })
+        CnnOp::Conv(ConvOp {
+            name: "c".into(),
+            cin,
+            cout,
+            k,
+            stride,
+            pad,
+            dilation,
+            groups: 1,
+            bias: false,
+            bn: None,
+            act: None,
+            ..ConvOp::default()
+        })
     };
-    let net = |h: u32, w: u32, ops: Vec<CnnOp>| CnnSpec { architecture: "Hostile".into(), h, w, mean: [0.0; 3], std: [1.0; 3], ops, out: CnnOut::Map, ignored: vec![], aliases: vec![], head: None };
+    let net = |h: u32, w: u32, ops: Vec<CnnOp>| CnnSpec {
+        architecture: "Hostile".into(),
+        h,
+        w,
+        mean: [0.0; 3],
+        std: [1.0; 3],
+        ops,
+        out: CnnOut::Map,
+        ignored: vec![],
+        aliases: vec![],
+        head: None,
+    };
     let e12 = 1_000_000_000_000usize;
     let cases: Vec<(&str, CnnSpec)> = vec![
         ("a kernel of 10^9", net(32, 32, vec![conv(1_000_000_000, 1, 0, 1, 3, 4)])),
@@ -1017,7 +1200,10 @@ fn hostile_numbers_in_a_spec_are_refused_by_arithmetic_not_allocated() {
         ("5,000 activations", net(8, 8, (0..5000).map(|_| CnnOp::Act(Act::Relu)).collect())),
         ("a max pool of 10^9", net(32, 32, vec![CnnOp::MaxPool { k: 1_000_000_000, stride: 1, pad: 0 }])),
         ("a max pool of stride 0", net(32, 32, vec![CnnOp::MaxPool { k: 3, stride: 0, pad: 0 }])),
-        ("a convolution of channels that overflow the taps", net(8, 8, vec![conv(3, 1, 1, 1, 3, 1 << 20), conv(63, 1, 31, 1, 1 << 20, 1)])),
+        (
+            "a convolution of channels that overflow the taps",
+            net(8, 8, vec![conv(3, 1, 1, 1, 3, 1 << 20), conv(63, 1, 31, 1, 1 << 20, 1)]),
+        ),
     ];
     for (what, spec) in cases {
         let t0 = std::time::Instant::now();

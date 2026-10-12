@@ -585,7 +585,9 @@ fn reread_probes() -> Vec<Obj> {
 /// it tolerates the carrier and folds nothing; below `palw_task_heads_v1` every build must do the same, and a node with the fence armed
 /// far above the chain agrees.
 fn appended_probes() -> Vec<Obj> {
-    use kaspa_consensus_core::palw_task_heads_v1::{PALW_HEAD_PROBLEM_SINGLE_LABEL_V1, PALW_HEAD_TASK_SEQUENCE_V1, PalwGenHeadBodyV1, PalwGenHeadOffersV1};
+    use kaspa_consensus_core::palw_task_heads_v1::{
+        PALW_HEAD_PROBLEM_SINGLE_LABEL_V1, PALW_HEAD_TASK_SEQUENCE_V1, PalwGenHeadBodyV1, PalwGenHeadOffersV1,
+    };
     let mut class = zero_filled_kind(68);
     let Obj::ClassRegisteredGenV1 { admission, .. } = &mut class else { unreachable!("tag 68") };
     admission.class.profile = 6;
@@ -845,7 +847,10 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         payloads.push(("a live-build kind carrying a re-read value (tag 68, profile 6)".into(), payload_of(&probe)));
     }
     for probe in appended_probes() {
-        payloads.push((format!("an appended Head form inside a live-build kind: {probe:?}").chars().take(70).collect(), payload_of(&probe)));
+        payloads.push((
+            format!("an appended Head form inside a live-build kind: {probe:?}").chars().take(70).collect(),
+            payload_of(&probe),
+        ));
     }
     for object in adr0175_objects() {
         payloads.push((format!("ADR-0175: {object:?}").chars().take(60).collect(), payload_of(&object)));

@@ -9,9 +9,10 @@
 //! that disagrees. They are in no earlier flag-day list and not in the capacity lists (the int-11 flag day names their height).
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_EMISSION_BUDGET_V1, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_MULTI_CLAIM_V1,
-    PALW_T12_CAPACITY_RHO_BREAKER_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, PalwPostLaunchFenceV1,
-    SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_EMISSION_BUDGET_V1, PALW_T12_CAPACITY_FENCES_V1,
+    PALW_T12_CAPACITY_MULTI_CLAIM_V1, PALW_T12_CAPACITY_RHO_BREAKER_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
+    PALW_T12_POST_LAUNCH_FENCES_V1, PalwPostLaunchFenceV1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -120,7 +121,11 @@ fn arming_each_moves_the_params_and_schedule_ids_but_not_the_identity() {
             let f = armed.palw_fences_v1().into_iter().find(|(n, _)| *n == entry.name).and_then(|(_, f)| f);
             assert_eq!(f, Some(ForkActivation::new(h)));
             let s = fork_id_v1(&base, h);
-            assert!(evaluate_fork_id_v1(&armed, h, s.fired.as_bytes().as_slice(), s.next).refuses(), "{} is gated from {h}", entry.name);
+            assert!(
+                evaluate_fork_id_v1(&armed, h, s.fired.as_bytes().as_slice(), s.next).refuses(),
+                "{} is gated from {h}",
+                entry.name
+            );
             let mut never = base.clone();
             (entry.set)(&mut never, Some(ForkActivation::never()));
             never.validate_palw_v2().expect("a never-armed fence is no fence");
@@ -138,7 +143,14 @@ fn arming_each_moves_the_params_and_schedule_ids_but_not_the_identity() {
         assert_eq!(mirror(&all), (Some(h), Some(h), Some(h)));
         for (daa, want) in [(h - 1, false), (h, true)] {
             let PalwConsensusMode::ConsensusV2(b) = &all.palw_consensus_mode else { panic!("ConsensusV2") };
-            assert_eq!((b.state.capacity_emission_active_at(daa), b.state.capacity_riders_active_at(daa), b.state.capacity_breaker_active_at(daa)), (want, want, want));
+            assert_eq!(
+                (
+                    b.state.capacity_emission_active_at(daa),
+                    b.state.capacity_riders_active_at(daa),
+                    b.state.capacity_breaker_active_at(daa)
+                ),
+                (want, want, want)
+            );
         }
     }
 }

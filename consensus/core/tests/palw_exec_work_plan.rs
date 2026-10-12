@@ -217,12 +217,7 @@ fn maximum_structural_size_context_and_slice_count_have_a_bounded_cost_inverse()
             carry_in: vec![],
             carry_out: vec![],
             nodes: vec![
-                Node {
-                    prim: Prim::Cast,
-                    inputs: vec![Ref::Input(0)],
-                    out: TensorType::scalar(DType::Idx),
-                    commit: true,
-                };
+                Node { prim: Prim::Cast, inputs: vec![Ref::Input(0)], out: TensorType::scalar(DType::Idx), commit: true };
                 MAX_NODES_PER_BLOCK
             ],
         })

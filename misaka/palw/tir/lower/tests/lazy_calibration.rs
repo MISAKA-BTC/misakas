@@ -67,13 +67,20 @@ fn run(name: &str) -> (usize, usize, usize, usize, usize, Vec<String>) {
     let want = run_layer_major(&prep.hl, &resident, &seqs, true, false, &|_, _| {}).unwrap_or_else(|e| panic!("{name}: {e}")).stats;
     assert!(!want.is_empty(), "{name}: calibration measured something");
     // The lazy run: every param of one element or more lazy, nothing kept between asks.
-    let probe = Probe { inner: source, max_whole: AtomicUsize::new(0), whole: Default::default(), row_reads: AtomicUsize::new(0), max_rows: AtomicUsize::new(0) };
+    let probe = Probe {
+        inner: source,
+        max_whole: AtomicUsize::new(0),
+        whole: Default::default(),
+        row_reads: AtomicUsize::new(0),
+        max_rows: AtomicUsize::new(0),
+    };
     let lazy = Streamed::new(&prep.hl, &prep.binding, &probe).with_lazy(1, 0);
     let got = run_layer_major(&prep.hl, &lazy, &seqs, true, false, &|_, _| {}).unwrap_or_else(|e| panic!("{name} (lazy): {e}")).stats;
     assert_eq!(got, want, "{name}: the statistics are the resident run's");
     // And with a cache that holds everything: the same again.
     let cached = Streamed::new(&prep.hl, &prep.binding, &probe).with_lazy(1, 1 << 30);
-    let got = run_layer_major(&prep.hl, &cached, &seqs, true, false, &|_, _| {}).unwrap_or_else(|e| panic!("{name} (cached): {e}")).stats;
+    let got =
+        run_layer_major(&prep.hl, &cached, &seqs, true, false, &|_, _| {}).unwrap_or_else(|e| panic!("{name} (cached): {e}")).stats;
     assert_eq!(got, want, "{name}: and the cached run's");
     // The largest param the program has, in elements.
     let largest = prep.hl.params.iter().map(|d| d.shape.iter().product::<usize>()).max().unwrap_or(0);

@@ -286,7 +286,9 @@ fn the_sd3_class_passes_the_gate_and_every_cone_close_fits_one_carrier() {
 /// gathers by an index table is a close of one input leaf per tap).
 #[test]
 fn the_sd3_class_registers_where_a_close_can_only_ride_one_carrier() {
-    use kaspa_consensus_core::palw_gen_admission_v1::{PalwGenAdmissionRulesV1, palw_gen_post_genesis_registration_v1, palw_gen_registration_preflight_at_v1};
+    use kaspa_consensus_core::palw_gen_admission_v1::{
+        PalwGenAdmissionRulesV1, palw_gen_post_genesis_registration_v1, palw_gen_registration_preflight_at_v1,
+    };
     use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
     let Some(c) = sd3_class() else { return };
     let mut p = all_armed();
@@ -345,9 +347,7 @@ fn breakdown_of_the_close_at_a_kind() {
 }
 
 /// **PALW-GEN-20: what the gate prices a close at**, per commit point `(stage, block, node)`, and the work the sizing did.
-fn gate_prices(
-    c: &Sd3Class,
-) -> (BTreeMap<(u8, u8, u16), kaspa_consensus_core::palw_tir_close_size_v1::PalwTirCloseBoundV1>, u64) {
+fn gate_prices(c: &Sd3Class) -> (BTreeMap<(u8, u8, u16), kaspa_consensus_core::palw_tir_close_size_v1::PalwTirCloseBoundV1>, u64) {
     use kaspa_consensus_core::palw_gen_close_price_v1::{PALW_GEN_CLOSE_SIZING_WORK_CAP_V1, palw_gen_worst_closes_of_class_v1};
     let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs)
         .expect("the class's inventory")
@@ -379,7 +379,8 @@ fn gate_prices(
 /// The prices of the stages' checkpoint leaves, by `(stage, state)` — none for this class (no `Fixed` state outside `post`).
 fn checkpoint_prices(c: &Sd3Class) -> BTreeMap<(u8, u16), u64> {
     use kaspa_consensus_core::palw_gen_close_price_v1::{PALW_GEN_CLOSE_SIZING_WORK_CAP_V1, palw_gen_worst_closes_of_class_v1};
-    let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).expect("inventory").leaf_count();
+    let leaves =
+        kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).expect("inventory").leaf_count();
     let (bounds, _) = palw_gen_worst_closes_of_class_v1(
         &c.declared.class,
         &c.spec.pipeline,
@@ -434,7 +435,14 @@ fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
         if b.close_bytes > worst.0 {
             worst = (b.close_bytes, *k);
         }
-        eprintln!("  stage {} block {} node {:>3}: close {:>7} B{}", k.0, k.1, k.2, b.close_bytes, if b.dissected { format!(", root claim {} B (dissected)", b.root_claim_bytes) } else { String::new() });
+        eprintln!(
+            "  stage {} block {} node {:>3}: close {:>7} B{}",
+            k.0,
+            k.1,
+            k.2,
+            b.close_bytes,
+            if b.dissected { format!(", root claim {} B (dissected)", b.root_claim_bytes) } else { String::new() }
+        );
     }
     eprintln!("the largest priced close: {} B at {:?} (one-move carrier {one_move_max} B)", worst.0, worst.1);
     // **The drill class's sizing work and its headroom under the cap are PINNED.** The generative cap is the IR's own (`2^26`, the
@@ -460,13 +468,15 @@ fn the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap() {
         use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseSizingV1, PalwTirParamFormV1, palw_gen_worst_closes_v1};
         let class = &c.declared.class;
         let tables = PalwGenClassSizingV1::new(class, &c.spec.pipeline, &c.spec.programs).expect("tables");
-        let leaves =
-            kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs).expect("inventory").leaf_count();
+        let leaves = kaspa_consensus_core::palw_gen_artifact_v1::PalwGenInventoryIndexV1::new(&c.spec.programs)
+            .expect("inventory")
+            .leaf_count();
         let mut total = 0u64;
         for (s, st) in c.spec.pipeline.stages.iter().enumerate() {
             let z = tables.stage(class, &c.spec.pipeline, &c.spec.programs, s).expect("stage");
             let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court: true, cap: 1 << 40, stop_above: None };
-            let (_, w) = palw_gen_worst_closes_v1(&z.space, &z.inventory, &z.job, &sizing, s, leaves, &z.model, z.pricing).expect("sizes");
+            let (_, w) =
+                palw_gen_worst_closes_v1(&z.space, &z.inventory, &z.job, &sizing, s, leaves, &z.model, z.pricing).expect("sizes");
             total += w;
             eprintln!("  stage {s:>2} {:<12} {w:>10} steps", st.name);
         }
@@ -483,7 +493,9 @@ fn the_gate_prices_every_output_close_at_least_what_it_measures() {
     use kaspa_consensus_core::palw_gen_close_price_v1::{PalwGenWholeCloseKindV1, palw_gen_whole_closes_v1};
     let Some(c) = sd3_class() else { return };
     let prices = palw_gen_whole_closes_v1(&c.declared.class, &c.spec.pipeline, &c.spec.programs).expect("the whole closes");
-    let [(PalwGenWholeCloseKindV1::Output, priced)] = prices[..] else { panic!("a tensor class has one whole close, its output close: {prices:?}") };
+    let [(PalwGenWholeCloseKindV1::Output, priced)] = prices[..] else {
+        panic!("a tensor class has one whole close, its output close: {prices:?}")
+    };
     let (held, _file) = held(&c);
     let honest = held.run_tensor(&c.job, &c.ids, &[], &[], FORM).expect("the job runs");
     let ev = honest.evidence(&held);
@@ -556,7 +568,11 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
     let by_leaf: BTreeMap<u64, (u8, u8, u16)> = by_point.iter().flat_map(|(k, v)| v.iter().map(move |l| (*l, *k))).collect();
     let state_leaves = listing.iter().filter(|l| l.lanes > 0 && point_of(&c, l).is_none()).count();
     eprintln!("{state_leaves} checkpoint leaves; their prices by (stage, state): {:?}", checkpoint_prices(&c));
-    assert_eq!(state_leaves == 0, checkpoint_prices(&c).is_empty(), "a class with checkpoint leaves is priced at them, and one without is not");
+    assert_eq!(
+        state_leaves == 0,
+        checkpoint_prices(&c).is_empty(),
+        "a class with checkpoint leaves is priced at them, and one without is not"
+    );
     eprintln!("the gate sizes {} commit points in {work} steps; measuring {} leaves (stride {stride})", prices.len(), sample.len());
     // Measured, per commit point: the largest, its leaf and the samples taken.
     let mut measured: BTreeMap<(u8, u8, u16), (u64, u64, usize)> = BTreeMap::new();
@@ -584,7 +600,10 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
         let b = &c.spec.programs[st.program as usize].blocks[k.1 as usize];
         format!("{} / {} / {}", st.name, b.name, b.nodes[k.2 as usize].prim.name())
     };
-    eprintln!("  {:<58} {:>5} {:>9} {:>9} {:>8} {:>6}", "commit point (stage / block / primitive)", "n", "measured", "priced", "margin", "ratio");
+    eprintln!(
+        "  {:<58} {:>5} {:>9} {:>9} {:>8} {:>6}",
+        "commit point (stage / block / primitive)", "n", "measured", "priced", "margin", "ratio"
+    );
     let (mut under, mut min_ratio, mut max_ratio, mut min_margin) = (Vec::new(), f64::MAX, 0f64, i64::MAX);
     for (k, (bytes, leaf, n)) in &measured {
         let price = prices[k].close_bytes;
@@ -634,11 +653,12 @@ fn the_gate_prices_every_close_at_least_what_it_measures() {
 #[ignore = "diagnostic: SD3_POINT=<stage>,<block>,<node> cargo test --config profile.dev.opt-level=2 -p misaka-palw-sdk --test gen_sd3_class -- --ignored --nocapture breakdown_of_a_priced"]
 fn breakdown_of_a_priced_close() {
     use kaspa_consensus_core::palw_gen_close_price_v1::PalwGenClassSizingV1;
-    use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirCloseRequestV1, PalwTirClosePriceV1, palw_gen_close_reads_v1};
+    use kaspa_consensus_core::palw_tir_close_size_v1::{PalwTirClosePriceV1, PalwTirCloseRequestV1, palw_gen_close_reads_v1};
     use misaka_palw_tir::demand::{DemandContext, history_length_v1};
     let Some(c) = sd3_class() else { return };
     let want = std::env::var("SD3_POINT").expect("SD3_POINT=<stage>,<block>,<node>");
-    let [s, bi, ni]: [usize; 3] = want.split(',').map(|v| v.trim().parse().unwrap()).collect::<Vec<_>>().try_into().expect("three numbers");
+    let [s, bi, ni]: [usize; 3] =
+        want.split(',').map(|v| v.trim().parse().unwrap()).collect::<Vec<_>>().try_into().expect("three numbers");
     let class = &c.declared.class;
     let tables = PalwGenClassSizingV1::new(class, &c.spec.pipeline, &c.spec.programs).expect("tables");
     let z = tables.stage(class, &c.spec.pipeline, &c.spec.programs, s).expect("the stage's sizing");
@@ -649,7 +669,10 @@ fn breakdown_of_a_priced_close() {
     let tile_len = z.space.commit_tile_len(bi as u8, ni as u16).expect("a commit point") as usize;
     let h = history_length_v1(&z.space.info, bi as u8, p_max).unwrap_or(1);
     let count: usize = z.space.program.blocks[bi].nodes[ni].out.resolve(h).iter().product();
-    eprintln!("stage {s} block {bi} node {ni}: {count} elements at position {p_max} in tiles of {tile_len}; frame {} B", price.frame(tile_len as u32));
+    eprintln!(
+        "stage {s} block {bi} node {ni}: {count} elements at position {p_max} in tiles of {tile_len}; frame {} B",
+        price.frame(tile_len as u32)
+    );
     let mut worst: Option<(u64, usize, kaspa_consensus_core::palw_tir_close_size_v1::PalwTirCloseReadsV1)> = None;
     for first in (0..count).step_by(tile_len) {
         let elements: Vec<usize> = (first..(first + tile_len).min(count)).collect();
@@ -670,7 +693,12 @@ fn breakdown_of_a_priced_close() {
     let (bytes, first, reads) = worst.expect("a tile");
     eprintln!("worst tile starts at element {first}: priced {bytes} B");
     eprintln!("  step leaves {} ({} B), loose {}", reads.steps.len(), price.steps(&reads, false), reads.loose_steps.len());
-    eprintln!("  param leaves {} + wild rows {} ({} B)", reads.params.len(), reads.wild_rows.values().map(|p| p.len()).sum::<usize>(), price.params(&reads));
+    eprintln!(
+        "  param leaves {} + wild rows {} ({} B)",
+        reads.params.len(),
+        reads.wild_rows.values().map(|p| p.len()).sum::<usize>(),
+        price.params(&reads)
+    );
     let mut by_param: BTreeMap<String, usize> = BTreeMap::new();
     for leaf in &reads.params {
         let (p, _, _, _) = z.inventory.piece_of(*leaf).unwrap();
@@ -697,14 +725,22 @@ fn breakdown_of_a_priced_close() {
                 let close = ev.cone_close(l.global, &LIMITS).expect("a close");
                 let bytes = borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) }).unwrap().len();
                 if best.as_ref().is_none_or(|b| bytes > b.0) {
-                    best = Some((bytes, l.global, close.operands.len(), close.params.len(), close.operands.iter().filter(|o| o.coord.stage as usize != s).count()));
+                    best = Some((
+                        bytes,
+                        l.global,
+                        close.operands.len(),
+                        close.params.len(),
+                        close.operands.iter().filter(|o| o.coord.stage as usize != s).count(),
+                    ));
                 }
             }
         }
         best
     };
     if let Some((bytes, leaf, operands, params, edges)) = honest {
-        eprintln!("measured at its worst leaf {leaf}: {bytes} B with {operands} operand leaves ({edges} of other stages), {params} param leaves");
+        eprintln!(
+            "measured at its worst leaf {leaf}: {bytes} B with {operands} operand leaves ({edges} of other stages), {params} param leaves"
+        );
     }
 }
 
@@ -721,7 +757,9 @@ fn dissected_moves(
     use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
     use kaspa_consensus_core::palw_gen_close_v1::check_gen_root_claim_v1;
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
-    use kaspa_consensus_core::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1};
+    use kaspa_consensus_core::palw_tir_dissect_v1::{
+        PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirDissectChoiceV1, PalwTirDissectPhaseV1,
+    };
     let zero = Hash64::from_bytes([0; 64]);
     let len = |o: &PalwConsensusObjectV2| borsh::to_vec(o).unwrap().len() as u64;
     let root = ev.root_claim(leaf, &LIMITS).unwrap_or_else(|e| panic!("the root claim at leaf {leaf}: {e}"));
@@ -735,15 +773,29 @@ fn dissected_moves(
         .unwrap_or_else(|e| panic!("the root claim at leaf {leaf} is not admitted: {e}"));
     let mut bottom_worst = 0u64;
     for child_last in [false, true] {
-        let mut phase =
-            PalwTirDissectPhaseV1::open_parts(Hash64::from_bytes([7; 64]), leaf, &site, root.version, &root.elements, &root.totals, 2, 1, 100)
-                .expect("the phase opens");
+        let mut phase = PalwTirDissectPhaseV1::open_parts(
+            Hash64::from_bytes([7; 64]),
+            leaf,
+            &site,
+            root.version,
+            &root.elements,
+            &root.totals,
+            2,
+            1,
+            100,
+        )
+        .expect("the phase opens");
         let mut daa = 2;
         while phase.turn() == PalwBisectTurnV1::AwaitDisclosure {
             let round = ev.round(&phase, &LIMITS).expect("a round");
             phase.apply_round(&round, daa, 100).expect("the honest children fold");
             let child = if child_last { (round.children.len() - 1) as u8 } else { 0 };
-            let choice = PalwTirDissectChoiceV1 { version: PALW_TIR_DISSECT_OBJECT_VERSION_V1, session_id: phase.session_id(), round: phase.round(), child };
+            let choice = PalwTirDissectChoiceV1 {
+                version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                session_id: phase.session_id(),
+                round: phase.round(),
+                child,
+            };
             phase.apply_choice(&choice, daa + 1, 100).expect("a legal choice");
             daa += 2;
         }
@@ -884,7 +936,11 @@ fn the_price_counts_the_committed_write_of_the_previous_position_for_every_eleme
             let close = ev.cone_close(global, &LIMITS).unwrap_or_else(|e| panic!("denoise pos {pos} node {node} tile {n}: {e}"));
             let bytes = borsh::to_vec(&PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) }).unwrap().len() as u64;
             measured += 1;
-            assert!(bound.close_bytes >= bytes, "denoise pos {pos} block {block} node {node}: priced {} B, measured {bytes} B", bound.close_bytes);
+            assert!(
+                bound.close_bytes >= bytes,
+                "denoise pos {pos} block {block} node {node}: priced {} B, measured {bytes} B",
+                bound.close_bytes
+            );
             worst_margin = worst_margin.min(bound.close_bytes as i64 - bytes as i64);
             // The committed writes of the previous position the close carries.
             let writes: Vec<_> = close
@@ -901,7 +957,8 @@ fn the_price_counts_the_committed_write_of_the_previous_position_for_every_eleme
             }
             with_write += 1;
             positions.insert(*pos);
-            let elements: Vec<usize> = (leaf.first_element..leaf.first_element + leaf.value_count as u64).map(|e| e as usize).collect();
+            let elements: Vec<usize> =
+                (leaf.first_element..leaf.first_element + leaf.value_count as u64).map(|e| e as usize).collect();
             let request = PalwTirCloseRequestV1 {
                 ctx: DemandContext { pos: *pos, occurrence: *occurrence },
                 target: *node,

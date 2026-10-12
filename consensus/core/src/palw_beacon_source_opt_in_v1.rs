@@ -116,13 +116,18 @@ mod tests {
         use misaka_palw_challenge::{BeaconContextV1, RootV1, SubjectKindV1};
         let policy = crate::palw_conformance_evidence_v1::palw_onboarding_paid_opt_in_policy_v5();
         let ledger = crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(
-            kaspa_hashes::Hash64::from_u64_word(1), kaspa_hashes::Hash64::from_u64_word(2),
+            kaspa_hashes::Hash64::from_u64_word(1),
+            kaspa_hashes::Hash64::from_u64_word(2),
         );
         let source = PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(1));
         let context = BeaconContextV1 {
-            chain_genesis: [1; 64], ruleset_id: [2; 64], policy,
-            subject_kind: SubjectKindV1::ModelConformance, commitment_root: [3; 64],
-            commitment_position: 100, challenge_epoch: 0,
+            chain_genesis: [1; 64],
+            ruleset_id: [2; 64],
+            policy,
+            subject_kind: SubjectKindV1::ModelConformance,
+            commitment_root: [3; 64],
+            commitment_position: 100,
+            challenge_epoch: 0,
             eligible_profiles: std::collections::BTreeSet::from([[4; 64]]),
             excluded_profiles: std::collections::BTreeSet::from([[5; 64]]),
             candidate_profile_id: RootV1::Present([5; 64]),
@@ -130,13 +135,17 @@ mod tests {
         let original = source.policy.target(context.clone(), &ledger).unwrap();
         original.validate().unwrap();
         for subject in SubjectKindV1::ALL {
-            if subject == SubjectKindV1::ModelConformance { continue; }
-            let mut changed = context.clone(); changed.subject_kind = subject;
+            if subject == SubjectKindV1::ModelConformance {
+                continue;
+            }
+            let mut changed = context.clone();
+            changed.subject_kind = subject;
             assert!(source.policy.target(changed.clone(), &ledger).is_err(), "{subject:?}");
             changed.candidate_profile_id = RootV1::Absent;
             assert!(source.policy.target(changed, &ledger).is_err(), "typed absence does not authorize {subject:?}");
         }
-        let mut missing = context; missing.candidate_profile_id = RootV1::Absent;
+        let mut missing = context;
+        missing.candidate_profile_id = RootV1::Absent;
         assert!(source.policy.target(missing, &ledger).is_err());
     }
 

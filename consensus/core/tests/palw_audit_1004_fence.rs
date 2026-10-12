@@ -7,9 +7,9 @@
 //! Run: `cargo test -p kaspa-consensus-core --test palw_audit_1004_fence`
 
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT13_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v5_params, palw_t12_release_v6_params,
-    palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT13_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int13_flag_day_at_v1,
+    palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_audit_1004_v1::{PALW_T12_AUDIT_1004_ENTRY, palw_audit_1004_value_v1};

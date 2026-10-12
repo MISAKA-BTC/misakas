@@ -1203,9 +1203,15 @@ mod tests {
         let pledge = PalwModelMarketV1::pledge_v1(5, 400_000 * MSK, kaspa_consensus_core::Hash64::from_u64_word(1));
         let r = answer(MILLION_MSK, pledge);
         let opens = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(2), 600_000 * MSK).join("\n");
-        assert!(opens.contains("opens the pair") && opens.contains("first price 2.00000000 BILI"), "400k + 600k opens at 2.0: {opens}");
+        assert!(
+            opens.contains("opens the pair") && opens.contains("first price 2.00000000 BILI"),
+            "400k + 600k opens at 2.0: {opens}"
+        );
         let part = seed_preview(&r, &kaspa_consensus_core::Hash64::from_u64_word(2), 100_000 * MSK).join("\n");
-        assert!(part.contains("500000.00000000 BILI of 1000000.00000000 BILI") && part.contains("500000.00000000 BILI to go"), "{part}");
+        assert!(
+            part.contains("500000.00000000 BILI of 1000000.00000000 BILI") && part.contains("500000.00000000 BILI to go"),
+            "{part}"
+        );
     }
 
     /// **The 2026-09-25 Position review's N4: the owner's leg is named as the chain pays it** — burned

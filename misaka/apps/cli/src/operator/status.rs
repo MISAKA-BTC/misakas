@@ -180,8 +180,12 @@ fn from_node(i: &MinerInputs<'_>, remote: bool) -> MinerView {
         return view(MinerState::Unreachable, f.title.clone(), Some(f), "rpc");
     }
     if let Some(rt) = i.runtime.filter(|rt| rt.import_session_available && !rt.pruning_import_stable) {
-        return view(MinerState::Syncing,
-            format!("pruning import {} (epoch {}) is incomplete", rt.import_session_phase, rt.import_session_epoch), None, "rpc");
+        return view(
+            MinerState::Syncing,
+            format!("pruning import {} (epoch {}) is incomplete", rt.import_session_phase, rt.import_session_epoch),
+            None,
+            "rpc",
+        );
     }
     // The producer's own gate is not `is_synced`: with --enable-unsynced-mining, peers and open
     // participation it draws on a chain whose tip is older than the window (a fresh chain's first
@@ -539,10 +543,18 @@ pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String
     }
     // Bond
     if let Some(rt) = snap.node_status.as_ref().filter(|rt| rt.import_session_available) {
-        let point = if rt.import_session_point.is_empty() { String::new() }
-            else { format!(" · point {}", rt.import_session_point.chars().take(12).collect::<String>()) };
-        out.push_str(&format!("  {}  {} · epoch {} · {}{point}\n", paint::bold("Import "),
-            rt.import_session_phase, rt.import_session_epoch, if rt.pruning_import_stable { "stable" } else { "incomplete" }));
+        let point = if rt.import_session_point.is_empty() {
+            String::new()
+        } else {
+            format!(" · point {}", rt.import_session_point.chars().take(12).collect::<String>())
+        };
+        out.push_str(&format!(
+            "  {}  {} · epoch {} · {}{point}\n",
+            paint::bold("Import "),
+            rt.import_session_phase,
+            rt.import_session_epoch,
+            if rt.pruning_import_stable { "stable" } else { "incomplete" }
+        ));
     }
     match (&p.bond, snap.facts.as_ref()) {
         (Some(bond), Some(Ok(f))) if f.bond_known => {
@@ -988,9 +1000,12 @@ mod tests {
     fn rfc12_an_incomplete_import_overrides_old_draw_evidence_and_unsynced_mining() {
         let log = drawing_log();
         let runtime = kaspa_rpc_core::GetPalwNodeStatusResponse {
-            producer_state: "drawing".into(), last_draw_unix: (NOW - 10) as u64,
-            import_session_available: true, import_session_epoch: 9,
-            import_session_phase: "utxo-stream".into(), pruning_import_stable: false,
+            producer_state: "drawing".into(),
+            last_draw_unix: (NOW - 10) as u64,
+            import_session_available: true,
+            import_session_epoch: 9,
+            import_session_phase: "utxo-stream".into(),
+            pruning_import_stable: false,
             ..Default::default()
         };
         let mut input = base(Some(&log), None);

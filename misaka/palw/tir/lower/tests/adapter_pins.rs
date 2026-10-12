@@ -29,12 +29,27 @@ const INTENDED: &[(&str, &str)] = &[
     ),
     // The census lane's key fixes of 2026-10-04 moved these after the last regeneration (455364f0d) without recording them here; the
     // test failed at `febc07f24` (the model-onboarding base) before any change of lane A. Recorded, with their commits.
-    ("llama", "6b082bef7: Llama reads its positional-limit aliases as inert and accepts rope_interleaved / sliding_window only absent, false or null (census CONFIG_KEY_UNREAD)"),
-    ("gpt2", "6b082bef7: GPT-2 accepts n_special only when 0 (census CONFIG_KEY_UNREAD); model-onboarding: its lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)"),
+    (
+        "llama",
+        "6b082bef7: Llama reads its positional-limit aliases as inert and accepts rope_interleaved / sliding_window only absent, false or null (census CONFIG_KEY_UNREAD)",
+    ),
+    (
+        "gpt2",
+        "6b082bef7: GPT-2 accepts n_special only when 0 (census CONFIG_KEY_UNREAD); model-onboarding: its lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)",
+    ),
     ("mixtral", "23f8a9feb: Mixtral reads attention_bias (absent or false only)"),
-    ("phi3", "23f8a9feb: Phi-3 reads attention_bias (absent or false only); model-onboarding: its lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)"),
-    ("opt", "model-onboarding: OPT's lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)"),
-    ("mixin-vlm", "42faa5b55: a chat model's wrapper keys that shadow its decoder's are inert (`root_shadows_decoder`), the decoder's image token ids are inert"),
+    (
+        "phi3",
+        "23f8a9feb: Phi-3 reads attention_bias (absent or false only); model-onboarding: its lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)",
+    ),
+    (
+        "opt",
+        "model-onboarding: OPT's lm_head tensor name is the `lm_head_name` variable (the sequence-classification mixin renames it `score`)",
+    ),
+    (
+        "mixin-vlm",
+        "42faa5b55: a chat model's wrapper keys that shadow its decoder's are inert (`root_shadows_decoder`), the decoder's image token ids are inert",
+    ),
     ("vlm", "42faa5b55: as mixin-vlm (the wrapper adapter extends it)"),
     ("vlm-gemma", "42faa5b55 / 1472a300c: as mixin-vlm; the Gemma wrapper's own keys"),
     ("vlm-gemma2", "42faa5b55: as mixin-vlm"),
@@ -46,14 +61,23 @@ const INTENDED: &[(&str, &str)] = &[
     ("vlm-qwen2-vl", "42faa5b55: flat Qwen2/2.5-VL configurations dispatch to their decoder (`decoder_optional`)"),
     ("vlm-qwen3-5", "42faa5b55 / cc72d2424: as mixin-vlm; the Qwen3.5 vision tower"),
     ("vlm-qwen3-5-moe", "42faa5b55 / cc72d2424: as mixin-vlm; the Qwen3.5 vision tower"),
-    ("roberta-seqcls", "HFX 2026-10-10: CamembertForSequenceClassification joins the match list (CamemBERT is RoBERTa's classification head under the `roberta.` prefix)"),
+    (
+        "roberta-seqcls",
+        "HFX 2026-10-10: CamembertForSequenceClassification joins the match list (CamemBERT is RoBERTa's classification head under the `roberta.` prefix)",
+    ),
     ("roberta-tokcls", "HFX 2026-10-10: CamembertForTokenClassification joins the match list"),
     ("roberta-qa", "HFX 2026-10-10: CamembertForQuestionAnswering joins the match list"),
     // HFX 2026-10-10: `…ForImageClassification` reads its classifier as a `CnnHead` (it was ignored as `classifier.`); `…Model` is unchanged.
     ("resnet", "HFX 2026-10-10: ResNetForImageClassification reads `classifier.1` as the class's head (CnnHead), no longer ignored"),
     ("convnext", "HFX 2026-10-10: ConvNextForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored"),
-    ("mobilenet-v1", "HFX 2026-10-10: MobileNetV1ForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored"),
-    ("mobilenet-v2", "HFX 2026-10-10: MobileNetV2ForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored"),
+    (
+        "mobilenet-v1",
+        "HFX 2026-10-10: MobileNetV1ForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored",
+    ),
+    (
+        "mobilenet-v2",
+        "HFX 2026-10-10: MobileNetV2ForImageClassification reads `classifier` as the class's head (CnnHead), no longer ignored",
+    ),
 ];
 
 fn golden_path() -> PathBuf {
@@ -101,7 +125,11 @@ fn every_pinned_adapter_still_has_its_hash() {
     if !unpinned.is_empty() {
         eprintln!("{} adapter(s) not pinned yet (PALW_PINS_UPDATE=1 records them): {unpinned:?}", unpinned.len());
     }
-    assert!(moved.is_empty(), "a pinned adapter's identity changed — every pack that names it would stop verifying:\n{}", moved.join("\n"));
+    assert!(
+        moved.is_empty(),
+        "a pinned adapter's identity changed — every pack that names it would stop verifying:\n{}",
+        moved.join("\n")
+    );
 }
 
 /// The pack's hash is over the sorted `(id, hash)` pairs: the pins above make it a function of the files.

@@ -84,7 +84,11 @@ fn soundness_is_the_secrecy_of_the_vector_and_the_rate_is_one_over_p() {
         }
     }
     // 1/p of 20,000 is 198; the bound is generous at both ends.
-    assert!((130..=270).contains(&passed), "a toy-prime check passed {passed} of {trials} tampered outputs (expected ≈ {})", trials / p_toy as usize);
+    assert!(
+        (130..=270).contains(&passed),
+        "a toy-prime check passed {passed} of {trials} tampered outputs (expected ≈ {})",
+        trials / p_toy as usize
+    );
     // At P61 none passes.
     let (mut h, keys) = sketch(1, TirSketchModulusV1::P61);
     for (kr, vr) in k.iter().zip(&v) {
@@ -121,10 +125,13 @@ fn a_sliding_window_equals_a_fresh_sketch_of_the_window() {
     }
     assert_eq!(sliding.retained(), window);
     assert_eq!(sliding.next_pos(), total as u32, "positions are absolute");
-    assert!(!{
-        let (mut empty, _) = sketch(1, TirSketchModulusV1::P61);
-        empty.evict_oldest(&k[0])
-    }, "nothing to evict");
+    assert!(
+        !{
+            let (mut empty, _) = sketch(1, TirSketchModulusV1::P61);
+            empty.evict_oldest(&k[0])
+        },
+        "nothing to evict"
+    );
 }
 
 /// Wide moduli: the sketch works over every rung of the ladder.

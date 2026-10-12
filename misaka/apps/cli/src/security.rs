@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use misaka_palw::host_security::{
-    PALW_WORKER_ENV_ALLOWLIST, PALW_WORKER_ENV_PINNED, confinement_backend_available, establish_confinement,
-    harden_worker_command, resident_bytes, worker_max_resident_bytes, worker_working_dir,
+    PALW_WORKER_ENV_ALLOWLIST, PALW_WORKER_ENV_PINNED, confinement_backend_available, establish_confinement, harden_worker_command,
+    resident_bytes, worker_max_resident_bytes, worker_working_dir,
 };
 
 use crate::node::Ctx;

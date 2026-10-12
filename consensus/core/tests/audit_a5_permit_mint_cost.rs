@@ -10,7 +10,9 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1;
-use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_v1, palw_execution_quantum_count_v1};
+use kaspa_consensus_core::palw_execution_quanta_v1::{
+    PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_v1, palw_execution_quantum_count_v1,
+};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 
@@ -25,7 +27,15 @@ fn bond(n: u64) -> PalwBondKeyV2 {
 }
 
 fn one_final(credit: u64) -> PalwExecFinalV1 {
-    PalwExecFinalV1 { domain: h(1), bond: bond(7), operator_id: h(2), claim_id: h(3), execution_root: h(4), credit, accepted_blue_score: 0 }
+    PalwExecFinalV1 {
+        domain: h(1),
+        bond: bond(7),
+        operator_id: h(2),
+        claim_id: h(3),
+        execution_root: h(4),
+        credit,
+        accepted_blue_score: 0,
+    }
 }
 
 /// **MEASURED**: how long `palw_execution_mint_quanta_v1` takes, and how many tickets it produces,
@@ -40,17 +50,20 @@ fn the_mint_cost_of_one_final_grows_superlinearly() {
     println!("\n=== MINT COST OF ONE `Final`, measured through palw_execution_mint_quanta_v1 ===");
     println!("  quantum = {PALW_EXECUTION_QUANTUM_V1} (declared unit: EXPOSURE pwu; fed unit on t12: RAW MAC-eq)");
     println!("  assign_round probes a 2^16 = 65,536 round horizon, then walks linearly.\n");
-    println!("  {:<24} {:>12} {:>14} {:>16} {:>14} {:>18}", "credit (raw MAC-eq)", "tickets", "wall ms", "ns per ticket", "vs prev x", "rooted bytes (>=268B)");
+    println!(
+        "  {:<24} {:>12} {:>14} {:>16} {:>14} {:>18}",
+        "credit (raw MAC-eq)", "tickets", "wall ms", "ns per ticket", "vs prev x", "rooted bytes (>=268B)"
+    );
 
     let mut prev: Option<(u64, f64)> = None;
     for credit in [
-        21_657_728u64,      // the t12 BASE-0 floor's derived work per draw
+        21_657_728u64, // the t12 BASE-0 floor's derived work per draw
         100_000_000,
         1_000_000_000,
         3_000_000_000,
         6_000_000_000,
         10_000_000_000,
-        13_107_200_000,     // exactly 131,072 tickets — where assign_round's probe window is full
+        13_107_200_000, // exactly 131,072 tickets — where assign_round's probe window is full
         16_000_000_000,
         20_000_000_000,
     ] {
@@ -61,10 +74,7 @@ fn the_mint_cost_of_one_final_grows_superlinearly() {
         assert_eq!(issued.len() as u32, n, "the mint issues exactly the counted tickets");
         let ns_each = ms * 1e6 / (n.max(1) as f64);
         let growth = prev.map(|(pc, pms)| (ms / pms.max(1e-9)) / (credit as f64 / pc as f64)).unwrap_or(1.0);
-        println!(
-            "  {credit:<24} {n:>12} {ms:>14.1} {ns_each:>16.0} {growth:>14.2} {:>18}",
-            u64::from(n) * 268
-        );
+        println!("  {credit:<24} {n:>12} {ms:>14.1} {ns_each:>16.0} {growth:>14.2} {:>18}", u64::from(n) * 268);
         prev = Some((credit, ms));
     }
 
@@ -84,7 +94,10 @@ fn the_t12_rows_ticket_counts_in_both_units() {
     const BASE_CANONICAL: u128 = 21_657_728;
 
     println!("\n=== TICKETS PER `Final`, the fed unit vs the declared unit ===");
-    println!("  {:<24} {:>22} {:>14} {:>22} {:>14} {:>10}", "class", "credit fed (MAC-eq)", "tickets", "same, exposure pwu", "tickets", "over x");
+    println!(
+        "  {:<24} {:>22} {:>14} {:>22} {:>14} {:>10}",
+        "class", "credit fed (MAC-eq)", "tickets", "same, exposure pwu", "tickets", "over x"
+    );
     for (name, draw, declared_leaves) in [
         ("BASE-0 floor", 21_657_728u128, 7_708u128),
         ("Qwen3.6 hybrid @512", 158_574_200_672, 20_717_968),
@@ -99,6 +112,9 @@ fn the_t12_rows_ticket_counts_in_both_units() {
         );
         // And what the class's OWN declared leaves would mint, which is the number the constant's
         // doc comment scales against ("a ~1.6M-pwu QWEN25-scale job is about 16 tickets").
-        println!("      declared leaves {declared_leaves} -> {} tickets", palw_execution_quantum_count_v1(declared_leaves, q, seed, h(3)));
+        println!(
+            "      declared leaves {declared_leaves} -> {} tickets",
+            palw_execution_quantum_count_v1(declared_leaves, q, seed, h(3))
+        );
     }
 }

@@ -44,8 +44,18 @@ fn step(
     daa: u64,
     objects: &[PalwConsensusObjectV2],
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
-    let applied =
-        apply_palw_transition_v2_with_extras(parent, p, &ctx(block_word, daa, block_word), objects, None, true, false, false, false, &mx())?;
+    let applied = apply_palw_transition_v2_with_extras(
+        parent,
+        p,
+        &ctx(block_word, daa, block_word),
+        objects,
+        None,
+        true,
+        false,
+        false,
+        false,
+        &mx(),
+    )?;
     check(parent, p, &applied);
     Ok(applied)
 }
@@ -55,7 +65,11 @@ fn check(parent: &PalwChainStateV2, p: &PalwStateParamsV2, applied: &(PalwChainS
     applied.0.assert_internal_consistency(p).expect("internal consistency after apply");
     applied.0.assert_deadline_consistency(p).expect("deadline consistency after apply");
     assert_eq!(apply_delta_v2(parent, &applied.1, p).unwrap().state_root(), applied.0.state_root(), "the delta reproduces the fold");
-    assert_eq!(revert_delta_v2(&applied.0, &applied.1, p).unwrap().state_root(), parent.state_root(), "the delta reverts to the parent");
+    assert_eq!(
+        revert_delta_v2(&applied.0, &applied.1, p).unwrap().state_root(),
+        parent.state_root(),
+        "the delta reverts to the parent"
+    );
 }
 
 /// A block that accepts `env` (the chain block's own attempt), with a subsidy so the claim escrows a reward.
@@ -160,10 +174,14 @@ fn only_ir_classes_and_only_past_the_fence_are_audited() {
     let s0 = registry(&late);
     let (s1, _) = accept(&s0, &late, 2, 101, &env);
     assert!(s1.mesh_audit_row_v1(&claim).is_none() && s1.vertex.mesh.is_empty());
-    assert_eq!(s1.state_root(), {
-        let (plain, _) = accept(&registry(&mp(None)), &mp(None), 2, 101, &env);
-        plain.state_root()
-    }, "below the fence the state is byte-for-byte the fence-off state");
+    assert_eq!(
+        s1.state_root(),
+        {
+            let (plain, _) = accept(&registry(&mp(None)), &mp(None), 2, 101, &env);
+            plain.state_root()
+        },
+        "below the fence the state is byte-for-byte the fence-off state"
+    );
 }
 
 /// **An `Audited` leaf** is counted when its seat is a drawn auditor naming the drawn ticket inside the audit window; the audit is paid
@@ -178,9 +196,11 @@ fn audited_leaves_are_counted_and_paid_and_silence_is_not_a_match() {
     let reserve0 = s.panel_reserve_sompi();
     // A wrong ticket, a seat that was not drawn, a leaf signed past the window: ignored.
     let stranger = auditor_bonds().into_iter().find(|b| *b != first.auditor && *b != second.auditor).unwrap();
-    for (seat, ticket, signed) in
-        [(first.auditor, first.ticket ^ 1, 110u64), (stranger, first.ticket, 111), (first.auditor, first.ticket, row.audit_end_daa + 1)]
-    {
+    for (seat, ticket, signed) in [
+        (first.auditor, first.ticket ^ 1, 110u64),
+        (stranger, first.ticket, 111),
+        (first.auditor, first.ticket, row.audit_end_daa + 1),
+    ] {
         let (next, _) = step(&s, &p, 10, signed, &[vertex(seat, signed, vec![leaf(claim, ticket, 0)])]).unwrap();
         assert!(next.mesh_audit_row_v1(&claim).unwrap().assignments.iter().all(|a| a.outcome.is_none()), "ignored");
         assert_eq!(next.panel_reserve_sompi(), reserve0, "and unpaid");
@@ -206,11 +226,8 @@ fn audited_leaves_are_counted_and_paid_and_silence_is_not_a_match() {
     assert_eq!(s3.panel_reserve_sompi(), reserve0 - 2 * pay);
     assert!(!r3.all_matched(), "a mismatch is not a match");
     // A compact reference names the audited claim by the DAA its audit was drawn at and an id prefix.
-    let compact = PalwVertexLeafV1::Audited {
-        claim: PalwClaimRefV1::compact_of(&claim, 101).unwrap(),
-        leaf: second.ticket,
-        result: 0,
-    };
+    let compact =
+        PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::compact_of(&claim, 101).unwrap(), leaf: second.ticket, result: 0 };
     let (s4, _) = step(&s, &p, 14, 140, &[vertex(second.auditor, 140, vec![compact])]).unwrap();
     assert!(s4.mesh_audit_row_v1(&claim).unwrap().assignments[1].outcome.is_some_and(|o| o.matched), "a compact reference resolves");
     // A pay the reserve cannot cover is clamped, never refused.
@@ -226,10 +243,16 @@ fn mesh_moves_are_refused_by_name_below_their_fence() {
     let p = mp(None);
     let s0 = registry(&p);
     let seat = bond_key(7);
-    let why = step(&s0, &p, 10, 110, &[vertex(seat, 110, vec![leaf(h64(5), 1, 0)])]).expect_err("an audit leaf below the mesh fence").to_string();
+    let why = step(&s0, &p, 10, 110, &[vertex(seat, 110, vec![leaf(h64(5), 1, 0)])])
+        .expect_err("an audit leaf below the mesh fence")
+        .to_string();
     assert!(why.contains("audit mesh") && why.contains("not armed"), "{why}");
     let commit = PalwConsensusObjectV2::TrapCommittedV1 {
-        trap: Box::new(PalwTrapCommittedV1 { setter_bond: bond_key(1), commitment: h64(9), signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }),
+        trap: Box::new(PalwTrapCommittedV1 {
+            setter_bond: bond_key(1),
+            commitment: h64(9),
+            signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        }),
     };
     assert!(palw_object_is_mesh_v1(&commit));
     let why = step(&s0, &p, 10, 110, &[commit]).expect_err("a trap below the fence").to_string();
@@ -279,7 +302,8 @@ fn a_trap_slashes_the_lazy_auditor_pays_the_honest_one_and_spares_its_setter() {
     let (lazy, honest) = (row.assignments[0], row.assignments[1]);
     // One tile: every ticket lands on the planted one. The lazy auditor attests a match, the honest one the mismatch.
     let (s3, _) = step(&s2, &p, 12, claim_daa + 5, &[vertex(lazy.auditor, claim_daa + 5, vec![leaf(claim, lazy.ticket, 0)])]).unwrap();
-    let (s4, _) = step(&s3, &p, 13, claim_daa + 6, &[vertex(honest.auditor, claim_daa + 6, vec![leaf(claim, honest.ticket, 1)])]).unwrap();
+    let (s4, _) =
+        step(&s3, &p, 13, claim_daa + 6, &[vertex(honest.auditor, claim_daa + 6, vec![leaf(claim, honest.ticket, 1)])]).unwrap();
     let before_lazy = s4.bond(&lazy.auditor).unwrap().collateral;
     let before_setter = s4.bond(&setter).unwrap().collateral;
     let reserve = s4.panel_reserve_sompi();
@@ -291,10 +315,18 @@ fn a_trap_slashes_the_lazy_auditor_pays_the_honest_one_and_spares_its_setter() {
     assert!(late.contains("past its reveal window") || late.contains("not a claim"), "{late}");
     let (s5, _) = step(&s4, &p, 16, reveal_daa, &[reveal_object(setter, claim, 0, 1, salt)]).expect("the reveal settles");
     // The lazy auditor lost the penalty; the honest one earned the bounty; the setter lost nothing.
-    assert_eq!(before_lazy - s5.bond(&lazy.auditor).unwrap().collateral, u64::try_from(row.penalty).unwrap(), "the lazy auditor is slashed the penalty");
+    assert_eq!(
+        before_lazy - s5.bond(&lazy.auditor).unwrap().collateral,
+        u64::try_from(row.penalty).unwrap(),
+        "the lazy auditor is slashed the penalty"
+    );
     assert_eq!(s5.bond(&setter).unwrap().collateral, before_setter, "the setter is not slashed");
     assert_eq!(s5.bond(&setter).unwrap().slashed, s4.bond(&setter).unwrap().slashed);
-    assert_eq!(s5.panel_reserve_sompi(), reserve - palw_mesh_trap_bounty_v1(row.pay), "the honest auditor is paid the bounty from the reserve");
+    assert_eq!(
+        s5.panel_reserve_sompi(),
+        reserve - palw_mesh_trap_bounty_v1(row.pay),
+        "the honest auditor is paid the bounty from the reserve"
+    );
     assert_eq!(s5.reserved_exposure(&setter), 0, "the deposit is returned");
     assert!(s5.mesh_trap_row_v1(&commitment).is_none(), "the commitment is spent");
     assert!(matches!(s5.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the trap claim is voided");
@@ -316,7 +348,8 @@ fn hostile_trap_moves_are_refused_by_name() {
     let salt = [4u8; 32];
     let claim = h64(0xC1);
     // (A refused block is a block that never lands: its word may repeat, and sits above every parent's.)
-    let refused = |s: &PalwChainStateV2, daa: u64, o: PalwConsensusObjectV2| step(s, &p, 900, daa, &[o]).expect_err("refused").to_string();
+    let refused =
+        |s: &PalwChainStateV2, daa: u64, o: PalwConsensusObjectV2| step(s, &p, 900, daa, &[o]).expect_err("refused").to_string();
     assert!(refused(&s0, undrawn, commit_object(setter, &claim, 0, 1, salt)).contains("not drawn to set a trap"));
     assert!(refused(&s0, drawn, commit_object(bond_key(77), &claim, 0, 1, salt)).contains("not registered"));
     // A bond that cannot afford the deposit (a panel seat posts 1 MSK-scale collateral, below the 100 MSK deposit).
@@ -329,7 +362,10 @@ fn hostile_trap_moves_are_refused_by_name() {
     assert!(second.contains("already has a trap open"), "{second}");
     // Reveals: nothing committed; wrong setter; impossible tiles; a claim that has no audit row.
     assert!(refused(&s1, drawn + 300, reveal_object(setter, claim, 0, 1, [9u8; 32])).contains("opens no commitment"));
-    assert!(refused(&s1, drawn + 300, reveal_object(bond_key(2), claim, 0, 1, salt)).contains("that committed it"), "another setter's reveal");
+    assert!(
+        refused(&s1, drawn + 300, reveal_object(bond_key(2), claim, 0, 1, salt)).contains("that committed it"),
+        "another setter's reveal"
+    );
     assert!(refused(&s1, drawn + 300, reveal_object(setter, claim, 1, 1, salt)).contains("tiles"));
     assert!(refused(&s1, drawn + 300, reveal_object(setter, claim, 0, PALW_TRAP_MAX_TILES_V1 + 1, salt)).contains("tiles"));
     assert!(refused(&s1, drawn + 300, reveal_object(setter, claim, 0, 1, salt)).contains("audit row"), "a claim with no audit row");
@@ -362,8 +398,15 @@ fn the_sweep_releases_reservations_and_forfeits_an_unrevealed_trap() {
     let (s4, _) = step(&s3, &p, 13, ttl + 1, &[]).unwrap();
     let commitment = palw_trap_commitment_v1(&claim, 0, 1, &salt);
     assert!(s4.mesh_trap_row_v1(&commitment).is_none(), "the unrevealed trap is gone");
-    assert_eq!(collateral - s4.bond(&setter).unwrap().collateral, u64::try_from(PALW_TRAP_DEPOSIT_SOMPI_V1).unwrap(), "its deposit is forfeited");
-    assert!(s3.reserved_exposure(&setter) - s4.reserved_exposure(&setter) >= PALW_TRAP_DEPOSIT_SOMPI_V1, "and the reservation returned");
+    assert_eq!(
+        collateral - s4.bond(&setter).unwrap().collateral,
+        u64::try_from(PALW_TRAP_DEPOSIT_SOMPI_V1).unwrap(),
+        "its deposit is forfeited"
+    );
+    assert!(
+        s3.reserved_exposure(&setter) - s4.reserved_exposure(&setter) >= PALW_TRAP_DEPOSIT_SOMPI_V1,
+        "and the reservation returned"
+    );
 }
 
 fn palw_mesh_trap_ttl_for_tests() -> u64 {
@@ -391,7 +434,10 @@ fn a_recorded_witness_profile_pins_the_chunk_count_and_widens_the_window() {
         Err(crate::palw_admission_v2::PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: 4, canonical: 1 })
     ));
     // A profile of three witness chunks: exactly four chunks.
-    s.vertex.mesh.witness.insert(h64(1), PalwWitnessProfileRowV1 { elements_per_position: 72, max_context: 100, bytes: 3_000_000, chunks: 3 });
+    s.vertex
+        .mesh
+        .witness
+        .insert(h64(1), PalwWitnessProfileRowV1 { elements_per_position: 72, max_context: 100, bytes: 3_000_000, chunks: 3 });
     for (count, ok) in [(1, false), (3, false), (4, true), (5, false)] {
         a.trace_chunk_count = count;
         assert_eq!(crate::palw_admission_v2::check_palw_attempt_witness_pin_v1(&s, &p, &a, 100).is_ok(), ok, "count {count}");
@@ -451,11 +497,21 @@ fn audit_1004_a_trap_reveal_never_voids_a_claim_with_a_court_open() {
         )
         .expect("the reveal is admissible either way");
         let voided = matches!(s3.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Voided { .. });
-        assert_eq!(voided, !on, "fence {on}: the claim is voided below the fence and left to its court past it: before {:?}, after {:?}", s2.claim(&claim).unwrap().phase, s3.claim(&claim).unwrap().phase);
+        assert_eq!(
+            voided,
+            !on,
+            "fence {on}: the claim is voided below the fence and left to its court past it: before {:?}, after {:?}",
+            s2.claim(&claim).unwrap().phase,
+            s3.claim(&claim).unwrap().phase
+        );
         assert!(s3.mesh_audit_row_v1(&claim).unwrap().trap_settled, "the auditors are settled either way");
         // The setter's deposit comes back either way; what is left on its bond is the live claim's own reservation (none once voided).
         let claim_reserved = if on { s3.claim(&claim).unwrap().reserved } else { 0 };
-        assert_eq!(s3.reserved_exposure(&setter), claim_reserved, "the deposit is returned; only a live claim's own reservation remains");
+        assert_eq!(
+            s3.reserved_exposure(&setter),
+            claim_reserved,
+            "the deposit is returned; only a live claim's own reservation remains"
+        );
     }
 }
 
@@ -484,7 +540,8 @@ fn audit_1004_a_one_tile_trap_or_one_committed_after_the_draw_is_refused() {
         let d = drawn_slot_start(&setter, 3);
         let accepted_at = d - 50;
         let (s1, _) = accept(&s0, &p, 12, accepted_at, &env);
-        let (s2, _) = step(&s1, &p, 13, d + 1, &[commit_object(setter, &claim, 0, 2, salt)]).expect("a late commitment is still admitted");
+        let (s2, _) =
+            step(&s1, &p, 13, d + 1, &[commit_object(setter, &claim, 0, 2, salt)]).expect("a late commitment is still admitted");
         let reveal_daa = s2.mesh_audit_row_v1(&claim).unwrap().audit_end_daa + 5;
         let late = step(&s2, &p, 17, reveal_daa, &[reveal_object(setter, claim, 0, 2, salt)]);
         assert_eq!(late.is_err(), on, "fence {on}: a trap committed after the draw is refused past the fence only");
@@ -505,7 +562,8 @@ fn audit_1004_the_draw_reads_the_beacon_and_not_the_blocks_own_hash() {
         let s0 = registry(&p);
         let c = PalwBlockContextV2 { subsidy: SUBSIDY, ..ctx(block_word, 101, block_word) };
         let extras = PalwTransitionExtrasV1 { audit_1004_draw_seed_source: beacon.map(h64), ..mx() };
-        let (s, _) = apply_palw_transition_v2_with_extras(&s0, &p, &c, &[], Some(&env), true, false, false, false, &extras).expect("accepted");
+        let (s, _) =
+            apply_palw_transition_v2_with_extras(&s0, &p, &c, &[], Some(&env), true, false, false, false, &extras).expect("accepted");
         s.mesh_audit_row_v1(&claim).unwrap().assignments.iter().map(|a| (a.auditor, a.ticket)).collect::<Vec<_>>()
     };
     // Past the fence with a beacon: the block's own word does not matter.
@@ -539,7 +597,11 @@ fn audit_1004_audit_pay_waits_for_the_answer_to_stand() {
         let (first, second) = (row.assignments[0], row.assignments[1]);
         let reserve0 = s.panel_reserve_sompi();
         let (s1, _) = step(&s, &p, 11, 120, &[vertex(first.auditor, 120, vec![leaf(claim, first.ticket, 0)])]).unwrap();
-        assert_eq!(s1.panel_reserve_sompi(), if on { reserve0 } else { reserve0 - row.pay }, "fence {on}: pay at the leaf only below the fence");
+        assert_eq!(
+            s1.panel_reserve_sompi(),
+            if on { reserve0 } else { reserve0 - row.pay },
+            "fence {on}: pay at the leaf only below the fence"
+        );
         let (s2, _) = step(&s1, &p, 12, 130, &[vertex(second.auditor, 130, vec![leaf(claim, second.ticket, 1)])]).unwrap();
         // The sweep after the row's end.
         let (s3, _) = step(&s2, &p, 13, row.row_end_daa + 1, &[]).unwrap();
@@ -566,8 +628,10 @@ fn audit_1004_a_trap_caught_answer_earns_no_audit_pay() {
     // Two tiles, planted tile 0: pick what each auditor's ticket makes of it — the test only needs the lazy one to match on the tile.
     let hits = |a: &PalwAuditAssignmentV1| palw_trap_ticket_hits_v1(a.ticket, 0, 2);
     // Both answer "match"; whoever's ticket lands on the planted tile is the one the trap catches.
-    let (s3, _) = step(&s2, &p, 12, commit_daa + 6, &[vertex(lazy.auditor, commit_daa + 6, vec![leaf(claim, lazy.ticket, 0)])]).unwrap();
-    let (s4, _) = step(&s3, &p, 13, commit_daa + 7, &[vertex(honest.auditor, commit_daa + 7, vec![leaf(claim, honest.ticket, 0)])]).unwrap();
+    let (s3, _) =
+        step(&s2, &p, 12, commit_daa + 6, &[vertex(lazy.auditor, commit_daa + 6, vec![leaf(claim, lazy.ticket, 0)])]).unwrap();
+    let (s4, _) =
+        step(&s3, &p, 13, commit_daa + 7, &[vertex(honest.auditor, commit_daa + 7, vec![leaf(claim, honest.ticket, 0)])]).unwrap();
     let caught = [lazy, honest].into_iter().filter(|a| hits(a)).count() as u128;
     let reveal_daa = row.audit_end_daa + 5;
     let (s5, _) = step(&s4, &p, 16, reveal_daa, &[reveal_object(setter, claim, 0, 2, salt)]).expect("the reveal settles");

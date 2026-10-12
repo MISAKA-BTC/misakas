@@ -56,7 +56,10 @@ fn decode_of(name: &str) -> Result<BTreeMap<String, String>, String> {
             out.insert(key(""), d);
             if let Some(qs) = store.get_q(pi as u32, layer) {
                 for (k, q) in qs.iter().enumerate() {
-                    let shape: Vec<u8> = [q.out, q.inp, q.group, q.bits as usize, q.signed as usize].iter().flat_map(|d| (*d as u64).to_le_bytes()).collect();
+                    let shape: Vec<u8> = [q.out, q.inp, q.group, q.bits as usize, q.signed as usize]
+                        .iter()
+                        .flat_map(|d| (*d as u64).to_le_bytes())
+                        .collect();
                     let codes: Vec<u8> = q.q.iter().flat_map(|x| x.to_le_bytes()).collect();
                     let scale: Vec<u8> = q.scale.iter().flat_map(|x| x.to_bits().to_le_bytes()).collect();
                     let zero: Vec<u8> = q.zero.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -95,9 +98,10 @@ fn every_quantised_fixture_decodes_to_its_pinned_weights() {
         std::fs::write(&pins_path, serde_json::to_string_pretty(&now).expect("json") + "\n").expect("write the pins");
         return;
     }
-    let pinned: BTreeMap<String, BTreeMap<String, String>> =
-        serde_json::from_str(&std::fs::read_to_string(&pins_path).expect("tests/golden/quant_decode_v1.json (UPDATE_PINS=1 writes it)"))
-            .expect("pins");
+    let pinned: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(
+        &std::fs::read_to_string(&pins_path).expect("tests/golden/quant_decode_v1.json (UPDATE_PINS=1 writes it)"),
+    )
+    .expect("pins");
     for (fixture, tensors) in &now {
         let want = pinned.get(fixture).unwrap_or_else(|| panic!("{fixture}: no pins (UPDATE_PINS=1)"));
         for (k, d) in tensors {
@@ -109,6 +113,9 @@ fn every_quantised_fixture_decodes_to_its_pinned_weights() {
     // The vectors cover every format family the RFC names for L4.
     for family in ["gptq_", "awq_", "ct_", "bnb_", "fp8_", "mxfp4_"] {
         assert!(now.keys().any(|k| k.starts_with(family)), "no {family} fixture");
-        assert!(now.iter().filter(|(k, _)| k.starts_with(family)).all(|(_, v)| !v.is_empty()), "{family}: a fixture with no decoded tensor");
+        assert!(
+            now.iter().filter(|(k, _)| k.starts_with(family)).all(|(_, v)| !v.is_empty()),
+            "{family}: a fixture with no decoded tensor"
+        );
     }
 }

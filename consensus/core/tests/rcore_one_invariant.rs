@@ -396,7 +396,11 @@ fn m1_the_invariant_holds_across_interleavings() {
     let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     let total = |c: &Chain, b: &PalwBondKeyV2, at: u64| {
-        (kaspa_consensus_core::palw_state_v2::palw_bond_committed_v1(&c.s, b, at, None, c.sp.window_court()), palw_accuser_exposure_v1(&c.s, b), u128::from(c.s.bond(b).unwrap().collateral))
+        (
+            kaspa_consensus_core::palw_state_v2::palw_bond_committed_v1(&c.s, b, at, None, c.sp.window_court()),
+            palw_accuser_exposure_v1(&c.s, b),
+            u128::from(c.s.bond(b).unwrap().collateral),
+        )
     };
     let work_until_refused = |c: &mut Chain, seed0: u64| -> u64 {
         let mut taken = 0;
@@ -422,7 +426,12 @@ fn m1_the_invariant_holds_across_interleavings() {
     let accuse = |c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2| -> bool {
         let object = PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index: 0, accuser, signature: Vec::new() };
         let daa = c.daa + 1;
-        let at = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: h(0xDA00_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 0 };
+        let at = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: h(0xDA00_0000 + daa),
+            daa_score: daa,
+            blue_score: daa,
+            subsidy: 0,
+        };
         if c.try_fold(&c.s.clone(), &at, std::slice::from_ref(&object), PalwBlockWorkV3::None, Hash64::default()).is_err() {
             return false;
         }
@@ -436,7 +445,10 @@ fn m1_the_invariant_holds_across_interleavings() {
         c.s = readied(&c.sp, &c.s, &honest(&c.p), id2m, c.daa);
         let bound = c.bind(id, &seats);
         c.s = readied(&c.sp, &c.s, &honest(&c.p), id2m, c.daa);
-        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+            claim: id,
+            receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+        }]);
         c.step(&[bond_obj(2, 65_000 * MSK as u64)]);
         let accuser = bond_key(2);
         let holds = |c: &Chain, what: &str| {

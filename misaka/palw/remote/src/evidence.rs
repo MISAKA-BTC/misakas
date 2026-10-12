@@ -89,9 +89,17 @@ pub fn fetch_chunk_any(
         match provider.fetch_chunk(manifest_id, index) {
             Ok(bytes) => match manifest.verify_chunk(index, &bytes) {
                 Ok(()) => return Ok((bytes, provider.provider_id().to_string(), failures)),
-                Err(e) => failures.push(ProviderFailure { provider: provider.provider_id().to_string(), index, kind: FetchFailureKind::BadBytes(e) }),
+                Err(e) => failures.push(ProviderFailure {
+                    provider: provider.provider_id().to_string(),
+                    index,
+                    kind: FetchFailureKind::BadBytes(e),
+                }),
             },
-            Err(e) => failures.push(ProviderFailure { provider: provider.provider_id().to_string(), index, kind: FetchFailureKind::Unavailable(e.0) }),
+            Err(e) => failures.push(ProviderFailure {
+                provider: provider.provider_id().to_string(),
+                index,
+                kind: FetchFailureKind::Unavailable(e.0),
+            }),
         }
     }
     Err(FetchFailure::ChunkUnavailable { index, failures })
@@ -199,7 +207,9 @@ pub mod fs {
 
     #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
     pub enum ClaimFetchError {
-        #[error("no provider holds a manifest for this claim that agrees with the claim's own roots (offered {offered}, refused: {refusals:?})")]
+        #[error(
+            "no provider holds a manifest for this claim that agrees with the claim's own roots (offered {offered}, refused: {refusals:?})"
+        )]
         NoAdmissibleManifest { offered: usize, refusals: Vec<String> },
         #[error("{0}")]
         Fetch(FetchFailure),
@@ -219,7 +229,8 @@ pub mod fs {
         // One implementation for every transport: this is [`crate::transport::fetch_claim_material_any`] over directories, so the node's
         // `--palw-evidence-provider-dir`, a Panel seat and a public verifier on HTTP providers read the same bytes under the same checks.
         let providers: Vec<FsProvider> = roots.iter().map(FsProvider::new).collect();
-        let refs: Vec<&dyn crate::transport::EvidenceProvider> = providers.iter().map(|p| p as &dyn crate::transport::EvidenceProvider).collect();
+        let refs: Vec<&dyn crate::transport::EvidenceProvider> =
+            providers.iter().map(|p| p as &dyn crate::transport::EvidenceProvider).collect();
         crate::transport::fetch_claim_material_any(&refs, claim_hex, claim, limits, order_seed).map_err(|e| match e {
             crate::transport::ClaimFetchErrorV1::NoAdmissibleManifest { offered, mut refusals, silent } => {
                 refusals.extend(silent);
@@ -230,14 +241,12 @@ pub mod fs {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use kaspa_consensus_core::tx::TransactionOutpoint;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
-
 
     fn h(n: u8) -> Hash64 {
         Hash64::from_bytes([n; 64])
@@ -252,7 +261,14 @@ mod tests {
         EvidenceManifestV1::build(h(9), &bond(), &[5u8; 32], h(1), h(2), h(3), 3, 10_000, &chunks())
     }
     fn claim() -> ClaimRoots {
-        ClaimRoots { network_domain: h(9), trace_root: h(1), output_root: h(2), execution_root: h(3), trace_chunk_count: 3, retention_deadline: 9_000 }
+        ClaimRoots {
+            network_domain: h(9),
+            trace_root: h(1),
+            output_root: h(2),
+            execution_root: h(3),
+            trace_chunk_count: 3,
+            retention_deadline: 9_000,
+        }
     }
 
     struct Prov {
@@ -263,7 +279,12 @@ mod tests {
     }
     impl Prov {
         fn honest(id: &'static str) -> Self {
-            Self { id, chunks: chunks().into_iter().enumerate().map(|(i, c)| (i as u32, c)).collect(), down: false, asked: Default::default() }
+            Self {
+                id,
+                chunks: chunks().into_iter().enumerate().map(|(i, c)| (i as u32, c)).collect(),
+                down: false,
+                asked: Default::default(),
+            }
         }
     }
     impl ChunkProvider for Prov {
@@ -295,8 +316,14 @@ mod tests {
         let (material, report) = fetch_material_any(&manifest(), &claim(), &ManifestLimits::default(), &providers, h(0x5E)).unwrap();
         assert_eq!(material, chunks(), "the bytes are the executor's, whoever served them");
         assert_eq!(report.served_by.len(), 3);
-        assert!(report.failures.iter().any(|f| f.provider == "liar" && matches!(f.kind, FetchFailureKind::BadBytes(_))), "a liar is recorded");
-        assert!(report.failures.iter().any(|f| f.provider == "dead" && matches!(f.kind, FetchFailureKind::Unavailable(_))), "a dead one is recorded");
+        assert!(
+            report.failures.iter().any(|f| f.provider == "liar" && matches!(f.kind, FetchFailureKind::BadBytes(_))),
+            "a liar is recorded"
+        );
+        assert!(
+            report.failures.iter().any(|f| f.provider == "dead" && matches!(f.kind, FetchFailureKind::Unavailable(_))),
+            "a dead one is recorded"
+        );
         assert!(report.served_by.iter().all(|p| p == "good"), "only verified bytes are ever accepted");
         // The order is deterministic in (seed, chunk, provider): the same seed tries the same order, so a replay is reproducible.
         let again = fetch_material_any(&manifest(), &claim(), &ManifestLimits::default(), &providers, h(0x5E)).unwrap();
@@ -315,7 +342,10 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let none: Vec<&dyn ChunkProvider> = vec![];
-        assert!(matches!(fetch_material_any(&manifest(), &claim(), &ManifestLimits::default(), &none, h(1)), Err(FetchFailure::ChunkUnavailable { index: 0, .. })));
+        assert!(matches!(
+            fetch_material_any(&manifest(), &claim(), &ManifestLimits::default(), &none, h(1)),
+            Err(FetchFailure::ChunkUnavailable { index: 0, .. })
+        ));
     }
 
     #[test]
@@ -328,7 +358,6 @@ mod tests {
         assert_eq!(r, Err(FetchFailure::Manifest(EvidenceError::RootMismatch("output"))));
         assert!(good.asked.borrow().is_empty(), "no provider was asked");
     }
-
 
     #[test]
     fn a_provider_directory_serves_a_claims_material_to_the_panel_and_a_forged_directory_is_refused() {
@@ -347,7 +376,8 @@ mod tests {
         c.trace_chunk_count = 4;
         let limits = ManifestLimits::default();
         // The forger is listed FIRST; its manifest disagrees with the claim's roots and is refused, the honest one serves.
-        let (got, report) = fs::fetch_claim_material(&[forger.clone(), honest.clone(), empty.clone()], "claimA", &c, &limits, h(4)).unwrap();
+        let (got, report) =
+            fs::fetch_claim_material(&[forger.clone(), honest.clone(), empty.clone()], "claimA", &c, &limits, h(4)).unwrap();
         assert_eq!(got, material, "the material is reassembled from verified chunks");
         assert!(report.served_by.iter().all(|p| p.ends_with("honest") || p.ends_with("forger")));
         // Only the forger → nothing admissible; only the empty directory → nothing offered.
@@ -371,5 +401,4 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&tmp);
     }
-
 }

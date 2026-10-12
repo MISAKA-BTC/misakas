@@ -14,10 +14,10 @@ use kaspa_consensus_core::config::drill::{
 use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
     PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
-    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
-    TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int11_flag_day_at_v1,
-    palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params,
-    palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,
+    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS,
+    TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params,
+    palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
@@ -117,7 +117,10 @@ fn every_ruleset_leaves_it_dormant_but_testnet12s_int11_release_which_arms_it_at
         PALW_T12_TIR_FLAG_DAY_FENCES_V1,
         PALW_T12_TIR_FENCE2_FENCES_V1,
     ] {
-        assert!(list.iter().all(|f| f.name != "palw_held_close_chunks_v1"), "no earlier testnet-12 release arms the held leaf challenge");
+        assert!(
+            list.iter().all(|f| f.name != "palw_held_close_chunks_v1"),
+            "no earlier testnet-12 release arms the held leaf challenge"
+        );
     }
     assert!(PALW_T12_INT11_FENCES_V1.iter().any(|f| f.name == "palw_held_close_chunks_v1"), "the int-11 flag day arms it");
     let names: Vec<&str> = PALW_DRILL_HELD_CLOSE_CHUNKS_FENCES_V1.iter().map(|f| f.name).collect();

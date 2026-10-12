@@ -387,24 +387,40 @@ impl PermissionlessPanelStateV1 {
         }
         if self.version == WIRE_VERSION_RETIRED_V1 {
             for (id, record) in &mut self.claims {
-                if !record.phase.terminal() || matches!(record.phase, ClaimPhaseV3::Retired(_)) { continue; }
+                if !record.phase.terminal() || matches!(record.phase, ClaimPhaseV3::Retired(_)) {
+                    continue;
+                }
                 let Some(authority) = view.retired_claim(id) else { continue };
                 if authority.native_parent_root == Hash64::default() || authority.native_parent_checkpoint == Hash64::default() {
                     return Err(PanelErrorV1::InvalidSnapshot);
                 }
                 let prior_record_root = digest("misaka-palw/panel-v4/retired-record", record);
                 let population = record.snapshot.as_ref().map(|s| PanelPopulationArchiveV1 {
-                    root: s.root, checkpoint: s.checkpoint, checkpoint_height: s.checkpoint_height,
-                    checkpoint_daa: s.checkpoint_daa, candidate_count: s.candidates.len() as u32,
+                    root: s.root,
+                    checkpoint: s.checkpoint,
+                    checkpoint_height: s.checkpoint_height,
+                    checkpoint_daa: s.checkpoint_daa,
+                    candidate_count: s.candidates.len() as u32,
                 });
                 let bindings_root = digest("misaka-palw/panel-v4/retired-bindings", &record.binding_history);
                 let binding_count = u32::try_from(record.binding_history.len()).map_err(|_| PanelErrorV1::Overflow)?;
                 let operators_root = digest("misaka-palw/panel-v4/retired-operators", &record.used_operators);
-                let (last_seed, last_beacon_id) = record.binding_history.last().map(|b| (Some(b.panel_seed_v3), Some(b.beacon_id)))
-                    .unwrap_or((None, None));
-                record.snapshot = None; record.binding_history.clear(); record.used_operators.clear();
-                record.phase = ClaimPhaseV3::Retired(PanelRetiredClaimV1 { daa, authority, prior_record_root, population,
-                    bindings_root, binding_count, operators_root, last_seed, last_beacon_id });
+                let (last_seed, last_beacon_id) =
+                    record.binding_history.last().map(|b| (Some(b.panel_seed_v3), Some(b.beacon_id))).unwrap_or((None, None));
+                record.snapshot = None;
+                record.binding_history.clear();
+                record.used_operators.clear();
+                record.phase = ClaimPhaseV3::Retired(PanelRetiredClaimV1 {
+                    daa,
+                    authority,
+                    prior_record_root,
+                    population,
+                    bindings_root,
+                    binding_count,
+                    operators_root,
+                    last_seed,
+                    last_beacon_id,
+                });
             }
         }
         self.rebuild_reservations()
@@ -910,10 +926,19 @@ impl PermissionlessPanelStateV1 {
         }
         let order = self.next_order;
         let record = ClaimRecordV3 {
-            claim: claim.clone(), accepted_block: block, accepted_daa: daa, accepted_height: height,
-            acceptance_order: order, occurrence_index: index, seal: None, snapshot: None,
-            entropy_output: None, used_operators: Vec::new(), binding_history: Vec::new(),
-            phase: ClaimPhaseV3::PendingSeal, strata,
+            claim: claim.clone(),
+            accepted_block: block,
+            accepted_daa: daa,
+            accepted_height: height,
+            acceptance_order: order,
+            occurrence_index: index,
+            seal: None,
+            snapshot: None,
+            entropy_output: None,
+            used_operators: Vec::new(),
+            binding_history: Vec::new(),
+            phase: ClaimPhaseV3::PendingSeal,
+            strata,
         };
         if self.version == WIRE_VERSION_RETIRED_V1 {
             let size = borsh::object_length(self).map_err(|_| PanelErrorV1::Overflow)? as u64;
@@ -985,38 +1010,76 @@ impl PermissionlessPanelStateV1 {
     }
 
     fn validate_retired_record_v1(&self, r: &ClaimRecordV3, t: &PanelRetiredClaimV1) -> Result<(), PanelErrorV1> {
-        if self.version != WIRE_VERSION_RETIRED_V1 || t.daa < r.accepted_daa || t.daa > self.daa
-            || r.accepted_height > self.height || r.accepted_daa > self.daa || r.claim.required_exposure == 0
-            || r.snapshot.is_some() || !r.binding_history.is_empty() || !r.used_operators.is_empty()
-            || t.prior_record_root == Hash64::default() || t.bindings_root == Hash64::default() || t.operators_root == Hash64::default()
-            || t.authority.native_parent_root == Hash64::default() || t.authority.native_parent_checkpoint == Hash64::default()
-            || r.strata.is_some_and(|s| s.validate().is_err()) || t.population.is_some() != r.seal.is_some()
-            || t.binding_count > u32::from(self.policy.max_retries) + 1 || t.last_seed.is_some() != (t.binding_count > 0)
+        if self.version != WIRE_VERSION_RETIRED_V1
+            || t.daa < r.accepted_daa
+            || t.daa > self.daa
+            || r.accepted_height > self.height
+            || r.accepted_daa > self.daa
+            || r.claim.required_exposure == 0
+            || r.snapshot.is_some()
+            || !r.binding_history.is_empty()
+            || !r.used_operators.is_empty()
+            || t.prior_record_root == Hash64::default()
+            || t.bindings_root == Hash64::default()
+            || t.operators_root == Hash64::default()
+            || t.authority.native_parent_root == Hash64::default()
+            || t.authority.native_parent_checkpoint == Hash64::default()
+            || r.strata.is_some_and(|s| s.validate().is_err())
+            || t.population.is_some() != r.seal.is_some()
+            || t.binding_count > u32::from(self.policy.max_retries) + 1
+            || t.last_seed.is_some() != (t.binding_count > 0)
             || t.last_seed.is_some() != t.last_beacon_id.is_some()
-            || (t.last_seed.is_some() && r.entropy_output.is_none()) || (r.entropy_output.is_some() && r.seal.is_none()) {
+            || (t.last_seed.is_some() && r.entropy_output.is_none())
+            || (r.entropy_output.is_some() && r.seal.is_none())
+        {
             return Err(PanelErrorV1::InvalidCarriage);
         }
         if let (Some(population), Some(seal)) = (&t.population, &r.seal) {
-            if population.candidate_count > self.policy.max_candidates || population.checkpoint != seal.checkpoint
-                || population.checkpoint_height > self.height || population.checkpoint_daa > self.daa
-                || population.checkpoint_daa < r.accepted_daa || population.root == Hash64::default()
-                || population.checkpoint_height != seal.checkpoint_height || population.checkpoint_daa != seal.checkpoint_daa
-                || seal.accepted_block != r.accepted_block || seal.accepted_daa != r.accepted_daa
-                || seal.accepted_height != r.accepted_height || seal.acceptance_order != r.acceptance_order
-                || seal.occurrence_index != r.occurrence_index || seal.checkpoint_height != add(r.accepted_height, self.policy.seal_depth_blocks)?
+            if population.candidate_count > self.policy.max_candidates
+                || population.checkpoint != seal.checkpoint
+                || population.checkpoint_height > self.height
+                || population.checkpoint_daa > self.daa
+                || population.checkpoint_daa < r.accepted_daa
+                || population.root == Hash64::default()
+                || population.checkpoint_height != seal.checkpoint_height
+                || population.checkpoint_daa != seal.checkpoint_daa
+                || seal.accepted_block != r.accepted_block
+                || seal.accepted_daa != r.accepted_daa
+                || seal.accepted_height != r.accepted_height
+                || seal.acceptance_order != r.acceptance_order
+                || seal.occurrence_index != r.occurrence_index
+                || seal.checkpoint_height != add(r.accepted_height, self.policy.seal_depth_blocks)?
                 || seal.anchor_slot != seal.beacon_epoch.checked_mul(self.policy.beacon_period_daa).ok_or(PanelErrorV1::Overflow)?
-                || seal.checkpoint_daa >= seal.anchor_slot || seal.beacon_epoch != add(seal.checkpoint_daa / self.policy.beacon_period_daa, 1)? {
+                || seal.checkpoint_daa >= seal.anchor_slot
+                || seal.beacon_epoch != add(seal.checkpoint_daa / self.policy.beacon_period_daa, 1)?
+            {
                 return Err(PanelErrorV1::InvalidCarriage);
             }
             // The seal needs only the checkpoint and ORIGINAL complete population root.
-            let snapshot = PanelSnapshotV1 { root: population.root, checkpoint: population.checkpoint,
-                checkpoint_height: population.checkpoint_height, checkpoint_daa: population.checkpoint_daa,
-                class_id: r.claim.class_id, excluded_bond: r.claim.producer, excluded_operator: r.claim.producer_operator,
-                excluded_key: r.claim.producer_key, policy_id: self.policy.id(), candidates: Vec::new(), strata_members: Vec::new() };
-            if seal.id != claim_seal_id(self.network, self.ruleset, r, &snapshot, seal.anchor_slot, seal.beacon_epoch) { return Err(PanelErrorV1::InvalidCarriage); }
+            let snapshot = PanelSnapshotV1 {
+                root: population.root,
+                checkpoint: population.checkpoint,
+                checkpoint_height: population.checkpoint_height,
+                checkpoint_daa: population.checkpoint_daa,
+                class_id: r.claim.class_id,
+                excluded_bond: r.claim.producer,
+                excluded_operator: r.claim.producer_operator,
+                excluded_key: r.claim.producer_key,
+                policy_id: self.policy.id(),
+                candidates: Vec::new(),
+                strata_members: Vec::new(),
+            };
+            if seal.id != claim_seal_id(self.network, self.ruleset, r, &snapshot, seal.anchor_slot, seal.beacon_epoch) {
+                return Err(PanelErrorV1::InvalidCarriage);
+            }
             if let (Some(seed), Some(beacon_id), Some(output)) = (t.last_seed, t.last_beacon_id, r.entropy_output) {
                 if seed != panel_seed_v3(self.network, self.ruleset, seal, &snapshot, output)
-                    || beacon_id != digest("misaka-palw/panel-v3/beacon", &(self.network, self.ruleset, self.policy.beacon_scheme, seal.beacon_epoch, output)) {
+                    || beacon_id
+                        != digest(
+                            "misaka-palw/panel-v3/beacon",
+                            &(self.network, self.ruleset, self.policy.beacon_scheme, seal.beacon_epoch, output),
+                        )
+                {
                     return Err(PanelErrorV1::InvalidCarriage);
                 }
             }
@@ -1030,7 +1093,8 @@ impl PermissionlessPanelStateV1 {
         }
         self.policy.validate_for_version(self.version)?;
         if ![WIRE_VERSION_V2, WIRE_VERSION_COMPLETE_V1, WIRE_VERSION_RETIRED_V1].contains(&self.version)
-            || self.claims.values().filter(|r| !matches!(r.phase, ClaimPhaseV3::Retired(_))).count() > self.policy.max_tracked_claims as usize
+            || self.claims.values().filter(|r| !matches!(r.phase, ClaimPhaseV3::Retired(_))).count()
+                > self.policy.max_tracked_claims as usize
             || (self.version == WIRE_VERSION_RETIRED_V1 && self.claims.len() > MAX_RETIRED_ARCHIVE_CLAIMS_V1)
             || self.work_ids.len() != self.claims.len()
             || self.claims.values().filter(|r| !r.phase.terminal()).count() > self.policy.max_pending as usize

@@ -235,7 +235,9 @@ mod tests {
     fn block_cache_usage_after_reading_a_40_mb_row(cache_budget: Option<usize>) -> u64 {
         use crate::prelude::{ConnBuilder, RocksDbPreset};
         use rand::RngCore;
-        let (_life, db) = crate::create_temp_db!(ConnBuilder::default().with_files_limit(10).with_preset(RocksDbPreset::Default).with_cache_budget(cache_budget));
+        let (_life, db) = crate::create_temp_db!(
+            ConnBuilder::default().with_files_limit(10).with_preset(RocksDbPreset::Default).with_cache_budget(cache_budget)
+        );
         let mut big = vec![0u8; 40 << 20];
         rand::thread_rng().fill_bytes(&mut big);
         db.put(b"a-small", b"1").unwrap();

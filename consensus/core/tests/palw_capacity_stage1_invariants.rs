@@ -279,7 +279,10 @@ fn honest_no_loss_served_runs_leave_every_honest_party_whole() {
         tw.jump(last + 1);
         for id in &licensed {
             for t in 0..2 {
-                assert!(matches!(phase_of(&tw.sims[t].c.s, id), Some(PalwClaimPhaseV2::Final { .. })), "seed {seed}: {id} Final (twin {t})");
+                assert!(
+                    matches!(phase_of(&tw.sims[t].c.s, id), Some(PalwClaimPhaseV2::Final { .. })),
+                    "seed {seed}: {id} Final (twin {t})"
+                );
             }
         }
         // On, in steps, past the rows' maturity where the harness's settled clock matures them (each
@@ -328,7 +331,12 @@ fn honest_no_loss_an_unserved_claim_costs_no_collateral_and_holds_only_its_commi
             let voided_at = claim.accepted_daa + window_bind + 1;
             tw.jump(voided_at);
             for t in 0..2 {
-                assert!(unconvicted_void(&tw.sims[t].c.s, &id), "{} @ {size}: an unconvicted void on twin {t}: {:?}", class.label(), phase_of(&tw.sims[t].c.s, &id));
+                assert!(
+                    unconvicted_void(&tw.sims[t].c.s, &id),
+                    "{} @ {size}: an unconvicted void on twin {t}: {:?}",
+                    class.label(),
+                    phase_of(&tw.sims[t].c.s, &id)
+                );
             }
             let held = committed(&tw.sims[1], &bond);
             let shipped_held = committed(&tw.sims[0], &bond);
@@ -337,7 +345,12 @@ fn honest_no_loss_an_unserved_claim_costs_no_collateral_and_holds_only_its_commi
                 assert_whole(&tw, &b, &format!("{} @ {size} voided", class.label()));
             }
             tw.jump(voided_at + h_obl + 1);
-            assert_eq!(committed(&tw.sims[1], &bond), committed(&tw.sims[0], &bond), "{} @ {size}: released at voided + h_obl", class.label());
+            assert_eq!(
+                committed(&tw.sims[1], &bond),
+                committed(&tw.sims[0], &bond),
+                "{} @ {size}: released at voided + h_obl",
+                class.label()
+            );
             for b in [bond, bond_key(CHALLENGER), bond_key(ACCUSER)] {
                 assert_whole(&tw, &b, &format!("{} @ {size} released", class.label()));
             }
@@ -440,8 +453,9 @@ fn j1_cap_holds_after_every_block_reorg_and_restart() {
         }
         // Restarts: every recorded tip reloads under its root, and J-1 holds on what loads.
         for (j, b) in sim.tape.iter().enumerate() {
-            let reloaded =
-                PalwStateCarriageV2::from_state(&b.child).into_state(&sim.c.sp, Some(b.child.state_root())).expect("the carriage reloads");
+            let reloaded = PalwStateCarriageV2::from_state(&b.child)
+                .into_state(&sim.c.sp, Some(b.child.state_root()))
+                .expect("the carriage reloads");
             assert_eq!(reloaded, b.child, "seed {seed}: tip {j} reloads");
             assert_j1(&reloaded, &sim.c.sp, &format!("seed {seed} restart at {j}"));
         }
@@ -560,7 +574,12 @@ fn liability_survives_void_retirement_reorg_and_restart_until_the_window_closes(
             let deadline = sim.c.s.deadline_of(&x).expect("a licensed claim's deadline");
             sim.block(deadline + 1, vec![], None);
         }
-        assert!(matches!(phase_of(&sim.c.s, &x), Some(PalwClaimPhaseV2::Final { .. })), "{}: x Final: {:?}", class.label(), phase_of(&sim.c.s, &x));
+        assert!(
+            matches!(phase_of(&sim.c.s, &x), Some(PalwClaimPhaseV2::Final { .. })),
+            "{}: x Final: {:?}",
+            class.label(),
+            phase_of(&sim.c.s, &x)
+        );
         check(&sim, "Final");
         let mut t = sim.c.daa;
         let end = t + sim.c.sp.claim_retirement_daa() + 400;
@@ -600,7 +619,8 @@ fn no_free_void_a_void_never_returns_more_than_serving() {
     for class in [Class::Floor, Class::K8] {
         for size in [13_000u64, 100_000] {
             let bond = bond_key(90);
-            let mut runs = [Sim::new(params_for(class, true), class, &[(90, size)]), Sim::new(params_for(class, true), class, &[(90, size)])];
+            let mut runs =
+                [Sim::new(params_for(class, true), class, &[(90, size)]), Sim::new(params_for(class, true), class, &[(90, size)])];
             let mut paid = [BTreeMap::new(), BTreeMap::new()];
             let id = runs[0].claim(90, 0xF0F0).expect("admitted");
             assert_eq!(runs[1].claim(90, 0xF0F0), Some(id));
@@ -636,7 +656,8 @@ fn no_free_void_a_void_never_returns_more_than_serving() {
 fn no_free_void_a_void_keeps_the_obligation_and_shields_no_conviction() {
     for class in [Class::Floor, Class::K8] {
         let bond = bond_key(90);
-        let mut runs = [Sim::new(params_for(class, true), class, &[(90, 100_000)]), Sim::new(params_for(class, true), class, &[(90, 100_000)])];
+        let mut runs =
+            [Sim::new(params_for(class, true), class, &[(90, 100_000)]), Sim::new(params_for(class, true), class, &[(90, 100_000)])];
         let id = runs[0].claim(90, 0xE4E4).expect("admitted");
         assert_eq!(runs[1].claim(90, 0xE4E4), Some(id));
         let accepted = runs[0].c.claim(&id).accepted_daa;
@@ -670,7 +691,11 @@ fn no_free_void_a_void_keeps_the_obligation_and_shields_no_conviction() {
         assert_eq!(collected[0], collected[1], "{}: the void shielded nothing", class.label());
         // Past the hold the commitment is released (or charged): never before.
         runs[0].block(voided_at + h_obl + 1, vec![], None);
-        println!("NO-FREE-VOID (b) {}: commitment {commitment} held to voided + {h_obl}; the in-hold conviction collected {} on both runs", class.label(), collected[0]);
+        println!(
+            "NO-FREE-VOID (b) {}: commitment {commitment} held to voided + {h_obl}; the in-hold conviction collected {} on both runs",
+            class.label(),
+            collected[0]
+        );
     }
 }
 
@@ -717,7 +742,10 @@ fn tape_random_step(tape: &mut Tape, rng: &mut Rng, producers: &[u64], seeds: &m
             let id = lists[1].remove(0);
             if let Some(PalwClaimPhaseV2::PanelBound { .. }) = tape.c.s.claim(&id).map(|c| c.phase.clone()) {
                 let bound = tape.c.s.panel(&id).expect("bound").bound_daa;
-                tape.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+                tape.step(vec![PalwConsensusObjectV2::ReceiptLicensed {
+                    claim: id,
+                    receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+                }]);
                 lists[2].push(id);
             } else {
                 tape.step(vec![]);
@@ -756,7 +784,8 @@ fn reorg_determinism_every_walk_reaches_the_fresh_folds_roots() {
         let mut c = Chain::new(params_for(Class::Floor, true));
         c.attribution = true;
         let producers: Vec<u64> = (0..4).map(|i| 90 + i).collect();
-        let mut objects: Vec<PalwConsensusObjectV2> = producers.iter().map(|n| bond_obj(*n, SIZES[rng.below(4) as usize] * MSK)).collect();
+        let mut objects: Vec<PalwConsensusObjectV2> =
+            producers.iter().map(|n| bond_obj(*n, SIZES[rng.below(4) as usize] * MSK)).collect();
         objects.push(bond_obj(CHALLENGER, 400_000 * MSK));
         c.step(&objects);
         let mut tape = Tape::new(c);
@@ -802,7 +831,10 @@ fn reorg_determinism_holds_on_the_8k_class() {
     let _b = tape.model_attempt(class_id, 91, 0x8A02);
     let seats = honest_seats(&tape.c.p, 5);
     let bound = tape.bind_to(a, &seats);
-    tape.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: a, receipts: seats.iter().map(|(k, _)| valid(a, *k, bound)).collect() }]);
+    tape.step(vec![PalwConsensusObjectV2::ReceiptLicensed {
+        claim: a,
+        receipts: seats.iter().map(|(k, _)| valid(a, *k, bound)).collect(),
+    }]);
     tape.step(vec![]);
     tape.revert_to_base_and_reapply();
     tape.ibd_from(tape.base.clone());

@@ -59,7 +59,10 @@ fn demand_positions_sort_numerically_not_by_their_little_endian_bytes() {
     use misaka_palw_kernel::ledger::DemandRowV1;
     let mut w = World::new();
     for position in [256u32, 1, 70_000, 2] {
-        w.l.demands.insert(([7; 64], 0, position), DemandRowV1 { demanders: vec![([9; 64], 10)], filed_daa: 1, deadline_daa: 21, last: None });
+        w.l.demands.insert(
+            ([7; 64], 0, position),
+            DemandRowV1 { demanders: vec![([9; 64], 10)], filed_daa: 1, deadline_daa: 21, last: None },
+        );
     }
     check(&w);
 }

@@ -22,17 +22,21 @@ use stage1::*;
 
 use kaspa_consensus_core::config::params::{
     PALW_T12_CAPACITY_EMISSION_BUDGET_V1, PALW_T12_CAPACITY_MULTI_CLAIM_V1, PALW_T12_CAPACITY_RHO_BREAKER_V1,
-    PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_CAPACITY_RHO100_STEP_3_V1, PALW_T12_CAPACITY_RHO250_STEP_4_V1,
-    PALW_T12_CAPACITY_RHO1000_STEP_5_V1, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
-    PALW_T12_INT11_RHO1000_DAA, PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA, PalwPostLaunchFenceV1, palw_t12_arm_int11_flag_day_at_v1,
-    palw_t12_release_v5_params, palw_t12_release_v6_params,
+    PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_3_V1,
+    PALW_T12_CAPACITY_RHO250_STEP_4_V1, PALW_T12_CAPACITY_RHO1000_STEP_5_V1, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
+    PALW_T12_INT11_RHO100_DAA, PALW_T12_INT11_RHO250_DAA, PALW_T12_INT11_RHO1000_DAA, PalwPostLaunchFenceV1,
+    palw_t12_arm_int11_flag_day_at_v1, palw_t12_release_v5_params, palw_t12_release_v6_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepOffsetV1};
-use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_TRACE_CHUNKS, PalwAttemptEnvelopeV2, attempt_id_v2, attempt_trace_manifest_root_v1};
-use kaspa_consensus_core::palw_audit_door_v1::{PalwAuditEntryV1, palw_audit_pool_of_claim_v1, palw_capacity_claim_credited_v1, palw_capacity_claim_k_aud_v1};
+use kaspa_consensus_core::palw_attempt_v2::{
+    PALW_ATTEMPT_V2_TRACE_CHUNKS, PalwAttemptEnvelopeV2, attempt_id_v2, attempt_trace_manifest_root_v1,
+};
+use kaspa_consensus_core::palw_audit_door_v1::{
+    PalwAuditEntryV1, palw_audit_pool_of_claim_v1, palw_capacity_claim_credited_v1, palw_capacity_claim_k_aud_v1,
+};
 use kaspa_consensus_core::palw_capacity_s567_v1::{
-    PALW_EMISSION_BLOCKS_PER_DAA_V1, PALW_RIDERS_MAX_V1, PALW_RIDERS_WINDOW_DAA_V1, PALW_RHO_LADDER_V1, palw_emission_budget_milli_v1,
+    PALW_EMISSION_BLOCKS_PER_DAA_V1, PALW_RHO_LADDER_V1, PALW_RIDERS_MAX_V1, PALW_RIDERS_WINDOW_DAA_V1, palw_emission_budget_milli_v1,
     palw_rider_challenge_v1,
 };
 use kaspa_consensus_core::palw_issuance_slots_v1::palw_issuance_read_at_v1;
@@ -132,7 +136,18 @@ fn the_release_arms_the_package_at_h_and_the_two_steps_at_the_directed_heights()
     }
     assert_eq!(fence_at(&shipped, "palw_capacity_aggregate_liability_step_4"), Some(5_490));
     assert_eq!(fence_at(&shipped, "palw_capacity_aggregate_liability_step_5"), Some(5_585));
-    for (daa, want) in [(1_700, 10), (5_299, 10), (5_300, 25), (5_394, 25), (5_395, 100), (5_489, 100), (5_490, 250), (5_584, 250), (5_585, 1_000), (50_000, 1_000)] {
+    for (daa, want) in [
+        (1_700, 10),
+        (5_299, 10),
+        (5_300, 25),
+        (5_394, 25),
+        (5_395, 100),
+        (5_489, 100),
+        (5_490, 250),
+        (5_584, 250),
+        (5_585, 1_000),
+        (50_000, 1_000),
+    ] {
         assert_eq!(shipped.palw_capacity_step_at_v1(daa).map(|s| s.rho), Some(want), "ρ at {daa}");
     }
     // Heights no other fence uses.
@@ -182,17 +197,13 @@ fn every_prerequisite_is_refused_where_it_is_missing() {
     for f in S567 {
         (f.set)(&mut late, Some(ForkActivation::new(H + 50)));
     }
-    late.palw_capacity_aggregate_liability.as_mut().unwrap().steps.push(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityStepV1 {
-        from_daa: H + 40,
-        rho: 250,
-        q_credit_permille: 250,
-    });
+    late.palw_capacity_aggregate_liability.as_mut().unwrap().steps.push(
+        kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: H + 40, rho: 250, q_credit_permille: 250 },
+    );
     late.sync_palw_capacity_liability();
     assert!(late.validate_palw_v2().is_err(), "a ρ = 250 step below the fences it needs");
     // F-M1 without each of its prerequisites.
-    for (name, undo) in [
-        ("emission", &PALW_T12_CAPACITY_EMISSION_BUDGET_V1 as &PalwPostLaunchFenceV1),
-    ] {
+    for (name, undo) in [("emission", &PALW_T12_CAPACITY_EMISSION_BUDGET_V1 as &PalwPostLaunchFenceV1)] {
         let mut p = tier_params(Class::Floor, 100);
         (undo.set)(&mut p, None);
         assert!(p.validate_palw_v2().is_err(), "F-M1 without {name}");
@@ -242,7 +253,10 @@ fn the_two_new_steps_append_like_the_others() {
     }
     p.validate_palw_v2().expect("the whole ramp validates");
     let rho = |daa: u64| p.palw_capacity_step_at_v1(daa).map(|s| s.rho);
-    assert_eq!([rho(H), rho(H + 10), rho(H + 20), rho(H + 30), rho(H + 40), rho(H + 4_000)], [Some(10), Some(25), Some(100), Some(250), Some(1_000), Some(1_000)]);
+    assert_eq!(
+        [rho(H), rho(H + 10), rho(H + 20), rho(H + 30), rho(H + 40), rho(H + 4_000)],
+        [Some(10), Some(25), Some(100), Some(250), Some(1_000), Some(1_000)]
+    );
     let full = ids(&p);
     let mut dropped = p.clone();
     (PALW_T12_CAPACITY_RHO250_STEP_4_V1.set)(&mut dropped, None);
@@ -350,8 +364,15 @@ fn a_lead_and_its_riders_hold_exactly_the_leads_carve() {
             let riders: u64 = rider_ids.iter().map(|id| sim.c.claim(id).escrowed_reward).sum();
             assert_eq!(kept + riders, carve, "ρ = {rho}, n = {n}: the lead's carve, to the sompi");
             assert!(kept >= riders / n as u64, "the lead keeps at least a rider's share");
-            assert_eq!(sim.c.s.emission_spent_milli_v1(day + 1).max(sim.c.s.emission_spent_milli_v1(day)), 1_000, "riders charge nothing");
-            assert!(rider_ids.iter().all(|id| matches!(sim.c.claim(id).phase, PalwClaimPhaseV2::Provisional)), "each rider is a claim of its own");
+            assert_eq!(
+                sim.c.s.emission_spent_milli_v1(day + 1).max(sim.c.s.emission_spent_milli_v1(day)),
+                1_000,
+                "riders charge nothing"
+            );
+            assert!(
+                rider_ids.iter().all(|id| matches!(sim.c.claim(id).phase, PalwClaimPhaseV2::Provisional)),
+                "each rider is a claim of its own"
+            );
             // Each rider is its own claim end to end: bound, licensed, audited, Final (one of them, to keep the run short).
             let seats = sim.seats();
             let rider = rider_ids[0];
@@ -369,7 +390,11 @@ fn a_lead_and_its_riders_hold_exactly_the_leads_carve() {
 /// across a budget-full day stays ≤ sixteen carves with riders on every lead.
 #[test]
 fn emission_per_daa_is_invariant_to_the_number_of_claims() {
-    let mut sim = Sim::new(tier_params(Class::Floor, 1_000), Class::Floor, &[(90, 1_000_000), (91, 1_000_000), (92, 1_000_000), (93, 1_000_000)]);
+    let mut sim = Sim::new(
+        tier_params(Class::Floor, 1_000),
+        Class::Floor,
+        &[(90, 1_000_000), (91, 1_000_000), (92, 1_000_000), (93, 1_000_000)],
+    );
     let day = sim.c.daa + 1;
     let mut leads = Vec::new();
     for k in 0..20u64 {
@@ -476,9 +501,14 @@ fn a_refused_batch_leaves_the_lead_whole() {
 /// clean epochs raise it one rung; and it is never above the schedule.
 #[test]
 fn the_breaker_lowers_the_tier_on_a_backlog_and_a_false_audit_and_raises_it_after_two_clean_epochs() {
-    let mut sim = Sim::new(tier_params(Class::Floor, 1_000), Class::Floor, &[(90, 1_000_000), (91, 1_000_000), (92, 1_000_000), (93, 1_000_000), (94, 13_000)]);
+    let mut sim = Sim::new(
+        tier_params(Class::Floor, 1_000),
+        Class::Floor,
+        &[(90, 1_000_000), (91, 1_000_000), (92, 1_000_000), (93, 1_000_000), (94, 13_000)],
+    );
     let collateral = sim.c.s.bond(&bond_key(94)).unwrap().collateral;
-    let cap_at = |sim: &Sim| palw_issuance_read_at_v1(&sim.c.s, &sim.c.sp, &bond_key(94), collateral, sim.c.daa + 1).expect("F-S reads").cap;
+    let cap_at =
+        |sim: &Sim| palw_issuance_read_at_v1(&sim.c.s, &sim.c.sp, &bond_key(94), collateral, sim.c.daa + 1).expect("F-S reads").cap;
     assert_eq!(cap_at(&sim), 2_000, "13,000 MSK at ρ = 1000: u = 2, N_out = 2,000");
     // 24 claims left unbound in epoch 1 (DAA 1,000–1,999): each a BindTimeout void, 24 of 24 reaching their anchor.
     let day0 = sim.c.daa;
@@ -487,7 +517,12 @@ fn the_breaker_lowers_the_tier_on_a_backlog_and_a_false_audit_and_raises_it_afte
         sim.block(daa, vec![], Some((90 + k % 4, 0xA000 + k))).expect("admitted");
     }
     sim.block(day0 + 700, vec![], None);
-    let voids = sim.c.s.claims_iter().filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. })).count();
+    let voids = sim
+        .c
+        .s
+        .claims_iter()
+        .filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }))
+        .count();
     assert!(voids >= 20, "a backlog: {voids} BindTimeout voids");
     let row = sim.c.s.rho_breaker_v1().expect("the breaker counted").clone();
     assert_eq!((row.bind_voids as usize, row.epoch, row.level), (voids, 1, 7), "counted in epoch 1, not yet judged");
@@ -698,7 +733,10 @@ fn ten_small_bonds_never_beat_one_bond_of_their_total() {
         let weight_whole = whole.c.s.capacity_weight_index().term(&bond_key(90), None);
         println!("split-neutral ρ = {rho}: ten 13k bonds admitted {a}, one 130k bond {b}; weight {weight_split} vs {weight_whole}");
         assert!(a <= b + 10 * 16, "ρ = {rho}: the pieces admitted {a} claims against the whole's {b}");
-        assert!(weight_split <= weight_whole.max(1) * 11 / 10 + 1 || a <= b, "ρ = {rho}: the pieces' weight {weight_split} against the whole's {weight_whole}");
+        assert!(
+            weight_split <= weight_whole.max(1) * 11 / 10 + 1 || a <= b,
+            "ρ = {rho}: the pieces' weight {weight_split} against the whole's {weight_whole}"
+        );
     }
 }
 
@@ -724,8 +762,13 @@ fn the_slot_terms_are_linear_in_units_at_every_rho() {
             let whole = palw_issuance_units_v1(total);
             let units: Vec<u64> = parts.iter().map(|c| palw_issuance_units_v1(*c)).collect();
             assert!(units.iter().sum::<u64>() <= whole);
-            assert!(units.iter().map(|u| palw_issuance_outstanding_cap_v1(*u, rho)).sum::<u64>() <= palw_issuance_outstanding_cap_v1(whole, rho));
-            assert!(units.iter().map(|u| palw_issuance_rate_milli_v1(*u, rho)).sum::<u64>() <= palw_issuance_rate_milli_v1(whole, rho));
+            assert!(
+                units.iter().map(|u| palw_issuance_outstanding_cap_v1(*u, rho)).sum::<u64>()
+                    <= palw_issuance_outstanding_cap_v1(whole, rho)
+            );
+            assert!(
+                units.iter().map(|u| palw_issuance_rate_milli_v1(*u, rho)).sum::<u64>() <= palw_issuance_rate_milli_v1(whole, rho)
+            );
             // The burst is one DAA's refill with a one-claim floor: pieces below the floor may each hold it, the floor binds only at u·ρ < 20.
             let burst: u64 = units.iter().map(|u| palw_issuance_burst_milli_v1(*u, rho)).sum();
             let floor_pieces = units.iter().filter(|u| palw_issuance_rate_milli_v1(**u, rho) < 1_000).count() as u64;
@@ -755,7 +798,12 @@ fn audit_1004_a_batch_with_a_strangers_key_is_refused_before_the_checkpoint() {
         stranger.attempt.executor_pubkey = vec![0x5A; stranger.attempt.executor_pubkey.len()];
         sim.step(vec![PalwConsensusObjectV2::AttemptRidersV1 { lead, riders: vec![stranger] }]);
         assert_eq!(skipped(&sim, "riders refused"), 1, "fence {on}: the batch is a skip: {:?}", sim.skips);
-        assert_eq!(skipped(&sim, "registered key"), usize::from(on), "fence {on}: refused by name on the cheap test only past the fence: {:?}", sim.skips);
+        assert_eq!(
+            skipped(&sim, "registered key"),
+            usize::from(on),
+            "fence {on}: refused by name on the cheap test only past the fence: {:?}",
+            sim.skips
+        );
         assert_eq!(sim.c.claim(&lead), whole, "the lead is whole");
         assert!(sim.c.s.rider_mark_of_v1(&lead).is_none());
         // A good batch is taken.

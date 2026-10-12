@@ -146,11 +146,8 @@ pub fn palw_seat_tier_v1(item: &PalwSeatScheduleInV1, quorum: usize, now_daa: u6
         return if waited >= PALW_SEAT_SATISFIED_AFTER_DAA_V1 { (PalwSeatTierV1::Needed, 1) } else { (PalwSeatTierV1::Satisfied, 0) };
     }
     // The seats that have not answered, ranked; this seat is among them (its duty is due).
-    let mut pending: Vec<(u64, &PalwBondKeyV2)> = panel
-        .iter()
-        .filter(|seat| !others.contains(seat))
-        .map(|seat| (palw_seat_rank_key_v1(&item.claim_id, seat), seat))
-        .collect();
+    let mut pending: Vec<(u64, &PalwBondKeyV2)> =
+        panel.iter().filter(|seat| !others.contains(seat)).map(|seat| (palw_seat_rank_key_v1(&item.claim_id, seat), seat)).collect();
     pending.sort();
     let rank = pending.iter().position(|(_, seat)| **seat == item.me);
     let primary = rank.is_some_and(|rank| rank < short + PALW_SEAT_PRIMARY_SPARE_V1);
@@ -170,8 +167,7 @@ pub fn palw_seat_light_pending_v1(items: &[PalwSeatScheduleInV1], quorum: usize,
 pub fn palw_seat_schedule_order_v1(items: &[PalwSeatScheduleInV1], quorum: usize, now_daa: u64) -> Vec<usize> {
     let tiers: Vec<(PalwSeatTierV1, usize)> = items.iter().map(|item| palw_seat_tier_v1(item, quorum, now_daa)).collect();
     // The guard: the oldest due claims that are not already at quorum.
-    let mut candidates: Vec<usize> =
-        (0..items.len()).filter(|i| items[*i].due && tiers[*i].0 != PalwSeatTierV1::Satisfied).collect();
+    let mut candidates: Vec<usize> = (0..items.len()).filter(|i| items[*i].due && tiers[*i].0 != PalwSeatTierV1::Satisfied).collect();
     candidates.sort_by_key(|i| (items[*i].deadline, items[*i].claim_id));
     // A big (slow-class, not yet urgent) claim waits behind the lighter ones and takes no guard place.
     candidates.retain(|i| !items[*i].big);
@@ -258,7 +254,11 @@ mod tests {
             assert_eq!(palw_seat_tier_v1(&items[index], 4, 110), (PalwSeatTierV1::Needed, short), "claim {index} is primary work");
         }
         assert_eq!(palw_seat_tier_v1(&items[5], 4, 110).0, PalwSeatTierV1::Satisfied);
-        assert_eq!(palw_seat_schedule_order_v1(&items, 4, 110), vec![0, 1, 2, 4, 3, 5], "guard, then closest to quorum, satisfied last");
+        assert_eq!(
+            palw_seat_schedule_order_v1(&items, 4, 110),
+            vec![0, 1, 2, 4, 3, 5],
+            "guard, then closest to quorum, satisfied last"
+        );
     }
 
     /// **The oldest-first guard holds under a standing backlog**: with every claim old (an age
@@ -346,7 +346,11 @@ mod tests {
         assert_eq!(palw_seat_tier_v1(&it, 3, 100 + PALW_SEAT_BACKUP_AFTER_DAA_V1).0, PalwSeatTierV1::Needed, "aged: primary work");
         let satisfied = item(9, 5, &[1, 2, 3], 100);
         assert_eq!(palw_seat_tier_v1(&satisfied, 3, 100 + PALW_SEAT_SATISFIED_AFTER_DAA_V1 - 1).0, PalwSeatTierV1::Satisfied);
-        assert_eq!(palw_seat_tier_v1(&satisfied, 3, 100 + PALW_SEAT_SATISFIED_AFTER_DAA_V1).0, PalwSeatTierV1::Needed, "aged: replayed anyway");
+        assert_eq!(
+            palw_seat_tier_v1(&satisfied, 3, 100 + PALW_SEAT_SATISFIED_AFTER_DAA_V1).0,
+            PalwSeatTierV1::Needed,
+            "aged: replayed anyway"
+        );
     }
 
     /// **Seats do not all pick the same claims**: over many claims with nothing pooled, exactly one seat

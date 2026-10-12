@@ -21,7 +21,9 @@ use kaspa_consensus_core::palw_freeprompt_v3::{
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_hashes::Hash64;
 use misaka_palw_remote::evidence::{ClaimRoots, EvidenceManifestV1, ManifestLimits, manifest_id_v1};
-use misaka_palw_remote::transport::{EvidenceProvider, LOCAL_OBSERVATION, PublishReportV1, fetch_claim_material_any, publish_to_providers_v1};
+use misaka_palw_remote::transport::{
+    EvidenceProvider, LOCAL_OBSERVATION, PublishReportV1, fetch_claim_material_any, publish_to_providers_v1,
+};
 
 /// Material chunk size: the same the rail's `--evidence-out` uses (1 MiB), so a manifest built here and one built there for the same
 /// claim are the same manifest.
@@ -71,7 +73,9 @@ pub fn build(commitment: &PalwFreePromptCommitmentV3, prompt_ids: &[u32], captur
         &chunks,
     );
     manifest.validate_shape(&ManifestLimits::default()).map_err(|e| format!("the evidence manifest is not admissible: {e}"))?;
-    manifest.verify_claim_binding(&claim_roots(commitment)).map_err(|e| format!("the evidence manifest does not agree with its own claim: {e}"))?;
+    manifest
+        .verify_claim_binding(&claim_roots(commitment))
+        .map_err(|e| format!("the evidence manifest does not agree with its own claim: {e}"))?;
     Ok(ClaimEvidence {
         claim_hex: faster_hex::hex_string(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment).as_byte_slice()),
         manifest,
@@ -119,8 +123,13 @@ pub struct PublicMaterial {
 /// **The public verifier's checks on fetched material**, beyond the per-chunk hashes the transport already made: it is an `FPC1` payload
 /// whose prompt ids bind its job (in the network's form), and the job is THE CLAIM'S job — not another claim's material served under this
 /// claim's manifest. What it cannot check is the arithmetic: that is a replay (the seat's, or anyone's) over this material.
-pub fn verify_public_material(bytes: &[u8], commitment: &PalwFreePromptCommitmentV3, form: PalwPromptIdsFormV1) -> Result<PublicMaterial, String> {
-    let payload = palw_fp_capture_decode_v1(bytes, form).ok_or("the fetched bytes are not an FPC1 payload whose prompt ids bind its job")?;
+pub fn verify_public_material(
+    bytes: &[u8],
+    commitment: &PalwFreePromptCommitmentV3,
+    form: PalwPromptIdsFormV1,
+) -> Result<PublicMaterial, String> {
+    let payload =
+        palw_fp_capture_decode_v1(bytes, form).ok_or("the fetched bytes are not an FPC1 payload whose prompt ids bind its job")?;
     if payload.material.job != commitment.job {
         return Err("the fetched material is for a different job than the claim's".to_string());
     }
@@ -166,10 +175,12 @@ mod tests {
         assert_eq!(out["misaka"]["committed"], true);
         let job_id = out["misaka"]["fp_job_id"].as_str().unwrap().to_string();
         let stem = format!("fp-job-{}", &job_id[..16]);
-        let commitment: PalwFreePromptCommitmentV3 = borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
+        let commitment: PalwFreePromptCommitmentV3 =
+            borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
         let result: kaspa_consensus_core::palw_freeprompt_v3::PalwFpWorkerResultV3 =
             borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.result.borsh"))).unwrap()).unwrap();
-        let capture = read_capture(dir, &kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&commitment.job)).expect("the worker retained its capture");
+        let capture = read_capture(dir, &kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&commitment.job))
+            .expect("the worker retained its capture");
         let _ = (chain::ChainFacts::default(), JobRunner::processes(&w));
         (commitment, result.prompt_token_ids, capture)
     }
@@ -283,8 +294,19 @@ mod tests {
         cfg.evidence_min_copies = 2;
         let refused = crate::testkit::chat(&cfg, &id, &w, &facts, &source, &body, &serving::AlwaysPresent).unwrap();
         assert_eq!(refused["misaka"]["committed"], false);
-        assert!(refused["misaka"]["not_committed_because"].as_str().unwrap().contains("evidence"), "{}", refused["misaka"]["not_committed_because"]);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".commitment-unsigned.borsh")).count(), 0);
+        assert!(
+            refused["misaka"]["not_committed_because"].as_str().unwrap().contains("evidence"),
+            "{}",
+            refused["misaka"]["not_committed_because"]
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".commitment-unsigned.borsh"))
+                .count(),
+            0
+        );
         assert_eq!(refused["misaka"]["request"]["status"], "answered");
 
         // (2) One copy suffices at --evidence-min-copies 1: committed, with a report that says where the copies are.
@@ -295,7 +317,8 @@ mod tests {
         assert_eq!(ok["misaka"]["evidence"]["provenance"], LOCAL_OBSERVATION);
         let job_id = ok["misaka"]["fp_job_id"].as_str().unwrap().to_string();
         let stem = format!("fp-job-{}", &job_id[..16]);
-        let commitment: PalwFreePromptCommitmentV3 = borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
+        let commitment: PalwFreePromptCommitmentV3 =
+            borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
         let summary: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join(format!("{stem}.json"))).unwrap()).unwrap();
         assert_eq!(summary["evidence"]["verified_copies"], 1, "the outbox summary records the placement");
 

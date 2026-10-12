@@ -59,13 +59,14 @@ impl TensorIndex {
     /// Read the headers of a checkpoint directory, a `.safetensors` file or an index whose shards
     /// are present. Reads headers only: no tensor data.
     pub fn from_checkpoint_path(path: &Path) -> Result<Self> {
-        if path.extension().and_then(|e| e.to_str()) == Some("json") && !path.parent().map(|d| d.join("model.safetensors").exists()).unwrap_or(false) {
+        if path.extension().and_then(|e| e.to_str()) == Some("json")
+            && !path.parent().map(|d| d.join("model.safetensors").exists()).unwrap_or(false)
+        {
             // An index: names only unless the shards sit beside it.
             let dir = path.parent().unwrap_or(Path::new("."));
-            let v: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?,
-            )
-            .map_err(|e| LowerError::weights(format!("index: {e}")))?;
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?)
+                    .map_err(|e| LowerError::weights(format!("index: {e}")))?;
             let wm = v.get("weight_map").and_then(|w| w.as_object()).ok_or_else(|| LowerError::weights("index has no weight_map"))?;
             let shards_present = wm.values().filter_map(|x| x.as_str()).all(|s| dir.join(s).exists());
             if !shards_present {

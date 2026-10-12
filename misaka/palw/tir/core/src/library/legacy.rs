@@ -568,7 +568,8 @@ impl BlockBuilder<'_> {
         // `decay` is `[heads]` (the library's gate: one per head) or `[heads, d_k]` (a forget gate per key channel, Kimi delta attention:
         // the state's last axis is the key channel, so the decay broadcasts as `[heads, 1, d_k]` and nothing else of the step changes).
         let numel: u64 = self.ty(decay).shape.iter().map(|d| if let Dim::Fixed(n) = d { *n as u64 } else { 0 }).product();
-        let dec = if dk > 1 && numel == h as u64 * dk as u64 { self.reshape_fixed(decay, &[h, 1, dk]) } else { b_reshape3(self, decay, h) };
+        let dec =
+            if dk > 1 && numel == h as u64 * dk as u64 { self.reshape_fixed(decay, &[h, 1, dk]) } else { b_reshape3(self, decay, h) };
         let sd = self.mul(Ref::State(state), dec, DType::I64);
         let sd = self.shr(sd, K, Rounding::HalfAwayFromZero, DType::I64);
         let s1 = self.clamp(sd, -smax, smax, DType::I32);

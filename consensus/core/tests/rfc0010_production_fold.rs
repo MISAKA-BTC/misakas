@@ -115,7 +115,9 @@ impl V3 {
     fn extras(&self, daa: u64) -> PalwTransitionExtrasV1 {
         let mut e = self.c.extras_at(daa);
         e.panel_v3 = Some(self.inputs.clone());
-        if let Some(route) = &self.source_route { e.kernel_route = Some(route.clone()); }
+        if let Some(route) = &self.source_route {
+            e.kernel_route = Some(route.clone());
+        }
         e
     }
 
@@ -1364,18 +1366,22 @@ fn retired_population_compacts_after_actual_native_retirement_and_op220_keeps_ty
     };
     let mut w = V3::new();
     let mut p = w.c.p.clone();
-    let mut policy = engine_policy(); policy.max_assignments_per_block = 1; policy.max_admissions_per_block = 1;
+    let mut policy = engine_policy();
+    policy.max_assignments_per_block = 1;
+    policy.max_admissions_per_block = 1;
     p.palw_permissionless_panel_v1 = None;
     p.palw_permissionless_panel_retired_v1 = Some(PalwPermissionlessPanelRetiredV1 { activation: ForkActivation::new(FENCE), policy });
     assert!(p.validate_palw_v2().is_err(), "an actual public activation stays refused");
-    p.sync_palw_permissionless_panel_v1(); w.c = Chain::new(p);
+    p.sync_palw_permissionless_panel_v1();
+    w.c = Chain::new(p);
     assert!(w.c.sp.claim_retirement_daa() > 0);
     let (id, bound_at) = w.run_to_bound(0xA410);
     assert_eq!(w.engine().cursor().version, WIRE_VERSION_RETIRED_V1);
     let frozen = w.record(&id).snapshot.unwrap();
     let subject = w.record(&id).claim;
     let seats = seats_of_panel(&w.c.s, &id);
-    w.step_with(&[quorum(id, &seats, bound_at + 1)]); w.step();
+    w.step_with(&[quorum(id, &seats, bound_at + 1)]);
+    w.step();
     assert!(matches!(w.record(&id).phase, ClaimPhaseV3::Released { .. }));
     assert!(w.record(&id).snapshot.is_some(), "ReceiptLicensed never compacts a population");
     let final_at = w.c.s.deadline_of(&id).unwrap() + 1;
@@ -1386,19 +1392,26 @@ fn retired_population_compacts_after_actual_native_retirement_and_op220_keeps_ty
     w.step_at(retire_at, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(w.c.s.claim(&id).is_none(), "the original native retirement funnel removed its terminal claim");
     assert!(w.record(&id).snapshot.is_some(), "one trusted parent checkpoint must authenticate native removal");
-    let authority_root = w.c.s.state_root(); let authority_point = w.c.s.last_point().unwrap().block;
-    let before = w.c.s.clone(); w.step();
-    let record = w.record(&id); let ClaimPhaseV3::Retired(archive) = &record.phase else { panic!("{:?}", record.phase) };
-    assert_eq!(archive.authority.native_parent_root, authority_root); assert_eq!(archive.authority.native_parent_checkpoint, authority_point);
+    let authority_root = w.c.s.state_root();
+    let authority_point = w.c.s.last_point().unwrap().block;
+    let before = w.c.s.clone();
+    w.step();
+    let record = w.record(&id);
+    let ClaimPhaseV3::Retired(archive) = &record.phase else { panic!("{:?}", record.phase) };
+    assert_eq!(archive.authority.native_parent_root, authority_root);
+    assert_eq!(archive.authority.native_parent_checkpoint, authority_point);
     assert_eq!(archive.population.as_ref().unwrap().root, frozen.root);
     assert_eq!(archive.population.as_ref().unwrap().candidate_count as usize, frozen.candidates.len());
-    assert_eq!(record.claim, subject); assert!(record.snapshot.is_none() && record.binding_history.is_empty());
+    assert_eq!(record.claim, subject);
+    assert!(record.snapshot.is_none() && record.binding_history.is_empty());
     assert!(w.engine().work_id_rows().contains(&subject.work_id));
     let observation = panel_v3_observation_v1(&w.c.s, &w.c.sp, &[id], 1);
-    assert!(observation.unknown.is_empty()); assert_eq!(observation.claims[0].engine_phase, Some("retired"));
+    assert!(observation.unknown.is_empty());
+    assert_eq!(observation.claims[0].engine_phase, Some("retired"));
     assert_eq!(observation.claims[0].retirement.as_ref(), Some(archive));
     assert_eq!(observation.claims[0].terminal.as_ref().unwrap().reason, "RETIREMENT_COMPACTED");
-    assert_eq!(observation.overview.retired_tombstones, Some(1)); assert_eq!(observation.overview.active_population_claims, Some(0));
+    assert_eq!(observation.overview.retired_tombstones, Some(1));
+    assert_eq!(observation.overview.active_population_claims, Some(0));
     assert!(w.c.s.state_root() != before.state_root());
     // Every step above already checks actual native deltas replay/undo and root-verified carriage.
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&w.c.s)).unwrap();
@@ -1434,9 +1447,17 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
     let mirror = *v.c.sp.panel_v3().unwrap();
     let opv = PalwPanelFreeFenceV1::at(ForkActivation::new(FENCE));
     v.source_route = Some(PalwKernelRouteExtrasV1 {
-        network_domain: mirror.network, ruleset_digest: mirror.ruleset, chain_genesis: v.c.p.genesis.hash,
-        opv: Some(PalwKernelOpvExtrasV1 { policy: opv.opv_policy(), denied_classes: Vec::new(), min_effective_bits: 128,
-            sampled_conformance_gates_reward: false, test_eligible: Vec::new(), reward_gate: None }),
+        network_domain: mirror.network,
+        ruleset_digest: mirror.ruleset,
+        chain_genesis: v.c.p.genesis.hash,
+        opv: Some(PalwKernelOpvExtrasV1 {
+            policy: opv.opv_policy(),
+            denied_classes: Vec::new(),
+            min_effective_bits: 128,
+            sampled_conformance_gates_reward: false,
+            test_eligible: Vec::new(),
+            reward_gate: None,
+        }),
         beacon_source: Some(PalwBeaconSourceFenceV1::unapproved_probe_at(ForkActivation::new(FENCE))),
         ..Default::default()
     });
@@ -1444,16 +1465,19 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
     // Exercise that production writer before the epoch's parent checkpoint. As
     // elsewhere in this pure-fold fixture, signatures are already-admitted inputs;
     // this does not establish the native signature or paid-source admission gate.
-    let route_actor = bundle(&v.c.p).genesis_objects.iter().filter_map(|object| match object {
-        PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
-        _ => None,
-    }).nth(1).expect("a distinct existing genesis bond");
+    let route_actor = bundle(&v.c.p)
+        .genesis_objects
+        .iter()
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .nth(1)
+        .expect("a distinct existing genesis bond");
     let init = misaka_palw_kernel::route::KernelRouteObjectV1::RequestExit {
         bond: kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&route_actor),
     };
-    v.step_with(&[PalwConsensusObjectV2::KernelRouteV1 {
-        bytes: init.encode(), signer: route_actor, signature: Vec::new(),
-    }]);
+    v.step_with(&[PalwConsensusObjectV2::KernelRouteV1 { bytes: init.encode(), signer: route_actor, signature: Vec::new() }]);
     assert!(v.c.s.kernel_route().is_some(), "an accepted route object creates authenticated parent state");
     let id = v.floor_claim(0x7A);
     v.step();
@@ -1463,8 +1487,14 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
     let seal = record.seal.unwrap();
     let release = seal.anchor_slot;
     let source_checkpoint = v.engine().tip();
-    let request = BeaconRequestV1 { network: mirror.network, ruleset: mirror.ruleset, scheme: panel.beacon_scheme,
-        epoch: seal.beacon_epoch, release_daa: release, deadline_daa: release + 200 };
+    let request = BeaconRequestV1 {
+        network: mirror.network,
+        ruleset: mirror.ruleset,
+        scheme: panel.beacon_scheme,
+        epoch: seal.beacon_epoch,
+        release_daa: release,
+        deadline_daa: release + 200,
+    };
     let delta = v.step_at(release + 3, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(delta.entries.iter().any(|entry| matches!(entry,
         PalwDeltaEntryV2::KernelRouteRow { table, old: None, new: Some(_), .. } if *table == PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1)));
@@ -1480,6 +1510,9 @@ fn paid_panel_source_subject_freezes_in_actual_fold_replay_and_carriage_and_surv
     // delta replay and cold carriage reload, both checked by every step_at.
     v.step_at(release + 201, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(v.record(&id).phase.terminal());
-    assert_eq!(v.c.s.kernel_route().unwrap().panel_source_snapshot_v1(seal.beacon_epoch).unwrap(), frozen,
-        "a candidate leaving the pending phase never releases its source exclusion");
+    assert_eq!(
+        v.c.s.kernel_route().unwrap().panel_source_snapshot_v1(seal.beacon_epoch).unwrap(),
+        frozen,
+        "a candidate leaving the pending phase never releases its source exclusion"
+    );
 }

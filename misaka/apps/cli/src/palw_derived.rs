@@ -1189,8 +1189,7 @@ mod tests {
         );
 
         // The forgery: an artifact of another answer, filed against THIS claim.
-        let other =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../palw/derive/corpus/music/03-overlapping-melody.json");
+        let other = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../palw/derive/corpus/music/03-overlapping-melody.json");
         let other = std::fs::read(&other).unwrap_or_else(|e| panic!("{}: {e}", other.display()));
         assert_ne!(other, honest.answer, "the forgery must be derived from a different answer");
         let claim = ClaimBinding {

@@ -46,7 +46,8 @@ pub fn palw_witness_chunk_request_index_v1(chunk: u32) -> Option<u32> {
 
 /// `Some(chunk)` for a witness-chunk request index, `None` for any other kind.
 pub fn palw_witness_chunk_request_decode_v1(index: u32) -> Option<u32> {
-    (index & !(PALW_WITNESS_CHUNK_REQUEST_BIT_V1 | 0xFFFF) == 0 && index & PALW_WITNESS_CHUNK_REQUEST_BIT_V1 != 0).then_some(index & 0xFFFF)
+    (index & !(PALW_WITNESS_CHUNK_REQUEST_BIT_V1 | 0xFFFF) == 0 && index & PALW_WITNESS_CHUNK_REQUEST_BIT_V1 != 0)
+        .then_some(index & 0xFFFF)
 }
 
 /// The `leafIndex` that names a class by its artifact root.
@@ -98,19 +99,20 @@ mod tests {
         let resume = 1u32 << 30;
         let plain = 17u32;
         // The bit each kind owns, and that no kind owns another's.
-        for (name, index, owns) in [
-            ("weight", weight, 26u32),
-            ("weight", weight_low, 26),
-            ("witness", witness, 25),
-            ("witness", witness_low, 25),
-        ] {
+        for (name, index, owns) in
+            [("weight", weight, 26u32), ("weight", weight_low, 26), ("witness", witness, 25), ("witness", witness_low, 25)]
+        {
             assert_ne!(index & (1 << owns), 0, "{name} owns bit {owns}");
             for foreign in [27u32, 28, 29, 30, 31] {
                 assert_eq!(index & (1 << foreign), 0, "{name} never sets bit {foreign}");
             }
         }
         assert_eq!(witness & (1 << 26), 0, "a witness index never sets the weight bit");
-        assert_ne!(weight & (1 << 25), 0, "a high-site weight index does set bit 25, and that is why the witness decoder also requires bit 26 clear");
+        assert_ne!(
+            weight & (1 << 25),
+            0,
+            "a high-site weight index does set bit 25, and that is why the witness decoder also requires bit 26 clear"
+        );
         // Each decoder refuses every other kind's index.
         for index in [witness, witness_low, leaf, shard_rows, step_runs, block_leaves, resume, plain, shard_rows | 3, step_runs | 3] {
             assert_eq!(palw_weight_block_request_decode_v1(index), None, "weight refuses {index:#x}");

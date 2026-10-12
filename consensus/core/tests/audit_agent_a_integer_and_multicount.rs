@@ -23,7 +23,9 @@ use kaspa_consensus_core::palw_execution_quanta_v1::{
     PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_v1, palw_execution_quantum_count_v1,
 };
 use kaspa_consensus_core::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
@@ -93,18 +95,26 @@ const T12_SLASH_VALUE_PER_PWU: u64 = 5;
 #[test]
 fn a3_the_quantum_constant_is_divided_into_a_unit_it_was_not_calibrated_in() {
     println!("\n=== quantum unit: credited_work / PALW_EXECUTION_QUANTUM_V1 ({PALW_EXECUTION_QUANTUM_V1}) ===");
-    println!("{:<14} {:>16} {:>22} {:>18} {:>14} {:>12} {:>14}", "class", "declared U1", "raw per-draw U2", "norm U3", "quanta(U2)", "quanta(U3)", "ratio U2/U3");
+    println!(
+        "{:<14} {:>16} {:>22} {:>18} {:>14} {:>12} {:>14}",
+        "class", "declared U1", "raw per-draw U2", "norm U3", "quanta(U2)", "quanta(U3)", "ratio U2/U3"
+    );
     for row in t12_rows() {
         let u3 = row.per_draw * (T12_FLOOR_DECLARED as u128) / (T12_FLOOR_CANONICAL as u128);
-        let q_u2 = palw_execution_quantum_count_v1(row.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
+        let q_u2 =
+            palw_execution_quantum_count_v1(row.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
         let q_u3 = palw_execution_quantum_count_v1(u3, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
         let ratio = if u3 > 0 { row.per_draw as f64 / u3 as f64 } else { f64::NAN };
-        println!("{:<14} {:>16} {:>22} {:>18} {:>14} {:>12} {:>14.1}", row.name, row.declared_leaves, row.per_draw, u3, q_u2, q_u3, ratio);
+        println!(
+            "{:<14} {:>16} {:>22} {:>18} {:>14} {:>12} {:>14.1}",
+            row.name, row.declared_leaves, row.per_draw, u3, q_u2, q_u3, ratio
+        );
     }
     // The saturation is real: the dense row's raw credit overruns the u32 the count returns.
     let dense = t12_rows().pop().expect("three rows");
     let uncapped = dense.per_draw / PALW_EXECUTION_QUANTUM_V1 as u128;
-    let capped = palw_execution_quantum_count_v1(dense.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
+    let capped =
+        palw_execution_quantum_count_v1(dense.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
     println!("\n  dense @2M uncapped quanta = {uncapped}, returned (u32-clamped) = {capped}");
     assert!(uncapped > u32::MAX as u128, "the dense row's raw credit overruns u32 in quanta");
     assert_eq!(capped, u32::MAX, "and the count clamps rather than refusing");
@@ -138,7 +148,8 @@ fn a3_the_mint_cost_is_quadratic_past_the_probe_horizon() {
     for n in [1_000u64, 4_000, 16_000, 64_000, 128_000, 200_000] {
         let credit = n * PALW_EXECUTION_QUANTUM_V1;
         let t0 = std::time::Instant::now();
-        let issued = palw_execution_mint_quanta_v1(&[one_final(credit)], Hash64::from_u64_word(9), PALW_EXECUTION_QUANTUM_V1 as u128, 0);
+        let issued =
+            palw_execution_mint_quanta_v1(&[one_final(credit)], Hash64::from_u64_word(9), PALW_EXECUTION_QUANTUM_V1 as u128, 0);
         let dt = t0.elapsed().as_secs_f64();
         let scaling = last.map(|(pn, pt)| (dt / pt) / ((n as f64) / (pn as f64))).unwrap_or(f64::NAN);
         println!("  n = {:>7}  issued = {:>7}  {:>9.3} s   (per-ticket cost vs previous: {:.2}x)", n, issued.len(), dt, scaling);
@@ -154,10 +165,14 @@ fn a3_the_mint_cost_is_quadratic_past_the_probe_horizon() {
         println!("  quadratic estimate (t ~ n^2): {:.1} s", dt * (hybrid_n / n as f64).powi(2));
         let dense_n = u32::MAX as f64;
         println!("  linear-in-n lower bound for the dense @2M Final ({dense_n} tickets): {:.0} s", dense_n * per_ticket_us / 1e6);
-        println!("  memory at 1 ticket ~ {} B: hybrid {:.1} GiB, dense {:.1} GiB",
+        println!(
+            "  memory at 1 ticket ~ {} B: hybrid {:.1} GiB, dense {:.1} GiB",
             std::mem::size_of::<kaspa_consensus_core::palw_execution_quanta_v1::PalwExecQuantumV1>(),
-            hybrid_n * std::mem::size_of::<kaspa_consensus_core::palw_execution_quanta_v1::PalwExecQuantumV1>() as f64 / 1024f64.powi(3),
-            dense_n * std::mem::size_of::<kaspa_consensus_core::palw_execution_quanta_v1::PalwExecQuantumV1>() as f64 / 1024f64.powi(3));
+            hybrid_n * std::mem::size_of::<kaspa_consensus_core::palw_execution_quanta_v1::PalwExecQuantumV1>() as f64
+                / 1024f64.powi(3),
+            dense_n * std::mem::size_of::<kaspa_consensus_core::palw_execution_quanta_v1::PalwExecQuantumV1>() as f64
+                / 1024f64.powi(3)
+        );
     }
 }
 
@@ -181,8 +196,11 @@ fn a3_q32_scaling_is_applied_once_on_each_path() {
     let class_q32 = palw_expected_attempts_q32_v1(u128::MAX / 2); // 2.0
     let net_q32 = palw_network_draws_q32_from_bits_v1(0x207f_ffff); // 2.0 at the difficulty floor
     let ccu = palw_attempted_ccu_v1(class_q32, net_q32, draw);
-    println!("\n  draw = {draw}, class_q32 = {class_q32} (={}), net_q32 = {net_q32} (={})",
-        class_q32 as f64 / 2f64.powi(32), net_q32 as f64 / 2f64.powi(32));
+    println!(
+        "\n  draw = {draw}, class_q32 = {class_q32} (={}), net_q32 = {net_q32} (={})",
+        class_q32 as f64 / 2f64.powi(32),
+        net_q32 as f64 / 2f64.powi(32)
+    );
     println!("  palw_attempted_ccu_v1 = {ccu}  (expect 2 x 2 x draw = {})", 4 * draw);
     assert_eq!(ccu, 4 * draw, "both Q32 factors shift out exactly once");
 
@@ -195,7 +213,8 @@ fn a3_q32_scaling_is_applied_once_on_each_path() {
     // when the class target is MAX. The recon brief measured 16_777_472x — that is the network
     // factor at the floor bits, not a scaling bug. Confirm it here.
     let adr131 = palw_attempted_compute_per_claim_v1(palw_expected_attempts_v1(u128::MAX), draw);
-    let adr132 = palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(u128::MAX), palw_network_draws_q32_from_bits_v1(0x1d00_ffff), draw);
+    let adr132 =
+        palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(u128::MAX), palw_network_draws_q32_from_bits_v1(0x1d00_ffff), draw);
     println!("\n  ADR-0131 palw_attempted_compute_per_claim_v1 = {adr131}");
     println!("  ADR-0132 palw_attempted_ccu_v1 (bits 0x1d00ffff) = {adr132}  ratio = {}", adr132 / adr131.max(1));
 }
@@ -226,7 +245,10 @@ fn a3_boundary_sweep_of_the_price_path() {
     }
     println!("-- palw_cap_utilization_permille_v1 --");
     for ccu in [0u128, 1, 284_519_688_960, 355_649_611_200, u128::MAX] {
-        println!("  ccu {ccu:>42} -> cap {} permille", palw_cap_utilization_permille_v1(ccu, T12_RATE_SOMPI_PER_GIGA, T12_ESCROW_SOMPI));
+        println!(
+            "  ccu {ccu:>42} -> cap {} permille",
+            palw_cap_utilization_permille_v1(ccu, T12_RATE_SOMPI_PER_GIGA, T12_ESCROW_SOMPI)
+        );
     }
     println!("-- palw_panel_share_permille_v1 denominators --");
     println!("  c_p=0,c_v=0 -> {}", palw_panel_share_permille_v1(0, 0, 100, 100, 300));
@@ -263,13 +285,17 @@ fn a4_value_per_unit_of_real_work_summed_across_primitives() {
     println!("  rate                     {T12_RATE_SOMPI_PER_GIGA} sompi / 10^9 CCU (scale {PALW_LEDGER_RATE_SCALE_V1})");
     println!("  permit ceiling           {PALW_T12_PERMIT_FEE_CEILING_SOMPI} sompi/round");
     println!();
-    println!("{:<14} {:>20} {:>16} {:>16} {:>18} {:>12}", "class", "per-draw CCU", "priced reward", "quanta", "permit value", "permit/pay");
+    println!(
+        "{:<14} {:>20} {:>16} {:>16} {:>18} {:>12}",
+        "class", "per-draw CCU", "priced reward", "quanta", "permit value", "permit/pay"
+    );
     for row in t12_rows() {
         // (1) the escrow reward, priced at the rate, capped by the escrow.
         let ccu = palw_attempted_ccu_v1(PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, row.per_draw);
         let reward = palw_rate_priced_reward_v1(T12_ESCROW_SOMPI, ccu, T12_RATE_SOMPI_PER_GIGA as u128);
         // (2) the execution quanta the SAME Final mints, each redeemable for one algo-10 round.
-        let quanta = palw_execution_quantum_count_v1(row.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
+        let quanta =
+            palw_execution_quantum_count_v1(row.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
         let permit_value = (quanta as u128) * (PALW_T12_PERMIT_FEE_CEILING_SOMPI as u128);
         let ratio = permit_value as f64 / reward.max(1) as f64;
         println!("{:<14} {:>20} {:>16} {:>16} {:>18} {:>12.1}", row.name, row.per_draw, reward, quanta, permit_value, ratio);
@@ -290,7 +316,9 @@ fn a4_the_seat_lock_priced_from_the_runtime_unit() {
         // (which is what a class at or above W0 gets: target = u128::MAX, attempts = 1).
         let claim_pwu = palw_pwu_v1(u128::MAX, row.per_draw.min(u64::MAX as u128) as u64);
         let weight_sompi = (claim_pwu as u128) * (T12_SLASH_VALUE_PER_PWU as u128);
-        let quanta = palw_execution_quantum_count_v1(row.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default()).saturating_add(1);
+        let quanta =
+            palw_execution_quantum_count_v1(row.per_draw, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default())
+                .saturating_add(1);
         let rights = palw_realizable_before_maturity_v1(
             quanta,
             T12_WINDOW_CHALLENGE,
@@ -304,8 +332,13 @@ fn a4_the_seat_lock_priced_from_the_runtime_unit() {
         let required = palw_seat_lock_required_v2(gain, 3);
         println!("  {:<14} claim.pwu = {:<22} weight = {:>22} sompi", row.name, claim_pwu, weight_sompi);
         println!("  {:<14} quanta+1  = {:<22} rights = {:>22} sompi", "", quanta, rights);
-        println!("  {:<14} seat lock required = {:>22} sompi = {:.2} MSK  ({:.2}x posted)",
-            "", required, required as f64 / 1e8, required as f64 / posted as f64);
+        println!(
+            "  {:<14} seat lock required = {:>22} sompi = {:.2} MSK  ({:.2}x posted)",
+            "",
+            required,
+            required as f64 / 1e8,
+            required as f64 / posted as f64
+        );
     }
 }
 
@@ -319,7 +352,13 @@ fn a4_the_realizable_rights_mask_and_its_boundary() {
     println!("  window_challenge {T12_WINDOW_CHALLENGE} + window_court {T12_WINDOW_COURT} = {gap} DAA");
     println!("  rounds_per_daa {rounds_per_daa} -> rounds in the gap = {rounds_in_gap}");
     for q in [0u32, 1, rounds_in_gap as u32 - 1, rounds_in_gap as u32, rounds_in_gap as u32 + 1, u32::MAX] {
-        let v = palw_realizable_before_maturity_v1(q, T12_WINDOW_CHALLENGE, T12_WINDOW_COURT, T12_TARGET_TIME_MS, PALW_T12_PERMIT_FEE_CEILING_SOMPI);
+        let v = palw_realizable_before_maturity_v1(
+            q,
+            T12_WINDOW_CHALLENGE,
+            T12_WINDOW_COURT,
+            T12_TARGET_TIME_MS,
+            PALW_T12_PERMIT_FEE_CEILING_SOMPI,
+        );
         println!("  quanta {q:>12} -> realizable {v:>22} sompi  (masked = {})", q as u64 > rounds_in_gap);
     }
     println!("\n  NOTE: the mask hides the unit error in the LOCK, but the MINT at");
@@ -359,6 +398,8 @@ fn a3_network_q32_boundaries() {
     // A saturated network factor makes attempted_ccu saturate too.
     let sat = palw_attempted_ccu_v1(PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, u128::MAX, 1_000_000);
     println!("\n  a saturated network Q32 prices one draw at {sat} CCU");
-    println!("  reward at the t12 rate: {} sompi (escrow {T12_ESCROW_SOMPI})",
-        palw_rate_priced_reward_v1(T12_ESCROW_SOMPI, sat, T12_RATE_SOMPI_PER_GIGA as u128));
+    println!(
+        "  reward at the t12 rate: {} sompi (escrow {T12_ESCROW_SOMPI})",
+        palw_rate_priced_reward_v1(T12_ESCROW_SOMPI, sat, T12_RATE_SOMPI_PER_GIGA as u128)
+    );
 }

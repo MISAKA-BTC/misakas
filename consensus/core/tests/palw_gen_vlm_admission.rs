@@ -287,7 +287,14 @@ fn text_only_class() -> PalwGenClassV1 {
     let program = topk_lm_program(false);
     let pipeline = TirPipelineV1 {
         version: TIR_PIPELINE_VERSION_V1,
-        stages: vec![StageDecl { name: "lm".into(), program: 0, trip: TripRule::TextStream, max_trip: 16, tokens: None, bind: vec![] }],
+        stages: vec![StageDecl {
+            name: "lm".into(),
+            program: 0,
+            trip: TripRule::TextStream,
+            max_trip: 16,
+            tokens: None,
+            bind: vec![],
+        }],
         output_stage: 0,
     };
     PalwGenClassV1 {

@@ -76,7 +76,10 @@ fn a_node_gives_the_default_height_and_the_independence_the_network_has() {
     let node = r.node.as_ref().expect("the node's facts are in the report");
     assert_eq!((node.network.as_str(), node.tip_daa, node.classes, node.base_operators), ("testnet-12", 7_150, 1, Some(20)));
     let independence = r.forecast.as_ref().and_then(|f| f.independence.as_ref()).expect("the forecast reads the seating floor");
-    assert_eq!((independence.independent_floor, independence.base_operators, independence.licensable_share_at_floor_permille), (3, Some(20), Some(150)));
+    assert_eq!(
+        (independence.independent_floor, independence.base_operators, independence.licensable_share_at_floor_permille),
+        (3, Some(20), Some(150))
+    );
     // int-12: testnet-12 arms `palw_class_seating` at the 5,300 flag day (the list), and this node's tip (7,150) is past it.
     assert!(independence.fence_in_force, "testnet-12 arms palw_class_seating at 5,300 and the node's tip is past it");
     assert!(r.render().contains("independence:"), "{}", r.render());
@@ -126,7 +129,12 @@ fn the_full_depth_reads_the_pack_and_the_chains_view_of_the_artifact_root() {
     assert_eq!(full.artifact_root.as_deref(), Some(root.as_str()));
     assert!(full.checks.iter().all(|c| c.status != "FAIL"), "{:?}", full.checks);
     let not_verified = r.blockers().iter().any(|b| b.code == "PACK_NOT_VERIFIED");
-    assert_eq!(not_verified, full.pack != "VERIFIED", "PACK_NOT_VERIFIED is raised exactly when the pack is not VERIFIED ({})", full.pack);
+    assert_eq!(
+        not_verified,
+        full.pack != "VERIFIED",
+        "PACK_NOT_VERIFIED is raised exactly when the pack is not VERIFIED ({})",
+        full.pack
+    );
 
     // A tampered artifact is a FAILED pack: named, with the failing check.
     let bad = work.join("bad.palwtir");
@@ -134,7 +142,8 @@ fn the_full_depth_reads_the_pack_and_the_chains_view_of_the_artifact_root() {
     let n = bytes.len();
     bytes[n - 1] ^= 1;
     std::fs::write(&bad, bytes).expect("write");
-    let r = run(&src, &Options { full: FullInputs { pack: Some(pack_dir.clone()), artifact: Some(bad) }, ..opts(Depth::Full) }).expect("preflight");
+    let r = run(&src, &Options { full: FullInputs { pack: Some(pack_dir.clone()), artifact: Some(bad) }, ..opts(Depth::Full) })
+        .expect("preflight");
     let b = r.blockers().into_iter().find(|b| b.code == "PACK_NOT_VERIFIED").expect("a tampered artifact is not verified");
     assert!(b.evidence.iter().any(|e| e.starts_with("FAIL")), "{:?}", b.evidence);
 
@@ -167,13 +176,17 @@ fn a_declared_class_already_on_the_chain_is_read_by_its_seats_and_its_independen
     o.prompts = 2;
     o.prefill = 5;
     o.decode = 2;
-    o.declare = vec![DeclareOpts { network: "testnet-12".into(), choice: TirLayoutChoiceV1 { max_context: Some(256), ..TirLayoutChoiceV1::default() } }];
+    o.declare = vec![DeclareOpts {
+        network: "testnet-12".into(),
+        choice: TirLayoutChoiceV1 { max_context: Some(256), ..TirLayoutChoiceV1::default() },
+    }];
     let built = build_pack(&o, &|_| {}).unwrap_or_else(|e| panic!("build: {e}"));
     let declared = built.pack.declared[0].clone();
     // The node holds that class with 3 of 7 seats and 1 of 3 independent operators.
     let mut node = facts(7_150);
     node.classes[0].class_id = declared.class_id.clone();
-    let (info, blockers) = judge_full(&FullInputs { pack: Some(pack_dir.clone()), artifact: None }, None, Some("testnet-12"), Some(&node));
+    let (info, blockers) =
+        judge_full(&FullInputs { pack: Some(pack_dir.clone()), artifact: None }, None, Some("testnet-12"), Some(&node));
     assert_eq!(info.declared, vec![("testnet-12".to_string(), declared.class_id)]);
     let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
     assert!(codes.contains(&"READY_SEATS_INSUFFICIENT") && codes.contains(&"INDEPENDENT_OPERATORS"), "{codes:?}");
@@ -195,11 +208,14 @@ fn a_declared_class_already_on_the_chain_is_read_by_its_seats_and_its_independen
 #[test]
 fn where_the_class_specific_window_is_dormant_the_report_says_what_it_would_be() {
     let dir = copy_fixture(&fixture("hf/llama"), "window");
-    let r = run(&dir, &Options { network: Some("devnet".into()), max_context: Some(16_384), ..opts(Depth::Shape) }).expect("preflight");
+    let r =
+        run(&dir, &Options { network: Some("devnet".into()), max_context: Some(16_384), ..opts(Depth::Shape) }).expect("preflight");
     let c = r.chain.iter().find(|c| c.id == "court_window").expect("the court window condition");
     assert!(c.source.contains("palw_model_court_window is not in force"), "{}", c.source);
     assert!(
-        r.notes.iter().any(|n| n.contains("under palw_model_court_window (dormant on this network) the class would be given its own window")),
+        r.notes
+            .iter()
+            .any(|n| n.contains("under palw_model_court_window (dormant on this network) the class would be given its own window")),
         "{:?}",
         r.notes
     );
@@ -236,11 +252,12 @@ fn serve(dir: PathBuf) -> Server {
             let n = s.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
             rq.fetch_add(1, Ordering::Relaxed);
-            let path = req.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("/").trim_start_matches("/m/").to_string();
-            let range = req
-                .lines()
-                .find_map(|l| l.to_ascii_lowercase().strip_prefix("range: bytes=").map(str::to_string))
-                .and_then(|r| r.split_once('-').and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u64>().ok()?))));
+            let path =
+                req.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("/").trim_start_matches("/m/").to_string();
+            let range =
+                req.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("range: bytes=").map(str::to_string)).and_then(|r| {
+                    r.split_once('-').and_then(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u64>().ok()?)))
+                });
             match std::fs::read(dir.join(&path)) {
                 Err(_) => {
                     let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");

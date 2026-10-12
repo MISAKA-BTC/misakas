@@ -219,7 +219,10 @@ fn integer_range(schema: &Schema) -> Result<Option<Vec<Value>>, String> {
         .flatten()
         .fold(None, |acc: Option<f64>, v| Some(acc.map_or(v, |a| a.min(v))));
     let (Some(lo), Some(hi)) = (lo, hi) else {
-        return Err("an integer range compiles only with BOTH a lower and an upper bound (an unbounded side is not a finite set of literals)".to_string());
+        return Err(
+            "an integer range compiles only with BOTH a lower and an upper bound (an unbounded side is not a finite set of literals)"
+                .to_string(),
+        );
     };
     if !lo.is_finite() || !hi.is_finite() || lo.abs() > 9.0e15 || hi.abs() > 9.0e15 {
         return Err("an integer bound is past 9e15, beyond what a double carries exactly".to_string());
@@ -320,7 +323,8 @@ impl Builder {
             .collect();
         let constraint =
             PalwDecodeConstraintV1 { version: PALW_DECODE_CONSTRAINT_VERSION_V2, compiler_id: compiler_id_v2(), start_frame, frames };
-        palw_constraint_validate_v2_v1(&constraint).map_err(|e| format!("the compiled automaton is outside the second form's bounds: {e}"))?;
+        palw_constraint_validate_v2_v1(&constraint)
+            .map_err(|e| format!("the compiled automaton is outside the second form's bounds: {e}"))?;
         Ok(constraint)
     }
 
@@ -806,7 +810,6 @@ fn ranges(table: &[Option<Action>]) -> Vec<PalwConstraintEdgeV1> {
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -889,13 +892,13 @@ mod tests {
         assert!(accepts(&c, br#"{"kind":"rect","h":2,"w":1}"#) && accepts(&c, br#"{"kind":"rect","w":1,"h":2}"#));
         // What the subset does not carry.
         for dead in [
-            &br#"{"r":3,"kind":"circle"}"#[..],        // the discriminator is the first member
+            &br#"{"r":3,"kind":"circle"}"#[..],            // the discriminator is the first member
             br#"{"kind":"circle","kind":"circle","r":3}"#, // a repeated discriminator
-            br#"{ "kind":"dot"}"#,                     // whitespace
-            br#"{"kind":"tri"}"#,                      // no such branch
-            br#"{"kind":"dot","r":3}"#,                // another branch's member
-            br#"{"kind":"circle","r":3,"r":4}"#,       // a repeated member
-            br#"[{"kind":"dot"}]"#,                    // not an object
+            br#"{ "kind":"dot"}"#,                         // whitespace
+            br#"{"kind":"tri"}"#,                          // no such branch
+            br#"{"kind":"dot","r":3}"#,                    // another branch's member
+            br#"{"kind":"circle","r":3,"r":4}"#,           // a repeated member
+            br#"[{"kind":"dot"}]"#,                        // not an object
         ] {
             assert!(!accepts(&c, dead), "{}", String::from_utf8_lossy(dead));
         }
@@ -947,9 +950,17 @@ mod tests {
         let mutual = json!({ "$defs": { "a": { "$ref": "#/$defs/b" }, "b": { "$ref": "#/$defs/a" } }, "$ref": "#/$defs/a" });
         assert!(refused(mutual).contains("is recursive"));
         assert!(refused(json!({ "$ref": "#/$defs/nope" })).contains("names no entry of `$defs`"));
-        assert!(refused(json!({ "$defs": { "a": { "type": "null" } }, "$ref": "https://example.com/schema.json" })).contains("not a `#/$defs/<name>` reference"));
-        assert!(refused(json!({ "$defs": { "a": { "type": "null" } }, "$ref": "#/$defs/a", "type": "null" })).contains("beside `$ref`"));
-        assert!(refused(json!({ "type": "object", "properties": { "x": { "$defs": {} } } })).contains("definitions live at the schema's root only"));
+        assert!(
+            refused(json!({ "$defs": { "a": { "type": "null" } }, "$ref": "https://example.com/schema.json" }))
+                .contains("not a `#/$defs/<name>` reference")
+        );
+        assert!(
+            refused(json!({ "$defs": { "a": { "type": "null" } }, "$ref": "#/$defs/a", "type": "null" })).contains("beside `$ref`")
+        );
+        assert!(
+            refused(json!({ "type": "object", "properties": { "x": { "$defs": {} } } }))
+                .contains("definitions live at the schema's root only")
+        );
         // A diamond past the expansion cap.
         let mut defs = serde_json::Map::new();
         defs.insert("l0".into(), json!({ "type": "null" }));
@@ -977,10 +988,20 @@ mod tests {
         let exclusive = compiled(json!({ "type": "integer", "exclusiveMinimum": 0, "exclusiveMaximum": 3 }));
         assert!(accepts(&exclusive, b"1") && accepts(&exclusive, b"2") && !accepts(&exclusive, b"0") && !accepts(&exclusive, b"3"));
         let mixed = compiled(json!({ "type": "integer", "minimum": 0.5, "exclusiveMaximum": 3.5 }));
-        assert!(!accepts(&mixed, b"0") && accepts(&mixed, b"1") && accepts(&mixed, b"3") && !accepts(&mixed, b"4"), "fractional bounds round inward");
+        assert!(
+            !accepts(&mixed, b"0") && accepts(&mixed, b"1") && accepts(&mixed, b"3") && !accepts(&mixed, b"4"),
+            "fractional bounds round inward"
+        );
         // Inside an object, with the terminators the parent reads.
-        let object = compiled(json!({ "type": "object", "properties": { "n": { "type": "integer", "minimum": 1, "maximum": 12 } }, "required": ["n"], "additionalProperties": false }));
-        assert!(accepts(&object, br#"{"n":12}"#) && accepts(&object, br#"{"n":1}"#) && !accepts(&object, br#"{"n":13}"#) && !accepts(&object, br#"{"n":0}"#));
+        let object = compiled(
+            json!({ "type": "object", "properties": { "n": { "type": "integer", "minimum": 1, "maximum": 12 } }, "required": ["n"], "additionalProperties": false }),
+        );
+        assert!(
+            accepts(&object, br#"{"n":12}"#)
+                && accepts(&object, br#"{"n":1}"#)
+                && !accepts(&object, br#"{"n":13}"#)
+                && !accepts(&object, br#"{"n":0}"#)
+        );
         for (schema, needle) in [
             (json!({ "type": "number", "minimum": 0, "maximum": 1 }), "a numeric range on `number` is not compiled"),
             (json!({ "type": "integer", "minimum": 0 }), "BOTH a lower and an upper bound"),
@@ -1005,11 +1026,23 @@ mod tests {
         let cases = [
             (json!({ "oneOf": [branch(json!({ "const": "a" }), false)] }), "has 1 branches"),
             (json!({ "oneOf": [branch(json!({ "const": "a" }), true), branch(json!({ "const": "b" }), true)] }), "is not closed"),
-            (json!({ "oneOf": [branch(json!({ "const": "a" }), false), branch(json!({ "const": "a" }), false)] }), "share the discriminator value"),
-            (json!({ "oneOf": [branch(json!({ "type": "string" }), false), branch(json!({ "type": "string" }), false)] }), "is not discriminated"),
+            (
+                json!({ "oneOf": [branch(json!({ "const": "a" }), false), branch(json!({ "const": "a" }), false)] }),
+                "share the discriminator value",
+            ),
+            (
+                json!({ "oneOf": [branch(json!({ "type": "string" }), false), branch(json!({ "type": "string" }), false)] }),
+                "is not discriminated",
+            ),
             (json!({ "oneOf": [branch(json!({ "const": "a" }), false), { "type": "string" }] }), "is not `type: \"object\"`"),
-            (json!({ "oneOf": [branch(json!({ "const": "a" }), false), branch(json!({ "const": "b" }), false)], "anyOf": [] }), "both at"),
-            (json!({ "type": "object", "required": ["z"], "oneOf": [branch(json!({ "const": "a" }), false), branch(json!({ "const": "b" }), false)] }), "carries a sibling keyword"),
+            (
+                json!({ "oneOf": [branch(json!({ "const": "a" }), false), branch(json!({ "const": "b" }), false)], "anyOf": [] }),
+                "both at",
+            ),
+            (
+                json!({ "type": "object", "required": ["z"], "oneOf": [branch(json!({ "const": "a" }), false), branch(json!({ "const": "b" }), false)] }),
+                "carries a sibling keyword",
+            ),
             (json!({ "oneOf": 3 }), "where a list of schemas was expected"),
         ];
         for (schema, needle) in cases {

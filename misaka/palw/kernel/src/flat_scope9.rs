@@ -106,8 +106,7 @@ pub fn flat_scope_metadata_work_v9(
     max_positions: u32,
     encoder: Option<&EncoderBindingV1>,
 ) -> Result<u64, DismissalV1> {
-    if max_positions == 0 || max_positions > program.history_bound
-        || max_positions > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD {
+    if max_positions == 0 || max_positions > program.history_bound || max_positions > misaka_palw_tir::program::HISTORY_BOUND_V1_HELD {
         return Err(bad("invalid flat-v9 metadata extent"));
     }
     let bytes = common::size_with_limit(program, misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64)

@@ -78,7 +78,10 @@ use kaspa_consensus_core::{
     mining_rules::MiningRules,
     muhash::MuHashExtensions,
     network::NetworkType,
-    pruning::{PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList, PruningProofMetadata},
+    pruning::{
+        PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList,
+        PruningProofMetadata,
+    },
     trusted::{ExternalGhostdagData, TrustedBlock},
     tx::{
         MutableTransaction, Transaction, TransactionId, TransactionIndexType, TransactionOutpoint, TransactionQueryResult,
@@ -901,11 +904,13 @@ impl Consensus {
         // All fallible traversal/session reads precede writers that stage caches.
         let mut anticone = self.services.dag_traversal_manager.anticone(new_pruning_point, [syncer_sink].into_iter(), None)?;
         anticone.push(new_pruning_point);
-        let mut import = self.pruning_meta_stores.read().import_session()
+        let mut import = self
+            .pruning_meta_stores
+            .read()
+            .import_session()
             .map_err(|e| ConsensusError::GeneralOwned(format!("reading pruning import authority: {e}")))?;
         if import.epoch > 0 {
-            import.epoch = import.epoch.checked_add(1)
-                .ok_or_else(|| ConsensusError::General("pruning import epoch exhausted"))?;
+            import.epoch = import.epoch.checked_add(1).ok_or_else(|| ConsensusError::General("pruning import epoch exhausted"))?;
         }
         import.active = None;
         import.utxos_started = false;
@@ -1158,7 +1163,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_round_lane_status_v1(round)
     }
 
-    fn palw_recent_executions_v1(&self, limit: usize) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+    fn palw_recent_executions_v1(
+        &self,
+        limit: usize,
+    ) -> Option<(Vec<kaspa_consensus_core::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
         self.virtual_processor.palw_recent_executions_v1(limit)
     }
 
@@ -1372,7 +1380,10 @@ impl ConsensusApi for Consensus {
     }
 
     fn palw_material_income_hold_until_v1(&self, claim: kaspa_hashes::Hash64) -> Option<u64> {
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode else { return None };
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return None;
+        };
         let (_, state) = self.virtual_processor.palw_v2_reader_state(&bundle.state).ok().flatten()?;
         state.material_income_hold_until_v1(&bundle.state, claim)
     }
@@ -1601,7 +1612,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_dns_confirmation(&self) -> Option<DnsConfirmation> {
-        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) { return None; }
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) {
+            return None;
+        }
         // kaspa-pq Phase 10 (ADR-0009): build the DNS confirmation view from the
         // current DnsState + this network's thresholds. `None` when the overlay
         // is not configured or no DnsState has been written yet.
@@ -1643,7 +1656,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
-        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) { return None; }
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) {
+            return None;
+        }
         // kaspa-pq Phase 13 (ADR-0017): all active-bond validators attest every
         // epoch — there is no sortition committee. Return the full active set at
         // the sink (the pov is the sink DAA score so the epoch matches the
@@ -1746,7 +1761,9 @@ impl ConsensusApi for Consensus {
         from_epoch: u64,
         limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
-        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) { return Vec::new(); }
+        if self.config.params.palw_dns_retired_at(self.get_sink_daa_score_timestamp().daa_score) {
+            return Vec::new();
+        }
         // kaspa-pq DNS v3 (batch): scan only the current stake-score window, not `[0, lifetime]`.
         // Return under-certified epochs first in ascending order so optional hard-inclusion forks
         // can clear oldest-first and shipped liveness-first validators still improve stale
@@ -2238,15 +2255,13 @@ impl ConsensusApi for Consensus {
         // Production proof/history context is established on fresh staging before
         // it receives an import session. Legacy context mutation cannot reset a
         // live or completed session, including one naming the same target.
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.services.pruning_proof_manager.apply_proof(proof, trusted_set)
-        })
+        self.virtual_processor
+            .with_pruning_import_session(None, |_| self.services.pruning_proof_manager.apply_proof(proof, trusted_set))
     }
 
     fn import_pruning_points(&self, pruning_points: PruningPointsList) -> PruningImportResult<()> {
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.services.pruning_proof_manager.import_pruning_points(&pruning_points)
-        })
+        self.virtual_processor
+            .with_pruning_import_session(None, |_| self.services.pruning_proof_manager.import_pruning_points(&pruning_points))
     }
 
     fn begin_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<PruningImportSessionV1> {
@@ -2262,20 +2277,26 @@ impl ConsensusApi for Consensus {
     }
 
     fn append_imported_pruning_point_utxos(
-        &self, chunk: &[(TransactionOutpoint, UtxoEntry)], multiset: &mut MuHash,
+        &self,
+        chunk: &[(TransactionOutpoint, UtxoEntry)],
+        multiset: &mut MuHash,
     ) -> PruningImportResult<()> {
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.virtual_processor.append_pruning_import_utxos(None, chunk, multiset)
-        })
+        self.virtual_processor
+            .with_pruning_import_session(None, |_| self.virtual_processor.append_pruning_import_utxos(None, chunk, multiset))
     }
 
     fn append_imported_pruning_point_utxos_for_session(
-        &self, session: PruningImportSessionV1, chunk: &[(TransactionOutpoint, UtxoEntry)], multiset: &mut MuHash,
+        &self,
+        session: PruningImportSessionV1,
+        chunk: &[(TransactionOutpoint, UtxoEntry)],
+        multiset: &mut MuHash,
     ) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |state| {
             if !state.utxos_started || state.utxos_imported {
                 return Err(PruningImportError::PruningImportSessionRefused {
-                    point: session.point, epoch: session.epoch, reason: "UTXO append is outside the active stream phase".into(),
+                    point: session.point,
+                    epoch: session.epoch,
+                    reason: "UTXO append is outside the active stream phase".into(),
                 });
             }
             self.virtual_processor.append_pruning_import_utxos(Some(session.point), chunk, multiset)
@@ -2283,16 +2304,17 @@ impl ConsensusApi for Consensus {
     }
 
     fn import_pruning_point_utxo_set(&self, point: BlockHash, multiset: MuHash) -> PruningImportResult<()> {
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.virtual_processor.import_pruning_point_utxo_set(point, multiset)
-        })
+        self.virtual_processor
+            .with_pruning_import_session(None, |_| self.virtual_processor.import_pruning_point_utxo_set(point, multiset))
     }
 
     fn import_pruning_point_utxo_set_for_session(&self, session: PruningImportSessionV1, multiset: MuHash) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |state| {
             if !state.utxos_started || state.utxos_imported {
                 return Err(PruningImportError::PruningImportSessionRefused {
-                    point: session.point, epoch: session.epoch, reason: "UTXO finalize is outside the active stream phase".into(),
+                    point: session.point,
+                    epoch: session.epoch,
+                    reason: "UTXO finalize is outside the active stream phase".into(),
                 });
             }
             self.virtual_processor.import_pruning_point_utxo_set(session.point, multiset)?;
@@ -2303,7 +2325,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn import_pruning_point_evm_state_for_session(
-        &self, session: PruningImportSessionV1, header: kaspa_consensus_core::evm::EvmExecutionHeader,
+        &self,
+        session: PruningImportSessionV1,
+        header: kaspa_consensus_core::evm::EvmExecutionHeader,
         snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
     ) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |_| {
@@ -2312,7 +2336,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn import_pruning_point_palw_state_for_session(
-        &self, session: PruningImportSessionV1, carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        &self,
+        session: PruningImportSessionV1,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
     ) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |_| {
             self.virtual_processor.import_pruning_point_palw_state(session.point, carriage)
@@ -2320,7 +2346,9 @@ impl ConsensusApi for Consensus {
     }
 
     fn import_pruning_point_overlay_snapshot_for_session(
-        &self, session: PruningImportSessionV1, snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot,
+        &self,
+        session: PruningImportSessionV1,
+        snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot,
     ) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |_| {
             self.virtual_processor.import_pruning_point_overlay_snapshot(session.point, snapshot)
@@ -2400,8 +2428,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
-    fn palw_staged_owned_progress_v1(&self,key:(kaspa_consensus_core::Hash64,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2))
-        ->Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+    fn palw_staged_owned_progress_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         self.virtual_processor.palw_staged_owned_progress_v1_impl(key)
     }
 
@@ -2428,7 +2458,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_legacy_answer_history_v2_impl(block, &chunk, maximum)
     }
 
-    fn palw_legacy_dispute_v1(&self, claim: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
+    fn palw_legacy_dispute_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1> {
         self.virtual_processor.palw_legacy_dispute_v1_impl(claim)
     }
 
@@ -2575,7 +2608,9 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_roots_v2_impl(claim)
     }
 
-    fn palw_tir_shard_plans_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+    fn palw_tir_shard_plans_v1(
+        &self,
+    ) -> Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_tir_shard_v1::PalwTirShardPlanV1)> {
         self.virtual_processor.palw_tir_shard_plans_v1_impl()
     }
 
@@ -2734,7 +2769,10 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip()?.kernel_route().cloned()
     }
 
-    fn palw_onboarding_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<kaspa_consensus_core::palw_onboarding_v1::OnboardingReadV1> {
+    fn palw_onboarding_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_onboarding_v1::OnboardingReadV1> {
         self.palw_state_v2_tip()?.onboarding_read_v1(&class_id, self.get_virtual_daa_score())
     }
 
@@ -2781,7 +2819,10 @@ impl ConsensusApi for Consensus {
         self.palw_state_v2_tip().map(|state| state.vertex_status_v1(state_params, &seat, from_round)).unwrap_or_default()
     }
 
-    fn palw_v2_mesh_status_v1(&self, seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
+    fn palw_v2_mesh_status_v1(
+        &self,
+        seat: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> kaspa_consensus_core::palw_mesh_v1::PalwMeshStatusV1 {
         let state_params = match &self.config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return Default::default(),
@@ -2879,9 +2920,8 @@ impl ConsensusApi for Consensus {
         pruning_point: BlockHash,
         carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
     ) -> PruningImportResult<()> {
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.virtual_processor.import_pruning_point_palw_state(pruning_point, carriage)
-        })
+        self.virtual_processor
+            .with_pruning_import_session(None, |_| self.virtual_processor.import_pruning_point_palw_state(pruning_point, carriage))
     }
 
     fn pruning_point_palw_state(&self, pruning_point: BlockHash) -> Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2> {
@@ -3205,7 +3245,12 @@ impl ConsensusApi for Consensus {
         &self,
     ) -> ConsensusResult<Option<kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1>> {
         // The same gate as the snapshot: nothing before the retirement fence is active at the sink.
-        if self.config.params.palw_dns_retirement.is_none_or(|r| !r.activation.is_active(self.get_sink_daa_score_timestamp().daa_score)) {
+        if self
+            .config
+            .params
+            .palw_dns_retirement
+            .is_none_or(|r| !r.activation.is_active(self.get_sink_daa_score_timestamp().daa_score))
+        {
             return Ok(None);
         }
         Ok(self.virtual_processor.native_safe_readiness(self.get_sink()))
@@ -3767,16 +3812,16 @@ impl ConsensusApi for Consensus {
     /// The utxo stable flag guarantees that a full utxoset is never mistaken for
     /// an incomplete or partially deleted one.
     fn clear_pruning_utxo_set(&self) -> PruningImportResult<()> {
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.virtual_processor.clear_pruning_import_utxos(None)
-        })
+        self.virtual_processor.with_pruning_import_session(None, |_| self.virtual_processor.clear_pruning_import_utxos(None))
     }
 
     fn clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |state| {
             if state.utxos_started || state.utxos_imported {
                 return Err(PruningImportError::PruningImportSessionRefused {
-                    point: session.point, epoch: session.epoch, reason: "the UTXO stream has already started; begin a new session to retry".into(),
+                    point: session.point,
+                    epoch: session.epoch,
+                    reason: "the UTXO stream has already started; begin a new session to retry".into(),
                 });
             }
             let mut state = state.clone();
@@ -3796,16 +3841,16 @@ impl ConsensusApi for Consensus {
     }
 
     fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
-        self.virtual_processor.with_pruning_import_session(None, |_| {
-            self.virtual_processor.complete_pruning_point_import(point)
-        })
+        self.virtual_processor.with_pruning_import_session(None, |_| self.virtual_processor.complete_pruning_point_import(point))
     }
 
     fn complete_pruning_point_import_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
         self.virtual_processor.with_pruning_import_session(Some(session), |state| {
             if !state.utxos_started || !state.utxos_imported {
                 return Err(PruningImportError::PruningImportSessionRefused {
-                    point: session.point, epoch: session.epoch, reason: "UTXO stream has not finalized".into(),
+                    point: session.point,
+                    epoch: session.epoch,
+                    reason: "UTXO stream has not finalized".into(),
                 });
             }
             self.virtual_processor.complete_pruning_point_import(session.point)

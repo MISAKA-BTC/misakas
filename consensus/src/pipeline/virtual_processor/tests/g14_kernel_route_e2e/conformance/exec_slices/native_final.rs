@@ -418,11 +418,14 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             params.palw_settled_anchor_depth = Some(1);
             assert!(params.validate_palw_bond_budget_v1().is_err(), "public activation remains refused");
         },
-    ).await;
+    )
+    .await;
     cw.net._keep.push(Box::new(receiver));
     let mut first = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), FIRST_LIFETIME).await;
-    assert!(cw.net.chain.tip_state().1.claim_economics_of(&first.real.claim).is_none(),
-        "whole-escrow pricing was fixed before acceptance; no snapshot may override it");
+    assert!(
+        cw.net.chain.tip_state().1.claim_economics_of(&first.real.claim).is_none(),
+        "whole-escrow pricing was fixed before acceptance; no snapshot may override it"
+    );
     for (index, slice) in first.slices.iter().enumerate() {
         first.lane.push(carry_slice(&mut cw, first.real.claim, index as u32, &slice.claim).await);
     }
@@ -434,7 +437,8 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert!(native.producer.amount > 0 && native.seats.iter().any(|(_, leg)| leg.amount > 0));
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::NativeSlice && leg.amount > 0));
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::KernelFee && leg.amount > 0));
-    let actual_fees: u64 = receipt.legs.iter().filter(|((_, fund), _)| *fund == PalwExecV2RewardFundV1::KernelFee).map(|(_, leg)| leg.amount).sum();
+    let actual_fees: u64 =
+        receipt.legs.iter().filter(|((_, fund), _)| *fund == PalwExecV2RewardFundV1::KernelFee).map(|(_, leg)| leg.amount).sum();
     assert_eq!(poster_before - cw.net.collateral(REGISTRANT), actual_fees);
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final);
@@ -450,7 +454,10 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final + 1);
     assert!(cw.net.daa() < native.expiry_daa);
     let second_native = state.vesting_row(&second.real.claim).unwrap().clone();
-    assert!(second_native.expiry_daa > native.expiry_daa + W, "the predeclared second signed lifetime isolates the first root's physical-payment W window");
+    assert!(
+        second_native.expiry_daa > native.expiry_daa + W,
+        "the predeclared second signed lifetime isolates the first root's physical-payment W window"
+    );
     let mut queues = std::collections::BTreeMap::new();
     let mut add = |key: Hash64, bond: PalwBondKeyV2, amount: u64| {
         if amount > 0 {
@@ -460,7 +467,9 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         }
     };
     add(palw_vesting_payout_key_v1(&first.real.claim), native.producer_bond, native.producer.amount);
-    for (bond, leg) in &native.seats { add(kaspa_consensus_core::palw_state_v2::palw_panel_payout_key_v1(&leg.payload), *bond, leg.amount); }
+    for (bond, leg) in &native.seats {
+        add(kaspa_consensus_core::palw_state_v2::palw_panel_payout_key_v1(&leg.payload), *bond, leg.amount);
+    }
     for ((bond, fund), leg) in &receipt.legs {
         let key = match fund {
             PalwExecV2RewardFundV1::NativeSlice => kaspa_consensus_core::palw_state_v2::palw_panel_payout_key_v1(&leg.payload),
@@ -473,12 +482,14 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let before = cw.net.chain.tip_state().1;
     assert!(before.vesting_row(&first.real.claim).is_some());
     assert!(before.exec_v2_reward_vesting_v1(&first.real.claim).is_some());
-    let expected: std::collections::BTreeMap<usize, u64> = queues.values().fold(std::collections::BTreeMap::new(), |mut amounts, (bond, amount)| {
-        let card = cw.net.chain.bonds.iter().position(|candidate| candidate == bond).unwrap();
-        *amounts.entry(card).or_default() += *amount;
-        amounts
-    });
-    let prior_cash: std::collections::BTreeMap<_, _> = expected.keys().map(|card| (*card, minted_and_owed(&cw.net, &cw.net.chain, *card).0)).collect();
+    let expected: std::collections::BTreeMap<usize, u64> =
+        queues.values().fold(std::collections::BTreeMap::new(), |mut amounts, (bond, amount)| {
+            let card = cw.net.chain.bonds.iter().position(|candidate| candidate == bond).unwrap();
+            *amounts.entry(card).or_default() += *amount;
+            amounts
+        });
+    let prior_cash: std::collections::BTreeMap<_, _> =
+        expected.keys().map(|card| (*card, minted_and_owed(&cw.net, &cw.net.chain, *card).0)).collect();
     let mut paid_rows = std::collections::BTreeMap::new();
     while paid_rows.len() < queues.len() {
         assert!(cw.net.daa() < native.expiry_daa + 32, "all actual first-root funds must settle without a synthetic clock");
@@ -500,7 +511,11 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert!(paid.exec_v2_reward_vesting_v1(&first.real.claim).is_none());
     assert_eq!(paid.vesting_row(&second.real.claim), Some(&second_native));
     for (card, amount) in &expected {
-        assert_eq!(minted_and_owed(&cw.net, &cw.net.chain, *card).0, prior_cash[card] + amount, "actual coinbase pays every fund exactly once");
+        assert_eq!(
+            minted_and_owed(&cw.net, &cw.net.chain, *card).0,
+            prior_cash[card] + amount,
+            "actual coinbase pays every fund exactly once"
+        );
     }
     let counters = paid.vesting_counters();
     let sink = cw.net.chain.sink();

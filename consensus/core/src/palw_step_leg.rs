@@ -2681,7 +2681,9 @@ mod tests {
             let leaves: Vec<Hash64> = (0..count as u64).map(|i| Hash64::from_u64_word(0xA0 + i)).collect();
             let root = step_merkle_root_v1(&leaves).unwrap();
             for i in 0..count as u64 {
-                let actual = step_opening_from_leaf_source_capped_v1(count as u64, i, PALW_STEP_LEG_MAX_LEAVES, |j| leaves[j as usize]).unwrap();
+                let actual =
+                    step_opening_from_leaf_source_capped_v1(count as u64, i, PALW_STEP_LEG_MAX_LEAVES, |j| leaves[j as usize])
+                        .unwrap();
                 assert_eq!(actual, step_opening_v1(&leaves, i).unwrap());
                 assert_eq!(step_opening_root_v1(count as u64, &actual).unwrap(), root);
             }

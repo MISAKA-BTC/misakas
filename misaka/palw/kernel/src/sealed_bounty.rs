@@ -79,7 +79,12 @@ impl KernelLedgerV1 {
 
     /// May `accuser` contest `claim`'s held bounty with `proof` now? (Its own seal, posted before the conviction, mature, opening to
     /// exactly these bytes, inside the window.) The court has not run yet.
-    pub(crate) fn held_bounty_contest_allows_v1(&self, accuser: &Digest, claim: &Digest, proof: &ProsecutionV1) -> Result<(), &'static str> {
+    pub(crate) fn held_bounty_contest_allows_v1(
+        &self,
+        accuser: &Digest,
+        claim: &Digest,
+        proof: &ProsecutionV1,
+    ) -> Result<(), &'static str> {
         let held = self.held_bounty_v1(claim).ok_or("the claim is convicted and holds no bounty")?;
         if self.daa >= held.until_daa {
             return Err("the held bounty's contest window has closed");
@@ -120,7 +125,8 @@ impl KernelLedgerV1 {
     /// Windows that closed with no earlier sealer's reveal: the held share is the original filer's.
     pub(crate) fn expire_held_bounties_v1(&mut self, out: &mut Vec<LedgerEventV1>) {
         let daa = self.daa;
-        let due: Vec<(Digest, Digest)> = self.held_bounties_v1().into_iter().filter(|(_, h)| daa >= h.until_daa).map(|(c, h)| (c, h.filer)).collect();
+        let due: Vec<(Digest, Digest)> =
+            self.held_bounties_v1().into_iter().filter(|(_, h)| daa >= h.until_daa).map(|(c, h)| (c, h.filer)).collect();
         for (claim, filer) in due {
             self.pay_held_bounty_v1(&claim, &filer, out);
         }

@@ -891,7 +891,8 @@ impl Base0CheckpointCaptureV1 {
     /// hashes, the chunk bytes a per-call class keeps, the previous push's chunk hashes, and the held
     /// map's frontiers — what a memory bracket prints beside the cache's and the sink's own figures.
     pub fn retained_bytes_v1(&self) -> u64 {
-        let leaves = self.leaves.len() as u64 * std::mem::size_of::<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>() as u64;
+        let leaves =
+            self.leaves.len() as u64 * std::mem::size_of::<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>() as u64;
         let hashes = self.leaf_hashes.len() as u64 * 64;
         let chunks: u64 = self.chunks.iter().flatten().map(|c| c.capacity() as u64 + 24).sum();
         let prev = self.prev_chunk_hashes.capacity() as u64 * 64;

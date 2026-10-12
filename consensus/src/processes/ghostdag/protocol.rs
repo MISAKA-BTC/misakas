@@ -896,7 +896,14 @@ mod lane_weight_tests {
         // attempt lane earns NO level-sized weight, so `level_work` never lifts it above the
         // constant), whatever DAA the header declares. The lottery outcome and the bond cannot enter
         // here; there is no input that carries them.
-        let hb = palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, PALW_V2_ATTEMPT_BITS, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64));
+        let hb = palw_lane_blue_work_v1(
+            PALW_HEARTBEAT_ALGO_ID,
+            PALW_V2_ATTEMPT_BITS,
+            5_000,
+            heartbeat,
+            attempt_work,
+            BlueWorkType::from(0u64),
+        );
         assert_eq!(hb, epsilon, "a heartbeat weighs ε = 1");
         for level in [0u8, 1, 8, 64] {
             for daa in [0u64, 499, 500, 50_000] {

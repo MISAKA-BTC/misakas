@@ -14,7 +14,7 @@ use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use misaka_palw::host_security::ConfinementBackend;
 
 use crate::testkit::{FloorWorker, identity, offline_source, temp_dir};
-use crate::{Config, Identity, JobRunner, ClaimBudget, Services, SourceRates, chain, pool};
+use crate::{ClaimBudget, Config, Identity, JobRunner, Services, SourceRates, chain, pool};
 
 pub(crate) struct Harness {
     pub dir: PathBuf,
@@ -156,7 +156,10 @@ impl Response {
 
 pub(crate) fn post(body: &serde_json::Value, key: Option<&str>) -> Vec<u8> {
     let body = serde_json::to_vec(body).unwrap();
-    let mut head = format!("POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\n", body.len());
+    let mut head = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        body.len()
+    );
     if let Some(key) = key {
         head.push_str(&format!("Idempotency-Key: {key}\r\n"));
     }
@@ -252,7 +255,10 @@ fn a_streaming_retry_of_a_finished_request_is_replayed_as_a_stream_without_a_sec
     assert_eq!(replay.status(), 200);
     assert!(replay.head.to_ascii_lowercase().contains("text/event-stream"), "{}", replay.head);
     let events = replay.events();
-    let terminal = events.iter().find_map(|e| e.get("misaka").filter(|m| m.get("fp_claim_id").is_some())).expect("a terminal event with the claim");
+    let terminal = events
+        .iter()
+        .find_map(|e| e.get("misaka").filter(|m| m.get("fp_claim_id").is_some()))
+        .expect("a terminal event with the claim");
     assert_eq!(terminal["fp_claim_id"], first_claim.as_str());
     assert_eq!(h.worker.runs(), 1, "a retry in the other delivery mode is still the same inference");
 }
@@ -391,7 +397,11 @@ fn a_full_queue_answers_503_with_a_retry_after_and_runs_nothing() {
     h.in_flight.store(crate::in_flight_cap(1), Ordering::Release);
     let response = h.call(&post(&chat("late"), None));
     assert_eq!(response.status(), 503, "{}", response.head);
-    assert!(response.header("retry-after").is_some_and(|v| v.parse::<u32>().is_ok_and(|n| n > 0)), "the 503 names when to retry: {}", response.head);
+    assert!(
+        response.header("retry-after").is_some_and(|v| v.parse::<u32>().is_ok_and(|n| n > 0)),
+        "the 503 names when to retry: {}",
+        response.head
+    );
     assert_eq!(h.worker.runs(), 0);
     assert_eq!(h.in_flight.load(Ordering::Acquire), crate::in_flight_cap(1), "a refusal reserves nothing and releases nothing");
 }
@@ -406,7 +416,11 @@ fn the_status_route_reports_committed_then_submitted_and_never_final_without_a_c
     assert_eq!(first_status.json()["status"], "committed", "{} / {}", first_status.head, String::from_utf8_lossy(&first_status.body));
     // The rail submits: its record lands beside the gateway's.
     let stem = crate::status::stem_of_completion_id(&id).unwrap();
-    std::fs::write(h.dir.join(format!("{stem}.rail.json")), serde_json::json!({ "submitted": "ab".repeat(64), "relayed": null }).to_string()).unwrap();
+    std::fs::write(
+        h.dir.join(format!("{stem}.rail.json")),
+        serde_json::json!({ "submitted": "ab".repeat(64), "relayed": null }).to_string(),
+    )
+    .unwrap();
     let after = h.call(&get(&format!("/v1/requests/{id}"))).json();
     assert_eq!(after["status"], "submitted");
     assert_eq!(after["final"], false, "a rail record is not a chain fact");

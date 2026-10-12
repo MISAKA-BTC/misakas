@@ -31,11 +31,11 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::Hash64;
+use crate::palw_fp_objects_v3::{PalwConsensusObjectV3Carrier, PalwFpExtractionV3};
 use crate::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PalwFpCommitmentTxPayloadV3, PalwFpJobTailV1,
     PalwFpStopReasonV3, PalwFpV3Error, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
 };
-use crate::palw_fp_objects_v3::{PalwConsensusObjectV3Carrier, PalwFpExtractionV3};
 use crate::palw_gen_class_v1::PalwGenClassRecordV1;
 use crate::palw_gen_close_v1::palw_gen_tensor_execution_root_v1;
 use crate::palw_gen_job_v1::{
@@ -82,7 +82,9 @@ pub struct PalwGenJobTailV1 {
 pub enum PalwGenClaimErrorV1 {
     #[error("the job is version {version}, not a tensor job (version 10) with its tail and no decode rules")]
     NotATensorJob { version: u16 },
-    #[error("a tensor job's lane field is not canonical: {0} (its text fields are zero: the class binds the tokenizer, the body carries the ids' commitments, the seed is the tail's)")]
+    #[error(
+        "a tensor job's lane field is not canonical: {0} (its text fields are zero: the class binds the tokenizer, the body carries the ids' commitments, the seed is the tail's)"
+    )]
     ShellNotCanonical(&'static str),
     #[error("unsupported payload version {got} (expected {expected})")]
     PayloadVersion { got: u16, expected: u16 },
@@ -558,14 +560,8 @@ pub fn palw_gen_payload_v1(
         trace_retention_daa: 0,
     };
     commitment.execution_root = palw_gen_commitment_execution_root_v1(&commitment, job);
-    PalwFpCommitmentTxPayloadV3 {
-        version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
-        commitment,
-        prompt_token_ids,
-        signature,
-    }
+    PalwFpCommitmentTxPayloadV3 { version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature }
 }
-
 
 // ---------------------------------------------------------------------------------------------
 // What the chain derives from the class (the fold's)
@@ -587,7 +583,8 @@ pub fn palw_gen_job_bound_v1(row: &PalwGenClassRecordV1, accepted: &PalwGenAccep
     let (_, pipeline) = row.class.decode().map_err(|e| E::Class(e.to_string()))?;
     for stage in &pipeline.stages {
         for binding in &stage.bind {
-            if let misaka_palw_tir::pipeline::Binding::JobTokens { rule } | misaka_palw_tir::pipeline::Binding::JobTokenCount { rule } = binding
+            if let misaka_palw_tir::pipeline::Binding::JobTokens { rule } | misaka_palw_tir::pipeline::Binding::JobTokenCount { rule } =
+                binding
                 && let Some(pad) = rule.pad
                 && u64::from(pad.to_len) > max
             {

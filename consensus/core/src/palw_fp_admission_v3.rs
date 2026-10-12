@@ -716,7 +716,16 @@ mod tests {
             spend: PalwReceiptSpendUnsignedV4 {
                 version: PALW_RECEIPT_V4_VERSION,
                 network_domain: h64(999),
-                challenge: spend_challenge_v4(h64(999), h64(SPEND_PPH), SPEND_TS, SPEND_NONCE, h64(0xFC), quantum_index, &bond_op(1), &bond_op(2)),
+                challenge: spend_challenge_v4(
+                    h64(999),
+                    h64(SPEND_PPH),
+                    SPEND_TS,
+                    SPEND_NONCE,
+                    h64(0xFC),
+                    quantum_index,
+                    &bond_op(1),
+                    &bond_op(2),
+                ),
                 claim_id: h64(0xFC),
                 quantum_index,
                 beacon_block: h64(0xBEAC),
@@ -741,7 +750,11 @@ mod tests {
         }
     }
 
-    fn admit_v4(state: &PalwChainStateV2, c: &PalwBlockContextV2, env: &PalwReceiptSpendEnvelopeV4) -> Result<Hash64, PalwFpAdmissionV3Error> {
+    fn admit_v4(
+        state: &PalwChainStateV2,
+        c: &PalwBlockContextV2,
+        env: &PalwReceiptSpendEnvelopeV4,
+    ) -> Result<Hash64, PalwFpAdmissionV3Error> {
         check_palw_receipt_spend_admission_v5(state, c, MATURITY, USE_WINDOW, &beacon(), env, None)
     }
 
@@ -773,13 +786,22 @@ mod tests {
             admit_v4(&state, &ctx(7, 135, 7), &spend_v4(3)).unwrap_err(),
             PalwFpAdmissionV3Error::QuantumOutOfRange { index: 3, quanta: 3, .. }
         ));
-        assert!(matches!(admit_v4(&state, &ctx(7, 181, 7), &spend_v4(0)).unwrap_err(), PalwFpAdmissionV3Error::OutsideUseWindow { .. }));
+        assert!(matches!(
+            admit_v4(&state, &ctx(7, 181, 7), &spend_v4(0)).unwrap_err(),
+            PalwFpAdmissionV3Error::OutsideUseWindow { .. }
+        ));
         let mut wrong_beacon = spend_v4(0);
         wrong_beacon.spend.beacon_block = h64(0xBAD);
-        assert!(matches!(admit_v4(&state, &ctx(7, 135, 7), &wrong_beacon).unwrap_err(), PalwFpAdmissionV3Error::BeaconMismatch { .. }));
+        assert!(matches!(
+            admit_v4(&state, &ctx(7, 135, 7), &wrong_beacon).unwrap_err(),
+            PalwFpAdmissionV3Error::BeaconMismatch { .. }
+        ));
         let mut stingy = certified_with_builder();
         stingy.set_receipt_target_for_tests(h64(1), 1);
-        assert!(matches!(admit_v4(&stingy, &ctx(7, 135, 7), &spend_v4(0)).unwrap_err(), PalwFpAdmissionV3Error::TicketRejected { .. }));
+        assert!(matches!(
+            admit_v4(&stingy, &ctx(7, 135, 7), &spend_v4(0)).unwrap_err(),
+            PalwFpAdmissionV3Error::TicketRejected { .. }
+        ));
         // A claim that is not Final licenses no redemption either.
         let p = params();
         let genesis = PalwChainStateV2::genesis();
@@ -873,10 +895,10 @@ mod tests {
             |_, _, _, _| true,
             None,
         );
-        assert!(matches!(
-            short_keys.unwrap_err(),
-            PalwFpAdmissionV3Error::ReceiptV4(PalwReceiptV4Error::PublicKeyLength { .. })
-        ), "stateless shape comes first");
+        assert!(
+            matches!(short_keys.unwrap_err(), PalwFpAdmissionV3Error::ReceiptV4(PalwReceiptV4Error::PublicKeyLength { .. })),
+            "stateless shape comes first"
+        );
     }
 
     /// The point of the whole lane: another party's block spends the executor's winning quantum, ONCE, and the chain's accounting is
@@ -892,7 +914,8 @@ mod tests {
             apply_palw_transition_v3(&state, &p, &ctx(8, 135, 8), &[], PalwBlockWorkV3::ReceiptSpend(&fold_view.spend)).unwrap();
         // The same quantum spent by the executor's own V3 block gives the SAME state: nothing in the accounting moved.
         let v3 = spend(1);
-        let (after_v3, _) = apply_palw_transition_v3(&state, &p, &ctx(8, 135, 8), &[], PalwBlockWorkV3::ReceiptSpend(&v3.spend)).unwrap();
+        let (after_v3, _) =
+            apply_palw_transition_v3(&state, &p, &ctx(8, 135, 8), &[], PalwBlockWorkV3::ReceiptSpend(&v3.spend)).unwrap();
         assert_eq!(after_v4, after_v3, "V4 and V3 fold to one state: weight, receipt census and the spent set are shared");
         assert!(after_v4.safe_weight() > state.safe_weight(), "the redemption adds the claim's per-quantum weight");
         // Spent once: the same quantum cannot be redeemed again, by anyone, on this chain…

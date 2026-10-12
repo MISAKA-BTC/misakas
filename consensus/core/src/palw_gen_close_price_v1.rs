@@ -37,8 +37,8 @@ use crate::palw_freeprompt_v3::{PALW_FP_V4_VERSION, PalwFreePromptJobV3};
 use crate::palw_gen_class_v1::{PalwGenClassV1, PalwGenImageInputRefV1, PalwGenSourceRefV1};
 use crate::palw_gen_close_v1::{
     PALW_GEN_CLOSE_VERSION_V1, PalwGenBindingV1, PalwGenConeCloseV1, PalwGenDecodeCloseV1, PalwGenLeafOpeningV1, PalwGenOutputCloseV1,
-    PalwGenRootClaimV1, PalwGenStepBindingV1, PalwGenTensorBindingV1, palw_gen_stage_reads_negative_v1, palw_gen_stage_reads_prompt_v1,
-    palw_gen_stage_reads_source_v1,
+    PalwGenRootClaimV1, PalwGenStepBindingV1, PalwGenTensorBindingV1, palw_gen_stage_reads_negative_v1,
+    palw_gen_stage_reads_prompt_v1, palw_gen_stage_reads_source_v1,
 };
 use crate::palw_gen_job_v1::{PALW_GEN_JOB_VERSION_V1, PalwGenBodyV1, PalwGenImageBodyV1, PalwGenJobV1, PalwJobEnvelopeV1};
 use crate::palw_gen_step_v1::{PalwGenLeafCoordV1, PalwGenLeafKindV1, PalwGenStepSpaceV1};
@@ -46,8 +46,8 @@ use crate::palw_gen_v1::PalwGenProfileV1;
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwCourtVerdictV2};
 use crate::palw_tir_class_v1::PalwTirLayoutV1;
 use crate::palw_tir_close_size_v1::{
-    MOVE_CARRIER_EXTRA_BYTES, MOVE_SIGNATURE_BYTES, PalwGenClosePricingV1, PalwGenTwinInputV1, PalwGenTwinStageV1, PalwTirCloseBoundV1,
-    PalwTirCloseSizingV1, PalwTirParamFormV1, palw_gen_worst_closes_v1,
+    MOVE_CARRIER_EXTRA_BYTES, MOVE_SIGNATURE_BYTES, PalwGenClosePricingV1, PalwGenTwinInputV1, PalwGenTwinStageV1,
+    PalwTirCloseBoundV1, PalwTirCloseSizingV1, PalwTirParamFormV1, palw_gen_worst_closes_v1,
 };
 use crate::palw_tir_court_v1::PalwTirInventoryIndexV1;
 use crate::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirRangeClaimV1};
@@ -202,7 +202,13 @@ fn widest_binding(class: &PalwGenClassV1, pipeline: &TirPipelineV1) -> PalwGenBi
 
 /// **A cone close that opens nothing**, for stage `stage` at the widest binding: the ids the stage reads at the offers' maxima and the
 /// disputed leaf's opening at the stage's depth, no lane.
-fn empty_close(class: &PalwGenClassV1, pipeline: &TirPipelineV1, binding: &PalwGenBindingV1, stage: usize, depth: u64) -> PalwGenConeCloseV1 {
+fn empty_close(
+    class: &PalwGenClassV1,
+    pipeline: &TirPipelineV1,
+    binding: &PalwGenBindingV1,
+    stage: usize,
+    depth: u64,
+) -> PalwGenConeCloseV1 {
     let zero = Hash64::from_bytes([0; 64]);
     let _ = (class, pipeline, stage);
     PalwGenConeCloseV1 {
@@ -263,32 +269,44 @@ fn frames(
     let zero = Hash64::from_bytes([0; 64]);
     let close = empty_close(class, pipeline, binding, stage, depth);
     let ids = ids_bytes(class, pipeline, stage);
-    let frame = ids + object_len(&PalwConsensusObjectV2::CourtClosed {
-        session_id: zero,
-        verdict: PalwCourtVerdictV2::ChallengerDefeated,
-        proof: PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) },
-    })?;
-    let root_frame = ids + object_len(&PalwConsensusObjectV2::CourtGenRootClaimed {
-        session_id: zero,
-        root: Box::new(PalwGenRootClaimV1 {
-            version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
-            elements: Vec::new(),
-            totals: PalwTirRangeClaimV1 { partials: Vec::new() },
-            finalize: Box::new(close),
-        }),
-        arity: 0,
-        signature: vec![0; MOVE_SIGNATURE_BYTES],
-    })? + MOVE_CARRIER_EXTRA_BYTES;
+    let frame = ids
+        + object_len(&PalwConsensusObjectV2::CourtClosed {
+            session_id: zero,
+            verdict: PalwCourtVerdictV2::ChallengerDefeated,
+            proof: PalwCourtVerdictProofV2::GenCone { close: Box::new(close.clone()) },
+        })?;
+    let root_frame =
+        ids + object_len(&PalwConsensusObjectV2::CourtGenRootClaimed {
+            session_id: zero,
+            root: Box::new(PalwGenRootClaimV1 {
+                version: PALW_TIR_DISSECT_OBJECT_VERSION_V1,
+                elements: Vec::new(),
+                totals: PalwTirRangeClaimV1 { partials: Vec::new() },
+                finalize: Box::new(close),
+            }),
+            arity: 0,
+            signature: vec![0; MOVE_SIGNATURE_BYTES],
+        })? + MOVE_CARRIER_EXTRA_BYTES;
     Ok((frame, root_frame))
 }
 
 /// **The commit tile and the elements per position of stage `up`'s output node** — what an edge into it is read through (the court
 /// reads the committed leaf of the output node at the stage's `post` occurrence).
-fn upstream_output(programs: &[TirProgramV2], pipeline: &TirPipelineV1, layouts: &[PalwTirLayoutV1], up: usize) -> Result<(u32, u64), String> {
+fn upstream_output(
+    programs: &[TirProgramV2],
+    pipeline: &TirPipelineV1,
+    layouts: &[PalwTirLayoutV1],
+    up: usize,
+) -> Result<(u32, u64), String> {
     let stage = pipeline.stages.get(up).ok_or_else(|| format!("an edge from stage {up}, which does not exist"))?;
     let program = &programs[stage.program as usize];
     let (post, node) = (program.schedule.post as usize, program.output.node() as usize);
-    let elements = program.blocks.get(post).and_then(|b| b.nodes.get(node)).map(|n| n.out.elements_at(1)).ok_or("an output node outside its block")?;
+    let elements = program
+        .blocks
+        .get(post)
+        .and_then(|b| b.nodes.get(node))
+        .map(|n| n.out.elements_at(1))
+        .ok_or("an output node outside its block")?;
     let layout = layouts.get(up).ok_or_else(|| format!("no layout for stage {up}"))?;
     let mut commits = layout.commit_tiles.iter();
     for (bi, block) in program.blocks.iter().enumerate() {
@@ -321,23 +339,29 @@ pub fn palw_gen_twin_stages_v1(
         for d in &program.inputs {
             inputs.push(match d.source {
                 InputSource::Random { .. } => PalwGenTwinInputV1::Free,
-                InputSource::External { .. } => match bindings.next().ok_or_else(|| format!("stage {s}: a binding per external input"))? {
-                    Binding::StageRows { stage: up, drop, .. } => {
-                        let (tile, elements) = upstream_output(programs, pipeline, &class.layouts, *up as usize)?;
-                        let per_row: u64 = d.shape.iter().skip(1).fold(1u64, |acc, x| acc.saturating_mul(*x as u64));
-                        PalwGenTwinInputV1::Edge { stage: *up, rows: Some((*drop, per_row)), tile, elements }
+                InputSource::External { .. } => {
+                    match bindings.next().ok_or_else(|| format!("stage {s}: a binding per external input"))? {
+                        Binding::StageRows { stage: up, drop, .. } => {
+                            let (tile, elements) = upstream_output(programs, pipeline, &class.layouts, *up as usize)?;
+                            let per_row: u64 = d.shape.iter().skip(1).fold(1u64, |acc, x| acc.saturating_mul(*x as u64));
+                            PalwGenTwinInputV1::Edge { stage: *up, rows: Some((*drop, per_row)), tile, elements }
+                        }
+                        Binding::StageFinal { stage: up } => {
+                            let (tile, elements) = upstream_output(programs, pipeline, &class.layouts, *up as usize)?;
+                            PalwGenTwinInputV1::Edge { stage: *up, rows: None, tile, elements }
+                        }
+                        Binding::JobImage { index } => {
+                            let slot = class
+                                .offers
+                                .images
+                                .get(*index as usize)
+                                .ok_or_else(|| format!("stage {s}: the class has no image {index}"))?;
+                            PalwGenTwinInputV1::Image { image: *index, tile_len: slot.tile_len }
+                        }
+                        // A scalar, a token run or a count: the accepted job's value, recomputed by every party.
+                        _ => PalwGenTwinInputV1::Free,
                     }
-                    Binding::StageFinal { stage: up } => {
-                        let (tile, elements) = upstream_output(programs, pipeline, &class.layouts, *up as usize)?;
-                        PalwGenTwinInputV1::Edge { stage: *up, rows: None, tile, elements }
-                    }
-                    Binding::JobImage { index } => {
-                        let slot = class.offers.images.get(*index as usize).ok_or_else(|| format!("stage {s}: the class has no image {index}"))?;
-                        PalwGenTwinInputV1::Image { image: *index, tile_len: slot.tile_len }
-                    }
-                    // A scalar, a token run or a count: the accepted job's value, recomputed by every party.
-                    _ => PalwGenTwinInputV1::Free,
-                },
+                }
             });
         }
         out.push(PalwGenTwinStageV1 { first_input: info.first_input_param, inputs, post_writers: post_writers_v2(program, &info) });
@@ -412,7 +436,13 @@ impl PalwGenClassSizingV1 {
             frame,
             root_frame,
         };
-        Ok(PalwGenStageSizingV1 { space, inventory, model: self.models[s].clone(), pricing, job: palw_gen_stage_job_context_v1(st.max_trip) })
+        Ok(PalwGenStageSizingV1 {
+            space,
+            inventory,
+            model: self.models[s].clone(),
+            pricing,
+            job: palw_gen_stage_job_context_v1(st.max_trip),
+        })
     }
 }
 
@@ -439,36 +469,38 @@ pub fn palw_gen_worst_closes_of_class_v1(
     let mut all = Vec::with_capacity(pipeline.stages.len());
     for s in 0..pipeline.stages.len() {
         let z = tables.stage(class, pipeline, programs, s)?;
-        let sizing = PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court, cap: remaining, stop_above: Some((carriable, root_cap)) };
+        let sizing =
+            PalwTirCloseSizingV1 { form: PalwTirParamFormV1::PerLeaf, court, cap: remaining, stop_above: Some((carriable, root_cap)) };
         // The twin at the block: the element twin, or the range twin past `palw_gen_range_twin_v1` (the same bounds, fewer steps).
         let sized = match twin {
             crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element => {
                 palw_gen_worst_closes_v1(&z.space, &z.inventory, &z.job, &sizing, s, class_inventory_leaves, &z.model, z.pricing)
             }
-            crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range => crate::palw_tir_close_range_v1::palw_gen_worst_closes_range_v1(
-                &z.space,
-                &z.inventory,
-                &z.job,
-                &sizing,
-                s,
-                class_inventory_leaves,
-                &z.model,
-                z.pricing,
-            ),
+            crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Range => {
+                crate::palw_tir_close_range_v1::palw_gen_worst_closes_range_v1(
+                    &z.space,
+                    &z.inventory,
+                    &z.job,
+                    &sizing,
+                    s,
+                    class_inventory_leaves,
+                    &z.model,
+                    z.pricing,
+                )
+            }
         };
-        let (bounds, work) =
-            sized.map_err(|e| {
-                if e == crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 {
-                    PalwClassAdmissionError::TirExceeds {
-                        limit: "generative close sizing work",
-                        at: format!("stage {s}'s terminal closes"),
-                        value: work_cap.saturating_add(1),
-                        cap: work_cap,
-                    }
-                } else {
-                    PalwClassAdmissionError::GenClass(format!("the close sizing refuses the class: stage {s}: {e}"))
+        let (bounds, work) = sized.map_err(|e| {
+            if e == crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1 {
+                PalwClassAdmissionError::TirExceeds {
+                    limit: "generative close sizing work",
+                    at: format!("stage {s}'s terminal closes"),
+                    value: work_cap.saturating_add(1),
+                    cap: work_cap,
                 }
-            })?;
+            } else {
+                PalwClassAdmissionError::GenClass(format!("the close sizing refuses the class: stage {s}: {e}"))
+            }
+        })?;
         remaining = remaining.saturating_sub(work);
         let past = bounds.last().is_some_and(|b| b.close_bytes > carriable || (b.dissected && b.root_claim_bytes > root_cap));
         all.push(bounds);
@@ -550,7 +582,12 @@ pub fn palw_gen_whole_closes_v1(
             };
             let layout = class.output.layout().map_err(|e| refused(format!("the output header: {e:?}")))?;
             let step_tile = PalwGenLeafOpeningV1 {
-                coord: PalwGenLeafCoordV1 { stage: out as u8, pos: 0, kind: PalwGenLeafKindV1::State { state: 0, layer: Some(0) }, tile: 0 },
+                coord: PalwGenLeafCoordV1 {
+                    stage: out as u8,
+                    pos: 0,
+                    kind: PalwGenLeafKindV1::State { state: 0, layer: Some(0) },
+                    tile: 0,
+                },
                 lanes_le: Vec::new(),
                 path: vec![zero; depth as usize],
             };

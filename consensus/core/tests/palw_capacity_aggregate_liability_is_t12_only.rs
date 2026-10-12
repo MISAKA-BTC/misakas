@@ -199,11 +199,20 @@ fn the_fork_id_gates_the_height_and_every_appended_step() {
         assert!(armed.fence_schedule_v1().contains(&height), "and on the schedule the fork id is derived from");
         for daa in [0, 1, height / 2, height - 1] {
             let (a, s) = (fork_id_v1(&armed, daa), fork_id_v1(&shipped, daa));
-            assert!(!evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "armed keeps shipped at {daa}");
-            assert!(!evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(), "shipped keeps armed at {daa}");
+            assert!(
+                !evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(),
+                "armed keeps shipped at {daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(),
+                "shipped keeps armed at {daa}"
+            );
         }
         let s = fork_id_v1(&shipped, height);
-        assert!(evaluate_fork_id_v1(&armed, height, s.fired.as_bytes().as_slice(), s.next).refuses(), "from {height} the armed node refuses");
+        assert!(
+            evaluate_fork_id_v1(&armed, height, s.fired.as_bytes().as_slice(), s.next).refuses(),
+            "from {height} the armed node refuses"
+        );
     }
     // The appended step: the schedule (and so the fork id) names 4,000.
     let one = armed_at(1_234);
@@ -214,10 +223,16 @@ fn the_fork_id_gates_the_height_and_every_appended_step() {
     assert!(two.fence_schedule_v1().contains(&4_000) && !one.fence_schedule_v1().contains(&4_000));
     for daa in [1_234, 3_999] {
         let o = fork_id_v1(&one, daa);
-        assert!(!evaluate_fork_id_v1(&two, daa, o.fired.as_bytes().as_slice(), o.next).refuses(), "below the step the two keep each other");
+        assert!(
+            !evaluate_fork_id_v1(&two, daa, o.fired.as_bytes().as_slice(), o.next).refuses(),
+            "below the step the two keep each other"
+        );
     }
     let o = fork_id_v1(&one, 4_000);
-    assert!(evaluate_fork_id_v1(&two, 4_000, o.fired.as_bytes().as_slice(), o.next).refuses(), "from the step's height the old schedule is refused");
+    assert!(
+        evaluate_fork_id_v1(&two, 4_000, o.fired.as_bytes().as_slice(), o.next).refuses(),
+        "from the step's height the old schedule is refused"
+    );
 }
 
 /// **What `validate_palw_v2` refuses**, each by name.

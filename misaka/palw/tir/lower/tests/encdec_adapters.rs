@@ -27,7 +27,8 @@ const DATA_ONLY: [&str; 3] = ["whisper", "t5_encoder", "longt5"];
 /// (`configs/encdec/*.json`), as `(name, text)`.
 fn configs() -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(tests_dir().join("fixtures/hf-encdec")).unwrap().flatten().map(|e| e.path()).collect();
+    let mut dirs: Vec<PathBuf> =
+        std::fs::read_dir(tests_dir().join("fixtures/hf-encdec")).unwrap().flatten().map(|e| e.path()).collect();
     dirs.sort();
     for d in dirs.into_iter().filter(|d| d.join("config.json").exists()) {
         let n = d.file_name().unwrap().to_string_lossy().to_string();
@@ -37,8 +38,12 @@ fn configs() -> Vec<(String, String)> {
         }
         out.push((format!("fixture {n}"), std::fs::read_to_string(d.join("config.json")).unwrap()));
     }
-    let mut files: Vec<PathBuf> =
-        std::fs::read_dir(tests_dir().join("configs/encdec")).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(tests_dir().join("configs/encdec"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
     files.sort();
     for p in files {
         let n = p.file_stem().unwrap().to_string_lossy().to_string();
@@ -106,7 +111,12 @@ fn the_t5_adapter_reads_what_the_rust_reader_read() {
     let cfg: Value = serde_json::from_str(&text).unwrap();
     let r = read_encdec(&cfg, &ReadOptions::default()).unwrap();
     assert_eq!(r.spec, parse_encdec(&text).unwrap());
-    assert!(r.assumed_defaults.iter().any(|k| k == "feed_forward_proj") && r.assumed_defaults.iter().any(|k| k == "relative_attention_max_distance"), "{:?}", r.assumed_defaults);
+    assert!(
+        r.assumed_defaults.iter().any(|k| k == "feed_forward_proj")
+            && r.assumed_defaults.iter().any(|k| k == "relative_attention_max_distance"),
+        "{:?}",
+        r.assumed_defaults
+    );
 }
 
 /// What the two readers said about one configuration.
@@ -180,7 +190,12 @@ fn single_key_mutants_agree_or_the_adapter_is_stricter() {
         }
     }
     eprintln!("{same} mutants read the same, {stricter} the adapter refuses where the Rust reader did not");
-    assert!(bad.is_empty(), "{} mutants on which the adapter and the Rust reader disagree:\n{}", bad.len(), bad.iter().take(12).cloned().collect::<Vec<_>>().join("\n"));
+    assert!(
+        bad.is_empty(),
+        "{} mutants on which the adapter and the Rust reader disagree:\n{}",
+        bad.len(),
+        bad.iter().take(12).cloned().collect::<Vec<_>>().join("\n")
+    );
     assert!(same > 500, "{same}");
 }
 
@@ -224,7 +239,13 @@ fn a_user_adapter_adds_an_encoder_decoder_family_with_data_only() {
     assert!(matches!(&r.adapter, AdapterSource::UserFile { id, .. } if id == "my-pegasus"), "{:?}", r.adapter);
     assert_eq!(r.spec, parse_encdec(&text).unwrap());
     // `--adapter none`: an encoder-decoder has no standard template.
-    assert!(read_encdec(&cfg, &ReadOptions { adapter: AdapterChoice::None }).unwrap_err().error.to_string().contains("no standard template"));
+    assert!(
+        read_encdec(&cfg, &ReadOptions { adapter: AdapterChoice::None })
+            .unwrap_err()
+            .error
+            .to_string()
+            .contains("no standard template")
+    );
     // A decoder adapter is not an encoder-decoder adapter.
     let e = read_encdec(&cfg, &ReadOptions { adapter: AdapterChoice::BuiltIn("llama".into()) }).unwrap_err();
     assert!(e.error.to_string().contains("not `encdec`"), "{}", e.error);
@@ -264,9 +285,10 @@ fn the_report_for_an_encoder_decoder_is_level_b_with_its_features() {
     let dir = tests_dir().join("fixtures/hf-encdec/bart");
     let cfg: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
     let mut tensors = TensorIndex::from_checkpoint_path(&dir).unwrap();
-    tensors
-        .tensors
-        .insert("model.decoder.layers.0.self_attn.rotary_gain.weight".into(), misaka_palw_tir_lower::hf_schema::TensorEntry { dtype: "BF16".into(), shape: Some(vec![4]) });
+    tensors.tensors.insert(
+        "model.decoder.layers.0.self_attn.rotary_gain.weight".into(),
+        misaka_palw_tir_lower::hf_schema::TensorEntry { dtype: "BF16".into(), shape: Some(vec![4]) },
+    );
     let r = analyze(&cfg, Some(&tensors), &ReadOptions::default());
     assert_eq!(r.level, Level::C, "{}", r.render());
     assert_eq!(r.unread_tensors, vec!["model.decoder.layers.0.self_attn.rotary_gain.weight".to_string()]);

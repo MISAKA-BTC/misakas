@@ -50,15 +50,15 @@ fn verdict_of(id: &str) -> Value {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).expect("tmp");
     std::fs::write(tmp.join("config.json"), config).expect("config");
-    let tensors: serde_json::Map<String, Value> = std::fs::read_to_string(spec.join("tensors.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
+    let tensors: serde_json::Map<String, Value> =
+        std::fs::read_to_string(spec.join("tensors.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let mut heads = tmp.join("headers");
     std::fs::create_dir_all(&heads).expect("headers");
     write_header_only(&heads, &tensors);
     // A diagnosis: `CORPUS_HEAVY=<dir>` reads the real checkpoint's headers instead of the light spec's (when the entry has one).
-    if let Some(h) = std::env::var_os("CORPUS_HEAVY").map(|d| PathBuf::from(d).join(id)).filter(|d| d.join("model.safetensors").exists()) {
+    if let Some(h) =
+        std::env::var_os("CORPUS_HEAVY").map(|d| PathBuf::from(d).join(id)).filter(|d| d.join("model.safetensors").exists())
+    {
         heads = h;
     }
     let adapter = lower().join("tools/corpus/adapters").join(format!("{id}.json"));
@@ -106,7 +106,8 @@ fn verdict_of(id: &str) -> Value {
 fn every_corpus_entry_has_its_pinned_preflight() {
     let manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(lower().join("tools/corpus/corpus_v2.json")).expect("manifest")).expect("json");
-    let ids: Vec<String> = manifest["entries"].as_array().expect("entries").iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
+    let ids: Vec<String> =
+        manifest["entries"].as_array().expect("entries").iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
     assert!((50..=100).contains(&ids.len()), "{} entries", ids.len());
     // `CORPUS_ONLY=a,b` runs a subset (a diagnosis; the pins are compared for those only).
     let only: Option<Vec<String>> = std::env::var("CORPUS_ONLY").ok().map(|v| v.split(',').map(str::to_string).collect());
@@ -126,8 +127,10 @@ fn every_corpus_entry_has_its_pinned_preflight() {
         std::fs::write(&pins, serde_json::to_string_pretty(&now).expect("json") + "\n").expect("write the pins");
         return;
     }
-    let pinned: BTreeMap<String, Value> =
-        serde_json::from_str(&std::fs::read_to_string(&pins).expect("tests/golden/corpus_preflight_v1.json (UPDATE_PINS=1 writes it)")).expect("pins");
+    let pinned: BTreeMap<String, Value> = serde_json::from_str(
+        &std::fs::read_to_string(&pins).expect("tests/golden/corpus_preflight_v1.json (UPDATE_PINS=1 writes it)"),
+    )
+    .expect("pins");
     for (id, v) in &now {
         assert_eq!(pinned.get(id), Some(v), "{id}: its preflight verdict moved (UPDATE_PINS=1 after review)");
     }

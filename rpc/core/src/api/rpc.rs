@@ -853,10 +853,7 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPanelStatusResponse::default())
     }
 
-    async fn get_palw_panel_assignments(
-        &self,
-        request: GetPalwPanelAssignmentsRequest,
-    ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
+    async fn get_palw_panel_assignments(&self, request: GetPalwPanelAssignmentsRequest) -> RpcResult<GetPalwPanelAssignmentsResponse> {
         self.get_palw_panel_assignments_call(None, request).await
     }
     async fn get_palw_panel_assignments_call(
@@ -868,10 +865,7 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwPanelAssignmentsResponse::default())
     }
 
-    async fn get_palw_model_preflight(
-        &self,
-        request: GetPalwModelPreflightRequest,
-    ) -> RpcResult<GetPalwModelPreflightResponse> {
+    async fn get_palw_model_preflight(&self, request: GetPalwModelPreflightRequest) -> RpcResult<GetPalwModelPreflightResponse> {
         self.get_palw_model_preflight_call(None, request).await
     }
     async fn get_palw_model_preflight_call(
@@ -925,10 +919,7 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelResponse::default())
     }
 
-    async fn get_palw_model_readiness(
-        &self,
-        request: GetPalwModelReadinessRequest,
-    ) -> RpcResult<GetPalwModelReadinessResponse> {
+    async fn get_palw_model_readiness(&self, request: GetPalwModelReadinessRequest) -> RpcResult<GetPalwModelReadinessResponse> {
         self.get_palw_model_readiness_call(None, request).await
     }
     async fn get_palw_model_readiness_call(
@@ -940,10 +931,7 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelReadinessResponse::default())
     }
 
-    async fn get_palw_model_admission(
-        &self,
-        request: GetPalwModelAdmissionRequest,
-    ) -> RpcResult<GetPalwModelAdmissionResponse> {
+    async fn get_palw_model_admission(&self, request: GetPalwModelAdmissionRequest) -> RpcResult<GetPalwModelAdmissionResponse> {
         self.get_palw_model_admission_call(None, request).await
     }
     async fn get_palw_model_admission_call(

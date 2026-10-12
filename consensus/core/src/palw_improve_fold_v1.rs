@@ -878,7 +878,9 @@ pub(super) fn apply_improvement_policy_set_v1(
             return Err(policy_refused("a judge is not an admitted IR class"));
         }
         // A judge class is not the line's head, nor a class that was (RFC-0004 §7.3 as decided 2026-09-30).
-        let head = row.as_ref().filter(|r| builder.extras.model_immutable_active || r.status != PalwImprovementLineStatusV1::Dissolved)
+        let head = row
+            .as_ref()
+            .filter(|r| builder.extras.model_immutable_active || r.status != PalwImprovementLineStatusV1::Dissolved)
             .map_or(spec15.class_id, |r| r.head);
         let history = builder.state.improvement_head_history(&line_id);
         if policy
@@ -1212,9 +1214,9 @@ fn retire_improvement_rows_v1(builder: &mut TransitionBuilder<'_>) {
         let (jobs, jobs_left) = builder.retire_improvement_eval_jobs_v1(&line_id, epoch, budget);
         budget -= jobs;
         let remaining = builder.state.improvement_pool_entries.range(pool_range(&line_id, epoch)).next().is_some()
-                || builder.state.improvement_items.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
-                || builder.state.improvement_results.range(lo..=hi).next().is_some()
-                || jobs_left;
+            || builder.state.improvement_items.range((line_id, epoch, 0)..=(line_id, epoch, u32::MAX)).next().is_some()
+            || builder.state.improvement_results.range(lo..=hi).next().is_some()
+            || jobs_left;
         if remaining {
             break;
         }
@@ -1953,7 +1955,8 @@ fn dissolve_if_done_v1(
         builder.write_improvement_material((line_id, epoch), None);
     }
     if !builder.extras.model_immutable_active {
-        let heads: Vec<u32> = builder.state.improvement_heads.range((line_id, 0)..=(line_id, u32::MAX)).map(|((_, s), _)| *s).collect();
+        let heads: Vec<u32> =
+            builder.state.improvement_heads.range((line_id, 0)..=(line_id, u32::MAX)).map(|((_, s), _)| *s).collect();
         for seq in heads {
             builder.write_improvement_head((line_id, seq), None);
         }
@@ -2505,7 +2508,10 @@ mod tests {
         let s = at(&s, &p, 2_400, |b| cases(b, 0x70, 2_400));
         let s = at(&s, &p, 2_510, |b| {
             for _ in 0..3 {
-                assert_eq!(b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(), fee_per_job);
+                assert_eq!(
+                    b.pay_improvement_eval_fee_v1(&h(LINE), 2, &PalwEvalSubjectV1::Parent, &bond(CAROL), None).unwrap(),
+                    fee_per_job
+                );
             }
         });
         let e2 = s.improvement_epoch(&h(LINE), 2).unwrap();
@@ -2618,7 +2624,9 @@ mod tests {
         let mut pol = policy();
         pol.fees.registration_fee = 10_000;
         pol.fees.eval_fee_per_job = 1;
-        let s = at(&genesis(), &p, 500, |b| apply_improvement_policy_set_v1(b, &ctx(500), &set(LINE, 1, Some(pol.clone()))).expect("opt in"));
+        let s = at(&genesis(), &p, 500, |b| {
+            apply_improvement_policy_set_v1(b, &ctx(500), &set(LINE, 1, Some(pol.clone()))).expect("opt in")
+        });
         let mut s = s;
         s.improvement_usage.insert(h(LINE), PalwImprovementUsageV1 { usage: 5, since_daa: 500 });
         let s = at(&s, &p, 1_000, |_| {});
@@ -2682,7 +2690,10 @@ mod tests {
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
         assert!(
-            matches!(apply_improvement_policy_set_v1(&mut b, &ctx(800), &set(LINE, 3, None)), Err(PalwStateV2Error::ImprovementPolicyRefused(_))),
+            matches!(
+                apply_improvement_policy_set_v1(&mut b, &ctx(800), &set(LINE, 3, None)),
+                Err(PalwStateV2Error::ImprovementPolicyRefused(_))
+            ),
             "a second opt-out"
         );
         apply_improvement_policy_set_v1(&mut b, &ctx(800), &set(LINE, 3, Some(policy()))).unwrap();
@@ -2695,7 +2706,10 @@ mod tests {
         pool.held_in += 1;
         s.improvement_pools.insert(h(LINE), pool);
         let s = at(&s, &p, 1_700, |_| {});
-        assert_eq!(s.improvement_line(&h(LINE)).unwrap().status, PalwImprovementLineStatusV1::OptingOut { effective_daa: Some(1_700) });
+        assert_eq!(
+            s.improvement_line(&h(LINE)).unwrap().status,
+            PalwImprovementLineStatusV1::OptingOut { effective_daa: Some(1_700) }
+        );
         let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
         assert!(
             matches!(

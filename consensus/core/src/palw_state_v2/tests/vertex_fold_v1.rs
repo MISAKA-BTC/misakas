@@ -530,7 +530,18 @@ fn audit_1004_a_leaf_for_a_layer_sharded_claim_is_ignored_not_a_vertex_refusal()
             let daa = 104 + i as u64;
             let v = vertex(seat, daa, vec![leaf(claim, Verdict::Valid)]);
             // (No consistency check here: the shard record is injected, not bound through a plan.)
-            match apply_palw_transition_v2_with_extras(&s, &p, &ctx(10 + i as u64, daa, 10 + i as u64), &[object(v)], None, true, false, false, false, &vx()) {
+            match apply_palw_transition_v2_with_extras(
+                &s,
+                &p,
+                &ctx(10 + i as u64, daa, 10 + i as u64),
+                &[object(v)],
+                None,
+                true,
+                false,
+                false,
+                false,
+                &vx(),
+            ) {
                 Ok((next, _)) => s = next,
                 Err(e) => {
                     result = Err(e.to_string());
@@ -538,7 +549,11 @@ fn audit_1004_a_leaf_for_a_layer_sharded_claim_is_ignored_not_a_vertex_refusal()
                 }
             }
         }
-        assert_eq!(result.is_err(), !on, "fence {on}: the vertex that completes the tally is refused below the fence and stands past it: {result:?}");
+        assert_eq!(
+            result.is_err(),
+            !on,
+            "fence {on}: the vertex that completes the tally is refused below the fence and stands past it: {result:?}"
+        );
         if on {
             assert!(matches!(phase(&s, claim), PalwClaimPhaseV2::PanelBound { .. }), "the claim waits for its shard parts");
         }

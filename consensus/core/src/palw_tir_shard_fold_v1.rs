@@ -181,7 +181,9 @@ pub(super) fn bind_record_stratified_v1(
     let plan = plan_of_class_v1(&builder.state, builder.params, class_id, ctx.daa_score)
         .filter(|plan| plan.s_l == s_l)
         .cloned()
-        .ok_or_else(|| PalwStateV2Error::TirShardRefused(format!("claim {claim_id} was drawn in {s_l} strata but its class holds no such plan")))?;
+        .ok_or_else(|| {
+            PalwStateV2Error::TirShardRefused(format!("claim {claim_id} was drawn in {s_l} strata but its class holds no such plan"))
+        })?;
     let claim = builder.state.claims.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
     let drawn = drawn_weights_v1(builder, claim_id, &claim, &plan, anchor, outsider)?;
     let record = rules::PalwTirShardClaimV1::bound(plan.s_l, plan.s_p, outsider, drawn)

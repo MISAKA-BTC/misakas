@@ -9,7 +9,8 @@ use crate::palw_artifact::{
 };
 use crate::palw_model_lines_v1::{PalwModelVersionV1, PalwVersionStatusV1, founding_line_v1};
 use crate::palw_model_registry_v1::{
-    PalwReadinessPolicyV1, PalwSeatReadinessRowV1, palw_model_registry_ready_seats_v1, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
+    PalwReadinessPolicyV1, PalwSeatReadinessRowV1, palw_model_registry_ready_seats_v1, palw_readiness_v2_challenge_seed_v1,
+    palw_readiness_v2_draw_v1,
 };
 
 const FENCE: u64 = 50;
@@ -118,7 +119,14 @@ impl Fx {
         seats.map(|n| proof_over(kimi_id(), ops, bond_key(n), span)).collect()
     }
 
-    fn door(&self, state: &PalwChainStateV2, p: &PalwStateParamsV2, root: Hash64, executor: u64, daa: u64) -> Result<(), PalwStateV2Error> {
+    fn door(
+        &self,
+        state: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        root: Hash64,
+        executor: u64,
+        daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
         let extras = self.extras();
         PalwFoldReadV1::outside(state, p, &extras).check_root_possession_v1(&kimi_id(), &root, Some(&bond_key(executor)), daa)
     }
@@ -130,7 +138,8 @@ impl Fx {
 fn a_proof_of_a_published_root_writes_its_own_row_and_round_trips() {
     let fx = Fx::new();
     let (r1, r2) = (root_of(&fx.r1), root_of(&fx.r2));
-    let (s3, d3) = fx.step(&fx.on, &fx.s2, &ctx(3, 111, 3), &fx.prove(&fx.r2, 2..=8, 11)).expect("R2 is a root the class has in force");
+    let (s3, d3) =
+        fx.step(&fx.on, &fx.s2, &ctx(3, 111, 3), &fx.prove(&fx.r2, 2..=8, 11)).expect("R2 is a root the class has in force");
     assert_eq!(s3.seat_root_readiness_iter().count(), 7, "one row per seat for R2");
     assert_eq!(s3.seat_readiness_iter().count(), 0, "and the founding table is untouched");
     assert!(s3.seat_readiness_for_root(&bond_key(2), &kimi_id(), Some(&r2)).is_some());
@@ -150,7 +159,11 @@ fn a_proof_of_a_published_root_writes_its_own_row_and_round_trips() {
     assert_eq!(s4.seat_readiness_iter().count(), 3);
     assert_eq!(s4.seat_root_readiness_iter().count(), 7);
     let legacy = *s4.seat_readiness(&bond_key(2), &kimi_id()).unwrap();
-    assert_eq!(s4.seat_readiness_for_root(&bond_key(2), &kimi_id(), Some(&r1)), Some(&legacy), "a legacy row reads as the founding root");
+    assert_eq!(
+        s4.seat_readiness_for_root(&bond_key(2), &kimi_id(), Some(&r1)),
+        Some(&legacy),
+        "a legacy row reads as the founding root"
+    );
     assert_eq!(s4.seat_readiness_for_root(&bond_key(2), &kimi_id(), None), Some(&legacy));
 
     // The carriage carries the tail, and a state without rows carries none.
@@ -219,7 +232,15 @@ fn an_r1_only_seat_is_never_drawn_onto_an_r2_claim() {
     let fx = Fx::new();
     let (r1, r2) = (root_of(&fx.r1), root_of(&fx.r2));
     // Bond 2: R1 only. Bond 3: R2 only. Bond 4: both.
-    let (s3, _) = fx.step(&fx.on, &fx.s2, &ctx(3, 111, 3), &[fx.prove(&fx.r1, 2..=2, 11), fx.prove(&fx.r2, 3..=3, 11), fx.prove(&fx.r1, 4..=4, 11), fx.prove(&fx.r2, 4..=4, 11)].concat()).unwrap();
+    let (s3, _) = fx
+        .step(
+            &fx.on,
+            &fx.s2,
+            &ctx(3, 111, 3),
+            &[fx.prove(&fx.r1, 2..=2, 11), fx.prove(&fx.r2, 3..=3, 11), fx.prove(&fx.r1, 4..=4, 11), fx.prove(&fx.r2, 4..=4, 11)]
+                .concat(),
+        )
+        .unwrap();
     let f = fx.fold();
     let keyed = PalwReadinessPolicyV1::at(&f, 120, h64(1), true).with_root_keyed(true);
     let plain = PalwReadinessPolicyV1::at(&f, 120, h64(1), true);
@@ -270,7 +291,10 @@ fn a_version_is_activated_only_once_its_root_is_possessed() {
     let (s4, _) = fx.step(&fx.on, &s3, &ctx(4, 112, 4), &fx.prove(&fx.r2, 2..=8, 11)).unwrap();
     let (s5, _) = fx.step(&fx.on, &s4, &ctx(5, 113, 5), &[promote(2)]).expect("five or more operators hold R2");
     assert_eq!(s5.model_lines.get(&kimi_id()).unwrap().current, 2);
-    assert!(matches!(s5.model_versions.get(&(kimi_id(), 1)).unwrap().status, PalwVersionStatusV1::Superseded { .. }), "R1 keeps its grace");
+    assert!(
+        matches!(s5.model_versions.get(&(kimi_id(), 1)).unwrap().status, PalwVersionStatusV1::Superseded { .. }),
+        "R1 keeps its grace"
+    );
 }
 
 /// **RFC-0004: a head moves only to a class that is Active and seated.** Below the fence the question is not asked.
@@ -279,7 +303,8 @@ fn a_line_head_moves_only_to_an_active_seated_class() {
     let fx = Fx::new();
     let (s3, _) = fx.step(&fx.on, &fx.s2, &ctx(3, 111, 3), &fx.prove(&fx.r1, 2..=8, 11)).unwrap();
     let extras = fx.extras();
-    let ready = |s: &PalwChainStateV2, p: &PalwStateParamsV2| PalwFoldReadV1::outside(s, p, &extras).class_ready_for_head_v1(&kimi_id(), 120);
+    let ready =
+        |s: &PalwChainStateV2, p: &PalwStateParamsV2| PalwFoldReadV1::outside(s, p, &extras).class_ready_for_head_v1(&kimi_id(), 120);
     let mut s = s3.clone();
     s.model_lifecycles.get_mut(&kimi_id()).expect("the row").state = PalwModelLifecycleV1::Probation { probes_passed: 1 };
     assert!(!ready(&s, &fx.on), "Probation is not Active: the old head stays live");

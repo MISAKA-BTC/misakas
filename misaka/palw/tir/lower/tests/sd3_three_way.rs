@@ -70,7 +70,13 @@ impl InputProvider for Provider<'_> {
 
 /// A backend: one stage, position by position, from a fresh state.
 trait Backend {
-    fn run_stage(&mut self, prog: &TirProgramV2, params: &MapParams, inputs: &Provider<'_>, tokens: &[u32]) -> Result<Vec<Pos>, String>;
+    fn run_stage(
+        &mut self,
+        prog: &TirProgramV2,
+        params: &MapParams,
+        inputs: &Provider<'_>,
+        tokens: &[u32],
+    ) -> Result<Vec<Pos>, String>;
 }
 
 fn commits_of(c: impl Iterator<Item = Commit>) -> Vec<Commit> {
@@ -84,7 +90,13 @@ fn commits_of(c: impl Iterator<Item = Commit>) -> Vec<Commit> {
 struct Reference;
 
 impl Backend for Reference {
-    fn run_stage(&mut self, prog: &TirProgramV2, params: &MapParams, inputs: &Provider<'_>, tokens: &[u32]) -> Result<Vec<Pos>, String> {
+    fn run_stage(
+        &mut self,
+        prog: &TirProgramV2,
+        params: &MapParams,
+        inputs: &Provider<'_>,
+        tokens: &[u32],
+    ) -> Result<Vec<Pos>, String> {
         let interp = InterpreterV2::new(prog).map_err(|e| e.to_string())?;
         let mut state = RefState::default();
         let mut out = Vec::new();
@@ -92,7 +104,9 @@ impl Backend for Reference {
             let o = interp.step(params, inputs, &mut state, *t).map_err(|e| format!("reference at {p}: {e}"))?;
             out.push(Pos {
                 output: o.output.data.clone(),
-                commits: commits_of(o.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone()))),
+                commits: commits_of(
+                    o.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())),
+                ),
             });
         }
         Ok(out)
@@ -113,7 +127,13 @@ impl StepSink for Collect {
 struct Exec;
 
 impl Backend for Exec {
-    fn run_stage(&mut self, prog: &TirProgramV2, params: &MapParams, inputs: &Provider<'_>, tokens: &[u32]) -> Result<Vec<Pos>, String> {
+    fn run_stage(
+        &mut self,
+        prog: &TirProgramV2,
+        params: &MapParams,
+        inputs: &Provider<'_>,
+        tokens: &[u32],
+    ) -> Result<Vec<Pos>, String> {
         let info = validate_v2(prog).map_err(|e| e.to_string())?;
         let plan = TirPlan::compile(&info.view).map_err(|e| format!("exec plan: {e}"))?;
         let owned: Vec<((u16, Option<u16>), DType, Vec<u8>)> =
@@ -129,7 +149,9 @@ impl Backend for Exec {
             let input_bytes: Vec<(u16, DType, Vec<u8>)> = values.iter().map(|(k, v)| (*k, v.dtype, v.to_le_bytes())).collect();
             let mut xparams = TirParams::new(&plan);
             for ((j, layer), dtype, b) in &owned {
-                xparams.insert(&plan, *j, *layer, ParamData::from_le_bytes(*dtype, b).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                xparams
+                    .insert(&plan, *j, *layer, ParamData::from_le_bytes(*dtype, b).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
             }
             for (k, dtype, b) in &input_bytes {
                 xparams
@@ -178,10 +200,17 @@ fn ref2_dtype(d: DType) -> misaka_palw_tir_ref2::DType {
 struct Ref2;
 
 impl Backend for Ref2 {
-    fn run_stage(&mut self, prog: &TirProgramV2, params: &MapParams, inputs: &Provider<'_>, tokens: &[u32]) -> Result<Vec<Pos>, String> {
+    fn run_stage(
+        &mut self,
+        prog: &TirProgramV2,
+        params: &MapParams,
+        inputs: &Provider<'_>,
+        tokens: &[u32],
+    ) -> Result<Vec<Pos>, String> {
         let info = validate_v2(prog).map_err(|e| e.to_string())?;
         // Its own decoding of the canonical bytes of the view.
-        let p2 = misaka_palw_tir_ref2::codec::decode_canonical(&info.view.encode()).map_err(|e| format!("ref2 refuses the view: {e:?}"))?;
+        let p2 =
+            misaka_palw_tir_ref2::codec::decode_canonical(&info.view.encode()).map_err(|e| format!("ref2 refuses the view: {e:?}"))?;
         let to2 = |t: &Tensor| {
             misaka_palw_tir_ref2::Tensor::from_le_bytes(
                 ref2_dtype(t.dtype),
@@ -259,7 +288,9 @@ fn stage_inputs(
                         data.resize(*pad_to as usize * per_row, 0);
                         Tensor::new(d.dtype, shape, data).map_err(|e| e.to_string())?
                     }
-                    Binding::StageFinal { stage } => earlier[*stage as usize].last().cloned().ok_or("an earlier stage ran no position")?,
+                    Binding::StageFinal { stage } => {
+                        earlier[*stage as usize].last().cloned().ok_or("an earlier stage ran no position")?
+                    }
                     // A scalar, a token run, a count: the job's own facts.
                     _ => facts.inputs.get(&k).cloned().ok_or_else(|| format!("stage {s}: the job fixes no input {k}"))?,
                 };
@@ -285,13 +316,17 @@ fn run_pipeline_on(
         let inputs = stage_inputs(&pipe.pipeline, &pipe.programs, s, &facts[s], &earlier, random)?;
         let tokens = if facts[s].tokens.is_empty() { vec![0; facts[s].trip as usize] } else { facts[s].tokens.clone() };
         let provider = Provider { inputs: &inputs, random };
-        let rows = backend.run_stage(prog, &pipe.params[st.program as usize], &provider, &tokens).map_err(|e| format!("stage {s} ({}): {e}", st.name))?;
+        let rows = backend
+            .run_stage(prog, &pipe.params[st.program as usize], &provider, &tokens)
+            .map_err(|e| format!("stage {s} ({}): {e}", st.name))?;
         // The stage's output as a tensor: the output node's declared type.
         let node = &prog.blocks[prog.schedule.post as usize].nodes[prog.output.node() as usize];
         let shape: Vec<usize> = node.out.resolve(1);
         let dtype = node.out.dtype;
         earlier.push(
-            rows.iter().map(|r| Tensor::new(dtype, shape.clone(), r.output.clone()).map_err(|e| e.to_string())).collect::<Result<_, _>>()?,
+            rows.iter()
+                .map(|r| Tensor::new(dtype, shape.clone(), r.output.clone()).map_err(|e| e.to_string()))
+                .collect::<Result<_, _>>()?,
         );
         all.push(rows);
     }
@@ -306,7 +341,8 @@ fn the_sd3_pipeline_is_bit_identical_on_the_reference_the_typed_backend_and_ref2
     let pipe = &fx.pipeline;
     let (mut positions, mut commits_total) = (0usize, 0usize);
     // The fidelity test's four evaluation jobs: prompts of one to four ids, two and four steps (the widest).
-    for (prompt, seed, steps) in [(vec![5u32, 9, 13], 1u64, 4u32), (vec![2, 7], 2, 2), (vec![20, 21, 22, 23], 3, 4), (vec![11], 4, 2)] {
+    for (prompt, seed, steps) in [(vec![5u32, 9, 13], 1u64, 4u32), (vec![2, 7], 2, 2), (vec![20, 21, 22, 23], 3, 4), (vec![11], 4, 2)]
+    {
         let si = COUNTS.iter().position(|c| *c == steps).unwrap();
         let words = noise_words(seed, c * side * side);
         let random = Noise(words.clone());
@@ -318,8 +354,13 @@ fn the_sd3_pipeline_is_bit_identical_on_the_reference_the_typed_backend_and_ref2
         for (s, st) in run.stages.iter().enumerate() {
             assert_eq!(reference[s].len(), st.steps.len(), "stage {s}: positions");
             for (p, step) in st.steps.iter().enumerate() {
-                assert_eq!(reference[s][p].output, step.output.data, "stage {s} position {p}: the harness's reference is the runner's");
-                let want = commits_of(step.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())));
+                assert_eq!(
+                    reference[s][p].output, step.output.data,
+                    "stage {s} position {p}: the harness's reference is the runner's"
+                );
+                let want = commits_of(
+                    step.commits.iter().map(|c| (c.slot as u64, c.block, c.layer.map(u32::from), c.node, c.value.data.clone())),
+                );
                 assert_eq!(reference[s][p].commits, want, "stage {s} position {p}: the harness's commits are the runner's");
             }
         }
@@ -331,9 +372,17 @@ fn the_sd3_pipeline_is_bit_identical_on_the_reference_the_typed_backend_and_ref2
         let second = run_pipeline_on(&mut Ref2, pipe, &job, &random).expect("ref2 runs the pipeline");
         for (s, st) in pipe.pipeline.stages.iter().enumerate() {
             for p in 0..reference[s].len() {
-                assert_eq!(reference[s][p].output, exec[s][p].output, "{} position {p}: reference vs the typed backend, output", st.name);
+                assert_eq!(
+                    reference[s][p].output, exec[s][p].output,
+                    "{} position {p}: reference vs the typed backend, output",
+                    st.name
+                );
                 assert_eq!(reference[s][p].output, second[s][p].output, "{} position {p}: reference vs ref2, output", st.name);
-                assert_eq!(reference[s][p].commits, exec[s][p].commits, "{} position {p}: reference vs the typed backend, commits", st.name);
+                assert_eq!(
+                    reference[s][p].commits, exec[s][p].commits,
+                    "{} position {p}: reference vs the typed backend, commits",
+                    st.name
+                );
                 assert_eq!(reference[s][p].commits, second[s][p].commits, "{} position {p}: reference vs ref2, commits", st.name);
                 positions += 1;
                 commits_total += reference[s][p].commits.len();

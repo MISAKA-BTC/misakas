@@ -17,13 +17,16 @@ use kaspa_consensus_core::palw_opv_bootstrap_v1::OpvClassFactsV1;
 
 struct NoProducerTrace;
 impl PublicSourceV1 for NoProducerTrace {
-    fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> { panic!("no producer trace is available") }
+    fn node(&self, _: u8, _: u32, _: u16, _: u16) -> Option<Tensor> {
+        panic!("no producer trace is available")
+    }
 }
 
 fn fresh_replay(net: &Net, claim: Digest, artifact: &dyn PublicArtifactV1, snapshots: &dyn SnapshotSourceV1) -> OutsiderFindingV1 {
     let ledger = net.ledger(); // reconstructed from this node's public RPC reads
     SpecOutsiderV1 { ledger: &ledger, claim, material: &NoProducerTrace, artifact, snapshots, salt: [0; 64] }
-        .check_computation().expect("the model-holding outsider concludes")
+        .check_computation()
+        .expect("the model-holding outsider concludes")
 }
 
 /// `memory_spec`'s shape over another `memory_v1` seed (a class no other test registers or seams).

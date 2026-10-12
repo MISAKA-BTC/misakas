@@ -11,6 +11,7 @@
 //! `misaka/palw/sdk/tests/gen_sd3_class.rs`).
 
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
 use kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
@@ -19,22 +20,23 @@ use kaspa_consensus_core::palw_fp_job_v5::PalwFreePromptJobV5;
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V4_VERSION, PalwFreePromptJobV3,
 };
+use kaspa_consensus_core::palw_gen_admission_v1::{PalwGenAdmissionRulesV1, PalwGenAdmittedV1, verify_gen_class_admission_v1};
 use kaspa_consensus_core::palw_gen_artifact_v1::{PalwGenInventoryIndexV1, palw_gen_inventory_root_v1};
 use kaspa_consensus_core::palw_gen_class_v1::*;
-use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
-use kaspa_consensus_core::palw_gen_admission_v1::{PalwGenAdmissionRulesV1, PalwGenAdmittedV1, verify_gen_class_admission_v1};
-use kaspa_consensus_core::palw_gen_close_price_v1::{PalwGenWholeCloseKindV1, palw_gen_whole_closes_v1, palw_gen_worst_closes_of_class_v1};
-use kaspa_consensus_core::palw_gen_one_move_v1::palw_gen_one_move_max_proof_bytes_v1;
-use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
-use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
+use kaspa_consensus_core::palw_gen_close_price_v1::{
+    PalwGenWholeCloseKindV1, palw_gen_whole_closes_v1, palw_gen_worst_closes_of_class_v1,
+};
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
+use kaspa_consensus_core::palw_gen_one_move_v1::palw_gen_one_move_max_proof_bytes_v1;
 use kaspa_consensus_core::palw_gen_step_v1::PalwGenLeafKindV1;
 use kaspa_consensus_core::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenDecodeV1, PalwGenExecutionV1, palw_gen_execute_tensor_v1, palw_gen_execute_v1};
+use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
+use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use misaka_palw_gen::OutputSpecV1;
 use misaka_palw_tir::demand::DemandLimits;
@@ -304,11 +306,14 @@ fn priced_bounds_measured(f: &Fixture, job: &PalwGenJobV1, ids: PalwGenIdsV1<'_>
     let programs = &f.programs;
     let leaves = PalwGenInventoryIndexV1::new(programs).expect("an inventory").leaf_count();
     let (priced, work) =
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN).expect("the sizing");
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN)
+            .expect("the sizing");
     let by_point: BTreeMap<(u8, u8, u16), (u64, bool)> = priced
         .iter()
         .enumerate()
-        .flat_map(|(s, st)| st.iter().filter(|b| b.checkpoint.is_none()).map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected))))
+        .flat_map(|(s, st)| {
+            st.iter().filter(|b| b.checkpoint.is_none()).map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected)))
+        })
         .collect();
     let ev = PalwGenEvidenceV1 {
         row: &f.row,
@@ -378,7 +383,9 @@ fn a_close_priced_past_the_carrier_is_refused_by_name_and_the_sizing_stops_there
     let programs = &f.programs;
     let leaves = PalwGenInventoryIndexV1::new(programs).unwrap().leaf_count();
     let all = |carriable: u64| {
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, carriable, u64::MAX, 1 << 30, TWIN).expect("sizes").0
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, programs, leaves, true, carriable, u64::MAX, 1 << 30, TWIN)
+            .expect("sizes")
+            .0
     };
     let sized: usize = all(u64::MAX).iter().map(Vec::len).sum();
     let worst = all(u64::MAX).iter().flatten().map(|b| b.close_bytes).max().unwrap();
@@ -513,15 +520,19 @@ fn the_price_bounds_every_measured_close_of_the_toy_vlm_class() {
         ..misaka_palw_tir::pipeline::PipelineJob::default()
     };
     let decode = PalwGenDecodeV1::of(&job).unwrap();
-    let e = palw_gen_execute_v1(&f.pipeline, &f.programs, &f.class.layouts, &f.params, &run_job, &decode, job.v4.sampling_seed).unwrap();
+    let e =
+        palw_gen_execute_v1(&f.pipeline, &f.programs, &f.class.layouts, &f.params, &run_job, &decode, job.v4.sampling_seed).unwrap();
     let binding = PalwGenStepBindingV1::of(&job, &e.claim, e.space.leaf_count());
     let leaves = PalwGenInventoryIndexV1::new(&f.programs).expect("an inventory").leaf_count();
     let (priced, work) =
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN).expect("sizing");
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN)
+            .expect("sizing");
     let by_point: BTreeMap<(u8, u8, u16), (u64, bool)> = priced
         .iter()
         .enumerate()
-        .flat_map(|(s, st)| st.iter().filter(|b| b.checkpoint.is_none()).map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected))))
+        .flat_map(|(s, st)| {
+            st.iter().filter(|b| b.checkpoint.is_none()).map(move |b| ((s as u8, b.block, b.node), (b.close_bytes, b.dissected)))
+        })
         .collect();
     // The checkpoint leaves' prices, by `(stage, state)`.
     let by_state: BTreeMap<(u8, u16), u64> = priced
@@ -558,7 +569,10 @@ fn the_price_bounds_every_measured_close_of_the_toy_vlm_class() {
                     .get(&(s as u8, state))
                     .copied()
                     .unwrap_or_else(|| panic!("toy vlm: no price for the checkpoint of state {state} of stage {s}"));
-                assert!(price >= bytes, "toy vlm: stage {s} checkpoint of state {state} at leaf {index}: priced {price} B, measured {bytes} B");
+                assert!(
+                    price >= bytes,
+                    "toy vlm: stage {s} checkpoint of state {state} at leaf {index}: priced {price} B, measured {bytes} B"
+                );
                 state_leaves += 1;
                 worst_state = worst_state.max(bytes);
                 continue;
@@ -569,7 +583,10 @@ fn the_price_bounds_every_measured_close_of_the_toy_vlm_class() {
                 continue;
             }
             let bytes = close();
-            assert!(price >= bytes, "toy vlm: stage {s} block {block} node {node} at leaf {index}: priced {price} B, measured {bytes} B");
+            assert!(
+                price >= bytes,
+                "toy vlm: stage {s} block {block} node {node} at leaf {index}: priced {price} B, measured {bytes} B"
+            );
             margin = margin.min(price as i64 - bytes as i64);
             done += 1;
         }
@@ -592,7 +609,8 @@ fn run_text(f: &Fixture, job: &PalwFreePromptJobV5, prompt: &[u32]) -> (PalwGenE
         ..misaka_palw_tir::pipeline::PipelineJob::default()
     };
     let decode = PalwGenDecodeV1::of(job).unwrap();
-    let e = palw_gen_execute_v1(&f.pipeline, &f.programs, &f.class.layouts, &f.params, &run_job, &decode, job.v4.sampling_seed).unwrap();
+    let e =
+        palw_gen_execute_v1(&f.pipeline, &f.programs, &f.class.layouts, &f.params, &run_job, &decode, job.v4.sampling_seed).unwrap();
     let binding = PalwGenStepBindingV1::of(job, &e.claim, e.space.leaf_count());
     (e, binding)
 }
@@ -672,7 +690,10 @@ fn output_bounded(f: &Fixture, job: &PalwGenJobV1, ids: PalwGenIdsV1<'_>, what: 
         assert!(priced >= bytes, "{what}: output tile {tile}: priced {priced} B, measured {bytes} B");
         worst = worst.max(bytes);
     }
-    eprintln!("{what}: {tiles} output closes measured (every tile), the largest {worst} B, priced {priced} B (margin {} B)", priced - worst);
+    eprintln!(
+        "{what}: {tiles} output closes measured (every tile), the largest {worst} B, priced {priced} B (margin {} B)",
+        priced - worst
+    );
 }
 
 #[test]
@@ -790,7 +811,18 @@ fn real_vocab_vlm_decoding(vocab: u32, tile: u32, budget: u32, decode: DecodeCon
     let programs = vec![golden_programs[0].clone(), lm];
     let params = Params(vec![golden_params.0[0].clone(), weights]);
     let program_bytes: Vec<Vec<u8>> = programs.iter().map(|p| p.encode()).collect();
-    text_fixture(golden_pipeline.encode(), program_bytes, golden_pipeline, programs, params, image, [tile, 16, 4, 4], vlm_prompt(), budget, decode)
+    text_fixture(
+        golden_pipeline.encode(),
+        program_bytes,
+        golden_pipeline,
+        programs,
+        params,
+        image,
+        [tile, 16, 4, 4],
+        vlm_prompt(),
+        budget,
+        decode,
+    )
 }
 
 /// The grid of the sweep: vocabularies a small, a Llama-2-class and a Qwen2.5-class model have, at the tiles a registrant would try.
@@ -817,7 +849,10 @@ fn the_price_bounds_every_measured_decode_close_at_real_vocabularies() {
         let (n, worst, priced) = decode_bounded(&f, &job, &prompt, &format!("real-vocab VLM V={vocab} T={tile}"));
         assert!(n >= 2);
         // The closed form's lanes alone are `4 · V`: the price is never below them, and the measured close is within the price.
-        assert!(priced >= 4 * vocab as u64 && worst >= 4 * vocab as u64, "V={vocab} T={tile}: the lanes of a logits row are 4 · V bytes");
+        assert!(
+            priced >= 4 * vocab as u64 && worst >= 4 * vocab as u64,
+            "V={vocab} T={tile}: the lanes of a logits row are 4 · V bytes"
+        );
     }
 }
 
@@ -839,7 +874,8 @@ fn widest_decode_rules() -> DecodeConfigV4 {
 fn the_price_bounds_a_decode_close_of_a_job_at_the_widest_decode_rules() {
     for (vocab, tile) in [(4_096u32, 64u32), (32_000, 256)] {
         let (f, job, prompt) = real_vocab_vlm_decoding(vocab, tile, 4, widest_decode_rules());
-        let (_, worst, priced) = decode_bounded(&f, &job, &prompt, &format!("real-vocab VLM V={vocab} T={tile}, the widest decode rules"));
+        let (_, worst, priced) =
+            decode_bounded(&f, &job, &prompt, &format!("real-vocab VLM V={vocab} T={tile}, the widest decode rules"));
         let (g, job, prompt) = real_vocab_vlm(vocab, tile, 4);
         let (_, plain, _) = decode_bounded(&g, &job, &prompt, &format!("real-vocab VLM V={vocab} T={tile}, no decode rules"));
         assert!(worst > plain, "the decode rules ride the binding: {worst} B against {plain} B");
@@ -905,7 +941,8 @@ fn gate(class: &PalwGenClassV1, chunks: bool) -> Result<PalwGenAdmittedV1, PalwC
 fn cone_close_max(f: &Fixture) -> u64 {
     let leaves = PalwGenInventoryIndexV1::new(&f.programs).expect("an inventory").leaf_count();
     let (priced, _) =
-        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN).expect("sizing");
+        palw_gen_worst_closes_of_class_v1(&f.class, &f.pipeline, &f.programs, leaves, true, u64::MAX, u64::MAX, 1 << 30, TWIN)
+            .expect("sizing");
     priced.iter().flatten().map(|b| b.close_bytes).max().expect("a commit point")
 }
 
@@ -913,7 +950,8 @@ fn cone_close_max(f: &Fixture) -> u64 {
 fn carriers() -> (u64, u64) {
     let p = armed();
     let PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
-    let carried = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&b.court).min(b.court.max_close_bytes());
+    let carried =
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&b.court).min(b.court.max_close_bytes());
     (palw_gen_one_move_max_proof_bytes_v1().min(carried), carried)
 }
 
@@ -940,7 +978,10 @@ fn a_decode_close_past_what_can_be_carried_is_refused_by_name_and_the_catalog_re
             for (chunks, verdict, cap) in [(false, one, one_move), (true, chunked, carried)] {
                 match verdict {
                     Ok(a) => {
-                        assert!(decode <= cap, "V={vocab} T={tile} chunks={chunks}: admitted with a decode close of {decode} B past {cap} B");
+                        assert!(
+                            decode <= cap,
+                            "V={vocab} T={tile} chunks={chunks}: admitted with a decode close of {decode} B past {cap} B"
+                        );
                         assert!(
                             a.entry.court_cost.max_close_bytes >= decode,
                             "V={vocab} T={tile}: the catalog records at least the decode close"

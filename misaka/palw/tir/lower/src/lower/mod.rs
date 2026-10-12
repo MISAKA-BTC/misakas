@@ -59,18 +59,18 @@
 //! measures it (`tests/admission.rs`; the worst, Falcon-40B's, is 2.6 Mi MACs of 16 Mi), so no
 //! commit point is added for cone size.
 
+mod altup;
 pub mod bidir;
 pub mod cnn;
-pub mod encdec;
 pub mod cross;
-pub mod qlinear;
-pub mod vision;
-mod altup;
 mod dsa;
 mod dsv4;
+pub mod encdec;
 pub mod fill;
 mod generic;
+pub mod qlinear;
 pub mod stream;
+pub mod vision;
 
 use crate::error::{LowerError, Result};
 use crate::hl::{self, BlockRole, HlProgram, Op, StateKind};
@@ -555,7 +555,16 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
     }
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no logits scale"))?;
-    Ok(Lowered { program, fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks })
+    Ok(Lowered {
+        program,
+        fills,
+        row_params: cx.row_params,
+        resid_sites,
+        logits_key,
+        block_map,
+        site_nodes: cx.site_nodes,
+        budget_fallbacks,
+    })
 }
 
 thread_local! {
@@ -1706,7 +1715,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::CrossAttention { heads, kv_heads, head_dim, scale, rows, slots, .. } => {
             let q = operand(lb, node.inputs[0])?;
             let q = codes(b, cx, lb, &q)?;
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             one(cross::lower_cross_attention(b, cx, lb, &q, *heads, *kv_heads, *head_dim, *scale, *rows, slots, &site, &want)?)
         }
         Op::ExpertLinear { top_k, per_slot, wide } => {
@@ -1738,14 +1748,37 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let idx = operand(lb, node.inputs[1])?;
             let w = operand(lb, node.inputs[2])?;
             // Gated: gate, up, down (+ three biases); plain: up, down.
-            let n_params = if !*gated { 2 } else if *bias { 6 } else { 3 };
+            let n_params = if !*gated {
+                2
+            } else if *bias {
+                6
+            } else {
+                3
+            };
             let ps: Vec<u32> = (3..3 + n_params).map(|k| pidx(node.inputs[k])).collect::<Result<_>>()?;
             let zero_w = if *identity { Some(operand(lb, node.inputs[3 + n_params])?) } else { None };
             let out_bias_p = if *out_bias { Some(pidx(node.inputs[3 + n_params + usize::from(*identity)])?) } else { None };
             if zero_w.is_some() && (*input_scaled || !matches!(*glu, crate::spec::Glu::Standard)) {
                 return Err(LowerError::not_lowerable("MLP_MOE_ZERO_EXPERT_V1 with experts that read their weighted input"));
             }
-            let v = lower_moe(b, cx, lb, &x, &idx, &w, zero_w.as_ref(), out_bias_p, &ps, *top_k, *act, *glu, *input_scaled, *gated, &site, &want)?;
+            let v = lower_moe(
+                b,
+                cx,
+                lb,
+                &x,
+                &idx,
+                &w,
+                zero_w.as_ref(),
+                out_bias_p,
+                &ps,
+                *top_k,
+                *act,
+                *glu,
+                *input_scaled,
+                *gated,
+                &site,
+                &want,
+            )?;
             note_resid(cx, lb, &v);
             one(v)
         }
@@ -1782,7 +1815,16 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                 let p = b.mul(x.r, c, DType::I64);
                 let kx = x.key.clone();
                 let want = if want.dt == DType::I16 || want.dt == DType::I32 { want } else { default_want(lb, i, &site) };
-                return one(generic::narrow_to(b, cx, lb, p, out_len, Arc::new(move |f| Ok(f.scale(&kx)? / (1u64 << 24) as f64)), &site, &want)?);
+                return one(generic::narrow_to(
+                    b,
+                    cx,
+                    lb,
+                    p,
+                    out_len,
+                    Arc::new(move |f| Ok(f.scale(&kx)? / (1u64 << 24) as f64)),
+                    &site,
+                    &want,
+                )?);
             }
             let x = coerce(b, cx, lb, &x, want.dt, &want.key)?;
             let c = decl(
@@ -1847,7 +1889,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             // Sparse block attention: the indexer's block ids are the node's last input.
             let sparse = match blocks {
                 Some(ratio) => {
-                    let ids_ref = *node.inputs.last().ok_or_else(|| LowerError::eval("internal: sparse attention without block ids"))?;
+                    let ids_ref =
+                        *node.inputs.last().ok_or_else(|| LowerError::eval("internal: sparse attention without block ids"))?;
                     let ids = operand(lb, ids_ref)?;
                     let nb = match ids_ref {
                         hl::Ref::Node(j, 0) => match &hl.blocks[lb.hb].nodes[j as usize].op {
@@ -1893,8 +1936,14 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
                     let iq = codes(b, cx, lb, &iq)?;
                     let iw = operand(lb, node.inputs[5])?;
                     let iw = codes(b, cx, lb, &iw)?;
-                    let hl::Ref::State(ih) = node.inputs[6] else { return Err(LowerError::eval("internal: a token indexer without its key history")) };
-                    let keys = lb.windows.get(&ih).cloned().ok_or_else(|| LowerError::eval("internal: indexer keys read before their append"))?;
+                    let hl::Ref::State(ih) = node.inputs[6] else {
+                        return Err(LowerError::eval("internal: a token indexer without its key history"));
+                    };
+                    let keys = lb
+                        .windows
+                        .get(&ih)
+                        .cloned()
+                        .ok_or_else(|| LowerError::eval("internal: indexer keys read before their append"))?;
                     let window = match hl.states[ih as usize].kind {
                         StateKind::Hist { window } => hist_window(cx, lb.hb, window),
                         StateKind::Fixed => return Err(LowerError::eval("internal: the indexer's keys are a Fixed state")),
@@ -2061,7 +2110,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let gi = lb.gdn.get(&i).cloned().ok_or_else(|| LowerError::eval("internal: GDN inputs not matched"))?;
             let a = lb.vals[gi.a as usize][0].clone().ok_or_else(|| LowerError::eval("internal: GDN `a` not lowered"))?;
             let bb = lb.vals[gi.b as usize][0].clone().ok_or_else(|| LowerError::eval("internal: GDN `b` not lowered"))?;
-            let dims = GdnDims { nk: *k_heads, nv: *v_heads, dk: *dk, dv: *dv, map: *head_map, q_scale: *q_scale, channel: *channel_decay };
+            let dims =
+                GdnDims { nk: *k_heads, nv: *v_heads, dk: *dk, dv: *dv, map: *head_map, q_scale: *q_scale, channel: *channel_decay };
             one(lower_gdn(b, cx, lb, &q, &k, &v, &a, &bb, &gi, st, dims, &site, &want)?)
         }
         Op::GatedRmsNorm { eps, groups, gate_first, act } => {
@@ -2138,7 +2188,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             Ok(vec![None])
         }
         Op::WindowPool { ratio, dim, overlap } => {
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             one(dsv4::window_pool(b, cx, lb, node, *ratio, *dim, *overlap, &site, &want)?)
         }
         Op::EntrySelect { heads, dim, ratio, blocks, top } => {
@@ -2156,12 +2207,24 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let (hl::Ref::State(hs), hl::Ref::State(es)) = (node.inputs[1], node.inputs[2]) else {
                 return Err(LowerError::eval("internal: entry attention without its states"));
             };
-            let window = lb.windows.get(&hs).cloned().ok_or_else(|| LowerError::eval("internal: the window is read before its append"))?;
+            let window =
+                lb.windows.get(&hs).cloned().ok_or_else(|| LowerError::eval("internal: the window is read before its append"))?;
             let sp = pidx(node.inputs[3])?;
             let sinks = decl_sinks(b, cx, lb, &site, *heads, sp)?;
             let ids = if *select { Some(operand(lb, node.inputs[5])?.r) } else { None };
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
-            let inp = dsv4::EntryInputs { heads: *heads, hd: *head_dim, ratio: *ratio, blocks: *blocks, scale: *scale, window, store: es, sinks, ids };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let inp = dsv4::EntryInputs {
+                heads: *heads,
+                hd: *head_dim,
+                ratio: *ratio,
+                blocks: *blocks,
+                scale: *scale,
+                window,
+                store: es,
+                sinks,
+                ids,
+            };
             one(dsv4::entry_attention(b, cx, lb, &q, &inp, &site, &want)?)
         }
         Op::StreamMix { n_in, n_out, transpose } => {
@@ -2174,13 +2237,15 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             let r = operand(lb, node.inputs[1])?;
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             one(altup::rms_match(b, cx, lb, &x, &r, *floor, &site, &want)?)
         }
         Op::GaussianTopK { layers } => {
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             one(altup::gaussian_topk(b, cx, lb, &x, layers, &site, &want)?)
         }
         Op::GroupDot { groups } => {
@@ -2205,13 +2270,15 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::GatherRows { .. } => {
             let ids = operand(lb, node.inputs[0])?;
             let tp = pidx(node.inputs[1])?;
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             one(generic::gather_rows(b, cx, lb, node, &ids, tp, &site, &want)?)
         }
         Op::BlockMean { ratio } => {
             let k = operand(lb, node.inputs[0])?;
             let k = codes(b, cx, lb, &k)?;
-            let want = if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
+            let want =
+                if want.dt == DType::I16 { want } else { Want { dt: DType::I16, key: ScaleKey::site(vec![site.clone()], false) } };
             one(generic::block_mean(b, cx, lb, node, &k, *ratio, &site, &want)?)
         }
         Op::BlockWrite { ratio, blocks } => {
@@ -2236,7 +2303,11 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let dt = if want.dt == DType::I32 { DType::I32 } else { DType::I16 };
             let r = b.iota(dt, &[Dim::Fixed(n as u32)], 0, 0, 0);
             // Zeros wanted at a wide scale are zeros at that scale (a carry's padding needs no change of scale).
-            let key = if dt == DType::I32 && want.dt == DType::I32 { want.key.clone() } else { ScaleKey { base: Base::Fixed(1.0), factor: 1.0 } };
+            let key = if dt == DType::I32 && want.dt == DType::I32 {
+                want.key.clone()
+            } else {
+                ScaleKey { base: Base::Fixed(1.0), factor: 1.0 }
+            };
             one(Val { r, dt, key, len: n, site })
         }
         other => Err(LowerError::not_lowerable(format!("op {} is not in Gate 2a (dense decoders only)", other.name()))),
@@ -2274,7 +2345,11 @@ fn lower_row_lookup(
     )?;
     // A table with fewer rows than the vocabulary (Gemma-3n's per-layer table: 262,144 rows, 262,400 token ids — the ids past it are
     // the multimodal placeholders, which transformers never looks up) holds its last row for them: the program stays total.
-    let at = if rows < hl.vocab && matches!(at, tir::Ref::Input(i) if i == INPUT_TOKEN) { b.clamp(at, 0, rows as i64 - 1, DType::Idx) } else { at };
+    let at = if rows < hl.vocab && matches!(at, tir::Ref::Input(i) if i == INPUT_TOKEN) {
+        b.clamp(at, 0, rows as i64 - 1, DType::Idx)
+    } else {
+        at
+    };
     let row = b.gather(table, at, 0, 0);
     let mt = b.gather(m, at, 0, 0);
     let st = b.gather(s, at, 0, 0);
@@ -2412,7 +2487,10 @@ fn lower_lora(
     let (r, inp) = (hl.params[ap as usize].shape[0], hl.params[ap as usize].shape[1]);
     let out = hl.params[bp as usize].shape[0];
     if r != l.rank || hl.params[bp as usize].shape[1] != r || (x.len != 0 && x.len != inp) || base.len != out {
-        return Err(LowerError::eval(format!("internal: LoRA `{site}`: A {:?}, B {:?}, x {}", hl.params[ap as usize].shape, hl.params[bp as usize].shape, x.len)));
+        return Err(LowerError::eval(format!(
+            "internal: LoRA `{site}`: A {:?}, B {:?}, x {}",
+            hl.params[ap as usize].shape, hl.params[bp as usize].shape, x.len
+        )));
     }
     let pl = per_layer(lb);
     let kx = x.key.clone();
@@ -2464,11 +2542,15 @@ fn lower_lora(
     let acc = b.reshape_fixed(acc, &[r as u32]);
     let a = narrow(b, acc, ma, sa, None, DType::I16);
     let a = b.commit(a);
-    cx.site_nodes.entry((b.pb.blocks.len() as u8, match a {
-        tir::Ref::Node(n) => n,
-        _ => 0,
-    }))
-    .or_insert((format!("{site}.lora_a"), ka.clone(), r));
+    cx.site_nodes
+        .entry((
+            b.pb.blocks.len() as u8,
+            match a {
+                tir::Ref::Node(n) => n,
+                _ => 0,
+            },
+        ))
+        .or_insert((format!("{site}.lora_a"), ka.clone(), r));
     // B·a, per-row i16, then the exact rational scale.
     let bw = decl(b, cx, lb, &format!("{site}.lora_b.w"), DType::I16, &[out, r], pl, table_codes(bp))?;
     let ac = b.reshape_fixed(a, &[r as u32, 1]);
@@ -2583,7 +2665,10 @@ fn lower_block_linear(
     let d = &hl.params[w as usize];
     let (n, bs) = (d.shape[0], *d.shape.get(1).unwrap_or(&0));
     if bs != block || bs == 0 || n % bs != 0 || (x.len != 0 && x.len != n) {
-        return Err(LowerError::eval(format!("internal: a block linear of block {block} over {} values with a param of {:?}", x.len, d.shape)));
+        return Err(LowerError::eval(format!(
+            "internal: a block linear of block {block} over {} values with a param of {:?}",
+            x.len, d.shape
+        )));
     }
     let nb = n / bs;
     let wt = decl_rows(b, cx, lb, &d.name, &[n, bs], d.per_layer, RowKind::W8, w)?;
@@ -3031,7 +3116,15 @@ fn lower_table_keyed(
 /// default) is the full `i16` domain, a 128 KiB table. A pipeline class prices a close at every distinct artifact piece a tile's
 /// lookups can touch — an executor's activations can land in all of them (PALW-GEN-20) — and a piece is 32 KiB: a class that must
 /// be convictable in one carrier needs a table of at most two pieces (`1`), or no table.
-fn table_with(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, site: &str, out_key: ScaleKey, make: TableMaker) -> Result<Val> {
+fn table_with(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    site: &str,
+    out_key: ScaleKey,
+    make: TableMaker,
+) -> Result<Val> {
     let (kx, ko) = (x.key.clone(), out_key.clone());
     let shift = cx.table_shift.min(8) as u32;
     let entries = 65536usize >> shift;
@@ -3702,9 +3795,7 @@ fn lower_route(
                     DType::I32,
                     &[experts],
                     per_layer(lb),
-                    Arc::new(move |c| {
-                        Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))
-                    }),
+                    Arc::new(move |c| Ok(IntTensor::i32(vec![experts], c.f(bp)?.data.iter().map(|v| q24_wide(*v as f64)).collect()))),
                 )?;
                 Ok(b.selection_bias(scores, bias))
             }
@@ -3968,7 +4059,8 @@ fn lower_moe(
         let hk = ScaleKey::site(vec![sub("hidden")], false);
         let p = b.mul(a16.r, u16_, DType::I32);
         let (ka, ku, kh) = (a16.key.clone(), uk.clone(), hk.clone());
-        let (m, s) = decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
+        let (m, s) =
+            decl_ms(b, cx, lb, &sub("hidden"), 1, Arc::new(move |c| Ok(vec![c.scale(&ka)? * c.scale(&ku)? / c.scale(&kh)?])))?;
         let hid = narrow(b, p, m, s, None, DType::I16);
         b.commit(hid);
         (hid, hk)
@@ -3999,7 +4091,11 @@ fn lower_moe(
         Some(zw) => {
             let xr = coerce(b, cx, lb, x, DType::I32, &ok)?;
             let xr = b.reshape_fixed(xr.r, &[1, d as u32]);
-            let zr = if zw.key.same(&kw) { zw.r } else { return Err(LowerError::eval("internal: the identity weight is at another scale than the routed weights")) };
+            let zr = if zw.key.same(&kw) {
+                zw.r
+            } else {
+                return Err(LowerError::eval("internal: the identity weight is at another scale than the routed weights"));
+            };
             (b.concat(&[y, xr], 0), b.concat(&[wr, zr], 0))
         }
         None => (y, wr),
@@ -4020,7 +4116,15 @@ fn lower_moe(
 }
 
 /// A `[D]` float param as the added term of an experts' combine: `round(bias / s_out)` in output codes (`I64`).
-fn combine_bias(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, bp: u32, out: &ScaleKey, d: usize, site: &str) -> Result<tir::Ref> {
+fn combine_bias(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    bp: u32,
+    out: &ScaleKey,
+    d: usize,
+    site: &str,
+) -> Result<tir::Ref> {
     let ko = out.clone();
     decl(
         b,
@@ -4261,7 +4365,8 @@ fn lower_conv(
             Ok(IntTensor::i8(vec![kernel, ch], t))
         }),
     )?;
-    let acc = if dilation == 1 { b.causal_conv(ts, row, taps) } else { generic::causal_conv_dilated(b, ts, row, taps, kernel, dilation) };
+    let acc =
+        if dilation == 1 { b.causal_conv(ts, row, taps) } else { generic::causal_conv_dilated(b, ts, row, taps, kernel, dilation) };
     let pre_key = ScaleKey::site(vec![format!("{site}.pre")], false);
     let (kx, kp) = (x.key.clone(), pre_key.clone());
     let (m, s) = decl_ms(

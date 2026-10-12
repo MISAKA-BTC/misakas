@@ -290,11 +290,8 @@ impl Cw {
         }
         let consumers = [REGISTRANT, OUTSIDER, 0, 2, 4, 5, 6, 7];
         assert!(n <= consumers.len(), "the fixture must fund independent source consumers");
-        let posts: Vec<(usize, Obj)> = jobs
-            .iter()
-            .zip(consumers)
-            .map(|(job, card)| (card, self.net.route(card, &K::PostJob { job: job.clone() })))
-            .collect();
+        let posts: Vec<(usize, Obj)> =
+            jobs.iter().zip(consumers).map(|(job, card)| (card, self.net.route(card, &K::PostJob { job: job.clone() }))).collect();
         self.net.send(posts).await;
         let src = self.src.clone_fixture();
         let class = self.src_class;

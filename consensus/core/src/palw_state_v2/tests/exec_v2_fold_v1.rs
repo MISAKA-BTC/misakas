@@ -1104,7 +1104,10 @@ fn exec_v2_origin_budget_is_spent_before_verification_and_not_refunded_by_restor
     let fake = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(fake) };
     for charged in 1..=PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1 {
         let error = apply_object(&mut builder, &point, &fake).unwrap_err();
-        assert_eq!(error.to_string(), PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::AuthorizationOrigin.to_string()).to_string());
+        assert_eq!(
+            error.to_string(),
+            PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::AuthorizationOrigin.to_string()).to_string()
+        );
         assert_eq!(builder.exec_origin_budget.charged(), charged);
         assert!(builder.entries.is_empty());
         assert_eq!(builder.state.state_root(), state.state_root());
@@ -1112,7 +1115,10 @@ fn exec_v2_origin_budget_is_spent_before_verification_and_not_refunded_by_restor
     builder.restore(checkpoint);
     let good = PalwConsensusObjectV2::ExecOriginRecordedV1 { witness: Box::new(witness) };
     let error = apply_object(&mut builder, &point, &good).unwrap_err();
-    assert_eq!(error.to_string(), PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::OriginVerificationBudget.to_string()).to_string());
+    assert_eq!(
+        error.to_string(),
+        PalwStateV2Error::ExecV2Refused(PalwWorkRootRefusalV2::OriginVerificationBudget.to_string()).to_string()
+    );
     assert_eq!(builder.exec_origin_budget.charged(), PALW_EXEC_ORIGIN_VERIFICATIONS_PER_BLOCK_V1);
     assert!(builder.state.exec_v2_origin_v1(&id).is_none());
     // A new block has a fresh budget, but it must still do the full proof check before writing.

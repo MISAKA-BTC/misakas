@@ -471,8 +471,15 @@ async fn model_vector_new_large_vocab_candidates_have_public_courts_without_a_fi
         let bad_id = send_vector(&mut net, &f, binding, 4, &bad).await;
         let route = net.api().unwrap();
         let view = route.model_vector_view_v2(&bad_id).unwrap();
-        let fault = misaka_palw_kernel::element::prove_model_vector_element_v2(&view.context(), &bad_material, &art, &bad.prompt, (0, 0, 0), 0)
-            .unwrap();
+        let fault = misaka_palw_kernel::element::prove_model_vector_element_v2(
+            &view.context(),
+            &bad_material,
+            &art,
+            &bad.prompt,
+            (0, 0, 0),
+            0,
+        )
+        .unwrap();
         let proof = SegFaultV1::Element(fault).to_bytes();
         assert!(proof.len() < 32 << 10, "large source is prosecuted with a bounded dependency line");
         assert_eq!(kaspa_consensus_core::palw_model_vector_v2::decode_model_vector_fault_v2(&proof).unwrap().to_bytes(), proof);
@@ -1642,9 +1649,8 @@ async fn flat_v4_sealed_refutation_pays_the_original_finder_and_refuses_the_copy
     // RPC op 213 (`getPalwModelRefutationSeals`): the request parser and the node's own builder, carried through the JSON wire form.
     {
         use kaspa_rpc_core::convert::palw_kernel::{palw_model_refutation_seals_request_v1, palw_model_refutation_seals_response_v1};
-        let request = kaspa_rpc_core::GetPalwModelRefutationSealsRequest {
-            bond: format!("{}:{}", finder.0.transaction_id, finder.0.index),
-        };
+        let request =
+            kaspa_rpc_core::GetPalwModelRefutationSealsRequest { bond: format!("{}:{}", finder.0.transaction_id, finder.0.index) };
         assert_eq!(palw_model_refutation_seals_request_v1(&request).unwrap(), finder);
         assert!(
             palw_model_refutation_seals_request_v1(&kaspa_rpc_core::GetPalwModelRefutationSealsRequest { bond: "nope".into() })
@@ -1658,7 +1664,10 @@ async fn flat_v4_sealed_refutation_pays_the_original_finder_and_refuses_the_copy
         let s = &read.seals[0];
         let mut wire = [0u8; 64];
         faster_hex::hex_decode(s.seal.as_bytes(), &mut wire).unwrap();
-        assert_eq!((s.slot, wire, s.posted_daa, s.expires_daa, s.deposit_sompi, s.live), (0, seal, row.posted_daa, row.expires_daa, row.deposit, true));
+        assert_eq!(
+            (s.slot, wire, s.posted_daa, s.expires_daa, s.deposit_sompi, s.live),
+            (0, seal, row.posted_daa, row.expires_daa, row.deposit, true)
+        );
         assert_eq!(read.reserved_sompi, row.deposit);
     }
     // An identical re-seal (a restarted finder) is a no-op: the clock stands. Another seal cannot take a live slot.

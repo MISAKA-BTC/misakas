@@ -20,7 +20,9 @@ use ref2::admit::ranges;
 use ref2::build::{ProgBuilder, fixed, ty};
 use ref2::codec::encode;
 use ref2::demand::{Ctx, Limits, Target, eval_demanded};
-use ref2::dissect::{RootClaim, Site, Values, Verdict, admit_root, bottom, closure, cut, finalize, history_tiles, partials, positions, site};
+use ref2::dissect::{
+    RootClaim, Site, Values, Verdict, admit_root, bottom, closure, cut, finalize, history_tiles, partials, positions, site,
+};
 use ref2::eval::Params;
 use ref2::{DType, Dim, Prim, Program, Ref};
 
@@ -56,11 +58,36 @@ fn attn(rng: &mut R, nh: u32, dh: u32, window: u32, layers: usize, extra: bool) 
     let k_row = proj(&mut b, true);
     let v_row = proj(&mut b, true);
     let q3 = b.node(lay, Prim::Reshape, &[Ref::Node(q)], fixed(DType::I16, &[nh, 1, dh]), false);
-    let kk = b.node(lay, Prim::HistAppend { state: hk }, &[Ref::Node(k_row)], ty(DType::I16, &[Dim::H, Dim::Fixed(nh), Dim::Fixed(dh)]), false);
-    let vv = b.node(lay, Prim::HistAppend { state: hv }, &[Ref::Node(v_row)], ty(DType::I16, &[Dim::H, Dim::Fixed(nh), Dim::Fixed(dh)]), false);
-    let kt = b.node(lay, Prim::Transpose { perm: vec![1, 2, 0] }, &[Ref::Node(kk)], ty(DType::I16, &[Dim::Fixed(nh), Dim::Fixed(dh), Dim::H]), false);
-    let vt = b.node(lay, Prim::Transpose { perm: vec![1, 0, 2] }, &[Ref::Node(vv)], ty(DType::I16, &[Dim::Fixed(nh), Dim::H, Dim::Fixed(dh)]), false);
-    let sc = b.node(lay, Prim::MatMul, &[Ref::Node(q3), Ref::Node(kt)], ty(DType::I32, &[Dim::Fixed(nh), Dim::Fixed(1), Dim::H]), false);
+    let kk = b.node(
+        lay,
+        Prim::HistAppend { state: hk },
+        &[Ref::Node(k_row)],
+        ty(DType::I16, &[Dim::H, Dim::Fixed(nh), Dim::Fixed(dh)]),
+        false,
+    );
+    let vv = b.node(
+        lay,
+        Prim::HistAppend { state: hv },
+        &[Ref::Node(v_row)],
+        ty(DType::I16, &[Dim::H, Dim::Fixed(nh), Dim::Fixed(dh)]),
+        false,
+    );
+    let kt = b.node(
+        lay,
+        Prim::Transpose { perm: vec![1, 2, 0] },
+        &[Ref::Node(kk)],
+        ty(DType::I16, &[Dim::Fixed(nh), Dim::Fixed(dh), Dim::H]),
+        false,
+    );
+    let vt = b.node(
+        lay,
+        Prim::Transpose { perm: vec![1, 0, 2] },
+        &[Ref::Node(vv)],
+        ty(DType::I16, &[Dim::Fixed(nh), Dim::H, Dim::Fixed(dh)]),
+        false,
+    );
+    let sc =
+        b.node(lay, Prim::MatMul, &[Ref::Node(q3), Ref::Node(kt)], ty(DType::I32, &[Dim::Fixed(nh), Dim::Fixed(1), Dim::H]), false);
     let m = b.node(lay, Prim::ReduceMax { axis: 2 }, &[Ref::Node(sc)], fixed(DType::I32, &[nh, 1, 1]), false);
     let diff = b.node(lay, Prim::Sub, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I64, &[Dim::Fixed(nh), Dim::Fixed(1), Dim::H]), false);
     let e = b.node(lay, Prim::IntExp, &[Ref::Node(diff)], ty(DType::I32, &[Dim::Fixed(nh), Dim::Fixed(1), Dim::H]), false);
@@ -72,7 +99,13 @@ fn attn(rng: &mut R, nh: u32, dh: u32, window: u32, layers: usize, extra: bool) 
         let vs = b.node(lay, Prim::ReduceSum { axis: 1 }, &[Ref::Node(vt)], fixed(DType::I32, &[nh, 1, dh]), false);
         num = b.node(lay, Prim::Add, &[Ref::Node(o), Ref::Node(vs)], fixed(DType::I64, &[nh, 1, dh]), false);
     }
-    let div = b.node(lay, Prim::Div { rule: ref2::Rounding::Floor }, &[Ref::Node(num), Ref::Node(s1)], fixed(DType::I64, &[nh, 1, dh]), false);
+    let div = b.node(
+        lay,
+        Prim::Div { rule: ref2::Rounding::Floor },
+        &[Ref::Node(num), Ref::Node(s1)],
+        fixed(DType::I64, &[nh, 1, dh]),
+        false,
+    );
     let out = b.node(lay, Prim::Clamp { lo: -30000, hi: 30000 }, &[Ref::Node(div)], fixed(DType::I16, &[nh, 1, dh]), true);
     let y = b.node(lay, Prim::Reshape, &[Ref::Node(out)], fixed(DType::I16, &[d]), false);
     let r = b.node(lay, Prim::Add, &[Ref::CarryIn(0), Ref::Node(y)], fixed(DType::I32, &[d]), false);
@@ -138,7 +171,12 @@ fn layout(p: &Program, positions: u32, h_tile: u32, tile_len: u32) -> cc::palw_t
 }
 
 /// The values of one leaf from this crate's run (`forge`: a replacement for one commit tile).
-fn leaf_values(p: &Program, m: &Model, leaf: &cc::palw_tir_step_v1::PalwTirLeafV1, forge: &BTreeMap<(u64, u32, u16, u64), Vec<i128>>) -> Result<Vec<i128>, String> {
+fn leaf_values(
+    p: &Program,
+    m: &Model,
+    leaf: &cc::palw_tir_step_v1::PalwTirLeafV1,
+    forge: &BTreeMap<(u64, u32, u16, u64), Vec<i128>>,
+) -> Result<Vec<i128>, String> {
     use cc::palw_tir_step_v1::PalwTirLeafKindV1 as K;
     let a = leaf.position as u64;
     let n = leaf.value_count as u64;
@@ -195,12 +233,14 @@ fn execute(
     let class_id = class.class_id(&artifact_root);
     let prompt: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
     // The yardstick context of the class at (prefill = positions, decode = 1), with this prompt.
-    let mut jc = cc::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class_id, (positions, 1)).ok_or("no canonical context")?;
+    let mut jc =
+        cc::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class_id, (positions, 1)).ok_or("no canonical context")?;
     jc.prompt_token_ids_hash = cc::palw_v2::prompt_token_ids_hash_v2(&prompt);
     // The binding's job-context shape wants n_ctx = prefill + decode (found by probing
     // verify_tir_binding_v1; the canonical context carries the layout's max_context).
     jc.max_context_tokens = positions + 1;
-    let mut builder = cc::palw_tir_step_v1::PalwTirStepLegBuilderV1::new(&space, &jc, class_id, 1 << 30).map_err(|e| format!("builder {e:?}"))?;
+    let mut builder =
+        cc::palw_tir_step_v1::PalwTirStepLegBuilderV1::new(&space, &jc, class_id, 1 << 30).map_err(|e| format!("builder {e:?}"))?;
     let mut leaves = Vec::new();
     while let Some(leaf) = builder.next_leaf() {
         let vals = leaf_values(p, m, &leaf, forge)?;
@@ -210,7 +250,8 @@ fn execute(
     }
     let (count, root) = builder.finish().map_err(|e| format!("finish {e:?}"))?;
     let ctx_hash = jc.context_hash();
-    let hashes: Vec<cc::Hash64> = leaves.iter().map(|(_, pre)| cc::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &class_id, pre)).collect();
+    let hashes: Vec<cc::Hash64> =
+        leaves.iter().map(|(_, pre)| cc::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &class_id, pre)).collect();
     let my_root = cc::palw_step_leg::step_merkle_root_v1(&hashes).map_err(|e| format!("root {e:?}"))?;
     if my_root != root {
         return Err("the leaf hashes do not rebuild the builder's root".into());
@@ -344,11 +385,18 @@ fn play(
         all_t.push(eval_demanded(prog, &Target::Node { ctx: st.ctx, node: r }, &els, &mut Mine(m), LIM).unwrap().0);
     }
     let full = RootClaim { elements: st.counts.iter().map(|&k| (0..k).collect()).collect(), totals: all_t.clone() };
-    let l: Vec<Vec<u64>> = closure(prog, st, tile, &full, &mut Mine(m), LIM).unwrap().iter().map(|s| s.iter().copied().collect()).collect();
-    let root = RootClaim { totals: l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect(), elements: l };
+    let l: Vec<Vec<u64>> =
+        closure(prog, st, tile, &full, &mut Mine(m), LIM).unwrap().iter().map(|s| s.iter().copied().collect()).collect();
+    let root = RootClaim {
+        totals: l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect(),
+        elements: l,
+    };
     let theirs_l: Vec<Vec<u64>> = root_f.elements.iter().map(|x| x.iter().map(|&e| e as u64).collect()).collect();
     if theirs_l != root.elements || root_f.totals.partials != root.totals {
-        t.disagree("honest root claim", format!("{tag}: ref2 {:?}/{:?} court {:?}/{:?}", root.elements, root.totals, theirs_l, root_f.totals.partials));
+        t.disagree(
+            "honest root claim",
+            format!("{tag}: ref2 {:?}/{:?} court {:?}/{:?}", root.elements, root.totals, theirs_l, root_f.totals.partials),
+        );
         return;
     }
     let mut games: Vec<(Option<(usize, usize, i128)>, u8)> = vec![(None, 0)];
@@ -376,16 +424,17 @@ fn play(
                 // Unforged: the honest execution, lying totals.
                 exec_store = None;
             } else {
-            let mut forge = BTreeMap::new();
-            forge.insert((st.ctx.pos, st.ctx.occ, st.node, tile[0]), forged.clone());
-            match execute(prog, m, tokens, h_tile, tile_len, &forge) {
-                Ok((x, _, _)) => exec_store = Some(x),
-                Err(e) => {
-                    // A forged value outside the node's dtype cannot be committed at all.
-                    *t.outcomes.entry(format!("forged tile uncommittable: {}", e.split(' ').next().unwrap_or(""))).or_default() += 1;
-                    continue;
+                let mut forge = BTreeMap::new();
+                forge.insert((st.ctx.pos, st.ctx.occ, st.node, tile[0]), forged.clone());
+                match execute(prog, m, tokens, h_tile, tile_len, &forge) {
+                    Ok((x, _, _)) => exec_store = Some(x),
+                    Err(e) => {
+                        // A forged value outside the node's dtype cannot be committed at all.
+                        *t.outcomes.entry(format!("forged tile uncommittable: {}", e.split(' ').next().unwrap_or(""))).or_default() +=
+                            1;
+                        continue;
+                    }
                 }
-            }
             }
         }
         let exec = exec_store.as_ref().unwrap_or(honest);
@@ -419,13 +468,14 @@ fn play(
         // Rounds at arity 2, the court building the honest-given-root partials; the liar's round
         // folds to its claim with the lie carried by the last child.
         let sid = cc::Hash64::from_u64_word(99);
-        let mut phase = match cc::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(sid, narrowed, &fsite, &root_c, arity as u8, 0, W_ROUND) {
-            Ok(p) => p,
-            Err(e) => {
-                t.disagree("phase open", format!("{tag}: {e:?}"));
-                continue;
-            }
-        };
+        let mut phase =
+            match cc::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(sid, narrowed, &fsite, &root_c, arity as u8, 0, W_ROUND) {
+                Ok(p) => p,
+                Err(e) => {
+                    t.disagree("phase open", format!("{tag}: {e:?}"));
+                    continue;
+                }
+            };
         let (mut first_t, mut count, mut disputed) = (0u64, history_tiles(st), claim.totals.clone());
         let mut daa = 1;
         let mut ok = true;
@@ -478,7 +528,12 @@ fn play(
             }
             daa += 1;
             let choice = (0..claims.len()).find(|&x| claims[x] != court_eval[x]).unwrap_or(claims.len() - 1);
-            let cm = cc::palw_tir_dissect_v1::PalwTirDissectChoiceV1 { version: 1, session_id: sid, round: phase.round(), child: choice as u8 };
+            let cm = cc::palw_tir_dissect_v1::PalwTirDissectChoiceV1 {
+                version: 1,
+                session_id: sid,
+                round: phase.round(),
+                child: choice as u8,
+            };
             if let Err(e) = phase.apply_choice(&cm, daa, W_ROUND) {
                 t.disagree("choice", format!("{tag}: {e:?}"));
                 ok = false;
@@ -496,11 +551,15 @@ fn play(
         let mine_v = bottom(prog, st, &claim, range, &disputed, &mut Mine(m), LIM);
         let court_v = catch_any(|| {
             let b = cc::palw_tir_court_v1::build_tir_dissect_bottom_v1(&exec.binding, &phase, exec, &rules)?;
-            Ok::<_, cc::palw_tir_court_v1::PalwTirEvidenceErrorV1>(cc::palw_tir_court_v1::check_tir_dissect_bottom_v1(&phase, &b, narrowed, &rules))
+            Ok::<_, cc::palw_tir_court_v1::PalwTirEvidenceErrorV1>(cc::palw_tir_court_v1::check_tir_dissect_bottom_v1(
+                &phase, &b, narrowed, &rules,
+            ))
         });
         let court = match court_v {
             Ok(Ok(Ok(v))) => match v.fault {
-                cc::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index } => Ok(Verdict::Mismatch { value_index: value_index as usize }),
+                cc::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index } => {
+                    Ok(Verdict::Mismatch { value_index: value_index as usize })
+                }
                 other => Err(format!("{other:?}")),
             },
             Ok(Ok(Err(cc::palw_step_refute::PalwStepRefuteError::NoFaultFound))) => Ok(Verdict::Defeated),
@@ -512,7 +571,11 @@ fn play(
                     (Verdict::Defeated, None) => "honest: challenger defeated at the bottom".to_string(),
                     (Verdict::Mismatch { value_index }, Some((i, e, _))) => {
                         let at: usize = claim.elements[..i].iter().map(|l| l.len()).sum::<usize>() + e;
-                        if *value_index == at { "a lie in reduction convicted at its value".into() } else { format!("a lie convicted elsewhere ({value_index} vs {at})") }
+                        if *value_index == at {
+                            "a lie in reduction convicted at its value".into()
+                        } else {
+                            format!("a lie convicted elsewhere ({value_index} vs {at})")
+                        }
                     }
                     other => format!("unexpected {other:?}"),
                 };

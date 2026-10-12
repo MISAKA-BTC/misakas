@@ -1209,7 +1209,9 @@ fn commitment_scope_memory_serves_no_model_values_and_convicts_from_public_inher
     let (_, job) = m.job(vec![vec![4, 4], vec![8, 1, 6]]);
     let (s_at, n_at) = matmul_of(&m.fx.program);
     let production = m.produce(&job, P1, &inherited, |step, trace| {
-        if step == 1 { bump(&mut trace.values[0][s_at][n_at], 1); }
+        if step == 1 {
+            bump(&mut trace.values[0][s_at][n_at], 1);
+        }
     });
     let (claim, events) = m.w.commit(SpecClaimV1::Memory(production.claim.clone()));
     assert!(events.contains(&E::ClaimCommitted { claim }));
@@ -1219,12 +1221,18 @@ fn commitment_scope_memory_serves_no_model_values_and_convicts_from_public_inher
     for trace in &production.traces {
         for values in &trace.values {
             let response = PositionResponseV1 {
-                values: values.iter().zip(&mask).map(|(occ, hidden)| {
-                    occ.iter().zip(hidden).map(|(value, hidden)| {
-                        if *hidden { MaterialResponseV1::Omitted }
-                        else { MaterialResponseV1::Whole(TensorWireV1::of(value)) }
-                    }).collect()
-                }).collect(),
+                values: values
+                    .iter()
+                    .zip(&mask)
+                    .map(|(occ, hidden)| {
+                        occ.iter()
+                            .zip(hidden)
+                            .map(|(value, hidden)| {
+                                if *hidden { MaterialResponseV1::Omitted } else { MaterialResponseV1::Whole(TensorWireV1::of(value)) }
+                            })
+                            .collect()
+                    })
+                    .collect(),
                 inputs: vec![],
             };
             let bytes = borsh::to_vec(&response).unwrap();

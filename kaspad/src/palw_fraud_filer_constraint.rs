@@ -513,7 +513,8 @@ mod tests {
             &template.job_context.network_id,
         )
         .unwrap();
-        template.activation_leg_root = kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&template.job_context);
+        template.activation_leg_root =
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&template.job_context);
         let own = vec![0; job.decode_token_limit as usize];
         for fault in 0..8 {
             let mut ids = own.clone();
@@ -630,7 +631,11 @@ mod tests {
             let initial = logits_event_disclosure_v1(&binding, &rows, &ids, 0, 0).unwrap();
             if fault == 7 {
                 let mut registered = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
-                    target.class_id, target.artifact_root, &binding.job_context, 31);
+                    target.class_id,
+                    target.artifact_root,
+                    &binding.job_context,
+                    31,
+                );
                 registered.token_table_root = Some(Hash64::from_u64_word(0xBAD16));
                 target.registered_semantics = Some(registered.clone());
                 let judge = |target: &PalwOffenceTargetV1, job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3| {
@@ -638,26 +643,41 @@ mod tests {
                 };
                 assert_eq!(judge(&target, &job), Ok(true));
                 registered.token_table_root = Some(table.root());
-                let mut honest_target = target.clone(); honest_target.registered_semantics = Some(registered);
+                let mut honest_target = target.clone();
+                honest_target.registered_semantics = Some(registered);
                 assert_eq!(judge(&honest_target, &job), Ok(false));
-                let mut unqualified = target.clone(); unqualified.registered_semantics = None;
+                let mut unqualified = target.clone();
+                unqualified.registered_semantics = None;
                 assert!(judge(&unqualified, &job).is_err(), "old claims never inherit a later table rule");
                 let mut forged_job = job.clone();
-                let Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &mut forged_job.tail else { unreachable!() };
-                tail.table_root = table.root(); tail.constraint[0] ^= 1;
+                let Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Constraint(tail)) = &mut forged_job.tail else {
+                    unreachable!()
+                };
+                tail.table_root = table.root();
+                tail.constraint[0] ^= 1;
                 assert!(judge(&target, &forged_job).is_err(), "uncommitted job substitutions never convict");
                 let answer = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(
-                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(initial));
+                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(initial),
+                );
                 let rules = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
-                    prompt_ids_form: backend.prompt_ids_form(), base_class_id: Hash64::default(), da_signer_liability: false,
+                    prompt_ids_form: backend.prompt_ids_form(),
+                    base_class_id: Hash64::default(),
+                    da_signer_liability: false,
                 };
                 let filing = super::super::palw_fraud_filer_public_filing_with_fp_v2(&target, rules, &answer, None, Some(&job))
-                    .unwrap().expect("registered table mismatch needs no table bytes or selected lane");
-                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = filing.object else { panic!("offence") };
-                let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 = borsh::from_slice(&evidence).unwrap();
+                    .unwrap()
+                    .expect("registered table mismatch needs no table bytes or selected lane");
+                let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = filing.object
+                else {
+                    panic!("offence")
+                };
+                let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
+                    borsh::from_slice(&evidence).unwrap();
                 assert!(matches!(decoded.contradiction, PalwPanelContradictionV1::RegisteredTableMismatch { .. }));
-                assert_eq!(kaspa_consensus_core::palw_offence_attribution_v1::palw_claim_proving_site_v1(&decoded.contradiction, None),
-                    Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFaultSiteV1::AnyValid));
+                assert_eq!(
+                    kaspa_consensus_core::palw_offence_attribution_v1::palw_claim_proving_site_v1(&decoded.contradiction, None),
+                    Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFaultSiteV1::AnyValid)
+                );
                 continue;
             }
             if fault == 5 {

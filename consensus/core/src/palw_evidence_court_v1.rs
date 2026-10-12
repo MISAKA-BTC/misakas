@@ -147,15 +147,41 @@ pub struct ProviderCourtStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CourtEventV1 {
     /// The claim was made under this court's fence (a property of the claim's version, recorded when it is accepted).
-    ClaimUnderCourt { claim: Hash64 },
-    FileReceipt { claim: Hash64, provider: PalwBondKeyV2, manifest_id: Hash64, chunk_count: u32, retain_until_daa: u64, now: u64 },
-    Challenge { claim: Hash64, provider: PalwBondKeyV2, chunk_index: u32, challenger: PalwBondKeyV2, now: u64 },
-    Answer { challenge: Hash64, manifest: EvidenceManifestV1, chunk: Vec<u8>, now: u64 },
+    ClaimUnderCourt {
+        claim: Hash64,
+    },
+    FileReceipt {
+        claim: Hash64,
+        provider: PalwBondKeyV2,
+        manifest_id: Hash64,
+        chunk_count: u32,
+        retain_until_daa: u64,
+        now: u64,
+    },
+    Challenge {
+        claim: Hash64,
+        provider: PalwBondKeyV2,
+        chunk_index: u32,
+        challenger: PalwBondKeyV2,
+        now: u64,
+    },
+    Answer {
+        challenge: Hash64,
+        manifest: EvidenceManifestV1,
+        chunk: Vec<u8>,
+        now: u64,
+    },
     /// One Panel could not fetch (timeout, refusal, a local failure). **Never** evidence: a no-op by construction.
-    PanelLocalTimeout { claim: Hash64 },
+    PanelLocalTimeout {
+        claim: Hash64,
+    },
     /// An accusation that the claim's PRODUCER withheld material (today's path). Refused for a claim under this court: one failure, one party.
-    ProducerWithholdingAccusation { claim: Hash64 },
-    Sweep { now: u64 },
+    ProducerWithholdingAccusation {
+        claim: Hash64,
+    },
+    Sweep {
+        now: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,12 +192,21 @@ pub enum LapseReason {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CourtOutcomeV1 {
-    ProviderCleared { challenge: Hash64 },
+    ProviderCleared {
+        challenge: Hash64,
+    },
     /// The provider's collateral is the case's subject — once per `(claim, provider)`.
-    ProviderCharged { claim: Hash64, provider: PalwBondKeyV2 },
+    ProviderCharged {
+        claim: Hash64,
+        provider: PalwBondKeyV2,
+    },
     /// The claim lapses unpaid. `miner_fraud` is always `false`: a withheld or lost chunk is not a false computation, and the miner's
     /// fraud slash is the court's separate (and untouched) path.
-    ClaimLapsed { claim: Hash64, reason: LapseReason, miner_fraud: bool },
+    ClaimLapsed {
+        claim: Hash64,
+        reason: LapseReason,
+        miner_fraud: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -235,7 +270,11 @@ impl ProviderCourtStateV1 {
             }
             CourtEventV1::PanelLocalTimeout { .. } => Ok(vec![]),
             CourtEventV1::ProducerWithholdingAccusation { claim } => {
-                if self.under_court.contains(&claim) { Err(CourtErrorV1::ProducerNotAccountable(claim)) } else { Ok(vec![]) }
+                if self.under_court.contains(&claim) {
+                    Err(CourtErrorV1::ProducerNotAccountable(claim))
+                } else {
+                    Ok(vec![])
+                }
             }
             CourtEventV1::FileReceipt { claim, provider, manifest_id, chunk_count, retain_until_daa, now } => {
                 if !self.under_court.contains(&claim) {
@@ -288,7 +327,14 @@ impl ProviderCourtStateV1 {
                 }
                 self.challenges.insert(
                     id,
-                    ProviderChallengeRowV1 { claim, provider, manifest_id: row.manifest_id, chunk_index, challenger, deadline_daa: deadline },
+                    ProviderChallengeRowV1 {
+                        claim,
+                        provider,
+                        manifest_id: row.manifest_id,
+                        chunk_index,
+                        challenger,
+                        deadline_daa: deadline,
+                    },
                 );
                 Ok(vec![])
             }
@@ -323,7 +369,11 @@ impl ProviderCourtStateV1 {
                         && filed.iter().all(|p| self.provider_charged.contains(&(row.claim, **p)))
                         && self.lapsed.insert(row.claim)
                     {
-                        out.push(CourtOutcomeV1::ClaimLapsed { claim: row.claim, reason: LapseReason::NoProviderAnswers, miner_fraud: false });
+                        out.push(CourtOutcomeV1::ClaimLapsed {
+                            claim: row.claim,
+                            reason: LapseReason::NoProviderAnswers,
+                            miner_fraud: false,
+                        });
                     }
                 }
                 Ok(out)
@@ -388,14 +438,25 @@ mod tests {
         for p in [10u8, 11] {
             s.apply(
                 W,
-                CourtEventV1::FileReceipt { claim: h(CLAIM), provider: bond(p), manifest_id: id, chunk_count: 3, retain_until_daa: 5_000, now: 100 },
+                CourtEventV1::FileReceipt {
+                    claim: h(CLAIM),
+                    provider: bond(p),
+                    manifest_id: id,
+                    chunk_count: 3,
+                    retain_until_daa: 5_000,
+                    now: 100,
+                },
             )
             .unwrap();
         }
         s
     }
     fn challenge(s: &mut ProviderCourtStateV1, provider: u8, chunk: u32, now: u64) -> Result<(), CourtErrorV1> {
-        s.apply(W, CourtEventV1::Challenge { claim: h(CLAIM), provider: bond(provider), chunk_index: chunk, challenger: bond(99), now }).map(|_| ())
+        s.apply(
+            W,
+            CourtEventV1::Challenge { claim: h(CLAIM), provider: bond(provider), chunk_index: chunk, challenger: bond(99), now },
+        )
+        .map(|_| ())
     }
     fn open_id(s: &ProviderCourtStateV1, provider: u8, chunk: u32) -> Hash64 {
         *s.challenges.iter().find(|(_, c)| c.provider == bond(provider) && c.chunk_index == chunk).map(|(id, _)| id).unwrap()
@@ -406,7 +467,17 @@ mod tests {
         let mut s = ProviderCourtStateV1::default();
         let id = manifest_id_v1(&manifest());
         let file = |s: &mut ProviderCourtStateV1, chunk_count, retain, now| {
-            s.apply(W, CourtEventV1::FileReceipt { claim: h(CLAIM), provider: bond(10), manifest_id: id, chunk_count, retain_until_daa: retain, now })
+            s.apply(
+                W,
+                CourtEventV1::FileReceipt {
+                    claim: h(CLAIM),
+                    provider: bond(10),
+                    manifest_id: id,
+                    chunk_count,
+                    retain_until_daa: retain,
+                    now,
+                },
+            )
         };
         assert_eq!(file(&mut s, 3, 5_000, 100), Err(CourtErrorV1::NotUnderCourt(h(CLAIM))));
         s.apply(W, CourtEventV1::ClaimUnderCourt { claim: h(CLAIM) }).unwrap();
@@ -423,14 +494,20 @@ mod tests {
         assert_eq!(challenge(&mut s, 10, 3, 200), Err(CourtErrorV1::ChunkNotPromised { index: 3, count: 3 }));
         assert_eq!(challenge(&mut s, 10, 0, 5_001), Err(CourtErrorV1::RetentionOver { retain_until: 5_000, now: 5_001 }));
         assert_eq!(
-            s.apply(W, CourtEventV1::Challenge { claim: h(CLAIM), provider: bond(10), chunk_index: 0, challenger: bond(10), now: 200 }),
+            s.apply(
+                W,
+                CourtEventV1::Challenge { claim: h(CLAIM), provider: bond(10), chunk_index: 0, challenger: bond(10), now: 200 }
+            ),
             Err(CourtErrorV1::SelfChallenge)
         );
         challenge(&mut s, 10, 0, 200).unwrap();
         assert_eq!(challenge(&mut s, 10, 0, 201), Err(CourtErrorV1::AlreadyOpen));
         let mut other = ProviderCourtStateV1::default();
         assert_eq!(
-            other.apply(W, CourtEventV1::Challenge { claim: h(0xEE), provider: bond(10), chunk_index: 0, challenger: bond(99), now: 1 }),
+            other.apply(
+                W,
+                CourtEventV1::Challenge { claim: h(0xEE), provider: bond(10), chunk_index: 0, challenger: bond(99), now: 1 }
+            ),
             Err(CourtErrorV1::NotUnderCourt(h(0xEE)))
         );
     }
@@ -442,10 +519,16 @@ mod tests {
         let id = open_id(&s, 10, 1);
         let c = chunks();
         // A wrong chunk, a wrong manifest and a late answer change nothing.
-        assert_eq!(s.apply(W, CourtEventV1::Answer { challenge: id, manifest: manifest(), chunk: c[0].clone(), now: 300 }), Err(CourtErrorV1::BadOpening));
+        assert_eq!(
+            s.apply(W, CourtEventV1::Answer { challenge: id, manifest: manifest(), chunk: c[0].clone(), now: 300 }),
+            Err(CourtErrorV1::BadOpening)
+        );
         let mut foreign = manifest();
         foreign.retention_until_daa += 1;
-        assert_eq!(s.apply(W, CourtEventV1::Answer { challenge: id, manifest: foreign, chunk: c[1].clone(), now: 300 }), Err(CourtErrorV1::WrongManifest));
+        assert_eq!(
+            s.apply(W, CourtEventV1::Answer { challenge: id, manifest: foreign, chunk: c[1].clone(), now: 300 }),
+            Err(CourtErrorV1::WrongManifest)
+        );
         assert_eq!(
             s.apply(W, CourtEventV1::Answer { challenge: id, manifest: manifest(), chunk: c[1].clone(), now: 200 + W + 1 }),
             Err(CourtErrorV1::TooLate { deadline: 200 + W, now: 200 + W + 1 })
@@ -455,7 +538,10 @@ mod tests {
         let out = s.apply(W, CourtEventV1::Answer { challenge: id, manifest: manifest(), chunk: c[1].clone(), now: 200 + W }).unwrap();
         assert_eq!(out, vec![CourtOutcomeV1::ProviderCleared { challenge: id }]);
         assert_eq!(s.open_challenges(), 0);
-        assert!(s.apply(W, CourtEventV1::Sweep { now: 100_000 }).unwrap().is_empty(), "a cleared challenge is never swept into a default");
+        assert!(
+            s.apply(W, CourtEventV1::Sweep { now: 100_000 }).unwrap().is_empty(),
+            "a cleared challenge is never swept into a default"
+        );
         assert!(!s.is_charged(&h(CLAIM), &bond(10)));
     }
 
@@ -466,7 +552,11 @@ mod tests {
         challenge(&mut s, 10, 1, 205).unwrap();
         assert!(s.apply(W, CourtEventV1::Sweep { now: 200 + W }).unwrap().is_empty(), "the deadline itself is inside");
         let out = s.apply(W, CourtEventV1::Sweep { now: 205 + W + 1 }).unwrap();
-        assert_eq!(out, vec![CourtOutcomeV1::ProviderCharged { claim: h(CLAIM), provider: bond(10) }], "two failed chunks, ONE charge; provider 11 untouched");
+        assert_eq!(
+            out,
+            vec![CourtOutcomeV1::ProviderCharged { claim: h(CLAIM), provider: bond(10) }],
+            "two failed chunks, ONE charge; provider 11 untouched"
+        );
         assert!(s.is_charged(&h(CLAIM), &bond(10)) && !s.is_charged(&h(CLAIM), &bond(11)));
         assert!(!s.has_lapsed(&h(CLAIM)), "one provider still stands behind the claim's material");
         // Nothing further can be charged to a provider already charged for the claim.
@@ -501,7 +591,10 @@ mod tests {
             assert_eq!(s.apply(W, CourtEventV1::PanelLocalTimeout { claim: h(CLAIM) }), Ok(vec![]));
         }
         assert_eq!(s, before, "any number of local fetch failures leaves the court exactly as it was");
-        assert!(s.apply(W, CourtEventV1::Sweep { now: 1_000_000 }).unwrap().is_empty(), "and with no challenge there is nothing to default");
+        assert!(
+            s.apply(W, CourtEventV1::Sweep { now: 1_000_000 }).unwrap().is_empty(),
+            "and with no challenge there is nothing to default"
+        );
     }
 
     #[test]

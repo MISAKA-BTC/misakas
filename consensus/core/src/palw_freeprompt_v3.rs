@@ -537,8 +537,10 @@ impl PalwFreePromptJobV3 {
             }
             // A constrained job (ADR-0096 Decision 7) is the V3 rule under its mask, which a host holding the class's
             // token table opens as a scope around the run ([`crate::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1`]).
-            _ if self.is_constraint() => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit)
-                .with_constraint(crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_v1()),
+            _ if self.is_constraint() => {
+                crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit)
+                    .with_constraint(crate::palw_fp_constraint_job_v1::palw_fp_constraint_scope_v1())
+            }
             _ => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit),
         }
     }
@@ -2688,7 +2690,11 @@ pub enum PalwFpWorkerFrameV1 {
     AnsweredBatch(Vec<PalwFpWorkerAnswerV1>) = 5,
     /// One id of one request of a batch, as it is selected (`index` is the request's place in the
     /// batch frame) — what lets the gateway run each candidate's own display rule over its own ids.
-    BatchToken { index: u32, token_id: u32, rendered: Vec<u8> } = 6,
+    BatchToken {
+        index: u32,
+        token_id: u32,
+        rendered: Vec<u8>,
+    } = 6,
     /// **RFC-0001 §2.8 — the answer to an embedding request** ([`PALW_FP_WORKER_EMBED_MAGIC_V1`]).
     Embedded(Box<PalwFpWorkerEmbeddingV1>) = 7,
     /// **RFC-0001 P1 — the terminator of a request the gateway cancelled** ([`PALW_FP_WORKER_CANCEL_MAGIC_V1`]): the run stopped

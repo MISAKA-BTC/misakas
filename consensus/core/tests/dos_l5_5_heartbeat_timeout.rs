@@ -80,7 +80,8 @@ impl Chain {
 /// Walk one floor claim of `executor` to `ReceiptLicensed` on the seats given. Returns its id.
 fn license_one(c: &mut Chain, seed: u64, executor: (PalwBondKeyV2, Vec<u8>, Vec<u8>), seats: &[(PalwBondKeyV2, Hash64)]) -> Hash64 {
     let (floor, leaves, target, _) = genesis_classes(&c.p)[0];
-    let (env, key, id) = junk_attempt(floor, executor.0, executor.1.clone(), &executor.2, palw_pwu_v1(target, leaves), seed, 0x5EED_0000 + seed);
+    let (env, key, id) =
+        junk_attempt(floor, executor.0, executor.1.clone(), &executor.2, palw_pwu_v1(target, leaves), seed, 0x5EED_0000 + seed);
     let d = c.daa + 1;
     c.step(d, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
     let bound = PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA0C0 + seed), seats: seats_of(seats) };
@@ -92,7 +93,9 @@ fn license_one(c: &mut Chain, seed: u64, executor: (PalwBondKeyV2, Vec<u8>, Vec<
     id
 }
 
-fn executor_and_seats(p: &kaspa_consensus_core::config::params::Params) -> ((PalwBondKeyV2, Vec<u8>, Vec<u8>), Vec<(PalwBondKeyV2, Hash64)>) {
+fn executor_and_seats(
+    p: &kaspa_consensus_core::config::params::Params,
+) -> ((PalwBondKeyV2, Vec<u8>, Vec<u8>), Vec<(PalwBondKeyV2, Hash64)>) {
     let b = bundle(p);
     let mut regs = Vec::new();
     for o in b.genesis_objects.iter() {
@@ -101,10 +104,8 @@ fn executor_and_seats(p: &kaspa_consensus_core::config::params::Params) -> ((Pal
         }
     }
     let exec = regs[0].clone();
-    let seats: Vec<(PalwBondKeyV2, Hash64)> = regs[1..6]
-        .iter()
-        .map(|(b, _, op)| (*b, kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(op)))
-        .collect();
+    let seats: Vec<(PalwBondKeyV2, Hash64)> =
+        regs[1..6].iter().map(|(b, _, op)| (*b, kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(op))).collect();
     (exec, seats)
 }
 
@@ -130,7 +131,8 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
     let last_licensed_daa = c.daa;
     let finalize_at = last_licensed_daa - 5 * 3 + window_challenge + 1; // strictly past the N_FINALS' deadlines, before the backlog's
     c.beat(finalize_at, &[]);
-    let finals_now = finals.iter().filter(|id| matches!(c.s.claim(id).map(|x| &x.phase), Some(PalwClaimPhaseV2::Final { .. }))).count();
+    let finals_now =
+        finals.iter().filter(|id| matches!(c.s.claim(id).map(|x| &x.phase), Some(PalwClaimPhaseV2::Final { .. }))).count();
     let settled_honest = c.s.settled_attempt_finals();
     let last_final_daa = finalize_at;
     // A seat that signed Valid holds a slashable lock; pick one to watch.
@@ -149,7 +151,10 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
     println!("claims in Final                      = {finals_now}/{N_FINALS}");
     println!("backlog still ReceiptLicensed        = {}", backlog.len());
     println!("last Final at DAA                    = {last_final_daa}");
-    println!("watched lock: amount={} expiry_daa={} settled_at_final={}", watched_lock.amount, watched_lock.expiry_daa, watched_lock.settled_at_final);
+    println!(
+        "watched lock: amount={} expiry_daa={} settled_at_final={}",
+        watched_lock.amount, watched_lock.expiry_daa, watched_lock.settled_at_final
+    );
     assert_eq!(finals_now as u64, N_FINALS, "the prefix settled its anchors");
     assert!(settled_honest >= depth, "the second clock is past depth: the bootstrap waiver is over");
 
@@ -185,11 +190,10 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
         c.beat(next, &[]);
         beats += 1;
         let (floor, window, eligible) = anchor_probe(&c.s, next);
-        let lock_live = c
-            .s
-            .slashable_lock(watched_seat, watched_claim)
-            .map(|l| l.is_live_v2(next, c.s.settled_attempt_finals(), clock(&c.s, next)))
-            .unwrap_or(false);
+        let lock_live =
+            c.s.slashable_lock(watched_seat, watched_claim)
+                .map(|l| l.is_live_v2(next, c.s.settled_attempt_finals(), clock(&c.s, next)))
+                .unwrap_or(false);
         // The withdrawal gate as `palw_v2_locked_bond_outpoints` reads it: v4, duty gate on.
         let withdraw_locked = palw_bond_collateral_is_locked_v4(
             &c.s,
@@ -205,9 +209,15 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
         next += 50;
     }
     let settled_after = c.s.settled_attempt_finals();
-    let backlog_final = backlog.iter().filter(|id| matches!(c.s.claim(id).map(|x| &x.phase), Some(PalwClaimPhaseV2::Final { .. })) || c.s.claim(id).is_none()).count();
+    let backlog_final = backlog
+        .iter()
+        .filter(|id| matches!(c.s.claim(id).map(|x| &x.phase), Some(PalwClaimPhaseV2::Final { .. })) || c.s.claim(id).is_none())
+        .count();
 
-    println!("{:>7} {:>8} {:>11} {:>14} {:>8} {:>15} {:>9} {:>15}", "DAA", "settled", "live Finals", "anchor floor", "D1 win", "sybil eligible", "lock live", "retiree locked");
+    println!(
+        "{:>7} {:>8} {:>11} {:>14} {:>8} {:>15} {:>9} {:>15}",
+        "DAA", "settled", "live Finals", "anchor floor", "D1 win", "sybil eligible", "lock live", "retiree locked"
+    );
     let mut first_eligible = None;
     for (i, row) in table.iter().enumerate() {
         if row.5 && first_eligible.is_none() {
@@ -239,7 +249,10 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
     println!("last licence at DAA {last_licence}; the liveness escape E = {escape_at}");
     println!("slash liability live until E         = {all_locks_live}");
     println!("retiring bond locked until E         = {all_withdraw_locked}");
-    println!("backlog licensed claims -> Final     = {backlog_final}/{} on DAA alone; settled counter {settled_before_backlog} -> {settled_after}", backlog.len());
+    println!(
+        "backlog licensed claims -> Final     = {backlog_final}/{} on DAA alone; settled counter {settled_before_backlog} -> {settled_after}",
+        backlog.len()
+    );
     match first_eligible {
         Some(d) => println!(
             "D1: sybil registered at {sybil_reg_daa} with ZERO anchors since, eligible to judge at anchor DAA {d} \
@@ -251,7 +264,9 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
 
     // ---- the assertions: the fix's promise, stated as the bound -------------------------------
     let (retiree_since, _) = match c.s.bond(&retiree).unwrap().status {
-        kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { since_daa, settled_at_since } => (since_daa, settled_at_since),
+        kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { since_daa, settled_at_since } => {
+            (since_daa, settled_at_since)
+        }
         _ => panic!("the retiree is retiring"),
     };
     let delay = bundle(&c.p).bond.withdrawal_delay_daa();

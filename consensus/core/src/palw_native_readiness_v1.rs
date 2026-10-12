@@ -807,10 +807,17 @@ mod tests {
         let b = r.blocking.expect("a blocker");
         assert_eq!(prefix.stop, Some(SettlementStopV1::InsufficientDepth));
         assert_eq!(b.evidence.pending_facts, 2);
-        let wait = b.waits.iter().find_map(|w| if let SafeWaitV1::WaitingMaturity { .. } = w { Some(w.clone()) } else { None }).unwrap();
+        let wait =
+            b.waits.iter().find_map(|w| if let SafeWaitV1::WaitingMaturity { .. } = w { Some(w.clone()) } else { None }).unwrap();
         assert_eq!(
             wait,
-            SafeWaitV1::WaitingMaturity { facts: 2, work: "20".into(), earliest_matured_daa: 500, wait_daa: 100, ready_daa: Some(800) }
+            SafeWaitV1::WaitingMaturity {
+                facts: 2,
+                work: "20".into(),
+                earliest_matured_daa: 500,
+                wait_daa: 100,
+                ready_daa: Some(800)
+            }
         );
         assert_eq!(b.earliest_ready_in_daa, Some(400), "800 - 400: both facts must mature");
         // Tight: the certificate flips exactly there.
@@ -822,8 +829,13 @@ mod tests {
     fn rfc0012_readiness_a_final_claims_retention_lapse_is_a_clock_and_sets_the_estimate() {
         // One Final claim at blue 10 holds the lifecycle until DAA 600; facts are mature already.
         let facts = [fact(1, 30, 0, 10), fact(2, 40, 0, 10)];
-        let claims =
-            [OpenClaimV1 { claim: h(0xC2), stage: ClaimStageV1::Final, accepted_blue: 10, retention_daa: 600, next_deadline_daa: None }];
+        let claims = [OpenClaimV1 {
+            claim: h(0xC2),
+            stage: ClaimStageV1::Final,
+            accepted_blue: 10,
+            retention_daa: 600,
+            next_deadline_daa: None,
+        }];
         let (r, prefix) = explain(3, 3, &facts, &claims, &[], 100, policy());
         let b = r.blocking.expect("a blocker");
         assert_eq!(prefix.stop, Some(SettlementStopV1::OpenLifecycle));
@@ -984,8 +996,13 @@ mod tests {
         let (mut a, mut c, mut b) = (fact(1, 30, 0, 12), fact(2, 40, 0, 8), fact(3, 40, 300, 20));
         (a.operator, c.operator, b.operator) = (h(0x71), h(0x72), h(0x71));
         let facts = [a, c, b];
-        let claims =
-            [OpenClaimV1 { claim: h(0xC3), stage: ClaimStageV1::Final, accepted_blue: 10, retention_daa: 600, next_deadline_daa: None }];
+        let claims = [OpenClaimV1 {
+            claim: h(0xC3),
+            stage: ClaimStageV1::Final,
+            accepted_blue: 10,
+            retention_daa: 600,
+            next_deadline_daa: None,
+        }];
         let (r, prefix) = explain(1, 1, &facts, &claims, &[], 100, policy());
         let blk = r.blocking.expect("held by the lifecycle");
         assert_eq!(prefix.stop, Some(SettlementStopV1::OpenLifecycle));

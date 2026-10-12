@@ -40,7 +40,8 @@ use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV
 use kaspa_consensus_core::palw_pwu::palw_pwu_v1;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwPanelSeatV2,
-    PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwVoidReasonV2, palw_da_accusation_exposure_v2, palw_da_disclose_window_daa_v1,
+    PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwVoidReasonV2, palw_da_accusation_exposure_v2,
+    palw_da_disclose_window_daa_v1,
 };
 
 const ATTACKER: u64 = 4;
@@ -94,8 +95,9 @@ fn setup(p: &Params, collateral: u64) -> (PalwStateParamsV2, PalwChainStateV2) {
     let b = bundle(p);
     let sp = b.state.clone();
     let g = genesis_state(p);
-    let (s, _, _) = fold(p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, collateral)], PalwBlockWorkV3::None, Hash64::default())
-        .expect("the attacker's bond registers");
+    let (s, _, _) =
+        fold(p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, collateral)], PalwBlockWorkV3::None, Hash64::default())
+            .expect("the attacker's bond registers");
     (sp, s)
 }
 
@@ -112,7 +114,10 @@ fn repro4_a_unbound_junk_voids_at_bind_timeout_uncharged_and_pins_nobody() {
     let collateral = per.collateral * concurrent;
     let (sp, mut s) = setup(&p, collateral);
     let f = flags(&p, 1_000);
-    println!("=== t12 fold flags at DAA 1000: unavailable_abstains={} da_court={} capability_bound={} ===", f.unavailable_abstains, f.da_court, f.capability_bound);
+    println!(
+        "=== t12 fold flags at DAA 1000: unavailable_abstains={} da_court={} capability_bound={} ===",
+        f.unavailable_abstains, f.da_court, f.capability_bound
+    );
     let genesis = genesis_bonds(&p);
     let keys: Vec<PalwBondKeyV2> = genesis.iter().map(|g| g.0).collect();
     let others_before = all_bonds_reserved(&s, &keys);
@@ -127,9 +132,18 @@ fn repro4_a_unbound_junk_voids_at_bind_timeout_uncharged_and_pins_nobody() {
     for i in 0..N_UNBOUND {
         daa += 1;
         blue += 1;
-        let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 0x4A00 + i, 0x4B00_0000 + i);
-        let (next, _, skips) = fold(&p, &sp, &s, &ctx(0x4000 + i, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
-            .unwrap_or_else(|e| panic!("junk #{i}: {e:?}"));
+        let (env, key, id) = junk_attempt(
+            floor,
+            bond_key(ATTACKER),
+            pubkey_of(ATTACKER),
+            &operator_pubkey_of(ATTACKER),
+            pwu,
+            0x4A00 + i,
+            0x4B00_0000 + i,
+        );
+        let (next, _, skips) =
+            fold(&p, &sp, &s, &ctx(0x4000 + i, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
+                .unwrap_or_else(|e| panic!("junk #{i}: {e:?}"));
         assert!(skips.is_empty(), "junk #{i}: an attacker sized by #9 is admitted: {skips:?}");
         s = next;
         let c = s.claim(&id).unwrap();
@@ -149,7 +163,12 @@ fn repro4_a_unbound_junk_voids_at_bind_timeout_uncharged_and_pins_nobody() {
         &sp,
         &s,
         &ctx(0x4F00, daa + 1, blue + 1, 0),
-        &[PalwConsensusObjectV2::DefaultAccused { claim: ids[N_UNBOUND as usize - 1], missing_event_index: 0, accuser, signature: vec![] }],
+        &[PalwConsensusObjectV2::DefaultAccused {
+            claim: ids[N_UNBOUND as usize - 1],
+            missing_event_index: 0,
+            accuser,
+            signature: vec![],
+        }],
         PalwBlockWorkV3::None,
         Hash64::default(),
     );
@@ -183,19 +202,34 @@ fn repro4_a_unbound_junk_voids_at_bind_timeout_uncharged_and_pins_nobody() {
         msk(per.collateral as u128),
         per.ratio_permille
     );
-    println!("attacker posts {concurrent} x that = {:.2} MSK (before: 1,000 MSK, which #9 now refuses a single attempt)", msk(collateral as u128));
+    println!(
+        "attacker posts {concurrent} x that = {:.2} MSK (before: 1,000 MSK, which #9 now refuses a single attempt)",
+        msk(collateral as u128)
+    );
     println!("attacker reservation at peak = {peak_reserved} sompi ({:.2} MSK), ceiling {ceiling}", msk(peak_reserved));
     println!("DefaultAccused on an unbound claim -> {accuse_err:?}");
     println!("claim phases after window_bind: {reasons:?}");
-    println!("attacker collateral {collateral} -> {collateral_after} sompi; bond.slashed = {slashed_after}; reserved after = {reserved_after}");
-    println!("escrow burned across the flood (forgone by the attacker, not taken from its bond) = {escrow_total} sompi ({:.2} MSK)", msk(escrow_total));
+    println!(
+        "attacker collateral {collateral} -> {collateral_after} sompi; bond.slashed = {slashed_after}; reserved after = {reserved_after}"
+    );
+    println!(
+        "escrow burned across the flood (forgone by the attacker, not taken from its bond) = {escrow_total} sompi ({:.2} MSK)",
+        msk(escrow_total)
+    );
     println!("carriage bytes {bytes_before} -> {bytes_after} (+{})", bytes_after as i64 - bytes_before as i64);
     println!("--- cost ledger ---");
-    println!("attacker: charge 0 (BindTimeout is uncharged by design, b38356fe), locks {:.2} MSK per concurrent claim for {bind} DAA", msk(per.reservation));
+    println!(
+        "attacker: charge 0 (BindTimeout is uncharged by design, b38356fe), locks {:.2} MSK per concurrent claim for {bind} DAA",
+        msk(per.reservation)
+    );
     println!("defender: honest reserved {others_before} -> peak {others_peak}: no panel is bound, nothing pinned");
 
     assert!(peak_reserved <= ceiling, "the flood fits the ceiling #9 holds on the live state");
-    assert_eq!(reasons.get("Voided(BindTimeout)").copied().unwrap_or(0), N_UNBOUND as usize, "every unbound junk claim voids BindTimeout");
+    assert_eq!(
+        reasons.get("Voided(BindTimeout)").copied().unwrap_or(0),
+        N_UNBOUND as usize,
+        "every unbound junk claim voids BindTimeout"
+    );
     assert_eq!(collateral_after, collateral, "a BindTimeout is not charged (b38356fe, by design)");
     assert_eq!(slashed_after, 0, "bond.slashed stays 0");
     assert_eq!(reserved_after, 0, "the whole reservation is handed back at void");
@@ -240,12 +274,17 @@ fn withheld_through_two_panels(go: FoldFn) -> Withheld {
     let keys: Vec<PalwBondKeyV2> = genesis.iter().map(|g| g.0).collect();
     let seats_posted: u64 = genesis.iter().map(|g| g.2).sum();
 
-    let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 0x4C01, 0x4C01_0000);
+    let (env, key, id) =
+        junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 0x4C01, 0x4C01_0000);
     let mut daa = 1_001u64;
     let mut blue = 2u64;
-    let step = |s: &PalwChainStateV2, daa: u64, blue: u64, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, sub: u64| {
-        go(&p, &sp, s, &ctx(0x4C00_0000 + blue, daa, blue, sub), objs, work, key)
-    };
+    let step = |s: &PalwChainStateV2,
+                daa: u64,
+                blue: u64,
+                objs: &[PalwConsensusObjectV2],
+                work: PalwBlockWorkV3<'_>,
+                key: Hash64,
+                sub: u64| { go(&p, &sp, s, &ctx(0x4C00_0000 + blue, daa, blue, sub), objs, work, key) };
     let (next, _, skips) = step(&s, daa, blue, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI).unwrap();
     assert!(skips.is_empty(), "an attacker posting what #9 admits gets its attempt: {skips:?}");
     s = next;
@@ -258,9 +297,17 @@ fn withheld_through_two_panels(go: FoldFn) -> Withheld {
     blue += 1;
     book.tick(&s, &keys, daa);
     let seats1 = seated(&p, &s, &id, h(0xA1));
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats1.clone() }], PalwBlockWorkV3::None, Hash64::default(), 0)
-        .unwrap()
-        .0;
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats1.clone() }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    )
+    .unwrap()
+    .0;
     let others_bound = all_bonds_reserved(&s, &keys) - others_baseline;
     let receipt_window = sp.receipt_window_for_claim_v1(
         &s,
@@ -280,9 +327,17 @@ fn withheld_through_two_panels(go: FoldFn) -> Withheld {
             signature: vec![],
         })
         .collect();
-    let pd = step(&s, daa + 1, blue + 1, &[PalwConsensusObjectV2::ProducerDefaulted { claim: id, receipts: unavailable }], PalwBlockWorkV3::None, Hash64::default(), 0)
-        .map(|_| ())
-        .map_err(|e| format!("{e:?}"));
+    let pd = step(
+        &s,
+        daa + 1,
+        blue + 1,
+        &[PalwConsensusObjectV2::ProducerDefaulted { claim: id, receipts: unavailable }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    )
+    .map(|_| ())
+    .map_err(|e| format!("{e:?}"));
 
     // Receipt window #1 lapses -> redraw.
     daa += receipt_window + 1;
@@ -296,9 +351,17 @@ fn withheld_through_two_panels(go: FoldFn) -> Withheld {
     blue += 1;
     book.tick(&s, &keys, daa);
     let seats2 = seated(&p, &s, &id, h(0xA2));
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA2), seats: seats2 }], PalwBlockWorkV3::None, Hash64::default(), 0)
-        .unwrap()
-        .0;
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA2), seats: seats2 }],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        0,
+    )
+    .unwrap()
+    .0;
     let others_rebound = all_bonds_reserved(&s, &keys) - others_baseline;
 
     // Receipt window #2 lapses -> void.
@@ -308,7 +371,12 @@ fn withheld_through_two_panels(go: FoldFn) -> Withheld {
     s = step(&s, daa, blue, &[], PalwBlockWorkV3::None, Hash64::default(), 0).unwrap().0;
     let phase2 = s.claim(&id).map(|c| c.phase.clone());
     let rec = s.bond(&bond_key(ATTACKER)).unwrap();
-    let per_seat = palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward, b.panel.seat_count() as usize, extras(&p, daa).panel_reward_multiple_permille);
+    let per_seat = palw_panel_seat_exposure_v1(
+        claim.reserved,
+        claim.escrowed_reward,
+        b.panel.seat_count() as usize,
+        extras(&p, daa).panel_reward_multiple_permille,
+    );
     Withheld {
         collateral,
         per,
@@ -354,14 +422,27 @@ fn print_withheld(label: &str, w: &Withheld) {
         w.per_seat,
         msk(w.per_seat)
     );
-    println!("reserved on OTHER bonds: bind #1 +{:.2} MSK, redraw bind #2 +{:.2} MSK, after void +{}", msk(w.others_bound), msk(w.others_rebound), w.others_after);
+    println!(
+        "reserved on OTHER bonds: bind #1 +{:.2} MSK, redraw bind #2 +{:.2} MSK, after void +{}",
+        msk(w.others_bound),
+        msk(w.others_rebound),
+        w.others_after
+    );
     println!("ProducerDefaulted (full Unavailable quorum) -> {:?}", w.pd);
     println!("after receipt timeout #1: phase {}", w.phase1);
     println!("after receipt timeout #2: phase {:?}", w.phase2);
-    println!("producer: collateral {} -> {}, bond.slashed = {}, reserved after = {}", w.collateral, w.collateral_after, w.slashed_after, w.producer_after);
+    println!(
+        "producer: collateral {} -> {}, bond.slashed = {}, reserved after = {}",
+        w.collateral, w.collateral_after, w.slashed_after, w.producer_after
+    );
     println!("seats:    collateral {} -> {}", w.seats_posted, w.seats_after);
     println!("--- cost ledger ---");
-    println!("attacker: charged {charge} sompi ({:.2} MSK); locked {} sompi*DAA ({:.2} MSK x {held_daa} DAA)", msk(charge), w.book_producer, msk(w.per.reservation));
+    println!(
+        "attacker: charged {charge} sompi ({:.2} MSK); locked {} sompi*DAA ({:.2} MSK x {held_daa} DAA)",
+        msk(charge),
+        w.book_producer,
+        msk(w.per.reservation)
+    );
     println!("defender: pinned {} sompi*DAA on other bonds = {:.2} MSK x {pinned_daa} DAA", w.book_others, msk(w.others_bound));
     println!(
         "capital x time others / producer = {:.4} (before: {BEFORE_RATIO_TIMEOUT:.0}); peak pinned / charge = {}",
@@ -379,13 +460,19 @@ fn repro4_b_bound_junk_two_receipt_timeouts_forfeits_weight_and_escrow() {
     let charge = (w.collateral - w.collateral_after) as u128;
     assert!(matches!(w.pd, Err(ref e) if e.starts_with("ProducerDefaultRetired")), "ProducerDefaulted is refused on t12: {:?}", w.pd);
     assert!(w.phase1.contains("Provisional"), "first receipt timeout redraws");
-    assert!(matches!(w.phase2, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })), "second receipt timeout voids");
+    assert!(
+        matches!(w.phase2, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })),
+        "second receipt timeout voids"
+    );
     assert_eq!(charge, w.per.reservation, "#10: the second ReceiptTimeout takes the escrow-inclusive reservation");
     assert_eq!(w.slashed_after as u128, w.per.reservation);
     assert_eq!(w.seats_after, w.seats_posted, "no seat is charged");
     assert_eq!(w.others_after, 0, "the seats' reservations come back");
     assert_eq!(w.producer_after, 0);
-    assert!(w.others_bound > 1_000 * 100_000_000, "more than 1,000 MSK of other parties' collateral pinned per bound junk floor claim");
+    assert!(
+        w.others_bound > 1_000 * 100_000_000,
+        "more than 1,000 MSK of other parties' collateral pinned per bound junk floor claim"
+    );
     assert_eq!(w.others_rebound, w.others_bound, "the redraw pins the same duty again");
     assert!(w.book_others / w.others_bound.max(1) >= 2 * w.receipt_window as u128, "pinned for two receipt windows");
     // **The bound: the attacker pays at least what it pins others for.**
@@ -398,7 +485,10 @@ fn repro4_b_bound_junk_two_receipt_timeouts_forfeits_weight_and_escrow() {
 fn repro4_b_pre_fence_record_two_receipt_timeouts_charge_nothing() {
     let w = withheld_through_two_panels(fold_pre_fence);
     print_withheld("PRE-FENCE (#10 off)", &w);
-    assert!(matches!(w.phase2, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })), "second receipt timeout voids");
+    assert!(
+        matches!(w.phase2, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })),
+        "second receipt timeout voids"
+    );
     assert_eq!(w.collateral_after, w.collateral, "pre-fence: no consensus charge for withholding through two panels");
     assert_eq!(w.slashed_after, 0);
 }
@@ -442,13 +532,16 @@ fn da_accused(go: FoldFn) -> Accused {
     let collateral = at_least_the_floor(&p, per.collateral);
     let (sp, mut s) = setup(&p, collateral);
     let keys: Vec<PalwBondKeyV2> = genesis_bonds(&p).iter().map(|g| g.0).collect();
-    let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 0x4D01, 0x4D01_0000);
+    let (env, key, id) =
+        junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 0x4D01, 0x4D01_0000);
     let mut daa = 1_001u64;
     let mut blue = 2u64;
     let step = |s: &PalwChainStateV2, daa: u64, blue: u64, objs: &[PalwConsensusObjectV2]| {
         go(&p, &sp, s, &ctx(0x4D00_0000 + blue, daa, blue, 0), objs, PalwBlockWorkV3::None, Hash64::default())
     };
-    s = go(&p, &sp, &s, &ctx(0x4D00_0000 + blue, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key).unwrap().0;
+    s = go(&p, &sp, &s, &ctx(0x4D00_0000 + blue, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
+        .unwrap()
+        .0;
     let claim = s.claim(&id).expect("the junk claim is recorded").clone();
     let mut book = Book { last: daa, others: 0, producer: 0 };
     daa += 1;
@@ -471,9 +564,14 @@ fn da_accused(go: FoldFn) -> Accused {
     daa += 1;
     blue += 1;
     book.tick(&s, &keys, daa);
-    s = step(&s, daa, blue, &[PalwConsensusObjectV2::DefaultAccused { claim: id, missing_event_index: 0, accuser, signature: vec![] }])
-        .unwrap_or_else(|e| panic!("DefaultAccused on a bound claim folds: {e:?}"))
-        .0;
+    s = step(
+        &s,
+        daa,
+        blue,
+        &[PalwConsensusObjectV2::DefaultAccused { claim: id, missing_event_index: 0, accuser, signature: vec![] }],
+    )
+    .unwrap_or_else(|e| panic!("DefaultAccused on a bound claim folds: {e:?}"))
+    .0;
     let accuser_during = s.reserved_exposure(&accuser);
     let others_during: u128 = all_bonds_reserved(&s, &keys);
     let disclose = palw_da_disclose_window_daa_v1(&sp);
@@ -515,10 +613,21 @@ fn print_accused(label: &str, a: &Accused) {
         a.accuser_after
     );
     println!("disclose window = {} DAA; phase after: {:?}", a.disclose, a.phase);
-    println!("producer posts {:.2} MSK (#9's one attempt); collateral -> {}; bond.slashed = {} sompi ({:.2} MSK)", msk(a.collateral as u128), a.collateral_after, a.slashed_after, msk(a.slashed_after as u128));
+    println!(
+        "producer posts {:.2} MSK (#9's one attempt); collateral -> {}; bond.slashed = {} sompi ({:.2} MSK)",
+        msk(a.collateral as u128),
+        a.collateral_after,
+        a.slashed_after,
+        msk(a.slashed_after as u128)
+    );
     println!("--- cost ledger, DA route ---");
     println!("attacker: charged {charge} sompi ({:.2} MSK) once (before: 38,540 sompi = claim.reserved)", msk(charge));
-    println!("defender: pinned {} sompi*DAA on other bonds = {:.2} MSK x {} DAA, plus an accuser who must act by hand", a.book_others, msk(pinned), a.book_others / pinned.max(1));
+    println!(
+        "defender: pinned {} sompi*DAA on other bonds = {:.2} MSK x {} DAA, plus an accuser who must act by hand",
+        a.book_others,
+        msk(pinned),
+        a.book_others / pinned.max(1)
+    );
     println!(
         "capital ratio: pinned {:.2} MSK / charge {:.2} MSK = {} (before: {BEFORE_RATIO_DA:.0}x)",
         msk(pinned),
@@ -535,7 +644,10 @@ fn repro4_c_da_accusation_forfeits_weight_and_escrow() {
     print_accused("FIXED (#10)", &a);
     let charge = (a.collateral - a.collateral_after) as u128;
     let pinned = a.others_during - a.expected_accuser;
-    assert!(matches!(a.phase, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. })), "the lapse voids ProducerWithholding");
+    assert!(
+        matches!(a.phase, Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. })),
+        "the lapse voids ProducerWithholding"
+    );
     assert_eq!(a.reserved, 38_540, "claim.reserved is 38,540 sompi on the t12 floor");
     assert_eq!(charge, a.per.reservation, "#10: ProducerWithholding takes the escrow-inclusive reservation");
     assert_eq!(a.slashed_after as u128, a.per.reservation);
@@ -543,7 +655,12 @@ fn repro4_c_da_accusation_forfeits_weight_and_escrow() {
     assert_eq!(a.accuser_during - a.accuser_before, a.expected_accuser);
     assert_eq!(a.accuser_after, 0, "the void releases the accuser's duty and its accusation reservation");
     assert_eq!(a.accuser_collateral_after, a.accuser_collateral_before, "the accuser is right and pays nothing");
-    assert!(charge >= pinned, "the attacker pays at least what it pinned: charge {:.2} MSK, pinned {:.2} MSK", msk(charge), msk(pinned));
+    assert!(
+        charge >= pinned,
+        "the attacker pays at least what it pinned: charge {:.2} MSK, pinned {:.2} MSK",
+        msk(charge),
+        msk(pinned)
+    );
 }
 
 #[test]

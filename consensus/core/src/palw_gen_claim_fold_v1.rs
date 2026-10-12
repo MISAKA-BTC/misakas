@@ -113,10 +113,8 @@ pub(super) fn apply_gen_tensor_commitment_v1(
     let Some(fold) = builder.model_registry_fold().cloned() else {
         return Err(refused("no model registry is in force: a class's seats prove possession through it"));
     };
-    let (ready, needed) = builder
-        .read()
-        .class_possession_v1(c.class_id, c.bond, daa, &fold)
-        .ok_or(PalwStateV2Error::MissingBond(*c.bond))?;
+    let (ready, needed) =
+        builder.read().class_possession_v1(c.class_id, c.bond, daa, &fold).ok_or(PalwStateV2Error::MissingBond(*c.bond))?;
     if ready < needed {
         return Err(PalwStateV2Error::GenClassNotReady { class: *c.class_id, ready, needed });
     }
@@ -259,6 +257,9 @@ pub(super) fn apply_gen_tensor_commitment_v1(
 
 // A tensor claim's commitment root the fold recomputes, for a caller that holds the commitment.
 #[allow(dead_code)]
-fn palw_gen_commitment_root_is_its_parts_v1(commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3, job: &PalwGenJobV1) -> bool {
+fn palw_gen_commitment_root_is_its_parts_v1(
+    commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    job: &PalwGenJobV1,
+) -> bool {
     palw_gen_commitment_execution_root_v1(commitment, job) == commitment.execution_root
 }

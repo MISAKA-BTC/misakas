@@ -7,12 +7,13 @@
 //! Run: `cargo test -p kaspa-consensus-core --test audit_search -- --nocapture`
 
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_canonical_work_v1::{
     PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, palw_canonical_draw_work_v1, palw_canonical_work_v1,
 };
 use kaspa_consensus_core::palw_economic_compute_v1::{
-    PALW_ECONOMIC_COST_TABLE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempt_economic_compute_v1,
-    palw_economic_shape_v1, palw_expected_attempts_q32_v1, palw_job_economic_compute_v1, palw_weight_dtype_cost_v1,
+    PALW_ECONOMIC_COST_TABLE_V1, PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempt_economic_compute_v1, palw_economic_shape_v1,
+    palw_expected_attempts_q32_v1, palw_job_economic_compute_v1, palw_weight_dtype_cost_v1,
 };
 use kaspa_consensus_core::palw_economic_payout_v1::{palw_attempted_ccu_v1, palw_cap_utilization_permille_v1};
 use kaspa_consensus_core::palw_economics_ledger_v1::{PALW_LEDGER_RATE_SCALE_V1, palw_rate_priced_reward_v1};
@@ -25,11 +26,9 @@ use kaspa_consensus_core::palw_qwen25_profile::{
 use kaspa_consensus_core::palw_qwen36_profile::{
     PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
 };
-use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_step::{
-    PALW_STEP_INPUT_KV_K, PALW_STEP_MAX_NODES_PER_TABLE, PALW_STEP_MAX_TILE_LEN,
-    PALW_STEP_MIN_TILE_LEN, PalwShapeProfileV3, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1,
-    PalwStepOutLenV1,
+    PALW_STEP_INPUT_KV_K, PALW_STEP_MAX_NODES_PER_TABLE, PALW_STEP_MAX_TILE_LEN, PALW_STEP_MIN_TILE_LEN, PalwShapeProfileV3,
+    PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
 };
 use kaspa_consensus_core::palw_work_target_v1::{palw_work_floor_v1, palw_work_ticket_target_v1};
 
@@ -93,8 +92,7 @@ fn w0() -> u128 {
 /// (t12 carries no bits-priced lane — recon §5D — so the network factor is exactly one draw).
 fn price(draw_ccu: u128, work_target_w: u128) -> Priced {
     let target = palw_work_ticket_target_v1(draw_ccu, work_target_w);
-    let attempted_ccu =
-        palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(target), PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, draw_ccu);
+    let attempted_ccu = palw_attempted_ccu_v1(palw_expected_attempts_q32_v1(target), PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, draw_ccu);
     let reward_sompi = palw_rate_priced_reward_v1(T12_ESCROW_SOMPI, attempted_ccu, T12_RATE_SOMPI_PER_GIGA as u128);
     Priced { draw_ccu, target, attempted_ccu, reward_sompi }
 }
@@ -157,9 +155,14 @@ fn s0_threshold_enumeration() {
     println!("  t12 escrow (720 permille carve)      = {T12_ESCROW_SOMPI} sompi");
     println!("  t12 rate_sompi_per_giga              = {T12_RATE_SOMPI_PER_GIGA}");
     println!("  W0 = palw_work_floor_v1(escrow,rate) = {} CCU", w0());
-    println!("  dtype costs: i8(24)={} f16(1)={} i16(25)={} i32(26)={} bf16(30)={}",
-        palw_weight_dtype_cost_v1(24), palw_weight_dtype_cost_v1(1), palw_weight_dtype_cost_v1(25),
-        palw_weight_dtype_cost_v1(26), palw_weight_dtype_cost_v1(30));
+    println!(
+        "  dtype costs: i8(24)={} f16(1)={} i16(25)={} i32(26)={} bf16(30)={}",
+        palw_weight_dtype_cost_v1(24),
+        palw_weight_dtype_cost_v1(1),
+        palw_weight_dtype_cost_v1(25),
+        palw_weight_dtype_cost_v1(26),
+        palw_weight_dtype_cost_v1(30)
+    );
 
     // Boundary sweep of every clamp/branch in the pricing chain, at 0,1,2,N-1,N,N+1,max-1,max.
     println!("\n  -- palw_work_ticket_target_v1(ccu, W0): the ccu >= W branch --");
@@ -176,19 +179,28 @@ fn s0_threshold_enumeration() {
     }
     println!("\n  -- palw_cap_utilization_permille_v1: ADR-0133 fence-3 ceiling is 800 permille --");
     for att in [0u128, w / 2, w, w * 2, w * 10_000] {
-        println!("     attempted={att:<42} cap_util={} permille",
-            palw_cap_utilization_permille_v1(att, T12_RATE_SOMPI_PER_GIGA, T12_ESCROW_SOMPI));
+        println!(
+            "     attempted={att:<42} cap_util={} permille",
+            palw_cap_utilization_permille_v1(att, T12_RATE_SOMPI_PER_GIGA, T12_ESCROW_SOMPI)
+        );
     }
     println!("\n  -- palw_pwu_v1(target, per_draw): the u64::MAX saturation --");
     let per_draw = 3_357_281_757_221_376u64;
     for t in [u128::MAX, u128::MAX / 2, u128::MAX / 5_494, u128::MAX / 5_495, u128::MAX / 6_000, u128::MAX / 1_000_000] {
         let pwu = palw_pwu_v1(t, per_draw);
-        println!("     attempts={:<12} pwu={} {}", palw_expected_attempts_v1(t), pwu,
-            if pwu == u64::MAX { "<-- SATURATED: more work buys zero weight" } else { "" });
+        println!(
+            "     attempts={:<12} pwu={} {}",
+            palw_expected_attempts_v1(t),
+            pwu,
+            if pwu == u64::MAX { "<-- SATURATED: more work buys zero weight" } else { "" }
+        );
     }
     println!("\n  -- palw_execution_quantum_count_v1(credit, 100_000): the u32::MAX clamp --");
     for c in [0u128, 99_999, 100_000, 100_001, 3_357_281_757_221_376u128] {
-        println!("     credit={c:<24} quanta={}", palw_execution_quantum_count_v1(c, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default()));
+        println!(
+            "     credit={c:<24} quanta={}",
+            palw_execution_quantum_count_v1(c, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default())
+        );
     }
     println!("\n  -- palw_work_priced_reward_v1(escrow, exposure, unit): the >= unit short circuit --");
     for (e, u) in [(0u64, 100u64), (99, 100), (100, 100), (101, 100), (u64::MAX, 100), (100, 0)] {
@@ -220,7 +232,10 @@ fn s1_the_three_shipped_classes_priced() {
         println!("     target            {}", pr.target);
         println!("     attempted_ccu     {} MAC-eq", pr.attempted_ccu);
         println!("     reward            {} sompi  (escrow {})", pr.reward_sompi, T12_ESCROW_SOMPI);
-        println!("     cap_util          {} permille", palw_cap_utilization_permille_v1(pr.attempted_ccu, T12_RATE_SOMPI_PER_GIGA, T12_ESCROW_SOMPI));
+        println!(
+            "     cap_util          {} permille",
+            palw_cap_utilization_permille_v1(pr.attempted_ccu, T12_RATE_SOMPI_PER_GIGA, T12_ESCROW_SOMPI)
+        );
         println!("     EFFICIENCY        {eff} sompi per 1e18 MAC-eq\n");
         if eff > best.0 {
             best = (eff, name.to_string());
@@ -332,7 +347,19 @@ fn s2_seeded_search_for_the_maximum_efficiency() {
         let real = mul_div(pr.attempted_ccu, honest, priced);
         let attempts = pr.attempted_ccu / priced.max(1);
         let eff = efficiency_e18(pr.reward_sompi, real);
-        let row = Best { eff, g, pad, pf: c.0, dc: c.1, priced, honest, attempts, real, reward: pr.reward_sompi, priced_attempted: pr.attempted_ccu };
+        let row = Best {
+            eff,
+            g,
+            pad,
+            pf: c.0,
+            dc: c.1,
+            priced,
+            honest,
+            attempts,
+            real,
+            reward: pr.reward_sompi,
+            priced_attempted: pr.attempted_ccu,
+        };
         if best.as_ref().is_none_or(|b| eff > b.eff) {
             best = Some(row);
         }
@@ -343,13 +370,27 @@ fn s2_seeded_search_for_the_maximum_efficiency() {
 
     let report = |label: &str, b: &Best| {
         println!("  *** {label} ***");
-        println!("  PalwQwen25GeometryV1 {{ layer_count: {}, hidden_dim: {}, ffn_dim: {}, attn_heads: {},", b.g.layer_count, b.g.hidden_dim, b.g.ffn_dim, b.g.attn_heads);
-        println!("      attn_kv_heads: {}, attn_head_dim: {}, vocab_size: {}, n_ctx: {},", b.g.attn_kv_heads, b.g.attn_head_dim, b.g.vocab_size, b.g.n_ctx);
+        println!(
+            "  PalwQwen25GeometryV1 {{ layer_count: {}, hidden_dim: {}, ffn_dim: {}, attn_heads: {},",
+            b.g.layer_count, b.g.hidden_dim, b.g.ffn_dim, b.g.attn_heads
+        );
+        println!(
+            "      attn_kv_heads: {}, attn_head_dim: {}, vocab_size: {}, n_ctx: {},",
+            b.g.attn_kv_heads, b.g.attn_head_dim, b.g.vocab_size, b.g.n_ctx
+        );
         println!("      n_threads: 1, rms_eps_q: 1, tile_len: {} }}", b.g.tile_len);
         println!("  + {} padding cache-matmul nodes (out_len Fixed{{1}}, tile_len 4, input_refs [KV_K]) in attn_nodes", b.pad);
         println!("  canonical job = ({}, {})", b.pf, b.dc);
-        println!("  priced draw_ccu {}   honest draw {}   priced/honest {:.4}x", b.priced, b.honest, b.priced as f64 / b.honest.max(1) as f64);
-        println!("  expected draws ~{}   priced attempted_ccu {}   REAL WORK {} MAC-eq   reward {} sompi", b.attempts, b.priced_attempted, b.real, b.reward);
+        println!(
+            "  priced draw_ccu {}   honest draw {}   priced/honest {:.4}x",
+            b.priced,
+            b.honest,
+            b.priced as f64 / b.honest.max(1) as f64
+        );
+        println!(
+            "  expected draws ~{}   priced attempted_ccu {}   REAL WORK {} MAC-eq   reward {} sompi",
+            b.attempts, b.priced_attempted, b.real, b.reward
+        );
         println!("  EFFICIENCY {} sompi/1e18 MAC-eq = {:.4}x the honest ceiling\n", b.eff, b.eff as f64 / ceiling as f64);
     };
 
@@ -363,7 +404,10 @@ fn s2_seeded_search_for_the_maximum_efficiency() {
     let (dp, dcn) = dense_2m();
     let dense = price(draw_ccu_of(&dp, dcn), w);
     let dense_eff = efficiency_e18(dense.reward_sompi, dense.attempted_ccu);
-    println!("  shipped Qwen2.5 A16 @2M: real {} MAC-eq, reward {} sompi, efficiency {}", dense.attempted_ccu, dense.reward_sompi, dense_eff);
+    println!(
+        "  shipped Qwen2.5 A16 @2M: real {} MAC-eq, reward {} sompi, efficiency {}",
+        dense.attempted_ccu, dense.reward_sompi, dense_eff
+    );
     println!("  RATIO best / shipped-dense   = {:.2}x", b.eff as f64 / dense_eff.max(1) as f64);
     println!("  RATIO best / honest ceiling  = {:.4}x", b.eff as f64 / ceiling as f64);
 }
@@ -409,10 +453,7 @@ fn try_draw(profile: &PalwShapeProfileV3, canonical: (u32, u32)) -> Option<u128>
 /// attention table. Nothing is a donor here except `kernel_semantics_id`, taken from the row's own
 /// output projection so the node names a kernel the class already reaches.
 fn pad_with_cache_matmuls(base: &PalwShapeProfileV3, n: usize, out_elements: u32) -> Option<PalwShapeProfileV3> {
-    let donor = base
-        .attn_nodes
-        .iter()
-        .find(|nd| matches!(nd.op_kind, PalwStepOpKindV1::MatMulQuant | PalwStepOpKindV1::MatMulF16))?;
+    let donor = base.attn_nodes.iter().find(|nd| matches!(nd.op_kind, PalwStepOpKindV1::MatMulQuant | PalwStepOpKindV1::MatMulF16))?;
     let pad = PalwStepNodeV1 {
         op_kind: PalwStepOpKindV1::MatMulQuant,
         role: PalwStepNodeRoleV1::Plain,
@@ -466,9 +507,13 @@ fn s3_node_splitting_over_the_kv_cache_is_priced_per_node_and_ignores_out_len() 
         let honest_per_kv = base.attn_kv_heads as u128 * base.attn_head_dim as u128;
         println!("\n  --- base A16 @{ctx}, canonical {canonical:?}, attn_nodes {} ---", base.attn_nodes.len());
         println!("      priced per padding node per kv = attn_heads x head_dim         = {priced_per_kv}");
-        println!("      honest per padding node per kv = attn_kv_heads x head_dim x 1  = {honest_per_kv}  ({}x over-priced)",
-            priced_per_kv / honest_per_kv);
-        println!("      pad  priced_draw_ccu       honest_draw_ccu        attempts   real_work(MAC-eq)      reward(sompi)   efficiency      x ceiling");
+        println!(
+            "      honest per padding node per kv = attn_kv_heads x head_dim x 1  = {honest_per_kv}  ({}x over-priced)",
+            priced_per_kv / honest_per_kv
+        );
+        println!(
+            "      pad  priced_draw_ccu       honest_draw_ccu        attempts   real_work(MAC-eq)      reward(sompi)   efficiency      x ceiling"
+        );
         for n in [0usize, 1, 2, 4, 8, 16, 24, 32, 40] {
             let Some(p) = pad_with_cache_matmuls(&base, n, 1) else { continue };
             let added = p.attn_nodes.len() - base.attn_nodes.len();
@@ -479,8 +524,11 @@ fn s3_node_splitting_over_the_kv_cache_is_priced_per_node_and_ignores_out_len() 
             let attempts = pr.attempted_ccu / draw.max(1);
             let real = mul_div(pr.attempted_ccu, honest, draw);
             let eff = efficiency_e18(pr.reward_sompi, real);
-            println!("      +{added:<3} {draw:<22} {honest:<22} {attempts:<10} {real:<22} {:<15} {eff:<15} {:.4}x",
-                pr.reward_sompi, eff as f64 / ceiling as f64);
+            println!(
+                "      +{added:<3} {draw:<22} {honest:<22} {attempts:<10} {real:<22} {:<15} {eff:<15} {:.4}x",
+                pr.reward_sompi,
+                eff as f64 / ceiling as f64
+            );
             if best.as_ref().is_none_or(|bst| eff > bst.0) {
                 best = Some((eff, ctx, added, draw, real, pr.reward_sompi));
             }
@@ -523,8 +571,12 @@ fn s4_declared_dtype_multiplies_the_price_at_identical_mac_count() {
         }
         let draw = draw_ccu_of(&p, canonical);
         let pr = price(draw, w0());
-        println!("  dtype {code:<3} ({name:<4}) cost/MAC={}  draw_ccu={draw:<24} ratio={:.4}x  reward={} sompi",
-            palw_weight_dtype_cost_v1(code), draw as f64 / base_draw as f64, pr.reward_sompi);
+        println!(
+            "  dtype {code:<3} ({name:<4}) cost/MAC={}  draw_ccu={draw:<24} ratio={:.4}x  reward={} sompi",
+            palw_weight_dtype_cost_v1(code),
+            draw as f64 / base_draw as f64,
+            pr.reward_sompi
+        );
     }
     println!("  The multiply-accumulate COUNT is identical in every row above: only the declared");
     println!("  byte width moved. Real arithmetic is unchanged; real weight traffic is 4x.");
@@ -567,14 +619,18 @@ fn s5_properties_p1_to_p7() {
     for (c, d, a, r) in &ladder {
         println!("      n_ctx={c:<9} draw_ccu={d:<24} attempted={a:<24} reward={r}");
     }
-    println!("  P1  {} — searched: the A16 n_ctx ladder 16..2^21 and the three genesis classes.",
-        if p1 { "HOLDS" } else { "VIOLATED" });
+    println!(
+        "  P1  {} — searched: the A16 n_ctx ladder 16..2^21 and the three genesis classes.",
+        if p1 { "HOLDS" } else { "VIOLATED" }
+    );
     println!("      NOTE: reward is FLAT at the escrow across 7 orders of magnitude of work.");
-    println!("      escrow/W0 ceiling {} vs dense@2M {} => {:.0}x efficiency spread between two honest classes.",
+    println!(
+        "      escrow/W0 ceiling {} vs dense@2M {} => {:.0}x efficiency spread between two honest classes.",
         efficiency_e18(T12_ESCROW_SOMPI, w),
         efficiency_e18(price(d_draw, w).reward_sompi, price(d_draw, w).attempted_ccu),
         efficiency_e18(T12_ESCROW_SOMPI, w) as f64
-            / efficiency_e18(price(d_draw, w).reward_sompi, price(d_draw, w).attempted_ccu).max(1) as f64);
+            / efficiency_e18(price(d_draw, w).reward_sompi, price(d_draw, w).attempted_ccu).max(1) as f64
+    );
     assert!(p1, "P1");
 
     // ---- P2: same work, different representation => reward does not move ----------------------
@@ -619,16 +675,15 @@ fn s5_properties_p1_to_p7() {
     let dtype_draw = draw_ccu_of(&p2_dtype, dcn);
     println!("      dtype i8 -> i32 on the SAME graph: draw_ccu {d_draw} -> {dtype_draw} ({:.2}x)", dtype_draw as f64 / d_draw as f64);
     let p2_overall = p2 && dtype_draw == d_draw;
-    println!("  P2  {} — searched: 7 tile_lens x 5 geometries, and the 5 admissible dtype codes.",
-        if p2_overall { "HOLDS" } else { "VIOLATED" });
+    println!(
+        "  P2  {} — searched: 7 tile_lens x 5 geometries, and the 5 admissible dtype codes.",
+        if p2_overall { "HOLDS" } else { "VIOLATED" }
+    );
 
     // ---- P3: no discontinuous gain at a parameter boundary ------------------------------------
     println!("\n  P3  boundary sweep, reward-per-real-MAC around every clamp:");
     let mut p3_notes = Vec::new();
-    for (label, ccus) in [
-        ("W0 (target saturation)", vec![w - 2, w - 1, w, w + 1, w + 2]),
-        ("escrow clamp", vec![w / 2, w, w * 2]),
-    ] {
+    for (label, ccus) in [("W0 (target saturation)", vec![w - 2, w - 1, w, w + 1, w + 2]), ("escrow clamp", vec![w / 2, w, w * 2])] {
         for ccu in ccus {
             let pr = price(ccu, w);
             let eff = efficiency_e18(pr.reward_sompi, pr.attempted_ccu);
@@ -646,7 +701,10 @@ fn s5_properties_p1_to_p7() {
             sat_at = Some(palw_expected_attempts_v1(target));
         }
     }
-    println!("      palw_pwu_v1 saturates at u64::MAX from {} expected attempts on the 2M row:", sat_at.map(|a| a.to_string()).unwrap_or("never".into()));
+    println!(
+        "      palw_pwu_v1 saturates at u64::MAX from {} expected attempts on the 2M row:",
+        sat_at.map(|a| a.to_string()).unwrap_or("never".into())
+    );
     println!("      past it, additional executed compute buys ZERO additional fork weight.");
     println!("  P3  VIOLATED — the pwu_v1 u64 clamp is a discontinuity the class target controls;");
     println!("      the W0 boundary is continuous in reward but its DERIVATIVE flips sign there.");
@@ -703,12 +761,17 @@ fn s5_properties_p1_to_p7() {
             _ => {}
         }
     }
-    println!("  P5  {} on the attempt lane (the only lane t12 prices) — the decode declaration is",
-        if p5 { "HOLDS" } else { "VIOLATED" });
+    println!(
+        "  P5  {} on the attempt lane (the only lane t12 prices) — the decode declaration is",
+        if p5 { "HOLDS" } else { "VIOLATED" }
+    );
     println!("      not read by palw_attempt_job_v1, so the partition is not an attacker lever there.");
     println!("  P6  merging K claims into one strictly LOSES reward (the escrow clamp): K=9440 merged");
-    println!("      into 1 goes from {} to {} sompi. P6 HOLDS.",
-        (price((d_draw / 9_440).max(1), w).reward_sompi as u128) * 9_440, price(d_draw, w).reward_sompi);
+    println!(
+        "      into 1 goes from {} to {} sompi. P6 HOLDS.",
+        (price((d_draw / 9_440).max(1), w).reward_sompi as u128) * 9_440,
+        price(d_draw, w).reward_sompi
+    );
 
     let _ = (h_draw, f_draw, hcn, fcn);
 }
@@ -729,8 +792,13 @@ fn s6_the_two_cost_walks_agree_on_every_shipped_class() {
         let job = rc_job_context(&p, c.0, c.1);
         let d = PalwCanonicalClassDescriptorV1::of(&p, Hash64::default()).unwrap();
         let v = palw_canonical_work_v1(&d, &PalwCanonicalExecutionFactsV1::of_attempt(&job, true)).unwrap();
-        println!("                 traffic_bytes={} (weight {} kv_r {} kv_w {}) — all weighted ZERO in provisional_scalar_v1",
-            v.traffic_bytes(), v.weight_traffic_bytes, v.kv_read_bytes, v.kv_write_bytes);
+        println!(
+            "                 traffic_bytes={} (weight {} kv_r {} kv_w {}) — all weighted ZERO in provisional_scalar_v1",
+            v.traffic_bytes(),
+            v.weight_traffic_bytes,
+            v.kv_read_bytes,
+            v.kv_write_bytes
+        );
         let _ = palw_economic_shape_v1(&p, &PALW_ECONOMIC_COST_TABLE_V1).unwrap();
     }
 }
@@ -740,8 +808,10 @@ fn s7_dump_attn_tables() {
     for (name, (p, _c)) in [("BASE-0", floor_class()), ("Qwen3.6@512", hybrid_512()), ("Qwen2.5@2M", dense_2m())] {
         println!("\n--- {name}: attn_nodes = {} ---", p.attn_nodes.len());
         for (i, nd) in p.attn_nodes.iter().enumerate() {
-            println!("  [{i:2}] {:?} out={:?} tile={} w='{}' dtypes={:?} refs={:?}",
-                nd.op_kind, nd.out_len, nd.tile_len, nd.weight_name, nd.weight_dtypes, nd.input_refs);
+            println!(
+                "  [{i:2}] {:?} out={:?} tile={} w='{}' dtypes={:?} refs={:?}",
+                nd.op_kind, nd.out_len, nd.tile_len, nd.weight_name, nd.weight_dtypes, nd.input_refs
+            );
         }
         println!("  pre={} gdn={} post={}", p.pre_nodes.len(), p.gdn_nodes.len(), p.post_nodes.len());
         println!("  validate_shape: {:?}", p.validate_shape());
@@ -762,8 +832,12 @@ fn s8_the_padding_node_reaches_no_new_kernel() {
         let kb = reachable_kernels_v1(&base);
         let kp = reachable_kernels_v1(&padded);
         let new: Vec<_> = kp.difference(&kb).collect();
-        println!("  n_ctx={ctx}: base reaches {} kernels, padded reaches {}, NEW kernels: {}",
-            kb.len(), kp.len(), if new.is_empty() { "none".to_string() } else { format!("{new:?}") });
+        println!(
+            "  n_ctx={ctx}: base reaches {} kernels, padded reaches {}, NEW kernels: {}",
+            kb.len(),
+            kp.len(),
+            if new.is_empty() { "none".to_string() } else { format!("{new:?}") }
+        );
         println!("           padded class_id (shape_profile_id) = {}", padded.shape_profile_id());
         assert!(new.is_empty(), "the padding node names no kernel the class did not already reach");
     }

@@ -148,26 +148,35 @@ fn every_improve_kind_writes_an_object_the_chain_accepts() {
     );
     assert!(text.contains("policy check") && text.contains("ok"), "{text}");
     let PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, signature } = object(&path) else { panic!("tag 70") };
-    let message = kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_message_v1(domain, &payload.line_id, 1, payload.policy.as_ref());
+    let message = kaspa_consensus_core::palw_improve_policy_v1::palw_improvement_policy_message_v1(
+        domain,
+        &payload.line_id,
+        1,
+        payload.policy.as_ref(),
+    );
     assert!(verifies(&public, message, &signature, kaspa_consensus_core::palw_improve_policy_v1::PALW_IMPROVE_POLICY_MLDSA87_CONTEXT));
     // An opt-out is the same object with no policy.
     let (path, _) = run("policy", serde_json::json!({ "line": hex(1), "sequence": 2, "opt_out": true }));
     assert!(matches!(object(&path), PalwConsensusObjectV2::ModelLineImprovementPolicySet { payload, .. } if payload.policy.is_none()));
     // A policy the chain would refuse is refused here, before anything is signed.
     let bad = d.join("bad.json");
-    std::fs::write(&bad, serde_json::json!({ "line": hex(1), "sequence": 1, "policy": { "windows": { "grid": 1 } } }).to_string()).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_palw-class"))
-        .args(&common("policy", &bad, &d.join("bad.obj")))
-        .output()
+    std::fs::write(&bad, serde_json::json!({ "line": hex(1), "sequence": 1, "policy": { "windows": { "grid": 1 } } }).to_string())
         .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_palw-class")).args(&common("policy", &bad, &d.join("bad.obj"))).output().unwrap();
     assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("would be refused"));
 
     // 71: a hard case, its key and salt written beside it for the reveal.
-    let (path, text) = run("hard-case", serde_json::json!({ "line": hex(1), "prompt": [1, 2, 3], "reference": { "exact_key": [5, 6] } }));
+    let (path, text) =
+        run("hard-case", serde_json::json!({ "line": hex(1), "prompt": [1, 2, 3], "reference": { "exact_key": [5, 6] } }));
     assert!(text.contains("case id"));
     let PalwConsensusObjectV2::HardCaseSubmitted { payload, submitter, signature } = object(&path) else { panic!("tag 71") };
     assert_eq!(palw_hard_case_form_v1(&payload), Ok(()));
-    assert!(verifies(&public, palw_improve_material_message_v1(71, &domain, payload.as_ref(), Some(&submitter)), &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
+    assert!(verifies(
+        &public,
+        palw_improve_material_message_v1(71, &domain, payload.as_ref(), Some(&submitter)),
+        &signature,
+        PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1
+    ));
     let key_json: serde_json::Value = serde_json::from_slice(&std::fs::read(d.join("hard-case.obj.key.json")).unwrap()).unwrap();
     assert_eq!(key_json["key"], serde_json::json!([5, 6]));
 
@@ -175,7 +184,9 @@ fn every_improve_kind_writes_an_object_the_chain_accepts() {
     let (path, _) = run("setter-set", serde_json::json!({ "line": hex(1), "epoch": 1, "prompts": [[1, 2], [3]], "keys": [[7], [8]] }));
     let PalwConsensusObjectV2::SetterSetCommitted { payload: commitment, .. } = object(&path) else { panic!("tag 73") };
     assert_eq!(palw_setter_set_form_v1(&commitment), Ok(()));
-    let PalwConsensusObjectV2::SetterSetRevealed { payload: prompts } = object(&d.join("setter-set.obj.prompts")) else { panic!("tag 74") };
+    let PalwConsensusObjectV2::SetterSetRevealed { payload: prompts } = object(&d.join("setter-set.obj.prompts")) else {
+        panic!("tag 74")
+    };
     let PalwConsensusObjectV2::SetterKeysRevealed { payload: keys } = object(&d.join("setter-set.obj.keys")) else { panic!("tag 75") };
     assert_eq!(palw_setter_prompts_open_v1(&commitment, &prompts), Ok(()));
     assert_eq!(palw_setter_keys_open_v1(&commitment, &keys), Ok(()));
@@ -185,25 +196,39 @@ fn every_improve_kind_writes_an_object_the_chain_accepts() {
         "dataset",
         serde_json::json!({ "line": hex(1), "content_root": hex(2), "items": 4, "license_classes": [hex(3)], "teacher_classes": 1, "provenance": hex(4) }),
     );
-    assert!(matches!(object(&path), PalwConsensusObjectV2::DatasetRegistered { payload, .. } if palw_dataset_form_v1(&payload).is_ok()));
+    assert!(
+        matches!(object(&path), PalwConsensusObjectV2::DatasetRegistered { payload, .. } if palw_dataset_form_v1(&payload).is_ok())
+    );
     let (path, _) = run(
         "artifact",
         serde_json::json!({ "line": hex(1), "kind": "answer", "task": hex(2), "teacher_type": "open_distill", "teacher_id": hex(3),
                             "license_class": hex(4), "provenance": hex(5), "output_hash": hex(6), "verification": "exact", "answer_span": [1] }),
     );
     let PalwConsensusObjectV2::TeachingArtifactCommitted { payload: commit, .. } = object(&path) else { panic!("tag 77") };
-    let PalwConsensusObjectV2::TeachingArtifactRevealed { payload: artifact } = object(&d.join("artifact.obj.reveal")) else { panic!("tag 78") };
+    let PalwConsensusObjectV2::TeachingArtifactRevealed { payload: artifact } = object(&d.join("artifact.obj.reveal")) else {
+        panic!("tag 78")
+    };
     assert_eq!(palw_teaching_artifact_form_v1(&artifact), Ok(()));
     assert_eq!(kaspa_consensus_core::palw_improve_material_v1::palw_teaching_artifact_commit_v1(&artifact), commit.commit);
-    let (path, _) = run("licence", serde_json::json!({ "model_family": hex(7), "domains": [2, 1], "uses": 1, "per_use_fee": 5, "expiry_daa": 99999 }));
+    let (path, _) = run(
+        "licence",
+        serde_json::json!({ "model_family": hex(7), "domains": [2, 1], "uses": 1, "per_use_fee": 5, "expiry_daa": 99999 }),
+    );
     let PalwConsensusObjectV2::TeacherLicenceRegistered { payload, signature } = object(&path) else { panic!("tag 79") };
     assert_eq!(palw_teacher_licence_form_v1(&payload), Ok(()));
     assert_eq!(payload.rights_holder_key, public, "the licence names the signing key");
-    assert!(verifies(&public, palw_improve_material_message_v1(79, &domain, payload.as_ref(), None), &signature, PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1));
+    assert!(verifies(
+        &public,
+        palw_improve_material_message_v1(79, &domain, payload.as_ref(), None),
+        &signature,
+        PALW_IMPROVE_MATERIAL_MLDSA87_CONTEXT_V1
+    ));
 
     // 81: a rollback.
     let (path, _) = run("rollback", serde_json::json!({ "line": hex(1), "epoch": 3, "to_class": hex(9), "cause": "owner" }));
-    assert!(matches!(object(&path), PalwConsensusObjectV2::LineageHeadRolledBack { payload, .. } if payload.cause == PalwRollbackCauseV1::Owner));
+    assert!(
+        matches!(object(&path), PalwConsensusObjectV2::LineageHeadRolledBack { payload, .. } if payload.cause == PalwRollbackCauseV1::Owner)
+    );
 }
 
 // ---- a candidate over a real composite ----
@@ -288,20 +313,42 @@ fn a_candidate_over_a_real_composite_names_the_chains_class_and_reference() {
     let spec = d.join("candidate.json");
     std::fs::write(
         &spec,
-        serde_json::json!({ "line": hex(1), "epoch": 2, "declarations": { "datasets": [[hex(5), 1000]], "teacher_classes": 4 } }).to_string(),
+        serde_json::json!({ "line": hex(1), "epoch": 2, "declarations": { "datasets": [[hex(5), 1000]], "teacher_classes": 4 } })
+            .to_string(),
     )
     .unwrap();
     let out = d.join("candidate.obj");
     let text = palw_class(&[
-        "improve", "candidate", "--network", "testnet-12", "--drill-salt", SALT, "--key-file", key.to_str().unwrap(), "--bond", &bond,
-        "--spec", spec.to_str().unwrap(), "--parent", pp.to_str().unwrap(), "--section", sp.to_str().unwrap(), "--out", out.to_str().unwrap(),
+        "improve",
+        "candidate",
+        "--network",
+        "testnet-12",
+        "--drill-salt",
+        SALT,
+        "--key-file",
+        key.to_str().unwrap(),
+        "--bond",
+        &bond,
+        "--spec",
+        spec.to_str().unwrap(),
+        "--parent",
+        pp.to_str().unwrap(),
+        "--section",
+        sp.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
     ]);
     assert!(text.contains(&entry.class_id().to_string()), "{text}");
     let PalwConsensusObjectV2::CandidateSubmitted { payload, submitter, signature } = object(&out) else { panic!("tag 80") };
     assert_eq!(payload.class_id, entry.class_id());
     assert_eq!(
         payload.artifact,
-        PalwTirArtifactRefV1::Composite { parent_class: parent.class_id(), parent_root: parent.artifact_root, adapter_root: composite.adapter_root, p }
+        PalwTirArtifactRefV1::Composite {
+            parent_class: parent.class_id(),
+            parent_root: parent.artifact_root,
+            adapter_root: composite.adapter_root,
+            p
+        }
     );
     assert_eq!(payload.layout, entry.class.layout, "the candidate class's layout rides, as the chain keeps only its digest");
     assert_eq!(payload.declarations.datasets, vec![(Hash64::from_bytes([5; 64]), 1000)]);
@@ -313,8 +360,26 @@ fn a_candidate_over_a_real_composite_names_the_chains_class_and_reference() {
     ));
     // A section without its parent is refused by name.
     let orphan = Command::new(env!("CARGO_BIN_EXE_palw-class"))
-        .args(["improve", "candidate", "--network", "testnet-12", "--drill-salt", SALT, "--key-file", key.to_str().unwrap(), "--bond", &bond,
-               "--spec", spec.to_str().unwrap(), "--parent", cp.to_str().unwrap(), "--section", sp.to_str().unwrap(), "--out", d.join("x.obj").to_str().unwrap()])
+        .args([
+            "improve",
+            "candidate",
+            "--network",
+            "testnet-12",
+            "--drill-salt",
+            SALT,
+            "--key-file",
+            key.to_str().unwrap(),
+            "--bond",
+            &bond,
+            "--spec",
+            spec.to_str().unwrap(),
+            "--parent",
+            cp.to_str().unwrap(),
+            "--section",
+            sp.to_str().unwrap(),
+            "--out",
+            d.join("x.obj").to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(!orphan.status.success(), "the full candidate is not the section's parent");

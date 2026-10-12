@@ -1,9 +1,9 @@
 //! The class worker retains its raw declaration for retry/inclusion tracking,
 //! and envelopes the actual submitted copy only when the chain requires it.
-use super::{PalwPanelService, CLASS_REGISTRATION_RETRY_DAA};
+use super::{CLASS_REGISTRATION_RETRY_DAA, PalwPanelService};
 use kaspa_consensus_core::{
     config::params::Params,
-    palw_state_v2::{palw_class_registration_buyer_v1, PalwConsensusObjectV2},
+    palw_state_v2::{PalwConsensusObjectV2, palw_class_registration_buyer_v1},
     tx::{Transaction, TransactionOutpoint, UtxoEntry},
 };
 use misaka_palw_sdk::onboarding_chain::{EnvelopeSigner, SignedRegistrationRequestV1};
@@ -55,7 +55,7 @@ mod tests {
         config::params::{ForkActivation, SIMNET_PARAMS},
         palw_state_v2::PalwBondKeyV2,
         palw_tir_admission_v1::palw_tir_post_genesis_registration_v1,
-        palw_tir_attempt_v1::{palw_tir_attempt_canonical_v1, palw_tir_job_context_v1, PalwTirJobFactsV1},
+        palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1},
         palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1},
     };
     use kaspa_hashes::Hash64;

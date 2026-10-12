@@ -20,9 +20,9 @@
 
 use super::*;
 use crate::palw_mesh_v1::{
-    PALW_AUDIT_MAX_OPEN_V1, PALW_AUDIT_WINDOW_DAA_V1, PALW_AUDITS_PER_CLAIM_V1, PALW_MESH_SWEEP_PER_BLOCK_V1, PALW_TRAP_DEPOSIT_SOMPI_V1,
-    PALW_TRAP_MAX_OPEN_V1, PALW_TRAP_MAX_TILES_V1, PALW_TRAP_REVEAL_WINDOW_DAA_V1, PalwAuditAssignmentV1, PalwAuditCandidateV1,
-    PalwAuditOutcomeV1, PalwAuditRowV1, PalwMeshErrorV1, PalwTrapCommittedV1, PalwTrapRevealedV1, PalwTrapRowV1,
+    PALW_AUDIT_MAX_OPEN_V1, PALW_AUDIT_WINDOW_DAA_V1, PALW_AUDITS_PER_CLAIM_V1, PALW_MESH_SWEEP_PER_BLOCK_V1,
+    PALW_TRAP_DEPOSIT_SOMPI_V1, PALW_TRAP_MAX_OPEN_V1, PALW_TRAP_MAX_TILES_V1, PALW_TRAP_REVEAL_WINDOW_DAA_V1, PalwAuditAssignmentV1,
+    PalwAuditCandidateV1, PalwAuditOutcomeV1, PalwAuditRowV1, PalwMeshErrorV1, PalwTrapCommittedV1, PalwTrapRevealedV1, PalwTrapRowV1,
     palw_mesh_audit_draw_v1, palw_mesh_audit_pay_v1, palw_mesh_audit_seed_v1, palw_mesh_trap_bounty_v1, palw_mesh_trap_penalty_v1,
     palw_trap_slot_drawn_v1, palw_trap_ticket_hits_v1,
 };
@@ -48,11 +48,7 @@ impl TransitionBuilder<'_> {
         if amount == 0 {
             return Ok(());
         }
-        let next = self
-            .state
-            .reserved_exposure(&bond)
-            .checked_add(amount)
-            .ok_or(PalwStateV2Error::Overflow("mesh reservation"))?;
+        let next = self.state.reserved_exposure(&bond).checked_add(amount).ok_or(PalwStateV2Error::Overflow("mesh reservation"))?;
         self.write_exposure(bond, Some(next));
         Ok(())
     }
@@ -62,11 +58,8 @@ impl TransitionBuilder<'_> {
         if amount == 0 {
             return Ok(());
         }
-        let next = self
-            .state
-            .reserved_exposure(&bond)
-            .checked_sub(amount)
-            .ok_or(PalwStateV2Error::Overflow("mesh reservation underflow"))?;
+        let next =
+            self.state.reserved_exposure(&bond).checked_sub(amount).ok_or(PalwStateV2Error::Overflow("mesh reservation underflow"))?;
         self.write_exposure(bond, if next == 0 { None } else { Some(next) });
         Ok(())
     }
@@ -162,7 +155,9 @@ pub fn palw_class_da_certificate_v1(state: &PalwChainStateV2, class_id: &Hash64)
         anchor.object == crate::palw_vertex_v1::PALW_VERTEX_HELD_OBJECT_CAPTURE_V1 && {
             let mut seats: Vec<PalwBondKeyV2> = rows
                 .iter()
-                .filter(|row| row.object == anchor.object && row.first == anchor.first && row.last == anchor.last && row.digest == anchor.digest)
+                .filter(|row| {
+                    row.object == anchor.object && row.first == anchor.first && row.last == anchor.last && row.digest == anchor.digest
+                })
                 .map(|row| row.seat)
                 .collect();
             seats.sort();
@@ -196,7 +191,10 @@ pub(super) fn capped_entry_v1(
         .filter(|(_, other)| crate::palw_mesh_v1::palw_lifecycle_is_capped_v1(&other.state))
         .map(|(id, _)| u32::from(builder.state.class_shares.get(id).copied().unwrap_or(0)))
         .sum();
-    crate::palw_mesh_v1::palw_capped_weight_admits_v1(capped_total, u32::from(builder.state.class_shares.get(class_id).copied().unwrap_or(0)))
+    crate::palw_mesh_v1::palw_capped_weight_admits_v1(
+        capped_total,
+        u32::from(builder.state.class_shares.get(class_id).copied().unwrap_or(0)),
+    )
 }
 
 /// Whether a registry row is a `Capped` class's.
@@ -220,7 +218,9 @@ pub(super) fn capped_class_admits_v1(state: &PalwChainStateV2) -> Result<(), Pal
         .map(|claim| claim.immature_contribution)
         .fold(0u128, u128::saturating_add);
     let total = state.bounded_immature;
-    if capped_open.saturating_mul(1_000) > total.saturating_mul(u128::from(crate::palw_mesh_v1::PALW_CAPPED_WEIGHT_CAP_PERMILLE_V1)) && capped_open > 0 {
+    if capped_open.saturating_mul(1_000) > total.saturating_mul(u128::from(crate::palw_mesh_v1::PALW_CAPPED_WEIGHT_CAP_PERMILLE_V1))
+        && capped_open > 0
+    {
         return Err(refused(format!(
             "the capped classes hold {capped_open} of {total} immature weight, past w_cap of {} ‰",
             crate::palw_mesh_v1::PALW_CAPPED_WEIGHT_CAP_PERMILLE_V1
@@ -365,9 +365,10 @@ impl AuditRefIndexV1 {
         let wanted: BTreeSet<u64> = leaves
             .iter()
             .filter_map(|leaf| match leaf {
-                crate::palw_vertex_v1::PalwVertexLeafV1::Audited { claim: crate::palw_vertex_v1::PalwClaimRefV1::Compact { bound_daa, .. }, .. } => {
-                    Some(u64::from(*bound_daa))
-                }
+                crate::palw_vertex_v1::PalwVertexLeafV1::Audited {
+                    claim: crate::palw_vertex_v1::PalwClaimRefV1::Compact { bound_daa, .. },
+                    ..
+                } => Some(u64::from(*bound_daa)),
                 _ => None,
             })
             .collect();
@@ -386,7 +387,12 @@ impl AuditRefIndexV1 {
         match claim {
             crate::palw_vertex_v1::PalwClaimRefV1::Full(id) => state.vertex.mesh.audits.contains_key(id).then_some(*id),
             crate::palw_vertex_v1::PalwClaimRefV1::Compact { bound_daa, .. } => {
-                let mut named = self.by_drawn.get(&u64::from(*bound_daa)).into_iter().flatten().filter(|id| claim.names(id, u64::from(*bound_daa)));
+                let mut named = self
+                    .by_drawn
+                    .get(&u64::from(*bound_daa))
+                    .into_iter()
+                    .flatten()
+                    .filter(|id| claim.names(id, u64::from(*bound_daa)));
                 let first = named.next()?;
                 named.next().is_none().then_some(*first)
             }
@@ -545,32 +551,32 @@ impl PalwChainStateV2 {
         if audit_1004 && reveal.tiles < PALW_AUDIT_1004_MIN_TRAP_TILES_V1 {
             return Err(PalwMeshErrorV1::TrapTilesInvalid { tiles: reveal.tiles, fault_leaf: reveal.fault_leaf });
         }
-    if reveal.tiles == 0 || reveal.tiles > PALW_TRAP_MAX_TILES_V1 || reveal.fault_leaf >= reveal.tiles {
-        return Err(PalwMeshErrorV1::TrapTilesInvalid { tiles: reveal.tiles, fault_leaf: reveal.fault_leaf });
+        if reveal.tiles == 0 || reveal.tiles > PALW_TRAP_MAX_TILES_V1 || reveal.fault_leaf >= reveal.tiles {
+            return Err(PalwMeshErrorV1::TrapTilesInvalid { tiles: reveal.tiles, fault_leaf: reveal.fault_leaf });
+        }
+        let row = state.vertex.mesh.traps.get(&reveal.commitment()).ok_or(PalwMeshErrorV1::TrapNotCommitted)?;
+        if row.setter != reveal.setter_bond {
+            return Err(PalwMeshErrorV1::TrapSetterDiffers { got: reveal.setter_bond, committed: row.setter });
+        }
+        if row.revealed_claim.is_some() {
+            return Err(PalwMeshErrorV1::TrapAlreadyRevealed);
+        }
+        let audit = state.vertex.mesh.audits.get(&reveal.claim).ok_or(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim))?;
+        if audit_1004 && row.committed_daa >= audit.drawn_daa {
+            return Err(PalwMeshErrorV1::TrapCommittedAfterTheDraw { committed: row.committed_daa, drawn: audit.drawn_daa });
+        }
+        let claim = state.claims.get(&reveal.claim).ok_or(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim))?;
+        if claim.bond != reveal.setter_bond {
+            return Err(PalwMeshErrorV1::TrapClaimNotTheSetters(reveal.claim));
+        }
+        if daa_score < audit.audit_end_daa {
+            return Err(PalwMeshErrorV1::TrapRevealedEarly { at: daa_score, audit_end: audit.audit_end_daa });
+        }
+        if daa_score > audit.row_end_daa {
+            return Err(PalwMeshErrorV1::TrapRevealedLate { at: daa_score, row_end: audit.row_end_daa });
+        }
+        Ok(())
     }
-    let row = state.vertex.mesh.traps.get(&reveal.commitment()).ok_or(PalwMeshErrorV1::TrapNotCommitted)?;
-    if row.setter != reveal.setter_bond {
-        return Err(PalwMeshErrorV1::TrapSetterDiffers { got: reveal.setter_bond, committed: row.setter });
-    }
-    if row.revealed_claim.is_some() {
-        return Err(PalwMeshErrorV1::TrapAlreadyRevealed);
-    }
-    let audit = state.vertex.mesh.audits.get(&reveal.claim).ok_or(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim))?;
-    if audit_1004 && row.committed_daa >= audit.drawn_daa {
-        return Err(PalwMeshErrorV1::TrapCommittedAfterTheDraw { committed: row.committed_daa, drawn: audit.drawn_daa });
-    }
-    let claim = state.claims.get(&reveal.claim).ok_or(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim))?;
-    if claim.bond != reveal.setter_bond {
-        return Err(PalwMeshErrorV1::TrapClaimNotTheSetters(reveal.claim));
-    }
-    if daa_score < audit.audit_end_daa {
-        return Err(PalwMeshErrorV1::TrapRevealedEarly { at: daa_score, audit_end: audit.audit_end_daa });
-    }
-    if daa_score > audit.row_end_daa {
-        return Err(PalwMeshErrorV1::TrapRevealedLate { at: daa_score, row_end: audit.row_end_daa });
-    }
-    Ok(())
-}
 }
 
 /// **`TrapRevealed`** (module doc): the deposit is released and the row dropped; every auditor whose ticket landed on the planted tile
@@ -585,10 +591,20 @@ pub(super) fn apply_trap_revealed_v1(
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(refused(PalwMeshErrorV1::Dormant("palw_audit_mesh_v1")));
     }
-    builder.state.mesh_trap_revealed_admissible_v2(reveal, ctx.daa_score, builder.params.audit_1004_active_at(ctx.daa_score)).map_err(refused)?;
+    builder
+        .state
+        .mesh_trap_revealed_admissible_v2(reveal, ctx.daa_score, builder.params.audit_1004_active_at(ctx.daa_score))
+        .map_err(refused)?;
     let commitment = reveal.commitment();
     let trap = builder.state.vertex.mesh.traps.get(&commitment).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapNotCommitted))?;
-    let mut audit = builder.state.vertex.mesh.audits.get(&reveal.claim).cloned().ok_or_else(|| refused(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim)))?;
+    let mut audit = builder
+        .state
+        .vertex
+        .mesh
+        .audits
+        .get(&reveal.claim)
+        .cloned()
+        .ok_or_else(|| refused(PalwMeshErrorV1::TrapClaimNotAudited(reveal.claim)))?;
 
     // 1. The deposit comes back, and the commitment is spent.
     builder.mesh_release(trap.setter, trap.deposit)?;
@@ -719,7 +735,9 @@ impl PalwChainStateV2 {
             }
         }
         for (claim_id, row) in &self.vertex.mesh.capped {
-            let Some(claim) = self.claims.get(claim_id) else { return bad(format!("a capped row of claim {claim_id}, which does not exist")) };
+            let Some(claim) = self.claims.get(claim_id) else {
+                return bad(format!("a capped row of claim {claim_id}, which does not exist"));
+            };
             if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
                 return bad(format!("a capped row of claim {claim_id}, which is no longer Provisional"));
             }

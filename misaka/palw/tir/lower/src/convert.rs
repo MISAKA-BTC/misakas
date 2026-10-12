@@ -11,12 +11,12 @@
 //! inputs rebuilds the same artifact, and so the same inventory root, class id and file digest:
 //! that is what `palw-class pack build` and `pack verify` are.
 
+use crate::detmath::MathMode;
 use crate::error::{LowerError, Result};
+use crate::fidelity::Prepared;
 use crate::float_ref::SiteStat;
 use crate::float_ref::stream::OccParams;
-use crate::fidelity::Prepared;
 use crate::lower::{ChunkSink, StreamMaterialised, StreamOpts, StreamStats, materialise_stream};
-use crate::detmath::MathMode;
 use crate::quant::QuantPolicy;
 use misaka_palw_tir_artifact::chunks::{ChunkStore, ChunkStoreStats, write_container_v1_chunked};
 use std::collections::BTreeMap;
@@ -85,8 +85,9 @@ pub fn convert_to_container(
     let mut sink = ChunkSink::new(&store);
     let m = materialise_stream(&prep.lowered, &prep.hl, loader, calib, policy, &opts.stream, &mut sink, progress)?;
     let meta = (opts.meta)(&m).to_string();
-    let digest = write_container_v1_chunked(out, &prep.lowered.program, opts.layout.clone(), opts.tokenizer_id, meta, &store, &sink.artifact)
-        .map_err(|e| LowerError::Io(e.to_string()))?;
+    let digest =
+        write_container_v1_chunked(out, &prep.lowered.program, opts.layout.clone(), opts.tokenizer_id, meta, &store, &sink.artifact)
+            .map_err(|e| LowerError::Io(e.to_string()))?;
     let report = ConvertReport {
         file_digest: hex(&digest),
         file_bytes: std::fs::metadata(out).map_err(|e| LowerError::Io(e.to_string()))?.len(),
@@ -117,8 +118,9 @@ pub struct CalibInput {
 impl CalibInput {
     /// A token file: `{"source": …, "sequences": [[id, …], …]}`.
     pub fn from_file(path: &Path) -> Result<CalibInput> {
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?)
-            .map_err(|e| LowerError::bad(format!("{}: {e}", path.display())))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| LowerError::Io(format!("{}: {e}", path.display())))?)
+                .map_err(|e| LowerError::bad(format!("{}: {e}", path.display())))?;
         let sequences = v["sequences"]
             .as_array()
             .ok_or_else(|| LowerError::bad(format!("{}: token file: no `sequences`", path.display())))?
@@ -247,12 +249,13 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     let prep = &opened.prepared;
     let ck = opened.source.as_ref();
     let descriptors = crate::fidelity::quant_descriptors_used(&req.model, prep, &reg)?;
+    log(format!("{} — {}", prep.spec.architecture, crate::lower::program_summary(&prep.lowered.program).lines().next().unwrap_or("")));
     log(format!(
-        "{} — {}",
-        prep.spec.architecture,
-        crate::lower::program_summary(&prep.lowered.program).lines().next().unwrap_or("")
+        "frontend: {} (level {}), spec {}",
+        opened.frontend.adapter.describe(),
+        opened.frontend.level,
+        &opened.frontend.spec_digest[..16]
     ));
-    log(format!("frontend: {} (level {}), spec {}", opened.frontend.adapter.describe(), opened.frontend.level, &opened.frontend.spec_digest[..16]));
     for (n, d) in &descriptors {
         log(format!("quant format {n} {d}"));
     }
@@ -262,7 +265,12 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     } else {
         crate::hf_schema::TensorIndex::from_checkpoint_path(&req.model)?
     };
-    let scope = crate::model::scope_of(&opened.frontend.config, Some(&prep.spec), Some(&tensor_index), &crate::model::sibling_files(&req.model));
+    let scope = crate::model::scope_of(
+        &opened.frontend.config,
+        Some(&prep.spec),
+        Some(&tensor_index),
+        &crate::model::sibling_files(&req.model),
+    );
     log(scope.headline());
     let features = prep.spec.features();
 
@@ -285,7 +293,10 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             let text = std::fs::read_to_string(p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
             let (stats, exact) = stats_from_json(&text)?;
             if !exact {
-                log(format!("WARNING: {} is in the legacy (decimal float) format — not bit-exact, not for a runtime pack", p.display()));
+                log(format!(
+                    "WARNING: {} is in the legacy (decimal float) format — not bit-exact, not for a runtime pack",
+                    p.display()
+                ));
             }
             log(format!("calibration statistics from {}", p.display()));
             if recurrent && let Some(longest) = req.calibrated_context {
@@ -302,7 +313,10 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             let text = std::fs::read_to_string(p).map_err(|e| LowerError::Io(format!("{}: {e}", p.display())))?;
             let (stats, exact) = stats_from_json(&text)?;
             if !exact {
-                log(format!("WARNING: {} is in the legacy (decimal float) format — not bit-exact, not for a runtime pack", p.display()));
+                log(format!(
+                    "WARNING: {} is in the legacy (decimal float) format — not bit-exact, not for a runtime pack",
+                    p.display()
+                ));
             }
             let mut seqs = c.sequences.clone();
             if let Some(n) = req.calib_seqs {

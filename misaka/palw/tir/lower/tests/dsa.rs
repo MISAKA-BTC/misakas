@@ -47,7 +47,11 @@ fn deepseek_v32_float_matches_hf() {
     let want = rows("logits_full");
     let scale = want.iter().flatten().fold(1.0f64, |m, v| m.max(v.abs()));
     let d = diff(&want);
-    eprintln!("deepseek_v32: {} positions vs HF (lowest-index ties): max|Δ| {:.2e} (scale {scale:.1})", got.len(), d.iter().cloned().fold(0.0, f64::max));
+    eprintln!(
+        "deepseek_v32: {} positions vs HF (lowest-index ties): max|Δ| {:.2e} (scale {scale:.1})",
+        got.len(),
+        d.iter().cloned().fold(0.0, f64::max)
+    );
     assert!(d.iter().all(|x| *x <= 1e-4 * scale), "float vs HF with the IR's tie rule: {d:?}");
     // 2. `torch.topk`'s own tie order differs from the IR's exactly where a k-th place is tied: here the last position
     //    (seven tokens score exactly zero for four places). The earlier positions, selecting among distinct scores or
@@ -75,7 +79,8 @@ fn run_on(cfg: &str, opts: &LowerOpts, eval: &[Vec<usize>]) -> Result<Run, Strin
     let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32, 7);
     let quiet = |_: usize, _: usize| {};
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
-    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
+        .map_err(|e| format!("materialise: {e}"))?;
     let float = fidelity::float_logits(&prep.hl, &loader, eval, &quiet).map_err(|e| e.to_string())?;
     let int: Vec<Vec<Vec<f64>>> = eval
         .iter()
@@ -95,7 +100,13 @@ fn config_with_topk(k: usize) -> String {
 fn show(name: &str, m: &fidelity::Metrics) {
     eprintln!(
         "{name}: top-1 {:.3}  KL {:.5} (max {:.4})  ppl {:.3} -> {:.3} ({:+.2}%)  [{} positions]",
-        m.top1_agreement, m.kl_mean, m.kl_max, m.ppl_float, m.ppl_int, m.ppl_delta * 100.0, m.positions
+        m.top1_agreement,
+        m.kl_mean,
+        m.kl_max,
+        m.ppl_float,
+        m.ppl_int,
+        m.ppl_delta * 100.0,
+        m.positions
     );
 }
 
@@ -124,7 +135,12 @@ fn the_integer_program_applies_the_selection() {
         show(&format!("index_topk {k:>2}: integer vs the DENSE float"), &against_dense);
         assert!(own.top1_agreement >= 0.9 && own.kl_mean <= 0.01, "k {k}: top-1 {} KL {}", own.top1_agreement, own.kl_mean);
         if k <= 4 {
-            assert!(against_dense.kl_mean > 5.0 * own.kl_mean, "k {k}: the selection moved nothing (KL {} against dense, {} against its own)", against_dense.kl_mean, own.kl_mean);
+            assert!(
+                against_dense.kl_mean > 5.0 * own.kl_mean,
+                "k {k}: the selection moved nothing (KL {} against dense, {} against its own)",
+                against_dense.kl_mean,
+                own.kl_mean
+            );
         }
     }
 }
@@ -135,8 +151,12 @@ fn the_integer_program_applies_the_selection() {
 fn deepseek_v32_integer_matches_hf_on_the_fixture_tokens() {
     let meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir().join("logits.json")).unwrap()).unwrap();
     let tokens: Vec<usize> = meta["tokens"].as_array().unwrap().iter().map(|t| t.as_u64().unwrap() as usize).collect();
-    let want: Vec<Vec<f64>> =
-        meta["logits_full"].as_array().unwrap().iter().map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()).collect();
+    let want: Vec<Vec<f64>> = meta["logits_full"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect())
+        .collect();
     let eval = vec![tokens];
     let r = run_on(&config(), &LowerOpts::default(), &eval).expect("integer run");
     let hf = vec![want.iter().map(|r| r.iter().map(|x| *x as f32).collect::<Vec<f32>>()).collect::<Vec<_>>()];
@@ -157,7 +177,8 @@ fn deepseek_v32_is_admitted() {
     let report = |name: &str, cfg: &str, window: Option<u32>| {
         let spec = parse_config_str(cfg).unwrap_or_else(|e| panic!("{name}: {e}"));
         let hl = hl::build_program(&spec).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let lw = lower(&hl, &LowerOpts { max_window: window, ..LowerOpts::default() }).unwrap_or_else(|e| panic!("{name}: lower: {e}"));
+        let lw =
+            lower(&hl, &LowerOpts { max_window: window, ..LowerOpts::default() }).unwrap_or_else(|e| panic!("{name}: lower: {e}"));
         let a = tir_admit_program_v1(&lw.program, &default_inputs()).unwrap_or_else(|e| panic!("{name}: REFUSED {e}"));
         let worst = a.cones.iter().max_by_key(|c| c.terminal().macs).expect("a cone");
         let dissected = a.cones.iter().filter(|c| !c.h_reductions.is_empty()).count();
@@ -176,7 +197,8 @@ fn deepseek_v32_is_admitted() {
         (a.cone_work, a.position.cost.macs)
     };
     report("the tiny fixture", &config(), None);
-    let real = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/deepseek-v3.2-exp.json")).expect("config");
+    let real = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/deepseek-v3.2-exp.json"))
+        .expect("config");
     for w in [1u32 << 13, 1 << 16] {
         let (work, macs) = report("DeepSeek-V3.2-Exp", &real, Some(w));
         assert!(macs <= 1 << 40, "{macs} MACs a position");
@@ -221,8 +243,16 @@ fn the_court_replays_every_node_of_the_dsa_program() {
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
     let tokens: Vec<u32> = fidelity::random_sequences(prep.hl.vocab, 1, 10, 5).remove(0).into_iter().map(|t| t as u32).collect();
     let last = tokens.len() as u32 - 1;
-    let r = common::court_coverage(&prep.lowered.program, &mat.params, &tokens, &[0, 2, 3, last], &[1, 3]).unwrap_or_else(|e| panic!("the court: {e}"));
-    eprintln!("DSA court: {} commit points, {} nodes, {} elements, {} dissected reductions over H, primitives {:?}", r.commits, r.nodes, r.elements, r.dissected, r.primitives.keys().collect::<Vec<_>>());
+    let r = common::court_coverage(&prep.lowered.program, &mat.params, &tokens, &[0, 2, 3, last], &[1, 3])
+        .unwrap_or_else(|e| panic!("the court: {e}"));
+    eprintln!(
+        "DSA court: {} commit points, {} nodes, {} elements, {} dissected reductions over H, primitives {:?}",
+        r.commits,
+        r.nodes,
+        r.elements,
+        r.dissected,
+        r.primitives.keys().collect::<Vec<_>>()
+    );
     assert!(r.commits > 0 && r.dissected > 0, "no reduction over H was dissected: the selection's radix search is not exercised");
     for p in ["Compare", "ReduceSum", "Select", "ReduceMax"] {
         assert!(r.primitives.contains_key(p), "the court never evaluated a `{p}` of the DSA program");
@@ -234,9 +264,9 @@ fn the_court_replays_every_node_of_the_dsa_program() {
 #[test]
 fn the_streamed_conversion_of_the_dsa_model_is_the_whole_one() {
     use misaka_palw_tir_artifact::chunks::{ChunkStore, write_container_v1_chunked};
+    use misaka_palw_tir_lower::artifact;
     use misaka_palw_tir_lower::float_ref::stream::Streamed;
     use misaka_palw_tir_lower::lower::{ChunkSink, StreamOpts, materialise_stream};
-    use misaka_palw_tir_lower::artifact;
     let prep = fidelity::prepare(&config(), &LowerOpts::default()).expect("prepare");
     let ck = Checkpoint::open(&dir()).expect("checkpoint");
     let loader = Streamed::new(&prep.hl, &prep.binding, &ck);
@@ -252,10 +282,14 @@ fn the_streamed_conversion_of_the_dsa_model_is_the_whole_one() {
     let old_path = tmp.join("old.palwtir");
     artifact::write(&old_path, &prep.lowered.program, &mat.params, tok, meta.clone()).unwrap();
     let old = std::fs::read(&old_path).unwrap();
-    for (label, opts) in [("rows1", StreamOpts { defer_min_elems: 0, block_elems: 1 }), ("never", StreamOpts { defer_min_elems: usize::MAX, block_elems: 8 })] {
+    for (label, opts) in [
+        ("rows1", StreamOpts { defer_min_elems: 0, block_elems: 1 }),
+        ("never", StreamOpts { defer_min_elems: usize::MAX, block_elems: 8 }),
+    ] {
         let store = ChunkStore::open(&tmp.join(format!("chunks-{label}"))).unwrap();
         let mut sink = ChunkSink::new(&store);
-        materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &policy, &opts, &mut sink, &quiet).unwrap_or_else(|e| panic!("materialise_stream[{label}]: {e}"));
+        materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &policy, &opts, &mut sink, &quiet)
+            .unwrap_or_else(|e| panic!("materialise_stream[{label}]: {e}"));
         let path = tmp.join(format!("new-{label}.palwtir"));
         write_container_v1_chunked(&path, &prep.lowered.program, Vec::new(), tok, meta.to_string(), &store, &sink.artifact).unwrap();
         assert!(std::fs::read(&path).unwrap() == old, "the streamed container ({label}) differs from the whole one");

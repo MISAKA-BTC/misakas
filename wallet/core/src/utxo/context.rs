@@ -142,7 +142,10 @@ struct Inner {
 impl Inner {
     pub fn new(processor: &UtxoProcessor, binding: UtxoContextBinding) -> Self {
         Self {
-            id: binding.id(), binding, context: Mutex::new(Context::default()), processor: processor.clone(),
+            id: binding.id(),
+            binding,
+            context: Mutex::new(Context::default()),
+            processor: processor.clone(),
             network_id: Mutex::new(processor.network_id().ok()),
         }
     }
@@ -150,7 +153,10 @@ impl Inner {
     pub fn new_with_mature_entries(processor: &UtxoProcessor, binding: UtxoContextBinding, mature: Vec<UtxoEntryReference>) -> Self {
         let context = Context::new_with_mature(mature);
         Self {
-            id: binding.id(), binding, context: Mutex::new(context), processor: processor.clone(),
+            id: binding.id(),
+            binding,
+            context: Mutex::new(context),
+            processor: processor.clone(),
             network_id: Mutex::new(processor.network_id().ok()),
         }
     }
@@ -221,8 +227,12 @@ impl UtxoContext {
             Some(_) => Ok(()),
             // Accounts can be constructed before selecting a network. Bind only
             // an empty context's first monetary import, never reinterpret money.
-            None if context.map.is_empty() && context.mature.is_empty() && context.pending.is_empty()
-                && context.stasis.is_empty() && context.outgoing.is_empty() => {
+            None if context.map.is_empty()
+                && context.mature.is_empty()
+                && context.pending.is_empty()
+                && context.stasis.is_empty()
+                && context.outgoing.is_empty() =>
+            {
                 *owned = Some(current);
                 Ok(())
             }
@@ -250,44 +260,49 @@ impl UtxoContext {
     /// keep the output and its money so a fresh confirmation or long maturity
     /// can promote it again. No mutex is held across an RPC or notification.
     pub(crate) fn refresh_mature_coinbases(&self) -> bool {
-        self.processor().with_current_utxo_generation(|| {
-            if !self.network_matches_processor() {
-                return Ok(false);
-            }
-            let params = self.processor().network_params().ok();
-            let daa = self.processor().current_daa_score();
-            let mut context = self.context();
-            let mut demoted = Vec::new();
-            context.mature.retain(|entry| {
-                if !entry.is_coinbase() {
-                    return true;
+        self.processor()
+            .with_current_utxo_generation(|| {
+                if !self.network_matches_processor() {
+                    return Ok(false);
                 }
-                let maturity = match (&params, daa) {
-                    (Some(params), Some(daa)) => entry.maturity(params, daa),
-                    _ => Maturity::Pending,
-                };
-                match maturity {
-                    Maturity::Confirmed => true,
-                    other => { demoted.push((entry.clone(), other)); false }
-                }
-            });
-            let changed = !demoted.is_empty();
-            for (entry, maturity) in demoted {
-                let pending = PendingUtxoEntryReference::new(entry.clone(), self.clone());
-                match maturity {
-                    Maturity::Stasis => {
-                        context.stasis.insert(entry.id(), entry.clone());
-                        self.processor().stasis().insert(entry.id(), pending);
+                let params = self.processor().network_params().ok();
+                let daa = self.processor().current_daa_score();
+                let mut context = self.context();
+                let mut demoted = Vec::new();
+                context.mature.retain(|entry| {
+                    if !entry.is_coinbase() {
+                        return true;
                     }
-                    Maturity::Pending => {
-                        context.pending.insert(entry.id(), entry.clone());
-                        self.processor().pending().insert(entry.id(), pending);
+                    let maturity = match (&params, daa) {
+                        (Some(params), Some(daa)) => entry.maturity(params, daa),
+                        _ => Maturity::Pending,
+                    };
+                    match maturity {
+                        Maturity::Confirmed => true,
+                        other => {
+                            demoted.push((entry.clone(), other));
+                            false
+                        }
                     }
-                    Maturity::Confirmed => unreachable!(),
+                });
+                let changed = !demoted.is_empty();
+                for (entry, maturity) in demoted {
+                    let pending = PendingUtxoEntryReference::new(entry.clone(), self.clone());
+                    match maturity {
+                        Maturity::Stasis => {
+                            context.stasis.insert(entry.id(), entry.clone());
+                            self.processor().stasis().insert(entry.id(), pending);
+                        }
+                        Maturity::Pending => {
+                            context.pending.insert(entry.id(), entry.clone());
+                            self.processor().pending().insert(entry.id(), pending);
+                        }
+                        Maturity::Confirmed => unreachable!(),
+                    }
                 }
-            }
-            Ok(changed)
-        }).unwrap_or(false)
+                Ok(changed)
+            })
+            .unwrap_or(false)
     }
 
     pub fn mature_utxo_size(&self) -> usize {
@@ -313,9 +328,21 @@ impl UtxoContext {
         let previous = self.context().balance.clone()?;
         self.refresh_mature_coinbases();
         let mut current = self.calculate_balance_now();
-        if (current.mature, current.pending, current.outgoing, current.mature_utxo_count, current.pending_utxo_count, current.stasis_utxo_count)
-            == (previous.mature, previous.pending, previous.outgoing, previous.mature_utxo_count, previous.pending_utxo_count, previous.stasis_utxo_count)
-        {
+        if (
+            current.mature,
+            current.pending,
+            current.outgoing,
+            current.mature_utxo_count,
+            current.pending_utxo_count,
+            current.stasis_utxo_count,
+        ) == (
+            previous.mature,
+            previous.pending,
+            previous.outgoing,
+            previous.mature_utxo_count,
+            previous.pending_utxo_count,
+            previous.stasis_utxo_count,
+        ) {
             return Some(previous);
         }
         current.delta(&Some(previous));
@@ -391,7 +418,8 @@ impl UtxoContext {
     }
 
     pub(crate) async fn notify_outgoing_transaction(&self, pending_tx: &PendingTransaction) -> Result<()> {
-        let outgoing_tx = self.processor().outgoing().get(&pending_tx.id()).expect("outgoing transaction for notification").value().clone();
+        let outgoing_tx =
+            self.processor().outgoing().get(&pending_tx.id()).expect("outgoing transaction for notification").value().clone();
 
         if pending_tx.is_batch() {
             let record = TransactionRecord::new_batch(self, &outgoing_tx, None)?;
@@ -454,7 +482,6 @@ impl UtxoContext {
                 // log_warn!("Warning: Ignoring duplicate UTXO entry");
                 Ok(())
             }
-
         })
     }
 
@@ -605,13 +632,19 @@ impl UtxoContext {
     }
 
     pub(crate) async fn extend_from_scan_for_generation(
-        &self, utxo_entries: Vec<UtxoEntryReference>, current_daa_score: u64, generation: u64,
+        &self,
+        utxo_entries: Vec<UtxoEntryReference>,
+        current_daa_score: u64,
+        generation: u64,
     ) -> Result<()> {
         self.extend_from_scan_inner(utxo_entries, current_daa_score, Some(generation)).await
     }
 
     async fn extend_from_scan_inner(
-        &self, utxo_entries: Vec<UtxoEntryReference>, current_daa_score: u64, generation: Option<u64>,
+        &self,
+        utxo_entries: Vec<UtxoEntryReference>,
+        current_daa_score: u64,
+        generation: Option<u64>,
     ) -> Result<()> {
         let classify = || -> Result<_> {
             let mut context = self.context();

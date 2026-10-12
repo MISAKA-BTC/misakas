@@ -111,7 +111,10 @@ enum Tok {
     Op(&'static str),
 }
 
-const OPS: &[&str] = &["<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "+", "-", "*", "/", "%", "&", "|", "^", "~", "!", "<", ">", "?", ":", "(", ")", "[", "]", ","];
+const OPS: &[&str] = &[
+    "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "+", "-", "*", "/", "%", "&", "|", "^", "~", "!", "<", ">", "?", ":", "(", ")",
+    "[", "]", ",",
+];
 
 fn lex(src: &str) -> R<Vec<Tok>> {
     let b = src.as_bytes();
@@ -465,9 +468,15 @@ pub fn streaming_syntax(src: &str) -> R<()> {
     }
     let mut depth = 0usize;
     for b in src.bytes() {
-        if b == b'(' || b == b'[' { depth += 1; }
-        if depth > 32 { return err("FRONTEND_DESCRIPTOR_LIMIT: expression nesting"); }
-        if b == b')' || b == b']' { depth = depth.saturating_sub(1); }
+        if b == b'(' || b == b'[' {
+            depth += 1;
+        }
+        if depth > 32 {
+            return err("FRONTEND_DESCRIPTOR_LIMIT: expression nesting");
+        }
+        if b == b')' || b == b']' {
+            depth = depth.saturating_sub(1);
+        }
     }
     Ok(())
 }
@@ -479,15 +488,28 @@ pub(super) fn streaming_nodes(root: &Node, metadata: Option<(usize, usize)>) -> 
     let mut work = 0usize;
     while let Some((n, depth)) = stack.pop() {
         work += 1;
-        if work > 256 || depth > 32 { return err("FRONTEND_DESCRIPTOR_LIMIT: expression nodes/depth"); }
+        if work > 256 || depth > 32 {
+            return err("FRONTEND_DESCRIPTOR_LIMIT: expression nodes/depth");
+        }
         let mut push = |n| stack.push((n, depth + 1));
         match n {
-            Node::Var(s) if metadata.is_some_and(|(lanes, _)| *s < lanes) => return err("FRONTEND_DESCRIPTOR: lane-dependent shape/check"),
-            Node::Read(s, _) if metadata.is_some_and(|(_, roles)| *s < roles) => return err("FRONTEND_DESCRIPTOR: data-dependent shape/check"),
+            Node::Var(s) if metadata.is_some_and(|(lanes, _)| *s < lanes) => {
+                return err("FRONTEND_DESCRIPTOR: lane-dependent shape/check");
+            }
+            Node::Read(s, _) if metadata.is_some_and(|(_, roles)| *s < roles) => {
+                return err("FRONTEND_DESCRIPTOR: data-dependent shape/check");
+            }
             Node::Read(_, ns) | Node::Call(_, ns) => ns.iter().for_each(&mut push),
             Node::Table(_, n) | Node::Un(_, n) => push(n),
-            Node::Bin(_, a, b) => { push(a); push(b); }
-            Node::Cond(c, a, b) => { push(c); push(a); push(b); }
+            Node::Bin(_, a, b) => {
+                push(a);
+                push(b);
+            }
+            Node::Cond(c, a, b) => {
+                push(c);
+                push(a);
+                push(b);
+            }
             _ => {}
         }
     }
@@ -585,7 +607,12 @@ pub fn eval(n: &Node, env: &dyn Env, mask: Mask<'_>) -> R<Col> {
             let tab = env.table(*t);
             let ix = eval(i, env, mask)?;
             match ix {
-                Col::CI(k) => Col::CI(*usize::try_from(k).ok().and_then(|k| tab.values.get(k)).ok_or_else(|| DslError(format!("table `{}` has no entry {k}", tab.name)))?),
+                Col::CI(k) => Col::CI(
+                    *usize::try_from(k)
+                        .ok()
+                        .and_then(|k| tab.values.get(k))
+                        .ok_or_else(|| DslError(format!("table `{}` has no entry {k}", tab.name)))?,
+                ),
                 Col::I(v) => {
                     let mut out = Vec::with_capacity(lanes);
                     for (k, i) in v.iter().enumerate() {
@@ -736,7 +763,11 @@ fn bin(op: Bin, a: &Col, b: &Col, n: usize, mask: Mask<'_>) -> R<Col> {
     }
     let mut out = Vec::with_capacity(n);
     for k in 0..n {
-        out.push(if mask.on(k) { bin_float(op, a.float_at(k), b.float_at(k))?.map_err(|_| DslError("internal: a comparison".into()))? } else { 0.0 });
+        out.push(if mask.on(k) {
+            bin_float(op, a.float_at(k), b.float_at(k))?.map_err(|_| DslError("internal: a comparison".into()))?
+        } else {
+            0.0
+        });
     }
     Ok(Col::F(out))
 }

@@ -77,7 +77,8 @@ fn hex(bytes: &[u8]) -> String {
 #[ignore]
 fn write_g14_real_checkpoint_fixtures() {
     let root = PathBuf::from(std::env::var("G14_CKPT_ROOT").expect("G14_CKPT_ROOT names the hf-ckpt directory"));
-    let mut out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus/src/pipeline/virtual_processor/tests/fixtures/g14");
+    let mut out =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus/src/pipeline/virtual_processor/tests/fixtures/g14");
     if shipped() {
         out = out.join("shipped");
     }

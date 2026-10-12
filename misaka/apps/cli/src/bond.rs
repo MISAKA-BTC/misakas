@@ -1066,7 +1066,8 @@ mod bond_lookup_class_tests {
             assert!(!source.contains("get_palw_producer_facts(String::new()"), "{file} reads a bond under an empty class");
             assert!(source.contains("bond_lookup_class("), "{file} names the base class");
             // The V09 review, LOW: an unanswered read is told apart from an unknown bond, first.
-            let answered = source.find("bond_facts_answered(facts.available").unwrap_or_else(|| panic!("{file} asks bond_facts_answered"));
+            let answered =
+                source.find("bond_facts_answered(facts.available").unwrap_or_else(|| panic!("{file} asks bond_facts_answered"));
             let unknown = source.find("if !facts.bond_known").unwrap_or_else(|| panic!("{file} checks bond_known"));
             assert!(answered < unknown, "{file} asks whether the node answered before concluding no bond");
         }

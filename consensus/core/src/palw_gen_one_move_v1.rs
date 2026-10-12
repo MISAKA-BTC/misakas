@@ -93,7 +93,8 @@ pub fn palw_gen_one_move_session_id_v1(network_domain: &[u8], a: &PalwGenOneMove
 /// accusation's version (2), the claim and the two roots (3 × 64), the two bond keys (2 × 68: a 64-byte txid and
 /// an index), the verdict (1) and the signature (a 4-byte length and an ML-DSA-87 signature). What is left of
 /// one carrier ([`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`]) is the proof's.
-pub const PALW_GEN_ONE_MOVE_FRAMING_BYTES_V1: u64 = 1 + 2 + 3 * 64 + 2 * 68 + 1 + 4 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+pub const PALW_GEN_ONE_MOVE_FRAMING_BYTES_V1: u64 =
+    1 + 2 + 3 * 64 + 2 * 68 + 1 + 4 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
 
 /// **PALW-GEN-21's bound: the most bytes of a proof a one-move accusation can carry** — one carrier less the
 /// accusation's framing. A pipeline class on a held-regime chain whose terminal close exceeds it cannot be
@@ -114,7 +115,9 @@ pub fn palw_gen_one_move_bytes_v1(a: &PalwGenOneMoveAccusationV1) -> u64 {
 pub fn palw_gen_one_move_proof_is_admissible_v1(proof: &PalwCourtVerdictProofV2) -> bool {
     matches!(
         proof,
-        PalwCourtVerdictProofV2::GenCone { .. } | PalwCourtVerdictProofV2::GenOutputTile { .. } | PalwCourtVerdictProofV2::GenDecodeToken { .. }
+        PalwCourtVerdictProofV2::GenCone { .. }
+            | PalwCourtVerdictProofV2::GenOutputTile { .. }
+            | PalwCourtVerdictProofV2::GenDecodeToken { .. }
     )
 }
 
@@ -125,7 +128,9 @@ pub fn palw_gen_proof_roots_v1(proof: &PalwCourtVerdictProofV2) -> Option<(Hash6
         PalwCourtVerdictProofV2::GenCone { close } => Some((close.binding.committed_execution_root(), close.binding.step_root())),
         PalwCourtVerdictProofV2::GenOutputTile { close } => Some((close.binding.committed_execution_root, close.binding.step_root())),
         PalwCourtVerdictProofV2::GenDecodeToken { close } => Some((close.binding.committed_execution_root, close.binding.step_root())),
-        PalwCourtVerdictProofV2::GenDissection { bottom } => Some((bottom.binding.committed_execution_root(), bottom.binding.step_root())),
+        PalwCourtVerdictProofV2::GenDissection { bottom } => {
+            Some((bottom.binding.committed_execution_root(), bottom.binding.step_root()))
+        }
         _ => None,
     }
 }
@@ -198,12 +203,13 @@ pub fn palw_gen_one_move_dissected_leaf_v1(
         .gen_class_v1(&claim.class_id)
         .ok_or_else(|| PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not a generative class", claim.class_id)))?;
     // The site needs the job's trips, never its ids' values: zeros of their lengths stand in.
-    let verified = match verify_gen_binding_any_v1(&close.binding, row, &claim.class_id, &claim.execution_root, PalwGenJobIdsV1::default())
-        .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?
-    {
-        PalwGenBindingOutcomeV1::Verified(v) => v,
-        PalwGenBindingOutcomeV1::Convicted(_) => return Ok(None),
-    };
+    let verified =
+        match verify_gen_binding_any_v1(&close.binding, row, &claim.class_id, &claim.execution_root, PalwGenJobIdsV1::default())
+            .map_err(|e| PalwCourtV2Error::DoesNotAdjudicate(e.to_string()))?
+        {
+            PalwGenBindingOutcomeV1::Verified(v) => v,
+            PalwGenBindingOutcomeV1::Convicted(_) => return Ok(None),
+        };
     let coord = close.disputed.coord;
     let index = verified
         .space

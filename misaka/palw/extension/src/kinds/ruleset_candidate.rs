@@ -246,7 +246,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_activation_pool" => {
             genesis_only(name, at)?;
             let terms = params.palw_activation_pool.map(|pool| pool.terms).unwrap_or_default();
-            params.palw_activation_pool = Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
+            params.palw_activation_pool =
+                Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
         }
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis-only
         // (a crossing would count one row by two horizons), so a height is refused here by name. At
@@ -580,11 +581,7 @@ mod tests {
     fn inactivity_leak_cannot_be_set_even_when_companion_values_are_present() {
         use kaspa_consensus_core::config::params::PalwInactivityLeakV1;
         let mut params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
-        let reserved = PalwInactivityLeakV1 {
-            activation: ForkActivation::never(),
-            t_leak_daa: 100,
-            reentry_final_depth_daa: 10,
-        };
+        let reserved = PalwInactivityLeakV1 { activation: ForkActivation::never(), t_leak_daa: 100, reentry_final_depth_daa: 10 };
         params.palw_inactivity_leak = Some(reserved);
         for at in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
             assert!(set_fence_by_name(&mut params, "palw_inactivity_leak", at).is_err());

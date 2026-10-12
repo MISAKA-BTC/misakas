@@ -635,14 +635,23 @@ impl EthProvider for NodeEthProvider {
                 let resp = match tag.as_str() {
                     "earliest" => c.get_evm_block_by_number(0),
                     "safe" => match heads {
-                        Some(hd) => match hd.safe_head() { Some(h) => c.get_evm_block_by_l1_hash(h), None => Ok(None) },
+                        Some(hd) => match hd.safe_head() {
+                            Some(h) => c.get_evm_block_by_l1_hash(h),
+                            None => Ok(None),
+                        },
                         None => Ok(None),
                     },
                     "finalized" => match heads {
-                        Some(hd) => match hd.finalized_head() { Some(h) => c.get_evm_block_by_l1_hash(h), None => Ok(None) },
+                        Some(hd) => match hd.finalized_head() {
+                            Some(h) => c.get_evm_block_by_l1_hash(h),
+                            None => Ok(None),
+                        },
                         None => Ok(None),
                     },
-                    _ => match heads.and_then(|h| h.latest_head()) { Some(h) => c.get_evm_block_by_l1_hash(h), None => Ok(None) }, // latest / pending
+                    _ => match heads.and_then(|h| h.latest_head()) {
+                        Some(h) => c.get_evm_block_by_l1_hash(h),
+                        None => Ok(None),
+                    }, // latest / pending
                 };
                 let parent = parent_l1_hash32(c, &resp);
                 Ok((resp, parent))
@@ -843,7 +852,13 @@ impl NodeEthProvider {
                 // (`B.header.daa_score`). `Err` if the sink header is briefly
                 // unavailable ⇒ treat as 0 (fence-inert ⇒ F003 off, fail-safe).
                 let head_daa = c.get_header(sink).map(|h| h.daa_score).unwrap_or(0);
-                Ok((c.get_evm_state_snapshot_of(sink), c.get_evm_header_of(sink), head_daa, c.evm_activation_fences(), c.palw_evm_view_v1()))
+                Ok((
+                    c.get_evm_state_snapshot_of(sink),
+                    c.get_evm_header_of(sink),
+                    head_daa,
+                    c.evm_activation_fences(),
+                    c.palw_evm_view_v1(),
+                ))
             })
             .await?;
         let snap = snap.map_err(|e| EthRpcError::server(format!("consensus: {e:?}")))?;
@@ -859,8 +874,11 @@ impl NodeEthProvider {
         let f003_active = head_daa >= f003_mldsa_verify_fence;
         // A latest tag requires a persisted execution header and its state. Missing history is
         // unavailable, never a successful simulation against an invented empty chain.
-        if header.is_none() { return Err(EthRpcError::server("latest executed EVM header unavailable")); }
-        let snap = snap.ok_or_else(|| EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"))?;
+        if header.is_none() {
+            return Err(EthRpcError::server("latest executed EVM header unavailable"));
+        }
+        let snap = snap
+            .ok_or_else(|| EthRpcError::server("EVM state snapshot unavailable for head; refusing to simulate against empty state"))?;
         let env = kaspa_evm::sim::EthCallEnv {
             chain_id: EVM_CHAIN_ID,
             number: header.as_ref().map(|h| h.evm_number).unwrap_or(0),
@@ -1022,9 +1040,16 @@ fn convert_struct_log(l: &kaspa_evm::trace::StructLog) -> EthStructLog {
 /// `evm_number − 1` block's L1 hash (audit H-04). Zero for EVM block 0 or when
 /// the parent cannot be read (a non-fatal best-effort field).
 /// Errors in canonical evidence are surfaced; an absent safe/finalized tag stays absent.
-fn resolve_executed_tag(c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized), tag: &str) -> EthResult<Option<kaspa_consensus_core::BlockHash>> {
+fn resolve_executed_tag(
+    c: &(impl kaspa_consensus_core::api::ConsensusApi + ?Sized),
+    tag: &str,
+) -> EthResult<Option<kaspa_consensus_core::BlockHash>> {
     let heads = c.get_evm_canonical_heads().map_err(|e| EthRpcError::server(format!("canonical EVM heads: {e}")))?;
-    Ok(heads.and_then(|h| match tag { "safe" => h.safe_head(), "finalized" => h.finalized_head(), _ => h.latest_head() }))
+    Ok(heads.and_then(|h| match tag {
+        "safe" => h.safe_head(),
+        "finalized" => h.finalized_head(),
+        _ => h.latest_head(),
+    }))
 }
 
 fn parent_l1_hash32(

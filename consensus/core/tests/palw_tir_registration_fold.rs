@@ -60,7 +60,12 @@ fn registration(chain: &Chain, registrant: PalwBondKeyV2, daa: u64) -> PalwConse
 }
 
 /// [`registration`] of a given class.
-fn registration_of(chain: &Chain, registrant: PalwBondKeyV2, daa: u64, (class, root): (PalwTirClassV1, Hash64)) -> PalwConsensusObjectV2 {
+fn registration_of(
+    chain: &Chain,
+    registrant: PalwBondKeyV2,
+    daa: u64,
+    (class, root): (PalwTirClassV1, Hash64),
+) -> PalwConsensusObjectV2 {
     let facts = PalwTirJobFactsV1::of_class(&class, class.class_id(&root)).expect("decodes");
     let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&class).expect("wide enough"));
     let (floor, _, target, slash) = genesis_classes(&chain.p)[0];

@@ -574,7 +574,10 @@ impl PalwPanelV2Error {
     /// them back therefore knows the receipt is sound, and keeps it. Every other refusal names a
     /// receipt that poisons any set it is in — or a claim no set can license.
     pub fn is_receipt_set_shortfall(&self) -> bool {
-        matches!(self, Self::NoQuorum { .. } | Self::CoverageShort { .. } | Self::OutsiderHasNotAnswered { .. } | Self::TirShardPartShort(_))
+        matches!(
+            self,
+            Self::NoQuorum { .. } | Self::CoverageShort { .. } | Self::OutsiderHasNotAnswered { .. } | Self::TirShardPartShort(_)
+        )
     }
 }
 
@@ -1324,7 +1327,15 @@ fn palw_panel_bonds_judging_v1<'a>(
         // Silence stays unjudged — a bond that declared and never produced is simply not drawn,
         // never charged for the omission and never convicted of it (ADR-0065 D4).
         let judge_root = if judged_class == &claim.class_id { claim_root.as_ref() } else { None };
-        if !crate::palw_state_v2::palw_bond_may_judge_class_v5(state, bond_key, bond, judged_class, judge_root, capability_proof, readiness) {
+        if !crate::palw_state_v2::palw_bond_may_judge_class_v5(
+            state,
+            bond_key,
+            bond,
+            judged_class,
+            judge_root,
+            capability_proof,
+            readiness,
+        ) {
             continue;
         }
         eligible.push((bond_key, bond));
@@ -1508,7 +1519,8 @@ pub fn derive_panel_v2_with_policy_judged_v1(
             Some(outsider) => base.into_iter().filter(|(_, bond)| bond.operator_id != outsider.operator_id).collect(),
             None => base,
         };
-        let base: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = base.into_iter().filter(|(key, _)| !excluded_bonds.contains(key)).collect();
+        let base: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> =
+            base.into_iter().filter(|(key, _)| !excluded_bonds.contains(key)).collect();
         // SW-10's executor term (M4 review finding 1): the executor operator's capped weight where
         // it could sit on this class but for being the executor, on both sides of the floor.
         let executor = palw_panel_stake_executor_bonds_judging_v1(
@@ -1523,7 +1535,17 @@ pub fn derive_panel_v2_with_policy_judged_v1(
             params.seat_count,
         )?;
         let executor_weight = palw_panel_stake_weight_v1(&executor, &stake);
-        palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, &eligible, &base, executor_weight, &stake, outsider_floor, Some(state))?
+        palw_panel_stake_race_with_v1(
+            needed,
+            claim_id,
+            anchor_block,
+            &eligible,
+            &base,
+            executor_weight,
+            &stake,
+            outsider_floor,
+            Some(state),
+        )?
     } else if policy.economy.is_some() {
         palw_panel_operator_lottery_of_v1(needed, claim_id, anchor_block, &eligible)?
     } else {
@@ -2124,7 +2146,8 @@ pub fn palw_panel_stake_entries_availability_v1(
     let mut entries = palw_panel_stake_entries_v1(claim_id, anchor_block, eligible, stake);
     if let (Some(now), Some(state)) = (stake.availability_at, state) {
         for entry in entries.iter_mut() {
-            let factor = crate::palw_seat_availability_v1::palw_seat_availability_factor_v1(state.seat_availability_of_v1(&entry.bond), now);
+            let factor =
+                crate::palw_seat_availability_v1::palw_seat_availability_factor_v1(state.seat_availability_of_v1(&entry.bond), now);
             entry.weight_msk = crate::palw_seat_availability_v1::palw_seat_availability_scale_weight_v1(entry.weight_msk, factor);
         }
         entries.sort_by(|a, b| a.key_cmp(b));
@@ -2487,7 +2510,8 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
                 let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
                 let not_registrant =
                     |b: &PalwStakeCensusBondV1| Some(*b.key) != registrant && Some(b.bond.operator_id) != registrant_operator;
-                let (outsiders, outsider_base, outsider_executor) = lists(&self.judges[&(independence.base_class_id, None)], &not_registrant);
+                let (outsiders, outsider_base, outsider_executor) =
+                    lists(&self.judges[&(independence.base_class_id, None)], &not_registrant);
                 let needed = self.seat_count.saturating_sub(1) as usize;
                 let (eligible_weight, base_weight) = (sum(&eligible), sum(&base));
                 // No outsider (`NoOutsider`), or the outsider's own floor — whoever sits — refuses;
@@ -2830,31 +2854,31 @@ pub fn validate_panel_bound_v2_with_tir_shard_v1(
             s_l,
         )?,
         None => match stratified {
-        // **The stratified (shard) draw is not stake-weighted yet.** It is dormant on every network
-        // (`palw_shard_court` / `palw_kary_court` are `None` everywhere, so `stratified` is always
-        // `None` here), so C-02's weighting rides the flat draw below. When the shard court is armed,
-        // `derive_shard_panel_v1`'s ticketing needs the same bucketing — a follow-up gated behind the
-        // shard fence, not this one. `weighted` is deliberately not forwarded here.
-        Some(shard_count) => derive_stratified_panel_v2(
-            state,
-            params,
-            claim_id,
-            seed,
-            state_params.min_collateral_sompi(),
-            registered_by_daa,
-            capability_proof,
-            shard_count,
-        )?,
-        None => derive_panel_v2_with_policy(
-            state,
-            params,
-            claim_id,
-            seed,
-            state_params.min_collateral_sompi(),
-            registered_by_daa,
-            capability_proof,
-            policy,
-        )?,
+            // **The stratified (shard) draw is not stake-weighted yet.** It is dormant on every network
+            // (`palw_shard_court` / `palw_kary_court` are `None` everywhere, so `stratified` is always
+            // `None` here), so C-02's weighting rides the flat draw below. When the shard court is armed,
+            // `derive_shard_panel_v1`'s ticketing needs the same bucketing — a follow-up gated behind the
+            // shard fence, not this one. `weighted` is deliberately not forwarded here.
+            Some(shard_count) => derive_stratified_panel_v2(
+                state,
+                params,
+                claim_id,
+                seed,
+                state_params.min_collateral_sompi(),
+                registered_by_daa,
+                capability_proof,
+                shard_count,
+            )?,
+            None => derive_panel_v2_with_policy(
+                state,
+                params,
+                claim_id,
+                seed,
+                state_params.min_collateral_sompi(),
+                registered_by_daa,
+                capability_proof,
+                policy,
+            )?,
         },
     };
     if derived != proposed_seats {
@@ -4096,7 +4120,11 @@ where
     let slice = shard_rules::palw_tir_panel_shard_slice_v1(&panel.seats, record.s_l, record.outsider, part.shard)
         .ok_or(PalwPanelV2Error::NotLicensedByParts(*claim_id))?;
     if part.receipts.is_empty() || part.receipts.len() > shard_rules::PALW_TIR_SHARD_PART_MAX_RECEIPTS_V1 {
-        return Err(refused(format!("{} receipts in a part of at most {}", part.receipts.len(), shard_rules::PALW_TIR_SHARD_PART_MAX_RECEIPTS_V1)));
+        return Err(refused(format!(
+            "{} receipts in a part of at most {}",
+            part.receipts.len(),
+            shard_rules::PALW_TIR_SHARD_PART_MAX_RECEIPTS_V1
+        )));
     }
     let receipt_deadline = bound_daa
         .checked_add(state_params.receipt_window_for_claim_v1(
@@ -4123,7 +4151,14 @@ where
             return Err(PalwPanelV2Error::DuplicateSeat(receipt.seat_bond));
         }
         let bond = state.bond(&receipt.seat_bond).ok_or(PalwPanelV2Error::SeatBondMissing(receipt.seat_bond))?;
-        let message = shard_rules::palw_receipt_message_v4(network_domain, *claim_id, receipt.verdict, receipt.signed_daa, signed.shard, signed.segments);
+        let message = shard_rules::palw_receipt_message_v4(
+            network_domain,
+            *claim_id,
+            receipt.verdict,
+            receipt.signed_daa,
+            signed.shard,
+            signed.segments,
+        );
         if !verify_mldsa87(&bond.pubkey, message.as_byte_slice(), &receipt.signature, shard_rules::PALW_RECEIPT_V4_MLDSA87_CONTEXT) {
             return Err(PalwPanelV2Error::ReceiptSignatureInvalid);
         }
@@ -4159,12 +4194,22 @@ where
             }
             // `palw_unavailable_abstains` is R-core+'s prerequisite: it accuses nobody and needs no obligation proof.
             PalwReceiptVerdictV2::Unavailable { .. } => {}
-            PalwReceiptVerdictV2::Sampled => return Err(refused("a Sampled receipt counts nowhere and has no place in a part".to_string())),
+            PalwReceiptVerdictV2::Sampled => {
+                return Err(refused("a Sampled receipt counts nowhere and has no place in a part".to_string()));
+            }
         }
         answered.push(receipt.seat_bond);
         counted.push((receipt.seat_bond, receipt.verdict, signed.segments));
     }
-    match shard_rules::palw_tir_shard_part_verdict_v1(slice, &panel.anchor, claim_id, part.shard, record.s_p, record.outsider, &counted) {
+    match shard_rules::palw_tir_shard_part_verdict_v1(
+        slice,
+        &panel.anchor,
+        claim_id,
+        part.shard,
+        record.s_p,
+        record.outsider,
+        &counted,
+    ) {
         short @ shard_rules::PalwTirShardPartVerdictV1::Short(_) => match short {
             shard_rules::PalwTirShardPartVerdictV1::Short(why) => Err(PalwPanelV2Error::TirShardPartShort(why)),
             _ => unreachable!(),
@@ -4970,8 +5015,7 @@ mod tests {
     fn route_matrix_3_a_bond_that_cannot_post_the_valid_lock_is_not_drawn() {
         use crate::palw_state_v2::{PalwClaimPhaseV2, PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras};
         let sp = state_params();
-        let extras =
-            PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..Default::default() };
+        let extras = PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..Default::default() };
         let registry = |cheap: u64| {
             vec![
                 adr0130_bond(1, 7, 0x21, 1_000_000), // executor — excluded from its own panel
@@ -5009,7 +5053,11 @@ mod tests {
                 &state,
                 &sp,
                 &ctx(3, 103, 3),
-                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: BlockHash::from_u64_word(0x77), seats: seats.to_vec() }],
+                &[PalwConsensusObjectV2::PanelBound {
+                    claim: claim_id,
+                    anchor: BlockHash::from_u64_word(0x77),
+                    seats: seats.to_vec(),
+                }],
                 None,
                 false,
                 false,
@@ -5023,8 +5071,9 @@ mod tests {
         let mut blind_drew_the_cheap_bond = false;
         for i in 0..24u64 {
             let anchor = BlockHash::from_u64_word(0x3A00 + i);
-            let blind = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, 100, None, false, PalwPanelDrawPolicyV1::default())
-                .unwrap();
+            let blind =
+                derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, 100, None, false, PalwPanelDrawPolicyV1::default())
+                    .unwrap();
             if blind.iter().any(|seat| seat.bond == cheap) {
                 blind_drew_the_cheap_bond = true;
                 assert!(!bind(&blind), "anchor {i}: the bind refuses the seat that cannot post its lock");
@@ -6038,12 +6087,9 @@ mod tests {
         let env = attempt(pwu, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (state, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
-        let p = PalwPanelParamsV2::new(
-            crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS,
-            crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM,
-            4,
-        )
-        .unwrap();
+        let p =
+            PalwPanelParamsV2::new(crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS, crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM, 4)
+                .unwrap();
         let sp = state_params();
         let anchor_block = BlockHash::from_u64_word(0xA0C0);
         let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).expect("five eligible operators seat five");
@@ -6212,7 +6258,8 @@ mod tests {
         let a = palw_segment_assignment_v2(panel.anchor, claim_id, seats.len() as u16);
 
         // A full mask on a partial seat is not that seat's assignment.
-        let stolen_full = sign(&seats[(a.full_seat as usize + 1) % seats.len()], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k));
+        let stolen_full =
+            sign(&seats[(a.full_seat as usize + 1) % seats.len()], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k));
         assert!(matches!(check(vec![stolen_full]), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
 
         // The assigned masks of every seat (full + four disjoint partials) license: quorum of 5 ≥ 3
@@ -6231,7 +6278,11 @@ mod tests {
         assert!(matches!(check(few), Err(PalwPanelV2Error::CoverageShort { have: 1, need: 2, .. })), "{a:?}");
         // A partial that attests a neighbour's segment is refused.
         let neighbour = (a.full_seat as usize + 1) % seats.len();
-        let wrong = sign(&seats[neighbour], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::single((a.mask_of(neighbour as u16).0.trailing_zeros() as u16 + 1) % k));
+        let wrong = sign(
+            &seats[neighbour],
+            PalwReceiptVerdictV2::Valid,
+            PalwSegmentMaskV2::single((a.mask_of(neighbour as u16).0.trailing_zeros() as u16 + 1) % k),
+        );
         assert!(matches!(check(vec![wrong]), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
 
         // A widened mask is refused with the signature: the mask is signed.
@@ -7776,7 +7827,8 @@ mod tests {
             let (eligible, _) = populations(&state, &claim_id);
             let armed = PalwPanelStakeDrawV1 { availability_at: Some(now), ..PalwPanelStakeDrawV1::V1 };
             let entries = palw_panel_stake_entries_availability_v1(&claim_id, at, &eligible, &armed, Some(&state));
-            let weight = |bond: PalwBondKeyV2, list: &[PalwPanelStakeEntryV1]| list.iter().find(|e| e.bond == bond).unwrap().weight_msk;
+            let weight =
+                |bond: PalwBondKeyV2, list: &[PalwPanelStakeEntryV1]| list.iter().find(|e| e.bond == bond).unwrap().weight_msk;
             assert_eq!(weight(boosted, &entries), palw_seat_availability_scale_weight_v1(weight(boosted, &plain), 1_200));
             assert_eq!(weight(normal, &entries), weight(normal, &plain), "1.0x");
             let nobody = plain.iter().map(|e| e.bond).find(|b| *b != boosted && *b != normal).unwrap();

@@ -8,21 +8,22 @@ pub mod annex;
 pub mod artifact;
 pub mod backend;
 mod capture_codec;
-mod copies;
 pub mod cell;
 pub mod conformance;
-pub mod shardrows;
-pub mod drill;
+mod copies;
 pub mod cost;
+pub mod drill;
 pub mod evidence;
 pub mod inventory;
 pub mod mapped;
 pub mod memory;
 pub mod residency;
 pub mod run;
-pub mod tree;
+pub mod shardrows;
 mod sparse_tree;
+pub mod tree;
 
+pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
 pub use annex::{
     PALW_TIR_LEAF_ANNEX_MAGIC_V1, PALW_TIR_LEAF_ANNEX_VERSION_V1, PalwTirAnnexTraceV1, PalwTirLeafAnnexV1, TirDivergenceV1,
     palw_tir_leaf_annex_verify_v1, tir_annex_trace_v1, tir_first_divergence_from_opening_v1,
@@ -30,22 +31,19 @@ pub use annex::{
 pub use artifact::TirArtifactV1;
 pub use backend::{
     TIR_CAPTURE_MAGIC_V1, TIR_FREE_PROMPT_CLOSED_V1, TirBackendV1, TirCaptureV1, set_tir_drill_boundary_lie_v1,
-    set_tir_fused_kernels_default_v1, set_tir_metal_v1, tir_dissect_choice_v1, tir_fused_kernels_default_v1,
-    tir_trace_event_disclosure_of_capture_v1, tir_authenticate_capture_metadata_v1, tir_court_builder_limits_v1,
+    set_tir_fused_kernels_default_v1, set_tir_metal_v1, tir_authenticate_capture_metadata_v1, tir_court_builder_limits_v1,
+    tir_dissect_choice_v1, tir_fused_kernels_default_v1, tir_trace_event_disclosure_of_capture_v1,
 };
 pub use cell::{
-    CpuKernelBackendV1, DeviceKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1, TirCellRequestV1,
-    TirCellV1, TirCellVerdictV1, TirRunInputsV1, cell_runs_v1, cell_runs_capped_v1, register_device_v1, tir_kernel_backend_registered_v1, tir_kernel_backend_v1,
-    tir_shard_cells_over_v1, tir_shard_cells_v1, tir_shard_geometry_over_v1, tir_shard_geometry_v1, tir_verify_capture_cells_over_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_v1, tokens_of_capture_v1, tir_public_court_cells_v1,
-    verify_cell_stepping_v1, verify_cell_v1,
+    CpuKernelBackendV1, DeviceKernelBackendV1, KernelBackendV1, KernelRefusedV1, TirCaptureInputsV1, TirCellInputsV1,
+    TirCellRequestV1, TirCellV1, TirCellVerdictV1, TirRunInputsV1, cell_runs_capped_v1, cell_runs_v1, register_device_v1,
+    tir_kernel_backend_registered_v1, tir_kernel_backend_v1, tir_public_court_cells_v1, tir_shard_cells_over_v1, tir_shard_cells_v1,
+    tir_shard_geometry_over_v1, tir_shard_geometry_v1, tir_shard_weight_bytes_v1, tir_verify_capture_cells_over_v1,
+    tir_verify_capture_cells_v1, tokens_of_capture_v1, verify_cell_stepping_v1, verify_cell_v1,
 };
 pub use conformance::{
     LazyContainerParams, TIR_CONFORMANCE_POSITIONS_V1, TirConformanceV1, tir_conformance_prompt_v1,
     tir_executor_conformance_against_v1, tir_executor_conformance_of_file_v1, tir_executor_conformance_v1,
-};
-pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
-pub use shardrows::{
-    TirFileMirrorV1, TirHeldRowsV1, TirRowFetcherV1, TirRowPursuitV1, TirShardHoldingV1, fetch_shard_params_v1, serve_rows_v1,
 };
 pub use drill::{
     TirCloseSizeV1, TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_drill_covering_leaves_v1,
@@ -63,9 +61,15 @@ pub use residency::{
     tir_stream_leaves_v1, tir_weight_store_for_root_v1,
 };
 pub use run::{TirBoundaryLieV1, TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
+pub use shardrows::{
+    TirFileMirrorV1, TirHeldRowsV1, TirRowFetcherV1, TirRowPursuitV1, TirShardHoldingV1, fetch_shard_params_v1, serve_rows_v1,
+};
 pub use tree::TirStepTreeV1;
 
-pub use sparse_tree::{TirProofTreeV1, TirSparseStepTreeV1};
 pub use cost::tir_replay_position_cost_v1;
+pub use sparse_tree::{TirProofTreeV1, TirSparseStepTreeV1};
 
-pub use memory::{TirMemoryLeaseV1, TirMemoryReserverV1, TirRetainedJobLeaseV1, set_tir_memory_reserver_v1, tir_full_tree_storage_need_v1, tir_retained_storage_need_v1, tir_executor_storage_need_v1, tir_fold_hash_storage_need_v1};
+pub use memory::{
+    TirMemoryLeaseV1, TirMemoryReserverV1, TirRetainedJobLeaseV1, set_tir_memory_reserver_v1, tir_executor_storage_need_v1,
+    tir_fold_hash_storage_need_v1, tir_full_tree_storage_need_v1, tir_retained_storage_need_v1,
+};

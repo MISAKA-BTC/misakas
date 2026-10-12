@@ -933,10 +933,7 @@ fn judge_declared(
             if head && !heads_armed_here {
                 notes.push(format!(
                     "{HEAD_PROFILE_HYPOTHETICAL_V1}: admitted ({} head, [{}, {}] at {} positions)",
-                    enc.head_name,
-                    enc.rows,
-                    enc.width,
-                    enc.positions
+                    enc.head_name, enc.rows, enc.width, enc.positions
                 ));
             }
             shown_class = Some(class);

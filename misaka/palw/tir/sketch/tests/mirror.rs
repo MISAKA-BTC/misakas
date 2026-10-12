@@ -36,7 +36,8 @@ fn rig() -> Rig {
 
 impl Rig {
     fn honest(&self) -> TirWitnessV1 {
-        tir_witness_produce_v1(&self.plan, &self.analysis, &self.fx.params, &job(), &policy(), &mut |_, _| {}).expect("the producer runs")
+        tir_witness_produce_v1(&self.plan, &self.analysis, &self.fx.params, &job(), &policy(), &mut |_, _| {})
+            .expect("the producer runs")
     }
 
     fn mirror(&self, w: &TirWitnessV1) -> TirMirrorOutcomeV1 {
@@ -112,7 +113,11 @@ fn an_image_splits_into_exactly_the_pinned_number_of_chunks() {
         assert_eq!(parts.concat(), image, "and they are the image");
     }
     assert!(codec::split_into(&image, 0).is_empty());
-    assert_eq!(codec::split_into(&[] as &[u8], 3), vec![&[] as &[u8], &[] as &[u8], &[] as &[u8]], "an empty image is `count` empty chunks");
+    assert_eq!(
+        codec::split_into(&[] as &[u8], 3),
+        vec![&[] as &[u8], &[] as &[u8], &[] as &[u8]],
+        "an empty image is `count` empty chunks"
+    );
 }
 
 #[test]
@@ -138,8 +143,16 @@ fn the_mirror_agrees_on_an_honest_own_witness_and_refuses_a_lie() {
     assert!(lied, "the lie was placed");
     let refused = r.mirror(&liar);
     assert!(!refused.accepted && refused.failure.is_some(), "the checker refuses the lie: {refused:?}");
-    assert_eq!(tir_mirror_agreement_v1(true, false, refused.accepted), TirMirrorAgreementV1::Agree, "a served lie the replay does not reproduce");
-    assert_eq!(tir_mirror_agreement_v1(true, true, refused.accepted), TirMirrorAgreementV1::WitnessRefused, "an honest claim with a bad witness");
+    assert_eq!(
+        tir_mirror_agreement_v1(true, false, refused.accepted),
+        TirMirrorAgreementV1::Agree,
+        "a served lie the replay does not reproduce"
+    );
+    assert_eq!(
+        tir_mirror_agreement_v1(true, true, refused.accepted),
+        TirMirrorAgreementV1::WitnessRefused,
+        "an honest claim with a bad witness"
+    );
 }
 
 #[test]

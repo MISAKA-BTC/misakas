@@ -13,14 +13,14 @@ use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::config::ConfigBuilder;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_mesh_v1::{
-    PALW_MESH_TRAP_COMMITTED_MLDSA87_CONTEXT_V1, PALW_MESH_TRAP_REVEALED_MLDSA87_CONTEXT_V1, PALW_TRAP_SLOT_DAA_V1, PalwTrapCommittedV1,
-    PalwTrapRevealedV1, palw_trap_slot_drawn_v1,
+    PALW_MESH_TRAP_COMMITTED_MLDSA87_CONTEXT_V1, PALW_MESH_TRAP_REVEALED_MLDSA87_CONTEXT_V1, PALW_TRAP_SLOT_DAA_V1,
+    PalwTrapCommittedV1, PalwTrapRevealedV1, palw_trap_slot_drawn_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2;
 use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2 as Obj, palw_object_is_mesh_v1};
-use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexLeafV1};
 use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
+use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexLeafV1};
 use kaspa_hashes::Hash64;
 
 #[tokio::test]
@@ -62,16 +62,14 @@ async fn t12_a_trap_is_signed_by_its_setter_drawn_by_the_lottery_and_dropped_bel
         };
         let claim = Hash64::from_bytes([0xC1; 64]);
         let salt = [9u8; 32];
-        let commit = |signer: usize, bond| {
-            Obj::TrapCommittedV1 {
-                trap: Box::new(
-                    PalwTrapCommittedV1::sign_v1(domain, bond, &claim, 0, 4, &salt, |m, c| {
-                        assert_eq!(c, PALW_MESH_TRAP_COMMITTED_MLDSA87_CONTEXT_V1);
-                        sign_as(signer, m, c)
-                    })
-                    .unwrap(),
-                ),
-            }
+        let commit = |signer: usize, bond| Obj::TrapCommittedV1 {
+            trap: Box::new(
+                PalwTrapCommittedV1::sign_v1(domain, bond, &claim, 0, 4, &salt, |m, c| {
+                    assert_eq!(c, PALW_MESH_TRAP_COMMITTED_MLDSA87_CONTEXT_V1);
+                    sign_as(signer, m, c)
+                })
+                .unwrap(),
+            ),
         };
         let gate = |object: &Obj, daa: u64| vp.palw_v2_validate_objects(&state, &bundle.state, &at(daa), std::slice::from_ref(object));
         let good = commit(card, setter);
@@ -85,8 +83,10 @@ async fn t12_a_trap_is_signed_by_its_setter_drawn_by_the_lottery_and_dropped_bel
             );
             // An audit leaf of a vertex is refused by name below the mesh fence, though the vertex fence is armed.
             let leaf = PalwVertexLeafV1::Audited { claim: PalwClaimRefV1::Full(claim), leaf: 1, result: 0 };
-            let vertex = PalwVerificationVertexV1::sign_v1(domain, chain.bonds[card], 0, vec![leaf], |m, c| sign_as(card, m, c)).unwrap();
-            let refused = gate(&Obj::VerificationVertexV1 { vertex: Box::new(vertex) }, 5).expect_err("an audit leaf below the mesh fence");
+            let vertex =
+                PalwVerificationVertexV1::sign_v1(domain, chain.bonds[card], 0, vec![leaf], |m, c| sign_as(card, m, c)).unwrap();
+            let refused =
+                gate(&Obj::VerificationVertexV1 { vertex: Box::new(vertex) }, 5).expect_err("an audit leaf below the mesh fence");
             assert!(refused.contains("audit mesh") && refused.contains("not armed"), "{refused}");
             continue;
         }
@@ -100,10 +100,17 @@ async fn t12_a_trap_is_signed_by_its_setter_drawn_by_the_lottery_and_dropped_bel
         };
         refused(good.clone(), undrawn, "not drawn to set a trap");
         refused(commit(card + 1, setter), drawn, "does not verify"); // another key's signature
-        refused(commit(card, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
-            kaspa_consensus_core::tx::TransactionId::from_bytes([0xEE; 64]),
-            9,
-        ))), drawn, "not registered");
+        refused(
+            commit(
+                card,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_bytes([0xEE; 64]),
+                    9,
+                )),
+            ),
+            drawn,
+            "not registered",
+        );
         let mut no_signature = commit(card, setter);
         if let Obj::TrapCommittedV1 { trap } = &mut no_signature {
             trap.signature.clear();

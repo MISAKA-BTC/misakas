@@ -82,7 +82,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     if let (Some(sp), Some(lp)) = (&a.sequences, &a.logits_out) {
         let meta: serde_json::Value = serde_json::from_str(&c.header.meta).unwrap_or(serde_json::Value::Null);
         let scale = meta["logits_scale"].as_f64().ok_or("the artifact's provenance carries no logits_scale")?;
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(sp).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(sp).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let seqs = v["sequences"].as_array().ok_or("sequences: no `sequences`")?;
         let mut bytes: Vec<u8> = Vec::new();
         let (mut n, t1) = (0usize, Instant::now());
@@ -98,17 +99,24 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             }
         }
         std::fs::write(lp, &bytes).map_err(|e| e.to_string())?;
-        eprintln!("[{:>6.1}s] {n} positions teacher-forced ({:.2}/s) -> {}", t0.elapsed().as_secs_f64(), n as f64 / t1.elapsed().as_secs_f64(), lp.display());
+        eprintln!(
+            "[{:>6.1}s] {n} positions teacher-forced ({:.2}/s) -> {}",
+            t0.elapsed().as_secs_f64(),
+            n as f64 / t1.elapsed().as_secs_f64(),
+            lp.display()
+        );
         return Ok(serde_json::json!({ "positions": n, "logits_scale": scale }));
     }
     let prompts = a.prompts.as_ref().ok_or("--prompts (or --sequences with --logits-out)")?;
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(prompts).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(prompts).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let recs = v["records"].as_array().ok_or("prompts: no `records`")?;
     let (mut prefill_n, mut prefill_s, mut decode_n, mut decode_s) = (0usize, 0f64, 0usize, 0f64);
     let mut out = Vec::new();
     let (mut same, mut total) = (0usize, 0usize);
     for r in recs {
-        let ids: Vec<u32> = r["input_ids"].as_array().ok_or("a record without input_ids")?.iter().map(|t| t.as_u64().unwrap_or(0) as u32).collect();
+        let ids: Vec<u32> =
+            r["input_ids"].as_array().ok_or("a record without input_ids")?.iter().map(|t| t.as_u64().unwrap_or(0) as u32).collect();
         let mut exec = TirExecutor::new(&plan, &xp).map_err(|e| e.to_string())?;
         let tp = Instant::now();
         for t in &ids {
@@ -132,7 +140,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         let mut line = format!("{} prompt ids -> {out_ids:?}", ids.len());
         let mut rec = serde_json::json!({ "input_ids": ids, "generated": out_ids });
         if a.compare {
-            let want: Vec<u32> = r["generated"].as_array().map(|g| g.iter().map(|t| t.as_u64().unwrap_or(0) as u32).collect()).unwrap_or_default();
+            let want: Vec<u32> =
+                r["generated"].as_array().map(|g| g.iter().map(|t| t.as_u64().unwrap_or(0) as u32).collect()).unwrap_or_default();
             let prefix = out_ids.iter().zip(&want).take_while(|(x, y)| x == y).count();
             same += prefix;
             total += want.len();

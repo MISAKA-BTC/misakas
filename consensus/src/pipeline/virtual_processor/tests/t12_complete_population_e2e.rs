@@ -219,22 +219,36 @@ async fn complete_retained_populations(extra_workers: u64, expect_fifth_refusal:
         for _ in 0..10 {
             let state = state_of(&a);
             let r = state.panel_v3().unwrap().claim(&id).unwrap();
-            if r.snapshot.is_some() || r.phase.terminal() { break; }
-            drop(state); a.heartbeat(ttpb(&a), Vec::new()).await;
+            if r.snapshot.is_some() || r.phase.terminal() {
+                break;
+            }
+            drop(state);
+            a.heartbeat(ttpb(&a), Vec::new()).await;
         }
-        let state = state_of(&a); let r = state.panel_v3().unwrap().claim(&id).unwrap();
-        if card < 4 { assert_eq!(r.snapshot.as_ref().unwrap().candidates.len() as u64, 7 + extra_workers); }
-        else { assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. })); assert!(r.snapshot.is_none() && r.seal.is_none()); }
+        let state = state_of(&a);
+        let r = state.panel_v3().unwrap().claim(&id).unwrap();
+        if card < 4 {
+            assert_eq!(r.snapshot.as_ref().unwrap().candidates.len() as u64, 7 + extra_workers);
+        } else {
+            assert!(matches!(r.phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PopulationResourceLimit, .. }));
+            assert!(r.snapshot.is_none() && r.seal.is_none());
+        }
     }
-    let state = state_of(&a); let engine = state.panel_v3().unwrap();
+    let state = state_of(&a);
+    let engine = state.panel_v3().unwrap();
     let retained: usize = engine.claim_rows().values().filter_map(|r| r.snapshot.as_ref()).map(|p| p.candidates.len()).sum();
     assert_eq!(retained as u64, 4 * (7 + extra_workers));
     let observed = a.vp().palw_panel_v3_observation_v1_impl(ids, 0).unwrap();
     assert_eq!(observed.overview.retained_candidates, retained as u64);
     let carriage = PalwStateCarriageV2::from_state(&state);
     let bytes = borsh::object_length(&carriage).unwrap();
-    eprintln!("[rfc06-resource] native_bonds={} retained_populations=4 retained_candidates={retained} encoded_engine_bytes={} full_carriage_bytes={bytes} legacy_384mib_fits={} elapsed_ms={}",
-        8 + extra_workers, borsh::object_length(engine).unwrap(), bytes <= 384 << 20, begun.elapsed().as_millis());
+    eprintln!(
+        "[rfc06-resource] native_bonds={} retained_populations=4 retained_candidates={retained} encoded_engine_bytes={} full_carriage_bytes={bytes} legacy_384mib_fits={} elapsed_ms={}",
+        8 + extra_workers,
+        borsh::object_length(engine).unwrap(),
+        bytes <= 384 << 20,
+        begun.elapsed().as_millis()
+    );
     assert_eq!(carriage.into_state(&cards.state, Some(state.state_root())).unwrap(), state);
 }
 

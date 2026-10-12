@@ -122,7 +122,8 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     };
     let tokenizer_path = match &sidecar_path {
         Some(path) => path.clone(),
-        None => std::env::var("MISAKA_PALW_TOKENIZER").unwrap_or_else(|_| die("MISAKA_PALW_TOKENIZER is not set (or pass --sidecar <file>)".into())),
+        None => std::env::var("MISAKA_PALW_TOKENIZER")
+            .unwrap_or_else(|_| die("MISAKA_PALW_TOKENIZER is not set (or pass --sidecar <file>)".into())),
     };
 
     // **The ladder is the RULESET's, not this module's constant** (ADR-0082 Decision 8, W1b).
@@ -239,13 +240,19 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     // leaves it disabled.
     let args: Vec<String> = std::env::args().collect();
     let flag_u64 = |name: &str| -> Option<u64> {
-        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(|v| v.parse().unwrap_or_else(|e| die(format!("{name}: {e}"))))
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .map(|v| v.parse().unwrap_or_else(|e| die(format!("{name}: {e}"))))
     };
     let backend = match flag_u64("--kv-cache-budget-mib").filter(|mib| *mib > 0) {
         Some(mib) => {
             let backend = backend.with_prefix_cache_v1(mib.saturating_mul(1 << 20), flag_u64("--kv-cache-verify-every").unwrap_or(0));
             let on = backend.prefix_cache_stats_v1().is_some_and(|s| !s.disabled);
-            eprintln!("[palw-a16-fp-worker] kv prefix cache: {mib} MiB, boot self-check {}", if on { "passed" } else { "FAILED — cache disabled" });
+            eprintln!(
+                "[palw-a16-fp-worker] kv prefix cache: {mib} MiB, boot self-check {}",
+                if on { "passed" } else { "FAILED — cache disabled" }
+            );
             backend
         }
         None => backend,
@@ -299,7 +306,13 @@ fn main() {
         let table = rt.token_table_v1();
         let bytes = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table);
         std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("cannot write {path}: {e}")));
-        println!("token table: {} ids, {} end-of-generation, {} bytes, root {}", table.vocab(), table.eog_token_ids.len(), bytes.len(), table.root());
+        println!(
+            "token table: {} ids, {} end-of-generation, {} bytes, root {}",
+            table.vocab(),
+            table.eog_token_ids.len(),
+            bytes.len(),
+            table.root()
+        );
         return;
     }
     match flag("--mode").as_deref() {

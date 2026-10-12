@@ -19,7 +19,6 @@
 //! `exit`) so systemd / shell / monitors can branch on them.
 
 mod ask;
-mod ollama;
 mod bond;
 mod bootstrap;
 mod config;
@@ -33,6 +32,7 @@ mod keys;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
 mod model_preflight;
 mod node;
+mod ollama;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
 mod pack_gate;
@@ -3250,24 +3250,71 @@ async fn run_cli() -> std::process::ExitCode {
                     operator::model_onboard::envelope_sign(&ctx, &request, &key.source(), expect_bond.as_deref(), &out)
                 }
                 OnboardCmd::Status { class } => operator::model_onboard::status(&ctx, &class).await,
-                OnboardCmd::BootstrapPrepare { stage, registration, artifact, max_positions, bond, key, out,
-                    maximum_binding_reservation_sompi, maximum_check_fee_sompi, ledger_root, aux_root, tip_daa, commitment_borsh } => {
-                    operator::model_bootstrap::prepare(&ctx, operator::model_bootstrap::PrepareArgs {
-                        stage, registration, artifact, max_positions, bond, key: key.source(), out,
-                        maximum_binding_reservation_sompi, maximum_check_fee_sompi, ledger_root, aux_root, tip_daa, commitment: commitment_borsh,
-                    }).await
+                OnboardCmd::BootstrapPrepare {
+                    stage,
+                    registration,
+                    artifact,
+                    max_positions,
+                    bond,
+                    key,
+                    out,
+                    maximum_binding_reservation_sompi,
+                    maximum_check_fee_sompi,
+                    ledger_root,
+                    aux_root,
+                    tip_daa,
+                    commitment_borsh,
+                } => {
+                    operator::model_bootstrap::prepare(
+                        &ctx,
+                        operator::model_bootstrap::PrepareArgs {
+                            stage,
+                            registration,
+                            artifact,
+                            max_positions,
+                            bond,
+                            key: key.source(),
+                            out,
+                            maximum_binding_reservation_sompi,
+                            maximum_check_fee_sompi,
+                            ledger_root,
+                            aux_root,
+                            tip_daa,
+                            commitment: commitment_borsh,
+                        },
+                    )
+                    .await
                 }
                 OnboardCmd::CompletePost { class, artifact, bond, key, out, ledger_root, aux_root, tip_daa } => {
-                    operator::model_complete::post(&ctx, &class, &artifact, &bond, &key.source(), &out, &ledger_root, &aux_root, tip_daa).await
+                    operator::model_complete::post(
+                        &ctx,
+                        &class,
+                        &artifact,
+                        &bond,
+                        &key.source(),
+                        &out,
+                        &ledger_root,
+                        &aux_root,
+                        tip_daa,
+                    )
+                    .await
                 }
                 OnboardCmd::Verify { class, artifact, ledger_root, aux_root, tip_daa } => {
-                    operator::model_onboard::verify(&ctx, &class, artifact.as_deref(), ledger_root.as_deref(), aux_root.as_deref(), tip_daa).await
-                },
+                    operator::model_onboard::verify(
+                        &ctx,
+                        &class,
+                        artifact.as_deref(),
+                        ledger_root.as_deref(),
+                        aux_root.as_deref(),
+                        tip_daa,
+                    )
+                    .await
+                }
             }
         }),
-        Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => Box::pin(async move {
-            operator::model_source::inspect(&ctx, &context, &ledger_root, &aux_root).await
-        }),
+        Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => {
+            Box::pin(async move { operator::model_source::inspect(&ctx, &context, &ledger_root, &aux_root).await })
+        }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {
                 Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
@@ -3386,14 +3433,11 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => Box::pin(async move {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }),
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate, maximum_total_fee_sompi }) => {
-            Box::pin(
-                async move {
-                    palw_fp::submit_objects_v2_capped(&ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
-                        .await.map(|_| ())
-                },
-            )
-        }
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes, allow_duplicate, maximum_total_fee_sompi }) => Box::pin(async move {
+            palw_fp::submit_objects_v2_capped(&ctx, &key.source(), &object, yes, allow_duplicate, maximum_total_fee_sompi)
+                .await
+                .map(|_| ())
+        }),
         Command::Palw(PalwCmd::TirRegistration {
             key,
             artifact,
@@ -3448,9 +3492,11 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => {
             Box::pin(async move { palw_extension::inspect(&ctx, &manifest, json) })
         }
-        Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => Box::pin(async move {
-            palw_extension::verify(&ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json)
-        }),
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
+            Box::pin(
+                async move { palw_extension::verify(&ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json) },
+            )
+        }
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
             Box::pin(async move { palw_extension::preflight(&ctx, &manifest, json).await })
         }
@@ -3470,9 +3516,7 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_shard_licensing::shard_plan(&ctx, &key.source(), &class, count, &bond, &out).await })
         }
         Command::Palw(PalwCmd::BondShards { key, bond, class, count, shards, out }) => {
-            Box::pin(
-                async move { palw_shard_licensing::bond_shards(&ctx, &key.source(), &bond, &class, count, &shards, &out).await },
-            )
+            Box::pin(async move { palw_shard_licensing::bond_shards(&ctx, &key.source(), &bond, &class, count, &shards, &out).await })
         }
         Command::Palw(PalwCmd::ShardAccuse { key, accusation, bond, ladder, out }) => Box::pin(async move {
             {
@@ -3563,9 +3607,7 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::ModelPool { class }) => Box::pin(async move { palw_activation_pool::pool(&ctx, &class).await }),
         #[cfg(feature = "evm-send")]
         Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
-            Box::pin(
-                async move { evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait) },
-            )
+            Box::pin(async move { evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait) })
         }
         Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, slippage, yes }) => Box::pin(async move {
             {
@@ -3636,9 +3678,7 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_line::version_move(&ctx, &key.source(), &line, version, false, yes).await })
         }
         Command::Palw(PalwCmd::LineBenefits { key, line, tiers, cadence_daa, expires_daa, yes }) => {
-            Box::pin(
-                async move { palw_line::line_benefits(&ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await },
-            )
+            Box::pin(async move { palw_line::line_benefits(&ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await })
         }
         Command::Palw(PalwCmd::ServiceDescribe { key, line, grants, roots, endpoints, valid_from_daa, expires_daa }) => {
             Box::pin(async move {
@@ -3697,9 +3737,9 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, recent, key })) => {
             Box::pin(async move { wallet::utxo_list(&ctx, address.as_deref(), &key.source(), recent).await })
         }
-        Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => Box::pin(
-            async move { wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await },
-        ),
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
+            Box::pin(async move { wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await })
+        }
         Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => Box::pin(async move {
             match parse_msk_to_sompi(&amount) {
                 Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,

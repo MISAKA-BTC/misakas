@@ -513,7 +513,17 @@ impl P<'_> {
         top_orig: Option<usize>,
         q_scaled: bool,
     ) -> Result<(RopeSpec, Option<QTemperature>)> {
-        crate::rope::rope_spec_from_config(&self.cfg, rotary_dim, style, theta_default, layer_type, partial, max_pos, top_orig, q_scaled)
+        crate::rope::rope_spec_from_config(
+            &self.cfg,
+            rotary_dim,
+            style,
+            theta_default,
+            layer_type,
+            partial,
+            max_pos,
+            top_orig,
+            q_scaled,
+        )
     }
 
     pub fn finish_spec(&mut self, s: SpecParts) -> ArchSpec {
@@ -600,7 +610,18 @@ pub(crate) fn llama_names(model: &str, lm_head: &str) -> BTreeMap<String, String
 }
 
 pub(crate) fn plain_embedding(dim: usize) -> EmbeddingSpec {
-    EmbeddingSpec { dim, scale: 1.0, positions: None, norm: None, proj_in: false, proj_after_norm: false, proj_in_bias: false, type_rows: None, rel_bias: None, disentangled: None }
+    EmbeddingSpec {
+        dim,
+        scale: 1.0,
+        positions: None,
+        norm: None,
+        proj_in: false,
+        proj_after_norm: false,
+        proj_in_bias: false,
+        type_rows: None,
+        rel_bias: None,
+        disentangled: None,
+    }
 }
 
 pub(crate) fn plain_head(tied: bool) -> HeadSpec {
@@ -612,11 +633,31 @@ pub(crate) fn pre_norm(n: NormSpec) -> Residual {
 }
 
 pub(crate) fn gated_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: true, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None, sparsity: None }
+    MlpSpec {
+        intermediate,
+        act,
+        gated: true,
+        glu: Glu::Standard,
+        up_bias: bias,
+        down_bias: bias,
+        inner_norm: None,
+        name: None,
+        sparsity: None,
+    }
 }
 
 pub(crate) fn plain_mlp(intermediate: usize, act: Act, bias: bool) -> MlpSpec {
-    MlpSpec { intermediate, act, gated: false, glu: Glu::Standard, up_bias: bias, down_bias: bias, inner_norm: None, name: None, sparsity: None }
+    MlpSpec {
+        intermediate,
+        act,
+        gated: false,
+        glu: Glu::Standard,
+        up_bias: bias,
+        down_bias: bias,
+        inner_norm: None,
+        name: None,
+        sparsity: None,
+    }
 }
 
 /// Heads / kv heads / head_dim with the usual defaults and divisibility checks.
@@ -686,4 +727,3 @@ pub(crate) fn attn(h: usize, kv: usize, hd: usize, position: Position, bias: (bo
 pub(crate) fn window_for(t: &str, sw: Option<usize>) -> Option<usize> {
     if t == "sliding_attention" { sw } else { None }
 }
-

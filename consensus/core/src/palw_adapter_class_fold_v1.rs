@@ -27,7 +27,8 @@ pub(super) fn apply_adapter_class_listed_v1(
     if !matches!(builder.state.bond(lister).map(|b| &b.status), Some(PalwBondStatusV2::Active)) {
         return Err(refused("the lister is not an Active bond"));
     }
-    let class_root = builder.state.class(&payload.class_id).ok_or_else(|| refused("the listed class is not registered"))?.artifact_root;
+    let class_root =
+        builder.state.class(&payload.class_id).ok_or_else(|| refused("the listed class is not registered"))?.artifact_root;
     if builder.state.tir_class_v1(&payload.class_id).is_none() {
         return Err(refused("the listed class is not an IR class"));
     }
@@ -124,7 +125,12 @@ mod tests {
         s
     }
 
-    fn run(s: &PalwChainStateV2, p: &PalwStateParamsV2, payload: &PalwAdapterClassListingV1, lister: PalwBondKeyV2) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    fn run(
+        s: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        payload: &PalwAdapterClassListingV1,
+        lister: PalwBondKeyV2,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(s, p, false, false, false, false, &extras);
         let ctx = PalwBlockContextV2 { block: h(1), daa_score: 200, blue_score: 200, subsidy: 0 };
@@ -144,7 +150,10 @@ mod tests {
         assert!(run(&s, &p, &payload(), bond(9)).unwrap_err().to_string().contains("Active bond"), "a lister with no bond");
         let mut other_adapter = payload();
         other_adapter.artifact.adapter_root = h(0x99);
-        assert!(run(&s, &p, &other_adapter, bond(LISTER)).unwrap_err().to_string().contains("registered artifact"), "not the class's artifact");
+        assert!(
+            run(&s, &p, &other_adapter, bond(LISTER)).unwrap_err().to_string().contains("registered artifact"),
+            "not the class's artifact"
+        );
         let mut other_parent = payload();
         other_parent.artifact.parent_class = h(0x77);
         assert!(run(&s, &p, &other_parent, bond(LISTER)).is_err(), "a parent that is not registered");

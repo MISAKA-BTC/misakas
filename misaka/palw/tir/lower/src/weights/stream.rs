@@ -85,7 +85,14 @@ pub fn eval_src_rows(
     rows_of(src, r, layer, vars, rows, cols)
 }
 
-fn rows_of(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>, rows: Range<usize>, cols: usize) -> Result<Tensor> {
+fn rows_of(
+    src: &Src,
+    r: &Resolver,
+    layer: Option<usize>,
+    vars: &BTreeMap<char, usize>,
+    rows: Range<usize>,
+    cols: usize,
+) -> Result<Tensor> {
     if rows.is_empty() {
         return Ok(Tensor::new(vec![0, cols], Vec::new()));
     }
@@ -170,7 +177,9 @@ fn rows_of(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, 
             data.resize(rows.len() * cols, 0.0);
             Ok(Tensor::new(vec![rows.len(), cols], data))
         }
-        Src::Transpose(_) | Src::Quant { .. } | Src::Combine { .. } => Err(LowerError::eval("a transpose or a quantised weight is not evaluated by row ranges")),
+        Src::Transpose(_) | Src::Quant { .. } | Src::Combine { .. } => {
+            Err(LowerError::eval("a transpose or a quantised weight is not evaluated by row ranges"))
+        }
     }
 }
 

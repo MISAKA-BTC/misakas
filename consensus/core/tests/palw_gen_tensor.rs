@@ -23,20 +23,20 @@ use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
 use kaspa_consensus_core::palw_gen_step_v1::{PalwGenLeafCoordV1, PalwGenLeafKindV1, PalwGenLeafV1, palw_gen_step_leaf_hash_v1};
-use kaspa_consensus_core::palw_tir_step_v1::{palw_tir_lane_values_v1, palw_tir_lanes_le_v1, palw_tir_lanes_wire_v1};
-use misaka_palw_tir::demand::DemandLimits;
-use misaka_palw_tir::types::DType;
 use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenExecutionV1, palw_gen_execute_tensor_v1};
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
 use kaspa_consensus_core::palw_step_leg::PalwStepFaultV1;
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
+use kaspa_consensus_core::palw_tir_step_v1::{palw_tir_lane_values_v1, palw_tir_lanes_le_v1, palw_tir_lanes_wire_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use misaka_palw_gen::OutputSpecV1;
+use misaka_palw_tir::demand::DemandLimits;
 use misaka_palw_tir::interp::{MapParams, ParamSource};
 use misaka_palw_tir::pipeline::{Binding, JobImageV1, PipelineParams, TirPipelineV1, TokenSource, TripRule};
 use misaka_palw_tir::program_v2::TirProgramV2;
 use misaka_palw_tir::tensor::Tensor;
+use misaka_palw_tir::types::DType;
 
 const FORM: PalwPromptIdsFormV1 = PalwPromptIdsFormV1::Flat;
 const LIMITS: DemandLimits = DemandLimits { max_elements: 1 << 20, max_terms: 1 << 24 };
@@ -875,7 +875,10 @@ fn an_executor_that_commits_a_lane_outside_its_dtype_is_convicted_at_the_output_
             );
             // In a session the same close is the narrowed leaf's.
             let global = lied.space.global_index(&close.step_tile.coord).unwrap();
-            assert_eq!(check(&f, &close, &accused, Some(global)), Ok(Some(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 1 })));
+            assert_eq!(
+                check(&f, &close, &accused, Some(global)),
+                Ok(Some(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 1 }))
+            );
             convicted += 1;
         }
         // The honest claim is what it was: the same root, acquitted at every tile.
@@ -905,7 +908,8 @@ fn a_cone_close_at_a_leaf_holding_a_lane_outside_its_dtype_convicts_on_the_lane_
     let global = lied.space.global_index(&coord).unwrap();
     let close = ev.cone_close(global, &LIMITS).expect("a lane outside the interval is a close, not a refusal to build one");
     assert!(close.operands.is_empty() && close.params.is_empty() && close.image_tiles.is_empty(), "the leaf alone");
-    let verdict = check_gen_cone_close_v1(&close, &f.row, &f.row.class_id, &accused.committed_execution_root, Some(global), FORM, &LIMITS);
+    let verdict =
+        check_gen_cone_close_v1(&close, &f.row, &f.row.class_id, &accused.committed_execution_root, Some(global), FORM, &LIMITS);
     assert_eq!(verdict, Ok(Some(PalwStepFaultV1::TirValueOutsideProvenInterval { value_index: 0 })));
 
     // An honest leaf still gets the full cone close and is acquitted (unchanged).

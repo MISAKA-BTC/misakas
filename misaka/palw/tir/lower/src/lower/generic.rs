@@ -191,7 +191,15 @@ pub(super) fn narrow_to(
 
 /// `out[d] = (1/S) Σ_s x[s·D + d]`: the sum of the streams' codes (exact in `i32`), narrowed once
 /// with the `1/S` in its ratio.
-pub(super) fn stream_mean(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, streams: usize, site: &str, want: &Want) -> Result<Val> {
+pub(super) fn stream_mean(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    streams: usize,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
     unsplit(x, site)?;
     if x.dt != DType::I16 {
         return Err(LowerError::eval("internal: a stream mean reads i16 codes"));
@@ -263,7 +271,14 @@ pub(super) fn group_dot(
 /// `(kernel − 1)·dilation` rows, the window is state ++ row, tap `t` reads row `t·dilation` of it
 /// (a `Gather` by a constant index vector), the last tap the new row. `taps` is `[kernel, ch]`
 /// (oldest first); the result is the `i64` accumulator `[ch]`.
-pub(super) fn causal_conv_dilated(b: &mut BlockBuilder<'_>, state: u16, row: tir::Ref, taps: tir::Ref, kernel: usize, dilation: usize) -> tir::Ref {
+pub(super) fn causal_conv_dilated(
+    b: &mut BlockBuilder<'_>,
+    state: u16,
+    row: tir::Ref,
+    taps: tir::Ref,
+    kernel: usize,
+    dilation: usize,
+) -> tir::Ref {
     let ch = match b.shape(row).as_slice() {
         [Dim::Fixed(c)] => *c,
         s => panic!("a conv row is a vector, got {s:?}"),
@@ -401,7 +416,9 @@ pub(super) fn ngram_ids(
     let mult_max = i64::MAX / vocab.max(1);
     let size_hi = max_head_size(ple, layers);
     if size_hi >= i64::from(u32::MAX) {
-        return Err(LowerError::not_lowerable(format!("EMBED_NGRAM_PLE_V1: a head table of {size_hi} rows is past what an `idx` indexes")));
+        return Err(LowerError::not_lowerable(format!(
+            "EMBED_NGRAM_PLE_V1: a head table of {size_hi} rows is past what an `idx` indexes"
+        )));
     }
     let sd = &hl.states[st as usize];
     let ts = match cx.tstate.get(&st) {
@@ -498,7 +515,9 @@ pub(super) fn gather_rows(
     let hl = cx.hl;
     let blk = &hl.blocks[lb.hb];
     // The ids must be a hash head's own table index: the producing node says how the table splits.
-    let hl::Ref::Node(j, 0) = node.inputs[0] else { return Err(LowerError::not_lowerable("GatherRows over ids no n-gram hash produced")) };
+    let hl::Ref::Node(j, 0) = node.inputs[0] else {
+        return Err(LowerError::not_lowerable("GatherRows over ids no n-gram hash produced"));
+    };
     let Op::NgramIds { ple, layers } = &blk.nodes[j as usize].op else {
         return Err(LowerError::not_lowerable("GatherRows over ids no n-gram hash produced"));
     };
@@ -545,7 +564,18 @@ pub(super) fn gather_rows(
                 let n = v.len() / dim.max(1);
                 Ok(IntTensor::i16(if c.block_range().is_some() { vec![n, dim] } else { vec![rows, dim] }, v))
             });
-            let p = decl_rows_with(b, cx, lb, &format!("{}.h{h}.c{k}", pd.name), DType::I16, &[rows, dim], pl, RowKind::Mapped(MapRef(map)), table, fill)?;
+            let p = decl_rows_with(
+                b,
+                cx,
+                lb,
+                &format!("{}.h{h}.c{k}", pd.name),
+                DType::I16,
+                &[rows, dim],
+                pl,
+                RowKind::Mapped(MapRef(map)),
+                table,
+                fill,
+            )?;
             let li = b.clamp(local, 0, rows as i64 - 1, DType::Idx);
             rows_k.push(b.gather(p, li, 0, 0)); // [1, dim]
         }
@@ -713,7 +743,15 @@ pub(super) fn keys_after(
 }
 
 /// `BlockWrite`: store the matrix [`keys_after`] made.
-pub(super) fn block_write(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, node: &hl::Node, cand: &Val, ratio: usize, blocks: usize) -> Result<()> {
+pub(super) fn block_write(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    node: &hl::Node,
+    cand: &Val,
+    ratio: usize,
+    blocks: usize,
+) -> Result<()> {
     let hl::Ref::State(st) = node.inputs[1] else { return Err(LowerError::eval("internal: BlockWrite without a state")) };
     let cand = codes(b, cx, lb, cand)?;
     let (ts, new) = keys_after(b, cx, lb, st, &cand, ratio, blocks)?;
@@ -867,9 +905,13 @@ mod tests {
     /// on random tokens, and the program passes the range analysis (no `i64` can overflow, on any params).
     #[test]
     fn the_in_program_hash_equals_the_reference_at_published_scale() {
-        for (vocab, base, n, hpn, layer) in
-            [(248_320usize, 20_000_000usize, 3usize, 8usize, 0usize), (248_320, 20_000_000, 3, 8, 37), (248_320, 20_000_000, 2, 8, 5), (151_936, 1_000_003, 4, 3, 2), (64, 61, 3, 2, 1)]
-        {
+        for (vocab, base, n, hpn, layer) in [
+            (248_320usize, 20_000_000usize, 3usize, 8usize, 0usize),
+            (248_320, 20_000_000, 3, 8, 37),
+            (248_320, 20_000_000, 2, 8, 5),
+            (151_936, 1_000_003, 4, 3, 2),
+            (64, 61, 3, 2, 1),
+        ] {
             let t = NgramTables::new(&spec(layer, n, hpn, vocab, base));
             let heads = (n - 1) * hpn;
             let mult_max = i64::MAX / vocab as i64;
@@ -893,7 +935,8 @@ mod tests {
                 b.finish(&[])
             };
             let program = pb.finish(pre, vec![], post, 0);
-            tir::interval::analyze_ranges(&program).unwrap_or_else(|e| panic!("vocab {vocab} base {base}: the range analysis refuses the hash: {e}"));
+            tir::interval::analyze_ranges(&program)
+                .unwrap_or_else(|e| panic!("vocab {vocab} base {base}: the range analysis refuses the hash: {e}"));
             let interp = Interpreter::new(&program).expect("valid");
             let mut rng = Lcg(0x5EED ^ vocab as u64 ^ layer as u64);
             for case in 0..400 {
@@ -905,11 +948,22 @@ mod tests {
                     })
                     .collect();
                 let mut params = MapParams::default();
-                params.tensors.insert((0, None), Tensor::new(DType::I64, vec![n], tokens.iter().map(|x| *x as i128).collect()).expect("tv"));
-                params.tensors.insert((1, None), Tensor::new(DType::I64, vec![n], t.multipliers.iter().map(|x| *x as i128).collect()).expect("mult"));
-                params.tensors.insert((2, None), Tensor::new(DType::I64, vec![heads], t.head_sizes.iter().map(|x| *x as i128).collect()).expect("size"));
-                let got = interp.eval_cone(pre, None, root, &params, &ConeEnv { token: Some(0), pos: 0, ..Default::default() }).expect("the cone");
-                let want: Vec<i128> = t.ids(tokens[0], &tokens[1..]).iter().zip(&t.head_offsets).map(|(id, off)| (id - off) as i128).collect();
+                params
+                    .tensors
+                    .insert((0, None), Tensor::new(DType::I64, vec![n], tokens.iter().map(|x| *x as i128).collect()).expect("tv"));
+                params.tensors.insert(
+                    (1, None),
+                    Tensor::new(DType::I64, vec![n], t.multipliers.iter().map(|x| *x as i128).collect()).expect("mult"),
+                );
+                params.tensors.insert(
+                    (2, None),
+                    Tensor::new(DType::I64, vec![heads], t.head_sizes.iter().map(|x| *x as i128).collect()).expect("size"),
+                );
+                let got = interp
+                    .eval_cone(pre, None, root, &params, &ConeEnv { token: Some(0), pos: 0, ..Default::default() })
+                    .expect("the cone");
+                let want: Vec<i128> =
+                    t.ids(tokens[0], &tokens[1..]).iter().zip(&t.head_offsets).map(|(id, off)| (id - off) as i128).collect();
                 assert_eq!(got.data, want, "vocab {vocab} n {n} layer {layer} tokens {tokens:?}");
             }
         }

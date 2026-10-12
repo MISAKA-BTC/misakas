@@ -44,10 +44,15 @@ fn run(name: &str) -> Run {
     let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32.min(max_len), 7);
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).expect("calibrate");
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).expect("materialise");
-    let meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).expect("logits.json")).expect("json");
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("logits.json")).expect("logits.json")).expect("json");
     let tokens: Vec<usize> = meta["tokens"].as_array().expect("tokens").iter().map(|t| t.as_u64().expect("int") as usize).collect();
-    let hf: Vec<Vec<f32>> =
-        meta["logits_full"].as_array().expect("logits").iter().map(|r| r.as_array().expect("row").iter().map(|x| x.as_f64().expect("f") as f32).collect()).collect();
+    let hf: Vec<Vec<f32>> = meta["logits_full"]
+        .as_array()
+        .expect("logits")
+        .iter()
+        .map(|r| r.as_array().expect("row").iter().map(|x| x.as_f64().expect("f") as f32).collect())
+        .collect();
     let int = fidelity::int_logits(&prep.lowered.program, &mat.params, &tokens, mat.logits_scale, &|_| {}).expect("integer run");
     Run { logits_scale: mat.logits_scale, int, hf, nodes: prep.lowered.program.blocks.iter().map(|b| b.nodes.len()).sum() }
 }
@@ -73,14 +78,8 @@ fn the_logits_are_natural_log_units_times_two_to_the_24() {
         let mag = rms(r.hf.iter().flat_map(|row| row.iter().map(|x| *x as f64)));
         // Where transformers' best token leads its runner-up by more than the quantisation's error
         // many times over, the integer program picks it too (random weights leave many near-ties).
-        let decided: Vec<(usize, &Vec<f64>, &Vec<f32>)> = r
-            .int
-            .iter()
-            .zip(&r.hf)
-            .enumerate()
-            .filter(|(_, (_, b))| margin(b) > 8.0 * err)
-            .map(|(p, (a, b))| (p, a, b))
-            .collect();
+        let decided: Vec<(usize, &Vec<f64>, &Vec<f32>)> =
+            r.int.iter().zip(&r.hf).enumerate().filter(|(_, (_, b))| margin(b) > 8.0 * err).map(|(p, (a, b))| (p, a, b)).collect();
         let wrong: Vec<usize> = decided.iter().filter(|(_, a, b)| argmax(a) != argmax_f32(b)).map(|(p, _, _)| *p).collect();
         eprintln!(
             "{name:>18}: |logits| rms {mag:.3}  rms error vs HF {err:.4} ({:.2}%)  decided positions {}/{} wrong {}  [{} nodes]",
@@ -91,7 +90,10 @@ fn the_logits_are_natural_log_units_times_two_to_the_24() {
             r.nodes
         );
         assert!(err <= 0.06 * mag + 0.01, "{name}: the Q24 logits are {err} (rms) from transformers' of magnitude {mag}");
-        assert!(wrong.is_empty(), "{name}: positions {wrong:?} disagree with transformers' top-1 although it leads by more than 8× the error");
+        assert!(
+            wrong.is_empty(),
+            "{name}: positions {wrong:?} disagree with transformers' top-1 although it leads by more than 8× the error"
+        );
     }
 }
 

@@ -33,8 +33,8 @@
 //! * `…carries_its_slots_tick…` — B: with no heartbeat in the chain a REAL attempt carries its slot's tick,
 //!   one tick a slot however many attempt-lane blocks the slot holds; the control (the fence unarmed) ticks
 //!   not at all.
-use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use super::OnetimeTxSelector;
+use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::model::stores::headers::HeaderStoreReader;
@@ -49,9 +49,9 @@ use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV
 use kaspa_consensus_core::palw_model_registry_v1::{PalwModelLifecycleV1, PalwSeatReadinessRowV1};
 use kaspa_consensus_core::palw_real_share_v1::PalwFloorModeV1::{Idle, Normal, Probe};
 use kaspa_consensus_core::palw_real_share_v1::{
-    PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as DUTY_AFTER, PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1 as DUTY_STAGGER, PALW_FLOOR_IDLE_SLOTS_V1 as IDLE,
-    PALW_FLOOR_PROBE_SLOTS_V1 as PROBE, PALW_T12_USEFUL_WORK_FENCES_V1, PalwFloorAnchorDutyInputV1, PalwFloorAnchorDutyWaitV1,
-    PalwFloorStateV1, palw_floor_anchor_duty_stagger_v1, palw_floor_anchor_duty_v1,
+    PALW_FLOOR_ANCHOR_DUTY_AFTER_SLOTS_V1 as DUTY_AFTER, PALW_FLOOR_ANCHOR_DUTY_STAGGER_SLOTS_V1 as DUTY_STAGGER,
+    PALW_FLOOR_IDLE_SLOTS_V1 as IDLE, PALW_FLOOR_PROBE_SLOTS_V1 as PROBE, PALW_T12_USEFUL_WORK_FENCES_V1, PalwFloorAnchorDutyInputV1,
+    PalwFloorAnchorDutyWaitV1, PalwFloorStateV1, palw_floor_anchor_duty_stagger_v1, palw_floor_anchor_duty_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
 use kaspa_hashes::Hash64;
@@ -260,18 +260,22 @@ impl Rig {
                 TemplateBuildMode::Standard,
             )
             .expect("a template");
-        assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id), "a V2 template declares the attempt lane");
+        assert!(
+            kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id),
+            "a V2 template declares the attempt lane"
+        );
         stamp_harness_time(&self.c.config.params, &mut t.block.header, self.c.ctx.simulated_time);
         t.block.header.nonce = self.nonce;
         let facts = self.c.ctx.consensus.palw_producer_facts_v2(class, Some(bond.0)).expect("a V2 network answers");
         if check_ready {
             let rcore_plus = self.c.config.params.palw_rcore_plus_fence().is_some_and(|f| f.is_active(facts.daa_score));
-            facts
-                .ready_to_produce_v3(&card_pubkey(card), rcore_plus)
-                .unwrap_or_else(|why| panic!("card {card} is not ready to produce for class {class}: {why} ({:?})", facts.class_admission_refusal));
+            facts.ready_to_produce_v3(&card_pubkey(card), rcore_plus).unwrap_or_else(|why| {
+                panic!("card {card} is not ready to produce for class {class}: {why} ({:?})", facts.class_admission_refusal)
+            });
         }
         let bond_facts = facts.bond.as_ref().expect("a genesis card is a registered bond").clone();
-        let network_domain = palw_network_domain_v2_for(self.c.config.params.net.to_string().as_bytes(), Some(self.c.config.params.genesis.hash));
+        let network_domain =
+            palw_network_domain_v2_for(self.c.config.params.net.to_string().as_bytes(), Some(self.c.config.params.genesis.hash));
         let header = &t.block.header;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let mut attempt = PalwAttemptUnsignedV2 {
@@ -494,7 +498,11 @@ async fn slow_real_under_heartbeats(slots: u64) -> (Colour, usize) {
 #[tokio::test]
 async fn real_share_a_slow_real_attempt_is_red_under_floors_and_blue_under_heartbeats_before_the_fence() {
     for n in [2usize, 3] {
-        assert_eq!(slow_real_under_floors(n).await, Colour::Red, "{n} floors in the anticone of a slow REAL attempt: RED (the live finding)");
+        assert_eq!(
+            slow_real_under_floors(n).await,
+            Colour::Red,
+            "{n} floors in the anticone of a slow REAL attempt: RED (the live finding)"
+        );
     }
     for slots in [1u64, 2, 3] {
         let (colour, beats) = slow_real_under_heartbeats(slots).await;
@@ -521,7 +529,11 @@ async fn real_share_past_the_fence_a_busy_chain_refuses_floors_and_the_slow_real
     let state = rig.state();
     assert!(state.claim(&r0_id).is_some(), "R0 is accepted");
     let r0_daa = rig.c.daa_of(r0.header.hash);
-    assert_eq!(rig.floor_state().mode, Normal { last_blue: r0_daa }, "a BLUE REAL attempt makes the chain Normal at once, with no probe");
+    assert_eq!(
+        rig.floor_state().mode,
+        Normal { last_blue: r0_daa },
+        "a BLUE REAL attempt makes the chain Normal at once, with no probe"
+    );
     rig.assert_floors_held("right after a REAL attempt");
 
     // The slow producer takes its template now and infers for 340 s; honest floor producers hold, the
@@ -546,7 +558,10 @@ async fn real_share_past_the_fence_a_busy_chain_refuses_floors_and_the_slow_real
     // the merging block's when it was merged.
     let accepted_at = if colour == Colour::SelectedParent { rig.c.daa_of(d.header.hash) } else { rig.c.daa_of(merger.header.hash) };
     assert_eq!(rig.floor_state().mode, Normal { last_blue: accepted_at }, "a BLUE REAL attempt refreshes Normal");
-    assert!(accepted_at >= r0_daa, "to a DAA no earlier than the first attempt's (equal when the slow attempt is the selected parent)");
+    assert!(
+        accepted_at >= r0_daa,
+        "to a DAA no earlier than the first attempt's (equal when the slow attempt is the selected parent)"
+    );
     rig.assert_floors_held("after the slow attempt landed");
 }
 
@@ -686,7 +701,11 @@ async fn real_share_an_unanswered_probe_expires_and_the_floor_resumes() {
     rig.assert_floors_free("at `until` the probe has run out");
     // The state is rooted as Idle once a block has folded the expiry; the next block does.
     rig.beat(1).await;
-    assert_eq!(rig.floor_state(), PalwFloorStateV1 { mode: Idle, last_probe_end: Some(until) }, "Idle, remembering when the probe ended");
+    assert_eq!(
+        rig.floor_state(),
+        PalwFloorStateV1 { mode: Idle, last_probe_end: Some(until) },
+        "Idle, remembering when the probe ended"
+    );
 }
 
 /// The DAA scores along an attempts-only chain (no heartbeat after the reference): a REAL attempt stamped into
@@ -880,7 +899,11 @@ async fn pruned_join(mut rig: Rig, at_p: PalwFloorStateV1, expires_at: u64, what
         assert_eq!(theirs.state_root(), mine, "{what}: block #{i} ({kind}): the importer's state is the archival node's");
         if let Some(id) = floor_id {
             let decision_here = archival.claim(id).is_some();
-            assert_eq!(theirs.claim(id).is_some(), decision_here, "{what}: block #{i} ({kind}): the same decision on the floor attempt");
+            assert_eq!(
+                theirs.claim(id).is_some(),
+                decision_here,
+                "{what}: block #{i} ({kind}): the same decision on the floor attempt"
+            );
         }
         let daa = rig.c.daa_of(*hash);
         let floor = theirs.floor_state_v1();
@@ -915,7 +938,11 @@ async fn real_share_a_pruned_join_inside_a_normal_stretch_decides_the_floor_as_a
     let at_p = PalwFloorStateV1 { mode: Normal { last_blue }, last_probe_end: None };
     let states = pruned_join(rig, at_p, last_blue + IDLE + 1, "Normal at P").await;
     assert_eq!(states.first().map(|(_, f)| f.mode), Some(Normal { last_blue }), "{states:?}");
-    assert_eq!(states.last().map(|(_, f)| *f), Some(PalwFloorStateV1::default()), "Normal ran out on the importer, rooted as nothing: {states:?}");
+    assert_eq!(
+        states.last().map(|(_, f)| *f),
+        Some(PalwFloorStateV1::default()),
+        "Normal ran out on the importer, rooted as nothing: {states:?}"
+    );
 }
 
 /// **A node that imports its pruning point inside a PROBE decides the floor as an archival node does** — the probe's `until`
@@ -1039,19 +1066,16 @@ impl Operators {
     async fn pass(&mut self, rig: &mut Rig) {
         for card in 0..self.waits.len() {
             let bond = rig.c.bonds[card];
-            let facts = rig
-                .c
-                .ctx
-                .consensus
-                .palw_producer_facts_v2(rig.floor(), Some(bond.0))
-                .expect("a V2 network answers for its floor");
+            let facts =
+                rig.c.ctx.consensus.palw_producer_facts_v2(rig.floor(), Some(bond.0)).expect("a V2 network answers for its floor");
             let rcore_plus = rig.c.config.params.palw_rcore_plus_fence().is_some_and(|f| f.is_active(facts.daa_score));
             let ready = facts.ready_to_produce_v3(&card_pubkey(card), rcore_plus);
             let due_slots = self.waits[card].observe(facts.binder_due, facts.daa_score);
             let fire = palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 {
                 binder_due: facts.binder_due,
                 is_base_class: facts.is_base_class,
-                hold_is_class_not_admitting: ready == Err(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2),
+                hold_is_class_not_admitting: ready
+                    == Err(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2),
                 class_refusal: facts.class_admission_refusal.as_deref(),
                 due_slots,
                 after_slots: self.after,
@@ -1097,7 +1121,12 @@ async fn non_operator_claim_under_normal(
     assert!(matches!(rig.floor_state().mode, Normal { .. }), "a BLUE REAL attempt: the chain is Normal and the floor is held");
     let mut meter = AnchorMeter::default();
     meter.sample(&rig);
-    let bound = |rig: &Rig| !matches!(rig.state().claim(&claim_id).map(|c| c.phase.clone()), Some(kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional));
+    let bound = |rig: &Rig| {
+        !matches!(
+            rig.state().claim(&claim_id).map(|c| c.phase.clone()),
+            Some(kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional)
+        )
+    };
     for (k, card) in producers.iter().enumerate() {
         while rig.c.ctx.consensus.get_virtual_daa_score() < x0 + 14 * (k as u64 + 1) {
             slot_with_operators(&mut rig, &mut meter, ops).await;
@@ -1112,7 +1141,10 @@ async fn non_operator_claim_under_normal(
             slot_with_operators(&mut rig, &mut meter, ops).await;
         }
         let (_merger, colour) = rig.land(&d).await;
-        assert!(matches!(colour, Colour::SelectedParent | Colour::Blue), "with the floor held only heartbeats stand in its anticone: {colour:?}");
+        assert!(
+            matches!(colour, Colour::SelectedParent | Colour::Blue),
+            "with the floor held only heartbeats stand in its anticone: {colour:?}"
+        );
         meter.sample(&rig);
         assert!(matches!(rig.floor_state().mode, Normal { .. }), "REAL work keeps the chain Normal");
     }
@@ -1194,7 +1226,10 @@ async fn real_share_anchor_duty_fires_once_and_then_the_floor_stays_held() {
     }
     assert_eq!(ops.fired.len(), 1, "no second binder: {:?}", ops.fired);
     assert!(
-        !matches!(rig.state().claim(&claim_id).map(|c| c.phase.clone()), Some(kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional)),
+        !matches!(
+            rig.state().claim(&claim_id).map(|c| c.phase.clone()),
+            Some(kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional)
+        ),
         "the claim stays bound"
     );
 }
@@ -1254,7 +1289,10 @@ async fn real_share_the_round_seed_anchor_is_recorded_from_merged_attempts_and_s
         "[real-share] seed anchors with the window: from span {first}, an audit at the next span finds a seed in {covered} of {spans} spans \
          (W = {W}); last anchor {last_anchor_block:?}"
     );
-    assert_eq!(covered, spans, "M3: every span from the first merged attempt on is followed by an audit that finds a seed in its window");
+    assert_eq!(
+        covered, spans,
+        "M3: every span from the first merged attempt on is followed by an audit that finds a seed in its window"
+    );
 }
 
 /// **The control, without the window: the gap as it stood** (the reason the fence exists). Same REAL flow, `palw_anchor_window_v1`
@@ -1302,5 +1340,8 @@ async fn real_share_control_without_the_window_most_spans_have_no_anchor_against
         landed.0, landed.1
     );
     assert!(fa * 10 >= fs * 9, "with floors mined every slot almost every span is anchored: {fa} of {fs}");
-    assert!(ra * 2 < rs, "without the window, with the floor held and REAL work merged beside the chain, most spans end with no anchor: {ra} of {rs}");
+    assert!(
+        ra * 2 < rs,
+        "without the window, with the floor held and REAL work merged beside the chain, most spans end with no anchor: {ra} of {rs}"
+    );
 }

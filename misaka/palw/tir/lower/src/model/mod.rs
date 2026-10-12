@@ -24,11 +24,11 @@ pub mod report;
 pub mod route;
 pub mod scope;
 
+pub use crate::hf_schema::{AdapterSource, Level, MissingItem};
 pub use crate::spec::ModelSpec;
 pub use features::{
     Area, BASE_PRIMITIVES, FeatureId, FeatureInfo, FeatureUse, Lowering, REGISTRY, Requirement, encdec_features, feature_info,
 };
-pub use crate::hf_schema::{AdapterSource, Level, MissingItem};
 pub use report::{ArchitectureReport, FeatureReport, FeatureStatus, ReportResult, analyze, analyze_headers_with, analyze_with};
 pub use scope::{Excluded, FeatureScope, SCOPE_SCHEMA_V1, scope_of, sibling_files};
 
@@ -45,7 +45,8 @@ pub const MODEL_SPEC_DIGEST_KEY_V1: &[u8] = b"misaka-palw/model-spec/v1";
 /// the same description.
 pub fn spec_digest(spec: &ModelSpec) -> String {
     let v = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
-    let h = blake2b_simd::Params::new().hash_length(32).key(MODEL_SPEC_DIGEST_KEY_V1).hash(crate::adapter::canonical_json(&v).as_bytes());
+    let h =
+        blake2b_simd::Params::new().hash_length(32).key(MODEL_SPEC_DIGEST_KEY_V1).hash(crate::adapter::canonical_json(&v).as_bytes());
     h.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
 }
 

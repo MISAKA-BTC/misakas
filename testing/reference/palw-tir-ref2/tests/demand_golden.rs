@@ -11,7 +11,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::demsrc::{Model, grouped, hist_sources, mine_demand, occurrences, DRes};
+use common::demsrc::{DRes, Model, grouped, hist_sources, mine_demand, occurrences};
 use common::*;
 use misaka_palw_tir_ref2::Program;
 use misaka_palw_tir_ref2::codec::decode_canonical;
@@ -88,7 +88,11 @@ fn target_of(v: &Value) -> Target {
 fn question_of(v: &Value) -> Question {
     let l = |x: &Value| layer_of(x);
     if let Some(n) = v.get("node") {
-        Question::Node { ctx: Ctx { pos: u64_of(&n["pos"]), occ: u64_of(&n["occurrence"]) as u32 }, node: u64_of(&n["node"]) as u16, i: 0 }
+        Question::Node {
+            ctx: Ctx { pos: u64_of(&n["pos"]), occ: u64_of(&n["occurrence"]) as u32 },
+            node: u64_of(&n["node"]) as u16,
+            i: 0,
+        }
     } else if let Some(n) = v.get("param") {
         Question::Param { param: u64_of(&n["param"]) as u16, layer: l(&n["layer"]), i: 0 }
     } else if let Some(n) = v.get("state") {

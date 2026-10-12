@@ -68,7 +68,10 @@ fn row_ranges_equal_the_whole_evaluation() {
             }
         }
     }
-    eprintln!("{} fixtures: {streamable} param instances evaluated by row ranges ({checked_rows} rows), {whole_only} whole-only", fx.len());
+    eprintln!(
+        "{} fixtures: {streamable} param instances evaluated by row ranges ({checked_rows} rows), {whole_only} whole-only",
+        fx.len()
+    );
     assert!(streamable > 500, "only {streamable} streamable instances");
 }
 

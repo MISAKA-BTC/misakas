@@ -246,17 +246,24 @@ impl TransactionValidator {
     /// ADR-0082 D10/D11 + RFC-0001 §A.4: declare the decode-rules fence
     /// (`Params::palw_fp_decode_rules_fence()`), which admits the V4 job's shape at isolation and
     /// splits V3 from V4 by the containing block's height in the header context.
-    pub fn with_dns_retirement(mut self, retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>) -> Self {
+    pub fn with_dns_retirement(
+        mut self,
+        retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+    ) -> Self {
         self.palw_dns_retirement = retirement;
         self
     }
 
     pub(crate) fn check_dns_retirement(&self, tx: &kaspa_consensus_core::tx::Transaction, daa: u64) -> errors::TxResult<()> {
         if self.palw_dns_retirement.is_some_and(|r| r.activation.is_active(daa))
-            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id) {
+            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)
+        {
             return Err(errors::TxRuleError::DnsParticipationRetired(tx.subnetwork_id.clone()));
         }
-        if self.palw_dns_retirement.is_some_and(|r| !kaspa_consensus_core::palw_native_settlement_v1::legacy_dns_evidence_allowed_v1(r, tx, daa)) {
+        if self
+            .palw_dns_retirement
+            .is_some_and(|r| !kaspa_consensus_core::palw_native_settlement_v1::legacy_dns_evidence_allowed_v1(r, tx, daa))
+        {
             return Err(errors::TxRuleError::DnsLegacyEvidenceOutsideWindow);
         }
         Ok(())

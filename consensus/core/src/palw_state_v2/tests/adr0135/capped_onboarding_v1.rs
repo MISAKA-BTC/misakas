@@ -10,10 +10,7 @@ use crate::palw_mesh_v1::*;
 use crate::palw_vertex_v1::*;
 
 fn cp(vertex: bool, mesh: bool, capped: Option<u64>) -> PalwStateParamsV2 {
-    params()
-        .with_vertex_from_daa(vertex.then_some(0))
-        .with_audit_mesh_from_daa(mesh.then_some(0))
-        .with_capped_from_daa(capped)
+    params().with_vertex_from_daa(vertex.then_some(0)).with_audit_mesh_from_daa(mesh.then_some(0)).with_capped_from_daa(capped)
 }
 
 fn dummy_sign(message: &[u8], _context: &[u8]) -> Option<Vec<u8>> {
@@ -24,7 +21,13 @@ fn dummy_sign(message: &[u8], _context: &[u8]) -> Option<Vec<u8>> {
 
 /// A vertex of `seat` attesting (a `Held` leaf of the capture of the class's probe job) that it holds `digest`.
 fn attests(seat: u64, daa: u64, digest: Hash64) -> PalwConsensusObjectV2 {
-    let leaf = PalwVertexLeafV1::Held { claim: PalwClaimRefV1::Full(kimi_id()), object: PALW_VERTEX_HELD_OBJECT_CAPTURE_V1, first: 0, last: 0, digest };
+    let leaf = PalwVertexLeafV1::Held {
+        claim: PalwClaimRefV1::Full(kimi_id()),
+        object: PALW_VERTEX_HELD_OBJECT_CAPTURE_V1,
+        first: 0,
+        last: 0,
+        digest,
+    };
     PalwConsensusObjectV2::VerificationVertexV1 {
         vertex: Box::new(PalwVerificationVertexV1::sign_v1(h64(999), bond_key(seat), daa, vec![leaf], dummy_sign).unwrap()),
     }
@@ -117,14 +120,18 @@ fn a_capped_class_admits_a_claim_that_waits_for_its_holders() {
     assert!(refused.is_err(), "a Prefetching class admits no claim");
     let env = kimi_attempt(1, root);
     let claim = attempt_id_v2(&env.attempt);
-    let (s1, _) = step(&capped, &p, &ctx(nb + 1, at + 1, nb + 1), &[], Some(&env), Some(f.clone())).expect("a capped class admits a claim");
+    let (s1, _) =
+        step(&capped, &p, &ctx(nb + 1, at + 1, nb + 1), &[], Some(&env), Some(f.clone())).expect("a capped class admits a claim");
     let row = s1.mesh_capped_row_v1(&claim).expect("the claim's capped row");
     assert_eq!((row.class_id, row.accepted_daa, row.window_end_daa), (kimi_id(), at + 1, None));
     s1.assert_deadline_consistency(&p).expect("the derived deadline is the index's");
     assert!(matches!(s1.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Provisional));
     // The bind window passes and the claim is not voided: it waits.
     let (waited, _) = step(&s1, &p, &ctx(nb + 2, at + 1 + p.window_bind() + 500, nb + 2), &[], None, Some(f.clone())).unwrap();
-    assert!(matches!(waited.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Provisional), "a capped claim is not voided by the bind window");
+    assert!(
+        matches!(waited.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Provisional),
+        "a capped claim is not voided by the bind window"
+    );
     waited.assert_deadline_consistency(&p).expect("and the deadline index agrees");
     // The same claim on the same chain below the capped fence cannot exist: the class is not admitting.
     let dormant = cp(true, true, None);
@@ -157,7 +164,11 @@ fn holders_seated_open_the_reverification_window_and_an_unverified_claim_is_void
     assert!(!matches!(state_of(&left), PalwModelLifecycleV1::Capped { .. }), "the class left Capped: {:?}", state_of(&left));
     assert_eq!(state_of(&left), PalwModelLifecycleV1::Probation { probes_passed: 0 }, "where Prefetching would have put it");
     let row = left.mesh_capped_row_v1(&claim).expect("the claim still waits");
-    assert_eq!(row.window_end_daa, Some(exit_at + PALW_CAPPED_REVERIFY_WINDOW_DAA_V1), "its re-verification window opened at the boundary");
+    assert_eq!(
+        row.window_end_daa,
+        Some(exit_at + PALW_CAPPED_REVERIFY_WINDOW_DAA_V1),
+        "its re-verification window opened at the boundary"
+    );
     left.assert_deadline_consistency(&p).expect("the deadline moved with the row");
     // At the window's end the claim, never bound, is voided; no row remains; nobody was slashed.
     let end = exit_at + PALW_CAPPED_REVERIFY_WINDOW_DAA_V1 + 1;

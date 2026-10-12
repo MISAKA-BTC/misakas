@@ -177,9 +177,12 @@ pub(crate) fn palw_tir_partial_dissect_build_v1(
 }
 
 pub(crate) fn palw_tir_partial_dissect_inputs_build_v1(
-    holding: &misaka_palw_sdk::lineages::tir::TirShardHoldingV1, capture: &TirCaptureV1,
-    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>, duty: &PalwCourtDutyV2,
-    mv: PalwTirDissectMoveV1, rules: &PalwTirCourtRulesV1,
+    holding: &misaka_palw_sdk::lineages::tir::TirShardHoldingV1,
+    capture: &TirCaptureV1,
+    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>,
+    duty: &PalwCourtDutyV2,
+    mv: PalwTirDissectMoveV1,
+    rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwTirDissectBuiltV1, String> {
     if duty.i_am_responder || palw_tir_dissect_move_of_duty_v1(duty) != Some(mv) {
         return Err("the partial public holder owes no move on this turn".into());

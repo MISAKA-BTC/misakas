@@ -9,7 +9,9 @@
 //! * an unknown key of a supported class is refused, not ignored.
 
 use misaka_palw_tir_lower::diffusion::probe::{probe_sd3_transformer, probe_vae_decoder};
-use misaka_palw_tir_lower::hf_schema::{AdapterSource, DiffusersRoute, Level, ReadOptions, diffusers_class, is_diffusers, read_diffusers};
+use misaka_palw_tir_lower::hf_schema::{
+    AdapterSource, DiffusersRoute, Level, ReadOptions, diffusers_class, is_diffusers, read_diffusers,
+};
 use misaka_palw_tir_lower::model::{FeatureStatus, Lowering, ReportResult, analyze, feature_info};
 use misaka_palw_tir_lower::weights::Checkpoint;
 use serde_json::Value;
@@ -49,10 +51,25 @@ fn sd3_and_the_vae_read_at_level_b_through_a_built_in_route_with_their_features(
         (
             "sd3-medium-transformer",
             "diffusers:sd3-transformer",
-            vec!["PATCH_EMBED_V1", "EMBED_TIMESTEP_TABLE_V1", "MOD_ADALN_V1", "ATTN_JOINT_STREAMS_V1", "ACT_TABLE_V1", "GEN_SAMPLER_AFFINE_V1"],
+            vec![
+                "PATCH_EMBED_V1",
+                "EMBED_TIMESTEP_TABLE_V1",
+                "MOD_ADALN_V1",
+                "ATTN_JOINT_STREAMS_V1",
+                "ACT_TABLE_V1",
+                "GEN_SAMPLER_AFFINE_V1",
+            ],
         ),
-        ("sdxl-vae", "diffusers:autoencoder-kl-decoder", vec!["CONV_DENSE_V1", "NORM_GROUP_SPATIAL_V1", "ACT_TABLE_V1", "GEN_STAGE_VAE_V1"]),
-        ("sd3-vae", "diffusers:autoencoder-kl-decoder", vec!["CONV_DENSE_V1", "NORM_GROUP_SPATIAL_V1", "ACT_TABLE_V1", "GEN_STAGE_VAE_V1"]),
+        (
+            "sdxl-vae",
+            "diffusers:autoencoder-kl-decoder",
+            vec!["CONV_DENSE_V1", "NORM_GROUP_SPATIAL_V1", "ACT_TABLE_V1", "GEN_STAGE_VAE_V1"],
+        ),
+        (
+            "sd3-vae",
+            "diffusers:autoencoder-kl-decoder",
+            vec!["CONV_DENSE_V1", "NORM_GROUP_SPATIAL_V1", "ACT_TABLE_V1", "GEN_STAGE_VAE_V1"],
+        ),
     ] {
         let r = analyze(&config(name), None, &ReadOptions::default());
         assert_eq!((r.level, &r.result), (Level::B, &ReportResult::Lowerable), "{name}: {}", r.render());
@@ -107,7 +124,10 @@ fn the_vae_refuses_what_its_decoder_does_not_lower() {
 #[test]
 fn flux_dit_and_the_unets_are_level_c_naming_what_their_lowering_lacks() {
     for (name, want) in [
-        ("flux1-dev-transformer", vec!["POS_ROPE_AXES_V1", "ATTN_QK_NORM_JOINT_V1", "GEN_BLOCK_SINGLE_STREAM_V1", "EMBED_GUIDANCE_V1"]),
+        (
+            "flux1-dev-transformer",
+            vec!["POS_ROPE_AXES_V1", "ATTN_QK_NORM_JOINT_V1", "GEN_BLOCK_SINGLE_STREAM_V1", "EMBED_GUIDANCE_V1"],
+        ),
         ("dit-xl-2-256", vec!["EMBED_CLASS_LABEL_V1", "GEN_BLOCK_ADALN_ZERO_V1", "GEN_OUTPUT_LEARNED_SIGMA_V1", "GEN_SAMPLER_EPS_V1"]),
         ("sd1.5-unet", vec!["GEN_UNET_SKIP_V1", "GEN_RESNET_TIME_COND_V1", "GEN_SPATIAL_TRANSFORMER_V1"]),
         ("sdxl-unet", vec!["GEN_UNET_SKIP_V1", "EMBED_ADDITION_TEXT_TIME_V1"]),

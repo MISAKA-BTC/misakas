@@ -4353,7 +4353,8 @@ pub fn base0_fp_block_leaves_from_tiles_v1(
     let ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
     let by_index: std::collections::HashMap<u64, &PalwStepTileLeafV1> = tiles.iter().map(|(i, t)| (*i, t)).collect();
-    let leaf = |i: u64| -> Option<Hash64> { by_index.get(&i).map(|t| step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, t)) };
+    let leaf =
+        |i: u64| -> Option<Hash64> { by_index.get(&i).map(|t| step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, t)) };
     let cut = Base0FpBlockLeavesV1::cut_v1(v4.interval_index, &v4.range, v4.binding.step_leaf_count, block_index, &leaf)
         .ok_or(Base0FpIntervalError::StepSpace(format!("block {block_index} is not inside interval {}", v4.interval_index)))?;
     cut.encode_v1()
@@ -4563,7 +4564,8 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
     let mut own: std::collections::HashMap<u64, Hash64> =
         tiles.tiles.iter().map(|(i, t)| (*i, step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, t))).collect();
     for (k, tile) in v4.seed_row_tiles.iter().enumerate() {
-        own.entry(v4.range.first_leaf_index + k as u64).or_insert_with(|| step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, tile));
+        own.entry(v4.range.first_leaf_index + k as u64)
+            .or_insert_with(|| step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, tile));
     }
     Ok(served.name_the_leaf_v1(&|i| own.get(&i).copied()))
 }
@@ -4642,7 +4644,8 @@ pub fn base0_fp_name_the_edge_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
     let mut own: std::collections::HashMap<u64, Hash64> =
         tiles.tiles.iter().map(|(i, t)| (*i, step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, t))).collect();
     for (k, tile) in v4.seed_row_tiles.iter().enumerate() {
-        own.entry(v4.range.first_leaf_index + k as u64).or_insert_with(|| step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, tile));
+        own.entry(v4.range.first_leaf_index + k as u64)
+            .or_insert_with(|| step_tile_leaf_hash_ctx_v1(&v4.binding.job_context, &profile_hash, tile));
     }
     let own_of = |span: (u64, u64)| -> Result<Vec<Hash64>, String> {
         (span.0..span.1).map(|i| own.get(&i).copied().ok_or_else(|| format!("this seat's replay has no leaf {i}"))).collect()

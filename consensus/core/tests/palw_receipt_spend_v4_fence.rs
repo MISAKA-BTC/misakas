@@ -6,13 +6,13 @@
 //! Run: `cargo test -p kaspa-consensus-core --test palw_receipt_spend_v4_fence`
 
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v5_params,
-    palw_t12_release_v6_params, palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT13_DAA, PALW_T12_INT13_FENCES_V1, Params,
+    SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    palw_t12_arm_int13_flag_day_at_v1, palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_receipt_v4::{
-    PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, PALW_COMMITMENT_MAX_BYTES_V4, palw_receipt_spend_v4_value_v1,
+    PALW_COMMITMENT_MAX_BYTES_V4, PALW_RECEIPT_V4_BUILDER_FEE_CAP_BPS, palw_receipt_spend_v4_value_v1,
 };
 
 /// A height no testnet-12 fence uses.

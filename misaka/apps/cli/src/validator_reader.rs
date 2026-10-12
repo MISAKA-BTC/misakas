@@ -194,8 +194,10 @@ async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> Cli
     };
     let group = crate::operator::status::group;
     let (headline, next): (String, Option<String>) = match (&args.stake_bond, &bond_read) {
-        _ if retirement.is_some() => (paint::dim(&format!("DNS validator role retired at DAA {}; PALW remains active", retirement.unwrap())),
-            args.stake_bond.as_ref().map(|_| "Use validator bonds / unbond for historical bond exits".into())),
+        _ if retirement.is_some() => (
+            paint::dim(&format!("DNS validator role retired at DAA {}; PALW remains active", retirement.unwrap())),
+            args.stake_bond.as_ref().map(|_| "Use validator bonds / unbond for historical bond exits".into()),
+        ),
         (None, _) => (
             paint::dim("○ NOT A VALIDATOR — no stake bond named here (--stake-bond, or ~/.misaka/validator.toml)"),
             Some("misaka validator setup".into()),

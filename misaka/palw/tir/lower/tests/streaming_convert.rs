@@ -53,7 +53,11 @@ fn run(dir: &Path, options: &[(&str, StreamOpts)]) -> Result<Case, String> {
         let mut sink = ChunkSink::new(&store);
         let m = materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &policy, opts, &mut sink, &quiet)
             .map_err(|e| format!("materialise_stream[{label}]: {e}"))?;
-        assert_eq!((m.resid_scale, m.logits_scale, m.quant_inexact), (mat.resid_scale, mat.logits_scale, mat.quant_inexact), "{name}[{label}]");
+        assert_eq!(
+            (m.resid_scale, m.logits_scale, m.quant_inexact),
+            (mat.resid_scale, mat.logits_scale, mat.quant_inexact),
+            "{name}[{label}]"
+        );
         let path = tmp.join(format!("new-{label}.palwtir"));
         write_container_v1_chunked(&path, &prep.lowered.program, Vec::new(), tok, meta.to_string(), &store, &sink.artifact)
             .map_err(|e| format!("assemble[{label}]: {e}"))?;
@@ -112,7 +116,10 @@ fn every_fixture_converts_to_the_same_file_streamed_or_whole() {
 /// row (a row's codes and scale), never a reduction across rows.
 #[test]
 fn the_conversion_does_not_depend_on_the_thread_count() {
-    let options = [("rows1", StreamOpts { defer_min_elems: 0, block_elems: 1 }), ("never", StreamOpts { defer_min_elems: usize::MAX, block_elems: 8 })];
+    let options = [
+        ("rows1", StreamOpts { defer_min_elems: 0, block_elems: 1 }),
+        ("never", StreamOpts { defer_min_elems: usize::MAX, block_elems: 8 }),
+    ];
     let pick = ["llama", "gemma2", "mixtral", "deepseek_v2_lite", "qwen3_5", "mamba2"];
     let pool = |n: usize| rayon::ThreadPoolBuilder::new().num_threads(n).build().expect("pool");
     let (one, many) = (pool(1), pool(7));
@@ -120,6 +127,9 @@ fn the_conversion_does_not_depend_on_the_thread_count() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf").join(name);
         let a = one.install(|| run(&dir, &options[..1])).unwrap_or_else(|e| panic!("{name}: {e}"));
         let b = many.install(|| run(&dir, &options[1..])).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(a.old == b.old && a.news[0].1 == b.news[0].1 && a.news[0].1 == a.old, "{name}: the artifact depends on the thread count");
+        assert!(
+            a.old == b.old && a.news[0].1 == b.news[0].1 && a.news[0].1 == a.old,
+            "{name}: the artifact depends on the thread count"
+        );
     }
 }

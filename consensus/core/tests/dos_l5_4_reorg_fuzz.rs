@@ -107,7 +107,8 @@ fn run(seed: u64) -> Outcome {
         let kind: &'static str;
         let provisional: Vec<Hash64> =
             s.claims_iter().filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::Provisional)).map(|(id, _)| *id).collect();
-        let bound: Vec<Hash64> = s.claims_iter().filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. })).map(|(id, _)| *id).collect();
+        let bound: Vec<Hash64> =
+            s.claims_iter().filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. })).map(|(id, _)| *id).collect();
         if roll < 30 {
             // an attempt from the genesis executor or a newcomer
             attempt_seed += 1;
@@ -240,7 +241,10 @@ fn run(seed: u64) -> Outcome {
                     let res = child.reserved_exposure(k) + child.registration_exposure(k);
                     let r1 = res as f64 / ceiling as f64;
                     if r1 > out.i1_worst.0 {
-                        out.i1_worst = (r1, format!("step {step} bond {:.12}: reserved {} / ceiling {}", k.0.transaction_id.to_string(), res, ceiling));
+                        out.i1_worst = (
+                            r1,
+                            format!("step {step} bond {:.12}: reserved {} / ceiling {}", k.0.transaction_id.to_string(), res, ceiling),
+                        );
                     }
                     let locks = live_locks(&child, k, next_daa, depth);
                     let r2 = (res + locks) as f64 / ceiling as f64;
@@ -275,7 +279,10 @@ fn dos_l5_4_reorg_and_liability_fuzz() {
     let mut worst_i2: (f64, String) = (0.0, String::new());
     for seed in SEEDS {
         let o = run(seed);
-        println!("=== seed {seed:#x}: accepted {} refused {} reverts checked {} settled finals {} ===", o.accepted, o.refused, o.reverts_checked, o.finals);
+        println!(
+            "=== seed {seed:#x}: accepted {} refused {} reverts checked {} settled finals {} ===",
+            o.accepted, o.refused, o.reverts_checked, o.finals
+        );
         println!("    ops: {:?}", o.kinds);
         println!("    R1 failures: {}   R2 violations: {}", o.revert_failures.len(), o.settled_violations.len());
         println!("    I1 worst (reserved / ceiling)           = {:.4}  {}", o.i1_worst.0, o.i1_worst.1);

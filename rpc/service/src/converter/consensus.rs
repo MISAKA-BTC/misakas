@@ -709,7 +709,10 @@ impl Debug for ConsensusConverter {
 /// **ADR-0165: a block's kind from its header and the ruleset** — the lane, and for an attempt the class its
 /// envelope names against the bundle's base class: `LEGACY_HEARTBEAT` (algo 8), `EXEC` (round block), `FALLBACK` (a
 /// floor attempt past `palw_floor_reserve_v1`), `LEGACY_FLOOR` (before it), `REAL` (any other class), else `""`.
-pub fn palw_block_kind_v1(params: &kaspa_consensus_core::config::params::Params, header: &kaspa_consensus_core::header::Header) -> &'static str {
+pub fn palw_block_kind_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    header: &kaspa_consensus_core::header::Header,
+) -> &'static str {
     use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_ROUND_V1, is_palw_attempt_algo_id};
     if header.pow_algo_id == POW_ALGO_ID_HEARTBEAT_V1 {
         return "LEGACY_HEARTBEAT";
@@ -726,7 +729,11 @@ pub fn palw_block_kind_v1(params: &kaspa_consensus_core::config::params::Params,
     };
     match (kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment), base) {
         (Ok(envelope), Some(base)) if envelope.attempt.class_id == base => {
-            if params.palw_floor_reserve_active_at(header.daa_score) { "FALLBACK" } else { "LEGACY_FLOOR" }
+            if params.palw_floor_reserve_active_at(header.daa_score) {
+                "FALLBACK"
+            } else {
+                "LEGACY_FLOOR"
+            }
         }
         (Ok(_), _) => "REAL",
         _ => "",
@@ -793,7 +800,11 @@ mod block_kind_tests {
         assert_eq!(palw_block_kind_v1(&params, &attempt(real, 9_999)), "REAL");
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_HEARTBEAT_V1, 9_999, vec![])), "LEGACY_HEARTBEAT");
         assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_ROUND_V1, 9_999, vec![])), "EXEC");
-        assert_eq!(palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_COMMITTED_V2, 9_999, vec![1, 2, 3])), "", "undecodable commitment");
+        assert_eq!(
+            palw_block_kind_v1(&params, &header(POW_ALGO_ID_PALW_COMMITTED_V2, 9_999, vec![1, 2, 3])),
+            "",
+            "undecodable commitment"
+        );
         assert_eq!(palw_block_kind_v1(&params, &header(1, 9_999, vec![])), "", "a non-PALW header");
         // Dormant ruleset (int-12: testnet-12 as shipped arms the fence at 5,300, so the dormant one is the int-10 baseline): a floor
         // attempt is LEGACY_FLOOR at any height.

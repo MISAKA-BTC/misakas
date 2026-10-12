@@ -4,11 +4,11 @@
 //! by the court's demand evaluator from only the committed leaves, equals the honest run).
 #![allow(dead_code)]
 
-use misaka_palw_tir::demand::{
-    DemandContext, DemandLimits, DemandRangeRequest, DemandRequest, DemandTarget, MapSource, eval_demanded, eval_demanded_range, history_length_v1,
-    reduces_over_h_v1, state_instance_is_held_v1,
-};
 use misaka_palw_tir::Prim;
+use misaka_palw_tir::demand::{
+    DemandContext, DemandLimits, DemandRangeRequest, DemandRequest, DemandTarget, MapSource, eval_demanded, eval_demanded_range,
+    history_length_v1, reduces_over_h_v1, state_instance_is_held_v1,
+};
 use misaka_palw_tir::program::StateKind;
 use misaka_palw_tir::{ConeEnv, Interpreter, MapParams, RunState, Tensor, TirProgramV1};
 use misaka_palw_tir_exec::{NodeValue, ParamData, StepSink, TirExecutor, TirParams, TirPlan};
@@ -126,7 +126,6 @@ pub fn three_ways(p: &misaka_palw_tir::TirProgramV1, params: &IntParams, eval: &
     }
     Ok(positions)
 }
-
 
 // ───────────────────────────── court coverage ─────────────────────────────
 
@@ -267,7 +266,13 @@ fn cone_env(program: &TirProgramV1, r: &Run, pos: u32, block: u8, layer: Option<
 /// `checkpoints`, replayed in between) — returns the honest run's elements: the whole node, and its
 /// first and last element alone. A committed node's committed value is among them. No node is
 /// skipped, so every primitive the program uses is evaluated by the court.
-pub fn court_coverage(program: &TirProgramV1, params: &IntParams, tokens: &[u32], positions: &[u32], checkpoints: &[u32]) -> Result<CourtReport, String> {
+pub fn court_coverage(
+    program: &TirProgramV1,
+    params: &IntParams,
+    tokens: &[u32],
+    positions: &[u32],
+    checkpoints: &[u32],
+) -> Result<CourtReport, String> {
     let mp = MapParams { tensors: params.tensors.iter().map(|(k, t)| (*k, t.to_tir())).collect() };
     let interp = Interpreter::new(program).map_err(|e| e.to_string())?;
     let run = honest_run(program, &mp, tokens)?;
@@ -280,19 +285,29 @@ pub fn court_coverage(program: &TirProgramV1, params: &IntParams, tokens: &[u32]
                 let ctx = DemandContext { pos, occurrence: occurrence_of(program, block, layer) };
                 for target in 0..program.blocks[block as usize].nodes.len() as u16 {
                     let env = cone_env(program, &run, pos, block, layer, target);
-                    let full = interp.eval_cone(block, layer, target, &mp, &env).map_err(|e| format!("pos {pos} block {block} node {target}: eval_cone {e}"))?;
+                    let full = interp
+                        .eval_cone(block, layer, target, &mp, &env)
+                        .map_err(|e| format!("pos {pos} block {block} node {target}: eval_cone {e}"))?;
                     if let Some(committed) = run.commits.get(&(ctx, target)) {
                         if &full != committed {
-                            return Err(format!("pos {pos} block {block} node {target}: the cone does not reproduce the committed value"));
+                            return Err(format!(
+                                "pos {pos} block {block} node {target}: the cone does not reproduce the committed value"
+                            ));
                         }
                         report.commits += 1;
                     }
                     let n = full.data.len();
-                    let sets: Vec<Vec<usize>> = if n > 2 { vec![(0..n).collect(), vec![0], vec![n - 1]] } else { vec![(0..n).collect()] };
+                    let sets: Vec<Vec<usize>> =
+                        if n > 2 { vec![(0..n).collect(), vec![0], vec![n - 1]] } else { vec![(0..n).collect()] };
                     for elements in sets {
                         let request = DemandRequest { target: DemandTarget::Node { ctx, node: target }, elements: &elements };
-                        let (values, _) = eval_demanded(program, &interp.info, &request, &mut src, &DemandLimits::UNLIMITED)
-                            .map_err(|e| format!("C {c} pos {pos} block {block} node {target} ({}): eval_demanded {e}", program.blocks[block as usize].nodes[target as usize].prim.name()))?;
+                        let (values, _) =
+                            eval_demanded(program, &interp.info, &request, &mut src, &DemandLimits::UNLIMITED).map_err(|e| {
+                                format!(
+                                    "C {c} pos {pos} block {block} node {target} ({}): eval_demanded {e}",
+                                    program.blocks[block as usize].nodes[target as usize].prim.name()
+                                )
+                            })?;
                         let expect: Vec<i128> = elements.iter().map(|e| full.data[*e]).collect();
                         if values != expect {
                             return Err(format!(
@@ -312,7 +327,13 @@ pub fn court_coverage(program: &TirProgramV1, params: &IntParams, tokens: &[u32]
                         let mid = h / 2;
                         for e in [0usize, n - 1] {
                             let mut part = |range: (usize, usize)| {
-                                let req = DemandRangeRequest { ctx, target, elements: std::slice::from_ref(&e), supplied: &[], range: Some(range) };
+                                let req = DemandRangeRequest {
+                                    ctx,
+                                    target,
+                                    elements: std::slice::from_ref(&e),
+                                    supplied: &[],
+                                    range: Some(range),
+                                };
                                 eval_demanded_range(program, &interp.info, &req, &mut src, &DemandLimits::UNLIMITED)
                                     .map(|(v, _)| v[0])
                                     .map_err(|er| format!("C {c} pos {pos} block {block} node {target}: range {range:?}: {er}"))
@@ -323,7 +344,10 @@ pub fn court_coverage(program: &TirProgramV1, params: &IntParams, tokens: &[u32]
                                 _ => lo + hi,
                             };
                             if whole != full.data[e] {
-                                return Err(format!("C {c} pos {pos} block {block} node {target}: the partials over {mid} + {} positions do not combine to the whole", h - mid));
+                                return Err(format!(
+                                    "C {c} pos {pos} block {block} node {target}: the partials over {mid} + {} positions do not combine to the whole",
+                                    h - mid
+                                ));
                             }
                         }
                         report.dissected += 1;

@@ -337,12 +337,8 @@ pub fn palw_tir_carried_closes_admit_form_v1(
     use crate::palw_tir_close_size_v1 as z;
     let inventory = crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program)
         .ok_or_else(|| PalwClassAdmissionError::TirLayout("the class's inventory has no index".into()))?;
-    let sizing = z::PalwTirCloseSizingV1 {
-        form,
-        court,
-        cap: work_cap,
-        stop_above: Some((carriable, PALW_TIR_DISSECT_CARRIER_BYTES_V1)),
-    };
+    let sizing =
+        z::PalwTirCloseSizingV1 { form, court, cap: work_cap, stop_above: Some((carriable, PALW_TIR_DISSECT_CARRIER_BYTES_V1)) };
     let sized = match twin {
         crate::palw_tir_close_range_v1::PalwTirCloseTwinV1::Element => {
             z::palw_tir_worst_closes_v1(space, &inventory, longest, &sizing)
@@ -454,7 +450,8 @@ pub(crate) fn palw_tir_dissected_cone_admits_parts_v1(
     if values > d::PALW_TIR_DISSECT_MAX_VALUES as u64 {
         return Err(refused(format!("a claim may carry {values} values; at most {}", d::PALW_TIR_DISSECT_MAX_VALUES)));
     }
-    let round = d::palw_tir_dissect_round_bytes_v1(k.dissection_arity, reductions, values).saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
+    let round = d::palw_tir_dissect_round_bytes_v1(k.dissection_arity, reductions, values)
+        .saturating_add(PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1);
     exceeds("IR dissection round bytes", round, PALW_TIR_DISSECT_CARRIER_BYTES_V1)?;
     let played = bundle
         .court
@@ -469,7 +466,10 @@ pub(crate) fn palw_tir_dissected_cone_admits_parts_v1(
     };
     admits.map(|_| ()).map_err(|e| match e {
         crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
-            PalwClassAdmissionError::CourtWindowTooShort { needed: moves.saturating_mul(deadline).saturating_add(reserve), window: window_court }
+            PalwClassAdmissionError::CourtWindowTooShort {
+                needed: moves.saturating_mul(deadline).saturating_add(reserve),
+                window: window_court,
+            }
         }
         _ => PalwClassAdmissionError::CourtWindowTooShort { needed: u64::MAX, window: k.window_court_daa },
     })
@@ -586,11 +586,12 @@ pub fn verify_class_admission_v10(
     let mut runs: Vec<(u32, TirAdmissionV1)> = Vec::with_capacity(tile_lens.len());
     for &tile_len in &tile_lens {
         let inputs = TirAdmitInputsV1 { tile_len, h_chunk: layout.h_tile, ceilings: admit_ceilings };
-        let admitted = misaka_palw_tir::admit::tir_admit_with_rules_v1(&class.program, &inputs, rules.demand).map_err(|e| match e {
-            TirAdmitError::Program(e) => tir_program_error(e),
-            TirAdmitError::Exceeds { limit, at, value, cap } => PalwClassAdmissionError::TirExceeds { limit, at, value, cap },
-            TirAdmitError::Inputs(why) => PalwClassAdmissionError::TirLayout(why.into()),
-        })?;
+        let admitted =
+            misaka_palw_tir::admit::tir_admit_with_rules_v1(&class.program, &inputs, rules.demand).map_err(|e| match e {
+                TirAdmitError::Program(e) => tir_program_error(e),
+                TirAdmitError::Exceeds { limit, at, value, cap } => PalwClassAdmissionError::TirExceeds { limit, at, value, cap },
+                TirAdmitError::Inputs(why) => PalwClassAdmissionError::TirLayout(why.into()),
+            })?;
         runs.push((tile_len, admitted));
     }
     let first = &runs.first().expect("a program has a logits commit point, so a tile length").1;
@@ -629,12 +630,21 @@ pub fn verify_class_admission_v10(
                             return Err(PalwClassAdmissionError::TirNeedsDissection { block: bi as u8, node: ni as u16 });
                         }
                     }
-                    Some(k) => {
-                        palw_tir_dissected_cone_admits_v1(bundle, &model_rules, class, &program, block, bi as u8, ni as u16, tile_len, k)?
-                    }
+                    Some(k) => palw_tir_dissected_cone_admits_v1(
+                        bundle,
+                        &model_rules,
+                        class,
+                        &program,
+                        block,
+                        bi as u8,
+                        ni as u16,
+                        tile_len,
+                        k,
+                    )?,
                 }
             }
-            let (tile, opened) = if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
+            let (tile, opened) =
+                if dissected { (cone.terminal(), cone.terminal_opened_bytes()) } else { (&cone.tile, cone.tile_opened_bytes) };
             exceeds("IR tile multiply-accumulates", tile.macs, bundle.court.max_terminal_macs())?;
             let mut work = tile.macs.saturating_add(tile.elementwise).saturating_add(tile.transcendentals);
             for leaf in &cone.leaves {

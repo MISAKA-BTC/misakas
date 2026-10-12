@@ -17,11 +17,7 @@ type Entry = kaspa_consensus_core::config::params::PalwPostLaunchFenceV1;
 /// `(name, drill entry, the prerequisites validate_palw_v2 must name)`.
 fn fences() -> Vec<(&'static str, Entry, Vec<&'static str>)> {
     vec![
-        (
-            "palw_fp_decode_constraint",
-            kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY,
-            vec![],
-        ),
+        ("palw_fp_decode_constraint", kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY, vec![]),
         (
             "palw_fp_prefix_state",
             kaspa_consensus_core::palw_fp_prefix_v1::PALW_DRILL_FP_PREFIX_STATE_ENTRY,

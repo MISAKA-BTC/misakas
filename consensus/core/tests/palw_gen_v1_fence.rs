@@ -20,15 +20,15 @@ use kaspa_consensus_core::config::params::{
     DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
     PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
     PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_drill_params_v1,
-    palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params,
-    palw_t12_release_v5_params, palw_t12_shipped_params,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_int11_flag_day_at_v1,
+    palw_t12_drill_params_v1, palw_t12_launch_params_v1, palw_t12_release_v1_params, palw_t12_release_v2_params,
+    palw_t12_release_v3_params, palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_gen_v1::{
-    PALW_DRILL_GEN_FENCES_V1, PALW_DRILL_GEN_V1_ENTRY, PALW_GEN_COURT_VERSION_V1, PALW_GEN_PROGRAM_VERSION_V1, PALW_T12_GEN_CEILINGS_V1,
-    PalwGenFenceV1, PalwGenProfileCeilingsV1, PalwGenProfileV1, palw_gen_court_root_v1,
+    PALW_DRILL_GEN_FENCES_V1, PALW_DRILL_GEN_V1_ENTRY, PALW_GEN_COURT_VERSION_V1, PALW_GEN_PROGRAM_VERSION_V1,
+    PALW_T12_GEN_CEILINGS_V1, PalwGenFenceV1, PalwGenProfileCeilingsV1, PalwGenProfileV1, palw_gen_court_root_v1,
     palw_gen_output_set_id_v1, palw_gen_rand_set_id_v1,
 };
 use kaspa_consensus_core::palw_tir_v1::{PALW_TIR_COURT_VERSION_V1, palw_tir_court_root_v1, palw_tir_prim_set_id_v1};
@@ -96,8 +96,15 @@ fn t12_armed(at: ForkActivation) -> Params {
 fn every_ruleset_leaves_it_dormant_but_testnet12s_int11_release_which_arms_it_at_h() {
     for (name, p) in armed_rows() {
         let h = PALW_T12_INT11_FLAG_DAY_DAA.expect("the int-11 flag day has a height");
-        assert_eq!(p.palw_gen_v1, Some(PalwGenFenceV1::testnet12_v1(ForkActivation::new(h))), "{name}: armed at H with testnet-12's value");
-        assert!(p.palw_gen_v1_fence().is_some() && !p.palw_gen_v1_active_at(h - 1) && p.palw_gen_v1_active_at(h), "{name}: live from H");
+        assert_eq!(
+            p.palw_gen_v1,
+            Some(PalwGenFenceV1::testnet12_v1(ForkActivation::new(h))),
+            "{name}: armed at H with testnet-12's value"
+        );
+        assert!(
+            p.palw_gen_v1_fence().is_some() && !p.palw_gen_v1_active_at(h - 1) && p.palw_gen_v1_active_at(h),
+            "{name}: live from H"
+        );
         assert!(p.validate_palw_gen_v1().is_ok(), "{name}: and it validates");
     }
     for (name, p) in rulesets() {

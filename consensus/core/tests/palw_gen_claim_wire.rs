@@ -12,12 +12,12 @@
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
-use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, PALW_FP_V3_VERSION,
-    PALW_FP_V4_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpDecodeRulesV1, PalwFpJobTailV1, PalwFpStopReasonV3, PalwFpV3Error,
-    PalwFreePromptJobV3, fp_claim_id_v3, fp_job_id_v3,
-};
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+    PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpDecodeRulesV1, PalwFpJobTailV1, PalwFpStopReasonV3,
+    PalwFpV3Error, PalwFreePromptJobV3, fp_claim_id_v3, fp_job_id_v3,
+};
 use kaspa_consensus_core::palw_gen_claim_v1::*;
 use kaspa_consensus_core::palw_gen_class_v1::PalwGenImageInputRefV1;
 use kaspa_consensus_core::palw_gen_job_v1::*;
@@ -59,7 +59,11 @@ fn image_job(privacy: u8, negative: bool) -> (PalwGenJobV1, Vec<u32>) {
     let body = PalwGenImageBodyV1 {
         prompt_token_ids_hash: prompt_token_ids_commitment_v1(FORM, &prompt).unwrap(),
         prompt_tokens: prompt.len() as u32,
-        negative_token_ids_hash: if negative { prompt_token_ids_commitment_v1(FORM, &negative_ids).unwrap() } else { Hash64::default() },
+        negative_token_ids_hash: if negative {
+            prompt_token_ids_commitment_v1(FORM, &negative_ids).unwrap()
+        } else {
+            Hash64::default()
+        },
         negative_tokens: negative_ids.len() as u32,
         guidance_q: 16,
         image_index: 2,
@@ -69,7 +73,12 @@ fn image_job(privacy: u8, negative: bool) -> (PalwGenJobV1, Vec<u32>) {
         height: 8,
         output: 1,
     };
-    let job = PalwGenJobV1 { version: PALW_GEN_JOB_VERSION_V1, envelope: envelope(privacy), seed: [0x33; 32], body: PalwGenBodyV1::Image(body) };
+    let job = PalwGenJobV1 {
+        version: PALW_GEN_JOB_VERSION_V1,
+        envelope: envelope(privacy),
+        seed: [0x33; 32],
+        body: PalwGenBodyV1::Image(body),
+    };
     let mut ids = prompt;
     ids.extend(negative_ids);
     (job, ids)
@@ -115,7 +124,10 @@ fn check(payload: &PalwFpCommitmentTxPayloadV3) -> Result<PalwGenJobV1, PalwGenC
 }
 
 /// The commitment edited, its execution root left as it was.
-fn edited(mut payload: PalwFpCommitmentTxPayloadV3, edit: impl FnOnce(&mut PalwFpCommitmentTxPayloadV3)) -> PalwFpCommitmentTxPayloadV3 {
+fn edited(
+    mut payload: PalwFpCommitmentTxPayloadV3,
+    edit: impl FnOnce(&mut PalwFpCommitmentTxPayloadV3),
+) -> PalwFpCommitmentTxPayloadV3 {
     edit(&mut payload);
     payload
 }
@@ -126,7 +138,8 @@ fn edited(mut payload: PalwFpCommitmentTxPayloadV3, edit: impl FnOnce(&mut PalwF
 
 #[test]
 fn a_tensor_job_rides_the_lanes_job_type_and_comes_back_whole() {
-    for (job, _) in [image_job(PALW_FP_PRIVACY_PUBLIC_DA, true), image_job(PALW_FP_PRIVACY_PANEL_DA, false), (embedding_job(), vec![])] {
+    for (job, _) in [image_job(PALW_FP_PRIVACY_PUBLIC_DA, true), image_job(PALW_FP_PRIVACY_PANEL_DA, false), (embedding_job(), vec![])]
+    {
         let carried = job.into_carried();
         assert_eq!(carried.version, PALW_FP_GEN_VERSION);
         assert!(carried.decode.is_none(), "no decode config");
@@ -135,12 +148,28 @@ fn a_tensor_job_rides_the_lanes_job_type_and_comes_back_whole() {
         // The lane's envelope fields are the envelope's; every text field the envelope has not is the canonical zero.
         let e = &job.envelope;
         assert_eq!(
-            (carried.network_domain, carried.class_id, carried.executor_bond, carried.operator_id, carried.anchor_block, carried.anchor_daa),
+            (
+                carried.network_domain,
+                carried.class_id,
+                carried.executor_bond,
+                carried.operator_id,
+                carried.anchor_block,
+                carried.anchor_daa
+            ),
             (e.network_domain, e.class_id, e.executor_bond, e.operator_id, e.anchor_block, e.anchor_daa)
         );
-        assert_eq!((carried.executor_pubkey.clone(), carried.job_nonce, carried.privacy_mode, carried.prompt_mode), (e.executor_pubkey.clone(), e.job_nonce, e.privacy_mode, e.prompt_mode));
         assert_eq!(
-            (carried.tokenizer_id, carried.prompt_token_ids_hash, carried.prompt_tokens, carried.decode_token_limit, carried.max_context_tokens),
+            (carried.executor_pubkey.clone(), carried.job_nonce, carried.privacy_mode, carried.prompt_mode),
+            (e.executor_pubkey.clone(), e.job_nonce, e.privacy_mode, e.prompt_mode)
+        );
+        assert_eq!(
+            (
+                carried.tokenizer_id,
+                carried.prompt_token_ids_hash,
+                carried.prompt_tokens,
+                carried.decode_token_limit,
+                carried.max_context_tokens
+            ),
             (Hash64::default(), Hash64::default(), 0, 0, 0)
         );
         assert_eq!((carried.sampling_seed, carried.temperature_q), ([0u8; 32], 0));
@@ -164,7 +193,10 @@ fn no_other_job_version_reads_as_a_tensor_job_and_none_admits_one() {
     let carried = job.into_carried();
     // The lane's own validators refuse version 10 by name, at every decode rule.
     for rules in [PalwFpDecodeRulesV1::Dormant, PalwFpDecodeRulesV1::Scheduled, PalwFpDecodeRulesV1::Active] {
-        assert_eq!(rules.check_job(&carried), Err(PalwFpV3Error::UnsupportedVersion { got: PALW_FP_GEN_VERSION, expected: PALW_FP_V3_VERSION }));
+        assert_eq!(
+            rules.check_job(&carried),
+            Err(PalwFpV3Error::UnsupportedVersion { got: PALW_FP_GEN_VERSION, expected: PALW_FP_V3_VERSION })
+        );
     }
     // A V4 job's bytes with the version word turned to 10 is not a tensor job: its tail is not a tail.
     let mut v4 = carried.clone();
@@ -178,9 +210,15 @@ fn no_other_job_version_reads_as_a_tensor_job_and_none_admits_one() {
     // And a tensor job renumbered to V4 or V5 is no V4 or V5 job (its tail is a tensor tail, whatever the word says).
     let mut as_v4 = borsh::to_vec(&carried).unwrap();
     as_v4[..2].copy_from_slice(&PALW_FP_V4_VERSION.to_le_bytes());
-    assert!(borsh::from_slice::<PalwFreePromptJobV3>(&as_v4).is_err() || PalwGenJobV1::from_carried(&borsh::from_slice(&as_v4).unwrap()).is_err());
+    assert!(
+        borsh::from_slice::<PalwFreePromptJobV3>(&as_v4).is_err()
+            || PalwGenJobV1::from_carried(&borsh::from_slice(&as_v4).unwrap()).is_err()
+    );
     // V3, V4 and V5 jobs carry no tensor tail: the tail enum's V5 arm is the only one a V5 job reads.
-    assert!(matches!(PalwGenJobV1::from_carried(&PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, ..carried.clone() }), Err(PalwGenClaimErrorV1::NotATensorJob { .. })));
+    assert!(matches!(
+        PalwGenJobV1::from_carried(&PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, ..carried.clone() }),
+        Err(PalwGenClaimErrorV1::NotATensorJob { .. })
+    ));
 }
 
 #[test]
@@ -201,7 +239,10 @@ fn a_tensor_jobs_text_fields_are_the_canonical_zeros_and_nothing_else() {
     assert!(matches!(with(&|j| j.max_context_tokens = 1), Err(Shell(_))));
     assert!(matches!(with(&|j| j.sampling_seed[0] = 1), Err(Shell(_))));
     assert!(matches!(with(&|j| j.temperature_q = 1), Err(Shell(_))));
-    assert!(matches!(with(&|j| j.decode = Some(DecodeConfigV4::NOOP)), Err(PalwGenClaimErrorV1::NotATensorJob { .. })), "a decode config");
+    assert!(
+        matches!(with(&|j| j.decode = Some(DecodeConfigV4::NOOP)), Err(PalwGenClaimErrorV1::NotATensorJob { .. })),
+        "a decode config"
+    );
     assert!(matches!(with(&|j| j.tail = None), Err(PalwGenClaimErrorV1::NotATensorJob { .. })));
     // The id is total over whatever a struct holds: a malformed version-10 job has an id, under its own key.
     let mut malformed = good.clone();
@@ -234,7 +275,9 @@ fn the_work_identity_is_the_class_the_tail_and_the_bond() {
 
 #[test]
 fn an_honest_tensor_commitment_passes_and_its_roots_are_its_parts() {
-    for (job, ids) in [image_job(PALW_FP_PRIVACY_PUBLIC_DA, true), image_job(PALW_FP_PRIVACY_PANEL_DA, false), (embedding_job(), vec![])] {
+    for (job, ids) in
+        [image_job(PALW_FP_PRIVACY_PUBLIC_DA, true), image_job(PALW_FP_PRIVACY_PANEL_DA, false), (embedding_job(), vec![])]
+    {
         let ids = if job.envelope.privacy_mode == PALW_FP_PRIVACY_PANEL_DA { vec![] } else { ids };
         let payload = payload_of(&job, ids);
         assert_eq!(check(&payload), Ok(job.clone()));
@@ -242,9 +285,18 @@ fn an_honest_tensor_commitment_passes_and_its_roots_are_its_parts() {
         assert_eq!(c.execution_root, palw_gen_commitment_execution_root_v1(c, &job));
         assert_eq!(
             c.execution_root,
-            kaspa_consensus_core::palw_gen_close_v1::palw_gen_tensor_execution_root_v1(&job.id(), &c.job.class_id, c.work_leaves, &c.trace_root, &c.output_root)
+            kaspa_consensus_core::palw_gen_close_v1::palw_gen_tensor_execution_root_v1(
+                &job.id(),
+                &c.job.class_id,
+                c.work_leaves,
+                &c.trace_root,
+                &c.output_root
+            )
         );
-        assert_eq!((c.decode_tokens_executed, c.stop_reason, c.trace_chunk_count, c.trace_retention_daa), (0, PalwFpStopReasonV3::ExactBudgetReached, 1, 0));
+        assert_eq!(
+            (c.decode_tokens_executed, c.stop_reason, c.trace_chunk_count, c.trace_retention_daa),
+            (0, PalwFpStopReasonV3::ExactBudgetReached, 1, 0)
+        );
         // The claim id is the lane's: the hash of the whole commitment.
         assert_eq!(payload.claim_id(), fp_claim_id_v3(&payload.commitment));
     }
@@ -263,11 +315,20 @@ fn every_way_a_tensor_commitment_is_not_the_canonical_one_is_refused_by_name() {
         Err(E::NetworkDomainMismatch),
         "another network's job"
     );
-    assert!(palw_fp_gen_claim_check_v1(&good, None, true, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, FORM).is_ok(), "the height-free door holds no domain");
+    assert!(
+        palw_fp_gen_claim_check_v1(&good, None, true, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, FORM).is_ok(),
+        "the height-free door holds no domain"
+    );
     assert_eq!(check(&edited(good.clone(), |p| p.commitment.job.privacy_mode = 0)), Err(E::PrivacyModeNotOffered(0)));
     assert_eq!(check(&edited(good.clone(), |p| p.commitment.job.privacy_mode = 3)), Err(E::PrivacyModeNotOffered(3)));
     assert_eq!(
-        palw_fp_gen_claim_check_v1(&edited(good.clone(), |p| p.commitment.job.privacy_mode = PALW_FP_PRIVACY_PANEL_DA), Some(net()), false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, FORM),
+        palw_fp_gen_claim_check_v1(
+            &edited(good.clone(), |p| p.commitment.job.privacy_mode = PALW_FP_PRIVACY_PANEL_DA),
+            Some(net()),
+            false,
+            PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            FORM
+        ),
         Err(E::PanelDaNotArmed)
     );
     assert_eq!(check(&edited(good.clone(), |p| p.commitment.job.prompt_mode = 1)), Err(E::PromptModeNotOffered(1)));
@@ -278,7 +339,10 @@ fn every_way_a_tensor_commitment_is_not_the_canonical_one_is_refused_by_name() {
     );
     // The commitment's fields (§I.4.2).
     assert!(matches!(check(&edited(good.clone(), |p| p.commitment.decode_tokens_executed = 1)), Err(E::CommitmentNotCanonical(_))));
-    assert!(matches!(check(&edited(good.clone(), |p| p.commitment.stop_reason = PalwFpStopReasonV3::EndOfGeneration)), Err(E::CommitmentNotCanonical(_))));
+    assert!(matches!(
+        check(&edited(good.clone(), |p| p.commitment.stop_reason = PalwFpStopReasonV3::EndOfGeneration)),
+        Err(E::CommitmentNotCanonical(_))
+    ));
     assert!(matches!(check(&edited(good.clone(), |p| p.commitment.schedule_root = h(1))), Err(E::CommitmentNotCanonical(_))));
     assert!(matches!(check(&edited(good.clone(), |p| p.commitment.trace_manifest_root = h(1))), Err(E::CommitmentNotCanonical(_))));
     assert!(matches!(check(&edited(good.clone(), |p| p.commitment.trace_chunk_count = 2)), Err(E::CommitmentNotCanonical(_))));
@@ -290,7 +354,11 @@ fn every_way_a_tensor_commitment_is_not_the_canonical_one_is_refused_by_name() {
         "the class's ladder is the walk's bound"
     );
     for (name, edit) in [
-        ("trace_root", (|p: &mut PalwFpCommitmentTxPayloadV3| p.commitment.trace_root = Hash64::default()) as fn(&mut PalwFpCommitmentTxPayloadV3)),
+        (
+            "trace_root",
+            (|p: &mut PalwFpCommitmentTxPayloadV3| p.commitment.trace_root = Hash64::default())
+                as fn(&mut PalwFpCommitmentTxPayloadV3),
+        ),
         ("output_root", |p| p.commitment.output_root = Hash64::default()),
         ("execution_root", |p| p.commitment.execution_root = Hash64::default()),
     ] {
@@ -309,7 +377,10 @@ fn every_way_a_tensor_commitment_is_not_the_canonical_one_is_refused_by_name() {
         check(&payload_of(&j, ids.clone()))
     };
     assert!(matches!(with_body(&|b| b.prompt_tokens = 0), Err(E::EmptyIdsEncoding { what: "prompt", .. })));
-    assert!(matches!(with_body(&|b| b.negative_token_ids_hash = Hash64::default()), Err(E::EmptyIdsEncoding { what: "negative prompt", .. })));
+    assert!(matches!(
+        with_body(&|b| b.negative_token_ids_hash = Hash64::default()),
+        Err(E::EmptyIdsEncoding { what: "negative prompt", .. })
+    ));
 }
 
 #[test]
@@ -366,7 +437,10 @@ fn the_isolation_door_admits_a_tensor_claim_only_where_the_ruleset_carries_the_f
     assert_eq!(door(true, &bytes), Ok(()));
     let (private, _) = image_job(PALW_FP_PRIVACY_PANEL_DA, false);
     let private_bytes = borsh::to_vec(&payload_of(&private, vec![])).unwrap();
-    assert!(matches!(door(true, &private_bytes), Err(PalwFpV3Error::TensorClaim(why)) if why.contains("PanelDa")), "PanelDa is not armed at this door");
+    assert!(
+        matches!(door(true, &private_bytes), Err(PalwFpV3Error::TensorClaim(why)) if why.contains("PanelDa")),
+        "PanelDa is not armed at this door"
+    );
     assert_eq!(
         validate_palw_fp_gen_commitment_tx_v1(&private_bytes, true, FORM, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP),
         Ok(()),
@@ -426,12 +500,26 @@ fn the_walk_turns_exactly_the_admissible_payloads_into_the_object_the_fold_reads
     let accept_all = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
     let out = palw_fp_gen_objects_from_accepted_txs_v1(&txs, net(), true, ladder, FORM, accept_all);
     assert_eq!(out.objects.len(), 2, "the two honest claims: {:?}", out.skipped);
-    assert_eq!(out.skipped.len(), 3, "the bad root, the other network and the torn tensor payload; junk and a native transaction are not the walk's");
+    assert_eq!(
+        out.skipped.len(),
+        3,
+        "the bad root, the other network and the torn tensor payload; junk and a native transaction are not the walk's"
+    );
     // The object is what the fold reads.
     let first = &out.objects[0];
     assert_eq!(first.carrier, txs[0].id());
     let PalwConsensusObjectV2::GenTensorCommitted {
-        claim, class_id, bond, executor_pubkey, work_leaves, prompt_token_ids, trace_root, output_root, execution_root, job_pin, job: read,
+        claim,
+        class_id,
+        bond,
+        executor_pubkey,
+        work_leaves,
+        prompt_token_ids,
+        trace_root,
+        output_root,
+        execution_root,
+        job_pin,
+        job: read,
     } = &first.object
     else {
         panic!("a tensor claim's object")
@@ -442,10 +530,14 @@ fn the_walk_turns_exactly_the_admissible_payloads_into_the_object_the_fold_reads
     assert_eq!(*executor_pubkey, job.envelope.executor_pubkey);
     assert_eq!(*work_leaves, LEAVES);
     assert_eq!(*prompt_token_ids, ids, "a public claim's prompt ids then its negative ids");
-    assert_eq!((*trace_root, *output_root, *execution_root), (good.commitment.trace_root, good.commitment.output_root, good.commitment.execution_root));
+    assert_eq!(
+        (*trace_root, *output_root, *execution_root),
+        (good.commitment.trace_root, good.commitment.output_root, good.commitment.execution_root)
+    );
     assert_eq!(*job_pin, kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&good.commitment));
     assert_eq!(**read, job);
-    let PalwConsensusObjectV2::GenTensorCommitted { prompt_token_ids: private_ids, job: private_job, .. } = &out.objects[1].object else {
+    let PalwConsensusObjectV2::GenTensorCommitted { prompt_token_ids: private_ids, job: private_job, .. } = &out.objects[1].object
+    else {
         panic!("a private claim's object")
     };
     assert!(private_ids.is_empty(), "PanelDa carries none");
@@ -492,7 +584,9 @@ fn an_embedding_claim_is_an_object_with_no_ids() {
     let accept_all = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
     let out = palw_fp_gen_objects_from_accepted_txs_v1(&[tx_of(&payload)], net(), true, ladder, FORM, accept_all);
     let [one] = &out.objects[..] else { panic!("one object: {:?}", out.skipped) };
-    let PalwConsensusObjectV2::GenTensorCommitted { prompt_token_ids, job: read, .. } = &one.object else { panic!("a tensor claim's object") };
+    let PalwConsensusObjectV2::GenTensorCommitted { prompt_token_ids, job: read, .. } = &one.object else {
+        panic!("a tensor claim's object")
+    };
     assert!(prompt_token_ids.is_empty());
     assert_eq!(**read, job);
     assert_eq!(job.text_commitments(), (Hash64::default(), 0, Hash64::default(), 0));

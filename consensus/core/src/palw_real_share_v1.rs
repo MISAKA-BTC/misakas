@@ -244,7 +244,12 @@ pub const PALW_FLOOR_STATE_LOG_TAG_V1: &str = "[palw-floor-state]";
 /// **The floor-state line**: `[palw-floor-state] daa=<N> block=<H> <from>-><to> last_blue=<n|-> until=<n|-> last_probe_end=<n|->`,
 /// where `from` and `to` are `idle`, `probe` or `normal` and the three fields describe the NEW state (`-` where the mode has no
 /// such value, or no probe has ended). Pure, so the format is pinned by a test.
-pub fn palw_floor_state_log_line_v1(block: &dyn std::fmt::Display, daa: u64, from: &PalwFloorStateV1, to: &PalwFloorStateV1) -> String {
+pub fn palw_floor_state_log_line_v1(
+    block: &dyn std::fmt::Display,
+    daa: u64,
+    from: &PalwFloorStateV1,
+    to: &PalwFloorStateV1,
+) -> String {
     let field = |v: Option<u64>| v.map_or_else(|| "-".to_string(), |v| v.to_string());
     let (last_blue, until) = match to.mode {
         PalwFloorModeV1::Idle => (None, None),
@@ -404,7 +409,8 @@ pub struct PalwClockMergesetFactsV1 {
 pub fn palw_clock_tick_source_v1(facts: &PalwClockMergesetFactsV1, attempt_ticks: bool) -> (bool, u64) {
     let beat = facts.priced == 0 && facts.heartbeats > 0;
     let attempt = attempt_ticks && facts.priced == 0 && facts.attempts > 0;
-    let newest = if attempt_ticks { facts.newest_beat_ms.into_iter().chain(facts.newest_attempt_ms).max() } else { facts.newest_beat_ms };
+    let newest =
+        if attempt_ticks { facts.newest_beat_ms.into_iter().chain(facts.newest_attempt_ms).max() } else { facts.newest_beat_ms };
     (beat || attempt, newest.unwrap_or(0))
 }
 
@@ -471,7 +477,8 @@ impl Params {
                 "palw_floor_reserve_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_floor_reserve_v1",
             ));
         }
-        let below = |fence: Option<ForkActivation>, at: u64| fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
+        let below =
+            |fence: Option<ForkActivation>, at: u64| fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
         if let Some(at) = armed {
             if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
                 return Err(PalwModeV2Error::Invalid("palw_floor_reserve_v1 is a ConsensusV2 rule: this ruleset has no V2 bundle"));
@@ -573,7 +580,11 @@ mod tests {
                     }
                 }
                 let horizon = (now - start).max(1);
-                assert!(daa <= horizon / I + 2, "attempt_ticks={attempt_ticks}: {daa} ticks over {horizon} ms (≤ {})", horizon / I + 2);
+                assert!(
+                    daa <= horizon / I + 2,
+                    "attempt_ticks={attempt_ticks}: {daa} ticks over {horizon} ms (≤ {})",
+                    horizon / I + 2
+                );
             }
         }
     }
@@ -629,7 +640,11 @@ mod tests {
                 "daa {daa}: a BLUE one is Normal whatever the cooldown, and leaves it where it was"
             );
         }
-        assert_eq!(palw_floor_step_v1(cooling, 100 + COOL, red()), st(Probe { until: 100 + COOL + PROBE }, Some(100)), "and runs at exactly COOL");
+        assert_eq!(
+            palw_floor_step_v1(cooling, 100 + COOL, red()),
+            st(Probe { until: 100 + COOL + PROBE }, Some(100)),
+            "and runs at exactly COOL"
+        );
         // Probe: RED changes nothing, BLUE makes it Normal; the probe's own end writes `last_probe_end`.
         let probe = st(Probe { until: 106 }, Some(7));
         assert_eq!(palw_floor_step_v1(probe, 103, red()), probe, "RED never extends a probe");
@@ -647,8 +662,16 @@ mod tests {
         assert_eq!(palw_floor_step_v1(normal, 210, red()), normal, "RED never extends Normal");
         assert_eq!(palw_floor_step_v1(normal, 200 + IDLE, None), normal, "still Normal at exactly floor_idle_slots");
         assert_eq!(palw_floor_step_v1(normal, 200 + IDLE + 1, None), st(Idle, None), "Idle one slot later");
-        assert_eq!(palw_floor_step_v1(normal, 200 + IDLE + 1, blue()), st(Normal { last_blue: 200 + IDLE + 1 }, None), "a BLUE after that is Normal again");
-        assert_eq!(palw_floor_step_v1(normal, 200 + IDLE + 1, red()), st(Probe { until: 200 + IDLE + 1 + PROBE }, None), "a RED after that probes");
+        assert_eq!(
+            palw_floor_step_v1(normal, 200 + IDLE + 1, blue()),
+            st(Normal { last_blue: 200 + IDLE + 1 }, None),
+            "a BLUE after that is Normal again"
+        );
+        assert_eq!(
+            palw_floor_step_v1(normal, 200 + IDLE + 1, red()),
+            st(Probe { until: 200 + IDLE + 1 + PROBE }, None),
+            "a RED after that probes"
+        );
         // A Normal that ended leaves `last_probe_end` where it was.
         assert_eq!(palw_floor_step_v1(st(Normal { last_blue: 50 }, Some(7)), 300, None), st(Idle, Some(7)));
     }
@@ -681,9 +704,15 @@ mod tests {
     /// **Several attempts in one block apply in the fold's order**, each on the state the one before left.
     #[test]
     fn several_attempts_in_one_slot_apply_in_the_folds_order() {
-        let run = |events: &[Option<PalwRealAcceptedV1>]| events.iter().fold(PalwFloorStateV1::default(), |s, e| palw_floor_step_v1(s, 500, *e));
+        let run = |events: &[Option<PalwRealAcceptedV1>]| {
+            events.iter().fold(PalwFloorStateV1::default(), |s, e| palw_floor_step_v1(s, 500, *e))
+        };
         assert_eq!(run(&[red(), blue()]), st(Normal { last_blue: 500 }, None), "Idle + [RED, BLUE]: Probe, then Normal");
-        assert_eq!(run(&[blue(), red()]), st(Normal { last_blue: 500 }, None), "Idle + [BLUE, RED]: Normal, and the RED changes nothing");
+        assert_eq!(
+            run(&[blue(), red()]),
+            st(Normal { last_blue: 500 }, None),
+            "Idle + [BLUE, RED]: Normal, and the RED changes nothing"
+        );
         assert_eq!(run(&[blue(), blue()]), st(Normal { last_blue: 500 }, None), "Idle + [BLUE, BLUE]: Normal");
         assert_eq!(run(&[red(), red(), red()]), st(Probe { until: 500 + PROBE }, None), "a burst of REDs is one probe");
     }
@@ -777,7 +806,11 @@ mod tests {
         // The derivation on other inputs: a rounding up, a floor of one, a ceiling.
         assert_eq!(palw_floor_idle_slots_for_v1(0, 0), 1, "never below one slot");
         assert_eq!(palw_floor_idle_slots_for_v1(PALW_REAL_SLOT_MS_V1 + 1, 0), 2, "rounds the gap up");
-        assert_eq!(palw_floor_idle_slots_for_v1(u64::MAX, u64::MAX), PALW_FLOOR_IDLE_SLOTS_MAX_V1, "saturating, capped, never a panic");
+        assert_eq!(
+            palw_floor_idle_slots_for_v1(u64::MAX, u64::MAX),
+            PALW_FLOOR_IDLE_SLOTS_MAX_V1,
+            "saturating, capped, never a panic"
+        );
         for gap in (0..40).map(|i| i * PALW_REAL_SLOT_MS_V1 / 2) {
             for margin in 0..4 {
                 assert!(palw_floor_idle_slots_for_v1(gap, margin) <= palw_floor_idle_slots_for_v1(gap + PALW_REAL_SLOT_MS_V1, margin));
@@ -785,9 +818,15 @@ mod tests {
             }
         }
         // The ceiling is an hour — the merge-depth duration — and the shipped constants sit inside it and in the fingerprint.
-        assert_eq!(PALW_FLOOR_IDLE_SLOTS_MAX_V1 * PALW_REAL_SLOT_MS_V1 / 1_000, crate::config::constants::consensus::MERGE_DEPTH_DURATION);
+        assert_eq!(
+            PALW_FLOOR_IDLE_SLOTS_MAX_V1 * PALW_REAL_SLOT_MS_V1 / 1_000,
+            crate::config::constants::consensus::MERGE_DEPTH_DURATION
+        );
         assert!((1..=PALW_FLOOR_IDLE_SLOTS_MAX_V1).contains(&PALW_FLOOR_IDLE_SLOTS_V1));
-        assert_eq!(palw_floor_reserve_value_v1(), [PALW_FLOOR_IDLE_SLOTS_V1, PALW_FLOOR_PROBE_SLOTS_V1, PALW_FLOOR_PROBE_COOLDOWN_SLOTS_V1]);
+        assert_eq!(
+            palw_floor_reserve_value_v1(),
+            [PALW_FLOOR_IDLE_SLOTS_V1, PALW_FLOOR_PROBE_SLOTS_V1, PALW_FLOOR_PROBE_COOLDOWN_SLOTS_V1]
+        );
     }
 
     /// The state's rooted form: the default is `None`; every other state round-trips borsh; it prints its mode.
@@ -800,7 +839,10 @@ mod tests {
             assert_eq!(PalwFloorStateV1::try_from_slice(&bytes).expect("decodes"), state);
         }
         assert_eq!(PalwFloorStateV1::default().to_string(), "idle");
-        assert!(st(Probe { until: 9 }, None).to_string().contains("probe") && st(Normal { last_blue: 3 }, None).to_string().contains("normal"));
+        assert!(
+            st(Probe { until: 9 }, None).to_string().contains("probe")
+                && st(Normal { last_blue: 3 }, None).to_string().contains("normal")
+        );
     }
 
     /// **The floor-state line's format is pinned** — an operator and the drill grep it.
@@ -867,12 +909,18 @@ mod tests {
         assert!(!palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { due_slots: base.after_slots - 1, ..base }), "not yet");
         assert!(!palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { stagger: 4, ..base }), "this bond waits four slots longer");
         assert!(palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { stagger: 4, due_slots: base.after_slots + 4, ..base }));
-        assert!(palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { after_slots: 5, due_slots: 5, ..base }), "a drill's shorter wait is the wait");
+        assert!(
+            palw_floor_anchor_duty_v1(&PalwFloorAnchorDutyInputV1 { after_slots: 5, due_slots: 5, ..base }),
+            "a drill's shorter wait is the wait"
+        );
         for (what, input) in [
             ("no claim due", PalwFloorAnchorDutyInputV1 { binder_due: false, ..base }),
             ("a REAL class", PalwFloorAnchorDutyInputV1 { is_base_class: false, ..base }),
             ("another hold", PalwFloorAnchorDutyInputV1 { hold_is_class_not_admitting: false, ..base }),
-            ("another registry refusal", PalwFloorAnchorDutyInputV1 { class_refusal: Some("class … is Prefetching under the model registry"), ..base }),
+            (
+                "another registry refusal",
+                PalwFloorAnchorDutyInputV1 { class_refusal: Some("class … is Prefetching under the model registry"), ..base },
+            ),
             ("no refusal", PalwFloorAnchorDutyInputV1 { class_refusal: None, ..base }),
         ] {
             assert!(!palw_floor_anchor_duty_v1(&input), "{what}: no duty");

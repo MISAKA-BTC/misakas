@@ -66,12 +66,8 @@ impl PalwIntervalFlow {
                     // RFC-0007 §II.8: a weight-block request (bit 26) carries the class's root tag in the same field, and the signature binds it.
                     let leaf_index =
                         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(inner.interval_index)
-                            .or_else(|| {
-                                kaspa_consensus_core::palw_tir_shard_v1::palw_tir_rows_request_decode_v1(inner.interval_index)
-                            })
-                            .or_else(|| {
-                                kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_decode_v1(inner.interval_index)
-                            })
+                            .or_else(|| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_rows_request_decode_v1(inner.interval_index))
+                            .or_else(|| kaspa_consensus_core::palw_tir_shard_v1::palw_tir_runs_request_decode_v1(inner.interval_index))
                             .or_else(|| {
                                 kaspa_consensus_core::palw_weight_block_v1::palw_weight_block_request_decode_v1(inner.interval_index)
                                     .map(|(site, _)| site)

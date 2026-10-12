@@ -257,8 +257,10 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disclosure_duties_v1(mine)
     }
 
-    pub fn palw_staged_owned_progress_v1(&self,key:(kaspa_consensus_core::Hash64,kaspa_consensus_core::palw_state_v2::PalwBondKeyV2))
-        ->Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+    pub fn palw_staged_owned_progress_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         self.consensus.palw_staged_owned_progress_v1(key)
     }
 
@@ -1222,19 +1224,32 @@ impl ConsensusSessionOwned {
     pub async fn async_clear_pruning_utxo_set(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.clear_pruning_utxo_set()).await
     }
-    pub async fn async_begin_pruning_point_import(&self, point: BlockHash) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionV1> {
+    pub async fn async_begin_pruning_point_import(
+        &self,
+        point: BlockHash,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionV1> {
         self.clone().spawn_blocking(move |c| c.begin_pruning_point_import(point)).await
     }
-    pub async fn async_pruning_import_session(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionStateV1> {
+    pub async fn async_pruning_import_session(
+        &self,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<PruningImportSessionStateV1> {
         self.clone().spawn_blocking(move |c| c.pruning_import_session()).await
     }
-    pub async fn async_pruning_import_status(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<(PruningImportSessionStateV1, bool)> {
+    pub async fn async_pruning_import_status(
+        &self,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<(PruningImportSessionStateV1, bool)> {
         self.clone().spawn_blocking(move |c| c.pruning_import_status()).await
     }
-    pub async fn async_clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+    pub async fn async_clear_pruning_utxo_set_for_session(
+        &self,
+        session: PruningImportSessionV1,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.clear_pruning_utxo_set_for_session(session)).await
     }
-    pub async fn async_complete_pruning_point_import_for_session(&self, session: PruningImportSessionV1) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+    pub async fn async_complete_pruning_point_import_for_session(
+        &self,
+        session: PruningImportSessionV1,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.complete_pruning_point_import_for_session(session)).await
     }
     pub async fn async_is_pruning_utxoset_stable(&self) -> bool {
@@ -1249,7 +1264,10 @@ impl ConsensusSessionOwned {
     pub async fn async_set_pruning_utxoset_unstable(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.set_pruning_utxoset_stable_flag(false)).await
     }
-    pub async fn async_complete_pruning_point_import(&self, point: BlockHash) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
+    pub async fn async_complete_pruning_point_import(
+        &self,
+        point: BlockHash,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {
         self.clone().spawn_blocking(move |c| c.complete_pruning_point_import(point)).await
     }
     pub async fn async_set_pruning_utxoset_stable(&self) -> kaspa_consensus_core::errors::pruning::PruningImportResult<()> {

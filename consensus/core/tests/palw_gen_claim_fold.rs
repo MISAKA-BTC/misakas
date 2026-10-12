@@ -272,7 +272,15 @@ fn prompt() -> Vec<u32> {
 }
 
 /// An image job of the toy class: the prompt, the guidance at the grid's low end, offered step count `steps_position`.
-fn image_job(class: &PalwGenClassV1, class_id: Hash64, n: u64, privacy: u8, nonce: u8, seed: u8, steps_position: usize) -> PalwGenJobV1 {
+fn image_job(
+    class: &PalwGenClassV1,
+    class_id: Hash64,
+    n: u64,
+    privacy: u8,
+    nonce: u8,
+    seed: u8,
+    steps_position: usize,
+) -> PalwGenJobV1 {
     let PalwGenProfileOffersV1::Image(offers) = &class.offers.profile else { unreachable!() };
     let g = offers.guidance.as_ref().unwrap();
     PalwGenJobV1 {
@@ -361,7 +369,11 @@ fn a_tensor_claim_folds_as_a_weightless_claim_of_its_class() {
     let claim = net.chain.claim(&id);
     assert!(matches!(&claim.source, PalwClaimSourceV2::FreePrompt { quanta: 0, spent } if spent.is_empty()), "no quanta, no spend");
     assert_eq!((claim.pwu, claim.rights_reserved, claim.escrowed_reward, claim.immature_contribution), (0, 0, 0, 0), "weightless");
-    assert_eq!((claim.class_id, claim.bond, claim.work_leaves), (net.image, bond, leaves), "the chain's own count of the job's leaves");
+    assert_eq!(
+        (claim.class_id, claim.bond, claim.work_leaves),
+        (net.image, bond, leaves),
+        "the chain's own count of the job's leaves"
+    );
     assert!(matches!(claim.phase, PalwClaimPhaseV2::Provisional));
     assert_eq!((claim.trace_root, claim.output_root), (h(0x5701), h(0x0A01)), "the roots as committed");
     assert_eq!(claim.trace_chunk_count, 1);
@@ -398,7 +410,13 @@ fn below_either_fence_a_tensor_claim_is_refused_by_name() {
     let (object, _) = image_claim(&net, EXECUTOR, 1, 0x33, 0);
     // Below the fence: the second lock behind the walk's drop (a block at AT - 1 on the pre-registration state).
     let fresh = Chain::new(armed());
-    let below = fresh.try_fold(&fresh.s, &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0), &[object.clone()], PalwBlockWorkV3::None, Hash64::default());
+    let below = fresh.try_fold(
+        &fresh.s,
+        &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0),
+        &[object.clone()],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    );
     assert!(matches!(&below, Err(PalwStateV2Error::GenObjectRefused(_))), "the generative fence's own lock fires first: {below:?}");
     // The generative fence alone (palw_fp_job_v5 pushed out): refused too — the lane's fence is the claim's.
     let mut p = armed();
@@ -409,7 +427,8 @@ fn below_either_fence_a_tensor_claim_is_refused_by_name() {
     late.room = true;
     late.s = net.chain.s.clone();
     late.sp = bundle(&late.p).state.clone();
-    let refused = late.try_fold(&late.s, &ctx(0xCA_0000 + AT + 1, AT + 1, AT + 1, 0), &[object], PalwBlockWorkV3::None, Hash64::default());
+    let refused =
+        late.try_fold(&late.s, &ctx(0xCA_0000 + AT + 1, AT + 1, AT + 1, 0), &[object], PalwBlockWorkV3::None, Hash64::default());
     assert!(matches!(&refused, Err(PalwStateV2Error::GenClaimRefused(_))), "{refused:?}");
 }
 
@@ -441,7 +460,9 @@ fn every_way_a_tensor_claim_is_not_its_classs_is_refused_by_name() {
     // The class does not exist: the registry's own refusal, by name.
     let mut stranger = good.clone();
     stranger.envelope.class_id = h(0xEE);
-    assert!(matches!(fold_one(&net, claim_object(&stranger, prompt(), leaves)), Err(PalwStateV2Error::MissingClass(id)) if id == h(0xEE)));
+    assert!(
+        matches!(fold_one(&net, claim_object(&stranger, prompt(), leaves)), Err(PalwStateV2Error::MissingClass(id)) if id == h(0xEE))
+    );
 
     // A text class takes V4/V5 jobs; a tensor job of it is refused.
     let mut text = good.clone();
@@ -594,7 +615,11 @@ fn audit_1004_generative_registrations_take_one_place_a_block() {
         assert!(one.is_ok(), "fence {on}: one registration folds: {:?}", one.err());
         let two = chain.try_fold(&chain.s, &c, &[a, b], PalwBlockWorkV3::None, Hash64::default());
         if on {
-            assert!(matches!(two, Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded { .. })), "a second registration in the block: {:?}", two.err());
+            assert!(
+                matches!(two, Err(PalwStateV2Error::TirRegistrationsPerBlockExceeded { .. })),
+                "a second registration in the block: {:?}",
+                two.err()
+            );
         } else {
             assert!(two.is_ok(), "below the fence two fold: {:?}", two.err());
         }

@@ -18,7 +18,9 @@ use rcore::*;
 use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
-use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP};
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+};
 use kaspa_consensus_core::palw_gen_admission_v1::*;
 use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_root_v1;
 use kaspa_consensus_core::palw_gen_claim_v1::*;
@@ -26,11 +28,15 @@ use kaspa_consensus_core::palw_gen_class_v1::*;
 use kaspa_consensus_core::palw_gen_close_v1::*;
 use kaspa_consensus_core::palw_gen_job_v1::*;
 use kaspa_consensus_core::palw_gen_one_move_v1::*;
-use kaspa_consensus_core::palw_gen_step_v1::{PalwGenLeafCoordV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1};
+use kaspa_consensus_core::palw_gen_step_v1::{
+    PalwGenLeafCoordV1, palw_gen_stage_root_v1, palw_gen_step_leaf_hash_v1, palw_gen_step_root_v1,
+};
 use kaspa_consensus_core::palw_gen_v1::{PalwGenFenceV1, PalwGenProfileV1};
 use kaspa_consensus_core::palw_gen_worker_v1::{PalwGenExecutionV1, palw_gen_execute_tensor_v1};
 use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
-use kaspa_consensus_core::palw_state_v2::{PalwClaimSourceV2, PalwCourtVerdictV2, PalwStateV2Error, PalwVoidReasonV2, palw_object_is_gen_v1};
+use kaspa_consensus_core::palw_state_v2::{
+    PalwClaimSourceV2, PalwCourtVerdictV2, PalwStateV2Error, PalwVoidReasonV2, palw_object_is_gen_v1,
+};
 use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
 use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
@@ -286,8 +292,9 @@ fn env() -> Env {
     let (registrant, _, _) = floor_producer(&chain.p);
     let (floor, _, target, slash) = genesis_classes(&chain.p)[0];
     let target = chain.s.class_target(&floor).map(|t| t.target).unwrap_or(target);
-    let object = palw_gen_post_genesis_registration_v1(f.class.clone(), f.row.artifact_root, 0, target, slash, AT, registrant, vec![9; 16])
-        .expect("the builder counts the yardstick job");
+    let object =
+        palw_gen_post_genesis_registration_v1(f.class.clone(), f.row.artifact_root, 0, target, slash, AT, registrant, vec![9; 16])
+            .expect("the builder counts the yardstick job");
     let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
         bond: bond_key(n),
         pubkey: fp_pubkey_of(n),
@@ -306,7 +313,11 @@ fn env() -> Env {
 }
 
 /// The object the acceptance walk makes of an execution's commitment, and the payload it came from.
-fn commit(job: &PalwGenJobV1, e: &PalwGenExecutionV1, binding: &PalwGenTensorBindingV1) -> (PalwConsensusObjectV2, kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3) {
+fn commit(
+    job: &PalwGenJobV1,
+    e: &PalwGenExecutionV1,
+    binding: &PalwGenTensorBindingV1,
+) -> (PalwConsensusObjectV2, kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3) {
     let payload = palw_gen_payload_v1(
         job,
         e.space.leaf_count(),
@@ -315,9 +326,19 @@ fn commit(job: &PalwGenJobV1, e: &PalwGenExecutionV1, binding: &PalwGenTensorBin
         prompt(),
         vec![7u8; MLDSA87_SIGNATURE_LEN],
     );
-    assert_eq!(payload.commitment.execution_root, binding.committed_execution_root, "the worker's binding is the commitment's execution root");
+    assert_eq!(
+        payload.commitment.execution_root, binding.committed_execution_root,
+        "the worker's binding is the commitment's execution root"
+    );
     let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, borsh::to_vec(&payload).unwrap());
-    let out = palw_fp_gen_objects_from_accepted_txs_v1(&[tx], net_domain(), true, |_| PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, FORM, |_, _, _, _| true);
+    let out = palw_fp_gen_objects_from_accepted_txs_v1(
+        &[tx],
+        net_domain(),
+        true,
+        |_| PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+        FORM,
+        |_, _, _, _| true,
+    );
     let [one] = &out.objects[..] else { panic!("the walk makes one object: {:?}", out.skipped) };
     (one.object.clone(), payload)
 }
@@ -335,7 +356,8 @@ fn accuse(env: &Env, claim_id: Hash64, proof: PalwCourtVerdictProofV2) -> (PalwG
     let ladder = env.chain.s.class_step_ladder_v1(&claim.class_id, court.max_step_leaf_count());
     let mut a = palw_gen_one_move_accusation_v1(claim_id, &claim, bond_key(ACCUSER), PalwCourtVerdictV2::ExecutorGuilty, proof);
     a.signature = vec![1; 8];
-    let verdict = palw_gen_one_move_verdict_v1(&env.chain.s, &claim, &a, &court, ladder, FORM).unwrap_or_else(|e| panic!("the proof adjudicates: {e}"));
+    let verdict = palw_gen_one_move_verdict_v1(&env.chain.s, &claim, &a, &court, ladder, FORM)
+        .unwrap_or_else(|e| panic!("the proof adjudicates: {e}"));
     a.verdict = verdict;
     (a, verdict)
 }
@@ -353,11 +375,20 @@ fn the_workers_run_the_commitment_and_the_chains_count_are_one_execution() {
     let job = job_of(&env.f, EXECUTOR, 1, 0x33);
     let (e, binding) = run(&env.f, &job);
     let (object, payload) = commit(&job, &e, &binding);
-    let PalwConsensusObjectV2::GenTensorCommitted { trace_root, output_root, execution_root, work_leaves, .. } = &object else { unreachable!() };
-    assert_eq!((*trace_root, *output_root, *execution_root, *work_leaves), (binding.step_root(), binding.output_root, binding.committed_execution_root, binding.step_leaf_count));
+    let PalwConsensusObjectV2::GenTensorCommitted { trace_root, output_root, execution_root, work_leaves, .. } = &object else {
+        unreachable!()
+    };
+    assert_eq!(
+        (*trace_root, *output_root, *execution_root, *work_leaves),
+        (binding.step_root(), binding.output_root, binding.committed_execution_root, binding.step_leaf_count)
+    );
     // The chain's closed-form count of the job's step space is the worker's enumeration.
     let accepted = palw_gen_job_resolve_class_v1(&job, &env.f.row).unwrap();
-    assert_eq!(palw_gen_job_step_leaves_v1(&env.f.row, &accepted), Ok(binding.step_leaf_count), "the chain counts what the worker commits");
+    assert_eq!(
+        palw_gen_job_step_leaves_v1(&env.f.row, &accepted),
+        Ok(binding.step_leaf_count),
+        "the chain counts what the worker commits"
+    );
     assert_eq!(payload.claim_id(), claim_id_of(&object));
 }
 
@@ -431,9 +462,16 @@ fn an_honest_claim_accused_is_acquitted_and_its_accuser_is_charged() {
         let close = ev.output_close(tile).expect("the close builds");
         let claim = env.chain.claim(&id);
         let court = bundle(&env.chain.p).court;
-        let mut a = palw_gen_one_move_accusation_v1(id, &claim, bond_key(ACCUSER), PalwCourtVerdictV2::ExecutorGuilty, PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(close) });
+        let mut a = palw_gen_one_move_accusation_v1(
+            id,
+            &claim,
+            bond_key(ACCUSER),
+            PalwCourtVerdictV2::ExecutorGuilty,
+            PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(close) },
+        );
         a.signature = vec![1; 8];
-        let verdict = palw_gen_one_move_verdict_v1(&env.chain.s, &claim, &a, &court, court.max_step_leaf_count(), FORM).expect("adjudicates");
+        let verdict =
+            palw_gen_one_move_verdict_v1(&env.chain.s, &claim, &a, &court, court.max_step_leaf_count(), FORM).expect("adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest tile acquits");
         if tile == 0 {
             a.verdict = verdict;
@@ -442,7 +480,10 @@ fn an_honest_claim_accused_is_acquitted_and_its_accuser_is_charged() {
     }
     let claim = env.chain.claim(&id);
     assert!(matches!(claim.phase, PalwClaimPhaseV2::Provisional), "the claim stands: {:?}", claim.phase);
-    assert!(env.chain.s.bond(&bond_key(ACCUSER)).expect("the accuser").collateral < accuser_collateral, "a false accusation is charged");
+    assert!(
+        env.chain.s.bond(&bond_key(ACCUSER)).expect("the accuser").collateral < accuser_collateral,
+        "a false accusation is charged"
+    );
 }
 
 #[test]
@@ -463,7 +504,9 @@ fn the_accusation_is_refused_by_name_where_it_is_not_a_pipeline_claims_court() {
     let (good, _) = accuse(&env, id, PalwCourtVerdictProofV2::GenOutputTile { close: Box::new(close) });
     fn fold(env: &Env, a: &PalwGenOneMoveAccusationV1) -> Result<(), PalwStateV2Error> {
         let at = env.chain.daa + 1;
-        env.chain.try_fold(&env.chain.s, &ctx(0xCA_0000 + at, at, at, 0), &[object_of(a)], PalwBlockWorkV3::None, Hash64::default()).map(|_| ())
+        env.chain
+            .try_fold(&env.chain.s, &ctx(0xCA_0000 + at, at, at, 0), &[object_of(a)], PalwBlockWorkV3::None, Hash64::default())
+            .map(|_| ())
     }
     assert!(fold(&env, &good).is_ok(), "the control folds");
     // Another claim: not on the chain.
@@ -507,7 +550,13 @@ fn an_accusation_below_the_generative_fence_is_refused_and_one_of_another_class_
     assert!(palw_object_is_gen_v1(&object_of(&a)), "a generative object: dropped by name below the fence");
     // A fresh state below the fence refuses it by name (the lock before any arm).
     let fresh = Chain::new(armed());
-    let below = fresh.try_fold(&fresh.s, &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0), &[object_of(&a)], PalwBlockWorkV3::None, Hash64::default());
+    let below = fresh.try_fold(
+        &fresh.s,
+        &ctx(0xCA_0000 + AT - 1, AT - 1, AT - 1, 0),
+        &[object_of(&a)],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+    );
     assert!(matches!(below, Err(PalwStateV2Error::GenObjectRefused(_))), "{below:?}");
     // The shape: a signature, a generative close, the roots the proof's binding commits, not one's own claim.
     let mut unsigned = a.clone();

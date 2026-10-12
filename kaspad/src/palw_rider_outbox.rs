@@ -3,11 +3,7 @@
 //! finished `AttemptRidersV1` object here, in process: a plain queue, drained once a tick by the panel loop into its carrier queue.
 //! What a restart loses is the queue (a lead whose riders were not filed inside the window simply keeps its whole carve).
 
-use kaspa_consensus_core::{
-    Hash64,
-    palw_attempt_v2::PalwAttemptEnvelopeV2,
-    palw_state_v2::PalwConsensusObjectV2,
-};
+use kaspa_consensus_core::{Hash64, palw_attempt_v2::PalwAttemptEnvelopeV2, palw_state_v2::PalwConsensusObjectV2};
 use std::sync::Mutex;
 
 /// The court-queue round the riders ride under (lane B's is `u32::MAX − 7`, the audit duty's `− 8`).

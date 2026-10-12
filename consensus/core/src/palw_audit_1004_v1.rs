@@ -121,10 +121,14 @@ impl Params {
         }
         let below = |fence: Option<ForkActivation>| fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= at);
         if !below(self.palw_economic_safety) {
-            return Err(PalwModeV2Error::Invalid("palw_audit_1004_v1 needs palw_economic_safety at or below it: it amends that bundle's folds"));
+            return Err(PalwModeV2Error::Invalid(
+                "palw_audit_1004_v1 needs palw_economic_safety at or below it: it amends that bundle's folds",
+            ));
         }
         if !below(self.palw_model_registry) {
-            return Err(PalwModeV2Error::Invalid("palw_audit_1004_v1 needs palw_model_registry at or below it: it amends the registry's folds"));
+            return Err(PalwModeV2Error::Invalid(
+                "palw_audit_1004_v1 needs palw_model_registry at or below it: it amends the registry's folds",
+            ));
         }
         Ok(())
     }

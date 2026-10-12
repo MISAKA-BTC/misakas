@@ -458,6 +458,7 @@ fn a_valid_wide_panel_checkpoint_fits_the_import_envelope() {
     let bound = ready.fold(&step(h(4), 5, 13, vec![], vec![]), &view).unwrap().0;
     assert_eq!(binding(&bound, 10).seats.len(), MAX_CANDIDATES_V1 as usize);
     let bytes = borsh::to_vec(&bound).unwrap();
-    let restored = PermissionlessPanelStateV1::import(&bytes, bound.root(), h(700), h(701), config).expect("a valid bound checkpoint fits");
+    let restored =
+        PermissionlessPanelStateV1::import(&bytes, bound.root(), h(700), h(701), config).expect("a valid bound checkpoint fits");
     assert_eq!(restored, bound);
 }

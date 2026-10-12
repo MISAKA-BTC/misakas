@@ -14,8 +14,8 @@
 //! mempool, the production template and the real block fold. The producer answers what it owes from ITS capture (its obligation,
 //! never the verifier's material). The outcome is read back from the chain.
 use super::palw_service_public_e2e::{
-    Chain, Funding, OUTSIDER, ServiceRun, card_payout_payload, card_payout_spk, card_pubkey, fixture_config, panel_config, pool_heartbeat,
-    signed,
+    Chain, Funding, OUTSIDER, ServiceRun, card_payout_payload, card_payout_spk, card_pubkey, fixture_config, panel_config,
+    pool_heartbeat, signed,
 };
 use super::*;
 use kaspa_consensus::consensus::test_consensus::TestConsensusFactory;
@@ -127,7 +127,14 @@ fn op_census(material: &[u8]) -> BTreeMap<String, u64> {
 
 /// **Card `card`'s attempt over a REAL floor execution**, honest or with `lie`, winning its class lottery the way a producer does
 /// (another nonce bucket is another anchor, another job, another inference); inserted through the real pipeline.
-async fn real_attempt(chain: &mut Chain, backend: &Base0Backend, card: usize, name: &'static str, lie: Lie, expect: Expect) -> Produced {
+async fn real_attempt(
+    chain: &mut Chain,
+    backend: &Base0Backend,
+    card: usize,
+    name: &'static str,
+    lie: Lie,
+    expect: Expect,
+) -> Produced {
     use kaspa_consensus_core::hashing::header::pre_pow_hash_64;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2,
@@ -317,9 +324,15 @@ async fn producer_answers(
             }
             PalwDaUnitV1::LegacyHeldV2(unit) => {
                 // LG14-B's tag 158 from the producer's own retention (its node's DA worker builds the same).
-                let (binding, answer) =
-                    crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(backend, &p.material, &p.prompt, p.roots, form, &unit)
-                        .unwrap_or_else(|e| panic!("the producer's capture answers {unit:?}: {e}"));
+                let (binding, answer) = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
+                    backend,
+                    &p.material,
+                    &p.prompt,
+                    p.roots,
+                    form,
+                    &unit,
+                )
+                .unwrap_or_else(|e| panic!("the producer's capture answers {unit:?}: {e}"));
                 let object = crate::palw_legacy_held_v2::palw_legacy_held_answer_object_v2(
                     &chain.network_domain,
                     p.claim,
@@ -388,7 +401,10 @@ async fn producer_send(chain: &mut Chain, floats: &mut [Funding], object: &PalwC
     chain.heartbeat(vec![]).await;
     let index = tx.outputs.len() - 1;
     let output = &tx.outputs[index];
-    *funding = (TransactionOutpoint::new(tx.id(), index as u32), UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false));
+    *funding = (
+        TransactionOutpoint::new(tx.id(), index as u32),
+        UtxoEntry::new(output.value, output.script_public_key.clone(), chain.daa(), false),
+    );
     true
 }
 
@@ -443,7 +459,8 @@ fn start_verifier(chain: &Chain, bond: PalwBondKeyV2, funding: &Funding) -> Veri
         rules,
     ));
     let dir = tempfile::tempdir().unwrap();
-    let service = Arc::new(PalwPanelService::new(panel_config(chain, dir.path(), bond, funding), manager.clone(), flow.clone(), config));
+    let service =
+        Arc::new(PalwPanelService::new(panel_config(chain, dir.path(), bond, funding), manager.clone(), flow.clone(), config));
     assert_eq!(service.bond, Some(bond.0));
     let cloned = service.clone();
     let task = tokio::spawn(async move {
@@ -544,7 +561,10 @@ async fn run_cases_on(cases: Vec<(&'static str, Lie, Expect)>, post_final: bool,
         assert!(
             std::time::Instant::now() < deadline,
             "the service made no objective progress on {:?}",
-            pending_convictions.iter().map(|p| (p.name, chain.tc.palw_legacy_dispute_v1(p.claim).map(|v| v.phase))).collect::<Vec<_>>()
+            pending_convictions
+                .iter()
+                .map(|p| (p.name, chain.tc.palw_legacy_dispute_v1(p.claim).map(|v| v.phase)))
+                .collect::<Vec<_>>()
         );
         let (pending, _) = verifier.pool.clone().get_all_transactions(TransactionQuery::TransactionsOnly).await;
         if !pending.is_empty() {
@@ -555,13 +575,20 @@ async fn run_cases_on(cases: Vec<(&'static str, Lie, Expect)>, post_final: bool,
             }
             let ids = pending.iter().map(|t| t.tx.id()).collect::<Vec<_>>();
             let block = pool_heartbeat(&mut chain, &verifier.manager, &verifier.pool).await;
-            assert!(ids.iter().any(|id| block.transactions.iter().any(|tx| tx.id() == *id)), "the template includes a service carrier");
+            assert!(
+                ids.iter().any(|id| block.transactions.iter().any(|tx| tx.id() == *id)),
+                "the template includes a service carrier"
+            );
             pool_heartbeat(&mut chain, &verifier.manager, &verifier.pool).await;
         }
         producer_answers(&mut chain, &mut floats, &backend, &produced, &|_| false, &mut refused).await;
         for p in &produced {
             let Some(view) = chain.tc.palw_legacy_dispute_v1(p.claim) else {
-                assert!(done_at.contains_key(&p.claim) || p.expect == Expect::Honest, "{}: the claim left the state unconvicted", p.name);
+                assert!(
+                    done_at.contains_key(&p.claim) || p.expect == Expect::Honest,
+                    "{}: the claim left the state unconvicted",
+                    p.name
+                );
                 continue;
             };
             if let Some(row) = view.record.as_ref().and_then(|r| r.live.get(&bond)) {
@@ -710,9 +737,17 @@ async fn g14v_trace_token_output_input_and_state_binding_lies_are_convicted_befo
             ),
             ("forged decode token", Lie::Drill(PalwDrillFaultV1::TokenNotSelected { pos: 0, lane: 7 }), Expect::Convicted),
             ("replaced output root", Lie::Drill(PalwDrillFaultV1::OutputRoot(Hash64::from_u64_word(0x0BAD))), Expect::Convicted),
-            ("relabelled prompt", Lie::Drill(PalwDrillFaultV1::RelabelPrompt { from: Hash64::from_u64_word(0x5EED) }), Expect::Convicted),
+            (
+                "relabelled prompt",
+                Lie::Drill(PalwDrillFaultV1::RelabelPrompt { from: Hash64::from_u64_word(0x5EED) }),
+                Expect::Convicted,
+            ),
             ("garbage prompt root", Lie::Drill(PalwDrillFaultV1::GarbagePromptRoot), Expect::Convicted),
-            ("replaced activation leg", Lie::Drill(PalwDrillFaultV1::ActivationRoot(Hash64::from_u64_word(0xAC7))), Expect::Withholding),
+            (
+                "replaced activation leg",
+                Lie::Drill(PalwDrillFaultV1::ActivationRoot(Hash64::from_u64_word(0xAC7))),
+                Expect::Withholding,
+            ),
             ("replaced checkpoint interval", Lie::Drill(PalwDrillFaultV1::CheckpointInterval(3)), Expect::Withholding),
         ],
         false,

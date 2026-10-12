@@ -344,7 +344,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
         // The checkpoint's tokenizer file (`tokenizer.json`, else another of `artifact::TOKENIZER_FILES_V1`) binds the artifact to
         // its tokenizer (zero when absent).
-        let tokenizer_id = match std::fs::read(artifact::tokenizer_path_in(&a.model).unwrap_or_else(|| a.model.join("tokenizer.json"))) {
+        let tokenizer_id = match std::fs::read(artifact::tokenizer_path_in(&a.model).unwrap_or_else(|| a.model.join("tokenizer.json")))
+        {
             Ok(bytes) => artifact::tokenizer_id_of(&bytes),
             Err(_) => [0u8; 64],
         };
@@ -377,9 +378,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                 e.1.extend(codes.iter().enumerate().map(|(i, c)| (*c as f64 * sv[i % sv.len()]) as f32));
             }
         };
-        let mut errs =
-            fidelity::site_errors_windows(&prep, &params_f, &stats, &policy, &mat, &eval[0], &windows, &every, &mut hook)
-                .map_err(|e| e.to_string())?;
+        let mut errs = fidelity::site_errors_windows(&prep, &params_f, &stats, &policy, &mat, &eval[0], &windows, &every, &mut hook)
+            .map_err(|e| e.to_string())?;
         if let Some(dir) = &a.dump_out {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             let raw = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
@@ -389,7 +389,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                 std::fs::write(dir.join(format!("{k}.int.f32")), raw(i)).map_err(|e| e.to_string())?;
                 widths.insert(k.clone(), serde_json::json!({ "width": w, "positions": f.len() / (*w).max(1) }));
             }
-            std::fs::write(dir.join("dump.json"), serde_json::to_vec_pretty(&widths).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("dump.json"), serde_json::to_vec_pretty(&widths).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
             log(format!("{} site(s) written to {}", kept.len(), dir.display()));
         }
         let growth = |v: &Vec<f64>| v.last().copied().unwrap_or(0.0) / v.first().copied().unwrap_or(0.0).max(1e-300);

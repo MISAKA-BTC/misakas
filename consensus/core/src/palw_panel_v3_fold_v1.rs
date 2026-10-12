@@ -164,18 +164,34 @@ fn attributed_v2(event: WorkFinalEventV1) -> AttributedWorkV1 {
 }
 
 impl PanelBeaconHistoryV1 for ChainPanelBeaconHistoryV1<'_> {
-    fn source_snapshot(&self, request: &BeaconRequestV1) -> Result<crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1, String> {
-        self.state.kernel_route.as_ref().ok_or("Panel source snapshot has no rooted kernel route")?.panel_source_snapshot_v1(request.epoch)
+    fn source_snapshot(
+        &self,
+        request: &BeaconRequestV1,
+    ) -> Result<crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1, String> {
+        self.state
+            .kernel_route
+            .as_ref()
+            .ok_or("Panel source snapshot has no rooted kernel route")?
+            .panel_source_snapshot_v1(request.epoch)
     }
 
-    fn opt_in_material(&self, context: &Digest) -> Result<(misaka_palw_challenge::OptInContractV4, Vec<misaka_palw_challenge::OptInSourceV4>), String> {
+    fn opt_in_material(
+        &self,
+        context: &Digest,
+    ) -> Result<(misaka_palw_challenge::OptInContractV4, Vec<misaka_palw_challenge::OptInSourceV4>), String> {
         let route = self.state.kernel_route.as_ref().ok_or("Panel sources have no rooted kernel route")?;
         let target = route.beacon_source_target_v4(context)?;
         if target.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment {
             return Err("source contract belongs to another subject".into());
         }
-        Ok((misaka_palw_challenge::OptInContractV4 { context_id: *context, terms_id: target.terms.id(),
-            source_final_by: target.terms.final_by }, route.beacon_opt_in_sources_v4(context)?))
+        Ok((
+            misaka_palw_challenge::OptInContractV4 {
+                context_id: *context,
+                terms_id: target.terms.id(),
+                source_final_by: target.terms.final_by,
+            },
+            route.beacon_opt_in_sources_v4(context)?,
+        ))
     }
 
     fn paid_material(&self, context: &Digest) -> Result<crate::palw_beacon_source_fee_v1::PaidBeaconMaterialV5, String> {
@@ -470,9 +486,14 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         // ReceiptLicensed releases Panel duties but retains the population. Compaction
         // waits for the existing retirement funnel's COMPLETE native removal, one full
         // checkpoint later, so its authority root authenticates the prior full record.
-        if self.builder.state.claims.contains_key(claim) || self.parent.claims.contains_key(claim)
-            || self.builder.state.palw_accusation_pending_v1(claim) || self.parent.palw_accusation_pending_v1(claim)
-            || self.parent.panel_v3().and_then(|engine| engine.claim(claim)).is_none() { return None; }
+        if self.builder.state.claims.contains_key(claim)
+            || self.parent.claims.contains_key(claim)
+            || self.builder.state.palw_accusation_pending_v1(claim)
+            || self.parent.palw_accusation_pending_v1(claim)
+            || self.parent.panel_v3().and_then(|engine| engine.claim(claim)).is_none()
+        {
+            return None;
+        }
         Some(eng::PanelRetirementAuthorityV1 {
             native_parent_root: *self.retirement_parent_root.get_or_init(|| self.parent.state_root()),
             native_parent_checkpoint: self.parent.last_point?.block,
@@ -585,17 +606,28 @@ pub(super) fn advance_v1(
 /// This is a prerequisite for paid Panel targets, whose authenticated sponsor
 /// and full consumer liability bound are still required before funding is enabled.
 fn freeze_source_epochs_v1(
-    builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, engine: &PermissionlessPanelStateV1,
-    inputs: &PalwPanelV3InputsV1, ctx: &PalwBlockContextV2,
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    engine: &PermissionlessPanelStateV1,
+    inputs: &PalwPanelV3InputsV1,
+    ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
-    use crate::palw_panel_source_snapshot_v1::{PalwPanelSourceSnapshotV1, PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1 as TABLE,
-        MAX_PANEL_SOURCE_SNAPSHOT_ITEMS_V1 as MAX_ITEMS};
+    use crate::palw_panel_source_snapshot_v1::{
+        MAX_PANEL_SOURCE_SNAPSHOT_ITEMS_V1 as MAX_ITEMS, PALW_PANEL_SOURCE_SNAPSHOT_TABLE_V1 as TABLE, PalwPanelSourceSnapshotV1,
+    };
     if !matches!(inputs.beacon_source, PalwPanelV3BeaconSourceV1::Chain)
-        || !builder.extras.kernel_route.as_ref().and_then(|e| e.beacon_source)
-            .is_some_and(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(ctx.daa_score)) {
+        || !builder
+            .extras
+            .kernel_route
+            .as_ref()
+            .and_then(|e| e.beacon_source)
+            .is_some_and(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(ctx.daa_score))
+    {
         return Ok(());
     }
-    let Some(policy) = inputs.approved_beacons.iter().find(|p| p.id() == engine.policy().beacon_scheme.as_bytes() && p.is_opt_in_source()) else {
+    let Some(policy) =
+        inputs.approved_beacons.iter().find(|p| p.id() == engine.policy().beacon_scheme.as_bytes() && p.is_opt_in_source())
+    else {
         return Ok(());
     };
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
@@ -605,7 +637,8 @@ fn freeze_source_epochs_v1(
     for ((table, _), bytes) in &route.aux {
         if *table == TABLE {
             let row: PalwPanelSourceSnapshotV1 = borsh::from_slice(bytes).map_err(|e| inconsistent("source snapshot carriage", e))?;
-            retained = retained.checked_add(row.eligible_profiles.len() + row.excluded_profiles.len() + row.assigned_work_ids.len())
+            retained = retained
+                .checked_add(row.eligible_profiles.len() + row.excluded_profiles.len() + row.assigned_work_ids.len())
                 .ok_or_else(|| inconsistent("source snapshots", "retention overflow"))?;
         }
     }
@@ -614,11 +647,15 @@ fn freeze_source_epochs_v1(
     let mut epochs: BTreeMap<u64, (BTreeSet<Digest>, BTreeSet<Digest>)> = BTreeMap::new();
     for record in engine.claim_rows().values() {
         let Some(seal) = &record.seal else { continue };
-        let release = seal.beacon_epoch.checked_mul(engine.policy().beacon_period_daa)
+        let release = seal
+            .beacon_epoch
+            .checked_mul(engine.policy().beacon_period_daa)
             .ok_or_else(|| inconsistent("source epoch", "release overflow"))?;
-        let deadline = release.checked_add(engine.policy().beacon_wait_daa)
-            .ok_or_else(|| inconsistent("source epoch", "deadline overflow"))?;
-        if ctx.daa_score < release || ctx.daa_score > deadline { continue; }
+        let deadline =
+            release.checked_add(engine.policy().beacon_wait_daa).ok_or_else(|| inconsistent("source epoch", "deadline overflow"))?;
+        if ctx.daa_score < release || ctx.daa_score > deadline {
+            continue;
+        }
         let (excluded, assigned) = epochs.entry(seal.beacon_epoch).or_default();
         excluded.insert(record.claim.class_id.as_bytes());
         assigned.insert(record.claim.work_id.as_bytes());
@@ -626,30 +663,73 @@ fn freeze_source_epochs_v1(
     let Some(parent_route) = parent.kernel_route.as_ref() else { return Ok(()) };
     let Some(opv) = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()) else { return Ok(()) };
     let ledger = parent_route.ledger().map_err(|e| inconsistent("source eligibility ledger", e))?;
-    let profiles = parent_route.opv_eligible_set_v1(&ledger, ctx.daa_score, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv));
+    let profiles =
+        parent_route.opv_eligible_set_v1(&ledger, ctx.daa_score, &crate::palw_opv_bootstrap_v1::OpvEligibilityViewV1::of(opv));
     for (epoch, (excluded_profiles, assigned_work_ids)) in epochs {
-        let Some(release) = epoch.checked_mul(engine.policy().beacon_period_daa) else { return Err(inconsistent("source epoch", "release overflow")) };
-        let Some(deadline) = release.checked_add(engine.policy().beacon_wait_daa) else { return Err(inconsistent("source epoch", "deadline overflow")) };
-        if ctx.daa_score < release || ctx.daa_score > deadline { continue; }
+        let Some(release) = epoch.checked_mul(engine.policy().beacon_period_daa) else {
+            return Err(inconsistent("source epoch", "release overflow"));
+        };
+        let Some(deadline) = release.checked_add(engine.policy().beacon_wait_daa) else {
+            return Err(inconsistent("source epoch", "deadline overflow"));
+        };
+        if ctx.daa_score < release || ctx.daa_score > deadline {
+            continue;
+        }
         let key = borsh::to_vec(&epoch).expect("epoch serializes");
         if builder.state.kernel_route.as_ref().expect("route exists").aux.contains_key(&(TABLE, key.clone())) {
             // Existing rooted rows must decode and bind exactly; never overwrite
             // malformed facts by reconstructing a different current population.
-            let row = builder.state.kernel_route.as_ref().unwrap().panel_source_snapshot_v1(epoch)
+            let row = builder
+                .state
+                .kernel_route
+                .as_ref()
+                .unwrap()
+                .panel_source_snapshot_v1(epoch)
                 .map_err(|e| inconsistent("frozen source subject", e))?;
-            row.validate_for(&BeaconRequestV1 { network: engine.network(), ruleset: engine.ruleset(), scheme: engine.policy().beacon_scheme,
-                epoch, release_daa: release, deadline_daa: deadline }, policy).map_err(|e| inconsistent("frozen source subject", e))?;
+            row.validate_for(
+                &BeaconRequestV1 {
+                    network: engine.network(),
+                    ruleset: engine.ruleset(),
+                    scheme: engine.policy().beacon_scheme,
+                    epoch,
+                    release_daa: release,
+                    deadline_daa: deadline,
+                },
+                policy,
+            )
+            .map_err(|e| inconsistent("frozen source subject", e))?;
             continue;
         }
-        let eligible_profiles: BTreeSet<_> = profiles.iter().map(|id| id.as_bytes()).filter(|id| !excluded_profiles.contains(id)).collect();
+        let eligible_profiles: BTreeSet<_> =
+            profiles.iter().map(|id| id.as_bytes()).filter(|id| !excluded_profiles.contains(id)).collect();
         let count = eligible_profiles.len() + excluded_profiles.len() + assigned_work_ids.len();
-        if count > MAX_ITEMS || retained.checked_add(count).is_none_or(|n| n > MAX_ITEMS) { continue; }
-        let snapshot = PalwPanelSourceSnapshotV1 { version: 1, network: engine.network(), ruleset: engine.ruleset(),
-            scheme: engine.policy().beacon_scheme, epoch, release_daa: release, deadline_daa: deadline,
-            committed_daa: ctx.daa_score, committed_block: ctx.block, checkpoint: engine.tip(), checkpoint_daa: engine.daa(),
-            eligible_profiles, excluded_profiles, assigned_work_ids };
-        let request = BeaconRequestV1 { network: engine.network(), ruleset: engine.ruleset(), scheme: engine.policy().beacon_scheme,
-            epoch, release_daa: release, deadline_daa: deadline };
+        if count > MAX_ITEMS || retained.checked_add(count).is_none_or(|n| n > MAX_ITEMS) {
+            continue;
+        }
+        let snapshot = PalwPanelSourceSnapshotV1 {
+            version: 1,
+            network: engine.network(),
+            ruleset: engine.ruleset(),
+            scheme: engine.policy().beacon_scheme,
+            epoch,
+            release_daa: release,
+            deadline_daa: deadline,
+            committed_daa: ctx.daa_score,
+            committed_block: ctx.block,
+            checkpoint: engine.tip(),
+            checkpoint_daa: engine.daa(),
+            eligible_profiles,
+            excluded_profiles,
+            assigned_work_ids,
+        };
+        let request = BeaconRequestV1 {
+            network: engine.network(),
+            ruleset: engine.ruleset(),
+            scheme: engine.policy().beacon_scheme,
+            epoch,
+            release_daa: release,
+            deadline_daa: deadline,
+        };
         snapshot.validate_for(&request, policy).map_err(|e| inconsistent("new source subject", e))?;
         builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&snapshot).expect("snapshot serializes")));
         retained += count;

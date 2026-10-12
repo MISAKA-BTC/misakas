@@ -59,8 +59,7 @@ pub(super) fn seal(
     if collateral.saturating_sub(builder.committed_at(signer, daa)) < policy.seal_deposit as u128 {
         return Err(refused("the sealer's free collateral does not cover the seal deposit"));
     }
-    let (Some(mature_daa), Some(expires_daa)) =
-        (daa.checked_add(policy.claim_seal_delay_daa), daa.checked_add(policy.seal_ttl_daa))
+    let (Some(mature_daa), Some(expires_daa)) = (daa.checked_add(policy.claim_seal_delay_daa), daa.checked_add(policy.seal_ttl_daa))
     else {
         return Err(refused("refutation seal clock overflows"));
     };
@@ -71,7 +70,8 @@ pub(super) fn seal(
     if !charge_route_budget_v1(builder, ctx, MODEL_REFUTATION_SEAL_WORK_V4, false)? {
         return Ok(());
     }
-    let row = ModelRefutationSealRowV4 { version: 4, seal: *seal, posted_daa: daa, mature_daa, expires_daa, deposit: policy.seal_deposit };
+    let row =
+        ModelRefutationSealRowV4 { version: 4, seal: *seal, posted_daa: daa, mature_daa, expires_daa, deposit: policy.seal_deposit };
     builder.write_kernel_row(
         MODEL_REFUTATION_SEAL_TABLE_V4,
         model_refutation_seal_key_v4(signer, slot),

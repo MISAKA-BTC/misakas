@@ -82,7 +82,11 @@ unsafe impl GlobalAlloc for Guard {
         unsafe { System.dealloc(p, l) }
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
-        let live = if new >= l.size() { LIVE.fetch_add(new - l.size(), Ordering::Relaxed) + (new - l.size()) } else { LIVE.fetch_sub(l.size() - new, Ordering::Relaxed) };
+        let live = if new >= l.size() {
+            LIVE.fetch_add(new - l.size(), Ordering::Relaxed) + (new - l.size())
+        } else {
+            LIVE.fetch_sub(l.size() - new, Ordering::Relaxed)
+        };
         if new > ONE_MAX || live > LIVE_MAX {
             too_big(new, live);
         }
@@ -126,7 +130,10 @@ fn declared(p: &misaka_palw_tir::TirProgramV1) -> (u64, u64, u64) {
 /// The tests' bound: no param over 64 MiB, under 20 M elements in all.
 fn assert_tiny(what: &str, p: &misaka_palw_tir::TirProgramV1) {
     let (largest, bytes, total) = declared(p);
-    assert!(bytes <= 64 << 20 && total <= 20_000_000, "{what}: declares a param of {largest} elements ({bytes} bytes) and {total} elements in all — not a tiny test program");
+    assert!(
+        bytes <= 64 << 20 && total <= 20_000_000,
+        "{what}: declares a param of {largest} elements ({bytes} bytes) and {total} elements in all — not a tiny test program"
+    );
 }
 
 fn root() -> PathBuf {
@@ -173,7 +180,9 @@ fn the_adapter_reads_every_fixture_into_generic_features() {
             assert!(matches!(l.residual, Residual::HyperConnection { .. }), "{n} layer {i}");
             match &l.mixer {
                 Mixer::GatedDeltaNet(_) => {}
-                Mixer::Attention(a) => assert!(a.sparse.is_some() && a.output_gate, "{n} layer {i}: sparse attention with a gated output"),
+                Mixer::Attention(a) => {
+                    assert!(a.sparse.is_some() && a.output_gate, "{n} layer {i}: sparse attention with a gated output")
+                }
                 m => panic!("{n} layer {i}: {m:?}"),
             }
         }
@@ -251,7 +260,11 @@ struct Case {
 }
 
 fn rows(v: &Value) -> Vec<Vec<f64>> {
-    v.as_array().expect("logits").iter().map(|r| r.as_array().expect("row").iter().map(|x| x.as_f64().expect("float")).collect()).collect()
+    v.as_array()
+        .expect("logits")
+        .iter()
+        .map(|r| r.as_array().expect("row").iter().map(|x| x.as_f64().expect("float")).collect())
+        .collect()
 }
 
 fn case(name: &str) -> Arc<Case> {
@@ -270,7 +283,8 @@ fn build(name: &str, opts: &LowerOpts) -> Case {
     let dir = fixture(name);
     let (prep, ck) = fidelity::open_model(&dir, opts).unwrap_or_else(|e| panic!("{name}: prepare: {e}"));
     assert_tiny(name, &prep.lowered.program);
-    let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, ck.as_ref()).unwrap_or_else(|e| panic!("{name}: params: {e}"));
+    let (params, unused) =
+        ParamStore::from_source(&prep.hl, &prep.binding, ck.as_ref()).unwrap_or_else(|e| panic!("{name}: params: {e}"));
     // Every checkpoint tensor is read or declared ignored (the hash buffers: recomputed from the config, equal to the checkpoint's).
     assert!(unused.is_empty(), "{name}: tensors the program never reads: {unused:?}");
     let params = Arc::new(params);
@@ -283,8 +297,10 @@ fn build(name: &str, opts: &LowerOpts) -> Case {
     let quiet = |_: usize, _: usize| {};
     let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32, 7);
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).unwrap_or_else(|e| panic!("{name}: calibrate: {e}"));
-    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap_or_else(|e| panic!("{name}: materialise: {e}"));
-    let int = fidelity::int_logits(&prep.lowered.program, &mat.params, &tokens, mat.logits_scale, &|_| {}).unwrap_or_else(|e| panic!("{name}: integer run: {e}"));
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
+        .unwrap_or_else(|e| panic!("{name}: materialise: {e}"));
+    let int = fidelity::int_logits(&prep.lowered.program, &mat.params, &tokens, mat.logits_scale, &|_| {})
+        .unwrap_or_else(|e| panic!("{name}: integer run: {e}"));
     Case { name: name.to_string(), prep, params, tokens, hf_full, hf_decode, float, mat, int }
 }
 
@@ -339,7 +355,13 @@ fn agree(reference: &[Vec<f64>], int: &[Vec<f64>]) -> Agreement {
             }
         }
     }
-    Agreement { kl_mean: kls.iter().sum::<f64>() / kls.len().max(1) as f64, kl_max: kls.iter().copied().fold(0.0, f64::max), decided, wrong, positions: kls.len() }
+    Agreement {
+        kl_mean: kls.iter().sum::<f64>() / kls.len().max(1) as f64,
+        kl_max: kls.iter().copied().fold(0.0, f64::max),
+        decided,
+        wrong,
+        positions: kls.len(),
+    }
 }
 
 fn widen(v: &[Vec<f32>]) -> Vec<Vec<f64>> {
@@ -373,7 +395,12 @@ fn assert_chain(c: &Case) {
     );
     assert!(max_abs <= 1e-3 * scale, "{}: the float reference is {max_abs:.3e} from transformers (scale {scale:.2})", c.name);
     assert!(vs_hf.kl_mean <= 0.01, "{}: the integer program is {:.5} nats from transformers", c.name, vs_hf.kl_mean);
-    assert!(vs_hf.wrong.is_empty(), "{}: top-1 differs from transformers at {:?} though it leads by >8× the error", c.name, vs_hf.wrong);
+    assert!(
+        vs_hf.wrong.is_empty(),
+        "{}: top-1 differs from transformers at {:?} though it leads by >8× the error",
+        c.name,
+        vs_hf.wrong
+    );
     assert!(vs_float.kl_mean <= 0.01, "{}: the integer program is {:.5} nats from its float reference", c.name, vs_float.kl_mean);
     // transformers' cached decode is its own whole-sequence logits (the fixtures record how far apart)
     if let Some(d) = &c.hf_decode {
@@ -410,13 +437,18 @@ fn assert_ngram_ids_in_program(c: &Case) {
     let spec = spec_of(&c.name);
     let ids = committed(c, &|b, n, p| {
         let blk = &p.blocks[b as usize];
-        blk.name.ends_with(".ple") && blk.nodes[n as usize].commit && matches!(blk.nodes[n as usize].prim, Prim::Clamp { .. }) && blk.nodes[n as usize].out.dtype == misaka_palw_tir::DType::Idx
+        blk.name.ends_with(".ple")
+            && blk.nodes[n as usize].commit
+            && matches!(blk.nodes[n as usize].prim, Prim::Clamp { .. })
+            && blk.nodes[n as usize].out.dtype == misaka_palw_tir::DType::Idx
     });
     assert!(!ids.is_empty(), "{}: no n-gram id commits", c.name);
     let mut checked = 0;
     for (pos, occ, got) in ids {
         let model_layer = c.prep.hl.model_layer(occ.expect("a layer block") as usize);
-        let Residual::HyperConnection { ple: Some(p) } = &spec.layers[model_layer].residual else { panic!("layer {model_layer} has no PLE") };
+        let Residual::HyperConnection { ple: Some(p) } = &spec.layers[model_layer].residual else {
+            panic!("layer {model_layer} has no PLE")
+        };
         let t = NgramTables::new(p);
         let want: Vec<i128> = v["ids"][model_layer.to_string()][pos as usize]
             .as_array()
@@ -447,7 +479,8 @@ fn selected_blocks(c: &Case) -> Vec<(u32, Vec<usize>)> {
 fn assert_selection_equals_the_indexer(c: &Case) -> usize {
     let v = json(&fixture(&c.name).join("qsa_selected.json"));
     let ratio = v["ratio"].as_u64().expect("ratio") as usize;
-    let want = v["selected"].as_object().expect("selected").values().next().expect("one QSA layer").as_array().expect("positions").clone();
+    let want =
+        v["selected"].as_object().expect("selected").values().next().expect("one QSA layer").as_array().expect("positions").clone();
     let mut checked = 0;
     for (pos, ids) in selected_blocks(c) {
         let pos = pos as usize;
@@ -458,7 +491,10 @@ fn assert_selection_equals_the_indexer(c: &Case) -> usize {
         assert_eq!(visible, hf, "{}: position {pos}: the program's block selection (ids {ids:?}) vs transformers' indexer", c.name);
         checked += 1;
     }
-    eprintln!("{:>22}: {checked} positions: the program's selected blocks read exactly the tokens transformers' indexer keeps", c.name);
+    eprintln!(
+        "{:>22}: {checked} positions: the program's selected blocks read exactly the tokens transformers' indexer keeps",
+        c.name
+    );
     checked
 }
 
@@ -491,15 +527,26 @@ fn GR_03_gate_edge_values() {
     assert_chain(&c);
     // the saturation is real: a large share of the mix gates sit within 1e-2 of 0 or 1
     let quiet = |_: usize, _: usize| {};
-    let stats = fidelity::calibrate(&c.prep.hl, &Resident(c.params.clone()), std::slice::from_ref(&c.tokens), &quiet).expect("calibrate");
-    let gate_absmax = stats.iter().filter(|(k, _)| k.ends_with("hc.mix.gate") || k.ends_with("hc.ffn.gate")).map(|(_, s)| s.absmax).fold(0f64, f64::max);
+    let stats =
+        fidelity::calibrate(&c.prep.hl, &Resident(c.params.clone()), std::slice::from_ref(&c.tokens), &quiet).expect("calibrate");
+    let gate_absmax = stats
+        .iter()
+        .filter(|(k, _)| k.ends_with("hc.mix.gate") || k.ends_with("hc.ffn.gate"))
+        .map(|(_, s)| s.absmax)
+        .fold(0f64, f64::max);
     assert!(gate_absmax > 0.99, "the gates reach saturation (absmax {gate_absmax})");
 }
 
 #[test]
 fn PLE_01_bigram() {
     let c = case("qwen4_ple_bigram");
-    assert_eq!(match &spec_of("qwen4_ple_bigram").layers[1].residual { Residual::HyperConnection { ple: Some(p) } => p.ngram_size, _ => 0 }, 2);
+    assert_eq!(
+        match &spec_of("qwen4_ple_bigram").layers[1].residual {
+            Residual::HyperConnection { ple: Some(p) } => p.ngram_size,
+            _ => 0,
+        },
+        2
+    );
     assert_chain(&c);
     assert_ngram_ids_in_program(&c);
 }
@@ -507,7 +554,13 @@ fn PLE_01_bigram() {
 #[test]
 fn PLE_02_trigram() {
     let c = case("qwen4_ple_trigram");
-    assert_eq!(match &spec_of("qwen4_ple_trigram").layers[1].residual { Residual::HyperConnection { ple: Some(p) } => p.ngram_size, _ => 0 }, 3);
+    assert_eq!(
+        match &spec_of("qwen4_ple_trigram").layers[1].residual {
+            Residual::HyperConnection { ple: Some(p) } => p.ngram_size,
+            _ => 0,
+        },
+        3
+    );
     assert_chain(&c);
     assert_ngram_ids_in_program(&c);
 }
@@ -528,7 +581,13 @@ fn PLE_04_streaming_cache() {
         let c = case(name);
         let decode = c.hf_decode.as_ref().unwrap_or_else(|| panic!("{name}: no cached-decode logits"));
         let a = agree(decode, &c.int);
-        eprintln!("{name:>22}: streaming int ↔ HF cached decode KL {:.5}, decided {}/{} wrong {}", a.kl_mean, a.decided, a.positions, a.wrong.len());
+        eprintln!(
+            "{name:>22}: streaming int ↔ HF cached decode KL {:.5}, decided {}/{} wrong {}",
+            a.kl_mean,
+            a.decided,
+            a.positions,
+            a.wrong.len()
+        );
         assert!(a.kl_mean <= 0.01 && a.wrong.is_empty(), "{name}: {a:?}");
         assert_ngram_ids_in_program(&c);
     }
@@ -576,7 +635,8 @@ fn PLE_06_a_table_taller_than_a_chunk_is_read_by_chunks() {
     let eval = fidelity::random_sequences(cut.prep.hl.vocab, 2, 16, 97);
     common::three_ways(&cut.prep.lowered.program, &cut.mat.params, &eval).expect("three implementations agree on the chunked lookup");
     let tokens: Vec<u32> = cut.tokens.iter().map(|t| *t as u32).collect();
-    let r = common::court_coverage(&cut.prep.lowered.program, &cut.mat.params, &tokens, &[0, 3, 9], &[1]).expect("the court reproduces the chunked lookup");
+    let r = common::court_coverage(&cut.prep.lowered.program, &cut.mat.params, &tokens, &[0, 3, 9], &[1])
+        .expect("the court reproduces the chunked lookup");
     eprintln!("PLE-06: {} chunks; the court reproduced {} nodes", chunks, r.nodes);
 }
 
@@ -636,7 +696,11 @@ fn QSA_05_causal_boundary() {
         for (pos, ids) in selected_blocks(&c) {
             let complete = (pos as usize + 1) / ratio;
             let real: Vec<&usize> = ids.iter().filter(|b| **b < complete).collect();
-            assert_eq!(real.len(), ids.len().min(complete), "{name} position {pos}: complete blocks fill the selection before any other ({ids:?}, {complete} complete)");
+            assert_eq!(
+                real.len(),
+                ids.len().min(complete),
+                "{name} position {pos}: complete blocks fill the selection before any other ({ids:?}, {complete} complete)"
+            );
         }
     }
 }
@@ -649,7 +713,13 @@ fn QSA_06_cached_generation() {
         let c = case(name);
         let decode = c.hf_decode.as_ref().unwrap_or_else(|| panic!("{name}: no cached-decode logits"));
         let a = agree(decode, &c.int);
-        eprintln!("{name:>22}: streaming int ↔ HF cached decode KL {:.5}, decided {}/{} wrong {}", a.kl_mean, a.decided, a.positions, a.wrong.len());
+        eprintln!(
+            "{name:>22}: streaming int ↔ HF cached decode KL {:.5}, decided {}/{} wrong {}",
+            a.kl_mean,
+            a.decided,
+            a.positions,
+            a.wrong.len()
+        );
         assert!(a.kl_mean <= 0.01 && a.wrong.is_empty(), "{name}: {a:?}");
     }
 }
@@ -679,7 +749,11 @@ fn GDN_04_arbitrary_ratio() {
 fn assert_gdn(name: &str, nk: usize, nv: usize) {
     let c = case(name);
     let spec = spec_of(name);
-    let g = spec.layers.iter().find_map(|l| if let Mixer::GatedDeltaNet(g) = &l.mixer { Some(g.clone()) } else { None }).expect("a delta net layer");
+    let g = spec
+        .layers
+        .iter()
+        .find_map(|l| if let Mixer::GatedDeltaNet(g) = &l.mixer { Some(g.clone()) } else { None })
+        .expect("a delta net layer");
     assert_eq!((g.k_heads, g.v_heads), (nk, nv), "{name}");
     assert_chain(&c);
 }
@@ -724,7 +798,10 @@ fn the_court_reproduces_every_node_of_the_qwen4_programs_from_the_leaves() {
         }
     }
     for u in &used {
-        assert!(covered.get(u).copied().unwrap_or(0) > 0, "primitive {u} is used by the programs but the court evaluator never evaluated it");
+        assert!(
+            covered.get(u).copied().unwrap_or(0) > 0,
+            "primitive {u} is used by the programs but the court evaluator never evaluated it"
+        );
     }
     eprintln!("court coverage by primitive: {covered:?}");
 }
@@ -775,7 +852,12 @@ fn the_hl_ops_of_the_new_features_carry_no_checkpoint_names() {
         let b = hf_weights::bind(&c.prep.spec, &hlp).expect("bind");
         assert_eq!(b.srcs.len(), hlp.params.len());
         for p in &hlp.params {
-            assert!(!p.name.contains("model.layers") && !p.name.contains("_hyper_connection"), "{}: HL param `{}` carries a checkpoint name", n, p.name);
+            assert!(
+                !p.name.contains("model.layers") && !p.name.contains("_hyper_connection"),
+                "{}: HL param `{}` carries a checkpoint name",
+                n,
+                p.name
+            );
         }
     }
 }
@@ -788,7 +870,8 @@ fn the_hl_ops_of_the_new_features_carry_no_checkpoint_names() {
 /// itself is checked at this scale by `lower::generic::tests` with the function alone.
 #[test]
 fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
-    let layer_types: Vec<&str> = (0..40).map(|i| if (i + 1) % 4 == 0 { "qwen_sparse_attention" } else { "linear_attention" }).collect();
+    let layer_types: Vec<&str> =
+        (0..40).map(|i| if (i + 1) % 4 == 0 { "qwen_sparse_attention" } else { "linear_attention" }).collect();
     let cfg = serde_json::json!({
         "architectures": ["Qwen4ExpForCausalLM"], "model_type": "qwen4_exp_text",
         "vocab_size": 248320, "hidden_size": 2048, "num_hidden_layers": 40, "num_attention_heads": 16, "num_key_value_heads": 2,
@@ -803,7 +886,8 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
         "indexer_n_heads": 16, "indexer_kv_heads": 1, "indexer_head_dim": 128, "indexer_budget": 2048, "indexer_compress_ratio": 16,
         "eos_token_id": 248044, "bos_token_id": 248044, "pad_token_id": 248044
     });
-    let prep = fidelity::prepare(&cfg.to_string(), &LowerOpts::default()).unwrap_or_else(|e| panic!("the real-shape config does not lower: {e}"));
+    let prep = fidelity::prepare(&cfg.to_string(), &LowerOpts::default())
+        .unwrap_or_else(|e| panic!("the real-shape config does not lower: {e}"));
     let p = &prep.lowered.program;
     let tables: Vec<_> = p.params.iter().filter(|q| q.name.starts_with("ple.ngram.table.h")).collect();
     assert_eq!(tables.len(), 16 * 2, "two chunks a head at 20 M rows, sixteen heads");
@@ -815,14 +899,25 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
     eprintln!("real shape DECLARES (never allocates) a param of {largest} elements ({bytes} bytes) and {total} elements in all");
     let most = p.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
     let counts: Vec<String> = p.blocks.iter().map(|b| format!("{}: {}", b.name, b.nodes.len())).collect();
-    eprintln!("real shape: {} blocks, largest {most} nodes; PLE table chunks {:?}; [{}]", p.blocks.len(), tables.iter().map(|t| t.shape.clone()).collect::<Vec<_>>(), counts.join(", "));
+    eprintln!(
+        "real shape: {} blocks, largest {most} nodes; PLE table chunks {:?}; [{}]",
+        p.blocks.len(),
+        tables.iter().map(|t| t.shape.clone()).collect::<Vec<_>>(),
+        counts.join(", ")
+    );
     assert!(most <= 512 && p.blocks.len() <= 16);
     // the court's view of it at the legacy ceilings (printed: a real-size program may meet a ceiling that is the
     // network's to set, not the lowering's)
     use misaka_palw_tir::admit::{TirAdmitInputsV1, TirCeilingsV1, tir_admit_program_v1};
     let inputs = TirAdmitInputsV1 { tile_len: 64, h_chunk: 64, ceilings: TirCeilingsV1::legacy_court_v1() };
     match tir_admit_program_v1(p, &inputs) {
-        Ok(a) => eprintln!("real shape: admitted; {} cones, cone work {}, step leaves {}, {:.3e} MACs a position", a.cones.len(), a.cone_work, a.position.step_leaves, a.position.cost.macs as f64),
+        Ok(a) => eprintln!(
+            "real shape: admitted; {} cones, cone work {}, step leaves {}, {:.3e} MACs a position",
+            a.cones.len(),
+            a.cone_work,
+            a.position.step_leaves,
+            a.position.cost.macs as f64
+        ),
         Err(e) => eprintln!("real shape: admission says {e}"),
     }
 }
@@ -838,7 +933,20 @@ fn a_config_at_the_real_shape_lowers_with_chunked_tables_inside_the_caps() {
 fn a_mutated_config_is_read_or_refused_never_a_panic_or_a_hang() {
     use serde_json::json;
     use std::time::Instant;
-    let variants = [Value::Null, json!(0), json!(1), json!(2), json!(3), json!(7), json!(65), json!(-1), json!(0.5), json!(true), json!("x"), json!([])];
+    let variants = [
+        Value::Null,
+        json!(0),
+        json!(1),
+        json!(2),
+        json!(3),
+        json!(7),
+        json!(65),
+        json!(-1),
+        json!(0.5),
+        json!(true),
+        json!("x"),
+        json!([]),
+    ];
     let (mut checked, mut lowered, mut declared_large) = (0usize, 0usize, 0usize);
     for name in ["qwen4_exp", "qwen4_qsa_r3"] {
         let cfg = json(&fixture(name).join("config.json"));
@@ -893,9 +1001,21 @@ fn a_hostile_number_in_a_feature_key_is_refused_before_anything_is_sized_on_it()
     use serde_json::json;
     use std::time::Instant;
     let keys = [
-        "hc_count", "hc_lowrank", "heads_per_ngram", "ngram_size", "ngram_vocab_size_base", "ple_embed_dim", "ple_conv_kernel_size",
-        "split_ngram_parts", "indexer_n_heads", "indexer_kv_heads", "indexer_head_dim", "indexer_budget", "indexer_compress_ratio",
-        "max_position_embeddings", "head_dim",
+        "hc_count",
+        "hc_lowrank",
+        "heads_per_ngram",
+        "ngram_size",
+        "ngram_vocab_size_base",
+        "ple_embed_dim",
+        "ple_conv_kernel_size",
+        "split_ngram_parts",
+        "indexer_n_heads",
+        "indexer_kv_heads",
+        "indexer_head_dim",
+        "indexer_budget",
+        "indexer_compress_ratio",
+        "max_position_embeddings",
+        "head_dim",
     ];
     let huge = [json!(1_000_000_000_000u64), json!(4_294_967_296u64), json!(u64::MAX)];
     let cfg = json(&fixture("qwen4_exp").join("config.json"));

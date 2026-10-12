@@ -34,10 +34,10 @@ pub mod virt;
 use crate::error::{LowerError, Result};
 use blocks::BlocksFormat;
 use desc::{FormatId, LayoutDesc, QuantFormatDesc, unhex};
-use tensors::{RoleTensor, TensorsFormat};
-use virt::VirtualFormat;
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
+use tensors::{RoleTensor, TensorsFormat};
+use virt::VirtualFormat;
 
 /// A compiled, self-tested descriptor.
 #[derive(Clone, Debug)]
@@ -100,7 +100,10 @@ impl QuantFormat {
         match (&self.tensors, &self.virt) {
             (Some(t), _) => t.read_config(q).map_err(|e| LowerError::not_lowerable(e.to_string())),
             (_, Some(v)) => v.read_config(q).map_err(|e| LowerError::not_lowerable(e.to_string())),
-            _ => Err(LowerError::bad(format!("quant format `{}` is a blocks format: a quant_method names a tensors or virtual format", self.name()))),
+            _ => Err(LowerError::bad(format!(
+                "quant format `{}` is a blocks format: a quant_method names a tensors or virtual format",
+                self.name()
+            ))),
         }
     }
 
@@ -117,14 +120,24 @@ impl QuantFormat {
             let raw = unhex(&t.block_hex).map_err(|e| LowerError::bad(format!("{} test {n}: {e}", self.name())))?;
             let want = unhex(&t.values_f32_hex).map_err(|e| LowerError::bad(format!("{} test {n}: {e}", self.name())))?;
             if raw.is_empty() || raw.len() % b.bytes != 0 {
-                return Err(LowerError::bad(format!("{} test {n}: {} bytes is not whole {}-byte blocks", self.name(), raw.len(), b.bytes)));
+                return Err(LowerError::bad(format!(
+                    "{} test {n}: {} bytes is not whole {}-byte blocks",
+                    self.name(),
+                    raw.len(),
+                    b.bytes
+                )));
             }
             let blocks = raw.len() / b.bytes;
             let got = b
                 .decode_floats(&raw, 1, blocks * b.elems)
                 .map_err(|e| LowerError::bad(format!("quant format `{}` test {n}: {e}", self.name())))?;
             if want.len() != got.len() * 4 {
-                return Err(LowerError::bad(format!("{} test {n}: {} values expected, {} decoded", self.name(), want.len() / 4, got.len())));
+                return Err(LowerError::bad(format!(
+                    "{} test {n}: {} values expected, {} decoded",
+                    self.name(),
+                    want.len() / 4,
+                    got.len()
+                )));
             }
             for (i, (g, w)) in got.iter().zip(want.chunks_exact(4)).enumerate() {
                 let w = f32::from_le_bytes([w[0], w[1], w[2], w[3]]);
@@ -155,14 +168,22 @@ impl QuantFormat {
             let mut tensors: Vec<Option<RoleTensor>> = Vec::with_capacity(roles.len());
             for (r, required) in &roles {
                 match v.roles.get(r) {
-                    Some(tr) => tensors.push(Some(RoleTensor { shape: tr.shape.clone(), dtype: tr.dtype.clone(), data: unhex(&tr.hex).map_err(|e| bad(e.to_string()))? })),
+                    Some(tr) => tensors.push(Some(RoleTensor {
+                        shape: tr.shape.clone(),
+                        dtype: tr.dtype.clone(),
+                        data: unhex(&tr.hex).map_err(|e| bad(e.to_string()))?,
+                    })),
                     None if *required => return Err(bad(format!("no tensor for the required role `{r}`"))),
                     None => tensors.push(None),
                 }
             }
             let cfg = v.config.clone().unwrap_or_else(|| serde_json::json!({}));
             // A format that says how its configuration is read is tested through that reading.
-            let params = if self.desc.config.is_some() { t.read_config(&cfg).map_err(|e| bad(e.to_string()))?.params } else { t.resolve_params(&cfg).map_err(|e| bad(e.to_string()))? };
+            let params = if self.desc.config.is_some() {
+                t.read_config(&cfg).map_err(|e| bad(e.to_string()))?.params
+            } else {
+                t.resolve_params(&cfg).map_err(|e| bad(e.to_string()))?
+            };
             let (got, out, inp) = t.decode_floats(&tensors, &params).map_err(|e| bad(e.to_string()))?;
             let want = unhex(&v.values_f32_hex).map_err(|e| bad(e.to_string()))?;
             if want.len() != got.len() * 4 {
@@ -171,7 +192,11 @@ impl QuantFormat {
             for (i, (g, w)) in got.iter().zip(want.chunks_exact(4)).enumerate() {
                 let w = f32::from_le_bytes([w[0], w[1], w[2], w[3]]);
                 if g.to_bits() != w.to_bits() && !(*g == 0.0 && w == 0.0) {
-                    return Err(bad(format!("fails at element {i} (row {}, column {}): decodes to {g:e}, the vector says {w:e}", i / inp, i % inp)));
+                    return Err(bad(format!(
+                        "fails at element {i} (row {}, column {}): decodes to {g:e}, the vector says {w:e}",
+                        i / inp,
+                        i % inp
+                    )));
                 }
             }
         }
@@ -192,13 +217,21 @@ impl QuantFormat {
             let mut tensors: Vec<Option<RoleTensor>> = Vec::with_capacity(roles.len());
             for (r, required) in &roles {
                 match t.roles.get(r) {
-                    Some(tr) => tensors.push(Some(RoleTensor { shape: tr.shape.clone(), dtype: tr.dtype.clone(), data: unhex(&tr.hex).map_err(|e| bad(e.to_string()))? })),
+                    Some(tr) => tensors.push(Some(RoleTensor {
+                        shape: tr.shape.clone(),
+                        dtype: tr.dtype.clone(),
+                        data: unhex(&tr.hex).map_err(|e| bad(e.to_string()))?,
+                    })),
                     None if *required => return Err(bad(format!("no tensor for the required role `{r}`"))),
                     None => tensors.push(None),
                 }
             }
             let cfg = t.config.clone().unwrap_or_else(|| serde_json::json!({}));
-            let params = if self.desc.config.is_some() { v.read_config(&cfg).map_err(|e| bad(e.to_string()))?.params } else { v.resolve_params(&cfg).map_err(|e| bad(e.to_string()))? };
+            let params = if self.desc.config.is_some() {
+                v.read_config(&cfg).map_err(|e| bad(e.to_string()))?.params
+            } else {
+                v.resolve_params(&cfg).map_err(|e| bad(e.to_string()))?
+            };
             let shape = v.shape(&tensors, &params).map_err(|e| bad(e.to_string()))?;
             let total: usize = shape.iter().product();
             let got = v.decode_range(&tensors, &params, 0..total).map_err(|e| bad(e.to_string()))?;
@@ -247,7 +280,12 @@ impl NeedsDescriptor {
         let which = if self.tensors.is_empty() {
             String::new()
         } else {
-            format!(": {} tensor(s) need one ({}{})", self.tensors.len(), some.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), if self.tensors.len() > 3 { ", …" } else { "" })
+            format!(
+                ": {} tensor(s) need one ({}{})",
+                self.tensors.len(),
+                some.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                if self.tensors.len() > 3 { ", …" } else { "" }
+            )
         };
         format!(
             "{what} has no quant-format descriptor{which}.{known_note} \
@@ -273,7 +311,8 @@ pub struct KnownUndescribed {
 pub fn known_undescribed() -> &'static [KnownUndescribed] {
     static K: OnceLock<Vec<KnownUndescribed>> = OnceLock::new();
     K.get_or_init(|| {
-        let v: serde_json::Value = serde_json::from_str(include_str!("../../quant-formats/known-undescribed.json")).expect("the known-undescribed list is JSON");
+        let v: serde_json::Value = serde_json::from_str(include_str!("../../quant-formats/known-undescribed.json"))
+            .expect("the known-undescribed list is JSON");
         assert_eq!(v["schema"], "misaka.palw.quant-known-undescribed.v1");
         v["methods"]
             .as_array()
@@ -316,9 +355,48 @@ macro_rules! builtin {
 
 /// The built-in descriptors, embedded.
 const BUILTIN: &[&str] = builtin!(
-    "f32", "f16", "bf16", "f64", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k", "iq4_nl", "iq4_xs",
-    "tq1_0", "tq2_0", "ptq1_0", "pq2_0", "mxfp4", "nvfp4", "q1_0", "q2_0", "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m", "gptq", "awq",
-    "fp8_block", "ct_pack", "ct_fp8", "ct_int8", "mxfp4_hf", "bnb_nf4", "bnb_fp4", "bnb_int8", "mlx_affine",
+    "f32",
+    "f16",
+    "bf16",
+    "f64",
+    "q4_0",
+    "q4_1",
+    "q5_0",
+    "q5_1",
+    "q8_0",
+    "q2_k",
+    "q3_k",
+    "q4_k",
+    "q5_k",
+    "q6_k",
+    "iq4_nl",
+    "iq4_xs",
+    "tq1_0",
+    "tq2_0",
+    "ptq1_0",
+    "pq2_0",
+    "mxfp4",
+    "nvfp4",
+    "q1_0",
+    "q2_0",
+    "iq2_xxs",
+    "iq2_xs",
+    "iq2_s",
+    "iq3_xxs",
+    "iq3_s",
+    "iq1_s",
+    "iq1_m",
+    "gptq",
+    "awq",
+    "fp8_block",
+    "ct_pack",
+    "ct_fp8",
+    "ct_int8",
+    "mxfp4_hf",
+    "bnb_nf4",
+    "bnb_fp4",
+    "bnb_int8",
+    "mlx_affine",
 );
 
 impl QuantRegistry {
@@ -348,17 +426,29 @@ impl QuantRegistry {
         if let Some(id) = f.ggml_id()
             && let Some(&i) = self.by_ggml.get(&id)
         {
-            return Err(LowerError::bad(format!("ggml type {id} is already `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
+            return Err(LowerError::bad(format!(
+                "ggml type {id} is already `{}`; `{}` cannot redefine it",
+                self.formats[i].name(),
+                f.name()
+            )));
         }
         let config_ids: Vec<&FormatId> = f.ids().iter().filter(|i| i.scheme == "config" && i.method.is_some()).collect();
         for id in &config_ids {
             let m = id.method.as_deref().unwrap_or_default();
             if id.when.is_empty() {
                 if let Some(&i) = self.by_config.get(m) {
-                    return Err(LowerError::bad(format!("quant_method `{m}` is already read by `{}`; `{}` cannot redefine it", self.formats[i].name(), f.name())));
+                    return Err(LowerError::bad(format!(
+                        "quant_method `{m}` is already read by `{}`; `{}` cannot redefine it",
+                        self.formats[i].name(),
+                        f.name()
+                    )));
                 }
             } else if let Some((_, i)) = self.by_when.get(m).and_then(|v| v.iter().find(|(w, _)| *w == id.when)) {
-                return Err(LowerError::bad(format!("quant_method `{m}` under the same conditions is already read by `{}`; `{}` cannot redefine it", self.formats[*i].name(), f.name())));
+                return Err(LowerError::bad(format!(
+                    "quant_method `{m}` under the same conditions is already read by `{}`; `{}` cannot redefine it",
+                    self.formats[*i].name(),
+                    f.name()
+                )));
             }
         }
         let i = self.formats.len();
@@ -430,7 +520,13 @@ impl QuantRegistry {
         let mut v: Vec<String> = self.by_config.keys().cloned().collect();
         for (m, list) in &self.by_when {
             for (when, _) in list {
-                v.push(format!("{m} [{}]", when.iter().map(|w| format!("{} = {}", w.path, w.one_of.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("|"))).collect::<Vec<_>>().join(", ")));
+                v.push(format!(
+                    "{m} [{}]",
+                    when.iter()
+                        .map(|w| format!("{} = {}", w.path, w.one_of.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("|")))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
         v.sort();

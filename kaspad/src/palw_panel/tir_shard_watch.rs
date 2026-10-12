@@ -30,8 +30,8 @@ use misaka_palw_sdk::lineages::tir::{TirBackendV1, TirCaptureV1, TirShardHolding
 use super::super::PALW_PANEL;
 use super::super::tir_court::palw_tir_duty_target_v1;
 use super::{
-    PalwTirShardBooksV1, PalwTirShardFindingV1, PalwTirShardOutcomeV1,
-    palw_tir_shard_accusation_v1, palw_tir_shard_outcome_over_v1, palw_tir_shard_outcome_v1,
+    PalwTirShardBooksV1, PalwTirShardFindingV1, PalwTirShardOutcomeV1, palw_tir_shard_accusation_v1, palw_tir_shard_outcome_over_v1,
+    palw_tir_shard_outcome_v1,
 };
 
 /// How many watched shards a tick verifies at most (each a run of one shard's cells over the capture).
@@ -100,10 +100,14 @@ pub(crate) fn palw_tir_shard_watch_finding_over_v1(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn palw_tir_shard_watch_finding_inputs_over_v1(
-    holding: &TirShardHoldingV1, capture: &TirCaptureV1,
-    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>, duty: &PalwSeatDutyV2,
-    watcher: PalwBondKeyV2, court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
-    rules: &PalwTirCourtRulesV1, ladder: u64,
+    holding: &TirShardHoldingV1,
+    capture: &TirCaptureV1,
+    inputs: Option<&misaka_palw_tir_exec::node::TirRunInputsV1>,
+    duty: &PalwSeatDutyV2,
+    watcher: PalwBondKeyV2,
+    court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    rules: &PalwTirCourtRulesV1,
+    ladder: u64,
     form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     device: &mut dyn misaka_palw_sdk::lineages::tir::KernelBackendV1,
 ) -> Result<PalwTirShardWatchFindingV1, String> {
@@ -128,7 +132,9 @@ pub(crate) fn palw_tir_shard_watch_finding_inputs_over_v1(
         PalwTirShardOutcomeV1::Abstain(why) => PalwTirShardWatchFindingV1::Abstain(why),
         PalwTirShardOutcomeV1::Fault { leaf, row, .. } => {
             let target = palw_tir_duty_target_v1(duty);
-            match super::palw_tir_shard_accusation_inputs_over_v1(holding, capture, inputs, leaf, row, &target, watcher, court, rules, ladder, form)? {
+            match super::palw_tir_shard_accusation_inputs_over_v1(
+                holding, capture, inputs, leaf, row, &target, watcher, court, rules, ladder, form,
+            )? {
                 Some((label, accusation)) => PalwTirShardWatchFindingV1::Accuse { label, leaf, row, accusation: Box::new(accusation) },
                 None => PalwTirShardWatchFindingV1::Unconvictable { leaf, row },
             }
@@ -234,14 +240,42 @@ impl super::super::PalwPanelService {
                 else {
                     continue;
                 };
-                let inputs = if capture.is_dense() { None } else {
-                    if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, form, ladder).is_err() { continue; }
+                let inputs = if capture.is_dense() {
+                    None
+                } else {
+                    if misaka_palw_sdk::lineages::tir::tir_authenticate_capture_metadata_v1(&capture, duty.class_id, form, ladder)
+                        .is_err()
+                    {
+                        continue;
+                    }
                     let Ok(shape) = holding.space.job_shape(&capture.binding.job_context) else { continue };
-                    let Ok(cells) = misaka_palw_sdk::lineages::tir::tir_shard_cells_over_v1(&holding.space, shape.positions,
-                        place.shard, place.s_l, place.s_p, place.segments) else { continue };
+                    let Ok(cells) = misaka_palw_sdk::lineages::tir::tir_shard_cells_over_v1(
+                        &holding.space,
+                        shape.positions,
+                        place.shard,
+                        place.s_l,
+                        place.s_p,
+                        place.segments,
+                    ) else {
+                        continue;
+                    };
                     let key = (duty.claim_id, place.s_l, place.shard, place.s_p, place.segments.0, None);
-                    let Ok(Some(inputs)) = self.tir_shard_ensure_cell_runs_v1(network_domain, current_daa, key, &capture, &cells,
-                        duty.receipt_deadline, interval_openings, books, ladder).await else { continue };
+                    let Ok(Some(inputs)) = self
+                        .tir_shard_ensure_cell_runs_v1(
+                            network_domain,
+                            current_daa,
+                            key,
+                            &capture,
+                            &cells,
+                            duty.receipt_deadline,
+                            interval_openings,
+                            books,
+                            ladder,
+                        )
+                        .await
+                    else {
+                        continue;
+                    };
                     Some(inputs)
                 };
                 Some((holding, capture, inputs))

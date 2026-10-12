@@ -634,7 +634,11 @@ fn a_state_written_by_two_layer_blocks() {
             b.carry_out(l, &[c]);
             l
         };
-        let (la, lb) = if heavy_first { (layer(&mut b, "heavy", true), layer(&mut b, "light", false)) } else { (layer(&mut b, "light", false), layer(&mut b, "heavy", true)) };
+        let (la, lb) = if heavy_first {
+            (layer(&mut b, "heavy", true), layer(&mut b, "light", false))
+        } else {
+            (layer(&mut b, "light", false), layer(&mut b, "heavy", true))
+        };
         let post = b.block("post", vec![fixed(DType::I32, &[2])]);
         let m = b.node(post, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), true);
         b.schedule(pre, &[la, lb], post, m);

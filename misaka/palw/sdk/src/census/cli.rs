@@ -79,10 +79,9 @@ pub fn run(args: &[String], network: Option<String>) -> Result<(), String> {
     if let Some(path) = &tokenizer_bases {
         let text = std::fs::read_to_string(path).map_err(|e| format!("--tokenizer-bases {path}: {e}"))?;
         for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-            let v: serde_json::Value = serde_json::from_str(line).map_err(|e| format!("--tokenizer-bases {path} line {}: {e}", n + 1))?;
-            let (Some(repo), Some(base), Some(vocab)) =
-                (v["repo"].as_str(), v["base"].as_str(), v["vocab_size"].as_u64())
-            else {
+            let v: serde_json::Value =
+                serde_json::from_str(line).map_err(|e| format!("--tokenizer-bases {path} line {}: {e}", n + 1))?;
+            let (Some(repo), Some(base), Some(vocab)) = (v["repo"].as_str(), v["base"].as_str(), v["vocab_size"].as_u64()) else {
                 return Err(format!("--tokenizer-bases {path} line {}: needs repo, base and vocab_size", n + 1));
             };
             ctx.base_tokenizers

@@ -43,7 +43,11 @@ impl DescribedSource {
     /// Serve `base` through `format` (a `virtual` descriptor) with the parameters its configuration gave.
     /// Every module of the format the checkpoint holds is found and its descriptor's rules checked; a module
     /// that breaks them is an error naming it.
-    pub fn new(base: Box<dyn TensorSource + Sync>, format: Arc<QuantFormat>, params: BTreeMap<String, i64>) -> Result<DescribedSource> {
+    pub fn new(
+        base: Box<dyn TensorSource + Sync>,
+        format: Arc<QuantFormat>,
+        params: BTreeMap<String, i64>,
+    ) -> Result<DescribedSource> {
         Self::new_with(base, format, params, &BTreeMap::new())
     }
 
@@ -58,7 +62,8 @@ impl DescribedSource {
         params: BTreeMap<String, i64>,
         overrides: &BTreeMap<String, Option<BTreeMap<String, i64>>>,
     ) -> Result<DescribedSource> {
-        let v = format.as_virtual().ok_or_else(|| LowerError::bad(format!("quant format `{}` is not a virtual format", format.name())))?;
+        let v =
+            format.as_virtual().ok_or_else(|| LowerError::bad(format!("quant format `{}` is not a virtual format", format.name())))?;
         let anchor = v.anchor_suffix().to_string();
         let mut modules = BTreeMap::new();
         let mut hidden = BTreeSet::new();
@@ -166,7 +171,9 @@ impl TensorSource for DescribedSource {
                 let n: usize = m.shape.iter().product();
                 Ok(Tensor::new(m.shape.clone(), self.decode(name, 0..n)?))
             }
-            None if self.hidden.contains(name) => Err(LowerError::weights(format!("`{name}` is a packed tensor the descriptor serves as its module's float tensor"))),
+            None if self.hidden.contains(name) => {
+                Err(LowerError::weights(format!("`{name}` is a packed tensor the descriptor serves as its module's float tensor")))
+            }
             None => self.base.load(name),
         }
     }
@@ -189,7 +196,9 @@ impl TensorSource for DescribedSource {
 
     fn metadata(&self, name: &str) -> Option<TensorMeta> {
         match self.modules.get(name) {
-            Some(m) => Some(TensorMeta { dtype: "F32".into(), shape: m.shape.clone(), bytes: m.shape.iter().product::<usize>() as u64 * 4 }),
+            Some(m) => {
+                Some(TensorMeta { dtype: "F32".into(), shape: m.shape.clone(), bytes: m.shape.iter().product::<usize>() as u64 * 4 })
+            }
             None if self.hidden.contains(name) => None,
             None => self.base.metadata(name),
         }
@@ -200,12 +209,16 @@ impl TensorSource for DescribedSource {
             Some(m) => {
                 let total = m.shape.iter().product::<usize>() as u64 * 4;
                 if range.start > range.end || range.end > total || !range.start.is_multiple_of(4) || !range.end.is_multiple_of(4) {
-                    return Err(LowerError::weights(format!("`{name}`: bytes {range:?} of a served tensor of {total} (whole f32 elements only)")));
+                    return Err(LowerError::weights(format!(
+                        "`{name}`: bytes {range:?} of a served tensor of {total} (whole f32 elements only)"
+                    )));
                 }
                 let vals = self.decode(name, (range.start / 4) as usize..(range.end / 4) as usize)?;
                 Ok(vals.iter().flat_map(|x| x.to_le_bytes()).collect())
             }
-            None if self.hidden.contains(name) => Err(LowerError::weights(format!("`{name}` is a packed tensor the descriptor serves as its module's float tensor"))),
+            None if self.hidden.contains(name) => {
+                Err(LowerError::weights(format!("`{name}` is a packed tensor the descriptor serves as its module's float tensor")))
+            }
             None => self.base.read_slice(name, range),
         }
     }
@@ -222,7 +235,9 @@ impl TensorSource for DescribedSource {
                 let data = self.decode(name, rows.start * cols..rows.end * cols)?;
                 Ok(Tensor::new(vec![rows.len(), cols], data))
             }
-            None if self.hidden.contains(name) => Err(LowerError::weights(format!("`{name}` is a packed tensor the descriptor serves as its module's float tensor"))),
+            None if self.hidden.contains(name) => {
+                Err(LowerError::weights(format!("`{name}` is a packed tensor the descriptor serves as its module's float tensor")))
+            }
             None => self.base.load_rows(name, rows),
         }
     }

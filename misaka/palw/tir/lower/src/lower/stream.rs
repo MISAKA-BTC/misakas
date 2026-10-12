@@ -168,7 +168,8 @@ pub fn materialise_stream(
         }
         loop {
             let store = if defer.is_empty() { loader.load(hbk, layer)? } else { loader.load_deferring(hbk, layer, &defer)? };
-            let ctx = FillCtx::streaming(hl, &store, layer, &prefix, calib, resid, policy, &defer, loader.row_source(), opts.block_elems);
+            let ctx =
+                FillCtx::streaming(hl, &store, layer, &prefix, calib, resid, policy, &defer, loader.row_source(), opts.block_elems);
             let attempt = (|| -> Result<()> {
                 // A deferred projection with split outlier channels: its small per-row parts first
                 // (one pass over the blocks, no codes kept), so the sibling params (`.wo`, `.of`, the
@@ -191,7 +192,22 @@ pub fn materialise_stream(
                     let bytes = d.shape.iter().map(|x| *x as u64).product::<u64>() * d.dtype.width() as u64;
                     let by_rows = lw.row_params.get(&d.name).filter(|rp| defer.contains(&rp.hl));
                     match by_rows {
-                        Some(rp) => fill_by_blocks(lw, hl, loader, calib, policy, opts, resid, (&prefix, layer), pi, rp, key, bytes, sink, &mut st)?,
+                        Some(rp) => fill_by_blocks(
+                            lw,
+                            hl,
+                            loader,
+                            calib,
+                            policy,
+                            opts,
+                            resid,
+                            (&prefix, layer),
+                            pi,
+                            rp,
+                            key,
+                            bytes,
+                            sink,
+                            &mut st,
+                        )?,
                         None => {
                             let t = (lw.fills[pi as usize])(&ctx).map_err(|e| match deferred_param_of(&e) {
                                 Some(_) => e,
@@ -264,7 +280,10 @@ fn fill_by_blocks(
     // its one scale is a first pass over the used rows.
     if let RowKind::Mapped(map) = &rp.kind {
         let (_, cols) = rs.row_space(rp.hl, layer)?.ok_or_else(|| not_rows("not readable by rows".into()))?;
-        let (drows, dcols) = (d.shape[..d.shape.len() - 1].iter().map(|x| *x as usize).product::<usize>(), *d.shape.last().expect("a param has a shape") as usize);
+        let (drows, dcols) = (
+            d.shape[..d.shape.len() - 1].iter().map(|x| *x as usize).product::<usize>(),
+            *d.shape.last().expect("a param has a shape") as usize,
+        );
         if cols != dcols {
             return Err(not_rows(format!("the checkpoint's rows are {cols} wide, the param's are {dcols}")));
         }
@@ -288,8 +307,8 @@ fn fill_by_blocks(
             bstore.insert(rp.hl, None, Tensor::new(vec![blk.len(), cols], data), None);
             let bctx = FillCtx::for_scales(hl, &bstore, layer, prefix, calib, resid, policy).with_block(blk.clone());
             bctx.inject_amax(rp.hl, amax);
-            let it: IntTensor =
-                (lw.fills[pi as usize])(&bctx).map_err(|e| LowerError::eval(format!("filling `{}` at {prefix}, rows {blk:?}: {e}", d.name)))?;
+            let it: IntTensor = (lw.fills[pi as usize])(&bctx)
+                .map_err(|e| LowerError::eval(format!("filling `{}` at {prefix}, rows {blk:?}: {e}", d.name)))?;
             if it.dtype != d.dtype || it.len() != blk.len() * cols {
                 return Err(LowerError::eval(format!(
                     "internal: the block of `{}` gave {} × {}, wanted {} × {cols}",
@@ -307,7 +326,10 @@ fn fill_by_blocks(
         return Ok(());
     }
     let (rows, cols) = rs.row_space(rp.hl, layer)?.ok_or_else(|| not_rows("not readable by rows".into()))?;
-    let (drows, dcols) = (d.shape[..d.shape.len() - 1].iter().map(|x| *x as usize).product::<usize>(), *d.shape.last().expect("a param has a shape") as usize);
+    let (drows, dcols) = (
+        d.shape[..d.shape.len() - 1].iter().map(|x| *x as usize).product::<usize>(),
+        *d.shape.last().expect("a param has a shape") as usize,
+    );
     if (rows, cols) != (drows, dcols) {
         return Err(not_rows(format!("the checkpoint's rows are {rows}×{cols}, the param is {drows}×{dcols}")));
     }
@@ -319,7 +341,8 @@ fn fill_by_blocks(
         let mut bstore = ParamStore::default();
         bstore.insert(rp.hl, None, t, None);
         let bctx = FillCtx::for_scales(hl, &bstore, layer, prefix, calib, resid, policy);
-        let it: IntTensor = (lw.fills[pi as usize])(&bctx).map_err(|e| LowerError::eval(format!("filling `{}` at {prefix}, rows {blk:?}: {e}", d.name)))?;
+        let it: IntTensor = (lw.fills[pi as usize])(&bctx)
+            .map_err(|e| LowerError::eval(format!("filling `{}` at {prefix}, rows {blk:?}: {e}", d.name)))?;
         if it.dtype != d.dtype || it.len() != blk.len() * cols {
             return Err(LowerError::eval(format!(
                 "internal: the block of `{}` gave {} × {}, wanted {} × {cols}",
@@ -353,9 +376,8 @@ fn split_meta(
     f_max: i32,
 ) -> Result<SplitCodes> {
     let rs = loader.row_source().ok_or_else(|| LowerError::eval("internal: a deferred param without a row source"))?;
-    let (rows, cols) = rs
-        .row_space(hp, layer)?
-        .ok_or_else(|| LowerError::eval(format!("{DEFERRED_MARK}{hp}: not readable by rows")))?;
+    let (rows, cols) =
+        rs.row_space(hp, layer)?.ok_or_else(|| LowerError::eval(format!("{DEFERRED_MARK}{hp}: not readable by rows")))?;
     let step = (opts.block_elems / cols.max(1)).max(1);
     let (mut scales, mut f, mut wo, mut outliers) = (Vec::with_capacity(rows), Vec::with_capacity(rows), Vec::new(), Vec::new());
     for blk in row_blocks(rows, step) {

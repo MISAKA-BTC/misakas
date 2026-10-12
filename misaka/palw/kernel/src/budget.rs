@@ -376,7 +376,11 @@ pub struct ParallelSessionScheduleV1 {
 }
 
 /// **Run the legacy parallel worst case** for sessions of `lanes[j]` lanes each, the verifier replaying after `replay_after`.
-pub fn parallel_session_schedule_v1(c: &ParallelSessionClockV1, lanes: &[u32], replay_after: Option<usize>) -> ParallelSessionScheduleV1 {
+pub fn parallel_session_schedule_v1(
+    c: &ParallelSessionClockV1,
+    lanes: &[u32],
+    replay_after: Option<usize>,
+) -> ParallelSessionScheduleV1 {
     let w = c.base.session_window_daa;
     let mut opens = Vec::with_capacity(lanes.len());
     let mut deadlines = Vec::with_capacity(lanes.len());
@@ -416,7 +420,8 @@ pub fn parallel_session_schedule_v1(c: &ParallelSessionClockV1, lanes: &[u32], r
 
 /// The longest verifier replay (after the input round) with which `lanes` still fits `c` (`None`: not even an instant replay).
 pub fn parallel_session_max_replay_v1(c: &ParallelSessionClockV1, lanes: &[u32], replay_after: Option<usize>) -> Option<u64> {
-    let at = |replay: u64| parallel_session_schedule_v1(&ParallelSessionClockV1 { replay_daa: replay, ..*c }, lanes, replay_after).fits;
+    let at =
+        |replay: u64| parallel_session_schedule_v1(&ParallelSessionClockV1 { replay_daa: replay, ..*c }, lanes, replay_after).fits;
     if !at(0) {
         return None;
     }

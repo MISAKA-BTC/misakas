@@ -195,11 +195,11 @@ mod improve;
 /// RFC-0002 Phase F (F6, node half): an IR class's court close.
 mod tir_court;
 // RFC-0006: layer-sharded panels, the node's half.
+mod da_answer_chunks;
 /// RFC-0003 (carriage node half): a tensor claim's seat replay and its one-move court.
 mod gen_court;
 /// RFC-0003 decision 22: the held leaf challenge filed from a node — a close past one carrier, declared and delivered in chunks.
 mod held_chunks;
-mod da_answer_chunks;
 /// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
 #[cfg(test)]
 mod held_court_e2e;
@@ -2578,10 +2578,17 @@ fn palw_da_legacy_answer_v2(
         {
             return Err("the retained FP job does not reproduce the recorded claim".into());
         }
-        let answer = kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::FpJob(Box::new(payload.material.job.clone()));
+        let answer =
+            kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerV2::FpJob(Box::new(payload.material.job.clone()));
         kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_check_answer_v3(
-            &facts.execution_root, unit, &binding, &answer, binding.step_leaf_count, facts.form,
-        ).map_err(|e| e.to_string())?;
+            &facts.execution_root,
+            unit,
+            &binding,
+            &answer,
+            binding.step_leaf_count,
+            facts.form,
+        )
+        .map_err(|e| e.to_string())?;
         return Ok(PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((binding, answer))));
     }
     let (capture, prompt, roots) = match (material, &facts.lane) {
@@ -2656,7 +2663,11 @@ fn palw_da_built_answer_carriage_v1(
             )
             .map_err(|e| format!("the legacy held answer is not this unit: {e}"))?;
             let mut bytes = kaspa_consensus_core::palw_legacy_held_da_v2::palw_legacy_held_answer_bytes_v2(&answer);
-            if matches!(unit, kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. } | kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob) {
+            if matches!(
+                unit,
+                kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::PromptIds { .. }
+                    | kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2::FpJob
+            ) {
                 bytes = bytes.saturating_add(borsh::to_vec(&binding).map_err(|e| e.to_string())?.len() as u64);
                 if direct && bytes > kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 {
                     return Err("the input answer cannot fit a single carrier".into());
@@ -2670,7 +2681,8 @@ fn palw_da_built_answer_carriage_v1(
                 // Count the original fixed-size MLDSA envelope before its signing message can clone
                 // or serialize the material; oversized answers do not consume unreserved scratch.
                 let envelope = borsh::object_length(&(2u16, claim, unit, &binding, &answer, discloser, Vec::<u8>::new()))
-                    .map_err(|e| e.to_string())?.saturating_add(kaspa_txscript::MLDSA87_SIG_LEN);
+                    .map_err(|e| e.to_string())?
+                    .saturating_add(kaspa_txscript::MLDSA87_SIG_LEN);
                 let maximum = max_close_bytes.min(
                     u64::from(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_CHUNKS_V2)
                         * u64::from(kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_CHUNK_BYTES_V2),
@@ -2689,7 +2701,8 @@ fn palw_da_built_answer_carriage_v1(
                 sign,
             )?;
             if direct {
-                kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(|e| e.to_string())?;
+                kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
+                    .map_err(|e| e.to_string())?;
             }
             Ok(object)
         }
@@ -6051,7 +6064,11 @@ impl PalwPanelService {
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
     /// configured one, else whatever the chain holds under this bond's payout script. Returns the
     /// entry with it, which is also the unspent check.
-    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy, minimum: u64) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    async fn resolve_fee_funding(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        minimum: u64,
+    ) -> Option<(TransactionOutpoint, UtxoEntry)> {
         // **"In the UTXO set" and "I can spend it" are different questions — ask the second one.**
         //
         // The virtual UTXO set is the CONFIRMED one: an output a carrier of ours is spending right
@@ -7039,7 +7056,14 @@ impl PalwPanelService {
         let replaces_feerate = replaces_feerate
             .or_else(|| self.carrier_replacement.lock().unwrap().as_ref().and_then(|opening| opening.floor_for(&funding_outpoint)));
         palw_carrier_fees::build_lifecycle_carrier_v2(
-            &self.consensus_config, kp, object, funding_outpoint, funding, extra_outputs, replaces_feerate, daa,
+            &self.consensus_config,
+            kp,
+            object,
+            funding_outpoint,
+            funding,
+            extra_outputs,
+            replaces_feerate,
+            daa,
         )
     }
 
@@ -7384,9 +7408,11 @@ impl PalwPanelService {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
-                    if let Some(name) = name.to_str() && let Some(stem) = name.split('.').next()
+                    if let Some(name) = name.to_str()
+                        && let Some(stem) = name.split('.').next()
                         && let Ok(claim) = stem.parse::<Hash64>()
-                        && session.palw_material_income_hold_until_v1(claim).is_some_and(|until| until == u64::MAX || now_daa < until) {
+                        && session.palw_material_income_hold_until_v1(claim).is_some_and(|until| until == u64::MAX || now_daa < until)
+                    {
                         pinned.insert(claim);
                     }
                 }
@@ -8771,7 +8797,9 @@ impl PalwPanelService {
                             self.consensus_config.params.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0)
                         )
                     });
-                } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await {
+                } else if let Some((funding_outpoint, funding_entry)) =
+                    self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await
+                {
                     if let Some(object) = class_registration.clone() {
                         match self.build_class_registration_tx(&object, funding_outpoint, &funding_entry, current_daa) {
                             Ok(tx) => {
@@ -9144,19 +9172,33 @@ impl PalwPanelService {
                 }
                 // A partial public challenger continues its local history court before the
                 // full-model resolver. This consumer never needs a whole-model backend.
-                if !duty.i_am_responder && !self.config.tir_shard_shadow
+                if !duty.i_am_responder
+                    && !self.config.tir_shard_shadow
                     && (self.config.tir_shard_fetch || self.config.tir_shard_mirror.is_some())
                     && self.consensus_config.params.palw_tir_shard_active_at(current_daa)
                     && duty.tir_dissection.is_some()
                     && let Some(mv) = tir_dissect::palw_tir_dissect_move_of_duty_v1(duty)
                 {
-                    match self.tir_shard_public_court_move_v1(&session, network_domain, current_daa, duty, mv,
-                        &materials, &mut interval_openings, &mut shard_books).await {
+                    match self
+                        .tir_shard_public_court_move_v1(
+                            &session,
+                            network_domain,
+                            current_daa,
+                            duty,
+                            mv,
+                            &materials,
+                            &mut interval_openings,
+                            &mut shard_books,
+                        )
+                        .await
+                    {
                         Ok(Some(object)) => {
                             court_due.insert((duty.session_id, move_round, false), palw_court_move_due_v1(duty));
                             court_pending.push((duty.session_id, move_round, false, object));
                         }
-                        Ok(None) => { *court_stalls.entry("the partial public bottom does not win").or_default() += 1; }
+                        Ok(None) => {
+                            *court_stalls.entry("the partial public bottom does not win").or_default() += 1;
+                        }
                         Err(why) => {
                             *court_stalls.entry("the partial public court waits for evidence").or_default() += 1;
                             crate::palw_backends::note_throttled_v1(&format!("tir-partial-court-{}", duty.session_id), || {
@@ -10590,13 +10632,17 @@ impl PalwPanelService {
                     owed.contains(&(answer.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(answer.unit)))
                 }
                 PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { declaration } => {
-                    owed.contains(&(declaration.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(declaration.unit)))
-                        && session.palw_legacy_answer_progress_v2(declaration.key()).map(|p| p.is_none()).unwrap_or(true)
+                    owed.contains(&(
+                        declaration.claim,
+                        kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(declaration.unit),
+                    )) && session.palw_legacy_answer_progress_v2(declaration.key()).map(|p| p.is_none()).unwrap_or(true)
                 }
                 PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk } => {
                     owed.contains(&(chunk.claim, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(chunk.unit)))
-                        && session.palw_legacy_answer_progress_v2(chunk.key())
-                            .map(|p| da_answer_chunks::chunk_is_pending_v2(chunk, p.as_ref())).unwrap_or(true)
+                        && session
+                            .palw_legacy_answer_progress_v2(chunk.key())
+                            .map(|p| da_answer_chunks::chunk_is_pending_v2(chunk, p.as_ref()))
+                            .unwrap_or(true)
                 }
                 _ => true,
             });
@@ -16872,13 +16918,21 @@ impl PalwPanelService {
         let transport_bytes = transport_max.saturating_mul(3).saturating_add(
             (duties.len() as u64).saturating_mul(kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64),
         );
-        let _transport_reservation = if duties.iter().any(|d| matches!(d.unit,
-            kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_))) {
-            Some(crate::palw_memory_ledger::host_ledger_v1().reserve(
-            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "da-answer-transport", class_id, job: claim },
-            transport_bytes,
-        ).map_err(|e| PalwDaClaimHoldV1::Ledger(format!("DA transport needs {transport_bytes} bytes: {e}")))?)
-        } else { None };
+        let _transport_reservation = if duties
+            .iter()
+            .any(|d| matches!(d.unit, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(_)))
+        {
+            Some(
+                crate::palw_memory_ledger::host_ledger_v1()
+                    .reserve(
+                        crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "da-answer-transport", class_id, job: claim },
+                        transport_bytes,
+                    )
+                    .map_err(|e| PalwDaClaimHoldV1::Ledger(format!("DA transport needs {transport_bytes} bytes: {e}")))?,
+            )
+        } else {
+            None
+        };
         // Every copy this node may hold, own retention first; a free-prompt claim's `.answer`
         // envelopes too, which carry its job.
         let dir = &self.config.retention_dir;
@@ -16933,33 +16987,50 @@ impl PalwPanelService {
         tokio::task::spawn_blocking(move || {
             let _replay_guard = _held_for_the_answers;
             let _transport_guard = _transport_reservation;
-            let sign = |message: &[u8], context: &[u8]| keypair.as_ref().and_then(|kp| {
-                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32])
-                    .ok().map(|sig| sig.as_ref().to_vec())
-            });
+            let sign = |message: &[u8], context: &[u8]| {
+                keypair.as_ref().and_then(|kp| {
+                    libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]).ok().map(|sig| sig.as_ref().to_vec())
+                })
+            };
             duties
-            .iter()
-            .zip(built.answers)
-            .map(|(duty, answer)| match answer {
-                None => Ok(None),
-                Some(Err(why)) => Err(why),
-                Some(Ok(answer)) => {
-                    let progress = if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
-                        session.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser))?
-                    } else { None };
-                    let object = palw_da_built_answer_carriage_v1(
-                        &network_domain, duty.claim_id, duty.unit, answer, duty.discloser, answer_form,
-                        maximum, false, |message, context| sign(message, context),
-                    )?;
-                    da_answer_chunks::next_answer_object_v2(
-                        object, progress.as_ref(), session.get_virtual_daa_score(), duty.deadline_daa,
-                        maximum, &network_domain,
-                        |message, context| sign(message, context),
-                    ).map(Some)
-                },
-            })
-            .collect()
-        }).await.map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))
+                .iter()
+                .zip(built.answers)
+                .map(|(duty, answer)| match answer {
+                    None => Ok(None),
+                    Some(Err(why)) => Err(why),
+                    Some(Ok(answer)) => {
+                        let progress = if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
+                            session.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser))?
+                        } else {
+                            None
+                        };
+                        let object = palw_da_built_answer_carriage_v1(
+                            &network_domain,
+                            duty.claim_id,
+                            duty.unit,
+                            answer,
+                            duty.discloser,
+                            answer_form,
+                            maximum,
+                            false,
+                            |message, context| sign(message, context),
+                        )?;
+                        da_answer_chunks::next_answer_object_v2(
+                            object,
+                            progress.as_ref(),
+                            session.get_virtual_daa_score(),
+                            duty.deadline_daa,
+                            maximum,
+                            &network_domain,
+                            |message, context| sign(message, context),
+                        )
+                        .map(Some)
+                    }
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -18942,8 +19013,10 @@ mod accepted_objects_walk_tests {
         blocks: HashMap<BlockHash, Block>,
         targets: HashMap<Hash64, kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1>,
         views: HashMap<Hash64, kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1>,
-        answer_history: HashMap<(BlockHash, kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, Hash64, u8),
-            kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2>,
+        answer_history: HashMap<
+            (BlockHash, kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2, Hash64, u8),
+            kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2,
+        >,
         answer_history_unavailable: bool,
         flip_sink_on_block: Option<(BlockHash, BlockHash)>,
         observed_sink: std::sync::Mutex<Option<BlockHash>>,
@@ -18951,10 +19024,14 @@ mod accepted_objects_walk_tests {
 
     impl kaspa_consensus_core::api::ConsensusApi for Chain {
         fn palw_legacy_answer_history_v2(
-            &self, block: BlockHash,
-            chunk: Box<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2>, maximum: u64,
+            &self,
+            block: BlockHash,
+            chunk: Box<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2>,
+            maximum: u64,
         ) -> Result<Option<kaspa_consensus_core::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2>, String> {
-            if self.answer_history_unavailable { return Err("test history reader unavailable".into()); }
+            if self.answer_history_unavailable {
+                return Err("test history reader unavailable".into());
+            }
             let Some(row) = self.answer_history.get(&(block, chunk.key(), chunk.answer_digest, chunk.index)) else { return Ok(None) };
             row.check(maximum)?;
             Ok(row.preview(&chunk).ok().flatten())
@@ -18989,7 +19066,9 @@ mod accepted_objects_walk_tests {
             self.acceptance.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
         }
         fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
-            if let Some((at, sink)) = self.flip_sink_on_block && at == hash {
+            if let Some((at, sink)) = self.flip_sink_on_block
+                && at == hash
+            {
                 *self.observed_sink.lock().unwrap() = Some(sink);
             }
             self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
@@ -19041,7 +19120,10 @@ mod accepted_objects_walk_tests {
             hash(n),
             Arc::new(vec![MergesetBlockAcceptanceData {
                 block_hash: hash(n),
-                accepted_transactions: vec![AcceptedTxEntry { transaction_id: chain.blocks[&hash(n)].transactions[0].id(), index_within_block: 0 }],
+                accepted_transactions: vec![AcceptedTxEntry {
+                    transaction_id: chain.blocks[&hash(n)].transactions[0].id(),
+                    index_within_block: 0,
+                }],
             }]),
         );
         chain.sink = hash(n);
@@ -19155,29 +19237,53 @@ mod accepted_objects_walk_tests {
         // Adapter evidence only: the real-node fixture deletes real block/acceptance DB rows.
         let metadata = borsh::to_vec(c).unwrap();
         let view = kaspa_consensus_core::palw_state_v2::PalwLegacyDisputeViewV1 {
-            claim_id: claim, class_id: target.class_id, producer: target.executor_bond,
-            phase: kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional, execution_root: target.execution_root, trace_root: target.trace_root,
-            accepted_daa: candidate.accepted_daa, trace_retention_daa: 9999, job_identity: target.job_identity,
-            public_fp_job: Some(metadata), registered_semantics: None, work_leaves: c.work_leaves, deadline_daa: None, hard_deadline_daa: 9990,
-            record: None, sessions: vec![], answered: vec![], flat_answered_rows: 0, open_courts: 0,
-            executor_refuted: false, court_convicted: false, da_defaulted: false,
+            claim_id: claim,
+            class_id: target.class_id,
+            producer: target.executor_bond,
+            phase: kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Provisional,
+            execution_root: target.execution_root,
+            trace_root: target.trace_root,
+            accepted_daa: candidate.accepted_daa,
+            trace_retention_daa: 9999,
+            job_identity: target.job_identity,
+            public_fp_job: Some(metadata),
+            registered_semantics: None,
+            work_leaves: c.work_leaves,
+            deadline_daa: None,
+            hard_deadline_daa: 9990,
+            record: None,
+            sessions: vec![],
+            answered: vec![],
+            flat_answered_rows: 0,
+            open_courts: 0,
+            executor_refuted: false,
+            court_convicted: false,
+            da_defaulted: false,
         };
         chain.views.insert(claim, view.clone());
-        assert_eq!(read(&chain, &candidate, c.job.network_domain).unwrap().prompt_token_ids, payload.prompt_token_ids,
-            "retained accepted PublicDA ids are preferred");
-        chain.acceptance.clear(); chain.blocks.clear();
+        assert_eq!(
+            read(&chain, &candidate, c.job.network_domain).unwrap().prompt_token_ids,
+            payload.prompt_token_ids,
+            "retained accepted PublicDA ids are preferred"
+        );
+        chain.acceptance.clear();
+        chain.blocks.clear();
         let recovered = read(&chain, &candidate, c.job.network_domain).unwrap();
         assert_eq!(recovered.commitment, *c);
         assert!(recovered.prompt_token_ids.is_empty() && recovered.signature.is_empty());
         assert!(read(&chain, &candidate, hash(999)).is_err());
-        let row = chain.views.get_mut(&claim).unwrap(); row.accepted_daa += 1;
+        let row = chain.views.get_mut(&claim).unwrap();
+        row.accepted_daa += 1;
         assert!(read(&chain, &candidate, c.job.network_domain).is_err());
         chain.views.insert(claim, view.clone());
         chain.views.get_mut(&claim).unwrap().producer = PalwBondKeyV2(TransactionOutpoint::new(hash(444), 0));
         assert!(read(&chain, &candidate, c.job.network_domain).is_err());
         chain.views.insert(claim, view.clone());
         chain.views.get_mut(&claim).unwrap().public_fp_job = Some(borsh::to_vec(&foreign.commitment).unwrap());
-        assert!(read(&chain, &candidate, c.job.network_domain).is_err(), "a foreign job cannot substitute for the accepted commitment");
+        assert!(
+            read(&chain, &candidate, c.job.network_domain).is_err(),
+            "a foreign job cannot substitute for the accepted commitment"
+        );
         chain.views.insert(claim, view.clone());
         chain.views.get_mut(&claim).unwrap().public_fp_job.as_mut().unwrap().push(0);
         assert!(read(&chain, &candidate, c.job.network_domain).is_err(), "no noncanonical trailing bytes");
@@ -19190,45 +19296,72 @@ mod accepted_objects_walk_tests {
         use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
         let backend = super::seat_s_tests::floor_backend();
         let payload = super::palw_fraud_filer::input::tests::payload();
-        let run = backend.execute_free_prompt(&payload.commitment.job,
-            &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>()).unwrap();
+        let run = backend
+            .execute_free_prompt(&payload.commitment.job, &payload.prompt_token_ids.iter().map(|id| *id as usize).collect::<Vec<_>>())
+            .unwrap();
         let event = backend.disclose_trace_event(&run.outcome.material, 0, 0).unwrap();
         let claim = Hash64::from_u64_word(45);
         let object = PalwConsensusObjectV2::MaterialDisclosedV2 {
-            claim, unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 },
+            claim,
+            unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 0, tile: 0 },
             answer: kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(event),
-            discloser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(payload.commitment.job.executor_bond), signature: vec![],
+            discloser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(payload.commitment.job.executor_bond),
+            signature: vec![],
         };
-        let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap());
+        let tx = Transaction::new(
+            TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
+        );
         let mut chain = repeated_daa_chain();
         chain.blocks.insert(hash(8), Block::new(chain.headers[&hash(8)].as_ref().clone(), vec![tx]));
-        chain.acceptance.insert(hash(8), Arc::new(vec![MergesetBlockAcceptanceData {block_hash:hash(8),
-            accepted_transactions:vec![AcceptedTxEntry{transaction_id:chain.blocks[&hash(8)].transactions[0].id(),index_within_block:0}]}]));
+        chain.acceptance.insert(
+            hash(8),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(8),
+                accepted_transactions: vec![AcceptedTxEntry {
+                    transaction_id: chain.blocks[&hash(8)].transactions[0].id(),
+                    index_within_block: 0,
+                }],
+            }]),
+        );
         let wanted = BTreeMap::from([(claim, run.outcome.execution_root)]);
-        let (_, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
-        assert!(!reset); assert_eq!(answers.len(), 1, "the stable native branch reads the actual authenticated binding");
+        let (_, reset, answers) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
+        assert!(!reset);
+        assert_eq!(answers.len(), 1, "the stable native branch reads the actual authenticated binding");
         append(&mut chain, 20, 104, 3);
         chain.sink = hash(8);
         chain.flip_sink_on_block = Some((hash(8), hash(20)));
-        let (walk, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
+        let (walk, reset, answers) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 8, &wanted, &BTreeMap::new()).unwrap();
         assert!(reset && answers.is_empty(), "end-of-page branch recheck discards the old branch's otherwise authentic bytes");
-        assert_eq!(walk.anchor, hash(20)); assert_eq!(walk.next, Some(hash(20))); assert_eq!(walk.floor, 100);
+        assert_eq!(walk.anchor, hash(20));
+        assert_eq!(walk.next, Some(hash(20)));
+        assert_eq!(walk.floor, 100);
     }
 
     #[test]
     fn public_filer_treats_native_body_acceptance_identity_mismatch_as_a_hole() {
-        let mut chain=repeated_daa_chain();
-        let mut row=chain.acceptance[&hash(7)].as_ref().clone();
-        row[0].accepted_transactions[0].transaction_id=hash(999);
-        chain.acceptance.insert(hash(7),Arc::new(row));
-        let mut seen=Vec::new();
-        let (next,hole)=super::palw_fraud_filer::history::walk_available_v1(&chain,chain.sink,100,8,
-            &mut |_,object|seen.push(claim_of(&object))).unwrap();
+        let mut chain = repeated_daa_chain();
+        let mut row = chain.acceptance[&hash(7)].as_ref().clone();
+        row[0].accepted_transactions[0].transaction_id = hash(999);
+        chain.acceptance.insert(hash(7), Arc::new(row));
+        let mut seen = Vec::new();
+        let (next, hole) = super::palw_fraud_filer::history::walk_available_v1(&chain, chain.sink, 100, 8, &mut |_, object| {
+            seen.push(claim_of(&object))
+        })
+        .unwrap();
         assert!(next.is_none() && hole);
-        assert_eq!(seen,vec![8,6,5,4,3,2,1],"an index cannot substitute another body for an accepted tx identity; older authenticated material remains reachable");
+        assert_eq!(
+            seen,
+            vec![8, 6, 5, 4, 3, 2, 1],
+            "an index cannot substitute another body for an accepted tx identity; older authenticated material remains reachable"
+        );
     }
 
     #[test]
@@ -19240,19 +19373,31 @@ mod accepted_objects_walk_tests {
         let mut cursor = Some(chain.sink);
         let mut incomplete = false;
         while let Some(start) = cursor {
-            let (next, hole) = super::palw_fraud_filer::history::walk_available_v1(&chain, start, 100, 3,
-                &mut |_, object| seen.push(claim_of(&object))).unwrap();
+            let (next, hole) = super::palw_fraud_filer::history::walk_available_v1(&chain, start, 100, 3, &mut |_, object| {
+                seen.push(claim_of(&object))
+            })
+            .unwrap();
             incomplete |= hole;
             cursor = next;
         }
         assert!(incomplete);
         assert_eq!(seen, vec![8, 7, 5, 3, 2, 1], "missing carrier/acceptance never hides older authenticated accepted bodies");
-        assert!(walk_accepted_lifecycle_page_with_block_v2(&chain, chain.sink, 100, 8, &mut |_, _| {}).is_err(),
-            "other callers retain the original strict walker contract");
+        assert!(
+            walk_accepted_lifecycle_page_with_block_v2(&chain, chain.sink, 100, 8, &mut |_, _| {}).is_err(),
+            "other callers retain the original strict walker contract"
+        );
         let mut previous = None;
         for expected in [5, 2, 8] {
             let (walk, reset, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-                &chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+                &chain,
+                100,
+                100,
+                previous,
+                3,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .unwrap();
             assert!(!reset && answers.is_empty());
             assert_eq!(walk.next, Some(hash(expected)));
             assert!(walk.incomplete, "a hole on the first page survives later pagination to the oldest floor");
@@ -19260,8 +19405,9 @@ mod accepted_objects_walk_tests {
         }
         // The finished incomplete scan starts again at a new tip, making fresh reanswers visible.
         append(&mut chain, 9, 103, 8);
-        let (fresh, _, _) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let (fresh, _, _) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, previous, 3, &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
         assert_eq!(fresh.anchor, hash(9));
         assert_eq!(fresh.next, Some(hash(6)));
     }
@@ -19302,7 +19448,9 @@ mod accepted_objects_walk_tests {
         let mut walk = Some(missing);
         loop {
             let found = page(&chain, walk, 102, 100, 3, &mut |o| seen.push(claim_of(&o))).unwrap();
-            if found.next.is_none() { break; }
+            if found.next.is_none() {
+                break;
+            }
             walk = Some(found);
         }
         assert_eq!(seen, vec![8, 7, 6, 5, 4, 3, 2, 1]);
@@ -19427,7 +19575,10 @@ mod accepted_objects_walk_tests {
             Arc::new(vec![MergesetBlockAcceptanceData {
                 block_hash: hash(2),
                 accepted_transactions: (0..count)
-                    .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(2)].transactions[i].id(), index_within_block: i as u32 })
+                    .map(|i| AcceptedTxEntry {
+                        transaction_id: chain.blocks[&hash(2)].transactions[i].id(),
+                        index_within_block: i as u32,
+                    })
                     .collect(),
             }]),
         );
@@ -19449,21 +19600,35 @@ mod accepted_objects_walk_tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(selected)));
         chain.acceptance.remove(&hash(1));
-        let (partial, _, readable) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 100, &wanted, &selected_units,
-        ).unwrap();
+        let (partial, _, readable) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wanted, &selected_units).unwrap();
         assert_eq!(partial.next, Some(partial.anchor), "missing old history never completes the floor");
         assert_eq!(readable.len(), 1, "authenticated answers before the prune boundary are retained");
         let saved = chain.blocks.remove(&hash(2)).unwrap();
         append(&mut chain, 9, 160, 8);
-        let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: good.clone() }).unwrap());
+        let tx = Transaction::new(
+            TX_VERSION,
+            vec![],
+            vec![],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: good.clone() }).unwrap(),
+        );
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), vec![tx]));
-        chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {block_hash:hash(9),
-            accepted_transactions:vec![AcceptedTxEntry{transaction_id:chain.blocks[&hash(9)].transactions[0].id(),index_within_block:0}]}]));
-        let (fresh, _, delivered) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, Some(partial), 100, &wanted, &selected_units,
-        ).unwrap();
+        chain.acceptance.insert(
+            hash(9),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(9),
+                accepted_transactions: vec![AcceptedTxEntry {
+                    transaction_id: chain.blocks[&hash(9)].transactions[0].id(),
+                    index_within_block: 0,
+                }],
+            }]),
+        );
+        let (fresh, _, delivered) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, Some(partial), 100, &wanted, &selected_units)
+                .unwrap();
         assert_eq!(fresh.anchor, hash(9), "a stalled old walk revisits the new tip");
         assert!(fresh.next.is_some(), "still no completed watermark across missing history");
         assert_eq!(delivered.len(), 1, "the reacquired copy is readable although its original carrier is gone");
@@ -19474,77 +19639,141 @@ mod accepted_objects_walk_tests {
         let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = &mut bad_input else { unreachable!() };
         let PalwLegacyHeldAnswerV2::PromptIds { ids, .. } = &mut answer.answer else { unreachable!() };
         ids[0] ^= 1;
-        let txs: Vec<_> = [bad_input, input_object].into_iter().map(|object| Transaction::new(
-            TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
-        )).collect();
-        chain.acceptance.insert(hash(9), Arc::new(vec![MergesetBlockAcceptanceData {
-            block_hash: hash(9), accepted_transactions: (0..txs.len()).map(|i| AcceptedTxEntry {
-                transaction_id: txs[i].id(), index_within_block: i as u32,
-            }).collect(),
-        }]));
+        let txs: Vec<_> = [bad_input, input_object]
+            .into_iter()
+            .map(|object| {
+                Transaction::new(
+                    TX_VERSION,
+                    vec![],
+                    vec![],
+                    0,
+                    SUBNETWORK_ID_PALW_LIFECYCLE,
+                    0,
+                    borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap(),
+                )
+            })
+            .collect();
+        chain.acceptance.insert(
+            hash(9),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(9),
+                accepted_transactions: (0..txs.len())
+                    .map(|i| AcceptedTxEntry { transaction_id: txs[i].id(), index_within_block: i as u32 })
+                    .collect(),
+            }]),
+        );
         chain.blocks.insert(hash(9), Block::new(chain.headers[&hash(9)].as_ref().clone(), txs));
         let input_selected = BTreeMap::from([(claim, input_unit)]);
         let (_, _, input_answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_with_form_v1(
-            &chain, 100, 100, None, 100, &wanted, &input_selected, &BTreeMap::new(), &BTreeMap::new(), backend.prompt_ids_form(),
-        ).unwrap();
+            &chain,
+            100,
+            100,
+            None,
+            100,
+            &wanted,
+            &input_selected,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            backend.prompt_ids_form(),
+        )
+        .unwrap();
         assert_eq!(input_answers.len(), 1, "only the valid reacquired input is cached before the missing suffix");
         assert_eq!(input_answers[0].0, (claim, PalwDaUnitV1::LegacyHeldV2(input_unit)));
-        assert!(super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 100, &wanted, &input_selected,
-        ).unwrap().2.is_empty(), "a carrier does not choose a Merkle ruleset on a Flat network");
+        assert!(
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wanted, &input_selected,)
+                .unwrap()
+                .2
+                .is_empty(),
+            "a carrier does not choose a Merkle ruleset on a Flat network"
+        );
         chain.blocks.insert(hash(2), saved);
         let PalwConsensusObjectV2::LegacyHeldAnsweredV2 { answer } = good else { unreachable!() };
         assert_eq!(found[0].1, PalwDaBuiltAnswerV1::LegacyHeldV2(Box::new((answer.binding.clone(), answer.answer.clone()))));
         // Adapter regression: public removal rows and a mergeset last carrier suffice across pages.
         // Synthetic signatures here do not prove MLDSA acceptance or the producer service path.
         let (declaration, chunks) = kaspa_consensus_core::palw_legacy_answer_chunks_v2::palw_legacy_answer_split_v2(
-            &answer, (borsh::object_length(&answer).unwrap().div_ceil(2)) as u32, u64::MAX, |_| Ok(vec![1]),
-        ).unwrap();
+            &answer,
+            (borsh::object_length(&answer).unwrap().div_ceil(2)) as u32,
+            u64::MAX,
+            |_| Ok(vec![1]),
+        )
+        .unwrap();
         let mut row = kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2 {
-            declaration, deadline_daa: 1000, parts: BTreeMap::new(),
+            declaration,
+            deadline_daa: 1000,
+            parts: BTreeMap::new(),
         };
-        for chunk in &chunks[..chunks.len() - 1] { row.parts.insert(chunk.index, chunk.bytes.clone()); }
+        for chunk in &chunks[..chunks.len() - 1] {
+            row.parts.insert(chunk.index, chunk.bytes.clone());
+        }
         let last = chunks.last().unwrap().clone();
         let history_key = (hash(2), last.key(), last.answer_digest, last.index);
         chain.answer_history.insert(history_key, row.clone());
-        let mut corrupt = last.clone(); corrupt.bytes[0] ^= 1;
-        let txs: Vec<_> = [last.clone(), corrupt].into_iter().map(|chunk| Transaction::new(
-            TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0,
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2,
-                object: PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) } }).unwrap(),
-        )).collect();
+        let mut corrupt = last.clone();
+        corrupt.bytes[0] ^= 1;
+        let txs: Vec<_> = [last.clone(), corrupt]
+            .into_iter()
+            .map(|chunk| {
+                Transaction::new(
+                    TX_VERSION,
+                    vec![],
+                    vec![],
+                    0,
+                    SUBNETWORK_ID_PALW_LIFECYCLE,
+                    0,
+                    borsh::to_vec(&PalwLifecycleTxPayloadV2 {
+                        version: PALW_LIFECYCLE_TX_VERSION_V2,
+                        object: PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) },
+                    })
+                    .unwrap(),
+                )
+            })
+            .collect();
         chain.blocks.insert(hash(40), Block::new(Header::from_precomputed_hash(hash(40), vec![]), txs));
-        chain.acceptance.insert(hash(2), Arc::new(vec![MergesetBlockAcceptanceData {
-            block_hash: hash(40), accepted_transactions: (0..2).map(|i| AcceptedTxEntry {
-                transaction_id: chain.blocks[&hash(40)].transactions[i as usize].id(), index_within_block: i,
-            }).collect(),
-        }]));
+        chain.acceptance.insert(
+            hash(2),
+            Arc::new(vec![MergesetBlockAcceptanceData {
+                block_hash: hash(40),
+                accepted_transactions: (0..2)
+                    .map(|i| AcceptedTxEntry {
+                        transaction_id: chain.blocks[&hash(40)].transactions[i as usize].id(),
+                        index_within_block: i,
+                    })
+                    .collect(),
+            }]),
+        );
         let mut previous = None;
         let mut recovered = Vec::new();
         for _ in 0..9 {
-            let (walk, _, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-                &chain, 100, 100, previous, 1, &wanted, &selected_units,
-            ).unwrap();
-            recovered.extend(answers); previous = Some(walk);
-            if !recovered.is_empty() { break; }
+            let (walk, _, answers) =
+                super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, previous, 1, &wanted, &selected_units)
+                    .unwrap();
+            recovered.extend(answers);
+            previous = Some(walk);
+            if !recovered.is_empty() {
+                break;
+            }
         }
         assert_eq!(recovered, found, "the fold block, rather than mergeset carrier block, selects the bounded history row");
         chain.answer_history_unavailable = true;
-        let (unavailable, _, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 100, &wanted, &selected_units,
-        ).unwrap();
-        assert!(answers.is_empty()); assert_eq!(unavailable.next, Some(unavailable.anchor));
+        let (unavailable, _, answers) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wanted, &selected_units).unwrap();
+        assert!(answers.is_empty());
+        assert_eq!(unavailable.next, Some(unavailable.anchor));
         chain.answer_history_unavailable = false;
         chain.answer_history.get_mut(&history_key).unwrap().parts.values_mut().next().unwrap()[0] ^= 1;
-        let (corrupt, _, answers) = super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 100, &wanted, &selected_units,
-        ).unwrap();
-        assert!(answers.is_empty()); assert_eq!(corrupt.next, Some(corrupt.anchor));
+        let (corrupt, _, answers) =
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wanted, &selected_units).unwrap();
+        assert!(answers.is_empty());
+        assert_eq!(corrupt.next, Some(corrupt.anchor));
         chain.answer_history.remove(&history_key);
-        assert!(super::palw_fraud_filer::palw_fraud_filer_read_page_v1(
-            &chain, 100, 100, None, 100, &wanted, &selected_units,
-        ).unwrap().2.is_empty(), "an absent old index does not invent an answer; the case must reacquire");
+        assert!(
+            super::palw_fraud_filer::palw_fraud_filer_read_page_v1(&chain, 100, 100, None, 100, &wanted, &selected_units,)
+                .unwrap()
+                .2
+                .is_empty(),
+            "an absent old index does not invent an answer; the case must reacquire"
+        );
         chain.answer_history.insert(history_key, row);
         let wrong_root = BTreeMap::from([(claim, Hash64::from_u64_word(0xBAD))]);
         assert!(
@@ -19585,7 +19814,10 @@ mod accepted_objects_walk_tests {
                 Arc::new(vec![MergesetBlockAcceptanceData {
                     block_hash: hash(block),
                     accepted_transactions: (0..count)
-                        .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(block)].transactions[i].id(), index_within_block: i as u32 })
+                        .map(|i| AcceptedTxEntry {
+                            transaction_id: chain.blocks[&hash(block)].transactions[i].id(),
+                            index_within_block: i as u32,
+                        })
                         .collect(),
                 }]),
             );
@@ -19728,7 +19960,10 @@ mod accepted_objects_walk_tests {
             block_hash: hash(block),
             accepted_transactions: indices
                 .iter()
-                .map(|i| AcceptedTxEntry { transaction_id: chain.blocks[&hash(block)].transactions[*i as usize].id(), index_within_block: *i })
+                .map(|i| AcceptedTxEntry {
+                    transaction_id: chain.blocks[&hash(block)].transactions[*i as usize].id(),
+                    index_within_block: *i,
+                })
                 .collect(),
         };
         chain.acceptance.insert(hash(4), Arc::new(vec![accepted(14, &[0, 1, 2])]));
@@ -23462,7 +23697,8 @@ mod p2_7_disclosure_policy {
         let binding = backend.disclose_trace_event(&capture, u32::MAX, 0).unwrap().binding().clone();
         facts.job_pin = Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context));
         let material = PalwDaCaptureV1::FreePrompt(PalwFpCaptureV1 {
-            material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: ids }, capture,
+            material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: ids },
+            capture,
         });
         let answer = palw_da_legacy_answer_v2(&backend, &facts, &material, &PalwLegacyHeldUnitV2::FpJob).unwrap();
         let PalwDaBuiltAnswerV1::LegacyHeldV2(opened) = answer else { panic!("a signed tag-158 descriptor is required") };
@@ -23619,9 +23855,16 @@ mod p2_7_disclosure_policy {
         let held = built.answers[2].clone().expect("asked").expect("the prompt tile opens from the capture's job");
         let bond = facts.executor_bond;
         for (unit, answer) in [(units[0], first), (units[2], held)] {
-            palw_da_built_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, facts.form, u64::MAX, |_, _| {
-                Some(vec![1])
-            })
+            palw_da_built_answer_object_v1(
+                &Hash64::from_u64_word(0xD0),
+                facts.claim_id,
+                unit,
+                answer,
+                bond,
+                facts.form,
+                u64::MAX,
+                |_, _| Some(vec![1]),
+            )
             .expect("the form the fold takes");
         }
     }
@@ -23690,9 +23933,16 @@ mod p2_7_disclosure_policy {
             .expect("the signed tag-158 object can ride");
             assert!(matches!(object, PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. }));
             assert!(
-                palw_da_built_answer_object_v1(&domain, facts.claim_id, *unit, answer.clone(), facts.executor_bond, facts.form, 0, |_, _| panic!(
-                    "ceiling checked before signing"
-                ))
+                palw_da_built_answer_object_v1(
+                    &domain,
+                    facts.claim_id,
+                    *unit,
+                    answer.clone(),
+                    facts.executor_bond,
+                    facts.form,
+                    0,
+                    |_, _| panic!("ceiling checked before signing")
+                )
                 .is_err()
             );
             assert!(
@@ -24149,8 +24399,10 @@ mod p2_6_da_accusation_policy {
         let mined = source.find("if session.get_virtual_utxo_entry(tip).is_some() {").expect("the mined tip");
         let drained =
             mined + source[mined..].find("if palw_fee_chain_drained_v1(chained_funding.as_ref()) {").expect("the drain rule");
-        let resolved =
-            drained + source[drained..].find("chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;").expect("resolved afresh");
+        let resolved = drained
+            + source[drained..]
+                .find("chained_funding = self.resolve_fee_funding(&session, palw_fee_funding_floor_v1()).await;")
+                .expect("resolved afresh");
         assert!(!source[mined..resolved].contains("} else if"), "inside the mined-tip branch");
         assert!(resolved - mined < 1_500);
     }
@@ -25167,10 +25419,16 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert!(!palw_carrier_replaceable_v1(&carrier(bond, 1)), "a registration is never replaced");
         let envelope = PalwConsensusObjectV2::SignedRegistrationV1 {
             registration: Box::new(PalwConsensusObjectV2::ObjectChunk {
-                group: Hash64::from_u64_word(12), index: 0, count: 1, bytes: vec![],
+                group: Hash64::from_u64_word(12),
+                index: 0,
+                count: 1,
+                bytes: vec![],
             }),
-            valid_from_daa: 1, valid_until_daa: 32, fork_digest: Default::default(),
-            signer: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(13), 0)), signature: vec![],
+            valid_from_daa: 1,
+            valid_until_daa: 32,
+            fork_digest: Default::default(),
+            signer: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(13), 0)),
+            signature: vec![],
         };
         // Even a malformed wrapper must not be swapped for another object by
         // the money-moving replacement path; native inclusion judges its bytes.

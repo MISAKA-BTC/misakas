@@ -305,7 +305,11 @@ mod unix_daemon {
             assert_eq!(names.len(), ALL_SIGNING_PURPOSES.len(), "no two purposes share a name");
             let mut discriminants: Vec<u8> = ALL_SIGNING_PURPOSES.iter().map(|p| *p as u8).collect();
             discriminants.sort_unstable();
-            assert_eq!(discriminants, vec![0, 1, 3, 4, 5, 6, 7, 8], "all active purpose tags are present, with the retired tag reserved");
+            assert_eq!(
+                discriminants,
+                vec![0, 1, 3, 4, 5, 6, 7, 8],
+                "all active purpose tags are present, with the retired tag reserved"
+            );
             // The four the audit found, named individually.
             for name in ["palw-attempt", "palw-fp-commitment", "palw-fp-spend", "palw-derived", "palw-receipt-auth"] {
                 assert!(parse_purpose(name).is_ok(), "{name} must be deniable");

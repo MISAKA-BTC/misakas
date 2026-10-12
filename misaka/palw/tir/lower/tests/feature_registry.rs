@@ -19,7 +19,9 @@ fn crate_dir() -> PathBuf {
 /// Every fixture checkpoint and real config this crate lowers, by name.
 fn corpus() -> Vec<(String, String)> {
     let mut v = Vec::new();
-    for root in ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf", "tests/fixtures/hf-enc", "tests/fixtures/hf-lora"] {
+    for root in
+        ["tests/fixtures/hf", "tests/fixtures/hf-quant", "tests/fixtures/gguf", "tests/fixtures/hf-enc", "tests/fixtures/hf-lora"]
+    {
         let dir = crate_dir().join(root);
         let mut names: Vec<PathBuf> = std::fs::read_dir(&dir).expect("fixtures").map(|e| e.expect("entry").path()).collect();
         names.sort();
@@ -71,7 +73,8 @@ fn every_feature_a_lowered_fixture_uses_is_in_the_registry_and_implemented() {
             }
         }
     }
-    let unused: Vec<&str> = REGISTRY.iter().filter(|f| f.lowering == Lowering::Implemented && !seen.contains_key(f.id.0)).map(|f| f.id.0).collect();
+    let unused: Vec<&str> =
+        REGISTRY.iter().filter(|f| f.lowering == Lowering::Implemented && !seen.contains_key(f.id.0)).map(|f| f.id.0).collect();
     eprintln!("{} features used by the corpus; implemented but unused by any fixture: {unused:?}", seen.len());
     assert!(bad.is_empty(), "{bad:?}");
 }
@@ -111,14 +114,22 @@ fn the_registry_is_well_formed() {
     for f in REGISTRY {
         assert!(ids.insert(f.id.0), "duplicate {}", f.id);
         let ok = f.id.0.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-            && f.id.0.rsplit('_').next().is_some_and(|v| v.starts_with('V') && v[1..].chars().all(|c| c.is_ascii_digit()) && v.len() > 1);
+            && f.id
+                .0
+                .rsplit('_')
+                .next()
+                .is_some_and(|v| v.starts_with('V') && v[1..].chars().all(|c| c.is_ascii_digit()) && v.len() > 1);
         assert!(ok, "{}: ids are UPPER_SNAKE_V<n>", f.id);
         assert!(!f.title.is_empty());
         for p in f.primitives {
             assert!(misaka_palw_tir::prim::PRIM_NAMES_V1.contains(p), "{}: `{p}` is not one of the 25 primitives", f.id);
         }
         if let Requirement::Capability { id, general_primitive, .. } = f.protocol {
-            assert!(!id.is_empty() && !general_primitive.is_empty(), "{}: a capability names itself and its general closing primitive", f.id);
+            assert!(
+                !id.is_empty() && !general_primitive.is_empty(),
+                "{}: a capability names itself and its general closing primitive",
+                f.id
+            );
         }
     }
 }
@@ -142,7 +153,9 @@ fn an_implemented_features_tests_exist() {
                 missing.push(format!("{}: no test file tests/{file}.rs", f.id));
                 continue;
             };
-            let fixture = ["hf", "hf-enc", "hf-quant", "gguf", "hf-lora"].iter().any(|r| Path::new(&crate_dir().join("tests/fixtures").join(r).join(name)).exists());
+            let fixture = ["hf", "hf-enc", "hf-quant", "gguf", "hf-lora"]
+                .iter()
+                .any(|r| Path::new(&crate_dir().join("tests/fixtures").join(r).join(name)).exists());
             if !text.contains(name) && !fixture {
                 missing.push(format!("{}: tests/{file}.rs names no `{name}`", f.id));
             }
@@ -162,7 +175,8 @@ fn print_primitives_by_feature() {
     let base: BTreeSet<String> = BASE_PRIMITIVES.iter().map(|s| s.to_string()).collect();
     for (name, cfg) in corpus().into_iter().filter(|(n, _)| n.starts_with("hf/")) {
         let Ok(prep) = fidelity::prepare(&cfg, &LowerOpts::default()) else { continue };
-        let used: BTreeSet<String> = prep.lowered.program.blocks.iter().flat_map(|b| b.nodes.iter().map(|n| n.prim.name().to_string())).collect();
+        let used: BTreeSet<String> =
+            prep.lowered.program.blocks.iter().flat_map(|b| b.nodes.iter().map(|n| n.prim.name().to_string())).collect();
         let extra: BTreeSet<String> = used.difference(&base).cloned().collect();
         eprintln!("{name:>24}: {}", extra.iter().cloned().collect::<Vec<_>>().join(" "));
         for u in prep.spec.features() {
@@ -184,7 +198,8 @@ fn a_declared_primitive_is_emitted_by_some_fixture_that_uses_the_feature() {
     let mut fixtures_using: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (_, cfg) in corpus().into_iter().filter(|(n, _)| n.starts_with("hf/")) {
         let Ok(prep) = fidelity::prepare(&cfg, &LowerOpts::default()) else { continue };
-        let used: BTreeSet<String> = prep.lowered.program.blocks.iter().flat_map(|b| b.nodes.iter().map(|n| n.prim.name().to_string())).collect();
+        let used: BTreeSet<String> =
+            prep.lowered.program.blocks.iter().flat_map(|b| b.nodes.iter().map(|n| n.prim.name().to_string())).collect();
         for u in prep.spec.features() {
             union.entry(u.id.0).or_default().extend(used.iter().cloned());
             *fixtures_using.entry(u.id.0).or_default() += 1;

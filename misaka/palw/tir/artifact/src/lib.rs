@@ -502,7 +502,8 @@ mod tests {
         let mp = params(&p);
         let tag = std::process::id();
         let full = std::env::temp_dir().join(format!("palwtir1-full-{tag}.palwtir"));
-        write_container_v1(&full, &p, vec![1], [7u8; 64], "{}".into(), &mut |j, l| Ok(mp.tensors[&(j, l)].to_le_bytes())).expect("written");
+        write_container_v1(&full, &p, vec![1], [7u8; 64], "{}".into(), &mut |j, l| Ok(mp.tensors[&(j, l)].to_le_bytes()))
+            .expect("written");
         let c = PalwTirContainerV1::open(&full).expect("opens");
         let path = std::env::temp_dir().join(format!("palwtirs-{tag}.palwtirs"));
         let split = 2u32;

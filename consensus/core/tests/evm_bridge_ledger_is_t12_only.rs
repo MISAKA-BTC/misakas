@@ -84,7 +84,8 @@ fn the_ledger_is_the_only_thing_that_moved_testnet12() {
 #[test]
 fn the_ledger_is_armed_on_testnet12_and_nowhere_else() {
     assert_eq!(palw_t12_shipped_params().evm_bridge_ledger_activation_daa_score, 0, "testnet-12 arms it at genesis");
-    for (name, p) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", mainnet_shipped_params())]
+    for (name, p) in
+        [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", mainnet_shipped_params())]
     {
         assert_eq!(p.evm_bridge_ledger_activation_daa_score, u64::MAX, "{name}: the ledger must be inert");
     }

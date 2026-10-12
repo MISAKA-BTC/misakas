@@ -17,8 +17,7 @@ use std::path::PathBuf;
 const ROOT: Hash64 = Hash64::from_bytes([0xD5; 64]);
 
 fn fixture(name: &str) -> String {
-    let p =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tir/lower/tests/fixtures/fr09").join(name).join("config.json");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tir/lower/tests/fixtures/fr09").join(name).join("config.json");
     std::fs::read_to_string(p).expect("the fixture's config")
 }
 
@@ -102,8 +101,7 @@ fn the_dsa_fixtures_register_under_the_shipped_rules_and_have_a_complete_k2_plan
 fn the_rotation_op_is_admitted_and_planned_with_existing_families() {
     let params = palw_t12_shipped_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("a V2 network") };
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tir/lower/tests/fixtures/gguf/prism_rotated/rotated/model.gguf");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tir/lower/tests/fixtures/gguf/prism_rotated/rotated/model.gguf");
     let model = misaka_palw_tir_lower::gguf::GgufModel::open(&path).expect("the rotated fixture");
     let prep = model.prepare(&misaka_palw_tir_lower::lower::LowerOpts::default()).expect("prepared");
     let rotations = prep

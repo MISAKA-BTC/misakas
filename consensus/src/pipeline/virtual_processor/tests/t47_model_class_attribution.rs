@@ -751,8 +751,8 @@ impl WideClaim {
 #[tokio::test]
 async fn t18u_process_cache_eviction_cannot_recompute_a_blocks_paid_prompt() {
     use kaspa_consensus_core::palw_attempt_rules_v1::{
-        PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, PalwPromptRootBlockGuardV2,
-        palw_attempt_prompt_root_memo_v1, palw_measure_prompt_root_work_v2,
+        PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, PalwPromptRootBlockGuardV2, palw_attempt_prompt_root_memo_v1,
+        palw_measure_prompt_root_work_v2,
     };
     let h = harness(true);
     let profile = wide_profile();
@@ -762,22 +762,31 @@ async fn t18u_process_cache_eviction_cannot_recompute_a_blocks_paid_prompt() {
     h.bind(&mut walk, x.claim_id);
     let licence = h.license_v2(&mut walk, x.claim_id);
     let mask = PalwSegmentMaskV2::full(4);
-    let spam = h.v2(BYSTANDER, x.claim_id,
-        h.v3_verdict(BYSTANDER, x.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask), x.whole());
-    let honest = vec![h.v2(licence.full_card(), x.claim_id, licence.segmented(licence.full_card()), x.whole()), h.refuted(x.claim_id, x.whole())];
+    let spam =
+        h.v2(BYSTANDER, x.claim_id, h.v3_verdict(BYSTANDER, x.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask), x.whole());
+    let honest = vec![
+        h.v2(licence.full_card(), x.claim_id, licence.segmented(licence.full_card()), x.whole()),
+        h.refuted(x.claim_id, x.whole()),
+    ];
     let mut objects = vec![spam; 3];
     objects.extend(honest.iter().cloned());
-    let priced: Vec<_> = objects.iter().map(|object| {
-        let rent = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(object, true, false);
-        (object.clone(), rent)
-    }).collect();
+    let priced: Vec<_> = objects
+        .iter()
+        .map(|object| {
+            let rent = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(object, true, false);
+            (object.clone(), rent)
+        })
+        .collect();
     let carrier_mass: u64 = priced.iter().map(|(object, fee)| h.fits_one_carrier_with_fee(object, *fee)).sum();
     println!("same-claim carrier transient mass: {carrier_mass} / {}", h.config.params.max_block_mass);
     assert!(carrier_mass < h.config.params.max_block_mass, "the complete proof list fits the carrier mass");
     let point = walk.next();
     let accept = || h.vp().palw_v2_accepted_priced_objects_for_tests(&walk.state, h.sp(), &point, priced.clone(), point.block).0;
     let assert_convicted = |folded: &PalwChainStateV2| {
-        assert!(matches!(folded.claim(&x.claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        assert!(matches!(
+            folded.claim(&x.claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+        ));
         assert!(folded.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &x.claim_id)).is_some());
         assert!(folded.slashable_lock(h.cards[licence.full_card()], x.claim_id).is_none());
         h.reloads(folded);
@@ -804,9 +813,19 @@ async fn t18u_process_cache_eviction_cannot_recompute_a_blocks_paid_prompt() {
             std::thread::spawn(move || {
                 for n in 0..9 {
                     let anchor = Hash64::from_u64_word(0xB10C_8000 + n);
-                    assert!(palw_attempt_prompt_root_memo_v1(&other_profile, &anchor, 8191, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1).is_some());
+                    assert!(
+                        palw_attempt_prompt_root_memo_v1(
+                            &other_profile,
+                            &anchor,
+                            8191,
+                            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
+                        )
+                        .is_some()
+                    );
                 }
-            }).join().unwrap();
+            })
+            .join()
+            .unwrap();
             let folded = h.fold(&walk.state, &point, &accepted).unwrap();
             (accepted, folded)
         });
@@ -921,7 +940,8 @@ async fn t18u_a_block_recomputes_one_whole_2m_prompt() {
         let row = walk.state.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &id)).expect("a kind-4 row");
         assert_eq!((row.claim_id, row.execution_root), (id, Hash64::default()), "by claim");
         let claim = before.claim(&id).unwrap();
-        let forfeit = claim.reserved + h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward) + claim.rights_reserved;
+        let forfeit =
+            claim.reserved + h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward) + claim.rights_reserved;
         let nominal = if h.sp().rcore_plus_active_at(point.daa_score) {
             forfeit + kaspa_consensus_core::palw_state_v2::palw_rcore_s1s2_action_v1(c0, g_of(&walk.state, id))
         } else {
@@ -1060,7 +1080,8 @@ async fn t18u_a_windowed_kind3_below_the_batch_fence_is_the_bases_junk() {
     assert_eq!(h.accepted(&walk.state, &point, std::slice::from_ref(&honest)), vec![honest.clone()], "the honest Whole alone lands");
     // A bystander's kind-3 Whole on Y whose receipt rides in the Windowed form.
     let mask = PalwSegmentMaskV2::full(4);
-    let PalwFalseValidReceiptV1::Segmented(signed) = h.v3_verdict(BYSTANDER, y.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask) else {
+    let PalwFalseValidReceiptV1::Segmented(signed) = h.v3_verdict(BYSTANDER, y.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask)
+    else {
         unreachable!("v3_verdict is segmented")
     };
     let windowed = PalwFalseValidReceiptV1::Windowed(PalwWindowedReceiptV1 {
@@ -1103,7 +1124,16 @@ async fn t18u_a_windowed_kind3_below_the_batch_fence_is_the_bases_junk() {
     assert_eq!(with_undecodable, vec![honest.clone()], "the base's reading: the honest Whole lands");
     assert_eq!(with_windowed, with_undecodable, "below F-B this build admits what the base admits");
     // Priced walk (the rent check runs first): the junk with no rent paid is still no heavy charge.
-    let priced = h.vp().palw_v2_accepted_priced_objects_for_tests(&walk.state, h.sp(), &point, vec![(junk, 0), (honest.clone(), palw_object_rent_ceiling_v2(&honest, true, false))], point.block).0;
+    let priced = h
+        .vp()
+        .palw_v2_accepted_priced_objects_for_tests(
+            &walk.state,
+            h.sp(),
+            &point,
+            vec![(junk, 0), (honest.clone(), palw_object_rent_ceiling_v2(&honest, true, false))],
+            point.block,
+        )
+        .0;
     assert_eq!(priced, vec![honest.clone()], "priced: the honest Whole lands behind the unpriced Windowed junk");
     // And the honest conviction folds.
     let (before, _) = h.carry(&mut walk, vec![honest]);

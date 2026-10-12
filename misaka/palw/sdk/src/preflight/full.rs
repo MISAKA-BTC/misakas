@@ -49,7 +49,12 @@ pub struct FullInfo {
 
 /// Run the full depth: verify the pack, then read the node's registry for the artifact root and the declared classes. Returns the
 /// findings and the blockers they raise.
-pub fn judge_full(inputs: &FullInputs, model: Option<&Path>, network: Option<&str>, node: Option<&NodeFacts>) -> (FullInfo, Vec<Blocker>) {
+pub fn judge_full(
+    inputs: &FullInputs,
+    model: Option<&Path>,
+    network: Option<&str>,
+    node: Option<&NodeFacts>,
+) -> (FullInfo, Vec<Blocker>) {
     let mut blockers = Vec::new();
     let Some(pack_dir) = inputs.pack.as_deref() else {
         blockers.push(
@@ -59,12 +64,29 @@ pub fn judge_full(inputs: &FullInputs, model: Option<&Path>, network: Option<&st
                     "then run this again with --pack <dir> [--artifact <artifact.palwtir>]".into(),
                 ]),
         );
-        return (FullInfo { pack: "NO_PACK".into(), pack_digest: None, checks: Vec::new(), artifact_root: None, declared: Vec::new(), on_chain: Vec::new() }, blockers);
+        return (
+            FullInfo {
+                pack: "NO_PACK".into(),
+                pack_digest: None,
+                checks: Vec::new(),
+                artifact_root: None,
+                declared: Vec::new(),
+                on_chain: Vec::new(),
+            },
+            blockers,
+        );
     };
     let mut opts = VerifyOpts::new(pack_dir);
     opts.model = model.filter(|m| m.is_dir()).map(Path::to_path_buf);
     opts.artifact = inputs.artifact.clone();
-    let mut info = FullInfo { pack: "FAILED".into(), pack_digest: None, checks: Vec::new(), artifact_root: None, declared: Vec::new(), on_chain: Vec::new() };
+    let mut info = FullInfo {
+        pack: "FAILED".into(),
+        pack_digest: None,
+        checks: Vec::new(),
+        artifact_root: None,
+        declared: Vec::new(),
+        on_chain: Vec::new(),
+    };
     match verify(&opts, &|_| {}) {
         Ok(report) => {
             info.pack_digest = Some(report.pack_digest.clone());
@@ -81,7 +103,14 @@ pub fn judge_full(inputs: &FullInputs, model: Option<&Path>, network: Option<&st
                     detail: c.detail.clone(),
                 })
                 .collect();
-            info.pack = if report.verified() { "VERIFIED" } else if report.ok() { "NOT_FULLY_VERIFIED" } else { "FAILED" }.into();
+            info.pack = if report.verified() {
+                "VERIFIED"
+            } else if report.ok() {
+                "NOT_FULLY_VERIFIED"
+            } else {
+                "FAILED"
+            }
+            .into();
             if !report.verified() {
                 let why: Vec<String> = report
                     .checks
@@ -144,7 +173,10 @@ pub fn judge_full(inputs: &FullInputs, model: Option<&Path>, network: Option<&st
                         Blocker::new(
                             Stage::Mine,
                             "READY_SEATS_INSUFFICIENT",
-                            format!("{} of {} seats hold the class with a fresh possession proof", c.ready_seats, c.required_ready_seats),
+                            format!(
+                                "{} of {} seats hold the class with a fresh possession proof",
+                                c.ready_seats, c.required_ready_seats
+                            ),
                         )
                         .numbers(u64::from(c.ready_seats), u64::from(c.required_ready_seats), "seats")
                         .safe(vec!["run seats that hold the artifact: `misaka model readiness <class>` lists each seat".into()]),

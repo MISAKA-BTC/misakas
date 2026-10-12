@@ -191,7 +191,10 @@ pub(super) fn gaussian_topk(
         per_layer(lb),
         Arc::new(move |c| {
             let l = c.hl.model_layer(c.layer.ok_or_else(|| LowerError::eval("a Gaussian top-k constant is filled outside a layer"))?);
-            let (_, zq, on) = table.iter().find(|(ml, _, _)| *ml == l).ok_or_else(|| LowerError::eval(format!("layer {l} does not run this Gaussian top-k")))?;
+            let (_, zq, on) = table
+                .iter()
+                .find(|(ml, _, _)| *ml == l)
+                .ok_or_else(|| LowerError::eval(format!("layer {l} does not run this Gaussian top-k")))?;
             Ok(IntTensor::i64(vec![2], vec![*zq, *on]))
         }),
     )?;

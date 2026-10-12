@@ -522,14 +522,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
         // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
         crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
-        crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
-            capture,
-            seat_count,
-            segment_index,
-            Some(&self.profile),
-            self.step_ladder_cap(),
-        )
-        .map_err(|e| e.to_string())
+            crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
+                capture,
+                seat_count,
+                segment_index,
+                Some(&self.profile),
+                self.step_ladder_cap(),
+            )
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -845,16 +845,16 @@ impl PalwExecutionBackendV1 for Base0Backend {
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
         // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
         crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
-        let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
-        crate::fp_interval::base0_open_fp_interval_capped_v1(
-            &material,
-            index,
-            prompt_token_ids,
-            self.checkpoint_interval(),
-            self.network_ladder,
-            self.prompt_ids_form,
-        )
-        .map_err(|e| e.to_string())
+            let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+            crate::fp_interval::base0_open_fp_interval_capped_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                self.checkpoint_interval(),
+                self.network_ladder,
+                self.prompt_ids_form,
+            )
+            .map_err(|e| e.to_string())
         })
     }
 
@@ -1402,96 +1402,122 @@ mod tests {
         let digest = Hash64::from_bytes(direct.finalize().as_bytes().try_into().unwrap());
         assert_eq!(named.state_root, kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&class, k, &digest));
         for inherited in [false, true] {
-            for false_named in [false,true] {
-            let mut job = free_prompt_job(&backend, ids.len() as u32, 1);
-            job.version = if inherited { 12 } else { 11 };
-            job.decode = Some(DecodeConfigV4::NOOP);
-            job.tail = Some(PalwFpJobTailV1::Prefix(if false_named { PalwFpPrefixStateV1 {state_root:Hash64::from_u64_word(0xbad19),..named} } else {named}));
-            job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
-                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-                &ids,
-            )
-            .unwrap();
-            if false_named { assert!(backend.verify_prefix_state_v1(&job, &ids).is_err()); } else { backend.verify_prefix_state_v1(&job, &ids).unwrap(); }
-            let good = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
-            let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
-            let binding = retained.binding();
-            let raw = retained.tiles().expect("BASE0 production capture retains dense public answer tiles");
-            let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
-            let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
-            for (i, t) in raw {
-                hashes[*i as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &class, t);
-            }
-            let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
-            assert_eq!(tree.root(), binding.step_merkle_root);
-            use kaspa_consensus_core::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as Action, PalwPrefixFamilyCourtV1};
-            let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).unwrap();
-            let mut semantic = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
-                class, inventory.root(), &binding.job_context, 0);
-            semantic.prefix_state_relation = Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1);
-            let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
-                claim_id: Hash64::from_u64_word(0xc19), class_id:class, artifact_root:inventory.root(),
-                executor_bond:kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond), execution_root:binding.committed_execution_root,
-                lane:Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt), segment_count:None,phase:None,
-                job_identity:kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
-                trace_root:binding.full_logits_trace_root, output_root:good.outcome.output_root, registered_semantics:Some(semantic),
-            };
-            let context = Hash64::from_u64_word(0x170019);
-            let mut court = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
-            assert!(court.finish().is_err());
-            let plan = PalwPrefixKvPlanV1::of_profile(profile, k).unwrap();
-            let mut public = PalwBase0PrefixDigestV1::new(profile, k).unwrap();
-            for ordinal in 0..plan.tile_count {
-                let (coordinate, _) = plan.coordinate(profile, ordinal).unwrap();
-                let index =
-                    kaspa_consensus_core::palw_step::canonical_step_leaf_index(profile, &binding.job_context, &coordinate).unwrap();
-                let tile = PalwPrefixKvTileV1 {
-                    opening: PalwStepOpeningV1 {
-                        leaf_index: index,
-                        leaf_hash: hashes[index as usize],
-                        siblings: tree.path_v1(index as usize).unwrap(),
-                    },
-                    preimage: (**by_index.get(&index).unwrap()).clone(),
+            for false_named in [false, true] {
+                let mut job = free_prompt_job(&backend, ids.len() as u32, 1);
+                job.version = if inherited { 12 } else { 11 };
+                job.decode = Some(DecodeConfigV4::NOOP);
+                job.tail = Some(PalwFpJobTailV1::Prefix(if false_named {
+                    PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }
+                } else {
+                    named
+                }));
+                job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    &ids,
+                )
+                .unwrap();
+                if false_named {
+                    assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
+                } else {
+                    backend.verify_prefix_state_v1(&job, &ids).unwrap();
+                }
+                let good = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
+                let retained = crate::produce::base0_material_decode_any_v1(&good.outcome.material).unwrap();
+                let binding = retained.binding();
+                let raw = retained.tiles().expect("BASE0 production capture retains dense public answer tiles");
+                let by_index: std::collections::BTreeMap<_, _> = raw.iter().map(|(i, t)| (*i, t)).collect();
+                let mut hashes = vec![Hash64::default(); binding.step_leaf_count as usize];
+                for (i, t) in raw {
+                    hashes[*i as usize] = step_tile_leaf_hash_ctx_v1(&binding.job_context, &class, t);
+                }
+                let tree = PalwStepMerkleTreeV1::build_capped_v1(&hashes, 1 << 22).unwrap();
+                assert_eq!(tree.root(), binding.step_merkle_root);
+                use kaspa_consensus_core::palw_prefix_family_court_v1::{PalwPrefixCourtActionV1 as Action, PalwPrefixFamilyCourtV1};
+                let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).unwrap();
+                let mut semantic = kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1::of_registration(
+                    class,
+                    inventory.root(),
+                    &binding.job_context,
+                    0,
+                );
+                semantic.prefix_state_relation =
+                    Some(kaspa_consensus_core::palw_class_semantics_v1::PalwPrefixStateRelationV1::Base0Int8KvV1);
+                let target = kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1 {
+                    claim_id: Hash64::from_u64_word(0xc19),
+                    class_id: class,
+                    artifact_root: inventory.root(),
+                    executor_bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(job.executor_bond),
+                    execution_root: binding.committed_execution_root,
+                    lane: Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt),
+                    segment_count: None,
+                    phase: None,
+                    job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context),
+                    trace_root: binding.full_logits_trace_root,
+                    output_root: good.outcome.output_root,
+                    registered_semantics: Some(semantic),
                 };
-                court.movement(context, &Action::BeginTile { opening:tile.opening.clone() }).unwrap();
-                for (i, bytes) in tile.preimage.values_le.chunks(65_536).enumerate() {
-                    court.movement(context, &Action::TilePart {offset:(i * 65_536) as u32, bytes:bytes.to_vec()}).unwrap();
-                    court = borsh::from_slice(&borsh::to_vec(&court).unwrap()).unwrap();
+                let context = Hash64::from_u64_word(0x170019);
+                let mut court = PalwPrefixFamilyCourtV1::new(context, &target, binding, &job, 1 << 22, 1 << 20).unwrap();
+                assert!(court.finish().is_err());
+                let plan = PalwPrefixKvPlanV1::of_profile(profile, k).unwrap();
+                let mut public = PalwBase0PrefixDigestV1::new(profile, k).unwrap();
+                for ordinal in 0..plan.tile_count {
+                    let (coordinate, _) = plan.coordinate(profile, ordinal).unwrap();
+                    let index = kaspa_consensus_core::palw_step::canonical_step_leaf_index(profile, &binding.job_context, &coordinate)
+                        .unwrap();
+                    let tile = PalwPrefixKvTileV1 {
+                        opening: PalwStepOpeningV1 {
+                            leaf_index: index,
+                            leaf_hash: hashes[index as usize],
+                            siblings: tree.path_v1(index as usize).unwrap(),
+                        },
+                        preimage: (**by_index.get(&index).unwrap()).clone(),
+                    };
+                    court.movement(context, &Action::BeginTile { opening: tile.opening.clone() }).unwrap();
+                    for (i, bytes) in tile.preimage.values_le.chunks(65_536).enumerate() {
+                        court.movement(context, &Action::TilePart { offset: (i * 65_536) as u32, bytes: bytes.to_vec() }).unwrap();
+                        court = borsh::from_slice(&borsh::to_vec(&court).unwrap()).unwrap();
+                    }
+                    assert!(court.finish().is_err(), "whole old leaf must authenticate before a verdict");
+                    court.movement(context, &Action::FinishTile).unwrap();
+                    let values = palw_prefix_kv_authenticated_bytes_v1(binding, &plan, ordinal, &tile, 1 << 22).unwrap();
+                    let before = borsh::to_vec(&public).unwrap();
+                    assert!(public.push_values(profile, coordinate, 0, &128i32.to_le_bytes()).is_err());
+                    assert_eq!(borsh::to_vec(&public).unwrap(), before);
+                    for (offset, word) in values.chunks_exact(4).enumerate() {
+                        public.push_values(profile, coordinate, offset as u32, word).unwrap();
+                        public = borsh::from_slice(&borsh::to_vec(&public).unwrap()).unwrap();
+                    }
                 }
-                assert!(court.finish().is_err(), "whole old leaf must authenticate before a verdict");
-                court.movement(context, &Action::FinishTile).unwrap();
-                let values = palw_prefix_kv_authenticated_bytes_v1(binding, &plan, ordinal, &tile, 1 << 22).unwrap();
-                let before = borsh::to_vec(&public).unwrap();
-                assert!(public.push_values(profile, coordinate, 0, &128i32.to_le_bytes()).is_err());
-                assert_eq!(borsh::to_vec(&public).unwrap(), before);
-                for (offset, word) in values.chunks_exact(4).enumerate() {
-                    public.push_values(profile, coordinate, offset as u32, word).unwrap();
-                    public = borsh::from_slice(&borsh::to_vec(&public).unwrap()).unwrap();
+                assert_eq!(
+                    public.finish(profile).unwrap(),
+                    named.state_root,
+                    "public i32 narrowing rows reproduce the actual i8 cache, inherited={inherited}"
+                );
+                assert_eq!(court.finish(), Ok(false_named), "actual bad-context public leaves convict; honest clears");
+                if !false_named {
+                    job.tail =
+                        Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }));
+                    assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
+                    let bad = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
+                    let bad_retained = crate::produce::base0_material_decode_any_v1(&bad.outcome.material).unwrap();
+                    assert_eq!(retained.generated_token_ids(), bad_retained.generated_token_ids());
+                    assert_eq!(retained.logits_rows(), bad_retained.logits_rows());
+                    // The output commitment includes the job context, including its named prefix.
+                    // Equal arithmetic answers for two different jobs therefore have different roots.
+                    for (run, material) in [(&good, &retained), (&bad, &bad_retained)] {
+                        assert_eq!(
+                            run.outcome.output_root,
+                            kaspa_consensus_core::palw_v2::output_commitment_v2(
+                                &material.binding().job_context.context_hash(),
+                                material.generated_token_ids(),
+                                &kaspa_consensus_core::palw_v2::rendered_output_hash_v2(&[])
+                            )
+                        );
+                    }
+                    assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
+                    assert_ne!(good.outcome.output_root, bad.outcome.output_root);
                 }
-            }
-            assert_eq!(
-                public.finish(profile).unwrap(),
-                named.state_root,
-                "public i32 narrowing rows reproduce the actual i8 cache, inherited={inherited}"
-            );
-            assert_eq!(court.finish(), Ok(false_named), "actual bad-context public leaves convict; honest clears");
-            if !false_named {
-            job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0xbad19), ..named }));
-            assert!(backend.verify_prefix_state_v1(&job, &ids).is_err());
-            let bad = backend.execute_free_prompt(&job, &ids.map(|id| id as usize)).unwrap();
-            let bad_retained = crate::produce::base0_material_decode_any_v1(&bad.outcome.material).unwrap();
-            assert_eq!(retained.generated_token_ids(), bad_retained.generated_token_ids());
-            assert_eq!(retained.logits_rows(), bad_retained.logits_rows());
-            // The output commitment includes the job context, including its named prefix.
-            // Equal arithmetic answers for two different jobs therefore have different roots.
-            for (run, material) in [(&good, &retained), (&bad, &bad_retained)] {
-                assert_eq!(run.outcome.output_root, kaspa_consensus_core::palw_v2::output_commitment_v2(
-                    &material.binding().job_context.context_hash(), material.generated_token_ids(),
-                    &kaspa_consensus_core::palw_v2::rendered_output_hash_v2(&[])));
-            }
-            assert_ne!(retained.binding().job_context.context_hash(), bad_retained.binding().job_context.context_hash());
-            assert_ne!(good.outcome.output_root, bad.outcome.output_root);
-            }
             }
         }
     }

@@ -744,8 +744,8 @@ pub fn gen_toy_vlm_fixture_v1() -> Result<GenToyVlmFixtureV1, String> {
     }
     let (tile, h_tile, checkpoint, image_tile) = (4u32, 16u32, 1u32, 4u32);
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus-vectors/tir-v2/pipelines/toy-vlm.json");
-    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
-        .map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| e.to_string())?;
     let jarr = |x: &serde_json::Value, what: &str| x.as_array().cloned().ok_or_else(|| format!("the vector has no {what}"));
     let program_bytes: Vec<Vec<u8>> = jarr(&v["programs"], "programs")?
         .iter()
@@ -833,8 +833,8 @@ pub struct GenToyEmbeddingFixtureV1 {
 pub fn gen_toy_embedding_fixture_v1() -> Result<GenToyEmbeddingFixtureV1, String> {
     use kaspa_consensus_core::palw_gen_artifact_v1::palw_gen_inventory_root_v1;
     use kaspa_consensus_core::palw_gen_class_v1::{
-        OutputSpecV1, PALW_GEN_CLASS_VERSION_V1, PALW_GEN_POOLING_CLS_V1, PalwGenClassV1, PalwGenEmbeddingOffersV1, PalwGenImageOfferV1,
-        PalwGenOffersV1, PalwGenProfileOffersV1, palw_gen_class_record_v1,
+        OutputSpecV1, PALW_GEN_CLASS_VERSION_V1, PALW_GEN_POOLING_CLS_V1, PalwGenClassV1, PalwGenEmbeddingOffersV1,
+        PalwGenImageOfferV1, PalwGenOffersV1, PalwGenProfileOffersV1, palw_gen_class_record_v1,
     };
     use kaspa_consensus_core::palw_gen_v1::PalwGenProfileV1;
     use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
@@ -844,9 +844,10 @@ pub fn gen_toy_embedding_fixture_v1() -> Result<GenToyEmbeddingFixtureV1, String
     fn unhex(s: &str) -> Result<Vec<u8>, String> {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string())).collect()
     }
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus-vectors/tir-v2/pipelines/toy-vision.json");
-    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
-        .map_err(|e| e.to_string())?;
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus-vectors/tir-v2/pipelines/toy-vision.json");
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| e.to_string())?;
     let jarr = |x: &serde_json::Value, what: &str| x.as_array().cloned().ok_or_else(|| format!("the vector has no {what}"));
     let program_bytes: Vec<Vec<u8>> = jarr(&v["programs"], "programs")?
         .iter()

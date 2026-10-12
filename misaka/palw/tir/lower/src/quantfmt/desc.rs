@@ -95,11 +95,7 @@ pub struct WhenDesc {
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum LayoutDesc {
     #[serde(rename = "blocks")]
-    Blocks {
-        elems: usize,
-        bytes: usize,
-        fields: Vec<FieldDesc>,
-    },
+    Blocks { elems: usize, bytes: usize, fields: Vec<FieldDesc> },
     /// Tensors the checkpoint stores packed are served as another, float tensor under another name:
     /// the descriptor names the roles (`<module><suffix>` each), the lanes and shape of the served
     /// tensor (any rank up to 4, so a leading expert axis is just the first lane), and as one expression
@@ -416,7 +412,8 @@ impl QuantFormatDesc {
     /// `BLAKE2b-256` over the canonical text, keyed `misaka.palw.quant-format.v1`: what a runtime
     /// pack pins.
     pub fn digest(&self) -> [u8; 32] {
-        let h = blake2b_simd::Params::new().hash_length(32).key(QUANT_FORMAT_SCHEMA_V1.as_bytes()).hash(self.canonical_json().as_bytes());
+        let h =
+            blake2b_simd::Params::new().hash_length(32).key(QUANT_FORMAT_SCHEMA_V1.as_bytes()).hash(self.canonical_json().as_bytes());
         let mut out = [0u8; 32];
         out.copy_from_slice(h.as_bytes());
         out

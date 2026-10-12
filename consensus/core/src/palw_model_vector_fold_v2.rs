@@ -177,7 +177,9 @@ pub(super) fn refute_outcome(
     let work = model_artifact_work_v2(h.program_bytes_len as usize, bytes.len().saturating_add(h.post_bytes_len as usize))
         .and_then(|w| w.checked_add(h.max_court_work))
         .ok_or_else(|| refused("vector court envelope overflows"))?;
-    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun) };
+    let Some(fee) = charge(builder, ctx, signer, work, true)? else {
+        return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun);
+    };
     let proven = (|| -> Result<(), String> {
         if bytes.len() as u64 > h.max_filing_bytes {
             return Err("vector filing exceeds admitted court bound".into());

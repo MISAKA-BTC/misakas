@@ -7,12 +7,12 @@
 //!   3. the option ON still lowers, runs on the reference evaluator, and agrees with the float reference no worse than OFF beyond noise.
 
 use misaka_palw_tir::interval::analyze_ranges;
+use misaka_palw_tir_lower::fidelity;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
 use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
-use misaka_palw_tir_lower::fidelity;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -68,7 +68,12 @@ fn pin(name: &str) {
         off.metrics.top1_agreement, off.metrics.kl_mean, on.metrics.top1_agreement, on.metrics.kl_mean
     );
     assert!(on.metrics.top1_agreement >= 0.9, "{name}: top-1 {} with the option", on.metrics.top1_agreement);
-    assert!(on.metrics.kl_mean <= off.metrics.kl_mean.max(0.002) * 1.5 + 0.002, "{name}: KL {} against {} without it", on.metrics.kl_mean, off.metrics.kl_mean);
+    assert!(
+        on.metrics.kl_mean <= off.metrics.kl_mean.max(0.002) * 1.5 + 0.002,
+        "{name}: KL {} against {} without it",
+        on.metrics.kl_mean,
+        off.metrics.kl_mean
+    );
 }
 
 #[test]

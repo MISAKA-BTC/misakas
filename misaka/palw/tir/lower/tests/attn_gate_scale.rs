@@ -61,8 +61,16 @@ fn a_separate_gate_and_a_value_scale_are_features_that_lower() {
     let pb = hl::build_program(&base).unwrap();
     let a = Session::new(&pb, &ParamStore::synthetic(&pb, 3)).run(&TOKENS).unwrap();
     for (name, s, feature) in [
-        ("sigmoid per element", spec(Some(SeparateGateSpec { act: Act::Sigmoid, per_head: false }), 1.0), "ATTN_OUTPUT_GATE_SEPARATE_V1"),
-        ("softplus per head", spec(Some(SeparateGateSpec { act: Act::Softplus, per_head: true }), 1.0), "ATTN_OUTPUT_GATE_SEPARATE_V1"),
+        (
+            "sigmoid per element",
+            spec(Some(SeparateGateSpec { act: Act::Sigmoid, per_head: false }), 1.0),
+            "ATTN_OUTPUT_GATE_SEPARATE_V1",
+        ),
+        (
+            "softplus per head",
+            spec(Some(SeparateGateSpec { act: Act::Softplus, per_head: true }), 1.0),
+            "ATTN_OUTPUT_GATE_SEPARATE_V1",
+        ),
         ("a value scale", spec(None, 0.707), "ATTN_VALUE_SCALE_V1"),
     ] {
         assert!(s.features().iter().any(|f| f.id.0 == feature) && !base.features().iter().any(|f| f.id.0 == feature), "{name}");

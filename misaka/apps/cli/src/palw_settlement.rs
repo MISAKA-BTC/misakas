@@ -24,10 +24,19 @@ pub(crate) fn settlement_line(r: &GetPalwSettlementResponse) -> String {
                 .into();
         }
         let head = |h: Option<kaspa_consensus_core::Hash64>| h.map(|h| h.to_string()).unwrap_or_else(|| "unavailable".into());
-        return format!("PALW native settlement: latest={} safe={} finalized={} depth={} work={} stop={:?}",
-            head(native.latest), head(native.safe), head(native.finalized), native.depth, native.unique_work, native.stop);
+        return format!(
+            "PALW native settlement: latest={} safe={} finalized={} depth={} work={} stop={:?}",
+            head(native.latest),
+            head(native.safe),
+            head(native.finalized),
+            native.depth,
+            native.unique_work,
+            native.stop
+        );
     }
-    if let Some(fence) = r.dns_retired_at { return format!("DNS retired at DAA {fence}; native settlement snapshot unavailable"); }
+    if let Some(fence) = r.dns_retired_at {
+        return format!("DNS retired at DAA {fence}; native settlement snapshot unavailable");
+    }
     if !r.available {
         return format!(
             "settlement unavailable at DAA {}: the node keeps no PALW state, or cannot date its safe frontier",
@@ -55,7 +64,10 @@ fn wait_clause(w: &kaspa_consensus_core::palw_native_readiness_v1::SafeWaitV1) -
         W::Unexecuted => "no executed block yet".into(),
         W::FinalizedConflict => "a finalized-head conflict is recorded".into(),
         W::FrontierBehind { frontier_blue, effect_blue, frontier_on_branch } => {
-            format!("safe frontier at blue {frontier_blue} has not reached blue {effect_blue}{}", if *frontier_on_branch { "" } else { " (not on this branch)" })
+            format!(
+                "safe frontier at blue {frontier_blue} has not reached blue {effect_blue}{}",
+                if *frontier_on_branch { "" } else { " (not on this branch)" }
+            )
         }
         W::OpenClaim { claim, stage, wait_daa, .. } => match wait_daa {
             Some(d) => format!("claim {claim} is {stage:?}, trace retention lapses in {d} DAA"),
@@ -66,8 +78,12 @@ fn wait_clause(w: &kaspa_consensus_core::palw_native_readiness_v1::SafeWaitV1) -
             if *claim_known { "" } else { " (claim not in state)" }
         ),
         W::WaitingMaturity { facts, work, wait_daa, ready_daa, .. } => match ready_daa {
-            Some(at) => format!("waiting on maturity: {facts} fact(s), work {work}; the first matures in {wait_daa} DAA, enough by DAA {at}"),
-            None => format!("waiting on maturity: {facts} fact(s), work {work}; the first matures in {wait_daa} DAA, but they would not be enough"),
+            Some(at) => {
+                format!("waiting on maturity: {facts} fact(s), work {work}; the first matures in {wait_daa} DAA, enough by DAA {at}")
+            }
+            None => format!(
+                "waiting on maturity: {facts} fact(s), work {work}; the first matures in {wait_daa} DAA, but they would not be enough"
+            ),
         },
         W::InsufficientDepth { have, need } => format!("{have} of {need} settled anchors"),
         W::InsufficientWork { have, need } => format!("work {have} of {need}"),
@@ -135,7 +151,10 @@ pub(crate) fn settlement_exit(r: &GetPalwSettlementResponse, min_depth: Option<u
         return exit::GENERIC;
     }
     // A node in FinalizedConflict will never settle anything until it is resynced: that is an error to a script, not "not yet".
-    if r.native_settlement.as_ref().is_some_and(|s| s.stop == Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FinalizedConflict)) {
+    if r.native_settlement
+        .as_ref()
+        .is_some_and(|s| s.stop == Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FinalizedConflict))
+    {
         return exit::GENERIC;
     }
     match min_depth {
@@ -160,7 +179,8 @@ pub(crate) async fn run(ctx: &Ctx, daa: u64, min_depth: Option<u64>) -> CliResul
     match ctx.output {
         OutputFormat::Json => {
             let mut doc = serde_json::to_value(&response).expect("a response serializes");
-            doc["schema"] = if response.dns_retired_at.is_some() { "misaka.palw.settlement.v2" } else { "misaka.palw.settlement.v1" }.into();
+            doc["schema"] =
+                if response.dns_retired_at.is_some() { "misaka.palw.settlement.v2" } else { "misaka.palw.settlement.v1" }.into();
             doc["minDepth"] = min_depth.into();
             doc["reached"] = min_depth.map(|_| code == exit::SUCCESS).into();
             println!("{doc}");
@@ -188,7 +208,9 @@ pub(crate) async fn run(ctx: &Ctx, daa: u64, min_depth: Option<u64>) -> CliResul
 
 /// The settlement column `wallet utxo list` prints for one output.
 pub(crate) fn settlement_cell(r: &GetPalwSettlementResponse) -> String {
-    if r.dns_retired_at.is_some() && !r.settled { return "native unsettled / unavailable".into(); }
+    if r.dns_retired_at.is_some() && !r.settled {
+        return "native unsettled / unavailable".into();
+    }
     if r.settled { format!("depth {}", depth_text(r)) } else { format!("unsettled ({} pending)", r.pending_anchors) }
 }
 
@@ -218,7 +240,9 @@ mod tests {
 
     fn answer(settled: bool, depth: u64, pending: u64, lower_bound: bool) -> GetPalwSettlementResponse {
         GetPalwSettlementResponse {
-            dns_retired_at: None, native_settlement: None, native_readiness: None,
+            dns_retired_at: None,
+            native_settlement: None,
+            native_readiness: None,
             available: true,
             sink_daa: 5_000,
             daa_score: 4_000,
@@ -265,7 +289,13 @@ mod tests {
                     wait_daa: Some(4_000),
                 },
                 SafeWaitV1::InsufficientDepth { have: 1, need: 3 },
-                SafeWaitV1::WaitingMaturity { facts: 2, work: "40".into(), earliest_matured_daa: 6_401, wait_daa: 4_000, ready_daa: Some(6_500) },
+                SafeWaitV1::WaitingMaturity {
+                    facts: 2,
+                    work: "40".into(),
+                    earliest_matured_daa: 6_401,
+                    wait_daa: 4_000,
+                    ready_daa: Some(6_500),
+                },
             ],
             open_claims_total: 1,
             open_sessions_total: 0,
@@ -330,7 +360,8 @@ mod tests {
         // A published finalized label that was withdrawn is an alarm line, naming the head (RFC-0012 C11).
         let mut withdrawn = readiness;
         withdrawn.finalized.withdrawn_from = Some(h(0xF1));
-        let text = readiness_lines(&GetPalwSettlementResponse { native_readiness: Some(withdrawn), ..answer(false, 1, 0, false) }).join("\n");
+        let text =
+            readiness_lines(&GetPalwSettlementResponse { native_readiness: Some(withdrawn), ..answer(false, 1, 0, false) }).join("\n");
         assert!(text.contains("FINALIZED LABEL WITHDRAWN"), "{text}");
         assert!(!text.contains("finalized: PruningPointNotExecuted"), "the withdrawal replaces the plain wait line: {text}");
     }

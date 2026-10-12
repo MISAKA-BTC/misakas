@@ -119,7 +119,10 @@ impl KernelLedgerV1 {
     pub fn source_fee_verifier_pay_rows_v1(&self) -> BTreeMap<(u8, Digest), VerifierPayRowV1> {
         let mut rows = BTreeMap::new();
         for (context, funding) in &self.beacon_source_fees {
-            rows.insert((VERIFIER_PAY_SOURCE_FEE_FUNDING_V1, *context), VerifierPayRowV1::SourceFeeFunding { funding: funding.clone() });
+            rows.insert(
+                (VERIFIER_PAY_SOURCE_FEE_FUNDING_V1, *context),
+                VerifierPayRowV1::SourceFeeFunding { funding: funding.clone() },
+            );
         }
         for ((context, producer), promise) in &self.beacon_source_fee_promises {
             rows.insert(

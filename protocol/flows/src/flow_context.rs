@@ -425,7 +425,10 @@ mod tests {
         let armed = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
         let mut old = armed.clone();
         old.palw_model_benefits = None;
-        assert!(armed.fence_schedule_v1().contains(&FENCE) && !old.fence_schedule_v1().contains(&FENCE), "the premise: they differ in the fence");
+        assert!(
+            armed.fence_schedule_v1().contains(&FENCE) && !old.fence_schedule_v1().contains(&FENCE),
+            "the premise: they differ in the fence"
+        );
 
         // Met at DAA 0: both announce the same next fence, so nothing in the snapshot disputes anything.
         let old_at_0 = fork_id_v1(&old, 0);
@@ -453,7 +456,8 @@ mod tests {
         // refused outright (it lacks the fence), and a node that carries it — met past the fence — is kept for good.
         let old_now = fork_id_v1(&old, FENCE);
         assert!(
-            kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(&armed, FENCE, old_now.fired.as_bytes().as_slice(), old_now.next).refuses(),
+            kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(&armed, FENCE, old_now.fired.as_bytes().as_slice(), old_now.next)
+                .refuses(),
             "the old build, reconnecting, is refused at the handshake"
         );
         let new_now = fork_id_v1(&armed, FENCE);
@@ -1079,10 +1083,8 @@ impl FlowContext {
             Ok(ghostdag) => consensus.async_get_header(ghostdag.selected_parent).await.map(|h| h.daa_score).unwrap_or_default(),
             Err(_) => 0,
         };
-        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(
-            anchor_daa,
-            lane.schedule_span_daa_at(anchor_daa),
-        );
+        let span =
+            kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(anchor_daa, lane.schedule_span_daa_at(anchor_daa));
         match self.palw_round_relay.observe(hash, &block.header, span) {
             V::NotRound | V::First => true,
             V::Repeat => false,

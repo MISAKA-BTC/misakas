@@ -171,7 +171,9 @@ fn main() {
         let tensors = a.weights.as_ref().and_then(|p| TensorIndex::from_checkpoint_path(p).ok());
         let encdec = cfg.as_ref().ok().is_some_and(misaka_palw_tir_lower::hf_schema::is_encoder_decoder);
         let vision = cfg.as_ref().ok().is_some_and(|c| {
-            misaka_palw_tir_lower::hf_schema::is_vision_tower(c) || misaka_palw_tir_lower::hf_schema::is_cnn(c) || misaka_palw_tir_lower::hf_schema::is_diffusers(c)
+            misaka_palw_tir_lower::hf_schema::is_vision_tower(c)
+                || misaka_palw_tir_lower::hf_schema::is_cnn(c)
+                || misaka_palw_tir_lower::hf_schema::is_diffusers(c)
         });
         (cfg.ok().map(|c| model::analyze(&c, tensors.as_ref(), &read)), (encdec, vision))
     };

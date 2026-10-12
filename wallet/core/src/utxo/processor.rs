@@ -374,7 +374,8 @@ impl UtxoProcessor {
     #[allow(clippy::mutable_key_type)]
     pub async fn handle_pending(&self, current_daa_score: u64) -> Result<()> {
         let registered: HashSet<UtxoContext> = self.inner.address_to_utxo_context_map.iter().map(|row| row.value().clone()).collect();
-        let mut updated_contexts: HashSet<UtxoContext> = registered.into_iter().filter(|context| context.refresh_mature_coinbases()).collect();
+        let mut updated_contexts: HashSet<UtxoContext> =
+            registered.into_iter().filter(|context| context.refresh_mature_coinbases()).collect();
         let generation = self.utxo_observation_generation();
         // Selection keeps global rows until the matching context mutation commits.
         // A switch while a notification is awaited cannot orphan the remaining rows.
@@ -383,7 +384,9 @@ impl UtxoProcessor {
             let mut mature_entries = Vec::new();
             let mut revived_entries = Vec::new();
             for entry in self.inner.pending.iter() {
-                if entry.utxo_context().network_matches_processor() && matches!(entry.maturity(&params, current_daa_score), Maturity::Confirmed) {
+                if entry.utxo_context().network_matches_processor()
+                    && matches!(entry.maturity(&params, current_daa_score), Maturity::Confirmed)
+                {
                     mature_entries.push(entry.value().clone());
                 }
             }
@@ -394,7 +397,7 @@ impl UtxoProcessor {
                 match entry.maturity(&params, current_daa_score) {
                     Maturity::Confirmed => mature_entries.push(entry.value().clone()),
                     Maturity::Pending => revived_entries.push(entry.value().clone()),
-                    Maturity::Stasis => {},
+                    Maturity::Stasis => {}
                 }
             }
             Ok((mature_entries, revived_entries))
@@ -991,7 +994,8 @@ mod dns_observation_generation_tests {
                 script_public_key: ScriptPublicKey::new(0, Default::default()),
                 block_daa_score: daa,
                 is_coinbase: coinbase,
-            }.into()
+            }
+            .into()
         };
         let entry = make_entry(27, false, 1_000);
         // Stall the actual insert on the context lock after it takes the authority
@@ -1001,8 +1005,11 @@ mod dns_observation_generation_tests {
         let writer_context = context.clone();
         let writer_entry = entry.clone();
         let writer = std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread().build().unwrap()
-                .block_on(writer_context.insert(writer_entry, 1_550, false)).unwrap();
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(writer_context.insert(writer_entry, 1_550, false))
+                .unwrap();
         });
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -1040,7 +1047,10 @@ mod dns_observation_generation_tests {
         context.insert(stasis.clone(), 1_010, false).await.unwrap();
         let old_generation = processor.utxo_observation_generation();
         processor.set_network_id(&network);
-        assert!(matches!(context.promote_for_generation(vec![pending.clone()], old_generation).await, Err(Error::StaleUtxoObservation)));
+        assert!(matches!(
+            context.promote_for_generation(vec![pending.clone()], old_generation).await,
+            Err(Error::StaleUtxoObservation)
+        ));
         assert!(matches!(context.revive_for_generation(vec![stasis.clone()], old_generation).await, Err(Error::StaleUtxoObservation)));
         assert!(processor.pending().contains_key(&pending.id()));
         assert!(processor.stasis().contains_key(&stasis.id()));
@@ -1062,7 +1072,6 @@ mod dns_observation_generation_tests {
         processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
         context.insert(make_entry(31, false, 1_000), 1_550, false).await.unwrap();
         assert_eq!(context.context().map.len(), 1, "explicit cleared context may bind its new ledger without old global rows");
-
     }
 
     #[tokio::test]
@@ -1086,7 +1095,8 @@ mod dns_observation_generation_tests {
             script_public_key: ScriptPublicKey::new(0, Default::default()),
             block_daa_score: 1_000,
             is_coinbase: false,
-        }.into();
+        }
+        .into();
         let old_rpc = processor.utxo_observation_generation();
         processor.bind_rpc(None).await.unwrap();
         assert!(matches!(
@@ -1103,12 +1113,21 @@ mod dns_observation_generation_tests {
         context.update_balance().await.unwrap();
         assert_eq!(context.balance().unwrap().mature, 2_000_000);
         let mut saved_iterator = UtxoIterator::new(&context);
-        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64])
-            .address(kaspa_addresses::Prefix::Testnet);
+        let change =
+            kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64]).address(kaspa_addresses::Prefix::Testnet);
         let settings = crate::tx::GeneratorSettings::try_new_with_context(
-            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
-            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
-        ).unwrap();
+            context.clone(),
+            Some(vec![entry.clone()]),
+            change,
+            1,
+            1,
+            crate::tx::PaymentDestination::Change,
+            None,
+            crate::tx::Fees::None,
+            None,
+            None,
+        )
+        .unwrap();
         let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
         generator.stash([entry.clone()]);
 
@@ -1119,28 +1138,44 @@ mod dns_observation_generation_tests {
             script_public_key: ScriptPublicKey::new(0, Default::default()),
             block_daa_score: 1_500,
             is_coinbase: false,
-        }.into();
+        }
+        .into();
         context.insert(pending.clone(), 1_550, false).await.unwrap();
 
         processor.set_network_id(&NetworkId::new(NetworkType::Devnet));
-        assert!(matches!(
-            context.extend_from_scan_for_generation(vec![], 1_550, current).await,
-            Err(Error::StaleUtxoObservation),
-        ), "an empty old response must also refuse");
+        assert!(
+            matches!(context.extend_from_scan_for_generation(vec![], 1_550, current).await, Err(Error::StaleUtxoObservation),),
+            "an empty old response must also refuse"
+        );
         assert!(saved_iterator.next().is_none(), "non-coinbase saved selection also pins its network");
         assert!(generator.generate_transaction().unwrap().is_none(), "saved priority and stash cannot fund another network");
         assert!(UtxoIterator::new(&context).next().is_none(), "a newly constructed iterator also checks context provenance");
-        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64])
-            .address(kaspa_addresses::Prefix::Testnet);
-        assert!(matches!(crate::tx::GeneratorSettings::try_new_with_context(
-            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
-            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
-        ), Err(Error::UtxoContextNetworkMismatch)), "fresh generation cannot reinterpret the old ledger");
+        let change =
+            kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[21; 64]).address(kaspa_addresses::Prefix::Testnet);
+        assert!(
+            matches!(
+                crate::tx::GeneratorSettings::try_new_with_context(
+                    context.clone(),
+                    Some(vec![entry.clone()]),
+                    change,
+                    1,
+                    1,
+                    crate::tx::PaymentDestination::Change,
+                    None,
+                    crate::tx::Fees::None,
+                    None,
+                    None,
+                ),
+                Err(Error::UtxoContextNetworkMismatch)
+            ),
+            "fresh generation cannot reinterpret the old ledger"
+        );
         assert_eq!(context.context().map.len(), 2, "refusal preserves existing lawful entries");
         assert!(context.balance().is_none(), "another network cannot publish this ledger's balance");
-        assert!(matches!(context.extend_from_scan_for_generation(
-            vec![], 1_550, processor.utxo_observation_generation(),
-        ).await, Err(Error::UtxoContextNetworkMismatch)));
+        assert!(matches!(
+            context.extend_from_scan_for_generation(vec![], 1_550, processor.utxo_observation_generation(),).await,
+            Err(Error::UtxoContextNetworkMismatch)
+        ));
         assert!(matches!(context.remove(vec![entry.clone()]).await, Err(Error::UtxoContextNetworkMismatch)));
         processor.handle_pending(1_000_000).await.unwrap();
         assert!(processor.pending().contains_key(&pending.id()), "other-network time cannot consume the original pending right");
@@ -1182,10 +1217,17 @@ mod dns_observation_generation_tests {
         processor.publish_dns_anchor_observation(&params, current, Some((false, 1_050)));
         processor.publish_dns_anchor_observation(&params, old, Some((true, 2_000)));
         assert_eq!(params.dns_confirmed_anchor_daa(), 0, "the old successful reply cannot revive its shortcut");
-        let settled = |pov| coinbase_spend_settled(1_000, pov, 0, Some(&DnsCoinbaseSettlement {
-            long_maturity_daa: 600,
-            confirmed_anchor_daa: (params.dns_confirmed_anchor_daa() > 0).then_some(params.dns_confirmed_anchor_daa()),
-        }));
+        let settled = |pov| {
+            coinbase_spend_settled(
+                1_000,
+                pov,
+                0,
+                Some(&DnsCoinbaseSettlement {
+                    long_maturity_daa: 600,
+                    confirmed_anchor_daa: (params.dns_confirmed_anchor_daa() > 0).then_some(params.dns_confirmed_anchor_daa()),
+                }),
+            )
+        };
         assert!(!settled(1_100), "the young coinbase remains held");
         assert!(settled(1_600), "ordinary long maturity remains lawful");
         processor.publish_dns_anchor_observation(&params, current, Some((true, 1_060)));
@@ -1237,12 +1279,21 @@ mod dns_observation_generation_tests {
         context.update_balance().await.unwrap();
         assert_eq!(context.balance().unwrap().mature, 2_000_000);
         let mut old_iterator = UtxoIterator::new(&context);
-        let change = kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[17; 64])
-            .address(kaspa_addresses::Prefix::Testnet);
+        let change =
+            kaspa_wallet_keys::kaspa_pq::derive_keypair("testnet-12", 0, 0, 0, &[17; 64]).address(kaspa_addresses::Prefix::Testnet);
         let settings = crate::tx::GeneratorSettings::try_new_with_context(
-            context.clone(), Some(vec![entry.clone()]), change, 1, 1,
-            crate::tx::PaymentDestination::Change, None, crate::tx::Fees::None, None, None,
-        ).unwrap();
+            context.clone(),
+            Some(vec![entry.clone()]),
+            change,
+            1,
+            1,
+            crate::tx::PaymentDestination::Change,
+            None,
+            crate::tx::Fees::None,
+            None,
+            None,
+        )
+        .unwrap();
         let generator = crate::tx::Generator::try_new(settings, None, None).unwrap();
         generator.stash([entry.clone()]);
         // One processor's fresh confirmation cannot undo another's revocation.
@@ -1261,12 +1312,15 @@ mod dns_observation_generation_tests {
 
         processor.inner.current_daa_score.store(1_600, Ordering::SeqCst);
         processor.handle_pending(1_600).await.unwrap();
-        assert_eq!(context.get_utxos(None, None).await.unwrap().len(), 1, "ordinary long maturity restores lawful selection without DNS");
+        assert_eq!(
+            context.get_utxos(None, None).await.unwrap().len(),
+            1,
+            "ordinary long maturity restores lawful selection without DNS"
+        );
         assert_eq!(context.balance().unwrap().mature, 2_000_000);
         assert_eq!(context.pending_utxo_size(), 0);
         assert_eq!(other_params.dns_confirmed_anchor_daa(), 1_550);
         processor.bind_rpc(None).await.unwrap();
         assert_eq!(other_params.dns_confirmed_anchor_daa(), 1_550, "disconnect revokes only its own processor");
     }
-
 }

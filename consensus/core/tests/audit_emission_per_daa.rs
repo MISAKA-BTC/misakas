@@ -7,7 +7,8 @@
 //! Run: `cargo test -p kaspa-consensus-core --test audit_emission_per_daa -- --nocapture`
 
 use kaspa_consensus_core::palw_capacity_s567_v1::{
-    PALW_EMISSION_BLOCKS_PER_DAA_V1, PALW_EMISSION_UNIT_MILLI_V1, palw_emission_admits_v1, palw_emission_budget_milli_v1, palw_rider_shares_v1,
+    PALW_EMISSION_BLOCKS_PER_DAA_V1, PALW_EMISSION_UNIT_MILLI_V1, palw_emission_admits_v1, palw_emission_budget_milli_v1,
+    palw_rider_shares_v1,
 };
 use kaspa_consensus_core::palw_real_share_v1::{PalwClockMergesetFactsV1, palw_clock_tick_source_v1};
 
@@ -27,7 +28,8 @@ fn live_escrow_is_720_permille_of_the_block_subsidy() {
 #[test]
 fn the_clock_ticks_once_per_mergeset_however_many_attempt_blocks_it_pays() {
     for k in [1u64, 2, 5, 31, 180] {
-        let facts = PalwClockMergesetFactsV1 { priced: 0, heartbeats: 0, attempts: k, newest_beat_ms: None, newest_attempt_ms: Some(1_000) };
+        let facts =
+            PalwClockMergesetFactsV1 { priced: 0, heartbeats: 0, attempts: k, newest_beat_ms: None, newest_attempt_ms: Some(1_000) };
         let (tick_before_5300, _) = palw_clock_tick_source_v1(&facts, false);
         let (tick_after_5300, _) = palw_clock_tick_source_v1(&facts, true);
         assert!(!tick_before_5300, "int-10.3: attempt blocks are no tick source (the heartbeat stands in)");
@@ -36,7 +38,12 @@ fn the_clock_ticks_once_per_mergeset_however_many_attempt_blocks_it_pays() {
         let ticks = u64::from(tick_after_5300);
         let schedule_per_mergeset = ticks * S; // calc_block_subsidy(daa) once per DAA tick
         let paid_carves = k * CARVE; // each attempt block declares calc_block_subsidy(its DAA) and escrows 720 permille of it
-        println!("k={k:>3}  schedule={:>12.2} MSK  carves paid={:>12.2} MSK  ratio={:.2}", schedule_per_mergeset as f64 / 1e8, paid_carves as f64 / 1e8, paid_carves as f64 / schedule_per_mergeset as f64);
+        println!(
+            "k={k:>3}  schedule={:>12.2} MSK  carves paid={:>12.2} MSK  ratio={:.2}",
+            schedule_per_mergeset as f64 / 1e8,
+            paid_carves as f64 / 1e8,
+            paid_carves as f64 / schedule_per_mergeset as f64
+        );
         assert_eq!(paid_carves / CARVE, k);
     }
 }

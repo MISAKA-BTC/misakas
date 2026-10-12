@@ -26,7 +26,7 @@
 
 use super::desc::{ConfigDesc, DecodeDesc, LayoutDesc, QuantFormatDesc};
 use super::expr::{Col, DslError, Env, Mask, Node, R, Table, compile, eval};
-use super::tensors::{ConfigReader, ConfigRead, Defs, Rd, Role, RoleTensor, TEnv, TScope, check_roles, compile_roles, table};
+use super::tensors::{ConfigRead, ConfigReader, Defs, Rd, Role, RoleTensor, TEnv, TScope, check_roles, compile_roles, table};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -59,11 +59,23 @@ impl VirtualFormat {
         if target != "tensor" {
             return Err(DslError(format!("a virtual layout decodes to `tensor`, not `{target}`")));
         }
-        if group.is_some() || q.is_some() || scale.is_some() || zero.is_some() || min.is_some() || code.is_some() || offset_term.is_some() || order.is_some() {
+        if group.is_some()
+            || q.is_some()
+            || scale.is_some()
+            || zero.is_some()
+            || min.is_some()
+            || code.is_some()
+            || offset_term.is_some()
+            || order.is_some()
+        {
             return Err(DslError("a virtual layout's decode is `value` alone".into()));
         }
         if axes.is_empty() || axes.len() > 4 || shape.len() != axes.len() {
-            return Err(DslError(format!("a virtual layout has 1 to 4 axes and one shape expression each ({} axes, {} shape expressions)", axes.len(), shape.len())));
+            return Err(DslError(format!(
+                "a virtual layout has 1 to 4 axes and one shape expression each ({} axes, {} shape expressions)",
+                axes.len(),
+                shape.len()
+            )));
         }
         let lane_names: Vec<&str> = axes.iter().map(String::as_str).collect();
         if lane_names.iter().enumerate().any(|(i, a)| lane_names[..i].contains(a)) {
@@ -100,7 +112,8 @@ impl VirtualFormat {
         let scope = TScope { lanes: &lane_names, consts: &consts, roles: &rs, tables: &tables };
         let value = compile(value.as_deref().ok_or_else(|| DslError("a virtual layout declares decode.value".into()))?, &scope)
             .map_err(|e| DslError(format!("decode.value: {e}")))?;
-        let shape = shape.iter().map(|e| compile(e, &scope).map_err(|x| DslError(format!("shape `{e}`: {x}")))).collect::<R<Vec<_>>>()?;
+        let shape =
+            shape.iter().map(|e| compile(e, &scope).map_err(|x| DslError(format!("shape `{e}`: {x}")))).collect::<R<Vec<_>>>()?;
         let mut chk = Vec::new();
         for c in checks {
             chk.push((compile(&c.expr, &scope).map_err(|e| DslError(format!("check `{}`: {e}", c.expr)))?, c.message.clone()));
@@ -199,7 +212,9 @@ impl VirtualFormat {
             .iter()
             .enumerate()
             .map(|(a, n)| {
-                let v = eval(n, &env, Mask(None)).and_then(|c| c.int_at(0)).map_err(|e| DslError(format!("{}: shape of axis {a}: {e}", self.name)))?;
+                let v = eval(n, &env, Mask(None))
+                    .and_then(|c| c.int_at(0))
+                    .map_err(|e| DslError(format!("{}: shape of axis {a}: {e}", self.name)))?;
                 usize::try_from(v).ok().filter(|v| *v > 0).ok_or_else(|| DslError(format!("{}: axis {a} has {v} elements", self.name)))
             })
             .collect()
@@ -210,7 +225,8 @@ impl VirtualFormat {
     /// in `f32` is an error.
     pub fn decode_range(&self, roles: &[Option<RoleTensor>], params: &BTreeMap<String, i64>, range: Range<usize>) -> R<Vec<f32>> {
         let shape = self.shape(roles, params)?;
-        let total = shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)).ok_or_else(|| DslError("virtual shape overflows".into()))?;
+        let total =
+            shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)).ok_or_else(|| DslError("virtual shape overflows".into()))?;
         if range.start > range.end || range.end > total {
             return Err(DslError(format!("{}: elements {range:?} of a tensor of {total}", self.name)));
         }

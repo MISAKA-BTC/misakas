@@ -642,9 +642,5 @@ async fn m1_a_composite_possession_proof_opens_the_adapter_section_through_the_g
         gate_under(&g.params, &honest).is_some(),
         "below palw_improvement_v1 a composite's adapter proof is refused: the rule is dormant"
     );
-    assert_eq!(
-        gate_under(&g.params, &proof_of(parent, &parent_ops, card as u64, daa)),
-        None,
-        "and the parent's proof is unchanged"
-    );
+    assert_eq!(gate_under(&g.params, &proof_of(parent, &parent_ops, card as u64, daa)), None, "and the parent's proof is unchanged");
 }

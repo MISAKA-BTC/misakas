@@ -209,7 +209,10 @@ from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelReceiptResponse>, protowire::Not
 from!(item: &kaspa_rpc_core::NotifyPalwPanelEligibilityChangedRequest, protowire::NotifyPalwPanelEligibilityChangedRequestMessage, {
     Self { command: item.command.into() }
 });
-from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>, protowire::NotifyPalwPanelEligibilityChangedResponseMessage);
+from!(
+    RpcResult<&kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>,
+    protowire::NotifyPalwPanelEligibilityChangedResponseMessage
+);
 
 // ~~~
 
@@ -2610,7 +2613,10 @@ try_from!(&protowire::NotifyNewBlockTemplateResponseMessage, RpcResult<kaspa_rpc
 try_from!(item: &protowire::NotifyPalwClassReadinessChangedRequestMessage, kaspa_rpc_core::NotifyPalwClassReadinessChangedRequest, {
     Self { command: item.command.into() }
 });
-try_from!(&protowire::NotifyPalwClassReadinessChangedResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwClassReadinessChangedResponse>);
+try_from!(
+    &protowire::NotifyPalwClassReadinessChangedResponseMessage,
+    RpcResult<kaspa_rpc_core::NotifyPalwClassReadinessChangedResponse>
+);
 try_from!(item: &protowire::NotifyPalwPanelAssignmentRequestMessage, kaspa_rpc_core::NotifyPalwPanelAssignmentRequest, {
     Self { command: item.command.into() }
 });
@@ -2622,7 +2628,10 @@ try_from!(&protowire::NotifyPalwPanelReceiptResponseMessage, RpcResult<kaspa_rpc
 try_from!(item: &protowire::NotifyPalwPanelEligibilityChangedRequestMessage, kaspa_rpc_core::NotifyPalwPanelEligibilityChangedRequest, {
     Self { command: item.command.into() }
 });
-try_from!(&protowire::NotifyPalwPanelEligibilityChangedResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>);
+try_from!(
+    &protowire::NotifyPalwPanelEligibilityChangedResponseMessage,
+    RpcResult<kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>
+);
 
 // ~~~
 
@@ -5567,19 +5576,31 @@ mod palw_capacity_shadow_grpc_tests {
 
 #[cfg(test)]
 mod native_settlement_tests {
-    use kaspa_rpc_core::{GetPalwSettlementResponse, GetPrecommitDutyResponse, RpcResult};
     use crate::protowire;
     use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+    use kaspa_rpc_core::{GetPalwSettlementResponse, GetPrecommitDutyResponse, RpcResult};
 
     #[test]
     fn rfc0012_grpc_keeps_legacy_absence_and_roundtrips_native_evidence() {
         let old = protowire::GetPalwSettlementResponseMessage::default();
         let decoded: GetPalwSettlementResponse = (&old).try_into().unwrap();
         assert!(decoded.dns_retired_at.is_none() && decoded.native_settlement.is_none());
-        let native = NativeSettlementSnapshotV1 { version: 1, ruleset_id: Default::default(), policy_id: Default::default(),
-            generation: Default::default(), retirement_daa: 5, frontier: None, latest: None, safe: None, finalized: None,
-            depth: 0, unique_work: "0".into(), stop: Some(SettlementStopV1::MissingHistory) };
-        let response = GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: Default::default(),
+            retirement_daa: 5,
+            frontier: None,
+            latest: None,
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        let response =
+            GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
         let wire: protowire::GetPalwSettlementResponseMessage = RpcResult::Ok(&response).into();
         let decoded: GetPalwSettlementResponse = (&wire).try_into().unwrap();
         assert_eq!(decoded.native_settlement, Some(native));
@@ -5601,7 +5622,12 @@ mod native_settlement_tests {
         let readiness = native_stopped_readiness_v1(
             h(9),
             (100, 90),
-            PalwSettlementPolicyV1 { settled_anchor_depth: 2, unique_mature_work: 20, max_operator_permille: 600, max_class_permille: 600 },
+            PalwSettlementPolicyV1 {
+                settled_anchor_depth: 2,
+                unique_mature_work: 20,
+                max_operator_permille: 600,
+                max_class_permille: 600,
+            },
             native_maturity_report_v1(3_000, 120),
             SafeWaitV1::Unexecuted,
             FinalizedReadinessV1 {
@@ -5629,8 +5655,8 @@ mod native_settlement_tests {
 mod palw_kernel_route_grpc_tests {
     use super::*;
     use kaspa_rpc_core::{
-        GetPalwKernelClaimRequest, GetPalwKernelClaimResponse, GetPalwKernelRowsRequest, GetPalwKernelRowsResponse, RpcPalwKernelDemand,
-        RpcPalwKernelRow, RpcPalwKernelSeat, RpcPalwKernelServed, RpcResult,
+        GetPalwKernelClaimRequest, GetPalwKernelClaimResponse, GetPalwKernelRowsRequest, GetPalwKernelRowsResponse,
+        RpcPalwKernelDemand, RpcPalwKernelRow, RpcPalwKernelSeat, RpcPalwKernelServed, RpcResult,
     };
 
     /// **`getPalwKernelClaim` and `getPalwKernelRows` (ops 210, 211) survive the grpc wire, both ways** — every field crosses.
@@ -5823,7 +5849,8 @@ mod palw_exec_v2_status_grpc_tests {
     /// **`getPalwExecV2Status` (op 240) survives the grpc wire, both ways**, each field distinct.
     #[test]
     fn op_240_round_trips_on_the_grpc_wire() {
-        let request = GetPalwExecV2StatusRequest { root_claim_ids: vec!["ab".repeat(64), "cd".repeat(64)], block_hash: "ef".repeat(64) };
+        let request =
+            GetPalwExecV2StatusRequest { root_claim_ids: vec!["ab".repeat(64), "cd".repeat(64)], block_hash: "ef".repeat(64) };
         let wire: protowire::GetPalwExecV2StatusRequestMessage = (&request).into();
         let back: GetPalwExecV2StatusRequest = (&wire).try_into().unwrap();
         assert_eq!(back, request);
@@ -5894,10 +5921,7 @@ mod palw_state_proof_grpc_tests {
             header: Some(header.clone()),
             state_preimage: vec![1, 2, 3, 4, 5],
             collection: "classes".into(),
-            rows: vec![
-                RpcPalwProofRow { key: vec![7; 68], value: vec![8; 300] },
-                RpcPalwProofRow { key: vec![6; 64], value: vec![] },
-            ],
+            rows: vec![RpcPalwProofRow { key: vec![7; 68], value: vec![8; 300] }, RpcPalwProofRow { key: vec![6; 64], value: vec![] }],
         };
         let wire: protowire::GetPalwStateProofResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwStateProofResponse = (&wire).try_into().unwrap();
@@ -5905,7 +5929,10 @@ mod palw_state_proof_grpc_tests {
         assert_eq!(back.reason, "r");
         assert_eq!(back.block_hash, response.block_hash);
         let got = back.header.expect("the header crosses");
-        assert_eq!((got.hash, got.daa_score, got.palw_state_root, got.palw_commitment), (header.hash, 77, header.palw_state_root, header.palw_commitment));
+        assert_eq!(
+            (got.hash, got.daa_score, got.palw_state_root, got.palw_commitment),
+            (header.hash, 77, header.palw_state_root, header.palw_commitment)
+        );
         assert_eq!(back.state_preimage, vec![1, 2, 3, 4, 5]);
         assert_eq!(back.collection, "classes");
         assert_eq!(back.rows, response.rows);
@@ -6085,7 +6112,8 @@ mod reward_vesting_v2_tests {
         assert!(GetPalwRewardVestingResponse::try_from(&missing).is_err());
         missing.native = Some(protowire::GetPalwVestingResponseMessage::default());
         assert!(GetPalwRewardVestingResponse::try_from(&missing).is_err());
-        let wire: protowire::GetPalwRewardVestingResponseMessage = RpcResult::<&GetPalwRewardVestingResponse>::Err(RpcError::General("unavailable".into())).into();
+        let wire: protowire::GetPalwRewardVestingResponseMessage =
+            RpcResult::<&GetPalwRewardVestingResponse>::Err(RpcError::General("unavailable".into())).into();
         assert!(GetPalwRewardVestingResponse::try_from(&wire).is_err());
     }
 }

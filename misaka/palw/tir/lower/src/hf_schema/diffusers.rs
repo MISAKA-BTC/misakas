@@ -135,16 +135,28 @@ pub fn read_diffusers(config: &Value) -> Result<DiffusersRead, ReadFailure> {
         "SD3Transformer2DModel" => {
             let unknown = unknown_keys(config, SD3_KEYS);
             if !unknown.is_empty() {
-                return Err(refusal(class, Vec::new(), unknown.clone(), &format!("config key(s) this reading does not model: {} — a key that might change the math is refused, not ignored", unknown.join(", "))));
+                return Err(refusal(
+                    class,
+                    Vec::new(),
+                    unknown.clone(),
+                    &format!(
+                        "config key(s) this reading does not model: {} — a key that might change the math is refused, not ignored",
+                        unknown.join(", ")
+                    ),
+                ));
             }
             let mut gaps = Vec::new();
             if config.get("qk_norm").is_some_and(|q| !q.is_null()) {
                 gaps.push(missing("ATTN_QK_NORM_JOINT_V1", "SD3.5's joint attention norms q and k per stream (qk_norm)"));
             }
             if config.get("dual_attention_layers").and_then(Value::as_array).is_some_and(|d| !d.is_empty()) {
-                gaps.push(missing("GEN_ATTN_DUAL_V1", "SD3.5's dual-attention layers (a second self-attention over the image stream)"));
+                gaps.push(missing(
+                    "GEN_ATTN_DUAL_V1",
+                    "SD3.5's dual-attention layers (a second self-attention over the image stream)",
+                ));
             }
-            if let (Some(i), Some(o)) = (config.get("in_channels").and_then(Value::as_u64), config.get("out_channels").and_then(Value::as_u64))
+            if let (Some(i), Some(o)) =
+                (config.get("in_channels").and_then(Value::as_u64), config.get("out_channels").and_then(Value::as_u64))
                 && i != o
             {
                 gaps.push(missing("GEN_OUTPUT_LEARNED_SIGMA_V1", "an output of other channels than the input's (a learned variance)"));
@@ -152,26 +164,45 @@ pub fn read_diffusers(config: &Value) -> Result<DiffusersRead, ReadFailure> {
             if !gaps.is_empty() {
                 return Err(refusal(class, gaps, Vec::new(), "a later profile of the MMDiT denoiser"));
             }
-            let assumed = ["out_channels"].iter().filter(|k| config.get(**k).is_none()).map(|k| format!("{k} = in_channels")).collect();
+            let assumed =
+                ["out_channels"].iter().filter(|k| config.get(**k).is_none()).map(|k| format!("{k} = in_channels")).collect();
             let cfg = Sd3Config::from_json(config).map_err(|e| refusal(class, Vec::new(), Vec::new(), &e))?;
             Ok(DiffusersRead { class: class.to_string(), route: DiffusersRoute::Sd3Transformer(cfg), assumed_defaults: assumed })
         }
         "AutoencoderKL" => {
             let unknown = unknown_keys(config, VAE_KEYS);
             if !unknown.is_empty() {
-                return Err(refusal(class, Vec::new(), unknown.clone(), &format!("config key(s) this reading does not model: {} — a key that might change the math is refused, not ignored", unknown.join(", "))));
+                return Err(refusal(
+                    class,
+                    Vec::new(),
+                    unknown.clone(),
+                    &format!(
+                        "config key(s) this reading does not model: {} — a key that might change the math is refused, not ignored",
+                        unknown.join(", ")
+                    ),
+                ));
             }
             // A normalisation the decoder would have to apply to the latent beyond `z / scaling + shift`.
             for k in ["latents_mean", "latents_std"] {
                 if config.get(k).is_some_and(|v| !v.is_null()) {
-                    return Err(refusal(class, vec![missing("GEN_VAE_LATENT_NORM_V1", "a per-channel latent mean and std applied before the decode")], Vec::new(), &format!("`{k}` is set")));
+                    return Err(refusal(
+                        class,
+                        vec![missing("GEN_VAE_LATENT_NORM_V1", "a per-channel latent mean and std applied before the decode")],
+                        Vec::new(),
+                        &format!("`{k}` is set"),
+                    ));
                 }
             }
             // The decoder's up blocks are resnets and a nearest-neighbour upsample: an attention up block is another network.
             if let Some(types) = config.get("up_block_types").and_then(Value::as_array)
                 && types.iter().any(|t| t.as_str() != Some("UpDecoderBlock2D"))
             {
-                return Err(refusal(class, vec![missing("GEN_VAE_ATTN_UP_BLOCK_V1", "an up block that is not UpDecoderBlock2D")], Vec::new(), "the decoder's up blocks"));
+                return Err(refusal(
+                    class,
+                    vec![missing("GEN_VAE_ATTN_UP_BLOCK_V1", "an up block that is not UpDecoderBlock2D")],
+                    Vec::new(),
+                    "the decoder's up blocks",
+                ));
             }
             let mut assumed = Vec::new();
             for (k, d) in [("latent_channels", "4"), ("layers_per_block", "1"), ("norm_num_groups", "32"), ("out_channels", "3")] {
@@ -191,9 +222,15 @@ pub fn read_diffusers(config: &Value) -> Result<DiffusersRead, ReadFailure> {
         "FluxTransformer2DModel" => Err(refusal(
             class,
             vec![
-                missing("POS_ROPE_AXES_V1", "a rotary embedding over several position axes (axes_dims_rope: the ids of text and image tokens)"),
+                missing(
+                    "POS_ROPE_AXES_V1",
+                    "a rotary embedding over several position axes (axes_dims_rope: the ids of text and image tokens)",
+                ),
                 missing("ATTN_QK_NORM_JOINT_V1", "an RMS norm of q and k per stream inside the joint attention"),
-                missing("GEN_BLOCK_SINGLE_STREAM_V1", "single-stream blocks: attention and MLP in parallel over the concatenated streams"),
+                missing(
+                    "GEN_BLOCK_SINGLE_STREAM_V1",
+                    "single-stream blocks: attention and MLP in parallel over the concatenated streams",
+                ),
                 missing("EMBED_GUIDANCE_V1", "the guidance scalar's embedding (guidance_embeds)"),
             ],
             Vec::new(),
@@ -214,8 +251,14 @@ pub fn read_diffusers(config: &Value) -> Result<DiffusersRead, ReadFailure> {
         "UNet2DConditionModel" => {
             let mut gaps = vec![
                 missing("GEN_UNET_SKIP_V1", "skip connections from the down path to the up path (stage outputs read by later stages)"),
-                missing("GEN_RESNET_TIME_COND_V1", "a ResNet block that adds the projected timestep embedding between its convolutions"),
-                missing("GEN_SPATIAL_TRANSFORMER_V1", "a Transformer2DModel: GroupNorm, proj_in, self- and cross-attention blocks, GEGLU, proj_out"),
+                missing(
+                    "GEN_RESNET_TIME_COND_V1",
+                    "a ResNet block that adds the projected timestep embedding between its convolutions",
+                ),
+                missing(
+                    "GEN_SPATIAL_TRANSFORMER_V1",
+                    "a Transformer2DModel: GroupNorm, proj_in, self- and cross-attention blocks, GEGLU, proj_out",
+                ),
                 missing("ATTN_CROSS_V1", "cross-attention of the image tokens to the text rows"),
                 missing("GEN_SAMPLER_EPS_V1", "a noise-prediction sampler (DDIM/PNDM/Euler-discrete) with classifier-free guidance"),
             ];

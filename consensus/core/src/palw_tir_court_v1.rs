@@ -53,7 +53,11 @@
 //! **The check order is normative** (the verdict and its evidence id must be the same on every
 //! implementation): see [`check_tir_cone_refutation_v1`].
 
-use std::{cell::Cell, collections::{BTreeMap, BTreeSet}, rc::Rc};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use crate::Hash64;
 use crate::palw_artifact::{
@@ -81,8 +85,8 @@ use crate::palw_tir_step_v1::{
 };
 use crate::palw_v2::PalwJobContextV2;
 use misaka_palw_tir::demand::{
-    DemandContext, DemandError, DemandLimits, DemandRequest, DemandSource, DemandTarget, DemandWork, StateSupply, eval_demanded, hist_row_node_v1,
-    state_occurrence_v1, state_writer_v1,
+    DemandContext, DemandError, DemandLimits, DemandRequest, DemandSource, DemandTarget, DemandWork, StateSupply, eval_demanded,
+    hist_row_node_v1, state_occurrence_v1, state_writer_v1,
 };
 use misaka_palw_tir::interval::{Interval, analyze_ranges};
 use misaka_palw_tir::{DType, Prim, TirError, TirErrorKind, TirProgramV1, TirResult};
@@ -150,8 +154,11 @@ impl BuilderBudget {
         }
     }
     fn targets(&mut self, count: u64) -> Result<(), DemandError> {
-        let total = self.meter.target_requests.checked_add(count).ok_or_else(||
-            DemandError::Tir(TirError::new(TirErrorKind::Malformed, "builder target request count overflows")))?;
+        let total = self
+            .meter
+            .target_requests
+            .checked_add(count)
+            .ok_or_else(|| DemandError::Tir(TirError::new(TirErrorKind::Malformed, "builder target request count overflows")))?;
         if total > self.limit.max_target_requests {
             return Err(DemandError::Tir(TirError::new(TirErrorKind::Missing, "builder target request budget is full")));
         }
@@ -659,8 +666,10 @@ fn tir_err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
 impl TirSource<'_, '_> {
     fn source_read(&self) -> TirResult<()> {
         if let Some((reads, limit)) = &self.read_budget {
-            let next = reads.get().checked_add(1).ok_or_else(||
-                TirError::new(TirErrorKind::Missing, "builder source read count overflows"))?;
+            let next = reads
+                .get()
+                .checked_add(1)
+                .ok_or_else(|| TirError::new(TirErrorKind::Missing, "builder source read count overflows"))?;
             if next > *limit {
                 return tir_err(TirErrorKind::Missing, "builder source read budget is full");
             }
@@ -1014,7 +1023,8 @@ fn check_opened_leaves(
         }
         let (param, layer, start, len) = inventory.piece_of(base + *index).ok_or(bad("the artifact multiproof names no leaf"))?;
         let d = v.space.program.params.get(param as usize).ok_or(bad("the artifact multiproof names no leaf"))?;
-        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize {
+        if operand.tensor_name != d.name || operand.layer != layer || operand.row_start != start || operand.bytes.len() != len as usize
+        {
             return Err(bad("an opened operand is not its leaf's canonical piece"));
         }
     }
@@ -1408,12 +1418,16 @@ fn build_tir_cone_refutation_with_budget(
 ) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
     let (v, leaf, inventory) = builder_prelude(binding, output_leaf)?;
     let eval_err = |e: DemandError| PalwTirEvidenceErrorV1::Evaluation(e.to_string());
-    if let Some(budget) = budget.as_deref_mut() { budget.targets(u64::from(leaf.value_count)).map_err(eval_err)?; }
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.targets(u64::from(leaf.value_count)).map_err(eval_err)?;
+    }
     let mut source = store_source(&v, &binding.job_context, &inventory, store, output_leaf, rules);
     source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
     let remaining = budget.as_ref().map_or(rules.limits, |budget| budget.remaining(&rules.limits));
     let (_, work) = evaluate_leaf_with_work(&v.space, &leaf, &mut source, &remaining).map_err(eval_err)?;
-    if let Some(budget) = budget { budget.charge(work).map_err(eval_err)?; }
+    if let Some(budget) = budget {
+        budget.charge(work).map_err(eval_err)?;
+    }
     assemble_carriage(&v, binding, output_leaf, &source.used, store, rules)
 }
 
@@ -1604,10 +1618,14 @@ fn finalize_and_closure_with_budget(
     limits: &DemandLimits,
     mut budget: Option<&mut BuilderBudget>,
 ) -> Result<Vec<i128>, DemandError> {
-    if let Some(budget) = budget.as_deref_mut() { budget.targets(u64::from(leaf.value_count))?; }
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.targets(u64::from(leaf.value_count))?;
+    }
     let remaining = budget.as_ref().map_or(*limits, |budget| budget.remaining(limits));
     let (values, work) = finalize_values_with_work(space, site, &leaf_elements(leaf), source, &remaining)?;
-    if let Some(budget) = budget.as_deref_mut() { budget.charge(work)?; }
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.charge(work)?;
+    }
     loop {
         let before = source.used_supplied.len();
         for node in &site.reductions {
@@ -1615,13 +1633,17 @@ fn finalize_and_closure_with_budget(
             if demanded.is_empty() {
                 continue;
             }
-            if let Some(budget) = budget.as_deref_mut() { budget.targets(demanded.len() as u64)?; }
+            if let Some(budget) = budget.as_deref_mut() {
+                budget.targets(demanded.len() as u64)?;
+            }
             let supplied: Vec<u16> = site.reductions.iter().copied().filter(|r| r != node).collect();
             let request =
                 DemandRangeRequest { ctx: site.ctx, target: *node, elements: &demanded, supplied: &supplied, range: Some((0, 1)) };
             let remaining = budget.as_ref().map_or(*limits, |budget| budget.remaining(limits));
             let (_, work) = eval_demanded_range(&space.program, &space.info, &request, source, &remaining)?;
-            if let Some(budget) = budget.as_deref_mut() { budget.charge(work)?; }
+            if let Some(budget) = budget.as_deref_mut() {
+                budget.charge(work)?;
+            }
         }
         if source.used_supplied.len() == before {
             return Ok(values);
@@ -1653,7 +1675,8 @@ fn finalize_values_with_work(
     limits: &DemandLimits,
 ) -> Result<(Vec<i128>, DemandWork), DemandError> {
     if site.reductions.contains(&site.node) {
-        let values = elements.iter().map(|e| source.node(site.ctx, site.node, *e).map_err(DemandError::from)).collect::<Result<Vec<_>, _>>()?;
+        let values =
+            elements.iter().map(|e| source.node(site.ctx, site.node, *e).map_err(DemandError::from)).collect::<Result<Vec<_>, _>>()?;
         return Ok((values, DemandWork::default()));
     }
     let request = DemandRangeRequest { ctx: site.ctx, target: site.node, elements, supplied: &site.reductions, range: None };
@@ -1866,12 +1889,16 @@ fn build_tir_root_claim_with_budget(
     for (node, count) in site.reductions.iter().zip(&site.counts) {
         let mut source = store_source(&v, &binding.job_context, &inventory, store, narrowed, rules);
         source.read_budget = budget.as_ref().and_then(|budget| budget.source_read_budget());
-        if let Some(budget) = budget.as_deref_mut() { budget.targets(u64::from(*count)).map_err(eval_err)?; }
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.targets(u64::from(*count)).map_err(eval_err)?;
+        }
         let elements: Vec<usize> = (0..*count as usize).collect();
         let request = DemandRequest { target: DemandTarget::Node { ctx: site.ctx, node: *node }, elements: &elements };
         let limits = budget.as_ref().map_or(DemandLimits::UNLIMITED, |budget| budget.remaining(&DemandLimits::UNLIMITED));
         let (values, work) = eval_demanded(&v.space.program, &v.space.info, &request, &mut source, &limits).map_err(eval_err)?;
-        if let Some(budget) = budget.as_deref_mut() { budget.charge(work).map_err(eval_err)?; }
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.charge(work).map_err(eval_err)?;
+        }
         for (e, value) in values.into_iter().enumerate() {
             all.insert((*node, e), value);
         }
@@ -2007,14 +2034,26 @@ fn build_tir_dissect_round_with_budget(
         let (v, leaf, inventory) = builder_prelude(binding, phase.leaf_index())?;
         let site = builder_site(&v, &leaf)?;
         Some((v, inventory, site))
-    } else { None };
+    } else {
+        None
+    };
     let h = phase.history_positions() as u64;
     let mut children = Vec::new();
     for (first, count) in phase.child_ranges() {
         let from = first * tile_positions as u64;
         let to = ((first + count) * tile_positions as u64).min(h);
         let child = if let Some((v, inventory, site)) = &verified {
-            builder_partials_verified(v, inventory, site, binding, phase, (from as usize, to as usize), store, rules, budget.as_deref_mut())?
+            builder_partials_verified(
+                v,
+                inventory,
+                site,
+                binding,
+                phase,
+                (from as usize, to as usize),
+                store,
+                rules,
+                budget.as_deref_mut(),
+            )?
         } else {
             builder_partials(binding, phase, (from as usize, to as usize), store, rules, None)?
         };
@@ -3597,8 +3636,11 @@ pub(crate) mod test_support {
     /// leaves read, and is priced to the byte by `palw_tir_param_carriage_bytes_v1`.
     #[test]
     fn the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none() {
-        let rules =
-            PalwTirCourtRulesV1 { max_step_leaf_count: 1 << 26, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+        let rules = PalwTirCourtRulesV1 {
+            max_step_leaf_count: 1 << 26,
+            prompt_form: PalwPromptIdsFormV1::Flat,
+            limits: DemandLimits::UNLIMITED,
+        };
         let x = tiny_execution(None);
         let program = x.binding.class.decode_program().expect("decodes");
         let hashes: Vec<Hash64> = x.ops.iter().map(crate::palw_artifact::artifact_leaf_v1).collect();
@@ -3639,11 +3681,8 @@ pub(crate) mod test_support {
     fn a_job_at_exactly_max_context_positions_runs_end_to_end_in_the_canonical_context() {
         use crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1;
         const MAX: u64 = 1 << 26;
-        let rules = PalwTirCourtRulesV1 {
-            max_step_leaf_count: MAX,
-            prompt_form: PalwPromptIdsFormV1::Flat,
-            limits: DemandLimits::UNLIMITED,
-        };
+        let rules =
+            PalwTirCourtRulesV1 { max_step_leaf_count: MAX, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
         let canonical = |class: &PalwTirClassV1, class_id: Hash64, prompt: &[u32]| {
             let mut ctx = palw_tir_canonical_context_v1(class, class_id, (PREFILL, DECODE)).expect("the tiny program decodes");
             ctx.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(prompt);
@@ -3761,7 +3800,11 @@ mod step_leaf_da_tests {
             d.binding.full_logits_trace_root = Hash64::from_bytes([9; 64]);
             edits.push(("another trace root", d));
             let mut d = honest.clone();
-            d.row_pin = if index == logits { None } else { crate::palw_step_refute::tiled_decode_pin_v1(&x.binding.job_context, &x.rows, &x.generated, 0, 0) };
+            d.row_pin = if index == logits {
+                None
+            } else {
+                crate::palw_step_refute::tiled_decode_pin_v1(&x.binding.job_context, &x.rows, &x.generated, 0, 0)
+            };
             edits.push(("the row pin where it does not belong, or missing", d));
             if index == logits {
                 let mut d = honest.clone();

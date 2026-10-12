@@ -5,8 +5,12 @@
 use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
 use kaspa_consensus_core::palw_economic_compute_v1::{PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1};
 use kaspa_consensus_core::palw_fp_devnet_v3::{PalwCollateralRowV1, palw_exposure_unit_pwu_v1, palw_v2_collateral_for_class_set_v1};
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_held_canonical_v1, qwen36_profile_v7,
+};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 
 const HYBRID_N_CTX: u32 = 512;
@@ -45,7 +49,10 @@ fn b2x_the_exposure_basis_denominator_is_a_build_constant() {
 
     println!("\nPALW_RC_BASE0_CANONICAL (palw_base0_profile.rs:905) = {PALW_RC_BASE0_CANONICAL:?} — a build constant.");
     println!("It appears in NO chain object. Genesis pins the floor's DECLARED LEAVES (7,708), not its MAC-eq.\n");
-    println!("{:<14} {:>16} {:>22} {:>22} {:>18}", "floor (P,D)", "floor MAC-eq", "dense exposure pwu", "dense reserved sompi", "seat collateral");
+    println!(
+        "{:<14} {:>16} {:>22} {:>22} {:>18}",
+        "floor (P,D)", "floor MAC-eq", "dense exposure pwu", "dense reserved sompi", "seat collateral"
+    );
     for cand in [PALW_RC_BASE0_CANONICAL, (8, 2), (11, 2), (4, 4), (1, 2)] {
         let floor_draw = draw(&f, cand.0, cand.1);
         let unit = palw_exposure_unit_pwu_v1(dense_draw, 7_708, floor_draw);
@@ -132,9 +139,14 @@ fn b2x_the_dtype_declaration_as_fork_weight_on_t12() {
     println!("\nt12: escrow {ESCROW_SOMPI} sompi, rate {RATE} sompi/1e9 MAC-eq, W0 = {w0} MAC-eq");
     let _ = palw_panel_share_permille_v1;
 
-    let rows: [(&str, PalwShapeProfileV3, (u32, u32)); 2] =
-        [("Qwen3.6 v7@512", hybrid(), qwen36_held_canonical_v1(HYBRID_N_CTX)), ("Qwen2.5 A16 v7@2M", dense(), qwen25_a16_held_canonical_v1(DENSE_N_CTX))];
-    println!("\n{:<20} {:>9} {:>22} {:>12} {:>22} {:>9}", "row", "dtype", "CCU (MAC-eq/draw)", "E[attempts]", "claim.pwu (MAC-eq)", "weight x");
+    let rows: [(&str, PalwShapeProfileV3, (u32, u32)); 2] = [
+        ("Qwen3.6 v7@512", hybrid(), qwen36_held_canonical_v1(HYBRID_N_CTX)),
+        ("Qwen2.5 A16 v7@2M", dense(), qwen25_a16_held_canonical_v1(DENSE_N_CTX)),
+    ];
+    println!(
+        "\n{:<20} {:>9} {:>22} {:>12} {:>22} {:>9}",
+        "row", "dtype", "CCU (MAC-eq/draw)", "E[attempts]", "claim.pwu (MAC-eq)", "weight x"
+    );
     for (name, base, (pf, de)) in rows.iter() {
         let honest = draw(base, *pf, *de);
         let hp = {

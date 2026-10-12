@@ -235,7 +235,10 @@ impl ReceiptV1 {
             if txid.len() != 128 || faster_hex::hex_decode(txid.as_bytes(), &mut raw).is_err() {
                 return Err("receipt field `executor_bond` has a bad transaction id".into());
             }
-            TransactionOutpoint::new(Hash64::from_bytes(raw), index.parse().map_err(|_| "receipt field `executor_bond` has a bad index")?)
+            TransactionOutpoint::new(
+                Hash64::from_bytes(raw),
+                index.parse().map_err(|_| "receipt field `executor_bond` has a bad index")?,
+            )
         };
         let body = ReceiptBodyV1 {
             network_domain: hash("network_domain")?,
@@ -252,7 +255,11 @@ impl ReceiptV1 {
             output_tokens: u32::try_from(uint("output_tokens")?).map_err(|_| "output_tokens out of range")?,
             shown_digest: hash("shown_digest")?,
             request_digest: hash("request_digest")?,
-            template_id: v.get("template_id").and_then(serde_json::Value::as_str).ok_or("receipt field `template_id` is missing")?.to_string(),
+            template_id: v
+                .get("template_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("receipt field `template_id` is missing")?
+                .to_string(),
             job_context_hash: hash("job_context_hash")?,
         };
         Ok(Self {
@@ -312,7 +319,9 @@ impl std::fmt::Display for ReceiptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unsealed => write!(f, "the receipt's seal does not recompute: a field was changed after it was sealed"),
-            Self::NotThisClaim(field) => write!(f, "the receipt's {field} is not the commitment's: this receipt is not for this claim"),
+            Self::NotThisClaim(field) => {
+                write!(f, "the receipt's {field} is not the commitment's: this receipt is not for this claim")
+            }
             Self::OutputDiffers(why) => write!(f, "the output is not the one the receipt names: {why}"),
             Self::ShownDiffers(why) => write!(f, "the shown text is not the one the receipt names: {why}"),
             Self::ContextDiffers(why) => write!(f, "the job context does not belong to this claim: {why}"),
@@ -377,7 +386,8 @@ pub fn verify_receipt(receipt: &ReceiptV1, witness: &ReceiptWitness<'_>) -> Resu
         if ctx.context_hash() != b.job_context_hash {
             return Err(ReceiptError::ContextDiffers("its hash is not the receipt's"));
         }
-        if ctx.job_id != b.job_id || ctx.prompt_token_ids_hash != c.job.prompt_token_ids_hash || ctx.tokenizer_id != c.job.tokenizer_id {
+        if ctx.job_id != b.job_id || ctx.prompt_token_ids_hash != c.job.prompt_token_ids_hash || ctx.tokenizer_id != c.job.tokenizer_id
+        {
             return Err(ReceiptError::ContextDiffers("it names another job, prompt or tokenizer"));
         }
         if ctx.exact_decode_tokens != c.decode_tokens_executed {
@@ -417,7 +427,10 @@ pub enum ChainStanding {
 
 /// **Check a receipt against a node's claim row** (`GetPalwFreePromptClaim`). A row that disagrees is refused by field; one that agrees is
 /// `UNVERIFIED_REMOTE_STATE` — the node said so, and nothing here proves it (RFC-0009 §6).
-pub fn check_against_chain(receipt: &ReceiptV1, row: &kaspa_rpc_core::GetPalwFreePromptClaimResponse) -> Result<ChainStanding, ReceiptError> {
+pub fn check_against_chain(
+    receipt: &ReceiptV1,
+    row: &kaspa_rpc_core::GetPalwFreePromptClaimResponse,
+) -> Result<ChainStanding, ReceiptError> {
     if !row.found {
         return Ok(ChainStanding::NotOnChain);
     }
@@ -443,8 +456,8 @@ pub fn check_against_chain(receipt: &ReceiptV1, row: &kaspa_rpc_core::GetPalwFre
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{FloorWorker, certified_facts, config, identity, offline_source, temp_dir};
     use crate::serving;
+    use crate::testkit::{FloorWorker, certified_facts, config, identity, offline_source, temp_dir};
     use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 
     /// A real committed answer: the commitment from the outbox, the response body, and the job context from the worker's retention.
@@ -466,7 +479,8 @@ mod tests {
         let body = crate::testkit::chat(&cfg, &id, &w, &facts, &source, &request, &serving::AlwaysPresent).expect("answers");
         assert_eq!(body["misaka"]["committed"], true);
         let stem = format!("fp-job-{}", &body["misaka"]["fp_job_id"].as_str().unwrap()[..16]);
-        let commitment: PalwFreePromptCommitmentV3 = borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
+        let commitment: PalwFreePromptCommitmentV3 =
+            borsh::from_slice(&std::fs::read(dir.join(format!("{stem}.commitment-unsigned.borsh"))).unwrap()).unwrap();
         let ids: Vec<u32> = serde_json::from_value(body["misaka"]["output_token_ids"].clone()).unwrap();
         let shown = body["choices"][0]["message"]["content"].as_str().unwrap().as_bytes().to_vec();
         let ctx_hex = body["misaka"]["job_context"].as_str().expect("the response publishes the job context");
@@ -481,7 +495,14 @@ mod tests {
     }
 
     fn witness<'a>(a: &'a Answer, shown: Option<&'a [u8]>) -> ReceiptWitness<'a> {
-        ReceiptWitness { commitment: &a.commitment, output_token_ids: &a.ids, shown, job_context: Some(&a.context), rule: OutputRule::CoreV1, render: None }
+        ReceiptWitness {
+            commitment: &a.commitment,
+            output_token_ids: &a.ids,
+            shown,
+            job_context: Some(&a.context),
+            rule: OutputRule::CoreV1,
+            render: None,
+        }
     }
 
     fn receipt_of(a: &Answer) -> ReceiptV1 {
@@ -588,7 +609,11 @@ mod tests {
         assert_eq!(verify_receipt(&receipt, &w).unwrap_err(), ReceiptError::OutputDiffers("the ids' digest"));
         let reforged = reseal(receipt.clone(), &|b| b.output_token_ids_hash = output_ids_digest(&other_ids));
         let err = verify_receipt(&reforged, &w).unwrap_err();
-        assert_eq!(err, ReceiptError::OutputDiffers("the ids do not recompute to the commitment's output_root"), "a re-sealed receipt cannot launder other ids: {err}");
+        assert_eq!(
+            err,
+            ReceiptError::OutputDiffers("the ids do not recompute to the commitment's output_root"),
+            "a re-sealed receipt cannot launder other ids: {err}"
+        );
         // Fewer ids than the commitment executed.
         let mut short = witness(&a, None);
         short.output_token_ids = &a.ids[..a.ids.len() - 1];
@@ -602,7 +627,10 @@ mod tests {
         let render = |ids: &[u32]| -> Vec<u8> { ids.iter().filter(|i| **i < 256).map(|i| *i as u8).collect() };
         let mut with_render = witness(&a, Some(&text));
         with_render.render = Some(&render);
-        assert_eq!(verify_receipt(&swapped, &with_render).unwrap_err(), ReceiptError::ShownDiffers("it is not a rendering of the committed ids"));
+        assert_eq!(
+            verify_receipt(&swapped, &with_render).unwrap_err(),
+            ReceiptError::ShownDiffers("it is not a rendering of the committed ids")
+        );
         let mut honest_render = witness(&a, Some(&a.shown));
         honest_render.render = Some(&render);
         assert!(verify_receipt(&receipt, &honest_render).unwrap().shown_is_a_rendering_of_the_ids);
@@ -643,9 +671,16 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(check_against_chain(&receipt, &kaspa_rpc_core::GetPalwFreePromptClaimResponse::default()).unwrap(), ChainStanding::NotOnChain);
+        assert_eq!(
+            check_against_chain(&receipt, &kaspa_rpc_core::GetPalwFreePromptClaimResponse::default()).unwrap(),
+            ChainStanding::NotOnChain
+        );
         for (field, edit) in [
-            ("output_root", Box::new(|r: &mut kaspa_rpc_core::GetPalwFreePromptClaimResponse| r.output_root = "00".repeat(64)) as Box<dyn Fn(&mut kaspa_rpc_core::GetPalwFreePromptClaimResponse)>),
+            (
+                "output_root",
+                Box::new(|r: &mut kaspa_rpc_core::GetPalwFreePromptClaimResponse| r.output_root = "00".repeat(64))
+                    as Box<dyn Fn(&mut kaspa_rpc_core::GetPalwFreePromptClaimResponse)>,
+            ),
             ("class_id", Box::new(|r| r.class_id = "00".repeat(64))),
             ("execution_root", Box::new(|r| r.execution_root = "00".repeat(64))),
             ("executor_bond", Box::new(|r| r.executor_bond = format!("{}:9", "00".repeat(64)))),

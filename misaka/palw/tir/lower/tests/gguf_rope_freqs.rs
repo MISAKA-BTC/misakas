@@ -161,7 +161,13 @@ fn scaling(m: &GgufModel) -> Value {
 fn a_header_only_view_reads_a_table_of_ones_and_says_its_values_are_read_at_conversion() {
     let factors = [1.0f32, 3.5];
     let (bytes, data_start) = tiny_llama(&factors);
-    let head = GgufFile::parse(&bytes[..data_start], None, std::path::Path::new("header-only"), misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin()).unwrap();
+    let head = GgufFile::parse(
+        &bytes[..data_start],
+        None,
+        std::path::Path::new("header-only"),
+        misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin(),
+    )
+    .unwrap();
     assert!(!head.has_data());
     // It used to be an error: "a header-only view holds no tensor data" (the census's `NOT_RUN_NEEDS_TENSOR_DATA`).
     let m = GgufModel::from_file(head).expect("a header-only view maps");
@@ -199,7 +205,13 @@ fn with_the_data_an_arbitrary_table_reads_as_itself_and_a_llama3_table_as_llama3
 #[test]
 fn the_program_does_not_depend_on_the_values_of_the_table() {
     let (bytes, data_start) = tiny_llama(&[1.0, 3.5]);
-    let head = GgufFile::parse(&bytes[..data_start], None, std::path::Path::new("header-only"), misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin()).unwrap();
+    let head = GgufFile::parse(
+        &bytes[..data_start],
+        None,
+        std::path::Path::new("header-only"),
+        misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin(),
+    )
+    .unwrap();
     let a = GgufModel::from_file(head).unwrap().prepare(&LowerOpts::default()).unwrap();
     let b = GgufModel::open(&on_disk(&bytes, "same")).unwrap().prepare(&LowerOpts::default()).unwrap();
     let c = {

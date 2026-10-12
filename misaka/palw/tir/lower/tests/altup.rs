@@ -39,7 +39,13 @@ fn rows(meta: &serde_json::Value, key: &str) -> Vec<Vec<f64>> {
 fn show(name: &str, m: &fidelity::Metrics) {
     eprintln!(
         "{name}: top-1 {:.3}  KL {:.5} (max {:.4})  ppl {:.3} -> {:.3} ({:+.2}%)  [{} positions]",
-        m.top1_agreement, m.kl_mean, m.kl_max, m.ppl_float, m.ppl_int, m.ppl_delta * 100.0, m.positions
+        m.top1_agreement,
+        m.kl_mean,
+        m.kl_max,
+        m.ppl_float,
+        m.ppl_int,
+        m.ppl_delta * 100.0,
+        m.positions
     );
 }
 
@@ -58,7 +64,8 @@ fn run_on(cfg: &str, eval: &[Vec<usize>]) -> Result<Run, String> {
     let calib = fidelity::random_sequences(prep.hl.vocab, 6, 32, 7);
     let quiet = |_: usize, _: usize| {};
     let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).map_err(|e| format!("calibrate: {e}"))?;
-    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).map_err(|e| format!("materialise: {e}"))?;
+    let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet)
+        .map_err(|e| format!("materialise: {e}"))?;
     let float = fidelity::float_logits(&prep.hl, &loader, eval, &quiet).map_err(|e| e.to_string())?;
     let int: Vec<Vec<Vec<f64>>> = eval
         .iter()
@@ -81,7 +88,8 @@ fn gemma3n_float_matches_hf() {
     let want = rows(&meta, "logits_full");
     let got = Session::new(&prog, &params).run(&tokens_of(&meta)).expect("run");
     let scale = want.iter().flatten().fold(1.0f64, |m, v| m.max(v.abs()));
-    let d: Vec<f64> = got.iter().zip(&want).map(|(g, w)| g.iter().zip(w).map(|(a, b)| (*a as f64 - b).abs()).fold(0.0, f64::max)).collect();
+    let d: Vec<f64> =
+        got.iter().zip(&want).map(|(g, w)| g.iter().zip(w).map(|(a, b)| (*a as f64 - b).abs()).fold(0.0, f64::max)).collect();
     eprintln!("gemma3n_text: {} positions vs HF: max|Δ| {:.2e} (scale {scale:.1})", got.len(), d.iter().cloned().fold(0.0, f64::max));
     assert!(d.iter().all(|x| *x <= 1e-4 * scale), "float vs HF: {d:?}");
 }
@@ -160,8 +168,15 @@ fn the_court_replays_every_node_of_the_altup_program() {
     let (prep, mat) = materialised(&config(), 11);
     let tokens: Vec<u32> = fidelity::random_sequences(prep.hl.vocab, 1, 10, 5).remove(0).into_iter().map(|t| t as u32).collect();
     let last = tokens.len() as u32 - 1;
-    let r = common::court_coverage(&prep.lowered.program, &mat.params, &tokens, &[0, 2, last], &[1, 3]).unwrap_or_else(|e| panic!("the court: {e}"));
-    eprintln!("AltUp court: {} commit points, {} nodes, {} elements, primitives {:?}", r.commits, r.nodes, r.elements, r.primitives.keys().collect::<Vec<_>>());
+    let r = common::court_coverage(&prep.lowered.program, &mat.params, &tokens, &[0, 2, last], &[1, 3])
+        .unwrap_or_else(|e| panic!("the court: {e}"));
+    eprintln!(
+        "AltUp court: {} commit points, {} nodes, {} elements, primitives {:?}",
+        r.commits,
+        r.nodes,
+        r.elements,
+        r.primitives.keys().collect::<Vec<_>>()
+    );
     assert!(r.commits > 0);
     for p in ["Compare", "Select", "IntRsqrt", "Log2Floor", "ReduceSum", "Concat", "Slice"] {
         assert!(r.primitives.contains_key(p), "the court never evaluated a `{p}` of the AltUp program");
@@ -220,7 +235,13 @@ fn a_gaussian_top_k_keeps_what_lies_above_mean_plus_z_std() {
     let policy = QuantPolicy::default();
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &policy, &quiet).expect("materialise");
     let errs = fidelity::site_errors(&prep, &params, &stats, &policy, &mat, &seq).expect("site errors");
-    let sparse: Vec<_> = errs.iter().filter(|e| e.key.ends_with(".mlp.sparse") && prep.hl.model_layer(e.key.trim_start_matches('L').split('.').next().and_then(|n| n.parse().ok()).unwrap_or(99)) < 2).collect();
+    let sparse: Vec<_> = errs
+        .iter()
+        .filter(|e| {
+            e.key.ends_with(".mlp.sparse")
+                && prep.hl.model_layer(e.key.trim_start_matches('L').split('.').next().and_then(|n| n.parse().ok()).unwrap_or(99)) < 2
+        })
+        .collect();
     assert_eq!(sparse.len(), 2, "{sparse:?}");
     for e in &sparse {
         eprintln!("{}: rel {:.4} (|f|max {:.3})", e.key, e.rel_l2, e.float_absmax);
@@ -235,14 +256,20 @@ fn the_real_gemma3n_e4b_text_decoder_is_admitted() {
     use misaka_palw_tir::admit::tir_admit_program_v1;
     use misaka_palw_tir_lower::admission::default_inputs;
     use misaka_palw_tir_lower::lower::lower;
-    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/gemma-3n-e4b-text.json")).expect("config");
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/gemma-3n-e4b-text.json"))
+        .expect("config");
     let spec = parse_config_str(&cfg).expect("spec");
     let hl = hl::build_program(&spec).expect("hl");
     for w in [1u32 << 13] {
         let lw = lower(&hl, &LowerOpts { max_window: Some(w), ..LowerOpts::default() }).expect("lower");
         let a = tir_admit_program_v1(&lw.program, &default_inputs()).unwrap_or_else(|e| panic!("REFUSED {e}"));
         let nodes = lw.program.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
-        eprintln!("Gemma-3n-E4B (window {w}): ADMITTED — largest block {nodes} nodes, {} cones, position {} MACs, cone work {}", a.cones.len(), a.position.cost.macs, a.cone_work);
+        eprintln!(
+            "Gemma-3n-E4B (window {w}): ADMITTED — largest block {nodes} nodes, {} cones, position {} MACs, cone work {}",
+            a.cones.len(),
+            a.position.cost.macs,
+            a.cone_work
+        );
         assert!(nodes <= 512, "largest block {nodes} nodes");
         assert!(a.cone_work <= 1 << 16, "admission's own work {} past testnet-12's 65,536", a.cone_work);
     }

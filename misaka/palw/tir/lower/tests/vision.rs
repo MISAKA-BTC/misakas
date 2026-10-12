@@ -19,8 +19,8 @@ use misaka_palw_tir as tir;
 use misaka_palw_tir_lower::encoder;
 use misaka_palw_tir_lower::float_ref::ParamStore;
 use misaka_palw_tir_lower::float_ref::stream::Resident;
-use misaka_palw_tir_lower::lower::vision::{self, VisionSpec};
 use misaka_palw_tir_lower::lower::materialise;
+use misaka_palw_tir_lower::lower::vision::{self, VisionSpec};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
 use std::path::{Path, PathBuf};
@@ -53,7 +53,9 @@ pub fn load(name: &str) -> Fixture {
 
 fn rows_of(v: &serde_json::Value) -> Vec<Vec<f64>> {
     match v.as_array() {
-        Some(a) if a.first().is_some_and(|x| x.is_array()) => a.iter().map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()).collect(),
+        Some(a) if a.first().is_some_and(|x| x.is_array()) => {
+            a.iter().map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()).collect()
+        }
         Some(a) => vec![a.iter().map(|x| x.as_f64().unwrap()).collect()],
         None => panic!("not an array"),
     }
@@ -122,7 +124,8 @@ pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -
     let interp = tir::interp_v2::InterpreterV2::new(&p2).expect("interpreter v2");
     for (img, out) in &fx.images {
         let mut inputs = tir::interp_v2::MapInputs::default();
-        let t = tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        let t =
+            tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
         inputs.constant.insert(0, t);
         let run = interp.run_positions(&params2, &inputs, 1).expect("v2 run");
         let o = &run[0].output;
@@ -133,7 +136,11 @@ pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -
         let cos: Vec<f64> = got.iter().zip(&want).map(|(a, b)| cosine(a, b)).collect();
         let mean = cos.iter().sum::<f64>() / cos.len() as f64;
         let min = cos.iter().cloned().fold(1.0, f64::min);
-        eprintln!("{name} integer vs HF `{key}`: cosine mean {mean:.6} min {min:.6}, rel {:.2e} ({} rows × {width})", rel(&got.concat(), &want.concat()), got.len());
+        eprintln!(
+            "{name} integer vs HF `{key}`: cosine mean {mean:.6} min {min:.6}, rel {:.2e} ({} rows × {width})",
+            rel(&got.concat(), &want.concat()),
+            got.len()
+        );
         assert!(min > 0.999, "{name}: cosine min {min}");
     }
     // 5. The class's one-stage pipeline: the image bound by JobImage (rfc3/impl 4bd8f3b2b). It
@@ -160,7 +167,8 @@ pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -
         };
         let pr = tir::pipeline::run_pipeline(&pipe, std::slice::from_ref(&p2), &One(&params2), &NoRandom, &job).expect("pipeline run");
         let mut inputs = tir::interp_v2::MapInputs::default();
-        let t = tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+        let t =
+            tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
         inputs.constant.insert(0, t);
         let direct = interp.run_positions(&params2, &inputs, 1).expect("v2 run").remove(0).output;
         assert_eq!(pr.output, direct, "{name}: the pipeline differs from the program");
@@ -176,11 +184,18 @@ pub fn check_tower_with(name: &str, key: &str, out: Option<vision::VisionOut>) -
     // 6. The three implementations and the court, on the tower's version-1 view (the image an input param).
     {
         let img = &fx.images[0].0;
-        let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+        let t =
+            misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
         let p6 = common::with_inputs(&lw.program, &mat.params, &[(vision::IMAGE_PARAM, t)]);
         let n3 = common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name}: three implementations: {e}"));
         let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name}: court: {e}"));
-        eprintln!("{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives", c.commits, c.nodes, c.elements, c.primitives.len());
+        eprintln!(
+            "{name} COURT: three implementations equal ({n3} position); the court replays {} commit points ({} nodes, {} elements) over {} primitives",
+            c.commits,
+            c.nodes,
+            c.elements,
+            c.primitives.len()
+        );
         assert!(c.commits > 0);
     }
     // 7. Admission of the program alone.
@@ -308,7 +323,7 @@ fn placed(
 /// 4. teacher-forced over HF's stream, the integer logits against HF's (top-1, KL);
 /// 5. the two-stage pipeline's admission.
 fn text_stage(name: &str, stream_key: &str) {
-    use misaka_palw_tir_lower::lower::{ImageRows, LowerOpts, IMAGE_ROWS_PARAM};
+    use misaka_palw_tir_lower::lower::{IMAGE_ROWS_PARAM, ImageRows, LowerOpts};
     use tir::pipeline::{Binding, JobImageV1, PipelineJob, StageDecl, TextSelectV1, TirPipelineV1, TripRule};
     let vis = check_tower(name, "image_rows");
     let fx = load(name);
@@ -326,7 +341,8 @@ fn text_stage(name: &str, stream_key: &str) {
         [tir::Dim::Fixed(n), tir::Dim::Fixed(w)] => (*n as usize, *w as usize),
         s => panic!("image rows of shape {s:?}"),
     };
-    let placeholder = root.get("image_token_id").or_else(|| root.get("image_token_index")).and_then(|v| v.as_u64()).expect("image token") as u32;
+    let placeholder =
+        root.get("image_token_id").or_else(|| root.get("image_token_index")).and_then(|v| v.as_u64()).expect("image token") as u32;
     // Qwen2-VL: the merged grid of the class's one image size.
     let mrope = fx.images[0].1.get("grid").map(|g| {
         let m = root["vision_config"]["spatial_merge_size"].as_u64().unwrap_or(2) as u32;
@@ -336,7 +352,8 @@ fn text_stage(name: &str, stream_key: &str) {
         assert_eq!((gh * gw) as usize, n, "{name}: the merged grid is the tower's rows");
     }
     let img = ImageRows { rows: n, width, unit: vis.out_scale, placeholder, mrope };
-    let ids_of = |v: &serde_json::Value| -> Vec<usize> { v.as_array().unwrap().iter().map(|t| t.as_u64().unwrap() as usize).collect() };
+    let ids_of =
+        |v: &serde_json::Value| -> Vec<usize> { v.as_array().unwrap().iter().map(|t| t.as_u64().unwrap() as usize).collect() };
     let f32s = |r: &[Vec<f64>]| -> Vec<Vec<f32>> { r.iter().map(|row| row.iter().map(|x| *x as f32).collect()).collect() };
     // 1. The float LM with HF's image rows in place is HF's VLM, over the whole stream.
     for (_, rec) in &fx.images {
@@ -378,15 +395,16 @@ fn text_stage(name: &str, stream_key: &str) {
     let (vhl, vbind) = vision::hl_program(&fx.spec).expect("tower hl");
     let (vparams, _) = ParamStore::from_source(&vhl, &vbind, &ck).expect("tower params");
     let mut stats: std::collections::BTreeMap<String, misaka_palw_tir_lower::float_ref::SiteStat> = Default::default();
-    let mut run_stats = |ov: std::collections::BTreeMap<usize, Vec<f32>>, mp: std::collections::BTreeMap<usize, [usize; 3]>, toks: &[usize]| {
-        let mut s = misaka_palw_tir_lower::float_ref::Session::new(&hl, &params_f).with_site_stats();
-        s.overrides = ov;
-        s.mrope_pos = mp;
-        s.run(toks).expect("calibration run");
-        for (k, v) in s.sites.take().unwrap_or_default() {
-            stats.entry(k).or_default().merge(&v);
-        }
-    };
+    let mut run_stats =
+        |ov: std::collections::BTreeMap<usize, Vec<f32>>, mp: std::collections::BTreeMap<usize, [usize; 3]>, toks: &[usize]| {
+            let mut s = misaka_palw_tir_lower::float_ref::Session::new(&hl, &params_f).with_site_stats();
+            s.overrides = ov;
+            s.mrope_pos = mp;
+            s.run(toks).expect("calibration run");
+            for (k, v) in s.sites.take().unwrap_or_default() {
+                stats.entry(k).or_default().merge(&v);
+            }
+        };
     let conts = misaka_palw_tir_lower::fidelity::random_sequences(vocab - 4, 4, gen0.len(), 17);
     for (im, cont) in calib_images(&fx.spec, 4).iter().zip(&conts) {
         let r = vision::float_forward(&vhl, &fx.spec, &vparams, im, None).expect("tower float");
@@ -455,16 +473,29 @@ fn text_stage(name: &str, stream_key: &str) {
             let id = argmax(&logits.data) as u32;
             if k == budget { TextSelectV1::Last(id) } else { TextSelectV1::Next(id) }
         };
-        let (run, got) = tir::pipeline::run_text_pipeline(&pipe, &programs, &params, &NoDraws, &job, &mut select).expect("text pipeline");
+        let (run, got) =
+            tir::pipeline::run_text_pipeline(&pipe, &programs, &params, &NoDraws, &job, &mut select).expect("text pipeline");
         let got: Vec<usize> = got.iter().map(|t| *t as usize).collect();
         let prefix = got.iter().zip(&want).take_while(|(a, b)| a == b).count();
         // 5. The committed ids replay the run exactly.
-        let replay = tir::pipeline::run_pipeline(&pipe, &programs, &params, &NoDraws, &PipelineJob { generated: got.iter().map(|t| *t as u32).collect(), ..job.clone() })
-            .expect("replay");
+        let replay = tir::pipeline::run_pipeline(
+            &pipe,
+            &programs,
+            &params,
+            &NoDraws,
+            &PipelineJob { generated: got.iter().map(|t| *t as u32).collect(), ..job.clone() },
+        )
+        .expect("replay");
         assert_eq!(replay.output, run.output, "{name}: the replay differs from the generating run");
         // 6. Teacher-forced over HF's stream: the integer logits against HF's.
-        let tf = tir::pipeline::run_pipeline(&pipe, &programs, &params, &NoDraws, &PipelineJob { generated: want.iter().map(|t| *t as u32).collect(), ..job.clone() })
-            .expect("teacher-forced run");
+        let tf = tir::pipeline::run_pipeline(
+            &pipe,
+            &programs,
+            &params,
+            &NoDraws,
+            &PipelineJob { generated: want.iter().map(|t| *t as u32).collect(), ..job.clone() },
+        )
+        .expect("teacher-forced run");
         let hf = rows_of(&rec[stream_key]);
         let v = tf.output.shape[1];
         assert_eq!(tf.output.shape[0], hf.len(), "{name}: the stream's positions");
@@ -593,7 +624,10 @@ fn a_fixed_ratio_downscale_stage_feeds_the_tower_exactly() {
     for (img, out) in std::mem::take(&mut fx.images) {
         let big = up(&img);
         let mut inputs = tir::interp_v2::MapInputs::default();
-        inputs.constant.insert(0, tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], big.iter().map(|v| *v as i128).collect()).unwrap());
+        inputs.constant.insert(
+            0,
+            tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], big.iter().map(|v| *v as i128).collect()).unwrap(),
+        );
         let o = interp.run_positions(&params2, &inputs, 1).expect("run").remove(0).output;
         let got: Vec<f64> = o.data.iter().map(|c| *c as f64 * mat.logits_scale).collect();
         let want = rows_of(&out["image_embeds"]).concat();
@@ -686,16 +720,23 @@ fn the_out_major_tower_computes_the_default_tower_s_integers() {
             let mut per_image = Vec::new();
             for (img, _) in &fx.images {
                 let mut inputs = tir::interp_v2::MapInputs::default();
-                let t = tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect()).unwrap();
+                let t =
+                    tir::Tensor::new(tir::DType::I16, vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i128).collect())
+                        .unwrap();
                 inputs.constant.insert(0, t);
                 per_image.push(interp.run_positions(&params2, &inputs, 1).expect("v2 run").remove(0).output);
             }
             if out_major {
                 let img = &fx.images[0].0;
-                let t = misaka_palw_tir_lower::lower::IntTensor::i16(vec![s.h as usize, s.w as usize, 3], img.iter().map(|v| *v as i16).collect());
+                let t = misaka_palw_tir_lower::lower::IntTensor::i16(
+                    vec![s.h as usize, s.w as usize, 3],
+                    img.iter().map(|v| *v as i16).collect(),
+                );
                 let p6 = common::with_inputs(&lw.program, &mat.params, &[(vision::IMAGE_PARAM, t)]);
-                common::three_ways(&lw.program, &p6, &[vec![0]]).unwrap_or_else(|e| panic!("{name} out-major: three implementations: {e}"));
-                let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1]).unwrap_or_else(|e| panic!("{name} out-major: court: {e}"));
+                common::three_ways(&lw.program, &p6, &[vec![0]])
+                    .unwrap_or_else(|e| panic!("{name} out-major: three implementations: {e}"));
+                let c = common::court_coverage(&lw.program, &p6, &[0], &[0], &[1])
+                    .unwrap_or_else(|e| panic!("{name} out-major: court: {e}"));
                 assert!(c.commits > 0);
             }
             outs.push((per_image, mat.logits_scale));

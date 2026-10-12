@@ -327,12 +327,7 @@ impl StorageReceiptV1 {
 
     /// Does the receipt cover every chunk of `manifest` through `needed_until_daa`, for this manifest and network, under a signature
     /// `verify(provider_id, message, signature)` accepts?
-    pub fn covers(
-        &self,
-        manifest: &EvidenceManifestV1,
-        needed_until_daa: u64,
-        verify: impl Fn(&[u8], &[u8], &[u8]) -> bool,
-    ) -> bool {
+    pub fn covers(&self, manifest: &EvidenceManifestV1, needed_until_daa: u64, verify: impl Fn(&[u8], &[u8], &[u8]) -> bool) -> bool {
         self.network_domain == manifest.network_domain
             && self.manifest_id == manifest_id_v1(manifest)
             && self.retain_until_daa >= needed_until_daa
@@ -344,7 +339,6 @@ impl StorageReceiptV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     fn h(n: u8) -> Hash64 {
         Hash64::from_bytes([n; 64])
@@ -359,7 +353,14 @@ mod tests {
         EvidenceManifestV1::build(h(9), &bond(), &[5u8; 32], h(1), h(2), h(3), 3, 10_000, &chunks())
     }
     fn claim() -> ClaimRoots {
-        ClaimRoots { network_domain: h(9), trace_root: h(1), output_root: h(2), execution_root: h(3), trace_chunk_count: 3, retention_deadline: 9_000 }
+        ClaimRoots {
+            network_domain: h(9),
+            trace_root: h(1),
+            output_root: h(2),
+            execution_root: h(3),
+            trace_chunk_count: 3,
+            retention_deadline: 9_000,
+        }
     }
 
     #[test]
@@ -394,7 +395,10 @@ mod tests {
         ] {
             assert_ne!(different, base);
         }
-        assert_eq!(manifest().verify_preclaim(&TransactionOutpoint::new(h(0xB0), 2), &[5u8; 32]), Err(EvidenceError::PreclaimMismatch));
+        assert_eq!(
+            manifest().verify_preclaim(&TransactionOutpoint::new(h(0xB0), 2), &[5u8; 32]),
+            Err(EvidenceError::PreclaimMismatch)
+        );
     }
 
     #[test]
@@ -500,5 +504,4 @@ mod tests {
         forged.retain_until_daa = 99_999; // changes what the signature covers
         assert!(!forged.covers(&m, 10_000, verify));
     }
-
 }

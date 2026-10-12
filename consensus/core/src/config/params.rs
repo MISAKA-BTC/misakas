@@ -6732,7 +6732,9 @@ impl Params {
         if self.palw_reporter_income_v2 == Some(ForkActivation::never()) {
             self.palw_reporter_income_v2 = None;
         }
-        if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_paid_consumer_lifecycle_v1 = None; }
+        if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_paid_consumer_lifecycle_v1 = None;
+        }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
@@ -8594,7 +8596,8 @@ impl Params {
     }
 
     pub fn validate_palw_class_semantics_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
-        if self.palw_class_semantics_v1.is_some_and(|f| f != ForkActivation::never()) && self.palw_class_semantics_v1_fence().is_none() {
+        if self.palw_class_semantics_v1.is_some_and(|f| f != ForkActivation::never()) && self.palw_class_semantics_v1_fence().is_none()
+        {
             return Err(crate::palw_state_v2::PalwStateV2Error::InvalidParams("palw_class_semantics_v1 requires ConsensusV2"));
         }
         Ok(())
@@ -8612,7 +8615,9 @@ impl Params {
     }
 
     pub fn validate_palw_court_commitment_scope_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
-        if self.palw_court_commitment_scope_v1.is_some_and(|f| f != ForkActivation::never()) && self.palw_court_commitment_scope_v1_fence().is_none() {
+        if self.palw_court_commitment_scope_v1.is_some_and(|f| f != ForkActivation::never())
+            && self.palw_court_commitment_scope_v1_fence().is_none()
+        {
             return Err(crate::palw_state_v2::PalwStateV2Error::InvalidParams("palw_court_commitment_scope_v1 requires ConsensusV2"));
         }
         Ok(())
@@ -8630,7 +8635,9 @@ impl Params {
     }
 
     pub fn validate_palw_staged_public_court_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
-        if self.palw_staged_public_court_v1.is_some_and(|f| f != ForkActivation::never()) && self.palw_staged_public_court_v1_fence().is_none() {
+        if self.palw_staged_public_court_v1.is_some_and(|f| f != ForkActivation::never())
+            && self.palw_staged_public_court_v1_fence().is_none()
+        {
             return Err(crate::palw_state_v2::PalwStateV2Error::InvalidParams("palw_staged_public_court_v1 requires ConsensusV2"));
         }
         Ok(())
@@ -12781,7 +12788,9 @@ impl Params {
         if let Some(at) = palw_reporter_income_v2.as_mut() {
             fork(at, visit);
         }
-        if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }

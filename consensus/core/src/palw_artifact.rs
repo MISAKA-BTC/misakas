@@ -1808,8 +1808,9 @@ mod multiproof_size_tests {
     fn the_sibling_count_and_the_borsh_length_are_the_builders() {
         let mut x = 0x9E37_79B9_7F4A_7C15u64;
         for leaf_count in [1u32, 2, 3, 5, 7, 8, 9, 31, 33, 64, 100, 257, 1_000, 3_333] {
-            let operands: Vec<PalwArtifactOperandV1> =
-                (0..leaf_count).map(|i| operand(i, (i % 5) as usize * 3 + 1, if i % 3 == 0 { None } else { Some(i as u16) })).collect();
+            let operands: Vec<PalwArtifactOperandV1> = (0..leaf_count)
+                .map(|i| operand(i, (i % 5) as usize * 3 + 1, if i % 3 == 0 { None } else { Some(i as u16) }))
+                .collect();
             let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
             let mut subsets: Vec<Vec<u32>> = vec![vec![0], vec![leaf_count - 1], (0..leaf_count).collect()];
             for _ in 0..12 {
@@ -1827,7 +1828,9 @@ mod multiproof_size_tests {
                 let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("a proof");
                 let count = palw_artifact_multiproof_sibling_count_v1(leaf_count, &indices).expect("a count");
                 assert_eq!(count, proof.siblings.len() as u64, "{leaf_count} leaves, {} opened", indices.len());
-                let lens = opened.iter().map(|(_, o)| palw_artifact_operand_borsh_len_v1(o.tensor_name.len(), o.layer.is_some(), o.bytes.len()));
+                let lens = opened
+                    .iter()
+                    .map(|(_, o)| palw_artifact_operand_borsh_len_v1(o.tensor_name.len(), o.layer.is_some(), o.bytes.len()));
                 assert_eq!(palw_artifact_multiproof_borsh_len_v1(lens, count), borsh::to_vec(&proof).unwrap().len() as u64);
                 verify_artifact_multiproof_v1(&proof, artifact_root_v1(&leaves).unwrap()).expect("verifies");
                 if indices.len() > 1 && indices.windows(2).all(|w| w[1] == w[0] + 1) {
@@ -1863,7 +1866,8 @@ mod multiproof_size_tests {
                 }
             }
             for indices in subsets {
-                let openings: Vec<PalwArtifactOpeningV1> = indices.iter().rev().map(|i| open_artifact_leaf_v1(&operands, *i).unwrap()).collect();
+                let openings: Vec<PalwArtifactOpeningV1> =
+                    indices.iter().rev().map(|i| open_artifact_leaf_v1(&operands, *i).unwrap()).collect();
                 let assembled = palw_artifact_multiproof_from_openings_v1(&openings).expect("assembles");
                 let opened: Vec<(u32, PalwArtifactOperandV1)> = indices.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
                 assert_eq!(assembled, palw_artifact_multiproof_v1(&leaves, &opened).unwrap(), "{leaf_count} leaves, {indices:?}");
@@ -1879,8 +1883,12 @@ mod multiproof_size_tests {
             }
             let mut other = o;
             other.leaf_count += 1;
-            assert_eq!(palw_artifact_multiproof_from_openings_v1(&[other, open_artifact_leaf_v1(&operands, leaf_count - 1).unwrap()])
-                .filter(|_| leaf_count > 1), None, "two inventories");
+            assert_eq!(
+                palw_artifact_multiproof_from_openings_v1(&[other, open_artifact_leaf_v1(&operands, leaf_count - 1).unwrap()])
+                    .filter(|_| leaf_count > 1),
+                None,
+                "two inventories"
+            );
         }
     }
 
@@ -1900,7 +1908,12 @@ mod batch_opening_tests {
     use super::*;
 
     fn operand(i: u32) -> PalwArtifactOperandV1 {
-        PalwArtifactOperandV1 { tensor_name: format!("t{}", i % 3), layer: Some((i % 4) as u16), row_start: i * 7, bytes: vec![i as u8; (i % 5 + 1) as usize] }
+        PalwArtifactOperandV1 {
+            tensor_name: format!("t{}", i % 3),
+            layer: Some((i % 4) as u16),
+            row_start: i * 7,
+            bytes: vec![i as u8; (i % 5 + 1) as usize],
+        }
     }
 
     #[test]

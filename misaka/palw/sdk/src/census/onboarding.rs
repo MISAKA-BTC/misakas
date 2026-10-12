@@ -208,13 +208,15 @@ pub fn classify_blocker_v1(b: &Blocker) -> GapClassV1 {
     match b.code.as_str() {
         // The preflight's own protocol-gap codes: a new primitive / court kernel is the chain's.
         "ARCH_NEEDS_PRIMITIVE" => KernelExtensionRequired,
-        "ARCH_NEEDS_FEATURE" => {
-            class_of_feature(b.arg.as_deref(), b.safe_paths.iter().any(|p| p.contains("smallest general")))
-        }
+        "ARCH_NEEDS_FEATURE" => class_of_feature(b.arg.as_deref(), b.safe_paths.iter().any(|p| p.contains("smallest general"))),
         "REMOTE_CODE" | "FORMAT_UNSUPPORTED" => FrontendRequired,
         "SOURCE_INCOMPLETE" => ExternalBlocker,
-        "CANONICAL_JOB_OUT_OF_BOUNDS" | "COURT_COST_OVER_CEILING" | "CLOSE_SIZE_OVER_CAP" | "SEAT_MEMORY_SHORT"
-        | "READY_SEATS_INSUFFICIENT" | "INDEPENDENT_OPERATORS" => ResourceRefused,
+        "CANONICAL_JOB_OUT_OF_BOUNDS"
+        | "COURT_COST_OVER_CEILING"
+        | "CLOSE_SIZE_OVER_CAP"
+        | "SEAT_MEMORY_SHORT"
+        | "READY_SEATS_INSUFFICIENT"
+        | "INDEPENDENT_OPERATORS" => ResourceRefused,
         "QUANT_NO_DESCRIPTOR" | "QUANT_KNOWN_UNDESCRIBED" => FrontendRequired,
         other => {
             let (gate, mapped) = codes::gate_code_of_preflight(other).unwrap_or((Gate::Lower, codes::UNMAPPED_PREFLIGHT_CODE));
@@ -252,7 +254,8 @@ mod tests {
     fn a_gate_that_was_not_run_is_never_a_gap_of_any_kind() {
         for c in all_codes() {
             for gate in Gate::ALL {
-                let k = classify_census_code_v1(gate, c, Some("rope_freqs.weight (256 bytes)"), &["the census reads headers only".into()]);
+                let k =
+                    classify_census_code_v1(gate, c, Some("rope_freqs.weight (256 bytes)"), &["the census reads headers only".into()]);
                 assert_eq!(k, GapClassV1::NotRun, "{c} at {gate:?}");
                 assert!(!k.is_semantic_gap() && !k.is_verdict() && k.onboarding_failure_code().is_none(), "{c}");
             }
@@ -321,10 +324,7 @@ mod tests {
         );
         // A gap that names the smallest general primitive that would close it is a protocol gap.
         let ev = ["the smallest general addition that closes it: a gather over the last axis".to_string()];
-        assert_eq!(
-            classify_census_code_v1(Gate::Lower, codes::FEATURE_C, Some("a thing"), &ev),
-            GapClassV1::KernelExtensionRequired
-        );
+        assert_eq!(classify_census_code_v1(Gate::Lower, codes::FEATURE_C, Some("a thing"), &ev), GapClassV1::KernelExtensionRequired);
         let b = Blocker::new(crate::preflight::Stage::Convert, "ARCH_NEEDS_PRIMITIVE", "needs a new primitive");
         assert_eq!(classify_blocker_v1(&b), GapClassV1::KernelExtensionRequired);
     }
@@ -333,7 +333,14 @@ mod tests {
     fn bounds_layout_fence_task_profile_and_source_codes_have_their_own_classes() {
         use GapClassV1::*;
         let k = |g, c: &str, ev: &[&str]| classify_census_code_v1(g, c, None, &ev.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        for c in [codes::COURT_BUDGET, codes::CLOSE_TOO_LARGE, codes::CONTEXT_BOUND, "COURT_WINDOW_EXCEEDED", "DA_LADDER_EXCEEDED", "ADMISSION_EXCEEDS"] {
+        for c in [
+            codes::COURT_BUDGET,
+            codes::CLOSE_TOO_LARGE,
+            codes::CONTEXT_BOUND,
+            "COURT_WINDOW_EXCEEDED",
+            "DA_LADDER_EXCEEDED",
+            "ADMISSION_EXCEEDS",
+        ] {
             assert_eq!(k(Gate::Admit, c, &[]), ResourceRefused, "{c}");
         }
         assert_eq!(k(Gate::Admit, "ADMISSION_REFUSED", &["no layout can be derived for the program"]), LayoutRequired);
@@ -346,11 +353,27 @@ mod tests {
         assert_eq!(ProfileRequired.onboarding_failure_code(), Some("KERNEL_EXTENSION_REQUIRED"));
         // …always with the reason text, so the matrix counts it apart from a relation gap; no other class carries one.
         assert_eq!(ProfileRequired.onboarding_reason(), Some("task profile"));
-        for c in [FrontendRequired, KernelExtensionRequired, KernelNotActive, LayoutRequired, ResourceRefused, ExternalBlocker, NotRun, Unmapped] {
+        for c in [
+            FrontendRequired,
+            KernelExtensionRequired,
+            KernelNotActive,
+            LayoutRequired,
+            ResourceRefused,
+            ExternalBlocker,
+            NotRun,
+            Unmapped,
+        ] {
             assert_eq!(c.onboarding_reason(), None, "{c:?}");
         }
         assert!(ProfileRequired.onboarding_failure_code() == KernelExtensionRequired.onboarding_failure_code());
-        for c in [codes::GATED_ACCESS, codes::MISSING_WEIGHTS, codes::BASE_UNPINNED, codes::HEADER_INVALID, codes::WEIGHTS_INCOMPLETE, codes::CONFIG_MISSING] {
+        for c in [
+            codes::GATED_ACCESS,
+            codes::MISSING_WEIGHTS,
+            codes::BASE_UNPINNED,
+            codes::HEADER_INVALID,
+            codes::WEIGHTS_INCOMPLETE,
+            codes::CONFIG_MISSING,
+        ] {
             assert_eq!(k(Gate::Source, c, &[]), ExternalBlocker, "{c}");
             assert_eq!(ExternalBlocker.onboarding_failure_code(), None);
         }
@@ -467,7 +490,11 @@ mod tests {
             let want = match bucket {
                 "frontend_gap" => GapClassV1::FrontendRequired,
                 "kernel_extension_gap" => {
-                    if o.code() == "KERNEL_NOT_ACTIVE" { GapClassV1::KernelNotActive } else { GapClassV1::KernelExtensionRequired }
+                    if o.code() == "KERNEL_NOT_ACTIVE" {
+                        GapClassV1::KernelNotActive
+                    } else {
+                        GapClassV1::KernelExtensionRequired
+                    }
                 }
                 "resource_or_lifecycle_gap" => GapClassV1::ResourceRefused,
                 "external_gap" => GapClassV1::ExternalBlocker,

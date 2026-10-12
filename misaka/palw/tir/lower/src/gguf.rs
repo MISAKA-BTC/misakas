@@ -212,8 +212,12 @@ pub struct GgufReadBudget {
 }
 impl GgufReadBudget {
     pub fn new(header_bytes: u64, allocation_bytes: u64, max_entries: u64) -> Self {
-        Self { header_left: header_bytes, allocation_left: allocation_bytes,
-            tensors_left: max_entries.min(MAX_TENSORS), metadata_left: max_entries.min(MAX_KV) }
+        Self {
+            header_left: header_bytes,
+            allocation_left: allocation_bytes,
+            tensors_left: max_entries.min(MAX_TENSORS),
+            metadata_left: max_entries.min(MAX_KV),
+        }
     }
 }
 
@@ -225,13 +229,13 @@ struct Rd<'a, R: Read> {
 
 impl<R: Read> Rd<'_, R> {
     fn allocation(&mut self, n: u64) -> Result<()> {
-        self.budget.allocation_left = self.budget.allocation_left.checked_sub(n)
-            .ok_or_else(|| LowerError::weights("GGUF: header allocation limit"))?;
+        self.budget.allocation_left =
+            self.budget.allocation_left.checked_sub(n).ok_or_else(|| LowerError::weights("GGUF: header allocation limit"))?;
         Ok(())
     }
     fn advance(&mut self, n: u64) -> Result<()> {
-        self.budget.header_left = self.budget.header_left.checked_sub(n)
-            .ok_or_else(|| LowerError::weights("GGUF: header byte limit"))?;
+        self.budget.header_left =
+            self.budget.header_left.checked_sub(n).ok_or_else(|| LowerError::weights("GGUF: header byte limit"))?;
         self.pos = self.pos.checked_add(n).ok_or_else(|| LowerError::weights("GGUF: header offset overflow"))?;
         Ok(())
     }
@@ -319,7 +323,7 @@ impl GgufFile {
     /// Raw acquisition with aggregate header/allocation/inventory budgets, before allocations.
     /// These producer-side limits do not define consensus admission or model support.
     pub fn open_bounded(path: &Path, reg: &QuantRegistry, header_bytes: u64, allocation_bytes: u64, max_tensors: u64) -> Result<Self> {
-        Self::open_with_budget(path,reg,&mut GgufReadBudget::new(header_bytes,allocation_bytes,max_tensors))
+        Self::open_with_budget(path, reg, &mut GgufReadBudget::new(header_bytes, allocation_bytes, max_tensors))
     }
 
     /// Open another part without replenishing its checkpoint's header/count/allocation budgets.
@@ -338,10 +342,16 @@ impl GgufFile {
     /// known, bounds every tensor against the file; when `None` (a header alone) the bounds are not
     /// checked and a type no descriptor describes has no size.
     pub fn parse(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry) -> Result<Self> {
-        Self::parse_with_budget(reader, file_len, label, reg, &mut GgufReadBudget::new(u64::MAX,u64::MAX,MAX_TENSORS))
+        Self::parse_with_budget(reader, file_len, label, reg, &mut GgufReadBudget::new(u64::MAX, u64::MAX, MAX_TENSORS))
     }
 
-    fn parse_with_budget(reader: impl Read, file_len: Option<u64>, label: &Path, reg: &QuantRegistry, budget: &mut GgufReadBudget) -> Result<Self> {
+    fn parse_with_budget(
+        reader: impl Read,
+        file_len: Option<u64>,
+        label: &Path,
+        reg: &QuantRegistry,
+        budget: &mut GgufReadBudget,
+    ) -> Result<Self> {
         let mut r = Rd { r: reader, pos: 0, budget };
         if &r.arr::<4>()? != b"GGUF" {
             return Err(LowerError::weights(format!("{}: not a GGUF file", label.display())));
@@ -357,7 +367,12 @@ impl GgufFile {
         }
         r.budget.tensors_left -= n_tensors;
         r.budget.metadata_left -= n_kv;
-        r.allocation(n_tensors.checked_add(n_kv).and_then(|n| n.checked_mul(256)).ok_or_else(|| LowerError::weights("GGUF: header allocation overflow"))?)?;
+        r.allocation(
+            n_tensors
+                .checked_add(n_kv)
+                .and_then(|n| n.checked_mul(256))
+                .ok_or_else(|| LowerError::weights("GGUF: header allocation overflow"))?,
+        )?;
         let mut meta = BTreeMap::new();
         for _ in 0..n_kv {
             let k = r.string()?;
@@ -369,7 +384,10 @@ impl GgufFile {
         }
         let alignment = match meta.get("general.alignment") {
             None => 32,
-            Some(v) => v.as_u64().filter(|a| *a > 0 && a.is_power_of_two()).ok_or_else(|| LowerError::weights("GGUF: bad general.alignment"))?,
+            Some(v) => v
+                .as_u64()
+                .filter(|a| *a > 0 && a.is_power_of_two())
+                .ok_or_else(|| LowerError::weights("GGUF: bad general.alignment"))?,
         };
         let mut infos = Vec::with_capacity(n_tensors as usize);
         for _ in 0..n_tensors {
@@ -390,18 +408,26 @@ impl GgufFile {
             let off = r.u64()?;
             infos.push((name, dims, ty, off));
         }
-        let data_start = r.pos.checked_add(alignment - 1).and_then(|p| (p / alignment).checked_mul(alignment))
+        let data_start = r
+            .pos
+            .checked_add(alignment - 1)
+            .and_then(|p| (p / alignment).checked_mul(alignment))
             .ok_or_else(|| LowerError::weights("GGUF: alignment overflow"))?;
         if file_len.is_some_and(|len| data_start > len) {
             return Err(LowerError::weights("GGUF: data start past the end of the file"));
         }
         let mut tensors = BTreeMap::new();
         for (name, dims, ty, off) in infos {
-            let numel = dims.iter().try_fold(1u64, |a, d| a.checked_mul(*d)).ok_or_else(|| LowerError::weights("GGUF: size overflow"))?;
+            let numel =
+                dims.iter().try_fold(1u64, |a, d| a.checked_mul(*d)).ok_or_else(|| LowerError::weights("GGUF: size overflow"))?;
             let bytes = match ty.block() {
                 Some((be, bb)) => {
                     if dims[0] % be as u64 != 0 {
-                        return Err(LowerError::weights(format!("GGUF: `{name}` rows of {} are not whole {} blocks", dims[0], ty.name())));
+                        return Err(LowerError::weights(format!(
+                            "GGUF: `{name}` rows of {} are not whole {} blocks",
+                            dims[0],
+                            ty.name()
+                        )));
                     }
                     (numel / be as u64).checked_mul(bb as u64).ok_or_else(|| LowerError::weights("GGUF: byte size overflow"))?
                 }
@@ -436,7 +462,10 @@ impl GgufFile {
         for t in tensors.values().filter(|t| t.ty.block().is_none()) {
             let next = starts.get(starts.partition_point(|s| *s <= t.offset)).copied().or(file_len);
             if let Some(n) = next {
-                unsized_bounds.insert(t.name.clone(), n.checked_sub(t.offset).ok_or_else(|| LowerError::weights("GGUF: tensor offset past file"))?);
+                unsized_bounds.insert(
+                    t.name.clone(),
+                    n.checked_sub(t.offset).ok_or_else(|| LowerError::weights("GGUF: tensor offset past file"))?,
+                );
             }
         }
         Ok(GgufFile { path: label.to_path_buf(), version, meta, tensors, alignment, data_start, file: None, unsized_bounds })
@@ -516,7 +545,12 @@ impl GgufFile {
     }
 
     fn refuse_type(&self, t: &GgufTensorInfo) -> LowerError {
-        let n = NeedsDescriptor { scheme: "ggml".into(), id: Some(t.ty.id), name: self.type_name_hint(t.ty.id), tensors: vec![t.name.clone()] };
+        let n = NeedsDescriptor {
+            scheme: "ggml".into(),
+            id: Some(t.ty.id),
+            name: self.type_name_hint(t.ty.id),
+            tensors: vec![t.name.clone()],
+        };
         LowerError::not_lowerable(format!("GGUF: `{}`: {}", t.name, n.message(&QuantRegistry::builtin().names())))
     }
 
@@ -568,7 +602,8 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{}`: a slice past the tensor", t.name)));
         }
         let mut b = vec![0u8; len as usize];
-        read_exact_at(self.data_file()?, &mut b, t.offset + start).map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
+        read_exact_at(self.data_file()?, &mut b, t.offset + start)
+            .map_err(|e| LowerError::weights(format!("GGUF `{}`: {e}", t.name)))?;
         Ok(b)
     }
 
@@ -580,7 +615,8 @@ impl GgufFile {
             return Err(LowerError::weights(format!("GGUF `{name}`: bytes {range:?} of a tensor of {len}")));
         }
         let mut b = vec![0u8; (range.end - range.start) as usize];
-        read_exact_at(self.data_file()?, &mut b, t.offset + range.start).map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
+        read_exact_at(self.data_file()?, &mut b, t.offset + range.start)
+            .map_err(|e| LowerError::weights(format!("GGUF `{name}`: {e}")))?;
         Ok(b)
     }
 
@@ -621,7 +657,6 @@ impl GgufFile {
         m
     }
 }
-
 
 /// **The hand-written decoders this crate shipped before quant formats became data** — kept, for
 /// tests only, as an independent oracle: every built-in descriptor of these types must decode to
@@ -814,7 +849,6 @@ pub(crate) mod legacy {
             label: format!("gguf {}", ty.name()),
         })
     }
-
 }
 
 // ───────────────────────────── the Hugging Face view ─────────────────────────────
@@ -914,7 +948,18 @@ fn parse_weight_rotation(meta: &BTreeMap<String, GValue>, arch: &str) -> Result<
         return Err(refuse(format!("version {:?}, only 1 is modelled", version.as_u64())));
     }
     for k in meta.keys().filter(|k| k.starts_with("prism.")) {
-        let known = ["version", "block_size", "transform", "axis", "sign_mode", "weight_names", "sign_widths", "sign_values", "inverse_weight_names", "gdn_v_grouped"];
+        let known = [
+            "version",
+            "block_size",
+            "transform",
+            "axis",
+            "sign_mode",
+            "weight_names",
+            "sign_widths",
+            "sign_values",
+            "inverse_weight_names",
+            "gdn_v_grouped",
+        ];
         if !k.strip_prefix("prism.hadamard.").is_some_and(|r| known.contains(&r)) {
             return Err(refuse(format!("`{k}` is not a key of the modelled version")));
         }
@@ -939,7 +984,10 @@ fn parse_weight_rotation(meta: &BTreeMap<String, GValue>, arch: &str) -> Result<
         other => return Err(refuse(format!("sign mode {other:?}"))),
     };
     let names = |k: &str| -> Vec<String> {
-        meta.get(&format!("prism.hadamard.{k}")).and_then(GValue::as_arr).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+        meta.get(&format!("prism.hadamard.{k}"))
+            .and_then(GValue::as_arr)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
     };
     let weights: std::collections::BTreeSet<String> = names("weight_names").into_iter().collect();
     if weights.is_empty() {
@@ -1142,8 +1190,15 @@ fn unmodelled_namespace_refusal(meta: &BTreeMap<String, GValue>, key: &str, ns: 
             GValue::Str(s) => s.chars().take(64).collect(),
             GValue::Bool(b) => b.to_string(),
             GValue::Arr(a) if a.len() > 8 => format!("[{} entries]", a.len()),
-            GValue::Arr(a) => format!("{:?}", a.iter().map(|x| x.as_u64().map(|u| u.to_string()).or_else(|| x.as_str().map(str::to_string)).unwrap_or_default()).collect::<Vec<_>>()),
-            other => other.as_u64().map(|u| u.to_string()).or_else(|| other.as_f64().map(|f| f.to_string())).unwrap_or_else(|| "?".into()),
+            GValue::Arr(a) => format!(
+                "{:?}",
+                a.iter()
+                    .map(|x| x.as_u64().map(|u| u.to_string()).or_else(|| x.as_str().map(str::to_string)).unwrap_or_default())
+                    .collect::<Vec<_>>()
+            ),
+            other => {
+                other.as_u64().map(|u| u.to_string()).or_else(|| other.as_f64().map(|f| f.to_string())).unwrap_or_else(|| "?".into())
+            }
         })
     };
     if meta.contains_key("prism.hadamard.transform") || ns == "prism" {
@@ -1162,7 +1217,9 @@ fn unmodelled_namespace_refusal(meta: &BTreeMap<String, GValue>, key: &str, ns: 
             field("gdn_v_grouped"),
         );
     }
-    format!("GGUF metadata `{key}` is in a namespace this reader does not model (`{ns}.*`): it may change the math, so it is refused, not ignored")
+    format!(
+        "GGUF metadata `{key}` is in a namespace this reader does not model (`{ns}.*`): it may change the math, so it is refused, not ignored"
+    )
 }
 
 fn arch_keys(arch: &str) -> &'static [&'static str] {
@@ -1279,7 +1336,10 @@ impl GgufModel {
         }
         if let Some(r) = &rotation {
             for n in r.weights.iter().chain(&r.inverse) {
-                let t = file.tensors.get(n).ok_or_else(|| LowerError::not_lowerable(format!("GGUF prism.hadamard: weight `{n}` not found")))?;
+                let t = file
+                    .tensors
+                    .get(n)
+                    .ok_or_else(|| LowerError::not_lowerable(format!("GGUF prism.hadamard: weight `{n}` not found")))?;
                 let inp = t.dims.first().copied().unwrap_or(0) as usize;
                 if inp % r.block != 0 || (r.explicit && !r.signs.contains_key(&inp)) {
                     return Err(LowerError::not_lowerable(format!(
@@ -1294,7 +1354,8 @@ impl GgufModel {
             get(k).and_then(GValue::as_u64).map(|v| v as usize).ok_or_else(|| LowerError::bad(format!("GGUF: no `{pre}{k}`")))
         };
         let experts = get("expert_count").and_then(GValue::as_u64).unwrap_or(0) as usize;
-        let (hf_arch, model_type) = if arch == "llama" && experts > 0 { ("MixtralForCausalLM", "mixtral") } else { (hf_arch, model_type) };
+        let (hf_arch, model_type) =
+            if arch == "llama" && experts > 0 { ("MixtralForCausalLM", "mixtral") } else { (hf_arch, model_type) };
         if experts > 0 {
             if get("expert_gating_func").and_then(GValue::as_u64).is_some_and(|g| g != 1) {
                 return Err(LowerError::not_lowerable("GGUF: an expert gating function other than softmax"));
@@ -1336,7 +1397,8 @@ impl GgufModel {
         if rope_dim != head_dim && !matches!(arch.as_str(), "phi3" | "qwen35") {
             return Err(LowerError::not_lowerable("GGUF: partial rotary for this architecture"));
         }
-        let eps = get("attention.layer_norm_rms_epsilon").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: no RMS epsilon"))?;
+        let eps =
+            get("attention.layer_norm_rms_epsilon").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: no RMS epsilon"))?;
         let theta = get("rope.freq_base").and_then(GValue::as_f64).unwrap_or(10000.0);
         let ctx = get("context_length").and_then(GValue::as_u64).unwrap_or(2048);
         let embd = file.tensors.get("token_embd.weight").ok_or_else(|| LowerError::weights("GGUF: no token_embd.weight"))?;
@@ -1366,7 +1428,9 @@ impl GgufModel {
             match get("rope.scaling.type").and_then(GValue::as_str) {
                 None | Some("none") => Ok(()),
                 Some("linear") => {
-                    let f = get("rope.scaling.factor").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
+                    let f = get("rope.scaling.factor")
+                        .and_then(GValue::as_f64)
+                        .ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
                     o.insert("rope_scaling".into(), json!({"rope_type": "linear", "factor": f}));
                     Ok(())
                 }
@@ -1399,7 +1463,9 @@ impl GgufModel {
                 if let Some(nw) = get("expert_weights_norm").and_then(|v| if let GValue::Bool(b) = v { Some(*b) } else { None })
                     && nw != v3
                 {
-                    return Err(LowerError::not_lowerable("GGUF: expert weight normalisation differs from llama.cpp's for this architecture"));
+                    return Err(LowerError::not_lowerable(
+                        "GGUF: expert weight normalisation differs from llama.cpp's for this architecture",
+                    ));
                 }
                 if v3 {
                     o.insert("attention_bias".into(), json!(has("blk.0.attn_q.bias")));
@@ -1439,7 +1505,9 @@ impl GgufModel {
                         o.insert(k.into(), json!(v));
                     }
                 }
-                let sw = get("attention.sliding_window").and_then(GValue::as_u64).ok_or_else(|| LowerError::bad("GGUF gemma2: no sliding window"))?;
+                let sw = get("attention.sliding_window")
+                    .and_then(GValue::as_u64)
+                    .ok_or_else(|| LowerError::bad("GGUF gemma2: no sliding window"))?;
                 o.insert("sliding_window".into(), json!(sw));
                 rope_scaling(o)?;
             }
@@ -1472,7 +1540,9 @@ impl GgufModel {
                         full.insert("rope_type".into(), json!("default"));
                     }
                     Some("linear") => {
-                        let f = get("rope.scaling.factor").and_then(GValue::as_f64).ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
+                        let f = get("rope.scaling.factor")
+                            .and_then(GValue::as_f64)
+                            .ok_or_else(|| LowerError::bad("GGUF: linear rope without a factor"))?;
                         full.insert("rope_type".into(), json!("linear"));
                         full.insert("factor".into(), json!(f));
                     }
@@ -1498,7 +1568,9 @@ impl GgufModel {
                 o.insert("sliding_window".into(), if sw == 0 { Value::Null } else { json!(sw) });
                 let orig = get("rope.scaling.original_context_length").and_then(GValue::as_u64).unwrap_or(ctx);
                 o.insert("original_max_position_embeddings".into(), json!(orig));
-                if let (Some(l), Some(s)) = (file.tensors.get("rope_factors_long.weight"), file.tensors.get("rope_factors_short.weight")) {
+                if let (Some(l), Some(s)) =
+                    (file.tensors.get("rope_factors_long.weight"), file.tensors.get("rope_factors_short.weight"))
+                {
                     let long: Vec<f64> = file.tensor_f32(&l.name)?.data.iter().map(|v| *v as f64).collect();
                     let short: Vec<f64> = file.tensor_f32(&s.name)?.data.iter().map(|v| *v as f64).collect();
                     // The attention factor transformers derives from the context ratio must be the
@@ -1526,7 +1598,9 @@ impl GgufModel {
                 for (i, t) in types.iter().enumerate() {
                     let is_full = has(&format!("blk.{i}.attn_q.weight"));
                     if is_full != (*t == "full_attention") {
-                        return Err(LowerError::not_lowerable(format!("GGUF qwen35: layer {i}'s tensors disagree with full_attention_interval {interval}")));
+                        return Err(LowerError::not_lowerable(format!(
+                            "GGUF qwen35: layer {i}'s tensors disagree with full_attention_interval {interval}"
+                        )));
                     }
                 }
                 let sections: Vec<u64> = get("rope.dimension_sections")
@@ -1647,7 +1721,9 @@ impl GgufModel {
                 put(format!("{m}mlp.down_proj.weight"), format!("{b}ffn_down.weight"), None, None);
                 continue;
             }
-            for (hfp, gp, n) in [("q_proj", "attn_q", heads), ("k_proj", "attn_k", kv), ("v_proj", "attn_v", 0), ("o_proj", "attn_output", 0)] {
+            for (hfp, gp, n) in
+                [("q_proj", "attn_q", heads), ("k_proj", "attn_k", kv), ("v_proj", "attn_v", 0), ("o_proj", "attn_output", 0)]
+            {
                 for suffix in ["weight", "bias"] {
                     let g = format!("{b}{gp}.{suffix}");
                     if let Some(t) = file.tensors.get(&g) {
@@ -1724,7 +1800,9 @@ impl GgufModel {
         if let Some(r) = &rotation
             && let Some(n) = r.weights.iter().chain(&r.inverse).find(|n| !map.values().any(|s| s.gguf == **n && s.expert.is_none()))
         {
-            return Err(LowerError::not_lowerable(format!("GGUF prism.hadamard: weight `{n}` is not a projection this view serves (an expert or an unmapped tensor)")));
+            return Err(LowerError::not_lowerable(format!(
+                "GGUF prism.hadamard: weight `{n}` is not a projection this view serves (an expert or an unmapped tensor)"
+            )));
         }
         Ok(GgufModel { file, arch, config: cfg, map, consumed, pending, dropped, rotation, inert_keys })
     }
@@ -1797,7 +1875,9 @@ impl GgufModel {
                 // Every tensor of the file with a type no descriptor describes, not only this module's:
                 // the one message says everything that must be supplied.
                 return Err(LowerError::not_lowerable(
-                    self.file.undescribed_refusal(QuantRegistry::builtin()).unwrap_or_else(|| format!("GGUF: `{m}` has a type no descriptor describes")),
+                    self.file
+                        .undescribed_refusal(QuantRegistry::builtin())
+                        .unwrap_or_else(|| format!("GGUF: `{m}` has a type no descriptor describes")),
                 ));
             }
             let group = types.iter().map(|t| t.group()).min().unwrap_or(32);
@@ -1918,8 +1998,10 @@ impl GgufModel {
         let refuse = |why: String| LowerError::not_lowerable(format!("GGUF prism.hadamard: {why} (WEIGHT_ROTATION_HADAMARD_V1)"));
         let prog = crate::hl::build_program(spec)?;
         let binding = crate::hf_weights::bind(spec, &prog)?;
-        let hf_of: BTreeMap<&str, &str> = self.map.iter().filter(|(_, s)| s.expert.is_none()).map(|(hf, s)| (s.gguf.as_str(), hf.as_str())).collect();
-        let rotated: std::collections::BTreeSet<String> = r.weights.iter().filter_map(|g| hf_of.get(g.as_str()).map(|h| h.to_string())).collect();
+        let hf_of: BTreeMap<&str, &str> =
+            self.map.iter().filter(|(_, s)| s.expert.is_none()).map(|(hf, s)| (s.gguf.as_str(), hf.as_str())).collect();
+        let rotated: std::collections::BTreeSet<String> =
+            r.weights.iter().filter_map(|g| hf_of.get(g.as_str()).map(|h| h.to_string())).collect();
         let linear_params: std::collections::BTreeSet<u32> = prog
             .blocks
             .iter()
@@ -1939,7 +2021,8 @@ impl GgufModel {
             src_tensor_names(&binding.srcs[pi], &mut names);
             for t in names {
                 let (inst, rot): (Vec<String>, Vec<String>) = if t.contains("{L}") {
-                    let inst: Vec<String> = (0..layers).map(|l| t.replace("{L}", &l.to_string())).filter(|n| self.map.contains_key(n)).collect();
+                    let inst: Vec<String> =
+                        (0..layers).map(|l| t.replace("{L}", &l.to_string())).filter(|n| self.map.contains_key(n)).collect();
                     let rot = inst.iter().filter(|n| rotated.contains(*n)).cloned().collect();
                     (inst, rot)
                 } else {
@@ -1949,7 +2032,11 @@ impl GgufModel {
                     continue;
                 }
                 if rot.len() != inst.len() {
-                    return Err(refuse(format!("`{role}` is rotated in {} of its {} layers: a projection is rotated in every layer or none", rot.len(), inst.len())));
+                    return Err(refuse(format!(
+                        "`{role}` is rotated in {} of its {} layers: a projection is rotated in every layer or none",
+                        rot.len(),
+                        inst.len()
+                    )));
                 }
                 let width = d.shape.get(1).copied().unwrap_or(0);
                 if width % r.block != 0 || (r.explicit && !r.signs.contains_key(&width)) {
@@ -1960,7 +2047,9 @@ impl GgufModel {
             }
         }
         if let Some(n) = rotated.difference(&covered).next() {
-            return Err(refuse(format!("the rotated weight `{n}` is read by no projection of the lowering (only `Linear` inputs are rotated)")));
+            return Err(refuse(format!(
+                "the rotated weight `{n}` is read by no projection of the lowering (only `Linear` inputs are rotated)"
+            )));
         }
         if r.inverse.contains("token_embd.weight") {
             if spec.head.tied {
@@ -2027,9 +2116,12 @@ fn src_tensor_names(src: &crate::weights::Src, out: &mut Vec<String>) {
         Src::Tensor(n) => out.push(n.clone()),
         Src::Quant { module, .. } => out.push(format!("{module}.weight")),
         Src::Combine { srcs, .. } => srcs.iter().for_each(|s| src_tensor_names(s, out)),
-        Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
-            src_tensor_names(src, out)
-        }
+        Src::Take { src, .. }
+        | Src::Transpose(src)
+        | Src::Stack { src, .. }
+        | Src::Map { src, .. }
+        | Src::Reshape { src, .. }
+        | Src::PadRows { src, .. } => src_tensor_names(src, out),
     }
 }
 
@@ -2151,7 +2243,6 @@ mod tests {
         assert_eq!(legacy::scale_min_k4(4, &q), ((0x9A & 0xF) | (3 << 4), (0x9A >> 4) | (1 << 4)));
     }
 
-
     // ───────────── the quant registry against the hand-written decoders and a custom type ─────────────
 
     /// Random blocks of a legacy type with valid binary16 scales (finite, modest).
@@ -2205,11 +2296,19 @@ mod tests {
             let old = legacy::unpack(ty, &raw, inp, rows, "t").unwrap();
             let fmt = reg.ggml(ty.id()).expect("a built-in descriptor");
             let new = fmt.as_blocks().unwrap().decode_integers(&raw, rows, inp).unwrap();
-            assert_eq!((new.out, new.inp, new.group, new.bits, new.signed), (old.out, old.inp, old.group, old.bits, old.signed), "{ty:?}");
+            assert_eq!(
+                (new.out, new.inp, new.group, new.bits, new.signed),
+                (old.out, old.inp, old.group, old.bits, old.signed),
+                "{ty:?}"
+            );
             assert_eq!(new.q, old.q, "{ty:?}: codes");
             assert_eq!(new.zero, old.zero, "{ty:?}: zero points");
             assert_eq!(new.gidx, old.gidx, "{ty:?}: groups");
-            assert_eq!(new.scale.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), old.scale.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), "{ty:?}: scales");
+            assert_eq!(
+                new.scale.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                old.scale.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                "{ty:?}: scales"
+            );
             assert_eq!(
                 new.min.as_ref().map(|m| m.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
                 old.min.as_ref().map(|m| m.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
@@ -2282,7 +2381,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("custom.gguf");
         let bytes = write_gguf(
-            &[("general.architecture", Kv::Str("llama".into())), ("general.file_type", Kv::U32(901)), ("general.name", Kv::Str("Mitsuba-test".into()))],
+            &[
+                ("general.architecture", Kv::Str("llama".into())),
+                ("general.file_type", Kv::U32(901)),
+                ("general.name", Kv::Str("Mitsuba-test".into())),
+            ],
             &[
                 ("blk.0.attn_q.weight", vec![16, 4], 200, data.clone()),
                 ("blk.0.ffn_up.weight", vec![16, 4], 200, data),

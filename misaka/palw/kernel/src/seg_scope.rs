@@ -126,9 +126,11 @@ fn whole_value_court_cost_in(
     let operand = |shape: Vec<usize>, dtype: DType, committed: bool| {
         if committed {
             node_bytes
-                + whole_tensor_bytes_v1(&shape, dtype)
-                    .max(all_leaves_bytes(&shape, dtype))
-                    .max(if hiding_operands { all_hiding_tiles_bytes_v1(&shape, dtype) } else { 0 })
+                + whole_tensor_bytes_v1(&shape, dtype).max(all_leaves_bytes(&shape, dtype)).max(if hiding_operands {
+                    all_hiding_tiles_bytes_v1(&shape, dtype)
+                } else {
+                    0
+                })
                 + shell
         } else {
             shell + 2 + all_leaves_bytes(&shape, dtype)

@@ -330,7 +330,12 @@ fn l4_a_dormant_class_registered_again_re_enters_as_a_candidate() {
 
 /// A lifecycle carrier as the CLI builds one: the payer's change to its own P2PKH-ML-DSA-87 script
 /// at output 0 (the payee P-B1 pays a refusal back to), then `sinks`, the object in the payload.
-fn lifecycle_carrier(object: &PalwConsensusObjectV2, payer: Hash64, sinks: Vec<crate::tx::TransactionOutput>, nonce: u32) -> crate::tx::Transaction {
+fn lifecycle_carrier(
+    object: &PalwConsensusObjectV2,
+    payer: Hash64,
+    sinks: Vec<crate::tx::TransactionOutput>,
+    nonce: u32,
+) -> crate::tx::Transaction {
     use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     use crate::tx::{TransactionInput, TransactionOutpoint, TransactionOutput};
     let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap();
@@ -363,7 +368,8 @@ fn block_of_carriers(
     let ctx = bctx(block, daa);
     let walk = palw_lifecycle_objects_from_accepted_txs_v2(carriers);
     assert_eq!(walk.objects.len(), carriers.len(), "every carrier rides: {:?}", walk.skipped);
-    let mut folded = palw_v2_pre_object_base_v1(base, &b.state, &ctx, false, false, false, false, extras).expect("the pre-object base");
+    let mut folded =
+        palw_v2_pre_object_base_v1(base, &b.state, &ctx, false, false, false, false, extras).expect("the pre-object base");
     let (mut accepted, mut refunds) = (Vec::new(), Vec::new());
     for carried in walk.objects {
         let tx = carriers.iter().find(|tx| tx.id() == carried.carrier).expect("the carrier");
@@ -437,7 +443,10 @@ fn p4_a_sponsor_in_its_registrations_block_is_credited_behind_it_and_paid_back_a
     assert_eq!(behind.model_lifecycle(&class_id).map(|row| row.state), Some(PalwModelLifecycleV1::Candidate));
     let pool = behind.activation_pool(&class_id).cloned().expect("the listing's pool");
     let alpha = u64::from(PALW_ACTIVATION_POOL_TERMS_V1.prep_share_permille);
-    assert_eq!((pool.funded_sompi, pool.prep_sompi, pool.bonus_sompi), (sponsor, sponsor * alpha / 1_000, sponsor - sponsor * alpha / 1_000));
+    assert_eq!(
+        (pool.funded_sompi, pool.prep_sompi, pool.bonus_sompi),
+        (sponsor, sponsor * alpha / 1_000, sponsor - sponsor * alpha / 1_000)
+    );
     assert!(pool.is_balanced());
     assert_eq!(owed(&behind), None, "a folded sponsor is the pool's");
 

@@ -3,7 +3,7 @@
 //! computes and prints, it changes nothing.
 
 use kaspa_consensus_core::Hash64;
-use kaspa_consensus_core::config::params::{Params, PALW_T12_DENSE_N_CTX, PALW_T12_HYBRID_N_CTX};
+use kaspa_consensus_core::config::params::{PALW_T12_DENSE_N_CTX, PALW_T12_HYBRID_N_CTX, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_economic_compute_v1::{
@@ -164,14 +164,14 @@ fn a2_the_t12_clamp_table() {
         // ---- the execution-credit path ----
         let unit = exposure_v2; // the work-price unit is at least this class's own measure
         let clamped_credit = palw_execution_credit_v1(exposure_v2, unit);
-        let quanta_unclamped =
-            palw_execution_quantum_count_v1(exposure_v2 as u128, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
-        let quanta_declared = palw_execution_quantum_count_v1(
-            declared,
+        let quanta_unclamped = palw_execution_quantum_count_v1(
+            exposure_v2 as u128,
             PALW_EXECUTION_QUANTUM_V1 as u128,
             Hash64::default(),
             Hash64::default(),
         );
+        let quanta_declared =
+            palw_execution_quantum_count_v1(declared, PALW_EXECUTION_QUANTUM_V1 as u128, Hash64::default(), Hash64::default());
 
         println!("\n=== {name} ===");
         println!("  declared leaves/draw     {declared}");
@@ -185,7 +185,11 @@ fn a2_the_t12_clamp_table() {
         println!("  attempted_ccu            {attempted}");
         println!("  uncapped reward          {} sompi", attempted * payout.rate_sompi_per_giga as u128 / 1_000_000_000);
         println!("  priced_reward (min esc)  {priced} sompi = {:.5} MSK   cap_utilization {cap_util} permille", priced as f64 / 1e8);
-        println!("  panel share              {share} permille   per_seat paid {} sompi = {:.5} MSK", paid.per_seat, paid.per_seat as f64 / 1e8);
+        println!(
+            "  panel share              {share} permille   per_seat paid {} sompi = {:.5} MSK",
+            paid.per_seat,
+            paid.per_seat as f64 / 1e8
+        );
         println!("  --- collateral path ---");
         println!("  3 x reserved (stake)     {}", reserved * 3);
         println!("  lambda floor input per_seat (200 permille FIXED) {assumed_per_seat}");

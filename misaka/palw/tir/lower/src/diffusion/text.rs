@@ -57,7 +57,8 @@ pub fn lower_clip_stage(dir: &Path, projection: bool, output: EncoderOutput, cal
         .ok_or("the text tower has no learned position table")?;
     // `table_shift: 1`: the MLP's activation is a table of two artifact pieces, not four — a close at it opens every piece its tile's
     // lookups can land in (an executor's activations can land in all), and four pieces are past a carrier (PALW-GEN-20).
-    let prep = fidelity::prepare(&cfg_text, &LowerOpts { max_window: Some(ctx as u32), table_shift: 1, ..LowerOpts::default() }).map_err(e)?;
+    let prep = fidelity::prepare(&cfg_text, &LowerOpts { max_window: Some(ctx as u32), table_shift: 1, ..LowerOpts::default() })
+        .map_err(e)?;
     let ck = Checkpoint::open(dir).map_err(e)?;
     let (params_f, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).map_err(e)?;
     let loader = Resident(Arc::new(params_f));

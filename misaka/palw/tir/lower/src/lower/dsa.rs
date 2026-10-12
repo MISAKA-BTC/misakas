@@ -62,10 +62,19 @@ fn ceil_log2(x: u64) -> u32 {
 
 /// The mask `[1, H]` (`i8`) of the tokens the indexer keeps: `1` exactly where the token is among the `min(topk, H)`
 /// best (ties to the lowest index of the window).
-pub(super) fn token_index_mask(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, ix: &IndexInputs, site: &str) -> Result<tir::Ref> {
+pub(super) fn token_index_mask(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    ix: &IndexInputs,
+    site: &str,
+) -> Result<tir::Ref> {
     let (hi, di) = (ix.heads as u32, ix.dim as u32);
     if ix.q.dt != DType::I16 || ix.w.dt != DType::I16 || ix.q.len != ix.heads * ix.dim || ix.w.len != ix.heads {
-        return Err(LowerError::eval(format!("internal: `{site}`'s indexer reads {:?}/{:?} rows of {}/{}", ix.q.dt, ix.w.dt, ix.q.len, ix.w.len)));
+        return Err(LowerError::eval(format!(
+            "internal: `{site}`'s indexer reads {:?}/{:?} rows of {}/{}",
+            ix.q.dt, ix.w.dt, ix.q.len, ix.w.len
+        )));
     }
     // Scores: dots [hi, H] exact in i64, ReLU, the head-weighted sum [1, H].
     let qm = b.reshape_fixed(ix.q.r, &[hi, di]);
@@ -88,7 +97,9 @@ pub(super) fn token_index_mask(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &m
     let total_bits = 4 * passes;
     let sb = total_bits - 1 - bidx; // ≥ SCORE_BITS
     if total_bits > 56 {
-        return Err(LowerError::not_lowerable(format!("{site}: a token indexer over a window of 2^{bidx} positions needs {total_bits}-bit keys")));
+        return Err(LowerError::not_lowerable(format!(
+            "{site}: a token indexer over a window of 2^{bidx} positions needs {total_bits}-bit keys"
+        )));
     }
     let score_key = ScaleKey::site(vec![format!("{site}.idx_score")], false).times(1.0 / (1u64 << (sb - 15)) as f64);
     let (kq, kk, kw, ks) = (ix.q.key.clone(), ix.keys.1.clone(), ix.w.key.clone(), score_key);
@@ -208,12 +219,15 @@ mod tests {
     #[test]
     fn the_radix_selection_equals_the_sort_with_ties_to_the_lowest_index() {
         let mut rng = Lcg(0xD5A);
-        for (n, k) in [(1usize, 1usize), (2, 1), (5, 4), (8, 8), (17, 4), (64, 5), (100, 16), (300, 64), (300, 1), (300, 299), (40, 100)] {
+        for (n, k) in
+            [(1usize, 1usize), (2, 1), (5, 4), (8, 8), (17, 4), (64, 5), (100, 16), (300, 64), (300, 1), (300, 299), (40, 100)]
+        {
             let bidx = ceil_log2(n.max(2) as u64);
             let passes = (SCORE_BITS + 1 + bidx).div_ceil(4);
             let sb = 4 * passes - 1 - bidx;
             let program = mask_program(n, bidx, sb, k);
-            tir::interval::analyze_ranges(&program).unwrap_or_else(|e| panic!("n {n} k {k}: the range analysis refuses the selection: {e}"));
+            tir::interval::analyze_ranges(&program)
+                .unwrap_or_else(|e| panic!("n {n} k {k}: the range analysis refuses the selection: {e}"));
             let interp = Interpreter::new(&program).expect("valid");
             let lim = (1i64 << sb) - 1;
             for case in 0..60 {
@@ -222,13 +236,22 @@ mod tests {
                         0 => 0,
                         1 => (rng.next() % 3) as i64 - 1,
                         2 => [0, 0, 0, 5, -5][(rng.next() % 5) as usize],
-                        3 => if rng.next() % 2 == 0 { lim } else { -lim },
+                        3 => {
+                            if rng.next() % 2 == 0 {
+                                lim
+                            } else {
+                                -lim
+                            }
+                        }
                         4 => (rng.next() % (2 * lim as u64 + 1)) as i64 - lim,
                         _ => ((rng.next() % 41) as i64 - 20) * 1000,
                     })
                     .collect();
                 let mut params = MapParams::default();
-                params.tensors.insert((0, None), Tensor::new(DType::I32, vec![1, n], scores.iter().map(|x| *x as i128).collect()).expect("scores"));
+                params.tensors.insert(
+                    (0, None),
+                    Tensor::new(DType::I32, vec![1, n], scores.iter().map(|x| *x as i128).collect()).expect("scores"),
+                );
                 let out = interp.run(&params, &[0]).expect("the program runs");
                 assert_eq!(out[0].logits.data, reference(&scores, k), "n {n} k {k} scores {scores:?}");
             }

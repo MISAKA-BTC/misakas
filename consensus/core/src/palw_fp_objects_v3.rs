@@ -208,7 +208,8 @@ where
             derived_work: PalwFpDerivedWorkCapV1::Declared,
             logits_q24: true,
             prefix_state_armed: false,
-            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
+            prefix_inherit_armed: false,
+            prefix_inherit_class_safe: false,
             constraint_armed: false,
             constraint_v2_armed: false,
             tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
@@ -338,7 +339,11 @@ where
         // **RFC-0001 §2.6 stage 2: a prefix-state claim (FP job version 11) is judged on its V4 stand-in** — every rule
         // below runs on the same payload at version 7 with no tail — and carries its state to the fold; every other payload
         // is its own view and names no state.
-        let (view, consumed_state) = match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(&payload, caps.prefix_state_armed, caps.prefix_inherit_armed) {
+        let (view, consumed_state) = match crate::palw_fp_prefix_v1::palw_fp_prefix_walk_view_v1(
+            &payload,
+            caps.prefix_state_armed,
+            caps.prefix_inherit_armed,
+        ) {
             Ok(v) => v,
             Err(why) => {
                 out.skipped.push((id, why));
@@ -354,7 +359,11 @@ where
         // is a V3 job, so its view meets the V3 rule whatever the decode-rules fence says.
         let constrained = payload.commitment.job.is_constraint();
         let view = if constrained {
-            match crate::palw_fp_constraint_job_v1::palw_fp_constraint_walk_view_v1(&payload, caps.constraint_armed, caps.constraint_v2_armed) {
+            match crate::palw_fp_constraint_job_v1::palw_fp_constraint_walk_view_v1(
+                &payload,
+                caps.constraint_armed,
+                caps.constraint_v2_armed,
+            ) {
                 Ok(v) => v,
                 Err(why) => {
                     out.skipped.push((id, why));
@@ -700,11 +709,12 @@ mod tests {
                     held: false,
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24: true,
-            prefix_state_armed: false,
-            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
-            constraint_armed: false,
-            constraint_v2_armed: false,
-            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
+                    prefix_state_armed: false,
+                    prefix_inherit_armed: false,
+                    prefix_inherit_class_safe: false,
+                    constraint_armed: false,
+                    constraint_v2_armed: false,
+                    tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
                 false,
@@ -770,11 +780,12 @@ mod tests {
                     held: false,
                     derived_work: PalwFpDerivedWorkCapV1::Declared,
                     logits_q24,
-            prefix_state_armed: false,
-            prefix_inherit_armed: false, prefix_inherit_class_safe: false,
-            constraint_armed: false,
-            constraint_v2_armed: false,
-            tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
+                    prefix_state_armed: false,
+                    prefix_inherit_armed: false,
+                    prefix_inherit_class_safe: false,
+                    constraint_armed: false,
+                    constraint_v2_armed: false,
+                    tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                 },
                 false,
                 false,
@@ -791,8 +802,14 @@ mod tests {
         ];
         let unit_dependent = [
             ("the temperature", with(1 << 24, DecodeConfigV4::NOOP)),
-            ("the frequency penalty", with(0, DecodeConfigV4 { frequency_penalty_q: 1 << 23, penalty_window: 4, ..DecodeConfigV4::NOOP })),
-            ("the presence penalty", with(0, DecodeConfigV4 { presence_penalty_q: -(1 << 22), penalty_window: 4, ..DecodeConfigV4::NOOP })),
+            (
+                "the frequency penalty",
+                with(0, DecodeConfigV4 { frequency_penalty_q: 1 << 23, penalty_window: 4, ..DecodeConfigV4::NOOP }),
+            ),
+            (
+                "the presence penalty",
+                with(0, DecodeConfigV4 { presence_penalty_q: -(1 << 22), penalty_window: 4, ..DecodeConfigV4::NOOP }),
+            ),
             ("a logit bias", with(0, DecodeConfigV4 { logit_bias: vec![(3, 1 << 24)], ..DecodeConfigV4::NOOP })),
         ];
         for (what, p) in &unit_free {
@@ -894,9 +911,10 @@ mod tests {
                         derived_work: PalwFpDerivedWorkCapV1::Declared,
                         logits_q24: true,
                         prefix_state_armed: false,
-                        prefix_inherit_armed: false, prefix_inherit_class_safe: false,
-            constraint_armed: false,
-            constraint_v2_armed: false,
+                        prefix_inherit_armed: false,
+                        prefix_inherit_class_safe: false,
+                        constraint_armed: false,
+                        constraint_v2_armed: false,
                         tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
                     }
                 },
@@ -1077,12 +1095,18 @@ mod tests {
         };
         assert_ne!(claim_a, claim_b, "the manifest root is inside the claim id, so it names the claim");
         *claim_b = *claim_a;
-        assert_eq!(borsh::to_vec(&object_a).unwrap(), borsh::to_vec(&object_b).unwrap(),
-            "native public metadata changes no carrier bytes or DA obligation fields");
+        assert_eq!(
+            borsh::to_vec(&object_a).unwrap(),
+            borsh::to_vec(&object_b).unwrap(),
+            "native public metadata changes no carrier bytes or DA obligation fields"
+        );
         let (
             PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job_a), .. },
             PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(job_b), .. },
-        ) = (&mut object_a, &mut object_b) else { panic!("extractor retains both original commitments") };
+        ) = (&mut object_a, &mut object_b)
+        else {
+            panic!("extractor retains both original commitments")
+        };
         assert_eq!(job_a.as_ref(), &honest.commitment);
         assert_eq!(job_b.as_ref(), &substituted.commitment);
         job_b.trace_manifest_root = job_a.trace_manifest_root;
@@ -1393,7 +1417,18 @@ mod tests {
                 false,
                 |class_id| {
                     assert_eq!(*class_id, class, "the class is the commitment's own");
-                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived, logits_q24: true, prefix_state_armed: false, prefix_inherit_armed: false, prefix_inherit_class_safe: false, constraint_armed: false, constraint_v2_armed: false, tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant }
+                    PalwFpClassCapsV1 {
+                        step_ladder: 1 << 26,
+                        held: false,
+                        derived_work: derived,
+                        logits_q24: true,
+                        prefix_state_armed: false,
+                        prefix_inherit_armed: false,
+                        prefix_inherit_class_safe: false,
+                        constraint_armed: false,
+                        constraint_v2_armed: false,
+                        tokenizer: crate::palw_fp_tokenizer_v1::PalwFpTokenizerRuleV1::Dormant,
+                    }
                 },
                 false,
                 true,

@@ -237,7 +237,10 @@ fn the_root_claim_is_admitted_at_the_named_leaf_and_the_fold_derives_the_same_si
             let extra = check_eval_root_claim_v1(&more, &facts, c.leaf, &LIMITS);
             assert!(matches!(&extra, Err(why) if why.contains("never reads")), "{extra:?}");
         }
-        None => eprintln!("note: leaf {}'s tile reads every element of its reductions {:?}: no value to name that it never reads", c.leaf, site.counts),
+        None => eprintln!(
+            "note: leaf {}'s tile reads every element of its reductions {:?}: no value to name that it never reads",
+            c.leaf, site.counts
+        ),
     }
     let mut fewer = root.clone();
     fewer.elements[r].remove(0);

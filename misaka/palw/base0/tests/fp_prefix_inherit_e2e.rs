@@ -14,8 +14,8 @@ use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
 use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
 use kaspa_consensus_core::palw_fp_prefix_v1::{PALW_FP_PREFIX_INHERIT_VERSION, PALW_FP_PREFIX_VERSION, palw_fp_prefix_state_root_v1};
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpJobTailV1, PalwFpPrefixStateV1, PalwFreePromptJobV3,
-    fp_job_id_v3,
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpJobTailV1, PalwFpPrefixStateV1,
+    PalwFreePromptJobV3, fp_job_id_v3,
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_step::canonical_step_coordinates;
@@ -38,15 +38,21 @@ fn job_of(backend: &Base0Backend, version: u16, ids: &[u32], nonce: u8, state: P
         version,
         network_domain: Hash64::from_u64_word(0x4E),
         class_id: floor,
-        executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(7), 0),
+        executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+            kaspa_consensus_core::tx::TransactionId::from_u64_word(7),
+            0,
+        ),
         executor_pubkey: vec![7; 32],
         operator_id: Hash64::from_u64_word(0xE0),
         anchor_block: Hash64::from_u64_word(0xA0),
         anchor_daa: 100,
         job_nonce: [nonce; 32],
         tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, ids)
-            .expect("the ids commit"),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            PalwPromptIdsFormV1::Flat,
+            ids,
+        )
+        .expect("the ids commit"),
         prompt_tokens: ids.len() as u32,
         decode_token_limit: 4,
         max_context_tokens: backend.profile().n_ctx,
@@ -83,7 +89,8 @@ struct Bound {
 }
 
 fn material(c: &Claim) -> Bound {
-    let (binding, ..) = misaka_palw_base0::produce::base0_material_decode_v1(&c.run.outcome.material).expect("our own material decodes");
+    let (binding, ..) =
+        misaka_palw_base0::produce::base0_material_decode_v1(&c.run.outcome.material).expect("our own material decodes");
     Bound { binding }
 }
 
@@ -121,7 +128,11 @@ fn inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_lea
     assert_eq!(me.binding.job_context.version, PALW_TRACE_COMMITMENT_VERSION_V3_INHERITED);
     assert_eq!(ml.binding.job_context.inherited_prefix_v1(), Some((K, state.state_root)));
     assert_ne!(me.binding.job_context.context_hash(), ml.binding.job_context.context_hash());
-    assert_eq!(me.binding.job_context.prefix_context_hash_v1(), ml.binding.job_context.prefix_context_hash_v1(), "the prefix context is the class's and the prefix's");
+    assert_eq!(
+        me.binding.job_context.prefix_context_hash_v1(),
+        ml.binding.job_context.prefix_context_hash_v1(),
+        "the prefix context is the class's and the prefix's"
+    );
 
     // The retained captures answer for the claims' own roots (so the leaf hashes below are the committed ones).
     for c in [&e, &l] {
@@ -133,7 +144,10 @@ fn inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_lea
             output_root: None,
             job_pin: None,
         };
-        assert_eq!(seat_material(&backend, c, &c.run.outcome.material, roots), kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches);
+        assert_eq!(
+            seat_material(&backend, c, &c.run.outcome.material, roots),
+            kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
+        );
     }
     let (pe, pl) = (prefix_leaves(&e), prefix_leaves(&l));
     assert!(!pe.is_empty() && pe.len() == pl.len(), "the same leaves in the same places");
@@ -150,7 +164,10 @@ fn inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_lea
     // Everything past the prefix is job-bound as before: the first position past it differs between the two claims' contexts.
     let past = |m: &Bound| {
         (0..m.binding.step_leaf_count)
-            .find(|i| canonical_step_coordinates(&m.binding.shape_profile, &m.binding.job_context, *i).is_some_and(|c| c.call_index == 0 && c.position == K))
+            .find(|i| {
+                canonical_step_coordinates(&m.binding.shape_profile, &m.binding.job_context, *i)
+                    .is_some_and(|c| c.call_index == 0 && c.position == K)
+            })
             .expect("a leaf at position k")
     };
     let (ie, il) = (past(&me), past(&ml));
@@ -202,7 +219,15 @@ fn inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_lea
             let c = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().binding.job_context;
             backend.checkpoint_root_for_context_v1(&c, &l.ids, &l.run.output_token_ids, covered).expect("the seat recomputes");
         }
-        let v = backend.verify_fp_interval_opening_under_job_v1(&opening, roots, index, &l.ids, l.run.facts.step_leaf_count, &l.job, &l.run.output_token_ids);
+        let v = backend.verify_fp_interval_opening_under_job_v1(
+            &opening,
+            roots,
+            index,
+            &l.ids,
+            l.run.facts.step_leaf_count,
+            &l.job,
+            &l.run.output_token_ids,
+        );
         assert_eq!(v, PalwFpIntervalVerdictV1::Valid, "interval {index} of the inherited claim");
     }
 
@@ -224,10 +249,12 @@ fn inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_lea
         job_pin: None,
     };
     let honest_material = l.run.outcome.material.clone();
-    assert_eq!(seat_material(&backend, &l, &honest_material, roots), kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches);
+    assert_eq!(
+        seat_material(&backend, &l, &honest_material, roots),
+        kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
+    );
     let mut retained = misaka_palw_base0::produce::base0_material_decode_v1(&honest_material).expect("decodes");
-    retained.1.iter_mut().find(|(i, _)| *i == target).expect("the tile is held").1.values_le[0] =
-        lying_tile.values_le[0];
+    retained.1.iter_mut().find(|(i, _)| *i == target).expect("the tile is held").1.values_le[0] = lying_tile.values_le[0];
     let tampered = borsh::to_vec(&(&retained.0, &retained.1, &retained.2, &retained.3, &retained.4)).expect("re-encodes");
     assert_eq!(
         seat_material(&backend, &l, &tampered, roots),

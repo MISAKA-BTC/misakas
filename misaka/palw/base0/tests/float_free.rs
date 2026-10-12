@@ -153,10 +153,16 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/qwen36_calibrate.rs", "offline PTQ: it turns measured ranges into (multiplier, shift) triples"),
     ("src/qwen36_reference.rs", "the hybrid graph in f32: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
-    ("src/bin/palw-a16-to-tir.rs", "offline artifact converter: it re-spells the A16 artifact's integer slabs and triples as a TIR artifact; the program it emits is `tir_a16.rs`, which is scanned"),
+    (
+        "src/bin/palw-a16-to-tir.rs",
+        "offline artifact converter: it re-spells the A16 artifact's integer slabs and triples as a TIR artifact; the program it emits is `tir_a16.rs`, which is scanned",
+    ),
     // RFC-0001 §2.9: the sidecar's generation defaults are the file's own JSON numbers (temperature, top_p, …); no commitment reads
     // them — a job carries the fixed-point decode rules (`palw_fp_decode_rules`), which are on the path.
-    ("src/sidecar.rs", "the artifact sidecar reader: sampling defaults as the JSON spells them; the committed decode rules are fixed-point"),
+    (
+        "src/sidecar.rs",
+        "the artifact sidecar reader: sampling defaults as the JSON spells them; the committed decode rules are fixed-point",
+    ),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     // ADR-0097's generator: it prints every wall a class meets, from consensus-core's own

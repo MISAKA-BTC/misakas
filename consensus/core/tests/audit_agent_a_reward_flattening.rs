@@ -8,7 +8,9 @@ use kaspa_consensus_core::palw_economic_compute_v1::{
 };
 use kaspa_consensus_core::palw_economic_payout_v1::{palw_attempted_ccu_v1, palw_network_draws_q32_from_bits_v1};
 use kaspa_consensus_core::palw_economics_ledger_v1::palw_rate_priced_reward_v1;
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{
+    PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
+};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 
 const T12_ESCROW_SOMPI: u64 = 320_084_650_080;
@@ -63,11 +65,15 @@ fn a4_the_compute_price_flattens_once_the_network_factor_carries_the_light_class
     }
     if let Some(bits) = first_flat {
         let net = palw_network_draws_q32_from_bits_v1(bits);
-        println!("\n  FIRST FLAT at bits 0x{bits:08x}: {:.0} network draws — from there the BASE-0 floor class",
-            net as f64 / 2f64.powi(32));
+        println!(
+            "\n  FIRST FLAT at bits 0x{bits:08x}: {:.0} network draws — from there the BASE-0 floor class",
+            net as f64 / 2f64.powi(32)
+        );
         println!("  and the Qwen2.5 @2M class are both paid the whole {T12_ESCROW_SOMPI}-sompi escrow");
         println!("  for work that differs by {:.0}x.", dense_draw as f64 / floor_draw as f64);
-        println!("  The t12 difficulty floor is 0x207fffff = 2.0 draws, so this is {:.0}x the floor difficulty.",
-            net as f64 / palw_network_draws_q32_from_bits_v1(0x207f_ffff) as f64);
+        println!(
+            "  The t12 difficulty floor is 0x207fffff = 2.0 draws, so this is {:.0}x the floor difficulty.",
+            net as f64 / palw_network_draws_q32_from_bits_v1(0x207f_ffff) as f64
+        );
     }
 }

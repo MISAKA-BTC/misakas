@@ -7,8 +7,8 @@ use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1;
 use std::str::FromStr;
 
 pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_root: &str) -> CliResult {
-    let hash = |value: &str, name| Hash64::from_str(value)
-        .map_err(|_| CliError::new(exit::CONFIG, format!("{name} must be a 64-byte root")));
+    let hash =
+        |value: &str, name| Hash64::from_str(value).map_err(|_| CliError::new(exit::CONFIG, format!("{name} must be a 64-byte root")));
     let context = hash(context, "context")?.as_bytes();
     let expected_ledger = hash(ledger_root, "ledger-root")?;
     let expected_aux = hash(aux_root, "aux-root")?;
@@ -21,25 +21,28 @@ pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_roo
     }
     let route = PalwKernelRouteStateV1::from_served_rows_v1(&snapshot.header, rows, &expected_ledger, &expected_aux)
         .map_err(|e| CliError::new(exit::GENERIC, format!("source route verification: {e}")))?;
-    let target = route.beacon_source_fee_target_v5(&context)
+    let target = route
+        .beacon_source_fee_target_v5(&context)
         .map_err(|e| CliError::new(exit::NOT_READY, format!("frozen paid source target: {e}")))?;
-    let costs = route.beacon_source_cost_bounds_v5(&context)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("frozen source costs: {e}")))?;
+    let costs =
+        route.beacon_source_cost_bounds_v5(&context).map_err(|e| CliError::new(exit::GENERIC, format!("frozen source costs: {e}")))?;
     // Verify the whole inventory, including failed promises. This is not the
     // current-attempt verifier: a completed/replaced attempt may still own cash.
-    let material = route.paid_beacon_material_v5(&context)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("source funding inventory: {e}")))?;
+    let material =
+        route.paid_beacon_material_v5(&context).map_err(|e| CliError::new(exit::GENERIC, format!("source funding inventory: {e}")))?;
     let ledger = route.ledger().map_err(|e| CliError::new(exit::GENERIC, e))?;
     let funding = ledger.beacon_source_fees.get(&context);
     let source = target.target.terms;
     let hex = misaka_palw_sdk::runtime_pack::commit::hex;
-    let funding = funding.map(|row| serde_json::json!({
-        "termsId":hex(&row.terms.id()), "sponsor":hex(&row.terms.sponsor),
-        "feePerSourceSompi":row.terms.fee_per_source, "maximumSources":row.terms.max_sources,
-        "fundedDaa":row.funded_daa, "heldSompi":row.held,
-        "logicalPaidSompi":row.paid, "logicalRefundedSompi":row.refunded,
-        "allocatedSources":row.allocated, "unusedRefunded":row.unused_refunded,
-    }));
+    let funding = funding.map(|row| {
+        serde_json::json!({
+            "termsId":hex(&row.terms.id()), "sponsor":hex(&row.terms.sponsor),
+            "feePerSourceSompi":row.terms.fee_per_source, "maximumSources":row.terms.max_sources,
+            "fundedDaa":row.funded_daa, "heldSompi":row.held,
+            "logicalPaidSompi":row.paid, "logicalRefundedSompi":row.refunded,
+            "allocatedSources":row.allocated, "unusedRefunded":row.unused_refunded,
+        })
+    });
     let (sources, promises) = material.as_ref().map_or((0, 0), |(_, s, p)| (s.len(), p.len()));
     let report = serde_json::json!({
         "schema":"misaka.palw.source-contract.inspect.v1",
@@ -69,8 +72,10 @@ pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_roo
         println!("source context    {}", hex(&context));
         println!("verified roots    {} / {}", expected_ledger, expected_aux);
         println!("rooted clock      DAA {}; served tip DAA {} is observational", route.header.scalars.daa, snapshot.tip_daa);
-        println!("admission window  DAA {}..{}; Final by {}; liability through {}",
-            source.seal_start, source.seal_end, source.final_by, source.hold_until);
+        println!(
+            "admission window  DAA {}..{}; Final by {}; liability through {}",
+            source.seal_start, source.seal_end, source.final_by, source.hold_until
+        );
         println!("fee floor         {} sompi/source; deposit {} sompi", target.minimum_fee, source.deposit);
         println!("inventory         {sources} sources; {promises} promises");
         println!("funding           {}", report["funding"]);

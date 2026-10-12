@@ -1225,11 +1225,16 @@ mod tests {
                     post_extra_bytes: next() % 60,
                 };
                 for budget in [0u128, 1, 25, 80, 130, 200, 500, 5_000] {
-                    assert_eq!(palw_tir_shard_min_shards_fast_v1(&w, budget), palw_tir_shard_min_shards_v1(&w, budget), "{w:?} budget {budget}");
+                    assert_eq!(
+                        palw_tir_shard_min_shards_fast_v1(&w, budget),
+                        palw_tir_shard_min_shards_v1(&w, budget),
+                        "{w:?} budget {budget}"
+                    );
                 }
             }
         }
-        let big = PalwTirShardWeightsV1 { layer_bytes: vec![3; 65_535], layers_global_bytes: 1, pre_extra_bytes: 5, post_extra_bytes: 7 };
+        let big =
+            PalwTirShardWeightsV1 { layer_bytes: vec![3; 65_535], layers_global_bytes: 1, pre_extra_bytes: 5, post_extra_bytes: 7 };
         assert_eq!(palw_tir_shard_min_shards_fast_v1(&big, 1_000), 197, "197 shards of at most 1,000 bytes, derived in one pass");
         assert_eq!(palw_tir_shard_plan_prelim_v1(1, 1, 8), Err(PalwTirShardError::ShardCountOutOfRange(1)));
         assert_eq!(palw_tir_shard_plan_prelim_v1(9, 1, 8), Err(PalwTirShardError::MoreShardsThanLayers { shards: 9, layers: 8 }));

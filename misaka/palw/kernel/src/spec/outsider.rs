@@ -105,11 +105,8 @@ impl SpecOutsiderV1<'_> {
         commitments: &[Vec<Vec<Digest>>],
     ) -> Vec<(u8, u32)> {
         let row = &self.ledger.claims[&self.claim];
-        let mask = if self.ledger.commitment_scope_applies_v1(row) {
-            self.ledger.derived_mask(row, stage)
-        } else {
-            derived_mask_v1(program)
-        };
+        let mask =
+            if self.ledger.commitment_scope_applies_v1(row) { self.ledger.derived_mask(row, stage) } else { derived_mask_v1(program) };
         let mut out = Vec::new();
         for (p, pos) in commitments.iter().enumerate() {
             let g = offset + p as u32;

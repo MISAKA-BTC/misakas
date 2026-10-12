@@ -17,8 +17,8 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
 use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpDecodeRulesV1, PalwFpJobTailV1};
 use kaspa_consensus_core::palw_improve_eval_v1::{
-    PalwEvalJobV1, PalwEvalModeV1, PalwEvalStageParamsV1, palw_fp_eval_objects_from_accepted_txs_v1, palw_fp_eval_refusal_at_v1,
-    palw_fp_eval_payload_decode_v1, palw_improve_eval_decode_config_v1, validate_palw_fp_commitment_tx_under_v6,
+    PalwEvalJobV1, PalwEvalModeV1, PalwEvalStageParamsV1, palw_fp_eval_objects_from_accepted_txs_v1, palw_fp_eval_payload_decode_v1,
+    palw_fp_eval_refusal_at_v1, palw_improve_eval_decode_config_v1, validate_palw_fp_commitment_tx_under_v6,
 };
 use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1, palw_improve_eval_seed_v1};
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
@@ -138,7 +138,15 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
     let seed = palw_improve_eval_seed_v1(&epoch_seed, 7);
     let mode = PalwEvalModeV1::Generate { seed, max_new: 4, stop_ids: vec![] };
     let subject = PalwEvalSubjectV1::Candidate(held.class_id);
-    let job = PalwEvalJobV1 { line_id: Hash64::from_bytes([0x11; 64]), epoch: 3, item: 7, subject, kind: PalwScoringKindV1::ExactMatch, part: 0, mode: mode.clone() };
+    let job = PalwEvalJobV1 {
+        line_id: Hash64::from_bytes([0x11; 64]),
+        epoch: 3,
+        item: 7,
+        subject,
+        kind: PalwScoringKindV1::ExactMatch,
+        part: 0,
+        mode: mode.clone(),
+    };
     let task = PalwImproveEvalTaskV1 {
         line_id: job.line_id,
         epoch: 3,
@@ -160,7 +168,8 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
         kaspa_consensus_core::network::NetworkType::Testnet,
         12,
     ));
-    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(t12.net.to_string().as_bytes(), Some(t12.genesis.hash));
+    let domain =
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(t12.net.to_string().as_bytes(), Some(t12.genesis.hash));
     let form = PalwPromptIdsFormV1::Flat;
     let facts = PalwEvalClaimFactsV1 {
         network_domain: domain,
@@ -178,7 +187,14 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
     let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0xF0; 64]).into(), 0);
     let funding = UtxoEntry::new(10_000_000, ScriptPublicKey::from_vec(0, vec![0x51]), 0, false);
     let tx = key
-        .build_fp_eval_commitment_tx(claim.commitment.clone(), &claim.tail, claim.prompt.clone(), funding_outpoint, &funding, 1_000_000)
+        .build_fp_eval_commitment_tx(
+            claim.commitment.clone(),
+            &claim.tail,
+            claim.prompt.clone(),
+            funding_outpoint,
+            &funding,
+            1_000_000,
+        )
         .expect("signed and funded");
     assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_PALW_FP_COMMITMENT);
 
@@ -226,7 +242,9 @@ fn a_claim_the_node_builds_passes_the_chains_door_the_walk_and_a_seats_replay() 
     );
     assert!(extraction.skipped.is_empty(), "{:?}", extraction.skipped);
     let [carried] = &extraction.objects[..] else { panic!("one object") };
-    let PalwConsensusObjectV2::FreePromptCommitted { claim: claim_id, class_id, work_leaves, eval, executor_pubkey, .. } = &carried.object else {
+    let PalwConsensusObjectV2::FreePromptCommitted { claim: claim_id, class_id, work_leaves, eval, executor_pubkey, .. } =
+        &carried.object
+    else {
         panic!("a free-prompt commitment")
     };
     assert_eq!(*claim_id, claim.claim_id());

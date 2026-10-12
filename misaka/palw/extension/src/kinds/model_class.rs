@@ -13,8 +13,7 @@
 use std::collections::BTreeSet;
 
 use kaspa_consensus_core::palw_class_admission_v2::{
-    PalwAdmissionShapeV1, PalwClassAdmissionError, palw_admission_shape_at_v1,
-    reachable_kernels_v1,
+    PalwAdmissionShapeV1, PalwClassAdmissionError, palw_admission_shape_at_v1, reachable_kernels_v1,
 };
 use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eFamilyV1, family_certified_for_weight_v2, palw_rc_certified_families_v1};
 use kaspa_consensus_core::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
@@ -279,7 +278,10 @@ fn classify_gate_refusal(
                     Some(cx.daa),
                     held_from.map(|f| f.daa_score()),
                 );
-                cx.refuse(field, format!("the class exceeds {wall} of this ruleset: {err} [refusal {}]", err.refusal_v1(&decided_by).to_json()))
+                cx.refuse(
+                    field,
+                    format!("the class exceeds {wall} of this ruleset: {err} [refusal {}]", err.refusal_v1(&decided_by).to_json()),
+                )
             }
         };
     }
@@ -566,10 +568,7 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
                 shape.prompt_ids_form,
             ) {
                 return Ok(KindOutcomeV1::at(
-                    cx.refuse(
-                        class.profile_field,
-                        format!("the registration would be dropped by the processor: {} ({e})", e.code()),
-                    ),
+                    cx.refuse(class.profile_field, format!("the registration would be dropped by the processor: {} ({e})", e.code())),
                     Structural,
                 ));
             }

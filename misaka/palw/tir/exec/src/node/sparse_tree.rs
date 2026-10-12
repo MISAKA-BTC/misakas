@@ -168,7 +168,9 @@ mod tests {
         let hash = Hash64::from_u64_word(73);
         let siblings: Vec<_> = (0..40).map(|i| Hash64::from_u64_word(100 + i)).collect();
         let mut root = step_merkle_leaf_v1(0, &hash);
-        for sibling in &siblings { root = step_merkle_node_v1(&root, sibling); }
+        for sibling in &siblings {
+            root = step_merkle_node_v1(&root, sibling);
+        }
         let opening = PalwStepRangeOpeningV1 { first_leaf_index: 0, leaf_hashes: vec![hash], siblings };
         let mut tree = TirSparseStepTreeV1::new(count, root).unwrap();
         tree.add_range(&opening, count).unwrap();

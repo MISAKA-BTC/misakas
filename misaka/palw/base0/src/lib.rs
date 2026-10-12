@@ -50,23 +50,23 @@ pub mod classes;
 /// ADR-0110: a context vector — a name, a seed and a geometry — and the stages that verify it
 /// through the seam a node holds (produce, commit, seat, court, availability, fit).
 pub mod context_vector;
+pub mod decode_scheduler;
 /// ADR-0069 Decision 3: the certification drill — the harness that takes a family's own backend
 /// through a real dispute and asks the SHIPPED court which way it reads. Holding the certificate
 /// it returns is the fact that the court convicted a planted fault and acquitted the honest run.
 pub mod e2e_drill;
 pub mod engine;
-pub mod decode_scheduler;
 pub mod engine_a16;
 pub mod fp_capture;
 pub mod fp_interval;
 pub mod fp_recompute;
 pub mod fp_worker;
-/// RFC-0003 §II.2.1: the generative worker, seat and court halves — FP Job V5 on a registered pipeline class (dormant).
-pub mod gen_worker;
-/// RFC-0003 §I.3, §II.2.1: the tensor (image, embedding) worker, seat and court halves — a `PalwGenJobV1` on a registered class (dormant).
-pub mod gen_tensor_worker;
 pub mod fuzz_a16;
 pub mod fuzz_qwen36;
+/// RFC-0003 §I.3, §II.2.1: the tensor (image, embedding) worker, seat and court halves — a `PalwGenJobV1` on a registered class (dormant).
+pub mod gen_tensor_worker;
+/// RFC-0003 §II.2.1: the generative worker, seat and court halves — FP Job V5 on a registered pipeline class (dormant).
+pub mod gen_worker;
 pub mod gguf;
 pub mod inventory;
 pub mod legs;
@@ -85,11 +85,11 @@ pub mod qwen36_plan;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;
-/// RFC-0001 §2.9: the artifact sidecar v2 (tokenizer.json, chat template spec, generation defaults), read side.
-pub mod sidecar;
 /// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
 /// the claim before one step runs.
 pub mod segment_opening;
+/// RFC-0001 §2.9: the artifact sidecar v2 (tokenizer.json, chat template spec, generation defaults), read side.
+pub mod sidecar;
 /// RFC-0002 Phase F: the A16 engine as a PALW-TIR program, and A16 → TIR artifact conversion.
 pub mod tir_a16;
 pub mod tokenizer;

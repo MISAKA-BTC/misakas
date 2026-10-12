@@ -274,7 +274,11 @@ pub fn check_ir_config_shaped_v1(
     if let Some(c) = parsed.as_ref().filter(|c| misaka_palw_tir_lower::hf_schema::is_encoder_decoder(c)) {
         return check_ir_encdec_v1(params, c, tensors, read, tile_len, h_chunk, shape, report);
     }
-    let spec = match misaka_palw_tir_lower::hf_config::parse_config_str_read(config_text, read, misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin()) {
+    let spec = match misaka_palw_tir_lower::hf_config::parse_config_str_read(
+        config_text,
+        read,
+        misaka_palw_tir_lower::quantfmt::QuantRegistry::builtin(),
+    ) {
         Ok(s) => s,
         Err(e) => return empty(String::new(), not_lowerable(e)),
     };
@@ -351,7 +355,10 @@ fn check_ir_encdec_v1(
         Ok(p) => p,
         Err(e) => return refuse(arch, not_lowerable(e)),
     };
-    let (re, rd) = (check_ir_program_at_v1(params, &enc.program, tile_len, h_chunk), check_ir_program_at_v1(params, &dec.program, tile_len, h_chunk));
+    let (re, rd) = (
+        check_ir_program_at_v1(params, &enc.program, tile_len, h_chunk),
+        check_ir_program_at_v1(params, &dec.program, tile_len, h_chunk),
+    );
     let verdict = if !re.verdict.is_admissible() {
         re.verdict.clone()
     } else if !rd.verdict.is_admissible() {
@@ -359,7 +366,10 @@ fn check_ir_encdec_v1(
     } else {
         // Both stages admissible: the model is as slow as its slower stage's estimate says.
         match (&re.verdict, &rd.verdict) {
-            (ArchVerdictV1::AdmissibleGeneric { slowdown_permille: a, patterns: pa }, ArchVerdictV1::AdmissibleGeneric { slowdown_permille: b, patterns: pb }) => {
+            (
+                ArchVerdictV1::AdmissibleGeneric { slowdown_permille: a, patterns: pa },
+                ArchVerdictV1::AdmissibleGeneric { slowdown_permille: b, patterns: pb },
+            ) => {
                 ArchVerdictV1::AdmissibleGeneric { slowdown_permille: (*a).max(*b), patterns: pa.iter().chain(pb).cloned().collect() }
             }
             (g @ ArchVerdictV1::AdmissibleGeneric { .. }, _) => g.clone(),
@@ -384,7 +394,10 @@ fn check_ir_encdec_v1(
         max_context: rd.max_context,
         graph_ir_root: None,
         inputs: re.inputs,
-        admission_text: format!("── stage 0: the encoder ──\n{}\n── stage 1: the decoder ──\n{}", re.admission_text, rd.admission_text),
+        admission_text: format!(
+            "── stage 0: the encoder ──\n{}\n── stage 1: the decoder ──\n{}",
+            re.admission_text, rd.admission_text
+        ),
         admission_json: serde_json::json!({"stages": [re.admission_json, rd.admission_json]}),
         architecture_report: report,
     }
@@ -523,11 +536,16 @@ pub fn generic_slowdown_v1(program: &TirProgramV1) -> Option<(u32, Vec<String>)>
     let mut by_pattern: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
     for bi in plan.occurrences.iter().map(|(b, _)| *b as usize) {
         let Some(block) = plan.blocks.get(bi) else { continue };
-        let inside: std::collections::BTreeSet<u16> = regions.get(bi).into_iter().flatten().flat_map(|r| r.nodes.iter().copied()).collect();
+        let inside: std::collections::BTreeSet<u16> =
+            regions.get(bi).into_iter().flatten().flat_map(|r| r.nodes.iter().copied()).collect();
         for (i, n) in block.nodes.iter().enumerate() {
             let work = match &n.prim {
                 Prim::MatMul => {
-                    let k = n.in_types.first().and_then(|t| t.shape.last()).map_or(1, |d| if let Dim::Fixed(k) = d { u64::from(*k) } else { 1 });
+                    let k = n
+                        .in_types
+                        .first()
+                        .and_then(|t| t.shape.last())
+                        .map_or(1, |d| if let Dim::Fixed(k) = d { u64::from(*k) } else { 1 });
                     (numel(&n.out) * k / 8).max(1)
                 }
                 _ => numel(&n.out),
@@ -1467,7 +1485,12 @@ mod tests {
         // text stage, each admitted on its own — it is no longer refused for being one.
         let t5 = check_ir_config_v1(&params, &read("tests/configs/encdec/t5-small.json"), false);
         assert!(!matches!(t5.verdict, ArchVerdictV1::NotLowerable(_)), "{}", t5.verdict);
-        assert!(t5.unverified.iter().any(|u| u.starts_with("stage 0 (encoder")) && t5.unverified.iter().any(|u| u.starts_with("stage 1 (decoder")), "{:?}", t5.unverified);
+        assert!(
+            t5.unverified.iter().any(|u| u.starts_with("stage 0 (encoder"))
+                && t5.unverified.iter().any(|u| u.starts_with("stage 1 (decoder")),
+            "{:?}",
+            t5.unverified
+        );
         // Encoder-only models are not decoders.
         assert!(matches!(verdict("bert-base-uncased.json"), ArchVerdictV1::NotLowerable(_)));
         // 671B parameters at a 2^18-position history: past the provisional per-position MACs.
@@ -1571,7 +1594,11 @@ mod tests {
         let (params, _, _) = network("testnet-11");
         let fused = check_ir_program_v1(&params, &norm_program(true, 8, 256));
         assert!(fused.admission_json["admitted"] == serde_json::json!(true), "{}", fused.verdict);
-        assert!(matches!(fused.verdict, ArchVerdictV1::Admissible { .. }), "a fused wide pattern leaves nothing generic: {}", fused.verdict);
+        assert!(
+            matches!(fused.verdict, ArchVerdictV1::Admissible { .. }),
+            "a fused wide pattern leaves nothing generic: {}",
+            fused.verdict
+        );
         let generic = check_ir_program_v1(&params, &norm_program(false, 8, 256));
         let ArchVerdictV1::AdmissibleGeneric { slowdown_permille, patterns } = &generic.verdict else {
             panic!("unfused wide work is ADMISSIBLE_GENERIC, got {}", generic.verdict)
@@ -1587,7 +1614,9 @@ mod tests {
         let (params, _, _) = network("testnet-11");
         let text = std::fs::read_to_string(lower_dir("tools/corpus/specs/internlm2/config.json")).expect("a remote-code config");
         let r = check_ir_config_v1(&params, &text, false);
-        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else { panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict) };
+        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else {
+            panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict)
+        };
         assert!(inner.is_admissible(), "the program earned its own verdict: {inner}");
         assert!(r.verdict.is_admissible());
         assert!(r.verdict.to_string().starts_with("LOWERABLE_UNVERIFIED ("), "{}", r.verdict);
@@ -1598,10 +1627,14 @@ mod tests {
         let (params, _, _) = network("testnet-11");
         let text = std::fs::read_to_string(lower_dir("tools/corpus/specs/chatglm3/config.json")).expect("the tiny ChatGLM3 config");
         let r = check_ir_config_v1(&params, &text, false);
-        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else { panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict) };
+        let ArchVerdictV1::LowerableUnverified { inner } = &r.verdict else {
+            panic!("remote code is LOWERABLE_UNVERIFIED, got {}", r.verdict)
+        };
         assert!(inner.is_admissible(), "the program earned its own verdict: {inner}");
         assert!(
-            r.unverified.iter().any(|u| u.contains("modeling_chatglm.ChatGLMForConditionalGeneration") && u.contains("no file pinned")),
+            r.unverified
+                .iter()
+                .any(|u| u.contains("modeling_chatglm.ChatGLMForConditionalGeneration") && u.contains("no file pinned")),
             "{:?}",
             r.unverified
         );

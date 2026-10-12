@@ -88,7 +88,10 @@ fn a_gamma_beta_checkpoint_binds_and_computes_the_same_bytes_as_its_weight_bias_
 #[test]
 fn the_rule_renames_a_layer_norm_leaf_and_nothing_else() {
     assert_eq!(legacy_layer_norm_name("embeddings.LayerNorm.weight").as_deref(), Some("embeddings.LayerNorm.gamma"));
-    assert_eq!(legacy_layer_norm_name("encoder.layer.0.output.LayerNorm.bias").as_deref(), Some("encoder.layer.0.output.LayerNorm.beta"));
+    assert_eq!(
+        legacy_layer_norm_name("encoder.layer.0.output.LayerNorm.bias").as_deref(),
+        Some("encoder.layer.0.output.LayerNorm.beta")
+    );
     for not in ["embeddings.LayerNorm.weights", "LayerNorm.weight.x", "layer_norm.weight", "embeddings.norm.weight", "weight", ""] {
         assert_eq!(legacy_layer_norm_name(not), None, "{not}");
     }
@@ -100,7 +103,9 @@ fn the_rule_renames_a_layer_norm_leaf_and_nothing_else() {
 /// spellings was `TENSOR_MISSING(embed.norm.gain)` — about 4 % of the head-task repositories the census fetched.
 #[test]
 fn a_task_models_prefixed_legacy_layernorm_names_bind() {
-    for (rel, adapter_arch) in [("hf-cls/bert_cls", "BertForSequenceClassification"), ("hf-heads/bert_tokcls", "BertForTokenClassification")] {
+    for (rel, adapter_arch) in
+        [("hf-cls/bert_cls", "BertForSequenceClassification"), ("hf-heads/bert_tokcls", "BertForTokenClassification")]
+    {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel);
         let (dir, renamed) = legacy_copy(&src, &format!("pfx-{}", rel.replace('/', "-")));
         assert!(renamed > 0, "{rel}: nothing renamed");

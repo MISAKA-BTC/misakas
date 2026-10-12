@@ -58,9 +58,10 @@ impl FloorWorker {
         let court = PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 4, 2).expect("the shipped court");
         let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
         let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
-        let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves from nothing"))
-            .with_step_ladder_cap(court.max_step_leaf_count())
-            .with_prompt_ids_form(form);
+        let backend =
+            Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves from nothing"))
+                .with_step_ladder_cap(court.max_step_leaf_count())
+                .with_prompt_ids_form(form);
         let profile = backend.profile().clone();
         let manifest = PalwFpWorkerManifestV1 {
             version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_WORKER_MANIFEST_V1_VERSION,
@@ -133,7 +134,12 @@ impl FloorWorker {
     }
 
     /// The worker's half of one job: `fp_worker::run_one_job_v1`'s steps over the floor engine.
-    fn execute(&self, request: &PalwFpWorkerRequestV3, request_hash: Hash64, on_token: &mut dyn FnMut(u32, &[u8])) -> Result<PalwFpWorkerResultV3, String> {
+    fn execute(
+        &self,
+        request: &PalwFpWorkerRequestV3,
+        request_hash: Hash64,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+    ) -> Result<PalwFpWorkerResultV3, String> {
         misaka_palw_base0::fp_worker::precheck_request_v1(request)?;
         let m = &self.manifest;
         for (field, ours, theirs) in [
@@ -175,7 +181,10 @@ impl FloorWorker {
         };
         let prefill = prompt_ids.len() as u32;
         if u64::from(prefill) + u64::from(request.decode_token_limit) > u64::from(request.max_context_tokens) {
-            return Err(format!("prompt {prefill} + decode ceiling {} exceeds max_context_tokens {}", request.decode_token_limit, request.max_context_tokens));
+            return Err(format!(
+                "prompt {prefill} + decode ceiling {} exceeds max_context_tokens {}",
+                request.decode_token_limit, request.max_context_tokens
+            ));
         }
         let job = PalwFreePromptJobV3 {
             version: request.version,
@@ -188,7 +197,8 @@ impl FloorWorker {
             anchor_daa: request.anchor_daa,
             job_nonce: request.job_nonce,
             tokenizer_id: m.tokenizer_id,
-            prompt_token_ids_hash: prompt_token_ids_commitment_v1(self.form, &prompt_ids).map_err(|e| format!("the prompt does not commit: {e}"))?,
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(self.form, &prompt_ids)
+                .map_err(|e| format!("the prompt does not commit: {e}"))?,
             prompt_tokens: prefill,
             decode_token_limit: request.decode_token_limit,
             max_context_tokens: request.max_context_tokens,
@@ -219,8 +229,13 @@ impl FloorWorker {
             shape_profile_id: m.shape_profile_id,
             cu_ruleset_id: Hash64::default(),
         };
-        let context = palw_fp_job_context_v3(&job, &class_facts, &run.facts, NETWORK).map_err(|e| format!("the finished run implies no context: {e:?}"))?;
-        let (schedule_root, _) = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(&context.context_hash(), job.prompt_tokens, run.facts.decode_tokens_executed);
+        let context = palw_fp_job_context_v3(&job, &class_facts, &run.facts, NETWORK)
+            .map_err(|e| format!("the finished run implies no context: {e:?}"))?;
+        let (schedule_root, _) = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
+            &context.context_hash(),
+            job.prompt_tokens,
+            run.facts.decode_tokens_executed,
+        );
         // Retention, before the result frame exists (`fp_worker::retain_v1`'s files).
         let dir = self.trace_out.join(faster_hex::hex_string(binding.as_byte_slice()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

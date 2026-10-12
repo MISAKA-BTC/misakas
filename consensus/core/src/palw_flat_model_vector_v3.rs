@@ -137,10 +137,15 @@ impl PalwKernelRouteStateV1 {
             .filter_map(|id| self.flat_model_vector_header_v3(id))
             .filter(|h| h.poster == *bond)
             .map(|h| {
-                if self.flat_vector_unavailable_v3(&h.id()) || self.flat_vector_unavailable_v7(&h.id()) || self.flat_vector_unavailable_v9(&h.id()) {
+                if self.flat_vector_unavailable_v3(&h.id())
+                    || self.flat_vector_unavailable_v7(&h.id())
+                    || self.flat_vector_unavailable_v9(&h.id())
+                {
                     0
                 } else if !h.refuted
-                    && (self.flat_vector_open_demands_v3(&h.id()) > 0 || self.flat_vector_open_demands_v7(&h.id()) > 0 || self.flat_vector_open_demands_v9(&h.id()) > 0)
+                    && (self.flat_vector_open_demands_v3(&h.id()) > 0
+                        || self.flat_vector_open_demands_v7(&h.id()) > 0
+                        || self.flat_vector_open_demands_v9(&h.id()) > 0)
                 {
                     h.reserved as u128
                 } else {

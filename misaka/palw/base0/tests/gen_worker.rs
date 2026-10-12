@@ -505,7 +505,8 @@ struct EncDec {
 }
 
 fn encdec() -> EncDec {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus-vectors/tir-v2/pipelines/toy-encdec.json");
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../consensus-vectors/tir-v2/pipelines/toy-encdec.json");
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the vector")).expect("json");
     let program_bytes: Vec<Vec<u8>> =
         v["programs"].as_array().unwrap().iter().map(|p| unhex(p["program_borsh_hex"].as_str().unwrap())).collect();

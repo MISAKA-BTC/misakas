@@ -77,7 +77,10 @@ fn a_candidate_converted_after_its_parent_stores_only_the_adapter() {
         // The candidate's tensors are the parent's plus the adapter's: what it adds to the store is
         // the adapter section (a duplicate chunk inside it costs nothing), never the parent again.
         assert!(new_bytes <= adapter_bytes, "{name}: {new_bytes} new bytes, the adapter is {adapter_bytes}");
-        assert!(after_candidate.deduplicated - after_parent.deduplicated >= sink_p.artifact.chunk_count() as u64, "{name}: the parent's chunks were not found");
+        assert!(
+            after_candidate.deduplicated - after_parent.deduplicated >= sink_p.artifact.chunk_count() as u64,
+            "{name}: the parent's chunks were not found"
+        );
         assert_eq!(mc.stats.bytes, mp.stats.bytes + adapter_bytes, "{name}");
         // Both containers assemble from the one store.
         for (tag, lw, sink) in [("parent", &lw_p, &sink_p), ("candidate", &lw_c, &sink_c)] {

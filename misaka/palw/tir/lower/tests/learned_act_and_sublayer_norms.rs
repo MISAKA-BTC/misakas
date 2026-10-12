@@ -56,7 +56,12 @@ fn the_court_reproduces_every_node_of_the_xielu_and_sublayer_norm_programs() {
         for u in &used {
             assert!(r.primitives.get(u).copied().unwrap_or(0) > 0, "{name}: primitive {u} is used but the court never evaluated it");
         }
-        eprintln!("{name}: {} nodes, {} committed values reproduced from the leaves, {} primitives", r.nodes, r.commits, r.primitives.len());
+        eprintln!(
+            "{name}: {} nodes, {} committed values reproduced from the leaves, {} primitives",
+            r.nodes,
+            r.commits,
+            r.primitives.len()
+        );
         assert!(r.commits > 0);
     }
 }
@@ -93,7 +98,11 @@ fn xielu_anywhere_but_a_dense_mlp_is_refused_by_name() {
     assert!(e.contains("xIELU in a clamped SwiGLU"), "{e}");
     // A gated MLP with the plain activation list, but a head transform that uses it.
     let mut spec = misaka_palw_tir_lower::parse_config_str(&cfg).expect("apertus reads");
-    spec.head.transform = Some(misaka_palw_tir_lower::spec::HeadTransformSpec { bias: false, act: Act::Xielu, norm: misaka_palw_tir_lower::spec::NormSpec::rms(1e-5) });
+    spec.head.transform = Some(misaka_palw_tir_lower::spec::HeadTransformSpec {
+        bias: false,
+        act: Act::Xielu,
+        norm: misaka_palw_tir_lower::spec::NormSpec::rms(1e-5),
+    });
     let e = misaka_palw_tir_lower::hl::build_program(&spec).unwrap_err().to_string();
     assert!(e.contains("xIELU in a head transform"), "{e}");
 }

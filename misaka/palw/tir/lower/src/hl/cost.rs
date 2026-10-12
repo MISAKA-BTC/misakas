@@ -106,7 +106,9 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += 3 * out;
                     c.transcendental += *groups as u64;
                 }
-                Op::Rope { heads, rotary_dim, .. } | Op::RopeAtBlock { heads, rotary_dim, .. } => c.elementwise += 3 * (*heads * *rotary_dim) as u64,
+                Op::Rope { heads, rotary_dim, .. } | Op::RopeAtBlock { heads, rotary_dim, .. } => {
+                    c.elementwise += 3 * (*heads * *rotary_dim) as u64
+                }
                 Op::StreamMix { n_in, n_out, .. } => {
                     c.macs_fixed += (*n_in * *n_out) as u64 * (out / (*n_out).max(1) as u64);
                     c.elementwise += out;
@@ -138,7 +140,12 @@ pub fn estimate(p: &HlProgram) -> CostReport {
                     c.elementwise += 3 * out;
                     c.transcendental += 1;
                 }
-                Op::StreamMean { .. } | Op::StreamOuter { .. } | Op::GroupDot { .. } | Op::GroupRepeat { .. } | Op::GatherRows { .. } | Op::BlockMean { .. } => c.elementwise += out.max(1),
+                Op::StreamMean { .. }
+                | Op::StreamOuter { .. }
+                | Op::GroupDot { .. }
+                | Op::GroupRepeat { .. }
+                | Op::GatherRows { .. }
+                | Op::BlockMean { .. } => c.elementwise += out.max(1),
                 // the hash: a few dozen elementwise ops over 63-bit vectors per order
                 Op::NgramIds { ple, .. } => c.elementwise += 63 * 6 * ple.ngram_size as u64,
                 // block scores: one dot per (head, block), the keys written back

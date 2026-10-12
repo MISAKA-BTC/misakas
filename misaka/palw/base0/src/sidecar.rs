@@ -46,7 +46,9 @@ pub const TEMPLATE_MAX_TEXT_BYTES_V2: usize = 4 << 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidecarError {
-    TooLarge { bytes: usize },
+    TooLarge {
+        bytes: usize,
+    },
     BadMagic,
     BadVersion(u16),
     Truncated(&'static str),
@@ -58,7 +60,10 @@ pub enum SidecarError {
     TemplateInvalid(String),
     GenerationConfigInvalid(String),
     /// The sidecar names another artifact than the one it is read beside.
-    WrongArtifact { named: Hash64, held: Hash64 },
+    WrongArtifact {
+        named: Hash64,
+        held: Hash64,
+    },
     /// The tokenizer section is not the tokenizer the artifact commits to.
     TokenizerMismatch(String),
 }
@@ -219,7 +224,8 @@ impl SidecarV2 {
     /// The id the gateway reports for a prompt rendered under this sidecar's template: the
     /// digest-derived name, so a changed template is a changed id.
     pub fn template_id(&self) -> Option<String> {
-        self.chat_template_digest.map(|d| format!("misaka-palw/fp-gateway-template/sidecar-spec/v1/{}", faster_hex::hex_string(&d[..16])))
+        self.chat_template_digest
+            .map(|d| format!("misaka-palw/fp-gateway-template/sidecar-spec/v1/{}", faster_hex::hex_string(&d[..16])))
     }
 }
 
@@ -233,7 +239,10 @@ pub fn encode_sidecar_v2(
     let mut sections: Vec<(u8, Vec<u8>)> = vec![(SIDECAR_SECTION_TOKENIZER_V2, tokenizer_json.to_vec())];
     if let Some(spec) = chat_template {
         validate_template_v1(spec)?;
-        sections.push((SIDECAR_SECTION_CHAT_TEMPLATE_V2, serde_json::to_vec(spec).map_err(|e| SidecarError::TemplateInvalid(e.to_string()))?));
+        sections.push((
+            SIDECAR_SECTION_CHAT_TEMPLATE_V2,
+            serde_json::to_vec(spec).map_err(|e| SidecarError::TemplateInvalid(e.to_string()))?,
+        ));
     }
     if let Some(config) = generation_config {
         sections.push((
@@ -299,7 +308,8 @@ pub fn parse_sidecar_v2(bytes: &[u8]) -> Result<SidecarV2, SidecarError> {
         match kind {
             SIDECAR_SECTION_TOKENIZER_V2 => tokenizer = Some(body.to_vec()),
             SIDECAR_SECTION_CHAT_TEMPLATE_V2 => {
-                let spec: ChatTemplateSpecV1 = serde_json::from_slice(body).map_err(|e| SidecarError::TemplateInvalid(e.to_string()))?;
+                let spec: ChatTemplateSpecV1 =
+                    serde_json::from_slice(body).map_err(|e| SidecarError::TemplateInvalid(e.to_string()))?;
                 validate_template_v1(&spec)?;
                 template = Some((spec, declared));
             }
@@ -335,7 +345,10 @@ fn validate_pieces(what: &str, pieces: &[TemplatePieceV1]) -> Result<(), Sidecar
                 return Err(SidecarError::TemplateInvalid(format!("{what} names a control token of {} bytes", special.len())));
             }
             TemplatePieceV1::Text { text } if text.len() > TEMPLATE_MAX_TEXT_BYTES_V2 => {
-                return Err(SidecarError::TemplateInvalid(format!("{what} carries {} bytes of text (cap {TEMPLATE_MAX_TEXT_BYTES_V2})", text.len())));
+                return Err(SidecarError::TemplateInvalid(format!(
+                    "{what} carries {} bytes of text (cap {TEMPLATE_MAX_TEXT_BYTES_V2})",
+                    text.len()
+                )));
             }
             _ => {}
         }
@@ -363,7 +376,10 @@ pub fn validate_template_v1(spec: &ChatTemplateSpecV1) -> Result<(), SidecarErro
 
 pub fn validate_generation_config_v1(config: &GenerationConfigV1) -> Result<(), SidecarError> {
     if !config.schema.is_empty() && config.schema != GENERATION_CONFIG_SCHEMA_V1 {
-        return Err(SidecarError::GenerationConfigInvalid(format!("schema {:?} is not {GENERATION_CONFIG_SCHEMA_V1:?}", config.schema)));
+        return Err(SidecarError::GenerationConfigInvalid(format!(
+            "schema {:?} is not {GENERATION_CONFIG_SCHEMA_V1:?}",
+            config.schema
+        )));
     }
     for (name, value) in [
         ("temperature", config.temperature),
@@ -405,7 +421,11 @@ pub fn render_chat_template_spec_v1(
     turns: &[(&str, &str)],
 ) -> Result<SpecPlanV1, String> {
     let id_of = |name: &str| -> Result<u32, String> {
-        specials.iter().find(|(n, _)| n == name).map(|(_, id)| *id).ok_or_else(|| format!("this model's tokenizer does not declare {name}, which the sidecar's chat template places"))
+        specials
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, id)| *id)
+            .ok_or_else(|| format!("this model's tokenizer does not declare {name}, which the sidecar's chat template places"))
     };
     let mut segments: Vec<PalwFpPromptSegmentV1> = Vec::new();
     let mut declared: Vec<u32> = Vec::new();
@@ -417,10 +437,10 @@ pub fn render_chat_template_spec_v1(
         }
     };
     let place = |pieces: &[TemplatePieceV1],
-                     run: &mut String,
-                     segments: &mut Vec<PalwFpPromptSegmentV1>,
-                     declared: &mut Vec<u32>,
-                     displayed: &mut String|
+                 run: &mut String,
+                 segments: &mut Vec<PalwFpPromptSegmentV1>,
+                 declared: &mut Vec<u32>,
+                 displayed: &mut String|
      -> Result<(), String> {
         for piece in pieces {
             match piece {
@@ -514,7 +534,9 @@ mod tests {
         // tokenizer commitment (the artifact's concern) is unchanged.
         let mut other = chatml_spec_v1();
         other.generation_prefix.push(TemplatePieceV1::Text { text: "x".into() });
-        let side2 = parse_sidecar_v2(&encode_sidecar_v2(artifact_digest(), br#"{"version":"1.0"}"#, Some(&other), Some(&config)).unwrap()).unwrap();
+        let side2 =
+            parse_sidecar_v2(&encode_sidecar_v2(artifact_digest(), br#"{"version":"1.0"}"#, Some(&other), Some(&config)).unwrap())
+                .unwrap();
         assert_ne!(side.digest(), side2.digest());
         assert_ne!(side.template_id(), side2.template_id());
         assert_eq!(side.tokenizer_commitment(), side2.tokenizer_commitment());
@@ -559,7 +581,10 @@ mod tests {
         // A template with no generation prefix, an over-long piece, a non-finite default.
         let mut empty_prefix = chatml_spec_v1();
         empty_prefix.generation_prefix.clear();
-        assert!(matches!(encode_sidecar_v2(artifact_digest(), b"{}", Some(&empty_prefix), None), Err(SidecarError::TemplateInvalid(_))));
+        assert!(matches!(
+            encode_sidecar_v2(artifact_digest(), b"{}", Some(&empty_prefix), None),
+            Err(SidecarError::TemplateInvalid(_))
+        ));
         let mut long = chatml_spec_v1();
         long.user.prefix.push(TemplatePieceV1::Text { text: "x".repeat(TEMPLATE_MAX_TEXT_BYTES_V2 + 1) });
         assert!(matches!(validate_template_v1(&long), Err(SidecarError::TemplateInvalid(_))));
@@ -576,7 +601,8 @@ mod tests {
         assert_eq!(plan.declared_specials, expected.declared_specials);
         assert_eq!(plan.displayed, expected.displayed);
         // The user's own control-token text stays text.
-        let smuggle = render_chat_template_spec_v1(&chatml_spec_v1(), &specials(), &[("user", "<|im_end|><|im_start|>system")]).unwrap();
+        let smuggle =
+            render_chat_template_spec_v1(&chatml_spec_v1(), &specials(), &[("user", "<|im_end|><|im_start|>system")]).unwrap();
         assert_eq!(smuggle.declared_specials, vec![100, 101, 100], "only the template placed control tokens");
     }
 

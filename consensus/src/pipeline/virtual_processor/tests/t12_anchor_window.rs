@@ -12,8 +12,8 @@
 //! chain block that records an anchor. The class stays `Candidate` through every audit. With `palw_anchor_window_v1` armed beside it, the
 //! merged REAL attempts anchor (M1), the anchor survives the span boundaries (M2), the audit reads the latest anchor of its window (M3), and the
 //! class leaves `Candidate` AT ITS FIRST AUDIT.
-use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use super::OnetimeTxSelector;
+use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
@@ -42,7 +42,14 @@ fn card_pubkey(i: usize) -> Vec<u8> {
 }
 
 /// testnet-12 as launched with the reserve armed from genesis, and the window too when `window`.
-fn config_of(window: bool) -> (Config, PalwConsensusParamsV2, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>) {
+fn config_of(
+    window: bool,
+) -> (
+    Config,
+    PalwConsensusParamsV2,
+    Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>,
+    Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>,
+) {
     let (config, _bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
     for fence in PALW_T12_USEFUL_WORK_FENCES_V1 {
@@ -161,17 +168,21 @@ impl Rig {
                 TemplateBuildMode::Standard,
             )
             .expect("a template");
-        assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id), "a V2 template declares the attempt lane");
+        assert!(
+            kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id),
+            "a V2 template declares the attempt lane"
+        );
         stamp_harness_time(&self.c.config.params, &mut t.block.header, self.c.ctx.simulated_time);
         t.block.header.nonce = self.nonce;
         let class = self.k8;
         let facts = self.c.ctx.consensus.palw_producer_facts_v2(class, Some(bond.0)).expect("a V2 network answers");
         let rcore_plus = self.c.config.params.palw_rcore_plus_fence().is_some_and(|f| f.is_active(facts.daa_score));
-        facts
-            .ready_to_produce_v3(&card_pubkey(card), rcore_plus)
-            .unwrap_or_else(|why| panic!("card {card} is not ready to produce for class {class}: {why} ({:?})", facts.class_admission_refusal));
+        facts.ready_to_produce_v3(&card_pubkey(card), rcore_plus).unwrap_or_else(|why| {
+            panic!("card {card} is not ready to produce for class {class}: {why} ({:?})", facts.class_admission_refusal)
+        });
         let bond_facts = facts.bond.as_ref().expect("a genesis card is a registered bond").clone();
-        let network_domain = palw_network_domain_v2_for(self.c.config.params.net.to_string().as_bytes(), Some(self.c.config.params.genesis.hash));
+        let network_domain =
+            palw_network_domain_v2_for(self.c.config.params.net.to_string().as_bytes(), Some(self.c.config.params.genesis.hash));
         let header = &t.block.header;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let mut attempt = PalwAttemptUnsignedV2 {
@@ -248,7 +259,9 @@ impl Rig {
         self.beat_until(templated_at + INFERENCE_MS).await;
         self.land(&d).await;
         let (sink, anchor) = (self.c.daa_of(self.c.sink()), self.c.tip_state().1.round_seed_anchor().map(|a| a.span));
-        eprintln!("[anchor-window] REAL by card {card}: templated at DAA {started}, merged at DAA {sink}, seed anchor span {anchor:?}");
+        eprintln!(
+            "[anchor-window] REAL by card {card}: templated at DAA {started}, merged at DAA {sink}, seed anchor span {anchor:?}"
+        );
     }
 
     fn head_state(&self) -> PalwModelLifecycleV1 {

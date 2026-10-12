@@ -25,7 +25,10 @@ use crate::{
     },
     header::Header,
     mass::{ContextualMasses, NonContextualMasses},
-    pruning::{PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList, PruningProofMetadata},
+    pruning::{
+        PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList,
+        PruningProofMetadata,
+    },
     trusted::{ExternalGhostdagData, TrustedBlock},
     tx::{
         MutableTransaction, Transaction, TransactionId, TransactionIndexType, TransactionOutpoint, TransactionQueryResult,
@@ -479,7 +482,9 @@ pub trait ConsensusApi: Send + Sync {
     /// Material retention through an authenticated root/dependency's actual monetary
     /// payment + W. MAX is a funded queue whose payment has not occurred yet.
     /// None means this dormant path owes no additional material hold.
-    fn palw_material_income_hold_until_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<u64> { None }
+    fn palw_material_income_hold_until_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<u64> {
+        None
+    }
 
     /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
     ///
@@ -807,7 +812,11 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
-    fn append_imported_pruning_point_utxos(&self, utxoset_chunk: &[(TransactionOutpoint, UtxoEntry)], current_multiset: &mut MuHash) -> PruningImportResult<()> {
+    fn append_imported_pruning_point_utxos(
+        &self,
+        utxoset_chunk: &[(TransactionOutpoint, UtxoEntry)],
+        current_multiset: &mut MuHash,
+    ) -> PruningImportResult<()> {
         unimplemented!()
     }
 
@@ -829,7 +838,10 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     fn append_imported_pruning_point_utxos_for_session(
-        &self, session: PruningImportSessionV1, chunk: &[(TransactionOutpoint, UtxoEntry)], multiset: &mut MuHash,
+        &self,
+        session: PruningImportSessionV1,
+        chunk: &[(TransactionOutpoint, UtxoEntry)],
+        multiset: &mut MuHash,
     ) -> PruningImportResult<()> {
         unimplemented!()
     }
@@ -839,19 +851,26 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     fn import_pruning_point_evm_state_for_session(
-        &self, session: PruningImportSessionV1, header: crate::evm::EvmExecutionHeader, snapshot: crate::evm::EvmStateSnapshot,
+        &self,
+        session: PruningImportSessionV1,
+        header: crate::evm::EvmExecutionHeader,
+        snapshot: crate::evm::EvmStateSnapshot,
     ) -> PruningImportResult<()> {
         unimplemented!()
     }
 
     fn import_pruning_point_palw_state_for_session(
-        &self, session: PruningImportSessionV1, carriage: crate::palw_state_v2::PalwStateCarriageV2,
+        &self,
+        session: PruningImportSessionV1,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
     ) -> PruningImportResult<()> {
         unimplemented!()
     }
 
     fn import_pruning_point_overlay_snapshot_for_session(
-        &self, session: PruningImportSessionV1, snapshot: crate::dns_finality::OverlaySnapshot,
+        &self,
+        session: PruningImportSessionV1,
+        snapshot: crate::dns_finality::OverlaySnapshot,
     ) -> PruningImportResult<()> {
         unimplemented!()
     }
@@ -983,7 +1002,10 @@ pub trait ConsensusApi: Send + Sync {
 
     /// **RFC-0006 × G14: the shards a non-seat bond may watch** (agent SHARD) — every shard of a live claim drawn per shard that
     /// `watcher` neither seats nor produced, as watch duties ([`crate::palw_tir_shard_watch_v1::palw_tir_shard_watch_duties_v1`]).
-    fn palw_tir_shard_watch_duties_v1(&self, _watcher: crate::palw_state_v2::PalwBondKeyV2) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {
+    fn palw_tir_shard_watch_duties_v1(
+        &self,
+        _watcher: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {
         Vec::new()
     }
 
@@ -1132,8 +1154,10 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// Bounded read-only progress from one accepted staged court/reservation snapshot.
-    fn palw_staged_owned_progress_v1(&self,_key:(crate::Hash64,crate::palw_state_v2::PalwBondKeyV2))
-        ->Result<Option<crate::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>,String> {
+    fn palw_staged_owned_progress_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         Err("staged owned progress reader unavailable".into())
     }
 
@@ -1177,10 +1201,7 @@ pub trait ConsensusApi: Send + Sync {
 
     /// The public filer's objective-proof target, resolved from the tip's claim/liability/vesting rows.
     /// These are public chain facts; a caller never reconstructs the recorded job identity from served material.
-    fn palw_fraud_filer_target_v1(
-        &self,
-        _claim: crate::Hash64,
-    ) -> Option<crate::palw_offence_attribution_v1::PalwOffenceTargetV1> {
+    fn palw_fraud_filer_target_v1(&self, _claim: crate::Hash64) -> Option<crate::palw_offence_attribution_v1::PalwOffenceTargetV1> {
         None
     }
 
@@ -1549,10 +1570,7 @@ pub trait ConsensusApi: Send + Sync {
 
     /// RFC-0002 Phase F: the IR class record the chain holds for `class_id` (its `tir_classes`
     /// row) at the tip. `None` for a legacy class, an unknown one, or off ConsensusV2.
-    fn palw_tir_class_record_v1(
-        &self,
-        _class_id: kaspa_hashes::Hash64,
-    ) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
+    fn palw_tir_class_record_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
         None
     }
 
@@ -1636,7 +1654,10 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// **RFC-0007 Part IV.1: the audits `seat` still owes** at the tip. Empty by `Default`.
-    fn palw_v2_mesh_audit_duties_v1(&self, _seat: crate::palw_state_v2::PalwBondKeyV2) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
+    fn palw_v2_mesh_audit_duties_v1(
+        &self,
+        _seat: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
         Vec::new()
     }
 

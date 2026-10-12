@@ -603,7 +603,10 @@ async fn hb_probe_b_future_stamped_beats_run_the_private_branch_ahead() {
         // its stamp trips the cap). At 1,620 s this is ~1 slot, NOT the 13 the uncapped tolerance
         // would give — the residual is what verdict 4 calls "partial": a small run-ahead survives the
         // cap, and it still flips a deep reorg whose PALW keys tie (see the fenced fix on this branch).
-        assert!(lead <= budget + 2, "{tag}: the run-ahead is bounded by min(tolerance, lead cap) in whole slots, got {lead} > {budget}+2");
+        assert!(
+            lead <= budget + 2,
+            "{tag}: the run-ahead is bounded by min(tolerance, lead cap) in whole slots, got {lead} > {budget}+2"
+        );
     }
 }
 
@@ -2221,7 +2224,11 @@ async fn hb_probe_verdict1_a_losing_lottery_attempt_still_earns_2_20_blue_work()
         if both.selected_parent == h.header.hash { "H" } else { "L" },
         if both.selected_parent == h.header.hash { "a valid chain H -> sink" } else { "chain through L: disqualified" },
     );
-    assert_eq!(lose_work, 1 << 20, "a LOSING-lottery attempt carries the same 2^20 as a winning one — header work alone earns blue work");
+    assert_eq!(
+        lose_work,
+        1 << 20,
+        "a LOSING-lottery attempt carries the same 2^20 as a winning one — header work alone earns blue work"
+    );
     assert!(l_blue, "merged beside an honest heartbeat, the losing attempt is coloured blue");
     assert_eq!(over_honest, 1 << 20, "and the merging block weighs exactly 2^20 more for it");
 }

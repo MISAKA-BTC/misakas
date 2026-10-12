@@ -240,7 +240,8 @@ impl TirSketchStoreV1 {
                 for md in &mods {
                     let v = keys.site_vector(occ, site.node, *md, g.v_len());
                     let mut s = Vec::with_capacity(experts * g.s_len());
-                    let mut sb: Vec<Vec<u64>> = if nblocks > 1 { vec![Vec::with_capacity(experts * g.s_len()); nblocks] } else { Vec::new() };
+                    let mut sb: Vec<Vec<u64>> =
+                        if nblocks > 1 { vec![Vec::with_capacity(experts * g.s_len()); nblocks] } else { Vec::new() };
                     for e in 0..experts {
                         let slice = &data.data[e * body..(e + 1) * body];
                         if nblocks > 1 {

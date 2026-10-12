@@ -193,7 +193,10 @@ pub fn palw_legacy_kary_width_bits_v1(level: u8, input_lanes: u32) -> Result<u8,
 /// **The input lanes of a claim's root round**: the `PromptIds` chunks a fresh verifier must acquire before its replay — one unit for a
 /// flat input, else `⌈prefill / 2,048⌉`. Derived from the binding alone (whether or not THIS verifier needs them), so every verifier
 /// derives the same root round.
-pub fn palw_legacy_input_lanes_v1(binding: &crate::palw_step_leg::PalwStepBindingV2, form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> u32 {
+pub fn palw_legacy_input_lanes_v1(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> u32 {
     use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1};
     let prefill = u64::from(binding.job_context.declared_prefill_tokens);
     if prefill == 0 {
@@ -249,7 +252,8 @@ pub fn palw_legacy_parallel_plan_at_v1(
     }
     while level > 0 {
         let input = if first { input_lanes } else { 0 };
-        let s = palw_legacy_kary_width_bits_at_depth_v1(level, input, k_max, depth).map_err(|why| format!("PARALLEL_SESSIONS: {why}"))?;
+        let s =
+            palw_legacy_kary_width_bits_at_depth_v1(level, input, k_max, depth).map_err(|why| format!("PARALLEL_SESSIONS: {why}"))?;
         let nodes = 1u32 << s;
         sessions.push(input + nodes);
         width_bits.push(s);
@@ -268,7 +272,8 @@ pub fn palw_legacy_parallel_plan_at_v1(
 
 /// [`palw_legacy_parallel_plan_at_v1`] at the consensus terms, refusing by name what the reservation's budgets cannot carry.
 pub fn palw_legacy_parallel_plan_v1(leaf_count: u64, input_lanes: u32) -> Result<PalwLegacyParallelPlanV1, String> {
-    let plan = palw_legacy_parallel_plan_at_v1(leaf_count, input_lanes, PALW_LEGACY_LANES_PER_SESSION_V1, PALW_LEGACY_HELD_NODE_DEPTH_V2)?;
+    let plan =
+        palw_legacy_parallel_plan_at_v1(leaf_count, input_lanes, PALW_LEGACY_LANES_PER_SESSION_V1, PALW_LEGACY_HELD_NODE_DEPTH_V2)?;
     let sessions_cap = usize::from(crate::palw_legacy_public_filer_v1::PALW_DISPUTE_SESSIONS_PER_RESERVATION_V1);
     if plan.sessions.len() > sessions_cap {
         return Err(format!("PARALLEL_SESSIONS: {} sessions exceed the reservation's {sessions_cap}", plan.sessions.len()));
@@ -614,7 +619,7 @@ mod tests {
                         let (step, rounds, lanes) = drive(n, &own, &committed, 0, k, depth);
                         assert_eq!(step, PalwLegacyKaryStepV1::FirstDivergentLeaf(lie), "n {n} k {k} depth {depth} lie {lie}");
                         assert!(rounds as usize <= plan.width_bits.len(), "n {n} k {k} depth {depth}: {rounds} rounds, plan {plan:?}");
-                        assert!(lanes.iter().all(|l| *l <= k), "every round within the session width");                        // Two lies: the first is located, never the second.
+                        assert!(lanes.iter().all(|l| *l <= k), "every round within the session width"); // Two lies: the first is located, never the second.
                         if lie + 3 < n {
                             let mut two = bad.clone();
                             two[(lie + 3) as usize] = Hash64::from_u64_word(0xBAD2);

@@ -15,9 +15,7 @@ use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_economic_safety_v1::{palw_exec_quantum_maturity_daa_v1, palw_rounds_per_daa_v1};
 use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, PalwExecScheduleV1, palw_execution_permits_v1};
-use kaspa_consensus_core::palw_execution_quanta_v1::{
-    PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1,
-};
+use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_qwen25_profile::{
     PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_held_canonical_v1,
@@ -107,7 +105,12 @@ fn ctx(block: u64, daa: u64, blue: u64, subsidy: u64) -> PalwBlockContextV2 {
 }
 
 fn fixture_params() -> PalwStateParamsV2 {
-    PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(CLASS), 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap().with_worker_carve_permille(720).unwrap()
+    PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(CLASS), 4, 1000, 100, 1000, 0)
+        .unwrap()
+        .with_fp_quanta(8, 64)
+        .unwrap()
+        .with_worker_carve_permille(720)
+        .unwrap()
 }
 
 /// **THE FINDING, run through the real fold.** `TransitionBuilder::seen_exec` is created empty for
@@ -242,8 +245,7 @@ fn floor_per_draw_mac_eq() -> u128 {
 }
 
 fn dense_per_draw_mac_eq() -> u128 {
-    let dense =
-        qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..QWEN25_1_5B }).expect("dense profile");
+    let dense = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..QWEN25_1_5B }).expect("dense profile");
     let (pf, df) = qwen25_a16_held_canonical_v1(2_097_152);
     let d = PalwCanonicalClassDescriptorV1::of(&dense, Hash64::default()).expect("descriptor");
     palw_canonical_draw_work_v1(&d, &rc_job_context(&dense, pf, df), true).expect("dense work").provisional_scalar_v1()
@@ -338,7 +340,10 @@ fn audit_c1b_the_exposure_ceiling_is_the_only_bound_and_here_is_its_size() {
     println!("escrow per claim (sompi)         = {escrow}  ({:.5} MSK)", escrow as f64 / 1e8);
     println!("block subsidy (sompi)            = {subsidy}  ({:.5} MSK)", subsidy as f64 / 1e8);
     println!("min_slash_permille_of_escrow     = {}", st.min_slash_permille_of_escrow());
-    println!("max_claim_exposure_daa           = {}", 2 * (st.window_bind() + st.window_receipt()) + st.window_challenge() + st.window_court() + st.fp_abandon_hold_daa());
+    println!(
+        "max_claim_exposure_daa           = {}",
+        2 * (st.window_bind() + st.window_receipt()) + st.window_challenge() + st.window_court() + st.fp_abandon_hold_daa()
+    );
     println!("claim_retirement_daa             = {}", st.claim_retirement_daa());
 
     assert_eq!(floor_exposure_pwu, 7_708, "the floor normalises to its own declared leaves");
@@ -438,8 +443,13 @@ fn audit_c1b_no_execution_quantum_on_t12_is_ever_reachable() {
     // schedule without quanta hands out permits through the domain lottery.
     let snapshot =
         kaspa_consensus_core::palw_execution_lane_v1::palw_execution_schedule_snapshot_v1(7, &[final_of(1, 0xE0, 1_000_000)]);
-    let with_quanta =
-        PalwExecScheduleV1 { span_index: 7, seed: h(9), domains: snapshot.domains.clone(), finals: snapshot.finals.clone(), quanta: issued };
+    let with_quanta = PalwExecScheduleV1 {
+        span_index: 7,
+        seed: h(9),
+        domains: snapshot.domains.clone(),
+        finals: snapshot.finals.clone(),
+        quanta: issued,
+    };
     let without = PalwExecScheduleV1 { quanta: vec![], ..with_quanta.clone() };
     let mut with_hits = 0usize;
     let mut without_hits = 0usize;
@@ -491,7 +501,13 @@ fn audit_c1b_t12_params_for_the_record() {
     println!("worker carve (fence)           = {:?}", p.palw_overlay_carve.map(|c| c.worker_carve_permille));
     println!("fp_max_exposure_ratio_permille = {}", st.fp_max_exposure_ratio_permille());
     println!("min_collateral_sompi           = {}", st.min_collateral_sompi());
-    println!("window_bind/receipt/chal/court  = {} / {} / {} / {}", st.window_bind(), st.window_receipt(), st.window_challenge(), st.window_court());
+    println!(
+        "window_bind/receipt/chal/court  = {} / {} / {} / {}",
+        st.window_bind(),
+        st.window_receipt(),
+        st.window_challenge(),
+        st.window_court()
+    );
     println!("epoch_length                   = {}", st.epoch_length());
     println!("palw_single_lottery armed      = {:?}", p.palw_single_lottery);
     println!("palw_attempt_work              = {:?}", p.palw_attempt_work);
@@ -694,7 +710,12 @@ fn audit_c1b_what_one_replayed_floor_sibling_pays() {
     println!("escrow (whole, unpriced)         = {escrow} sompi ({:.5} MSK)", escrow as f64 / 1e8);
     println!("panel pool permille              = {PALW_PANEL_POOL_PERMILLE_V1}");
     println!("producer take                    = {} sompi ({:.5} MSK)", split.producer, split.producer as f64 / 1e8);
-    println!("paid to seats                    = {} sompi ({:.5} MSK), per seat {}", split.paid, split.paid as f64 / 1e8, split.per_seat);
+    println!(
+        "paid to seats                    = {} sompi ({:.5} MSK), per seat {}",
+        split.paid,
+        split.paid as f64 / 1e8,
+        split.per_seat
+    );
     println!("panel reserve                    = {} sompi", split.reserve);
     println!("exposure reserved per floor claim= 38540 sompi (0.00038540 MSK), returned at Final");
     println!("floor class target / u128::MAX   = {:.6}", 1_218_938_590_613_259_230_285_389_391_303_016_447f64 / u128::MAX as f64);

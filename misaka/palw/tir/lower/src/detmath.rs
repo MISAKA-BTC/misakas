@@ -239,7 +239,16 @@ mod tests {
             let s = (exp(x), tanh(x), sin(x), cos(x), ln(y), ln_1p(y), powf(y, x / 7.0));
             set_mode(MathMode::LibmV1);
             let l = (exp(x), tanh(x), sin(x), cos(x), ln(y), ln_1p(y), powf(y, x / 7.0));
-            assert!(near(s.0, l.0) && near(s.1, l.1) && near(s.2, l.2) && near(s.3, l.3) && near(s.4, l.4) && near(s.5, l.5) && near(s.6, l.6), "{x} {y}: {s:?} vs {l:?}");
+            assert!(
+                near(s.0, l.0)
+                    && near(s.1, l.1)
+                    && near(s.2, l.2)
+                    && near(s.3, l.3)
+                    && near(s.4, l.4)
+                    && near(s.5, l.5)
+                    && near(s.6, l.6),
+                "{x} {y}: {s:?} vs {l:?}"
+            );
         }
         set_mode(MathMode::LibmV1);
     }

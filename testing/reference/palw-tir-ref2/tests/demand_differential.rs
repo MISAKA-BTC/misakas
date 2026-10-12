@@ -90,9 +90,8 @@ impl Tally {
         let a = mine_demand(&pp.prog, target, elements, m, limits);
         let f = first_demand(&pp.fp, &pp.info, target, elements, m, limits);
         let allowed = catch_any(|| allowed(&pp.prog, target, elements, m, limits));
-        let what = || {
-            format!("{tag}: {target:?} elements {} limits ({}, {})", show_elems(elements), limits.max_elements, limits.max_terms)
-        };
+        let what =
+            || format!("{tag}: {target:?} elements {} limits ({}, {})", show_elems(elements), limits.max_elements, limits.max_terms);
         let allowed = match allowed {
             Ok(x) => x,
             Err(msg) => {
@@ -316,11 +315,7 @@ fn rand_state_target(rng: &mut R, p: &Program, positions: u64) -> Option<(Target
 }
 
 fn rand_limits(rng: &mut R) -> Limits {
-    if rng.gen_bool(0.8) {
-        Limits::UNLIMITED
-    } else {
-        Limits { max_elements: rng.gen_range(0..40), max_terms: rng.gen_range(0..80) }
-    }
+    if rng.gen_bool(0.8) { Limits::UNLIMITED } else { Limits { max_elements: rng.gen_range(0..40), max_terms: rng.gen_range(0..80) } }
 }
 
 // ---------------------------------------------------------------- hostile answers
@@ -584,21 +579,32 @@ fn edges_long_replays_carried_values_and_refusals() {
             }
         }
         // Zero work at zero limits: a supplied carried value and a committed writer's leaf.
-        for target in [
-            Target::StateAfter { pos: 0, state: 1, layer: None },
-            Target::StateAfter { pos: 0, state: 0, layer: None },
-        ] {
+        for target in [Target::StateAfter { pos: 0, state: 1, layer: None }, Target::StateAfter { pos: 0, state: 0, layer: None }] {
             t.case(&format!("{tag} zero limits"), &pp, &target, &[0, 1], &m, Limits { max_elements: 0, max_terms: 0 });
         }
         // Repeats cost nothing, whatever the frame cap.
         let rep: Vec<u64> = (0..5000).map(|i| i % 2).collect();
         for target in [Target::Node { ctx: Ctx { pos: 3, occ: 0 }, node: 1 }, Target::StateAfter { pos: 5, state: 1, layer: None }] {
             if let Some(h) = t.case(&format!("{tag} repeats"), &pp, &target, &[0, 1], &m, Limits::UNLIMITED) {
-                t.case(&format!("{tag} 5000 repeats at exact limits"), &pp, &target, &rep, &m, Limits { max_elements: h.1.elements, max_terms: h.1.terms });
+                t.case(
+                    &format!("{tag} 5000 repeats at exact limits"),
+                    &pp,
+                    &target,
+                    &rep,
+                    &m,
+                    Limits { max_elements: h.1.elements, max_terms: h.1.terms },
+                );
             }
         }
         // The empty request.
-        t.case(&format!("{tag} empty"), &pp, &Target::Node { ctx: Ctx { pos: 2, occ: 1 }, node: 4 }, &[], &m, Limits { max_elements: 0, max_terms: 0 });
+        t.case(
+            &format!("{tag} empty"),
+            &pp,
+            &Target::Node { ctx: Ctx { pos: 2, occ: 1 }, node: 4 },
+            &[],
+            &m,
+            Limits { max_elements: 0, max_terms: 0 },
+        );
         // Replay at position 0, and nothing supplied at all.
         let none = Model::from_run(&prog, &params, &tokens[..20], &|_| false).unwrap();
         for target in [
@@ -652,12 +658,24 @@ fn history_rows() {
         let pre = b.block("pre", vec![]);
         let n0 = b.node(pre, Prim::Cast, &[Ref::Input(0)], fixed(DType::I16, &[]), false);
         let n1 = b.node(pre, Prim::Broadcast, &[Ref::Node(n0)], fixed(DType::I16, &[2]), true);
-        let n2 = b.node(pre, Prim::HistAppend { state: hs }, &[Ref::Node(n1)], ref2::build::ty(DType::I16, &[hdim, ref2::Dim::Fixed(2)]), false);
+        let n2 = b.node(
+            pre,
+            Prim::HistAppend { state: hs },
+            &[Ref::Node(n1)],
+            ref2::build::ty(DType::I16, &[hdim, ref2::Dim::Fixed(2)]),
+            false,
+        );
         let n3 = b.node(pre, Prim::ReduceSum { axis: 0 }, &[Ref::Node(n2)], fixed(DType::I32, &[1, 2]), false);
         let n4 = b.node(pre, Prim::Reshape, &[Ref::Node(n3)], fixed(DType::I32, &[2]), true);
         b.carry_out(pre, &[n4]);
         let lay = b.block("layer", vec![fixed(DType::I32, &[2])]);
-        let m0 = b.node(lay, Prim::HistAppend { state: hl }, &[Ref::CarryIn(0)], ref2::build::ty(DType::I32, &[hdim, ref2::Dim::Fixed(2)]), false);
+        let m0 = b.node(
+            lay,
+            Prim::HistAppend { state: hl },
+            &[Ref::CarryIn(0)],
+            ref2::build::ty(DType::I32, &[hdim, ref2::Dim::Fixed(2)]),
+            false,
+        );
         let m1 = b.node(lay, Prim::ReduceMax { axis: 0 }, &[Ref::Node(m0)], fixed(DType::I32, &[1, 2]), false);
         let m2 = b.node(lay, Prim::Reshape, &[Ref::Node(m1)], fixed(DType::I32, &[2]), false);
         let m3 = b.node(lay, Prim::Add, &[Ref::Node(m2), Ref::CarryIn(0)], fixed(DType::I64, &[2]), false);
@@ -735,9 +753,33 @@ fn text_gap_probes() {
     let mut bad = honest.clone();
     bad.faults.insert(Question::Node { ctx: Ctx { pos: 2, occ: 0 }, node: n1, i: 0 }, Fault::Value(100));
     println!("D1 — a committed writer answering 100 for a state in [-5, 5]:");
-    show(&mut t, "state_after(2, w): the writer's leaf is the target's element", &pp, &Target::StateAfter { pos: 2, state: w, layer: None }, &[0], &bad, Limits::UNLIMITED);
-    show(&mut t, "node(3, pre, Add): State(w) at 3 replays the writer's leaf at 2", &pp, &Target::Node { ctx: Ctx { pos: 3, occ: 0 }, node: n0 }, &[0], &bad, Limits::UNLIMITED);
-    show(&mut t, "node(2, pre, Cast): reads the writer's leaf as a Node operand", &pp, &Target::Node { ctx: Ctx { pos: 2, occ: 0 }, node: n2 }, &[0], &bad, Limits::UNLIMITED);
+    show(
+        &mut t,
+        "state_after(2, w): the writer's leaf is the target's element",
+        &pp,
+        &Target::StateAfter { pos: 2, state: w, layer: None },
+        &[0],
+        &bad,
+        Limits::UNLIMITED,
+    );
+    show(
+        &mut t,
+        "node(3, pre, Add): State(w) at 3 replays the writer's leaf at 2",
+        &pp,
+        &Target::Node { ctx: Ctx { pos: 3, occ: 0 }, node: n0 },
+        &[0],
+        &bad,
+        Limits::UNLIMITED,
+    );
+    show(
+        &mut t,
+        "node(2, pre, Cast): reads the writer's leaf as a Node operand",
+        &pp,
+        &Target::Node { ctx: Ctx { pos: 2, occ: 0 }, node: n2 },
+        &[0],
+        &bad,
+        Limits::UNLIMITED,
+    );
 
     // D3: a carried walk that never finds a value, under a small max_terms.
     let prog = edge_program(false);
@@ -760,14 +802,46 @@ fn text_gap_probes() {
         }
     }
     // The same need twice: two elements of one position are distinct needs, one position twice is not.
-    show(&mut t, "state_after(9, u) elements [0, 0, 1, 1]", &pp, &Target::StateAfter { pos: 9, state: 1, layer: None }, &[0, 0, 1, 1], &some, Limits::UNLIMITED);
-    show(&mut t, "node(9, post, Add): reads State(u) twice (two elements)", &pp, &Target::Node { ctx: Ctx { pos: 9, occ: 3 }, node: 0 }, &[0, 1], &some, Limits::UNLIMITED);
+    show(
+        &mut t,
+        "state_after(9, u) elements [0, 0, 1, 1]",
+        &pp,
+        &Target::StateAfter { pos: 9, state: 1, layer: None },
+        &[0, 0, 1, 1],
+        &some,
+        Limits::UNLIMITED,
+    );
+    show(
+        &mut t,
+        "node(9, post, Add): reads State(u) twice (two elements)",
+        &pp,
+        &Target::Node { ctx: Ctx { pos: 9, occ: 3 }, node: 0 },
+        &[0, 1],
+        &some,
+        Limits::UNLIMITED,
+    );
 
     // A replay across the whole history bound: position history_bound − 1, supplied at 0 only.
     let deep = Model::from_run(&prog, &Params::new(), &tokens[..3], &|q| q == 0).unwrap();
     println!("A replay from history_bound − 1 down to 0 (supplied at 0 only, the source knows nothing else):");
-    show(&mut t, "state_after(hb − 1, s)", &pp, &Target::StateAfter { pos: HB as u64 - 1, state: 0, layer: None }, &[0, 1], &deep, Limits::UNLIMITED);
-    show(&mut t, "state_after(hb − 1, u)", &pp, &Target::StateAfter { pos: HB as u64 - 1, state: 1, layer: None }, &[0, 1], &deep, Limits::UNLIMITED);
+    show(
+        &mut t,
+        "state_after(hb − 1, s)",
+        &pp,
+        &Target::StateAfter { pos: HB as u64 - 1, state: 0, layer: None },
+        &[0, 1],
+        &deep,
+        Limits::UNLIMITED,
+    );
+    show(
+        &mut t,
+        "state_after(hb − 1, u)",
+        &pp,
+        &Target::StateAfter { pos: HB as u64 - 1, state: 1, layer: None },
+        &[0, 1],
+        &deep,
+        Limits::UNLIMITED,
+    );
 
     // D10: an instance its per_layer has but no block references.
     let mut b = ProgBuilder::new(HB, 16);
@@ -795,9 +869,33 @@ fn text_gap_probes() {
         zeros.states.insert((p, v, Some(1)), vec![0]);
     }
     println!("D10 — state_after of instance (v, layer 1), which its per_layer has and no block references:");
-    show(&mut t, "state_after(3, v, 1), the source knows nothing of it", &pp, &Target::StateAfter { pos: 3, state: v, layer: Some(1) }, &[0], &m, Limits::UNLIMITED);
-    show(&mut t, "state_after(3, v, 1), the source answers zeros", &pp, &Target::StateAfter { pos: 3, state: v, layer: Some(1) }, &[0], &zeros, Limits::UNLIMITED);
-    show(&mut t, "state_after(3, v, 0), the referenced instance", &pp, &Target::StateAfter { pos: 3, state: v, layer: Some(0) }, &[0], &m, Limits::UNLIMITED);
+    show(
+        &mut t,
+        "state_after(3, v, 1), the source knows nothing of it",
+        &pp,
+        &Target::StateAfter { pos: 3, state: v, layer: Some(1) },
+        &[0],
+        &m,
+        Limits::UNLIMITED,
+    );
+    show(
+        &mut t,
+        "state_after(3, v, 1), the source answers zeros",
+        &pp,
+        &Target::StateAfter { pos: 3, state: v, layer: Some(1) },
+        &[0],
+        &zeros,
+        Limits::UNLIMITED,
+    );
+    show(
+        &mut t,
+        "state_after(3, v, 0), the referenced instance",
+        &pp,
+        &Target::StateAfter { pos: 3, state: v, layer: Some(0) },
+        &[0],
+        &m,
+        Limits::UNLIMITED,
+    );
 
     // D4: a source refusal reported by the source with a class other than Missing.
     println!("D4 — the source refuses with an error of another class (the text: the evaluation fails, class Missing):");
@@ -808,7 +906,12 @@ fn text_gap_probes() {
     let target = Target::Node { ctx: Ctx { pos: 5, occ: 3 }, node: 1 };
     let mut gone = m.clone();
     gone.nodes.remove(&(5, 2, 4));
-    for kind in [first::error::TirErrorKind::Missing, first::error::TirErrorKind::Operand, first::error::TirErrorKind::Position, first::error::TirErrorKind::Malformed] {
+    for kind in [
+        first::error::TirErrorKind::Missing,
+        first::error::TirErrorKind::Operand,
+        first::error::TirErrorKind::Position,
+        first::error::TirErrorKind::Malformed,
+    ] {
         REFUSAL_KIND.with(|k| k.set(Some(kind)));
         let f = first_demand(&pp.fp, &pp.info, &target, &[0], &gone, Limits::UNLIMITED);
         println!("  the source's error {kind:?}: first reports {:?}", f.res);

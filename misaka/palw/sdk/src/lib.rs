@@ -42,6 +42,10 @@
 
 /// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
 pub mod check_architecture;
+pub mod class_manifest;
+pub mod conformance;
+/// RFC-0003 step 7: declaring a generative (pipeline) class — layouts, the registration gate offline, registration, container.
+pub mod gen_class;
 /// RFC-0004's node side (A10): the epoch watcher's plan, adapter prefetch, evaluation jobs.
 pub mod improve;
 /// RFC-0004's evaluation executor (A10): an evaluation job run as its RFC-0003 pipeline.
@@ -49,10 +53,6 @@ pub mod improve_eval;
 /// RFC-0004's objects (A10), built and signed offline: policy, hard cases, setter sets, datasets, teaching
 /// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
 pub mod improve_objects;
-pub mod class_manifest;
-/// RFC-0003 step 7: declaring a generative (pipeline) class — layouts, the registration gate offline, registration, container.
-pub mod gen_class;
-pub mod conformance;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;
@@ -60,49 +60,49 @@ pub mod lineages {
     pub mod qwen36;
     pub mod tir;
 }
-/// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
-pub mod preflight;
+/// File-derived bootstrap preparation with rooted public binding checks.
+pub mod bootstrap_check;
 /// RFC-0002 Part II §II.10: the Hugging Face census — one gate row per Hub repository (`palw-class census`).
 pub mod census;
-/// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.
-pub mod runtime_pack;
-pub mod sdk;
-/// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
-pub mod tir_equiv;
-pub mod tir_manifest;
-/// RFC-0013 §5/§7.2: a stored Merkle index (one leaf hash per 32 KiB leaf) — authenticated range reads and multiproofs without a pass over the artifact.
-pub mod tir_merkle_index;
-/// RFC-0013 §5: the container as a row source for the tiled independent evaluator, authenticated by the stored index.
-pub mod tir_rows;
-pub mod tir_stream;
-/// Generic bounded preparation of segmented-kernel parameter commitments.
-pub mod kernel_params;
-/// Stream the node's native values into the existing segmented commitment grammar.
-pub mod kernel_execution;
+/// Bounded complete-check builder and verifier over a rooted public snapshot.
+pub mod complete_check;
 /// Protected native candidate preparation and private actor-bound seal/reveal material.
 pub mod flat_candidate_v6;
 /// Explicit v7 mixed-court candidate metadata registration.
 pub mod flat_candidate_v7;
 /// Independent full-resource preparation of the opt-in non-reward v9 candidate.
 pub mod flat_candidate_v9;
-pub mod flat_vector_v7;
 pub mod flat_snapshot_v7;
-/// RFC-0002 Phase F (F6, node half): registering an IR class.
-pub mod tir_certification;
-/// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.
-pub mod tir_composite;
-pub mod tir_layout;
-pub mod tir_registration;
+pub mod flat_vector_v7;
+/// Stream the node's native values into the existing segmented commitment grammar.
+pub mod kernel_execution;
+/// Generic bounded preparation of segmented-kernel parameter commitments.
+pub mod kernel_params;
+/// Bounded, ordered collection of the public kernel-route inventory.
+pub mod kernel_rows;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
 pub mod onboarding_snapshot;
-/// Bounded complete-check builder and verifier over a rooted public snapshot.
-pub mod complete_check;
-/// File-derived bootstrap preparation with rooted public binding checks.
-pub mod bootstrap_check;
-/// Bounded, ordered collection of the public kernel-route inventory.
-pub mod kernel_rows;
+/// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
+pub mod preflight;
+/// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.
+pub mod runtime_pack;
+pub mod sdk;
+/// RFC-0002 Phase F (F6, node half): registering an IR class.
+pub mod tir_certification;
+/// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.
+pub mod tir_composite;
+/// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
+pub mod tir_equiv;
+pub mod tir_layout;
+pub mod tir_manifest;
+/// RFC-0013 §5/§7.2: a stored Merkle index (one leaf hash per 32 KiB leaf) — authenticated range reads and multiproofs without a pass over the artifact.
+pub mod tir_merkle_index;
+pub mod tir_registration;
+/// RFC-0013 §5: the container as a row source for the tiled independent evaluator, authenticated by the stored index.
+pub mod tir_rows;
+pub mod tir_stream;
 
 pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
 pub use lineage::{
@@ -596,7 +596,7 @@ mod tests {
     }
 }
 
-pub mod flat_vector_v9;
-pub mod flat_snapshot_v9;
 pub mod flat_checkpoint_fixture9;
+pub mod flat_snapshot_v9;
 pub mod flat_streamed_locator_v9;
+pub mod flat_vector_v9;

@@ -10,12 +10,14 @@
 
 use super::qlinear::QInts;
 use super::{Base, Lowered, ScaleKey, occurrences};
-use crate::prequant::QLayout;
 use crate::error::{LowerError, Result};
 use crate::float_ref::stream::{OccParams, RowSource};
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::hl::HlProgram;
-use crate::quant::{CODE16_MAX, CODE32_MAX, QuantPolicy, RowCodes, RowCodes16, code_scale, quantize_rows, quantize_rows16, row_scales};
+use crate::prequant::QLayout;
+use crate::quant::{
+    CODE16_MAX, CODE32_MAX, QuantPolicy, RowCodes, RowCodes16, code_scale, quantize_rows, quantize_rows16, row_scales,
+};
 use crate::weights::Tensor;
 use crate::weights::stream::row_blocks;
 use misaka_palw_tir as tir;
@@ -309,10 +311,9 @@ impl<'a> FillCtx<'a> {
         if let Some(r) = self.qstack_memo.lock().expect("memo").get(&p) {
             return Ok(r.clone());
         }
-        let qs = self
-            .params
-            .get_q(p, self.layer)
-            .ok_or_else(|| LowerError::eval(format!("param {p} is lowered as pre-quantised experts, but the checkpoint gave no integers")))?;
+        let qs = self.params.get_q(p, self.layer).ok_or_else(|| {
+            LowerError::eval(format!("param {p} is lowered as pre-quantised experts, but the checkpoint gave no integers"))
+        })?;
         let v: Vec<QInts> = qs.iter().map(|q| super::qlinear::build(q, layout, &[], &[])).collect::<Result<_>>()?;
         let v = Arc::new(v);
         self.qstack_memo.lock().expect("memo").insert(p, v.clone());

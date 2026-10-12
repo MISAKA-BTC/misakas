@@ -507,7 +507,9 @@ pub fn admit_embeddings(request: &EmbeddingsRequest, max_input_bytes: usize) -> 
     match request.encoding_format.as_deref() {
         None | Some("float") => {}
         Some(other) => {
-            return Err(format!("encoding_format {other:?} is refused by name: only \"float\" is served (the exact Q24 integers ride `misaka`)"));
+            return Err(format!(
+                "encoding_format {other:?} is refused by name: only \"float\" is served (the exact Q24 integers ride `misaka`)"
+            ));
         }
     }
     if request.dimensions.as_ref().is_some_and(|v| !v.is_null()) {
@@ -1482,10 +1484,7 @@ mod tests {
         assert_eq!(admitted.turns[1], ChatTurn::text("user", "one\ntwo"));
         assert_eq!(admitted.turns[0], ChatTurn::text("system", "s"));
 
-        for (kind, needle) in [
-            ("input_audio", "`input_audio` part"),
-            ("file", "`file` part"),
-        ] {
+        for (kind, needle) in [("input_audio", "`input_audio` part"), ("file", "`file` part")] {
             let bad = json!([{ "role": "system", "content": "s" }, { "role": "user", "content": [{ "type": "text", "text": "look" }, { "type": kind, kind: {} }] }]);
             let err = admit(json!({ "messages": bad })).unwrap_err();
             assert!(err.contains(needle), "{err}");
@@ -1498,10 +1497,16 @@ mod tests {
             assert!(err.contains("messages[0].content[1]") && err.contains("decoded integer tensors only"), "{err}");
         }
         let tensor = json!({ "type": "palw_image_tensor", "h": 1, "w": 2, "format": "u8_hwc_rgb", "data": "0a0b0c0d0e0f" });
-        let admitted = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "text", "text": "look" }, tensor.clone(), tensor] }] })).unwrap();
+        let admitted = admit(
+            json!({ "messages": [{ "role": "user", "content": [{ "type": "text", "text": "look" }, tensor.clone(), tensor] }] }),
+        )
+        .unwrap();
         assert_eq!(admitted.turns[0], ChatTurn::text("user", "look"), "an image part adds no text");
         assert_eq!(admitted.images.len(), 2);
-        assert_eq!((admitted.images[0].h, admitted.images[0].w, admitted.images[0].rgb.as_slice()), (1, 2, &[10, 11, 12, 13, 14, 15][..]));
+        assert_eq!(
+            (admitted.images[0].h, admitted.images[0].w, admitted.images[0].rgb.as_slice()),
+            (1, 2, &[10, 11, 12, 13, 14, 15][..])
+        );
         let err = admit(json!({ "messages": [{ "role": "user", "content": [{ "type": "palw_image_tensor", "h": 1, "w": 2, "format": "u8_hwc_rgb", "data": "00" }] }] })).unwrap_err();
         assert!(err.contains("hex characters"), "{err}");
         let err = admit(json!({ "messages": [{ "role": "user", "content": ["plain string part"] }] })).unwrap_err();
@@ -1702,7 +1707,8 @@ mod tests {
         let source = std::include_str!("main.rs");
         let post_arm = source.find("(\"POST\", \"/v1/chat/completions\")").expect("the POST route");
         let admitted_at = source[post_arm..].find("surface::parse_and_admit_with(").expect("the route admits") + post_arm;
-        let reserved_at = source[post_arm..].find("serving::QueueGate::try_reserve(in_flight, jobs").expect("the route reserves") + post_arm;
+        let reserved_at =
+            source[post_arm..].find("serving::QueueGate::try_reserve(in_flight, jobs").expect("the route reserves") + post_arm;
         let handled_at = source[post_arm..].find("handle_chat(config").expect("the route runs") + post_arm;
         assert!(admitted_at < reserved_at && reserved_at < handled_at, "admit, then reserve the queue, then touch the worker");
     }
@@ -2173,7 +2179,9 @@ mod tests {
     /// **RFC-0001 §2.8: every refusal of an embeddings request, by name, before the worker.**
     #[test]
     fn an_embeddings_request_is_admitted_as_text_and_refused_by_name_otherwise() {
-        let ok = embeddings(json!({ "input": ["a", "b"], "model": "m", "user": "u", "misaka": { "pool": "last", "normalize": false } })).unwrap();
+        let ok =
+            embeddings(json!({ "input": ["a", "b"], "model": "m", "user": "u", "misaka": { "pool": "last", "normalize": false } }))
+                .unwrap();
         assert_eq!((ok.inputs.len(), ok.normalize), (2, false));
         assert_eq!(ok.pool, kaspa_consensus_core::palw_embedding_pool_v1::PalwEmbeddingPoolV1::LastToken);
         assert_eq!(ok.ignored_fields, vec!["user"]);

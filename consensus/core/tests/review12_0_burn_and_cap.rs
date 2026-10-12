@@ -13,8 +13,8 @@ use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
 use kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2;
 use kaspa_consensus_core::palw_state_v2::{
     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2,
-    PalwClassAdmissionCarriageV2, PalwConsensusObjectV2, PalwPwuRuleV2, PalwStateCarriageV2, PalwStateV2Error,
-    PalwTransitionExtrasV1, apply_palw_transition_v7, palw_v2_apply_one_object_v1, palw_v2_pre_object_base_v1,
+    PalwClassAdmissionCarriageV2, PalwConsensusObjectV2, PalwPwuRuleV2, PalwStateCarriageV2, PalwStateV2Error, PalwTransitionExtrasV1,
+    apply_palw_transition_v7, palw_v2_apply_one_object_v1, palw_v2_pre_object_base_v1,
 };
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, step_leaf_count_capped_v1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;

@@ -209,7 +209,9 @@ fn serve(adapter: &str) {
     // built from them — streamed or from the vector — opens `adapter_root` and nothing else. The parent is the parent
     // class's own proof (the seat holds it as a class of its own).
     {
-        use kaspa_consensus_core::palw_artifact::{PalwArtifactMultiproofStreamV1, palw_artifact_multiproof_v1, verify_artifact_multiproof_v1};
+        use kaspa_consensus_core::palw_artifact::{
+            PalwArtifactMultiproofStreamV1, palw_artifact_multiproof_v1, verify_artifact_multiproof_v1,
+        };
         use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1 as _;
         use kaspa_consensus_core::palw_model_registry_v1::{
             palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1, palw_readiness_v2_opening_is_the_challenge_v1,
@@ -218,7 +220,11 @@ fn serve(adapter: &str) {
         let picks = [0u32, composite.parent_leaves as u32, (leaves.len() - 1) as u32];
         let opened: Vec<_> = picks.iter().map(|i| (*i, entry.artifact.param_opening(*i).unwrap().operand)).collect();
         let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("a multiproof of the composite's own leaves");
-        assert_eq!(verify_artifact_multiproof_v1(&proof, full.artifact_root), Ok(()), "{adapter}: it opens the full candidate's inventory root");
+        assert_eq!(
+            verify_artifact_multiproof_v1(&proof, full.artifact_root),
+            Ok(()),
+            "{adapter}: it opens the full candidate's inventory root"
+        );
         assert!(
             verify_artifact_multiproof_v1(&proof, entry.artifact_root).is_err(),
             "{adapter}: it does NOT open the composite class's registered root: the composite is possessed over its adapter section"
@@ -227,8 +233,16 @@ fn serve(adapter: &str) {
         let seat = TirLineageV1::backend(&entry, &court(), PalwPromptIdsFormV1::Flat).expect("the composite's backend");
         let single = TirLineageV1::backend(&full, &court(), PalwPromptIdsFormV1::Flat).expect("the candidate's backend");
         let (root, n) = seat.artifact_possession_tree_v1().expect("a composite has a possession tree").expect("it roots");
-        assert_eq!((root, n), (r.adapter_root, composite.adapter_leaves as u32), "{adapter}: the adapter section's own root and count");
-        assert_eq!(seat.artifact_root_and_leaf_count(), Ok((r.artifact_root(), ft.leaf_count())), "{adapter}: the registered root is still the composite root");
+        assert_eq!(
+            (root, n),
+            (r.adapter_root, composite.adapter_leaves as u32),
+            "{adapter}: the adapter section's own root and count"
+        );
+        assert_eq!(
+            seat.artifact_root_and_leaf_count(),
+            Ok((r.artifact_root(), ft.leaf_count())),
+            "{adapter}: the registered root is still the composite root"
+        );
         assert!(single.artifact_possession_tree_v1().is_none(), "{adapter}: a single artifact is possessed over its registered root");
         // The draw is the chain's, over the section's leaves; the proof opens `adapter_root`.
         for span in [3u64, 4, 5] {
@@ -239,21 +253,34 @@ fn serve(adapter: &str) {
             assert_eq!((mroot, mleaves.len() as u32), (r.adapter_root, n));
             assert_eq!(&mleaves[..], &leaves[composite.parent_leaves as usize..], "{adapter}: the section's leaf hashes");
             for (i, operand) in &drawn {
-                assert_eq!(*operand, full.artifact.param_opening(composite.parent_leaves as u32 + i).unwrap().operand, "{adapter}: leaf {i} rebased");
+                assert_eq!(
+                    *operand,
+                    full.artifact.param_opening(composite.parent_leaves as u32 + i).unwrap().operand,
+                    "{adapter}: leaf {i} rebased"
+                );
             }
             let mut sorted = drawn.clone();
             sorted.sort_by_key(|(i, _)| *i);
             let proof = palw_artifact_multiproof_v1(&mleaves, &sorted).expect("a multiproof of the section");
             assert_eq!(proof.leaf_count, n, "{adapter}: the proof's count is the section's");
             assert_eq!(verify_artifact_multiproof_v1(&proof, r.adapter_root), Ok(()), "{adapter}: it opens the adapter root");
-            assert!(verify_artifact_multiproof_v1(&proof, entry.artifact_root).is_err(), "{adapter}: not the composite's registered root");
+            assert!(
+                verify_artifact_multiproof_v1(&proof, entry.artifact_root).is_err(),
+                "{adapter}: not the composite's registered root"
+            );
             assert!(verify_artifact_multiproof_v1(&proof, r.parent_root).is_err(), "{adapter}: not the parent's");
             let sizes: Vec<(u32, usize)> = sorted.iter().map(|(i, o)| (*i, o.bytes.len())).collect();
-            assert_eq!(palw_readiness_v2_opening_is_the_challenge_v1(&draw, &sizes), Ok(()), "{adapter}: the chain's own rule on the opened leaves");
+            assert_eq!(
+                palw_readiness_v2_opening_is_the_challenge_v1(&draw, &sizes),
+                Ok(()),
+                "{adapter}: the chain's own rule on the opened leaves"
+            );
             // The streamed walk builds the very same proof.
             let mut stream = PalwArtifactMultiproofStreamV1::new(n, &draw).expect("a stream over the section");
-            let (sroot, scount, sdrawn) =
-                seat.artifact_readiness_material_streamed_v1(&draw, &mut |leaf| stream.push(leaf)).expect("streams").expect("the section streams");
+            let (sroot, scount, sdrawn) = seat
+                .artifact_readiness_material_streamed_v1(&draw, &mut |leaf| stream.push(leaf))
+                .expect("streams")
+                .expect("the section streams");
             assert_eq!((sroot, scount, &sdrawn), (r.adapter_root, n, &drawn), "{adapter}: the streamed material");
             assert_eq!(stream.finish(&sorted), Some(proof), "{adapter}: the streamed proof is the vector's");
         }

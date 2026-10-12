@@ -171,9 +171,21 @@ mod tests {
         let duties = vec![
             PalwReadinessDutyV1 { object: object(1), urgency: None, slot: Hash64::default() },
             PalwReadinessDutyV1 { object: object(2), urgency: Some(PalwReadinessUrgencyV1::Lapsed), slot: Hash64::default() },
-            PalwReadinessDutyV1 { object: object(3), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 110 }), slot: Hash64::default() },
-            PalwReadinessDutyV1 { object: object(4), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }), slot: Hash64::default() },
-            PalwReadinessDutyV1 { object: object(5), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }), slot: Hash64::default() },
+            PalwReadinessDutyV1 {
+                object: object(3),
+                urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 110 }),
+                slot: Hash64::default(),
+            },
+            PalwReadinessDutyV1 {
+                object: object(4),
+                urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }),
+                slot: Hash64::default(),
+            },
+            PalwReadinessDutyV1 {
+                object: object(5),
+                urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }),
+                slot: Hash64::default(),
+            },
         ];
         assert_eq!(palw_escalated_readiness_pick_v1(&duties), Some(3), "the row closest to lapsing, the first of a tie");
         assert_eq!(palw_escalated_readiness_pick_v1(&duties[..3]), Some(2), "a lapsing row before a lapsed one");

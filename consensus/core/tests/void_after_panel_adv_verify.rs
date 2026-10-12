@@ -87,7 +87,8 @@ fn seed_rule_armed(anchor_daa: u64) -> bool {
 fn t12_f1_op() -> Params {
     let mut p = t12_f1();
     assert_eq!(p.palw_operator_anchor, None, "the release ships lane A dormant");
-    p.palw_operator_anchor = p.palw_operator_anchor_of_genesis_bonds_v1(kaspa_consensus_core::config::params::ForkActivation::new(F1_AT));
+    p.palw_operator_anchor =
+        p.palw_operator_anchor_of_genesis_bonds_v1(kaspa_consensus_core::config::params::ForkActivation::new(F1_AT));
     p.validate_palw_v2().expect("testnet-12 with lanes F1 and A armed is a runnable ruleset");
     p
 }
@@ -678,10 +679,7 @@ fn a5_past_the_operator_fence_no_junk_win_anchors_and_the_claim_gets_one_fair_dr
         let (mut op_env, _, _) = junk_attempt(floor, op_bond, op_pubkey, &op_operator, c.floor_pwu(slot), 0x0B01, 0x10C0 + 0x0B01);
         op_env.attempt.artifact_root = c.s.class(&floor).expect("the floor").artifact_root;
         assert_eq!(rule.operator_of_v1(&header_of(&p, &op_env, slot)), Some(op_bond), "the genesis card's attempt is an operator's");
-        let op_key = execution_commitment_v3(
-            &op_env.attempt,
-            execution_anchor_v3(h(NET), h(0x10C0 + 0x0B01), floor, &op_bond.0, 7),
-        );
+        let op_key = execution_commitment_v3(&op_env.attempt, execution_anchor_v3(h(NET), h(0x10C0 + 0x0B01), floor, &op_bond.0, 7));
         let fact = anchor_fact(h(0x0B_0001), slot, op_key);
         let op_seed = fact.panel_seed(&claim);
         let op_seats = derive_at(&c, &base, slot, op_seed, &claim).expect("the operator's anchor draws");

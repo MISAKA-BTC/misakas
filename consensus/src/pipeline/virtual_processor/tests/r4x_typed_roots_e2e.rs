@@ -621,7 +621,11 @@ async fn r4x_memory_class_end_to_end_a_lie_in_one_step_is_convicted_and_memory_i
     let slashed = economics.reservation_per_claim;
     // (and the non-refundable OPV admission fee burned at the commit: G14-R4's F-C4R3-05)
     assert_eq!(m.net.collateral(4), before - slashed - economics.admission_fee, "the real bond lost the OPV reservation");
-    assert_eq!(m.net.slashed(4), slashed4 + slashed + economics.admission_fee, "the fee and the slash are collected from the producer");
+    assert_eq!(
+        m.net.slashed(4),
+        slashed4 + slashed + economics.admission_fee,
+        "the fee and the slash are collected from the producer"
+    );
     assert_kernel_conserved_v1(money0, kernel_money_v1(&m.net.chain), "a typed claim's commit and conviction");
     assert_eq!(m.net.owed(outsider), slashed * u64::from(l.policy.accuser_reward_permille) / 1000, "the outsider's reward is queued");
     assert_eq!(m.head(), root1, "a convicted claim never moves the line");

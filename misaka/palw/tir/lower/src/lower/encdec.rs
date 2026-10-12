@@ -33,7 +33,10 @@
 //! [`super::vision`]. The float references [`float_encoder`] and [`float_decoder`] use the
 //! lowerings' site names, and they calibrate.
 
-use super::bidir::{add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, rows_val, site_key, softmax_committed, split_softmax};
+use super::bidir::{
+    add_rows, codes_rows, hl_param, input_fill, linear_rows, norm_rows_kind, note_site, rows_val, site_key, softmax_committed,
+    split_softmax,
+};
 use super::*;
 use crate::float_ref::{ParamStore, SiteStat};
 use crate::weights::{Binding, Src};
@@ -228,7 +231,10 @@ impl EncDecSpec {
         }
         if let EncInput::Frames { bins, frames, stem } = &self.input {
             if *bins == 0 || *bins > 1 << 16 || *frames == 0 || *frames > MAX_DIM || stem.is_empty() || stem.len() > 8 {
-                return Err(bad(format!("a feature-frame input of {frames} frames of {bins} bins through {} stem convolutions", stem.len())));
+                return Err(bad(format!(
+                    "a feature-frame input of {frames} frames of {bins} bins through {} stem convolutions",
+                    stem.len()
+                )));
             }
             if stem.iter().any(|c| c.k == 0 || c.k > 64 || c.stride == 0 || c.stride > 64 || c.pad > 64) {
                 return Err(bad("a stem convolution outside kernel 1..=64, stride 1..=64, padding 0..=64".into()));
@@ -253,7 +259,9 @@ impl EncDecSpec {
         if self.decoder_start as usize >= self.vocab {
             return Err(bad(format!("decoder_start {} is not a token of a vocabulary of {}", self.decoder_start, self.vocab)));
         }
-        let pos = |name: &str, v: f64| if v.is_finite() && v > 0.0 { Ok(()) } else { Err(bad(format!("{name} must be a positive number, got {v}"))) };
+        let pos = |name: &str, v: f64| {
+            if v.is_finite() && v > 0.0 { Ok(()) } else { Err(bad(format!("{name} must be a positive number, got {v}"))) }
+        };
         pos("eps", self.eps)?;
         pos("attn_scale", self.attn_scale)?;
         pos("embed_scale", self.embed_scale)?;
@@ -295,7 +303,13 @@ impl EncDecSpec {
             if !st.layer.contains("{L}") || st.layer.matches('{').count() != 1 || st.layer.matches('}').count() != 1 {
                 return Err(bad(format!("names.{which}.layer `{}` must contain `{{L}}` once and no other braces", st.layer)));
             }
-            for (what, v) in [("self_attn", &st.self_attn), ("self_norm", &st.self_norm), ("ffn_norm", &st.ffn_norm), ("ffn_up", &st.ffn_up), ("ffn_down", &st.ffn_down)] {
+            for (what, v) in [
+                ("self_attn", &st.self_attn),
+                ("self_norm", &st.self_norm),
+                ("ffn_norm", &st.ffn_norm),
+                ("ffn_up", &st.ffn_up),
+                ("ffn_down", &st.ffn_down),
+            ] {
                 name(&format!("{which}.{what}"), v)?;
             }
             if decoder {
@@ -470,7 +484,11 @@ fn parse_encdec_raw(config: &str) -> Result<EncDecSpec> {
                 eps: 1e-5,
                 pre_norm: pre,
                 bias: true,
-                positions: if learned { Positions::Learned { rows: max_pos + 2, offset: 2 } } else { Positions::Sinusoidal { rows: max_pos } },
+                positions: if learned {
+                    Positions::Learned { rows: max_pos + 2, offset: 2 }
+                } else {
+                    Positions::Sinusoidal { rows: max_pos }
+                },
                 embed_scale: if scale { (d as f64).sqrt() } else { 1.0 },
                 embed_norm: learned,
                 final_norm: pre,
@@ -506,7 +524,9 @@ pub fn t5_bucket(rel: i64, bidirectional: bool, num_buckets: usize, max_distance
     if n < max_exact {
         return (ret + n) as usize;
     }
-    let lg = crate::detmath::ln_f32((n as f32) / (max_exact as f32)) / (crate::detmath::ln(max_distance as f64 / max_exact as f64) as f32) * ((nb - max_exact) as f32);
+    let lg = crate::detmath::ln_f32((n as f32) / (max_exact as f32))
+        / (crate::detmath::ln(max_distance as f64 / max_exact as f64) as f32)
+        * ((nb - max_exact) as f32);
     (ret + (max_exact + lg as i64).min(nb - 1)) as usize
 }
 
@@ -620,12 +640,20 @@ pub fn family_names(family: Family, gated: bool) -> EncDecNames {
                 dec: stack(true),
                 lm_head: "lm_head.weight".into(),
                 logits_bias: None,
-                ignored: strs(&["encoder.embed_tokens.", "decoder.embed_tokens.", "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias."]),
+                ignored: strs(&[
+                    "encoder.embed_tokens.",
+                    "decoder.embed_tokens.",
+                    "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias.",
+                ]),
             }
         }
         Family::Bart | Family::MBart | Family::Marian | Family::Pegasus => {
             let stack = |decoder: bool| {
-                let (prefix, layer) = if decoder { ("model.decoder.", "model.decoder.layers.{L}.") } else { ("model.encoder.", "model.encoder.layers.{L}.") };
+                let (prefix, layer) = if decoder {
+                    ("model.decoder.", "model.decoder.layers.{L}.")
+                } else {
+                    ("model.encoder.", "model.encoder.layers.{L}.")
+                };
                 StackNames {
                     prefix: prefix.into(),
                     layer: layer.into(),
@@ -645,7 +673,12 @@ pub fn family_names(family: Family, gated: bool) -> EncDecNames {
                 }
             };
             let ignored: &[&str] = if family == Family::Marian {
-                &["model.encoder.embed_tokens.", "model.decoder.embed_tokens.", "model.encoder.embed_positions.", "model.decoder.embed_positions."]
+                &[
+                    "model.encoder.embed_tokens.",
+                    "model.decoder.embed_tokens.",
+                    "model.encoder.embed_positions.",
+                    "model.decoder.embed_positions.",
+                ]
             } else {
                 &["model.encoder.embed_tokens.", "model.decoder.embed_tokens."]
             };
@@ -810,8 +843,10 @@ fn decoder_table(s: &EncDecSpec, has: &dyn Fn(&str) -> bool) -> Table {
 /// per-layer nor in `post` in `pre`) and its binding.
 fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, post: &[&str]) -> Result<(HlProgram, Binding)> {
     use crate::hl::{Block, CarryDecl, HlType, Init, Node, ParamDecl, Ref};
-    let params: Vec<ParamDecl> =
-        table.iter().map(|(n, sh, pl, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: *pl, init: Init::Normal(0.1) }).collect();
+    let params: Vec<ParamDecl> = table
+        .iter()
+        .map(|(n, sh, pl, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: *pl, init: Init::Normal(0.1) })
+        .collect();
     let (mut pre, mut layer, mut postv) = (Vec::new(), Vec::new(), Vec::new());
     for (i, (n, _, pl, _)) in table.iter().enumerate() {
         let r = Ref::Param(i as u32);
@@ -852,7 +887,11 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
         layer_of: (0..layers).collect(),
     };
     hl.validate().map_err(|e| LowerError::eval(format!("internal: the {name}'s HL program: {e}")))?;
-    let binding = Binding { srcs: table.into_iter().map(|(_, _, _, src)| src).collect(), aliases: vec![], ignored_prefixes: s.names.ignored.clone() };
+    let binding = Binding {
+        srcs: table.into_iter().map(|(_, _, _, src)| src).collect(),
+        aliases: vec![],
+        ignored_prefixes: s.names.ignored.clone(),
+    };
     Ok((hl, binding))
 }
 
@@ -861,7 +900,10 @@ fn synth(s: &EncDecSpec, name: &str, table: Table, layers: usize, rows: usize, p
 #[allow(clippy::type_complexity)]
 pub fn hl_programs(s: &EncDecSpec, lmax: usize, has: &dyn Fn(&str) -> bool) -> Result<((HlProgram, Binding), (HlProgram, Binding))> {
     if s.encoder_only() {
-        return Err(LowerError::not_lowerable(format!("{}: an encoder alone has no decoder program (use hl_encoder)", s.architecture)));
+        return Err(LowerError::not_lowerable(format!(
+            "{}: an encoder alone has no decoder program (use hl_encoder)",
+            s.architecture
+        )));
     }
     let enc = hl_encoder(s, lmax, has)?;
     let dec = synth(s, "decoder", decoder_table(s, has), s.dec_layers, 1, &["final.", "head."])?;
@@ -1047,8 +1089,10 @@ fn attend(
     for hh in 0..h {
         for (i, qi) in q.iter().enumerate() {
             let js: Vec<usize> = (0..k.len()).filter(|j| visible(i, *j)).collect();
-            let sc: Vec<f64> =
-                js.iter().map(|&j| (0..dh).map(|t| qi[hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * scale + bias(hh, i, j)).collect();
+            let sc: Vec<f64> = js
+                .iter()
+                .map(|&j| (0..dh).map(|t| qi[hh * dh + t] * k[j][hh * dh + t]).sum::<f64>() * scale + bias(hh, i, j))
+                .collect();
             let mx = sc.iter().cloned().fold(f64::MIN, f64::max);
             let e: Vec<f64> = sc.iter().map(|x| (x - mx).exp()).collect();
             let z: f64 = e.iter().sum();
@@ -1077,7 +1121,13 @@ pub struct EncoderOut {
 
 /// The float encoder over the real source ids. With `stats`, every site's statistics under the
 /// lowering's names (`pre.embed.sum`, `L1.attn.q`, `post.xkv.L0.k`, …).
-pub fn float_encoder(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, ids: &[usize], stats: Option<&mut Stats>) -> Result<EncoderOut> {
+pub fn float_encoder(
+    hl: &HlProgram,
+    s: &EncDecSpec,
+    params: &ParamStore,
+    ids: &[usize],
+    stats: Option<&mut Stats>,
+) -> Result<EncoderOut> {
     encoder_run(hl, s, params, Source::Ids(ids), Obs { stats, trace: None })
 }
 
@@ -1089,12 +1139,24 @@ pub enum Source<'a> {
 }
 
 /// [`float_encoder`] over either kind of input.
-pub fn float_encoder_src(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<'_>, stats: Option<&mut Stats>) -> Result<EncoderOut> {
+pub fn float_encoder_src(
+    hl: &HlProgram,
+    s: &EncDecSpec,
+    params: &ParamStore,
+    src: Source<'_>,
+    stats: Option<&mut Stats>,
+) -> Result<EncoderOut> {
     encoder_run(hl, s, params, src, Obs { stats, trace: None })
 }
 
 /// [`float_encoder`], keeping every site's real rows for the per-site diagnosis.
-pub fn float_encoder_traced(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, ids: &[usize], trace: &mut Trace) -> Result<EncoderOut> {
+pub fn float_encoder_traced(
+    hl: &HlProgram,
+    s: &EncDecSpec,
+    params: &ParamStore,
+    ids: &[usize],
+    trace: &mut Trace,
+) -> Result<EncoderOut> {
     encoder_run(hl, s, params, Source::Ids(ids), Obs { stats: None, trace: Some(trace) })
 }
 
@@ -1144,7 +1206,8 @@ fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<
             if y.len() * d > table.len() {
                 return Err(LowerError::eval(format!("{} source rows against a position table of {}", y.len(), table.len() / d)));
             }
-            let x: Vec<Vec<f64>> = y.iter().enumerate().map(|(i, r)| r.iter().enumerate().map(|(j, v)| v + table[i * d + j]).collect()).collect();
+            let x: Vec<Vec<f64>> =
+                y.iter().enumerate().map(|(i, r)| r.iter().enumerate().map(|(j, v)| v + table[i * d + j]).collect()).collect();
             observe(&mut stats, "pre.embed.sum".into(), &x);
             let x = if s.embed_norm {
                 let y = p.norm("embed.norm", None, &x)?;
@@ -1185,7 +1248,9 @@ fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<
         observe(&mut stats, format!("{pre}attn.k"), &k);
         observe(&mut stats, format!("{pre}attn.v"), &v);
         let local = s.enc_local_radius;
-        let ctx = attend(&q, &k, &v, h, dh, s.attn_scale, &bias, &|i, j| local.is_none_or(|r| (j as i64 - i as i64).unsigned_abs() <= r as u64));
+        let ctx = attend(&q, &k, &v, h, dh, s.attn_scale, &bias, &|i, j| {
+            local.is_none_or(|r| (j as i64 - i as i64).unsigned_abs() <= r as u64)
+        });
         observe(&mut stats, format!("{pre}attn.ctx"), &ctx);
         let o = p.lin("attn.o", ly, &ctx)?;
         observe(&mut stats, format!("{pre}attn.o"), &o);
@@ -1230,8 +1295,10 @@ fn encoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, src: Source<
     let (mut xk, mut xv) = (Vec::with_capacity(dn), Vec::with_capacity(dn));
     for l in 0..dn {
         let (a, b) = (l * di * s.d, (l + 1) * di * s.d);
-        let kk: Vec<Vec<f64>> = hidden.iter().map(|r| lin_f(r, &kw[a..b], kb.as_ref().map(|v| &v[l * di..(l + 1) * di]), di)).collect();
-        let vv: Vec<Vec<f64>> = hidden.iter().map(|r| lin_f(r, &vw[a..b], vb.as_ref().map(|v| &v[l * di..(l + 1) * di]), di)).collect();
+        let kk: Vec<Vec<f64>> =
+            hidden.iter().map(|r| lin_f(r, &kw[a..b], kb.as_ref().map(|v| &v[l * di..(l + 1) * di]), di)).collect();
+        let vv: Vec<Vec<f64>> =
+            hidden.iter().map(|r| lin_f(r, &vw[a..b], vb.as_ref().map(|v| &v[l * di..(l + 1) * di]), di)).collect();
         observe(&mut stats, format!("post.xkv.L{l}.k"), &kk);
         observe(&mut stats, format!("post.xkv.L{l}.v"), &vv);
         xk.push(kk);
@@ -1255,11 +1322,25 @@ pub fn float_decoder(
 }
 
 /// [`float_decoder`], keeping every site's rows (one per position) for the per-site diagnosis.
-pub fn float_decoder_traced(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, enc: &EncoderOut, stream: &[usize], trace: &mut Trace) -> Result<Vec<Vec<f64>>> {
+pub fn float_decoder_traced(
+    hl: &HlProgram,
+    s: &EncDecSpec,
+    params: &ParamStore,
+    enc: &EncoderOut,
+    stream: &[usize],
+    trace: &mut Trace,
+) -> Result<Vec<Vec<f64>>> {
     decoder_run(hl, s, params, enc, stream, Obs { stats: None, trace: Some(trace) })
 }
 
-fn decoder_run(hl: &HlProgram, s: &EncDecSpec, params: &ParamStore, enc: &EncoderOut, stream: &[usize], mut stats: Obs<'_>) -> Result<Vec<Vec<f64>>> {
+fn decoder_run(
+    hl: &HlProgram,
+    s: &EncDecSpec,
+    params: &ParamStore,
+    enc: &EncoderOut,
+    stream: &[usize],
+    mut stats: Obs<'_>,
+) -> Result<Vec<Vec<f64>>> {
     let p = P { hl, params, s };
     let (h, dh) = (s.dec_heads, s.dec_head_dim);
     let mut x = p.embed(stream, 0, &mut stats)?;
@@ -1396,7 +1477,9 @@ pub(super) fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
     let prefixes: Vec<String> = match blk.role {
         BlockRole::Pre => vec!["pre.".into()],
         BlockRole::Post => vec!["post.".into()],
-        BlockRole::Layer => hl.schedule.iter().enumerate().filter(|(_, k)| **k as usize == hbk).map(|(l, _)| format!("L{l}.")).collect(),
+        BlockRole::Layer => {
+            hl.schedule.iter().enumerate().filter(|(_, k)| **k as usize == hbk).map(|(l, _)| format!("L{l}.")).collect()
+        }
     };
     Lb {
         hb: hbk,
@@ -1455,7 +1538,15 @@ fn input_ref(b: &BlockBuilder<'_>, name: &str) -> Result<tir::Ref> {
 }
 
 /// A pinned `idx` table, clamped to `[0, bound)` for the analysis.
-fn idx_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, name: &str, shape: &[usize], v: Vec<u32>, bound: usize) -> Result<tir::Ref> {
+fn idx_table(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    name: &str,
+    shape: &[usize],
+    v: Vec<u32>,
+    bound: usize,
+) -> Result<tir::Ref> {
     let sh = shape.to_vec();
     let p = decl(b, cx, lb, name, DType::Idx, shape, false, Arc::new(move |_| Ok(IntTensor::idx(sh.clone(), v.clone()))))?;
     Ok(b.clamp(p, 0, bound.max(1) as i64 - 1, DType::Idx))
@@ -1477,7 +1568,10 @@ fn rel_table_q(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpe
             let t = c.f(tp)?;
             Ok(IntTensor::i32(
                 vec![buckets, heads],
-                t.data.iter().map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).collect(),
+                t.data
+                    .iter()
+                    .map(|v| (*v as f64 * (1u64 << LOGIT_Q) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                    .collect(),
             ))
         }),
     )
@@ -1514,13 +1608,25 @@ fn word_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec,
 
 /// The absolute-position table at the residual scale, `i32 [rows, d]`: the checkpoint's (learned,
 /// or Pegasus's saved sinusoid) or the computed sinusoid (Marian).
-fn pos_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec, first: usize, count: usize, decoder: bool) -> Result<tir::Ref> {
+fn pos_table(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    s: &EncDecSpec,
+    first: usize,
+    count: usize,
+    decoder: bool,
+) -> Result<tir::Ref> {
     let (rows, _) = s.positions.table().ok_or_else(|| LowerError::eval("internal: no absolute positions"))?;
     let rows = if decoder { rows } else { s.enc_table_rows(rows) };
     let d = s.d;
     let pp = hl_param(cx.hl, "embed.pos_table").ok();
     if first + count > rows {
-        return Err(LowerError::not_lowerable(format!("{}: positions {first}..{} of a {rows}-row table", s.architecture, first + count)));
+        return Err(LowerError::not_lowerable(format!(
+            "{}: positions {first}..{} of a {rows}-row table",
+            s.architecture,
+            first + count
+        )));
     }
     decl(
         b,
@@ -1536,14 +1642,23 @@ fn pos_table(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, s: &EncDecSpec,
                 Some(p) => c.f(p)?.data.clone(),
                 None => sinusoid(rows, d),
             };
-            let v = (first * d..(first + count) * d).map(|i| (t[i] as f64 / sr).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).collect();
+            let v = (first * d..(first + count) * d)
+                .map(|i| (t[i] as f64 / sr).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+                .collect();
             Ok(IntTensor::i32(vec![count, d], v))
         }),
     )
 }
 
 /// `word + position`, then `layernorm_embedding`: the stack's first residual rows.
-fn embed_finish(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncDecSpec, word: tir::Ref, pos: Option<tir::Ref>) -> Result<Val> {
+fn embed_finish(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    s: &EncDecSpec,
+    word: tir::Ref,
+    pos: Option<tir::Ref>,
+) -> Result<Val> {
     let resid = ScaleKey::resid();
     let sum = match pos {
         Some(p) => {
@@ -1565,7 +1680,15 @@ fn embed_finish(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncD
 /// [`linear_rows`] with per-row `i16` weights (`x·Wᵀ` exact in `i64`): the projections whose
 /// error an unscaled score amplifies (T5's `q` and `k`).
 #[allow(clippy::too_many_arguments)]
-fn linear16_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, x: &Val, w_name: &str, site: &str, want: &Want) -> Result<Val> {
+fn linear16_rows(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    w_name: &str,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
     let hl = cx.hl;
     let w = hl_param(hl, w_name)?;
     let (out, inp) = (hl.params[w as usize].shape[0], hl.params[w as usize].shape[1]);
@@ -1655,7 +1778,11 @@ fn ffn_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncDecSp
 
 /// The input of a sublayer: its norm (pre-norm, codes), or the residual's own codes (post-norm).
 fn sub_in(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncDecSpec, x: &Val, norm: &str) -> Result<Val> {
-    let v = if s.pre_norm { norm_rows_kind(b, cx, lb, x, norm_kind(s), s.eps, norm, s.bias, &codes_want(norm))? } else { codes_rows(b, cx, lb, x)? };
+    let v = if s.pre_norm {
+        norm_rows_kind(b, cx, lb, x, norm_kind(s), s.eps, norm, s.bias, &codes_want(norm))?
+    } else {
+        codes_rows(b, cx, lb, x)?
+    };
     note(b, cx, &v);
     Ok(v)
 }
@@ -1663,7 +1790,16 @@ fn sub_in(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncDecSpec
 /// The residual after a sublayer: `x + y`, then (post-norm) its norm at the residual scale. The
 /// sum is a commit point: a norm reduces a whole row, and by box demand a tile of the norm would
 /// otherwise reach every row of the projection `y` came from (`L·d` outputs of a `MatMul`).
-fn sub_out(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncDecSpec, x: &Val, y: &Val, resid_site: &str, norm: &str) -> Result<Val> {
+fn sub_out(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    s: &EncDecSpec,
+    x: &Val,
+    y: &Val,
+    resid_site: &str,
+    norm: &str,
+) -> Result<Val> {
     let r = add_rows(b, cx, lb, x, y, resid_site)?;
     b.commit(r.r);
     note(b, cx, &r);
@@ -1677,7 +1813,17 @@ fn sub_out(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, s: &EncDecSpe
 }
 
 /// A context `o:i64 [h, n, dh]` (Q24 probabilities × value codes) to codes at `site`, `[n, h·dh]`.
-fn ctx_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, o: tir::Ref, vkey: &ScaleKey, site: &str, n: u32, h: u32, dh: u32) -> Result<Val> {
+fn ctx_rows(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    o: tir::Ref,
+    vkey: &ScaleKey,
+    site: &str,
+    n: u32,
+    h: u32,
+    dh: u32,
+) -> Result<Val> {
     let ck = site_key(site);
     let (kv, kc) = (vkey.clone(), ck.clone());
     let (m, sh) = decl_ms(b, cx, lb, site, 1, Arc::new(move |c| Ok(vec![c.scale(&kv)? / (1u64 << 24) as f64 / c.scale(&kc)?])))?;
@@ -1697,7 +1843,11 @@ pub fn lower_encoder(hl: &HlProgram, s: &EncDecSpec, lmax: u32) -> Result<Lowere
     if let Some((rows, off)) = s.positions.table() {
         let rows = s.enc_table_rows(rows);
         if off + lmax as usize > rows {
-            return Err(LowerError::not_lowerable(format!("{}: a source of {lmax} needs positions up to {} of {rows}", s.architecture, off + lmax as usize)));
+            return Err(LowerError::not_lowerable(format!(
+                "{}: a source of {lmax} needs positions up to {} of {rows}",
+                s.architecture,
+                off + lmax as usize
+            )));
         }
     }
     if let EncInput::Frames { bins, frames, stem } = &s.input {
@@ -1705,10 +1855,15 @@ pub fn lower_encoder(hl: &HlProgram, s: &EncDecSpec, lmax: u32) -> Result<Lowere
         let mut t = *frames;
         for (i, c) in stem.iter().enumerate() {
             let op = super::cnn::ConvOp::conv1d("stem", if i == 0 { *bins } else { s.d }, s.d, c.k, c.stride, c.pad, true);
-            t = super::cnn::conv1d_out_len(t, &op).ok_or_else(|| LowerError::bad(format!("{}: {t} frames are shorter than stem convolution {}'s window", s.architecture, i + 1)))?;
+            t = super::cnn::conv1d_out_len(t, &op).ok_or_else(|| {
+                LowerError::bad(format!("{}: {t} frames are shorter than stem convolution {}'s window", s.architecture, i + 1))
+            })?;
         }
         if t != lmax as usize {
-            return Err(LowerError::not_lowerable(format!("{}: {frames} frames through the stem give {t} source rows, not {lmax}", s.architecture)));
+            return Err(LowerError::not_lowerable(format!(
+                "{}: {frames} frames through the stem give {t} source rows, not {lmax}",
+                s.architecture
+            )));
         }
     }
     let hb = tir::program::HISTORY_BOUND_V1_SMALL;
@@ -1727,14 +1882,31 @@ pub fn lower_encoder(hl: &HlProgram, s: &EncDecSpec, lmax: u32) -> Result<Lowere
     finish(pb, cx, hl, block_map, out_node, "encoder")
 }
 
-pub(super) fn finish(pb: ProgramBuilder, cx: Cx<'_>, hl: &HlProgram, block_map: Vec<u8>, out_node: Option<u16>, what: &str) -> Result<Lowered> {
+pub(super) fn finish(
+    pb: ProgramBuilder,
+    cx: Cx<'_>,
+    hl: &HlProgram,
+    block_map: Vec<u8>,
+    out_node: Option<u16>,
+    what: &str,
+) -> Result<Lowered> {
     let out_node = out_node.ok_or_else(|| LowerError::eval("internal: no output node"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
     let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], out_node);
-    tir::validate::validate(&program).map_err(|e| LowerError::eval(format!("internal: the {what} program is not in normal form: {e}")))?;
+    tir::validate::validate(&program)
+        .map_err(|e| LowerError::eval(format!("internal: the {what} program is not in normal form: {e}")))?;
     let resid_sites = cx.resid_sites.into_iter().map(|((k, _), f)| (k, f)).collect();
     let logits_key = cx.logits_key.ok_or_else(|| LowerError::eval("internal: no output scale"))?;
-    Ok(Lowered { program, fills: cx.fills, row_params: cx.row_params, resid_sites, logits_key, block_map, site_nodes: cx.site_nodes, budget_fallbacks: vec![] })
+    Ok(Lowered {
+        program,
+        fills: cx.fills,
+        row_params: cx.row_params,
+        resid_sites,
+        logits_key,
+        block_map,
+        site_nodes: cx.site_nodes,
+        budget_fallbacks: vec![],
+    })
 }
 
 fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDecSpec, l: u32) -> Result<(u8, Option<u16>)> {
@@ -1760,14 +1932,25 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 EncInput::Frames { bins, frames, stem } => {
                     // The frames as `i16` codes at a fixed unit, through the stem's convolutions and their activations, to the
                     // source rows at the residual scale.
-                    let mel = decl(&mut b, cx, &lb, MEL_PARAM, DType::I16, &[*frames, *bins], false, input_fill(DType::I16, vec![*frames, *bins]))?;
-                    let mut y = rows_val(mel, DType::I16, ScaleKey { base: Base::Fixed(2f64.powi(-MEL_Q)), factor: 1.0 }, *bins, "mel");
+                    let mel = decl(
+                        &mut b,
+                        cx,
+                        &lb,
+                        MEL_PARAM,
+                        DType::I16,
+                        &[*frames, *bins],
+                        false,
+                        input_fill(DType::I16, vec![*frames, *bins]),
+                    )?;
+                    let mut y =
+                        rows_val(mel, DType::I16, ScaleKey { base: Base::Fixed(2f64.powi(-MEL_Q)), factor: 1.0 }, *bins, "mel");
                     let mut t = *frames;
                     for (i, c) in stem.iter().enumerate() {
                         let id = format!("stem{}", i + 1);
                         let op = super::cnn::ConvOp::conv1d(&id, if i == 0 { *bins } else { s.d }, s.d, c.k, c.stride, c.pad, true);
                         let v = super::cnn::lower_conv1d(&mut b, cx, &mut lb, &y, &id, &op, t, &codes_want(&id), false)?;
-                        t = super::cnn::conv1d_out_len(t, &op).ok_or_else(|| LowerError::eval("internal: the stem's geometry was checked"))?;
+                        t = super::cnn::conv1d_out_len(t, &op)
+                            .ok_or_else(|| LowerError::eval("internal: the stem's geometry was checked"))?;
                         note(&b, cx, &v);
                         y = lower_table_named(&mut b, cx, &mut lb, &v, TableFn::Act(s.act), &format!("{id}.act"))?;
                         note(&b, cx, &y);
@@ -1800,13 +1983,21 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             let kt = b.transpose(k.r, &[0, 2, 1]);
             let sc = b.matmul(q.r, kt, DType::I64);
             let (kq, kk, scale) = (q.key.clone(), k.key.clone(), s.attn_scale);
-            let (m, sh) = decl_ms(&mut b, cx, &lb, "attn.score", 1, Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])))?;
+            let (m, sh) = decl_ms(
+                &mut b,
+                cx,
+                &lb,
+                "attn.score",
+                1,
+                Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+            )?;
             let mut logits = narrow(&mut b, sc, m, sh, None, DType::I32);
             if let Positions::Relative { buckets, max_distance } = s.positions {
                 let table = rel_table_q(&mut b, cx, &lb, s, h as usize)?;
                 let lu = l as usize;
-                let ids: Vec<u32> =
-                    (0..lu).flat_map(|i| (0..lu).map(move |j| t5_bucket(j as i64 - i as i64, true, buckets, max_distance) as u32)).collect();
+                let ids: Vec<u32> = (0..lu)
+                    .flat_map(|i| (0..lu).map(move |j| t5_bucket(j as i64 - i as i64, true, buckets, max_distance) as u32))
+                    .collect();
                 let bk = idx_table(&mut b, cx, &lb, "attn.buckets", &[lu, lu], ids, buckets)?;
                 let bias = b.gather(table, bk, 0, 0); // [L, L, h]
                 let bias = b.transpose(bias, &[2, 0, 1]);
@@ -1816,8 +2007,19 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             // LongT5's local attention: a key farther than `r` from its query scores i32::MIN (a pinned `[L, L]` mask of 0/1).
             if let Some(r) = s.enc_local_radius {
                 let lu = l as usize;
-                let band: Vec<i8> = (0..lu).flat_map(|i| (0..lu).map(move |j| i8::from(((j as i64) - (i as i64)).unsigned_abs() <= r as u64))).collect();
-                let bp = decl(&mut b, cx, &lb, "attn.band", DType::I8, &[lu, lu], false, Arc::new(move |_| Ok(IntTensor::i8(vec![lu, lu], band.clone()))))?;
+                let band: Vec<i8> = (0..lu)
+                    .flat_map(|i| (0..lu).map(move |j| i8::from(((j as i64) - (i as i64)).unsigned_abs() <= r as u64)))
+                    .collect();
+                let bp = decl(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "attn.band",
+                    DType::I8,
+                    &[lu, lu],
+                    false,
+                    Arc::new(move |_| Ok(IntTensor::i8(vec![lu, lu], band.clone()))),
+                )?;
                 let neg = b.c(DType::I32, i32::MIN as i128);
                 logits = b.select(bp, logits, neg, DType::I32);
             }
@@ -1831,7 +2033,11 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                 let neg = b.c(DType::I32, i32::MIN as i128);
                 b.select(keep, logits, neg, DType::I32)
             };
-            let pm = if split_softmax(h, l, dh) { softmax_committed(&mut b, masked, 24 - LOGIT_Q) } else { b.softmax_shifted(masked, 24 - LOGIT_Q) };
+            let pm = if split_softmax(h, l, dh) {
+                softmax_committed(&mut b, masked, 24 - LOGIT_Q)
+            } else {
+                b.softmax_shifted(masked, 24 - LOGIT_Q)
+            };
             let o = b.matmul(pm, v.r, DType::I64);
             let ctx = ctx_rows(&mut b, cx, &mut lb, o, &v.key, "attn.ctx", l, h, dh)?;
             note_site(cx, tb, &ctx);
@@ -1900,7 +2106,11 @@ fn encoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
                             }
                         }
                     }
-                    Ok(if wide { IntTensor::i16(vec![d, n], t.iter().map(|v| *v as i16).collect()) } else { IntTensor::i8(vec![d, n], t.iter().map(|v| *v as i8).collect()) })
+                    Ok(if wide {
+                        IntTensor::i16(vec![d, n], t.iter().map(|v| *v as i16).collect())
+                    } else {
+                        IntTensor::i8(vec![d, n], t.iter().map(|v| *v as i8).collect())
+                    })
                 }),
             )?;
             let key_of = |l: usize, kv: usize| ScaleKey::site(vec![format!("xkv.L{l}.{}", if kv == 0 { "k" } else { "v" })], false);
@@ -2030,7 +2240,16 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             let a_in = sub_in(&mut b, cx, &mut lb, s, &x, "norm.self")?;
             let q = proj(&mut b, cx, &mut lb, s, &a_in, "attn.q", &codes_want("attn.q"))?;
             let k = proj(&mut b, cx, &mut lb, s, &a_in, "attn.k", &codes_want("attn.k"))?;
-            let v = linear_rows(&mut b, cx, &mut lb, &a_in, "attn.v.w", bias_name(s, "attn.v").as_deref(), "attn.v", &codes_want("attn.v"))?;
+            let v = linear_rows(
+                &mut b,
+                cx,
+                &mut lb,
+                &a_in,
+                "attn.v.w",
+                bias_name(s, "attn.v").as_deref(),
+                "attn.v",
+                &codes_want("attn.v"),
+            )?;
             for x in [&q, &k, &v] {
                 note(&b, cx, x);
             }
@@ -2048,7 +2267,8 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             let rel_bias = match s.positions {
                 Positions::Relative { buckets, max_distance } => {
                     let table = rel_table_q(&mut b, cx, &lb, s, h)?;
-                    let v: Vec<u32> = (0..=max_distance).map(|dd| t5_bucket(-(dd as i64), false, buckets, max_distance) as u32).collect();
+                    let v: Vec<u32> =
+                        (0..=max_distance).map(|dd| t5_bucket(-(dd as i64), false, buckets, max_distance) as u32).collect();
                     let bk = decl(&mut b, cx, &lb, "attn.buckets", DType::Idx, &[max_distance + 1], false, {
                         let n = max_distance + 1;
                         Arc::new(move |_| Ok(IntTensor::idx(vec![n], v.clone())))
@@ -2059,7 +2279,18 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             };
             let dims = AttnDims { heads: h, kv: h, d: dh, dv: dh, window };
             let ex = AttnExtras { scale: s.attn_scale, softcap: None, alibi: None, sinks: None, rel_bias, chunk: None, sparse: None };
-            let ctx = lower_attention(&mut b, cx, &mut lb, &qv, (kw, k.key.clone()), (vw, v.key.clone()), dims, &ex, "attn.ctx", &codes_want("attn.ctx"))?;
+            let ctx = lower_attention(
+                &mut b,
+                cx,
+                &mut lb,
+                &qv,
+                (kw, k.key.clone()),
+                (vw, v.key.clone()),
+                dims,
+                &ex,
+                "attn.ctx",
+                &codes_want("attn.ctx"),
+            )?;
             let cr = b.reshape_fixed(ctx.r, &[1, inner]);
             let ctx = Val { r: cr, ..ctx };
             note_site(cx, tb, &ctx);
@@ -2091,7 +2322,14 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             let q3 = b.reshape_fixed(xq.r, &[h32, 1, dh32]);
             let sc = b.matmul(q3, kk, DType::I64); // [h, 1, L]
             let (kq, kk2, vk, scale) = (xq.key.clone(), site_key("xattn.k"), site_key("xattn.v"), s.attn_scale);
-            let (m, sh) = decl_ms(&mut b, cx, &lb, "xattn.score", 1, Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk2)? * scale * (1u64 << LOGIT_Q) as f64])))?;
+            let (m, sh) = decl_ms(
+                &mut b,
+                cx,
+                &lb,
+                "xattn.score",
+                1,
+                Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk2)? * scale * (1u64 << LOGIT_Q) as f64])),
+            )?;
             let logits = narrow(&mut b, sc, m, sh, None, DType::I32);
             let masked = if s.fixed_source() {
                 logits
@@ -2106,7 +2344,8 @@ fn decoder_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &EncDe
             let o = b.matmul(pm, vv, DType::I64); // [h, 1, dh]
             let xctx = ctx_rows(&mut b, cx, &mut lb, o, &vk, "xattn.ctx", 1, h32, dh32)?;
             note_site(cx, tb, &xctx);
-            let xo = linear_rows(&mut b, cx, &mut lb, &xctx, "xattn.o.w", bias_name(s, "xattn.o").as_deref(), "xattn.o", &resid_want())?;
+            let xo =
+                linear_rows(&mut b, cx, &mut lb, &xctx, "xattn.o.w", bias_name(s, "xattn.o").as_deref(), "xattn.o", &resid_want())?;
             let x2 = sub_out(&mut b, cx, &mut lb, s, &x1, &xo, "resid.cross", "norm.cross")?;
             // FFN.
             let f_in = sub_in(&mut b, cx, &mut lb, s, &x2, "norm.ffn")?;

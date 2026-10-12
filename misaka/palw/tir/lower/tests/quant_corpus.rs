@@ -33,7 +33,11 @@ fn every_builtin_format_decodes_the_independent_corpus_bit_for_bit() {
         for (i, (g, w)) in got.iter().zip(want.chunks_exact(4)).enumerate() {
             let w = f32::from_le_bytes([w[0], w[1], w[2], w[3]]);
             // Bit for bit, a zero of either sign being one value.
-            assert!(g.to_bits() == w.to_bits() || (*g == 0.0 && w == 0.0), "{name}: element {i} of block {}: {g:e} vs {w:e}", *counts.get(name).unwrap_or(&0));
+            assert!(
+                g.to_bits() == w.to_bits() || (*g == 0.0 && w == 0.0),
+                "{name}: element {i} of block {}: {g:e} vs {w:e}",
+                *counts.get(name).unwrap_or(&0)
+            );
         }
         *counts.entry(name.to_string()).or_default() += 1;
     }

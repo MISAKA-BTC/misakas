@@ -2276,8 +2276,10 @@ mod tests {
 
     #[test]
     fn allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root() {
-        let bytes =
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"
+        ));
         let program = TirProgramV1::decode_canonical(bytes).unwrap();
         let descriptor = crate::descriptor::k2_tir_v4_descriptor();
         let plan = crate::plan::plan_for_tir_program_v1(&descriptor, &program, crate::public::program_root_v1(bytes), 32).unwrap();

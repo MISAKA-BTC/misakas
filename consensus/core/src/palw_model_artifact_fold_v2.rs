@@ -170,7 +170,9 @@ pub(super) fn refute_outcome(
     let payout = challenger.payout_payload;
     let work = model_artifact_work_v2(row.program_bytes_len as usize, proof_bytes.len())
         .ok_or_else(|| refused("model court work overflows"))?;
-    let Some(fee) = charge(builder, ctx, signer, work, true)? else { return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun) };
+    let Some(fee) = charge(builder, ctx, signer, work, true)? else {
+        return Ok(crate::palw_model_refutation_seal_v4::ModelRefutationOutcomeV4::NotRun);
+    };
     let row = builder
         .state
         .kernel_route
@@ -238,7 +240,9 @@ pub(super) fn candidate(
             plan: plan.clone(),
             param_commitments: param_commitments.clone(),
         },
-        KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. } | KernelRouteObjectV1::RegisterFlatModelCandidateV9 { .. } => object.clone(),
+        KernelRouteObjectV1::RegisterFlatModelCandidateV7 { .. } | KernelRouteObjectV1::RegisterFlatModelCandidateV9 { .. } => {
+            object.clone()
+        }
         _ => unreachable!(),
     };
     Ok(Some((candidate, id)))
@@ -279,9 +283,9 @@ pub(super) fn flat_candidate_v9(
         program_bytes.len(),
         param_commitments.by_instance.len(),
     )
-    .and_then(|work|work.checked_add(super::palw_kernel_route_fold_v1::projection_work_v9(builder).ok()?))
+    .and_then(|work| work.checked_add(super::palw_kernel_route_fold_v1::projection_work_v9(builder).ok()?))
     .ok_or_else(|| refused("flat-v9 binding/projection work overflow"))?;
     let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(None) };
     builder.slash_bond(*signer, fee)?;
-    Ok(candidate(builder, ctx, object).ok().flatten().map(|(o,id)|(o,id,super::palw_kernel_route_fold_v1::paid_projection_v9())))
+    Ok(candidate(builder, ctx, object).ok().flatten().map(|(o, id)| (o, id, super::palw_kernel_route_fold_v1::paid_projection_v9())))
 }

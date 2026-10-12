@@ -1989,7 +1989,8 @@ mod tests {
         let mut pol = policy();
         pol.eval.setter_cap_permille = 500;
         let set = PalwImprovementPolicySetV1 { line_id: h(LINE), sequence: 1, policy: Some(pol) };
-        try_at_p(&genesis(), p, &PalwTransitionExtrasV1::default(), daa, |b, x| apply_improvement_policy_set_v1(b, x, &set)).expect("opt in")
+        try_at_p(&genesis(), p, &PalwTransitionExtrasV1::default(), daa, |b, x| apply_improvement_policy_set_v1(b, x, &set))
+            .expect("opt in")
     }
 
     fn class_row(registrant: u8) -> PalwClassStateV2 {
@@ -2020,7 +2021,11 @@ mod tests {
                 commit_tiles: vec![],
                 state_tiles: vec![],
             },
-            declarations: PalwCandidateDeclarationsV1 { datasets: vec![], licences: vec![], teacher_classes: PalwTeacherClassV1::PublicData.bit() },
+            declarations: PalwCandidateDeclarationsV1 {
+                datasets: vec![],
+                licences: vec![],
+                teacher_classes: PalwTeacherClassV1::PublicData.bit(),
+            },
         };
         for on in [false, true] {
             let p = fenced_params(on);
@@ -2031,9 +2036,15 @@ mod tests {
             let mut s = s;
             s.classes.insert(h(CAND_A), class_row(BOB));
             let extras = PalwTransitionExtrasV1::default();
-            let by = |who: u8| try_at_p(&s, &p, &extras, 1_200, |b, x| apply_candidate_submitted_v1(b, x, &submission(CAND_A), &bond(who), ));
+            let by =
+                |who: u8| try_at_p(&s, &p, &extras, 1_200, |b, x| apply_candidate_submitted_v1(b, x, &submission(CAND_A), &bond(who)));
             let (alice, bob) = (by(ALICE), by(BOB));
-            assert_eq!(alice.is_err(), on, "fence {on}: a copycat submitting another bond's class is refused past the fence only: {:?}", alice.as_ref().err());
+            assert_eq!(
+                alice.is_err(),
+                on,
+                "fence {on}: a copycat submitting another bond's class is refused past the fence only: {:?}",
+                alice.as_ref().err()
+            );
             assert!(bob.is_ok(), "fence {on}: the registrant's own submission stands: {:?}", bob.err());
         }
     }
@@ -2049,7 +2060,8 @@ mod tests {
             let p = fenced_params(on);
             let s = opted_in_p(&p, 500);
             let extras = PalwTransitionExtrasV1::default();
-            let register = |d: &PalwDatasetV1, who: u8| try_at_p(&s, &p, &extras, 600, |b, x| apply_dataset_registered_v1(b, x, d, &bond(who)));
+            let register =
+                |d: &PalwDatasetV1, who: u8| try_at_p(&s, &p, &extras, 600, |b, x| apply_dataset_registered_v1(b, x, d, &bond(who)));
             assert_eq!(register(&plain, CAROL).is_ok(), !on, "fence {on}: the plain id stands below the fence only");
             assert_eq!(register(&mine, CAROL).is_ok(), on, "fence {on}: the registrant-bound id stands past the fence only");
             if on {
@@ -2090,13 +2102,19 @@ mod tests {
                 let mut pol = policy();
                 edit(&mut pol);
                 let set = PalwImprovementPolicySetV1 { line_id: h(LINE), sequence: 1, policy: Some(pol) };
-                let r = try_at_p(&genesis(), &p, &PalwTransitionExtrasV1::default(), 500, |b, x| apply_improvement_policy_set_v1(b, x, &set));
+                let r = try_at_p(&genesis(), &p, &PalwTransitionExtrasV1::default(), 500, |b, x| {
+                    apply_improvement_policy_set_v1(b, x, &set)
+                });
                 assert_eq!(r.is_err(), on, "{what}, fence {on}: {:?}", r.as_ref().err());
             }
         }
         let mut sane = policy();
         sane.eval.setter_cap_permille = 500;
-        assert_eq!(crate::palw_improve_policy_v1::palw_improvement_policy_audit_1004_check_v1(&sane), Ok(()), "the core's own test policy passes at 500 ‰");
+        assert_eq!(
+            crate::palw_improve_policy_v1::palw_improvement_policy_audit_1004_check_v1(&sane),
+            Ok(()),
+            "the core's own test policy passes at 500 ‰"
+        );
     }
 
     /// **RF-3**: the epoch draw's seed is the beacon's, not the drawing block's own hash, past the fence.
@@ -2136,7 +2154,11 @@ mod tests {
         assert!(a.is_some(), "the draw ran and recorded its seed");
         assert_eq!(a, seed_at(true, 2, Some(9)), "past the fence the drawing block's own hash does not matter");
         assert_ne!(a, seed_at(true, 1, Some(10)), "the beacon does");
-        assert_ne!(seed_at(false, 1, Some(9)), seed_at(false, 2, Some(9)), "below the fence the block's hash is the seed, and the beacon is not read");
+        assert_ne!(
+            seed_at(false, 1, Some(9)),
+            seed_at(false, 2, Some(9)),
+            "below the fence the block's hash is the seed, and the beacon is not read"
+        );
         assert_eq!(seed_at(false, 1, Some(9)), seed_at(false, 1, None));
     }
 }

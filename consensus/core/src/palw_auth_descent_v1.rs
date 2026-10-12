@@ -185,11 +185,7 @@ pub enum PalwAuthDescentV1 {
 /// **The descent's next move**, from the authenticated nodes alone: `own(level, index)` is the verifier's own node at the same
 /// position (leaf nodes are `step_merkle_leaf_v1(index, own leaf hash)`), `max_read` the widest read one session discloses (a power
 /// of two: 1,024 for `StepRange`, 1 for single-leaf openings).
-pub fn palw_auth_descent_next_v1(
-    tree: &PalwAuthTreeV1,
-    own: &dyn Fn(u8, u64) -> Option<Hash64>,
-    max_read: u64,
-) -> PalwAuthDescentV1 {
+pub fn palw_auth_descent_next_v1(tree: &PalwAuthTreeV1, own: &dyn Fn(u8, u64) -> Option<Hash64>, max_read: u64) -> PalwAuthDescentV1 {
     debug_assert!(max_read.is_power_of_two());
     let n = tree.leaf_count;
     let height = tree.height();
@@ -272,11 +268,7 @@ impl PalwOwnLeafTreeV1 {
     }
 
     /// Build by streaming `own_range` over every leaf once.
-    pub fn build(
-        leaf_count: u64,
-        retain: u8,
-        own_range: &dyn Fn(u64, u32) -> Result<Vec<Hash64>, String>,
-    ) -> Result<Self, String> {
+    pub fn build(leaf_count: u64, retain: u8, own_range: &dyn Fn(u64, u32) -> Result<Vec<Hash64>, String>) -> Result<Self, String> {
         if leaf_count == 0 {
             return Err("an empty tree".into());
         }

@@ -410,23 +410,23 @@ pub fn serve_cell_requests_v1(reader: &mut dyn Read, writer: &mut dyn Write, dev
             Ok(CellRequestV1::Hello { version }) if version == CELL_WIRE_VERSION_V1 => {
                 CellResponseV1::Ready { version, name: device.name(), capacity: device.capacity_bytes() }
             }
-            Ok(CellRequestV1::Hello { version }) => CellResponseV1::Refused(format!("wire version {version}, this helper speaks {CELL_WIRE_VERSION_V1}")),
-            Ok(CellRequestV1::Open { program, occ, params }) => {
-                match open_session(&program, occ, &params) {
-                    Err(why) => CellResponseV1::Refused(why),
-                    Ok((plan, tp)) => {
-                        let range = occ.0 as usize..occ.1 as usize;
-                        match device.cell_stepper(&plan, &tp, range) {
-                            Err(why) => CellResponseV1::Refused(why),
-                            Ok(mut stepper) => {
-                                write_frame(writer, &CellResponseV1::Opened.encode())?;
-                                session_loop(reader, writer, stepper.as_mut())?;
-                                continue;
-                            }
+            Ok(CellRequestV1::Hello { version }) => {
+                CellResponseV1::Refused(format!("wire version {version}, this helper speaks {CELL_WIRE_VERSION_V1}"))
+            }
+            Ok(CellRequestV1::Open { program, occ, params }) => match open_session(&program, occ, &params) {
+                Err(why) => CellResponseV1::Refused(why),
+                Ok((plan, tp)) => {
+                    let range = occ.0 as usize..occ.1 as usize;
+                    match device.cell_stepper(&plan, &tp, range) {
+                        Err(why) => CellResponseV1::Refused(why),
+                        Ok(mut stepper) => {
+                            write_frame(writer, &CellResponseV1::Opened.encode())?;
+                            session_loop(reader, writer, stepper.as_mut())?;
+                            continue;
                         }
                     }
                 }
-            }
+            },
             Ok(_) => CellResponseV1::Refused("no session is open".to_string()),
         };
         write_frame(writer, &reply.encode())?;
@@ -575,7 +575,9 @@ impl TirProcessDeviceV1 {
 
     fn connect_with(mut io: Io, mirror: bool) -> Result<Self, String> {
         let reply = Self::call(&mut io, &CellRequestV1::Hello { version: CELL_WIRE_VERSION_V1 })?;
-        let CellResponseV1::Ready { version, name, capacity } = reply else { return Err(format!("the helper answered hello with {reply:?}")) };
+        let CellResponseV1::Ready { version, name, capacity } = reply else {
+            return Err(format!("the helper answered hello with {reply:?}"));
+        };
         if version != CELL_WIRE_VERSION_V1 {
             return Err(format!("the helper speaks wire version {version}"));
         }
@@ -707,7 +709,13 @@ impl Drop for ProcessStepper<'_> {
 }
 
 impl TirCellStepperV1 for ProcessStepper<'_> {
-    fn step_cell(&mut self, token: u32, occ: Range<usize>, carry_in: &[Vec<i128>], sink: &mut dyn StepSink) -> TirResult<Vec<Vec<i128>>> {
+    fn step_cell(
+        &mut self,
+        token: u32,
+        occ: Range<usize>,
+        carry_in: &[Vec<i128>],
+        sink: &mut dyn StepSink,
+    ) -> TirResult<Vec<Vec<i128>>> {
         let fail = |m: String| TirError::new(TirErrorKind::Operand, m);
         let req = CellRequestV1::Step { token, occ: (occ.start as u32, occ.end as u32), carry_in: carry_in.to_vec() };
         let reply = self.call(&req).map_err(fail)?;
@@ -735,7 +743,16 @@ impl TirCellStepperV1 for ProcessStepper<'_> {
             let dtype = *DType::ALL.get(v.dtype as usize).ok_or_else(|| fail("a dtype tag the helper invented".to_string()))?;
             let shape: Vec<usize> = v.shape.iter().map(|d| *d as usize).collect();
             let buf = Buf::from_i128s(dtype, &v.lanes);
-            sink.node(&NodeValue { slot: v.slot, block: v.block, layer: v.layer, node: v.node, commit: true, dtype, shape: &shape, data: buf.slice() });
+            sink.node(&NodeValue {
+                slot: v.slot,
+                block: v.block,
+                layer: v.layer,
+                node: v.node,
+                commit: true,
+                dtype,
+                shape: &shape,
+                data: buf.slice(),
+            });
         }
         Ok(carry)
     }

@@ -390,7 +390,8 @@ mod tests {
         use crate::palw_clock_cursor_v1::{PalwClockCursorV1, PalwClockStepV1};
         use crate::palw_real_share_v1::PALW_REAL_TICK_GRACE_MS_V1 as GRACE;
         let cursor = |next| Some(PalwClockCursorV1 { next_slot_ms: next, slots_consumed: 0 });
-        let step = |granted, attempt_ticks| PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted, floor: true, attempt_ticks };
+        let step =
+            |granted, attempt_ticks| PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted, floor: true, attempt_ticks };
         let nothing = HeartbeatYieldHintV1::NothingToYieldTo;
         // Fence on: before the slot opens, and during the grace, the miner waits for slot + grace.
         for now in [0, 9_999, 10_000, 10_000 + GRACE - 1] {
@@ -404,7 +405,11 @@ mod tests {
         }
         // After the grace: the ordinary hint — mint into a slot nothing carried; step a source that waits.
         assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(false, true)), 10_000 + GRACE), nothing, "no attempt came: mint");
-        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&step(true, true)), 10_000 + GRACE + 5), nothing, "a waiting source is stepped");
+        assert_eq!(
+            heartbeat_slot_hint_v1(nothing, Some(&step(true, true)), 10_000 + GRACE + 5),
+            nothing,
+            "a waiting source is stepped"
+        );
         // A bonded selected parent keeps its own answer.
         assert_eq!(
             heartbeat_slot_hint_v1(HeartbeatYieldHintV1::BondedSelectedParent, Some(&step(false, true)), 0),

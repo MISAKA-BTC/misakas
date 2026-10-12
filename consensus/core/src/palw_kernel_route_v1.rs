@@ -384,11 +384,12 @@ impl KernelLedgerCacheV1 {
     }
 
     pub(crate) fn native_projection(&self) -> Option<KernelLedgerV1> {
-        if self.1 {self.0.as_ref().map(|l| (**l).clone())} else {None}
+        if self.1 { self.0.as_ref().map(|l| (**l).clone()) } else { None }
     }
     pub(crate) fn set_native_projection(&mut self, mut ledger: KernelLedgerV1) {
         ledger.flat_conformance_classes_v9.clear();
-        self.0 = Some(std::sync::Arc::new(ledger)); self.1 = true;
+        self.0 = Some(std::sync::Arc::new(ledger));
+        self.1 = true;
     }
 
     pub fn is_set(&self) -> bool {
@@ -923,7 +924,10 @@ pub enum PalwKernelChunkTargetV1 {
         vector: Hash64,
         actor: Digest,
     } = 4,
-    FlatProofV9 { vector:Hash64, actor:Digest } = 5,
+    FlatProofV9 {
+        vector: Hash64,
+        actor: Digest,
+    } = 5,
 }
 
 /// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
@@ -959,20 +963,21 @@ pub fn protected_flat_chunk_finish_work_v7(h: &crate::palw_flat_model_vector_v3:
     .and_then(|w| w.checked_add(metadata(proof)?))
     .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7)?))
 }
-pub fn protected_flat_chunk_cap_v9(h:&crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3)->Option<usize> {
-    usize::try_from(h.max_filing_bytes).ok()?.checked_add(16<<10).filter(|x| *x<=PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9)
+pub fn protected_flat_chunk_cap_v9(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<usize> {
+    usize::try_from(h.max_filing_bytes).ok()?.checked_add(16 << 10).filter(|x| *x <= PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9)
 }
-pub fn protected_flat_chunk_finish_work_v9(route:&PalwKernelRouteStateV1,h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+pub fn protected_flat_chunk_finish_work_v9(
+    route: &PalwKernelRouteStateV1,
+    h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3,
+) -> Option<u64> {
     let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9);
     let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
-    crate::palw_flat_model_vector_v9::flat_model_vector_work_v9(
-        route,
-        &h.class,
-        proof.checked_add(h.post_bytes_len as usize)?,
-    )
-    .and_then(|w| w.checked_add(h.max_court_work))
-    .and_then(|w| w.checked_add(metadata(proof)?))
-    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * protected_flat_chunk_cap_v9(h)?)?))
+    crate::palw_flat_model_vector_v9::flat_model_vector_work_v9(route, &h.class, proof.checked_add(h.post_bytes_len as usize)?)
+        .and_then(|w| w.checked_add(h.max_court_work))
+        .and_then(|w| w.checked_add(metadata(proof)?))
+        .and_then(|w| {
+            w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * protected_flat_chunk_cap_v9(h)?)?)
+        })
 }
 
 /// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
@@ -1300,7 +1305,9 @@ impl PalwKernelRouteStateV1 {
         let proof_cap = match chunk.target {
             PalwKernelChunkTargetV1::FlatProofV6 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6),
             PalwKernelChunkTargetV1::FlatProofV7 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7),
-            PalwKernelChunkTargetV1::FlatProofV9 { vector,.. } => Some(protected_flat_chunk_cap_v9(&self.flat_model_vector_header_v3(&vector)?)?),
+            PalwKernelChunkTargetV1::FlatProofV9 { vector, .. } => {
+                Some(protected_flat_chunk_cap_v9(&self.flat_model_vector_header_v3(&vector)?)?)
+            }
             _ => None,
         };
         if proof_cap.is_some_and(|cap| size > cap) {
@@ -1651,32 +1658,51 @@ impl PalwKernelRouteStateV1 {
     /// historical registration was fully independently checked in its block.
     /// Remote snapshot consumers use ledger()/full from_rows and an external
     /// chain anchor, never this fixed-prefix operational projection.
-    pub(crate) fn ledger_native_projection_v9(&self)->Result<KernelLedgerV1,String> {
-        use misaka_palw_kernel::{ledger::flat_candidate9::*,rows::*};
-        let mut count=0usize;let mut bytes=0usize;
-        for ((_,_),row) in self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9,Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9+1,Vec::new())) {
-            count+=1;bytes=bytes.checked_add(row.len()).ok_or("native9 registry size overflow")?;
-            if count>FLAT_CANDIDATE_REGISTRY_MAX_V9 || row.len()>FLAT_CANDIDATE_RECORD_MAX_BYTES_V9 || bytes>FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9 {
+    pub(crate) fn ledger_native_projection_v9(&self) -> Result<KernelLedgerV1, String> {
+        use misaka_palw_kernel::{ledger::flat_candidate9::*, rows::*};
+        let mut count = 0usize;
+        let mut bytes = 0usize;
+        for ((_, _), row) in
+            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        {
+            count += 1;
+            bytes = bytes.checked_add(row.len()).ok_or("native9 registry size overflow")?;
+            if count > FLAT_CANDIDATE_REGISTRY_MAX_V9
+                || row.len() > FLAT_CANDIDATE_RECORD_MAX_BYTES_V9
+                || bytes > FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9
+            {
                 return Err("native9 admitted registry count/raw residency cap".into());
             }
         }
-        if count==0 {return self.ledger();}
-        if let Some(cached)=self.ledger_cache.native_projection() {
-            debug_assert!(cached.scalars()==self.header.scalars);
+        if count == 0 {
+            return self.ledger();
+        }
+        if let Some(cached) = self.ledger_cache.native_projection() {
+            debug_assert!(cached.scalars() == self.header.scalars);
             debug_assert!(cached.flat_conformance_classes_v9.is_empty());
-            debug_assert!(cached.native_candidate_count_v9()==count);
-            debug_assert!(cached.to_rows().iter().all(|(k,v)| self.rows.get(k)==Some(v)));
-            debug_assert_eq!(cached.to_rows().len(),self.rows.keys().filter(|(t,_)|*t!=TABLE_FLAT_CONFORMANCE_CLASSES_V9).count());
-            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+            debug_assert!(cached.native_candidate_count_v9() == count);
+            debug_assert!(cached.to_rows().iter().all(|(k, v)| self.rows.get(k) == Some(v)));
+            debug_assert_eq!(
+                cached.to_rows().len(),
+                self.rows.keys().filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
+            );
+            PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(cached);
         }
-        let rows:LedgerRowsV1=self.rows.iter().filter(|((table,_),_)|*table!=TABLE_FLAT_CONFORMANCE_CLASSES_V9)
-            .map(|(k,v)|(k.clone(),v.clone())).collect();
-        let mut ledger=KernelLedgerV1::from_rows(&self.template(),self.header.scalars,&rows)?;
-        for ((_,key),row) in self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9,Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9+1,Vec::new())) {
-            let class:Digest=borsh::from_slice(key).map_err(|e|e.to_string())?;
-            let owner:Digest=row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_|"native9 owner size")?;
-            ledger.note_native_candidate_projection_v9(owner,class)?;
+        let rows: LedgerRowsV1 = self
+            .rows
+            .iter()
+            .filter(|((table, _), _)| *table != TABLE_FLAT_CONFORMANCE_CLASSES_V9)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows)?;
+        for ((_, key), row) in
+            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        {
+            let class: Digest = borsh::from_slice(key).map_err(|e| e.to_string())?;
+            let owner: Digest =
+                row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_| "native9 owner size")?;
+            ledger.note_native_candidate_projection_v9(owner, class)?;
         }
         Ok(ledger)
     }

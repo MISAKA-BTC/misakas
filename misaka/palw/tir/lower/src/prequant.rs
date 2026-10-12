@@ -90,7 +90,9 @@ impl Described {
                 t.layout(&params).map_err(|e| LowerError::bad(format!("quant format `{}`: {e}", format.name())))?;
             }
             (None, Some(_)) => {}
-            (None, None) => return Err(LowerError::bad(format!("quant format `{}` is neither a tensors nor a virtual format", format.name()))),
+            (None, None) => {
+                return Err(LowerError::bad(format!("quant format `{}` is neither a tensors nor a virtual format", format.name())));
+            }
         }
         Ok(Described { format, params })
     }
@@ -104,11 +106,17 @@ fn builtin_binding(fmt: &QFormat) -> Option<(Arc<QuantFormat>, BTreeMap<String, 
     match fmt {
         QFormat::Gptq { bits, group, sym, v2, .. } => Some((
             reg.named("GPTQ").expect("the built-in GPTQ descriptor").clone(),
-            BTreeMap::from([("bits".into(), *bits as i64), ("group_size".into(), gs(*group)), ("v2".into(), *v2 as i64), ("sym".into(), *sym as i64)]),
+            BTreeMap::from([
+                ("bits".into(), *bits as i64),
+                ("group_size".into(), gs(*group)),
+                ("v2".into(), *v2 as i64),
+                ("sym".into(), *sym as i64),
+            ]),
         )),
-        QFormat::Awq { bits, group } => {
-            Some((reg.named("AWQ").expect("the built-in AWQ descriptor").clone(), BTreeMap::from([("bits".into(), *bits as i64), ("group_size".into(), gs(*group))])))
-        }
+        QFormat::Awq { bits, group } => Some((
+            reg.named("AWQ").expect("the built-in AWQ descriptor").clone(),
+            BTreeMap::from([("bits".into(), *bits as i64), ("group_size".into(), gs(*group))]),
+        )),
         QFormat::Described(d) => Some((d.format.clone(), d.params.clone())),
         QFormat::Gguf { .. } => None,
     }
@@ -270,7 +278,12 @@ fn regex_parse(p: &str) -> Result<(Vec<(Re, bool)>, bool)> {
         let tok = match c {
             '\\' => match it.next() {
                 Some(e) if e.is_ascii_punctuation() => Re::Lit(e),
-                other => return Err(nl(format!("`ignore` pattern `{p}`: the escape \\{} is outside the subset read (literals, `.`, `.*`, `^`, `$`)", other.map(String::from).unwrap_or_default()))),
+                other => {
+                    return Err(nl(format!(
+                        "`ignore` pattern `{p}`: the escape \\{} is outside the subset read (literals, `.`, `.*`, `^`, `$`)",
+                        other.map(String::from).unwrap_or_default()
+                    )));
+                }
             },
             '.' => Re::Any,
             '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' => {
@@ -590,7 +603,14 @@ fn described_config(q: &Value, method: &str, arch: &str, reg: &QuantRegistry) ->
     for e in &r.skip {
         check_skip_pattern(e)?;
     }
-    Ok(QuantConfig { fmt: QFormat::Described(Described::new(f.clone(), r.params)?), lm_head: r.lm_head, skip: r.skip, only: None, per_module: Default::default(), module_params: Default::default() })
+    Ok(QuantConfig {
+        fmt: QFormat::Described(Described::new(f.clone(), r.params)?),
+        lm_head: r.lm_head,
+        skip: r.skip,
+        only: None,
+        per_module: Default::default(),
+        module_params: Default::default(),
+    })
 }
 
 /// Parse `quantization_config` (GPTQ and AWQ by hand; any other method through the descriptor in
@@ -626,9 +646,7 @@ pub fn parse_quant_config_with(q: &Value, arch: &str, model_type: &str, reg: &Qu
     let group = group_of(get_u(q, "group_size")?)?;
     if method == "gptq" {
         if ![2, 4, 8].contains(&bits) {
-            return Err(nl(format!(
-                "{arch}: GPTQ {bits}-bit (2, 4 and 8 bits are read; 3-bit words straddle int32 boundaries)"
-            )));
+            return Err(nl(format!("{arch}: GPTQ {bits}-bit (2, 4 and 8 bits are read; 3-bit words straddle int32 boundaries)")));
         }
         let fmt = get_s(q, "checkpoint_format")?.or(get_s(q, "format")?).unwrap_or_else(|| "gptq".into());
         let v2 = match fmt.as_str() {
@@ -790,7 +808,15 @@ impl QWeight {
             q.extend(cols.iter().map(|c| row[*c]));
         }
         let gidx = cols.iter().map(|c| self.gidx[*c]).collect();
-        Ok(QWeight { q, gidx, scale: self.scale.clone(), zero: self.zero.clone(), min: self.min.clone(), label: self.label.clone(), ..*self })
+        Ok(QWeight {
+            q,
+            gidx,
+            scale: self.scale.clone(),
+            zero: self.zero.clone(),
+            min: self.min.clone(),
+            label: self.label.clone(),
+            ..*self
+        })
     }
     /// The column order in which every group is contiguous: columns sorted by group, stable. Every
     /// group must have exactly `group` columns.

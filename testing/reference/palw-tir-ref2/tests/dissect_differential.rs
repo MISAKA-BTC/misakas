@@ -104,19 +104,57 @@ fn attn_program(rng: &mut R, a: &Attn) -> Program {
     let q3 = b.node(lay, Prim::Reshape, &[Ref::Node(q)], fixed(DType::I16, &[a.nh, 1, a.dh]), false);
     let k_row = proj(&mut b, rng, true);
     let v_row = proj(&mut b, rng, true);
-    let kk = b.node(lay, Prim::HistAppend { state: hk }, &[Ref::Node(k_row)], ty(DType::I16, &[Dim::H, Dim::Fixed(a.nh), Dim::Fixed(a.dh)]), false);
-    let vv = b.node(lay, Prim::HistAppend { state: hv }, &[Ref::Node(v_row)], ty(DType::I16, &[Dim::H, Dim::Fixed(a.nh), Dim::Fixed(a.dh)]), false);
-    let kt = b.node(lay, Prim::Transpose { perm: vec![1, 2, 0] }, &[Ref::Node(kk)], ty(DType::I16, &[Dim::Fixed(a.nh), Dim::Fixed(a.dh), Dim::H]), false);
-    let vt = b.node(lay, Prim::Transpose { perm: vec![1, 0, 2] }, &[Ref::Node(vv)], ty(DType::I16, &[Dim::Fixed(a.nh), Dim::H, Dim::Fixed(a.dh)]), false);
-    let sc = b.node(lay, Prim::MatMul, &[Ref::Node(q3), Ref::Node(kt)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
+    let kk = b.node(
+        lay,
+        Prim::HistAppend { state: hk },
+        &[Ref::Node(k_row)],
+        ty(DType::I16, &[Dim::H, Dim::Fixed(a.nh), Dim::Fixed(a.dh)]),
+        false,
+    );
+    let vv = b.node(
+        lay,
+        Prim::HistAppend { state: hv },
+        &[Ref::Node(v_row)],
+        ty(DType::I16, &[Dim::H, Dim::Fixed(a.nh), Dim::Fixed(a.dh)]),
+        false,
+    );
+    let kt = b.node(
+        lay,
+        Prim::Transpose { perm: vec![1, 2, 0] },
+        &[Ref::Node(kk)],
+        ty(DType::I16, &[Dim::Fixed(a.nh), Dim::Fixed(a.dh), Dim::H]),
+        false,
+    );
+    let vt = b.node(
+        lay,
+        Prim::Transpose { perm: vec![1, 0, 2] },
+        &[Ref::Node(vv)],
+        ty(DType::I16, &[Dim::Fixed(a.nh), Dim::H, Dim::Fixed(a.dh)]),
+        false,
+    );
+    let sc =
+        b.node(lay, Prim::MatMul, &[Ref::Node(q3), Ref::Node(kt)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let m = b.node(lay, Prim::ReduceMax { axis: 2 }, &[Ref::Node(sc)], fixed(DType::I32, &[a.nh, 1, 1]), a.commit_m);
-    let diff = b.node(lay, Prim::Sub, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
+    let diff =
+        b.node(lay, Prim::Sub, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I64, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let e = b.node(lay, Prim::IntExp, &[Ref::Node(diff)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
     let e_used = if a.select_o2 {
         // O-2: a Select whose condition carries H, with a value operand that depends on m.
-        let cmp = b.node(lay, Prim::Compare { cmp: ref2::Cmp::Eq }, &[Ref::Node(sc), Ref::Node(m)], ty(DType::I8, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false);
+        let cmp = b.node(
+            lay,
+            Prim::Compare { cmp: ref2::Cmp::Eq },
+            &[Ref::Node(sc), Ref::Node(m)],
+            ty(DType::I8, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]),
+            false,
+        );
         let mb = b.node(lay, Prim::Clamp { lo: 0, hi: 1 << 24 }, &[Ref::Node(m)], fixed(DType::I32, &[a.nh, 1, 1]), false);
-        b.node(lay, Prim::Select, &[Ref::Node(cmp), Ref::Node(mb), Ref::Node(e)], ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]), false)
+        b.node(
+            lay,
+            Prim::Select,
+            &[Ref::Node(cmp), Ref::Node(mb), Ref::Node(e)],
+            ty(DType::I32, &[Dim::Fixed(a.nh), Dim::Fixed(1), Dim::H]),
+            false,
+        )
     } else {
         e
     };
@@ -136,7 +174,13 @@ fn attn_program(rng: &mut R, a: &Attn) -> Program {
         let vs = b.node(lay, Prim::ReduceSum { axis: 1 }, &[Ref::Node(vt)], fixed(DType::I32, &[a.nh, 1, a.dh]), false);
         num = b.node(lay, Prim::Add, &[Ref::Node(o), Ref::Node(vs)], fixed(DType::I64, &[a.nh, 1, a.dh]), false);
     }
-    let div = b.node(lay, Prim::Div { rule: ref2::Rounding::Floor }, &[Ref::Node(num), Ref::Node(sc1)], fixed(DType::I64, &[a.nh, 1, a.dh]), false);
+    let div = b.node(
+        lay,
+        Prim::Div { rule: ref2::Rounding::Floor },
+        &[Ref::Node(num), Ref::Node(sc1)],
+        fixed(DType::I64, &[a.nh, 1, a.dh]),
+        false,
+    );
     let out = b.node(lay, Prim::Clamp { lo: -30000, hi: 30000 }, &[Ref::Node(div)], fixed(DType::I16, &[a.nh, 1, a.dh]), true);
     let y = b.node(lay, Prim::Reshape, &[Ref::Node(out)], fixed(DType::I16, &[d]), false);
     let r = b.node(lay, Prim::Add, &[Ref::CarryIn(0), Ref::Node(y)], fixed(DType::I32, &[d]), false);
@@ -152,7 +196,12 @@ fn attn_program(rng: &mut R, a: &Attn) -> Program {
 
 /// A step space and a job context for a run of `positions` positions, every commit point tiled at
 /// `tile_lens` (by `(block, node)`, default the node's element count at the window).
-fn space(pp: &Prepared, positions: u32, h_tile: u32, tile_len: u32) -> Result<(cc::palw_tir_step_v1::PalwTirStepSpaceV1, cc::palw_v2::PalwJobContextV2), String> {
+fn space(
+    pp: &Prepared,
+    positions: u32,
+    h_tile: u32,
+    tile_len: u32,
+) -> Result<(cc::palw_tir_step_v1::PalwTirStepSpaceV1, cc::palw_v2::PalwJobContextV2), String> {
     let p = &pp.prog;
     let mut commit_tiles = Vec::new();
     for blk in p.blocks.iter() {
@@ -178,7 +227,8 @@ fn space(pp: &Prepared, positions: u32, h_tile: u32, tile_len: u32) -> Result<(c
         commit_tiles,
         state_tiles,
     };
-    let sp = cc::palw_tir_step_v1::PalwTirStepSpaceV1::from_program(pp.fp.clone(), pp.info.clone(), layout).map_err(|e| format!("{e:?}"))?;
+    let sp = cc::palw_tir_step_v1::PalwTirStepSpaceV1::from_program(pp.fp.clone(), pp.info.clone(), layout)
+        .map_err(|e| format!("{e:?}"))?;
     let h = cc::Hash64::default();
     let ctx = cc::palw_v2::PalwJobContextV2 {
         version: 2,
@@ -217,7 +267,8 @@ fn first_site(
     });
     let Some(leaf) = leaf else { return Err(format!("no commit leaf for {ctx:?} node {n} element {first_el}")) };
     let (index, count) = (leaf.index, leaf.value_count);
-    let s = catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_site_v1(sp, &pp.ivs_first, &leaf)).map_err(|e| format!("panic {e}"))?;
+    let s =
+        catch_any(|| cc::palw_tir_dissect_v1::palw_tir_dissect_site_v1(sp, &pp.ivs_first, &leaf)).map_err(|e| format!("panic {e}"))?;
     Ok(s.map(|s| (s, index, count)))
 }
 
@@ -293,7 +344,13 @@ fn with_claim(m: &Model, st: &Site, root: &RootClaim) -> Model {
 /// The first implementation's evaluations of a claim, through its range evaluation: the finalize
 /// (with every reduction but `n` supplied), the closure of reads to a fixpoint, and a range's
 /// partials. `Err` carries the class of a failed evaluation.
-fn first_finalize(pp: &Prepared, st: &Site, tile: &[u64], root: &RootClaim, m: &Model) -> Result<(Vec<i128>, BTreeSet<(usize, u64)>), String> {
+fn first_finalize(
+    pp: &Prepared,
+    st: &Site,
+    tile: &[u64],
+    root: &RootClaim,
+    m: &Model,
+) -> Result<(Vec<i128>, BTreeSet<(usize, u64)>), String> {
     let mm = with_claim(m, st, root);
     let last = st.reductions.len() - 1;
     if st.reductions[last] == st.node {
@@ -427,17 +484,39 @@ enum Play {
     Honest,
     /// A false total at `(i, e)`, the tile forged to match; rounds fold to it with the lie carried
     /// by the child at `place` (usize::MAX: the last, a random one otherwise).
-    Consistent { i: usize, e: usize, delta: i128, place: Place },
+    Consistent {
+        i: usize,
+        e: usize,
+        delta: i128,
+        place: Place,
+    },
     /// A false total, forged tile, rounds that are honest-given-the-totals (they do not fold).
-    NonFolding { i: usize, e: usize, delta: i128 },
+    NonFolding {
+        i: usize,
+        e: usize,
+        delta: i128,
+    },
     /// A false total with the honest tile.
-    Unforged { i: usize, e: usize, delta: i128 },
+    Unforged {
+        i: usize,
+        e: usize,
+        delta: i128,
+    },
     /// A total outside its reduction's bound.
-    OutOfBound { i: usize, e: usize },
+    OutOfBound {
+        i: usize,
+        e: usize,
+    },
     /// One element dropped from, or added to, a list, or a list reversed.
-    ShortList { i: usize },
-    LongList { i: usize },
-    Unsorted { i: usize },
+    ShortList {
+        i: usize,
+    },
+    LongList {
+        i: usize,
+    },
+    Unsorted {
+        i: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -603,13 +682,14 @@ fn game(
         finalize: Box::new(dummy_carriage(pp)),
     };
     let sid = cc::Hash64::from_u64_word(7);
-    let mut phase = match catch_any(|| cc::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(sid, 0, fsite, &froot, k as u8, 0, W_ROUND)) {
-        Ok(Ok(ph)) => ph,
-        other => {
-            t.disagree("phase open", format!("{what}: {other:?}"));
-            return;
-        }
-    };
+    let mut phase =
+        match catch_any(|| cc::palw_tir_dissect_v1::PalwTirDissectPhaseV1::open(sid, 0, fsite, &froot, k as u8, 0, W_ROUND)) {
+            Ok(Ok(ph)) => ph,
+            other => {
+                t.disagree("phase open", format!("{what}: {other:?}"));
+                return;
+            }
+        };
     let t_h = history_tiles(st);
     if phase.round_budget() != ref2::dissect::round_budget(t_h, k) {
         t.disagree("round budget", format!("{what}: ref2 {} first {}", ref2::dissect::round_budget(t_h, k), phase.round_budget()));
@@ -676,7 +756,8 @@ fn game(
         // The challenger names the first child whose claim differs from the court's evaluation.
         let choice = (0..claims.len()).find(|&x| claims[x] != court[x]).unwrap_or_else(|| rng.gen_range(0..claims.len()));
         t.moves += 1;
-        let cm = cc::palw_tir_dissect_v1::PalwTirDissectChoiceV1 { version: 1, session_id: sid, round: phase.round(), child: choice as u8 };
+        let cm =
+            cc::palw_tir_dissect_v1::PalwTirDissectChoiceV1 { version: 1, session_id: sid, round: phase.round(), child: choice as u8 };
         match catch_any(|| {
             let mut ph = phase.clone();
             let r = ph.apply_choice(&cm, daa, W_ROUND);
@@ -807,7 +888,10 @@ fn exercise_with(t: &mut Tally, rng: &mut R, tag: &str, pp: &Prepared, params: &
                 if l.iter().map(|x| x.len()).sum::<usize>() > ref2::dissect::MAX_VALUES {
                     continue;
                 }
-                let root = RootClaim { totals: l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect(), elements: l };
+                let root = RootClaim {
+                    totals: l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect(),
+                    elements: l,
+                };
                 let honest_tile: Vec<i128> = tile.iter().map(|&e| m.nodes[&(pos, o as u32, n)][e as usize]).collect();
                 // The closure on the first implementation's arithmetic.
                 match first_closure(pp, &st, &tile, &root, &m) {
@@ -917,8 +1001,9 @@ fn random_programs_long_h() {
         let mut rng = R::seed_from_u64(0xD157_0000 + seed);
         let g = gen_program(&mut rng, GenCfg { range_safe: true, max_nodes: 30, ..GenCfg::default() });
         let p = &g.prog;
-        let dissected = (0..p.blocks.len())
-            .any(|b| p.blocks[b].nodes.iter().enumerate().any(|(n, x)| x.commit && !ref2::dissect::cone_reductions(p, b, n as u16).is_empty()));
+        let dissected = (0..p.blocks.len()).any(|b| {
+            p.blocks[b].nodes.iter().enumerate().any(|(n, x)| x.commit && !ref2::dissect::cone_reductions(p, b, n as u16).is_empty())
+        });
         if !dissected {
             continue;
         }
@@ -946,7 +1031,10 @@ fn cone_functions() {
     let mut progs: Vec<(String, Program)> = Vec::new();
     for seed in 0..(300 * scale() as u64) {
         let mut rng = R::seed_from_u64(0xC0FE_0000 + seed);
-        progs.push((format!("gen {seed}"), gen_program(&mut rng, GenCfg { range_safe: true, max_nodes: 30, ..GenCfg::default() }).prog));
+        progs.push((
+            format!("gen {seed}"),
+            gen_program(&mut rng, GenCfg { range_safe: true, max_nodes: 30, ..GenCfg::default() }).prog,
+        ));
         if seed % 5 == 0 {
             let a = Attn {
                 nh: rng.gen_range(1..=2),
@@ -1004,7 +1092,11 @@ fn cone_functions() {
                         if Ok(mv) != fv {
                             // Finding H2: the first implementation's V falls below the text's formula
                             // (and below the real closure: `value_bound_against_closures`).
-                            let kind = if fv.as_ref().is_ok_and(|&f| f < mv) { "H2: first's value bound below the text's (and the real closure)" } else { "value bound" };
+                            let kind = if fv.as_ref().is_ok_and(|&f| f < mv) {
+                                "H2: first's value bound below the text's (and the real closure)"
+                            } else {
+                                "value bound"
+                            };
                             t.disagree(kind, format!("{name} b{b} n{n} tile_len {tile_len}: ref2 {mv} first {fv:?}"));
                         }
                     }
@@ -1027,7 +1119,6 @@ fn cone_functions() {
     t.report("cone functions");
     assert!(t.disagreements.keys().all(|k| k.starts_with("H2")), "disagreements beyond finding H2");
 }
-
 
 #[test]
 #[ignore]
@@ -1097,7 +1188,10 @@ fn h1_empty_list_probe() {
         let full = RootClaim { elements: vec![vec![0], vec![0]], totals: all_t.clone() };
         let c = closure(&prog, &st, &tile, &full, &mut Mine(&m), LIM).unwrap();
         let l: Vec<Vec<u64>> = c.iter().map(|s| s.iter().copied().collect()).collect();
-        let root = RootClaim { totals: l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect(), elements: l.clone() };
+        let root = RootClaim {
+            totals: l.iter().enumerate().map(|(i, li)| li.iter().map(|&e| all_t[i][e as usize]).collect()).collect(),
+            elements: l.clone(),
+        };
         let committed: Vec<i128> = tile.iter().map(|&e| m.nodes[&(5, 1, cat)][e as usize]).collect();
         let mine = admit_root(&prog, &st, &tile, &committed, &root, &mut Mine(&m), LIM);
         let els32: Vec<Vec<u32>> = l.iter().map(|x| x.iter().map(|&e| e as u32).collect()).collect();
@@ -1117,7 +1211,8 @@ fn range_request_refusals() {
     let m = Model::from_run(&prog, &Params::new(), &tokens, &|_| true).unwrap();
     let ctx = Ctx { pos: 5, occ: 1 };
     let b = prog.schedule.layers[0] as usize;
-    let reds: Vec<u16> = (0..prog.blocks[b].nodes.len() as u16).filter(|&i| ref2::demand::reduces_over_h(&prog, b, i as usize)).collect();
+    let reds: Vec<u16> =
+        (0..prog.blocks[b].nodes.len() as u16).filter(|&i| ref2::demand::reduces_over_h(&prog, b, i as usize)).collect();
     let r = reds[0];
     let other = (0..prog.blocks[b].nodes.len() as u16).find(|&i| !reds.contains(&i)).unwrap();
     let n = prog.blocks[b].nodes.len() as u16;
@@ -1222,7 +1317,9 @@ fn value_bound_against_closures() {
                         }
                         start += tl;
                     }
-                    rows.push(format!("seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"));
+                    rows.push(format!(
+                        "seed {seed} b{b} n{n} tile_len {tl}: ref2 V {mv}, first V {fv}, the largest real closure {worst}"
+                    ));
                 }
             }
         }
@@ -1262,6 +1359,10 @@ fn value_bound_on_the_corpus() {
                 }
             }
         }
-        println!("{name}: {} dissected (commit point, tile_len) pairs, V and obligations identical{}", rows.len(), if rows.is_empty() { String::new() } else { format!(" — e.g. {}", rows[0]) });
+        println!(
+            "{name}: {} dissected (commit point, tile_len) pairs, V and obligations identical{}",
+            rows.len(),
+            if rows.is_empty() { String::new() } else { format!(" — e.g. {}", rows[0]) }
+        );
     }
 }

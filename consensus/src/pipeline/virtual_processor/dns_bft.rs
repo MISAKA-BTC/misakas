@@ -530,7 +530,9 @@ impl VirtualStateProcessor {
     pub(super) fn dns_bft_gate_refusal(&self, candidate: BlockHash, prev_sink: BlockHash) -> Option<DnsReorgOutcome> {
         let dns_params = self.dns_params.as_ref()?;
         let incumbent_daa = self.headers_store.get_daa_score(prev_sink).ok()?;
-        if self.dns_retired_at(incumbent_daa) { return None; }
+        if self.dns_retired_at(incumbent_daa) {
+            return None;
+        }
         let gate = self.dns_bft_gate.filter(|gate| gate.activation.is_active(incumbent_daa))?;
         if self.dns_bft_runtime.gate_abstains() {
             debug!("[dns-bft] gate: the last evaluation could not cover its walk; abstaining for candidate {candidate}");

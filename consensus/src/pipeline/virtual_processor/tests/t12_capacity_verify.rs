@@ -54,7 +54,9 @@
 //! * **V4:** the attempt lane made 20 / 36 / 68 / 85 claims a DAA at 4 / 8 / 16 / 32 parallel
 //!   producers (four merge rounds a DAA; a merge takes ≈ 21 at most); binding 100 and 1,000 claims in
 //!   one anchor block took 135 ms and 1,870 ms (1.35 / 1.87 ms a bind).
-use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
+use super::t12_round_lane_e2e::{
+    T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards,
+};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
@@ -68,10 +70,12 @@ use kaspa_consensus_core::palw_batch_licence_v1::{
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_registry_v1::{PalwModelLifecycleV1, PalwSeatReadinessRowV1};
-use kaspa_consensus_core::palw_panel_v2::{PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3, palw_receipt_message_v3};
+use kaspa_consensus_core::palw_panel_v2::{
+    PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3, palw_receipt_message_v3,
+};
 use kaspa_consensus_core::palw_state_v2::{
-    PalwBlockContextV2, PalwBondKeyV2, PalwBondStateV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj,
-    PalwStateCarriageV2,
+    PalwBlockContextV2, PalwBondKeyV2, PalwBondStateV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2,
+    PalwConsensusObjectV2 as Obj, PalwStateCarriageV2,
 };
 use kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2;
 use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
@@ -313,7 +317,9 @@ impl Sim {
     fn ready(&self, w: Who, class: Hash64) -> Result<(), String> {
         let (n, _) = self.who(w);
         let facts = self.facts(w, class);
-        facts.ready_to_produce_v3(&pubkey(n), true).map_err(|why| format!("{why}: {}", facts.class_admission_refusal.unwrap_or_default()))
+        facts
+            .ready_to_produce_v3(&pubkey(n), true)
+            .map_err(|why| format!("{why}: {}", facts.class_admission_refusal.unwrap_or_default()))
     }
 
     /// An attempt block by `w` for `class` on the node's own template, inserted as the sink. Returns the
@@ -369,7 +375,11 @@ impl Sim {
             .chain
             .ctx
             .consensus
-            .build_block_template(MinerData::new(miner, vec![]), Box::new(super::OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
+            .build_block_template(
+                MinerData::new(miner, vec![]),
+                Box::new(super::OnetimeTxSelector::new(txs)),
+                TemplateBuildMode::Standard,
+            )
             .expect("a template");
         assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id), "the attempt lane");
         stamp_harness_time(&self.chain.config.params, &mut t.block.header, self.chain.ctx.simulated_time);
@@ -430,7 +440,12 @@ impl Sim {
             );
             sign_spend(&mut tx, entry.clone(), card, self.chain.config.params.storage_mass_parameter);
             for i in 0..parts {
-                self.wallet.push((TransactionOutpoint::new(tx.id(), i), UtxoEntry::new(part, card_payout_spk(card), 0, false), card, self.blocks + 3));
+                self.wallet.push((
+                    TransactionOutpoint::new(tx.id(), i),
+                    UtxoEntry::new(part, card_payout_spk(card), 0, false),
+                    card,
+                    self.blocks + 3,
+                ));
             }
             txs.push(tx);
         }
@@ -454,7 +469,12 @@ impl Sim {
             payload,
         );
         sign_spend(&mut tx, entry, card, self.chain.config.params.storage_mass_parameter);
-        self.wallet.push((TransactionOutpoint::new(tx.id(), 0), UtxoEntry::new(change, card_payout_spk(card), 0, false), card, self.blocks + 3));
+        self.wallet.push((
+            TransactionOutpoint::new(tx.id(), 0),
+            UtxoEntry::new(change, card_payout_spk(card), 0, false),
+            card,
+            self.blocks + 3,
+        ));
         Some(tx)
     }
 
@@ -518,8 +538,10 @@ impl Sim {
             .into_iter()
             .map(|(seat, leaves)| {
                 let n = self.keys[&seat];
-                PalwSeatWindowV1::sign(self.domain, seat, now, now, leaves, |message| sign(n, message, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT))
-                    .expect("a non-empty window")
+                PalwSeatWindowV1::sign(self.domain, seat, now, now, leaves, |message| {
+                    sign(n, message, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT)
+                })
+                .expect("a non-empty window")
             })
             .collect()
     }
@@ -531,7 +553,12 @@ impl Sim {
 
     fn point(&self) -> PalwBlockContextV2 {
         let virtual_state = self.vp().lkg_virtual_state.load();
-        PalwBlockContextV2 { block: self.chain.sink(), daa_score: virtual_state.daa_score, blue_score: virtual_state.ghostdag_data.blue_score, subsidy: 0 }
+        PalwBlockContextV2 {
+            block: self.chain.sink(),
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        }
     }
 
     fn bound_claims(&self) -> Vec<Hash64> {
@@ -582,9 +609,10 @@ impl Sim {
                 },
             );
             if seat && let Some(k8) = self.k8 {
-                carriage
-                    .seat_readiness
-                    .insert((bond, k8), PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 });
+                carriage.seat_readiness.insert(
+                    (bond, k8),
+                    PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 },
+                );
             }
             self.keys.insert(bond, n);
             planted.push(bond);
@@ -606,9 +634,10 @@ impl Sim {
         let now = self.daa();
         let mut carriage = PalwStateCarriageV2::from_state(&tip);
         for seat in self.chain.bonds.iter().chain(self.planted_seats.iter()) {
-            carriage
-                .seat_readiness
-                .insert((*seat, k8), PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 });
+            carriage.seat_readiness.insert(
+                (*seat, k8),
+                PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 },
+            );
         }
         if let Some(row) = carriage.model_lifecycles.get_mut(&k8)
             && !row.state.admits_claims()
@@ -656,7 +685,10 @@ async fn adr0160_batch_and_room_v2_cross_their_fence_at_a_low_height() {
     s.beat().await;
     s.beat().await;
     let st = s.state();
-    assert!(matches!(st.claim(&below[0]).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the single licence licensed below H");
+    assert!(
+        matches!(st.claim(&below[0]).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+        "the single licence licensed below H"
+    );
     assert!(matches!(st.claim(&below[1]).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the batch below H folded nothing");
     assert!(s.daa() < H);
     // Across the fence: more claims, bound past it, licensed by one batch.
@@ -678,7 +710,12 @@ async fn adr0160_batch_and_room_v2_cross_their_fence_at_a_low_height() {
     assert_eq!(entries.len(), due.len(), "every due claim in one batch");
     assert!(roots.len() <= 8, "one root per seat: {}", roots.len());
     let tx = s.carrier(batch.clone()).expect("funding");
-    out_line(format!("{{\"crossing\":1,\"entries\":{},\"roots\":{},\"transient_mass\":{}}}", entries.len(), roots.len(), s.transient_mass(&tx)));
+    out_line(format!(
+        "{{\"crossing\":1,\"entries\":{},\"roots\":{},\"transient_mass\":{}}}",
+        entries.len(),
+        roots.len(),
+        s.transient_mass(&tx)
+    ));
     s.queued.push(tx);
     s.beat().await;
     s.beat().await;
@@ -716,7 +753,8 @@ async fn adr0160_batch_and_room_v2_cross_their_fence_at_a_low_height() {
             .unwrap_or_else(|e| panic!("the released node refuses an armed block below H: {e}"));
         let tip = block.header.hash;
         let armed_root = s.vp().palw_state_v2_store.read().state_root_of(tip).expect("the armed node's root of the block");
-        let released_root = twin_chain.vp().palw_state_v2_store.read().state_root_of(tip).expect("the released node's root of the block");
+        let released_root =
+            twin_chain.vp().palw_state_v2_store.read().state_root_of(tip).expect("the released node's root of the block");
         assert_eq!(released_root, armed_root, "block {tip} at DAA {}: one root below the fence", block.header.daa_score);
         compared += 1;
     }
@@ -727,7 +765,13 @@ async fn adr0160_batch_and_room_v2_cross_their_fence_at_a_low_height() {
         t12_genesis_chain(&config, &bundle, &premine, &floats)
     };
     for block in &armed_blocks {
-        second_chain.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a second armed node takes the chain");
+        second_chain
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone())
+            .virtual_state_task
+            .await
+            .expect("a second armed node takes the chain");
     }
     assert_eq!(second_chain.sink(), s.chain.sink(), "the same sink");
     assert_eq!(second_chain.tip_state().1.state_root(), s.root(), "the same PALW root on a second armed node");
@@ -831,19 +875,60 @@ async fn adr0160_vt1_a_batch_licenses_exactly_as_its_single_licences() {
     let Obj::ReceiptLicensedBatchV1 { roots: path_roots, entries: path_entries } = &by_paths else { unreachable!() };
     let mut bad_path = path_entries.clone();
     bad_path[0].seats[0].path[0] = Hash64::from_u64_word(0xBAD);
-    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: path_roots.clone(), entries: bad_path }], s.chain.sink()).is_empty(), "a path that does not fold is refused");
+    assert!(
+        vp.palw_v2_accepted_objects_for_tests(
+            &tip,
+            sp,
+            &point,
+            vec![Obj::ReceiptLicensedBatchV1 { roots: path_roots.clone(), entries: bad_path }],
+            s.chain.sink()
+        )
+        .is_empty(),
+        "a path that does not fold is refused"
+    );
     // A carried list that does not hash to its signed root: refused.
     let mut bad_list = roots.clone();
     bad_list[0].leaves[0] = Hash64::from_u64_word(0xBAD);
-    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: bad_list, entries: entries.clone() }], s.chain.sink()).is_empty(), "a list that is not the root's is refused");
+    assert!(
+        vp.palw_v2_accepted_objects_for_tests(
+            &tip,
+            sp,
+            &point,
+            vec![Obj::ReceiptLicensedBatchV1 { roots: bad_list, entries: entries.clone() }],
+            s.chain.sink()
+        )
+        .is_empty(),
+        "a list that is not the root's is refused"
+    );
     // A receipt naming another leaf of a listed root: refused.
     let mut wrong_leaf = entries.clone();
-    wrong_leaf[0].seats[0].leaf_index = (wrong_leaf[0].seats[0].leaf_index + 1) % roots[wrong_leaf[0].seats[0].root_index as usize].count;
-    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: roots.clone(), entries: wrong_leaf }], s.chain.sink()).is_empty(), "another leaf of the list is refused");
+    wrong_leaf[0].seats[0].leaf_index =
+        (wrong_leaf[0].seats[0].leaf_index + 1) % roots[wrong_leaf[0].seats[0].root_index as usize].count;
+    assert!(
+        vp.palw_v2_accepted_objects_for_tests(
+            &tip,
+            sp,
+            &point,
+            vec![Obj::ReceiptLicensedBatchV1 { roots: roots.clone(), entries: wrong_leaf }],
+            s.chain.sink()
+        )
+        .is_empty(),
+        "another leaf of the list is refused"
+    );
     // A root signed by another bond's key: refused.
     let mut forged_roots = roots.clone();
     forged_roots[0].signature = sign(15, b"not the window message", PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT);
-    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: forged_roots, entries: entries.clone() }], s.chain.sink()).is_empty(), "a root not signed by its seat is refused");
+    assert!(
+        vp.palw_v2_accepted_objects_for_tests(
+            &tip,
+            sp,
+            &point,
+            vec![Obj::ReceiptLicensedBatchV1 { roots: forged_roots, entries: entries.clone() }],
+            s.chain.sink()
+        )
+        .is_empty(),
+        "a root not signed by its seat is refused"
+    );
     // Cross-fork import: the same seats' leaves bound to ANOTHER anchor — valid signatures over a real
     // window, every path folding — license nothing here: the entry is inert, the claims stay bound.
     let foreign_windows: Vec<PalwSeatWindowV1> = {
@@ -852,14 +937,22 @@ async fn adr0160_vt1_a_batch_licenses_exactly_as_its_single_licences() {
             .into_iter()
             .map(|w| {
                 let n = s.keys[&w.root.seat_bond];
-                let leaves: Vec<PalwWindowLeafV1> = w.leaves.iter().map(|l| PalwWindowLeafV1 { anchor_hash: Hash64::from_u64_word(0xF0E1), ..*l }).collect();
-                PalwSeatWindowV1::sign(s.domain, w.root.seat_bond, w.root.from_daa, w.root.to_daa, leaves, |m| sign(n, m, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT)).unwrap()
+                let leaves: Vec<PalwWindowLeafV1> =
+                    w.leaves.iter().map(|l| PalwWindowLeafV1 { anchor_hash: Hash64::from_u64_word(0xF0E1), ..*l }).collect();
+                PalwSeatWindowV1::sign(s.domain, w.root.seat_bond, w.root.from_daa, w.root.to_daa, leaves, |m| {
+                    sign(n, m, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT)
+                })
+                .unwrap()
             })
             .collect()
     };
     let foreign = {
-        let Obj::ReceiptLicensedBatchV1 { roots: _, entries: real_entries } = hand_batch(&s, &s.windows(&due), &due) else { unreachable!() };
-        let Obj::ReceiptLicensedBatchV1 { roots: f_roots, entries: mut f_entries } = hand_batch(&s, &foreign_windows, &due) else { unreachable!() };
+        let Obj::ReceiptLicensedBatchV1 { roots: _, entries: real_entries } = hand_batch(&s, &s.windows(&due), &due) else {
+            unreachable!()
+        };
+        let Obj::ReceiptLicensedBatchV1 { roots: f_roots, entries: mut f_entries } = hand_batch(&s, &foreign_windows, &due) else {
+            unreachable!()
+        };
         for (f, r) in f_entries.iter_mut().zip(real_entries.iter()) {
             assert_eq!(f.claim, r.claim);
             f.anchor_hash = Hash64::from_u64_word(0xF0E1);
@@ -869,7 +962,10 @@ async fn adr0160_vt1_a_batch_licenses_exactly_as_its_single_licences() {
     let accepted_foreign = vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![foreign], s.chain.sink());
     let folded = vp.palw_v2_fold_accepted_for_tests(&tip, sp, &point, &accepted_foreign).expect("folds");
     for claim in &due {
-        assert!(matches!(folded.claim(claim).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "another anchor's receipts license nothing");
+        assert!(
+            matches!(folded.claim(claim).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+            "another anchor's receipts license nothing"
+        );
     }
     // Inert entries do not drop a live one — a licence another object lands first: V-T1b below.
 }
@@ -930,12 +1026,14 @@ async fn adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing() {
     // (b) The single in the block before; the batch offered after it.
     let after_single = vp.palw_v2_fold_accepted_for_tests(&tip, &sp, &point, &singles[..1]).expect("the single folds");
     let next = PalwBlockContextV2 { block: point.block, daa_score: point.daa_score, blue_score: point.blue_score + 1, subsidy: 0 };
-    vp.palw_v2_validate_objects(&after_single, &sp, &next, std::slice::from_ref(&batch)).expect("(b) the gate takes the batch after the single");
+    vp.palw_v2_validate_objects(&after_single, &sp, &next, std::slice::from_ref(&batch))
+        .expect("(b) the gate takes the batch after the single");
     let b = vp.palw_v2_accepted_objects_for_tests(&after_single, &sp, &next, vec![batch.clone()], sink);
     assert_eq!(b, vec![batch.clone()], "(b) the batch lands");
     let b_folded = vp.palw_v2_fold_accepted_for_tests(&after_single, &sp, &next, &b).expect("(b) folds");
     assert_eq!(licensed(&b_folded), 6, "(b) all six licensed");
-    let b_reference = vp.palw_v2_fold_accepted_for_tests(&after_single, &sp, &next, &singles[1..]).expect("the other singles fold").state_root();
+    let b_reference =
+        vp.palw_v2_fold_accepted_for_tests(&after_single, &sp, &next, &singles[1..]).expect("the other singles fold").state_root();
     assert_eq!(b_folded.state_root(), b_reference, "(b) the batch licenses the other five exactly as their singles");
 
     // (c) Anyone's one-entry copy of the batch (its roots, entry 0, no key) ahead of it.
@@ -968,7 +1066,10 @@ async fn adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing() {
         carriage.panel_duties.get_mut(&claim0).expect("the duty row").seats.insert(left_seat, 0);
         carriage.into_state(&sp, None).expect("a consistent planted state")
     };
-    assert!(kaspa_consensus_core::palw_state_v2::palw_seat_uncounted_on_licence_v1(&planted, &claim0, &left_seat), "the seat is uncounted");
+    assert!(
+        kaspa_consensus_core::palw_state_v2::palw_seat_uncounted_on_licence_v1(&planted, &claim0, &left_seat),
+        "the seat is uncounted"
+    );
     let route = kaspa_consensus_core::palw_batch_licence_v1::palw_batch_entry_route_v1(&planted, &sp, next.daa_score, &entries[0]);
     assert_eq!(route, kaspa_consensus_core::palw_batch_licence_v1::PalwBatchEntryRouteV1::Supplementary);
     let live = kaspa_consensus_core::palw_batch_licence_v1::palw_batch_entry_live_v1(&planted, route, &entries[0]);
@@ -977,8 +1078,17 @@ async fn adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing() {
     assert_eq!(d, vec![batch.clone()], "(d) the batch lands");
     let d_folded = vp.palw_v2_fold_accepted_for_tests(&planted, &sp, &next, &d).expect("(d) folds");
     assert_eq!(licensed(&d_folded), 6, "(d) all six licensed");
-    assert!(!kaspa_consensus_core::palw_state_v2::palw_seat_uncounted_on_licence_v1(&d_folded, &claim0, &left_seat), "(d) the seat is counted now");
-    out_line(format!("{{\"vt1b\":1,\"a\":{},\"b\":{},\"c\":{},\"d\":{}}}", licensed(&a_folded), licensed(&b_folded), licensed(&c_folded), licensed(&d_folded)));
+    assert!(
+        !kaspa_consensus_core::palw_state_v2::palw_seat_uncounted_on_licence_v1(&d_folded, &claim0, &left_seat),
+        "(d) the seat is counted now"
+    );
+    out_line(format!(
+        "{{\"vt1b\":1,\"a\":{},\"b\":{},\"c\":{},\"d\":{}}}",
+        licensed(&a_folded),
+        licensed(&b_folded),
+        licensed(&c_folded),
+        licensed(&d_folded)
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -988,14 +1098,28 @@ async fn adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing() {
 impl Sim {
     /// Plant `n` extra `Provisional` claims of `class` on `bond` at `accepted_daa`, each reserving what
     /// `template` reserves (a real claim of the class), on the current tip.
-    fn plant_claims(&mut self, class: Hash64, bond: PalwBondKeyV2, n: u64, accepted_daa: u64, template: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2, salt: u64) -> Vec<Hash64> {
+    fn plant_claims(
+        &mut self,
+        class: Hash64,
+        bond: PalwBondKeyV2,
+        n: u64,
+        accepted_daa: u64,
+        template: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+        salt: u64,
+    ) -> Vec<Hash64> {
         let vp = self.vp();
         let bundle = self.chain.bundle.clone();
         let (sink, tip) = self.chain.tip_state();
         let mut carriage = PalwStateCarriageV2::from_state(&tip);
         let mut ids = Vec::new();
         for i in 0..n {
-            let mut claim = kaspa_consensus_core::palw_state_v2::palw_claim_template_v1(class, bond, accepted_daa, template.reserved, template.escrowed_reward);
+            let mut claim = kaspa_consensus_core::palw_state_v2::palw_claim_template_v1(
+                class,
+                bond,
+                accepted_daa,
+                template.reserved,
+                template.escrowed_reward,
+            );
             claim.pwu = template.pwu;
             claim.accepted_block = template.accepted_block;
             claim.trace_root = Hash64::from_u64_word(0x7100_0000 ^ (salt << 24) ^ i);
@@ -1006,7 +1130,8 @@ impl Sim {
             // No immature weight (the planted tip's `bounded_immature` is not re-summed here): the
             // gates measured read none of it.
             claim.immature_contribution = 0;
-            let held = kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(&bundle.state, &claim).expect("a reservation");
+            let held =
+                kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(&bundle.state, &claim).expect("a reservation");
             *carriage.reserved_exposure.entry(bond).or_insert(0) += held;
             let id = Hash64::from_u64_word(0x7F00_0000_0000 ^ (salt << 32) ^ i);
             carriage.claims.insert(id, claim);
@@ -1115,7 +1240,8 @@ async fn adr0160_vt2_batch_carriage_per_block() {
             let carried: usize = txs
                 .iter()
                 .map(|tx| {
-                    let payload: Option<kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2> = borsh::from_slice(&tx.payload).ok();
+                    let payload: Option<kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2> =
+                        borsh::from_slice(&tx.payload).ok();
                     match payload.map(|p| p.object) {
                         Some(Obj::ReceiptLicensedBatchV1 { entries, .. }) => entries.len(),
                         Some(Obj::ReceiptLicensedV2 { .. }) => 1,
@@ -1136,7 +1262,13 @@ async fn adr0160_vt2_batch_carriage_per_block() {
             }
         }
         if rel % 5 == 0 {
-            eprintln!("[cap-verify] {run} rel {rel} daa {} accepted {} sent {} elapsed {:?}", s.daa(), accepted.len(), sent.len(), started.elapsed());
+            eprintln!(
+                "[cap-verify] {run} rel {rel} daa {} accepted {} sent {} elapsed {:?}",
+                s.daa(),
+                accepted.len(),
+                sent.len(),
+                started.elapsed()
+            );
         }
     }
     // The latency tail: accept → licence and bind → licence, from the chain's own records.
@@ -1303,7 +1435,10 @@ async fn adr0160_vt4_split_and_junk_on_the_8k_room() {
             }
             Some((whole_attacker, whole_honest)) => {
                 assert!(attacker_held <= whole_attacker, "V-I4: the split holds {attacker_held}, the whole {whole_attacker}");
-                assert!(honest_held >= whole_honest, "A4: the honest bond holds {honest_held} against the split, {whole_honest} against the whole");
+                assert!(
+                    honest_held >= whole_honest,
+                    "A4: the honest bond holds {honest_held} against the split, {whole_honest} against the whole"
+                );
             }
         }
     }
@@ -1603,7 +1738,13 @@ async fn adr0160_v4_attempt_lane_with_parallel_producers() {
                 let built: Vec<(MutableBlock, Hash64)> = producers.iter().map(|w| s.build_attempt(*w, base, Vec::new())).collect();
                 for (block, _) in built {
                     let block = block.to_immutable();
-                    s.chain.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a sibling attempt is valid");
+                    s.chain
+                        .ctx
+                        .consensus
+                        .validate_and_insert_block(block.clone())
+                        .virtual_state_task
+                        .await
+                        .expect("a sibling attempt is valid");
                     s.blocks += 1;
                     siblings_total += 1;
                 }
@@ -1734,7 +1875,6 @@ async fn adr0160_vt3_the_8k_network_at_the_x10_room() {
     ));
 }
 
-
 // ---------------------------------------------------------------------------------------------------------------
 // RFC-0007 Part I (spec 18): the verification vertex on a real testnet-12 chain, through real blocks
 // ---------------------------------------------------------------------------------------------------------------
@@ -1770,7 +1910,10 @@ impl Sim {
                 } else {
                     PalwClaimRefV1::compact_of(claim, panel.bound_daa).expect("a DAA that fits 32 bits")
                 };
-                leaves.entry(seat.bond).or_default().push(PalwVertexLeafV1::Verdict { claim: reference, verdict: PalwReceiptVerdictV2::Valid });
+                leaves
+                    .entry(seat.bond)
+                    .or_default()
+                    .push(PalwVertexLeafV1::Verdict { claim: reference, verdict: PalwReceiptVerdictV2::Valid });
             }
         }
         leaves
@@ -1837,7 +1980,10 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
     s.queued.push(single_tx);
     s.beat().await;
     s.beat().await;
-    assert!(matches!(s.state().claim(&old_path[0]).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed by receipts below H");
+    assert!(
+        matches!(s.state().claim(&old_path[0]).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+        "licensed by receipts below H"
+    );
 
     // ---- across the fence: claims bound at or after H ---------------------------------------------------------------
     s.beat_to(H - 2).await;
@@ -1864,7 +2010,8 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
         let receipts = s.v3_receipts(by_tally[0]);
         let object = Obj::ReceiptLicensedV2 { claim: by_tally[0], receipts: receipts.clone() };
         let (point, tip, sp, vp) = (s.point(), s.state(), s.chain.bundle.state.clone(), s.vp());
-        let refused = vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object)).expect_err("the receipt path is closed");
+        let refused =
+            vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object)).expect_err("the receipt path is closed");
         assert!(refused.contains("licenses by tally"), "{refused}");
         assert!(vp.palw_v2_receipt_coverage_assemble_impl(by_tally[0], &receipts).is_none(), "the assembler offers nothing for it");
         // …and the old-path claim is still offered one past the fence: no stranding.
@@ -1887,7 +2034,8 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
     let mut vertex_bytes = 0usize;
     for v in &vertices {
         let object = vertex_object(v.clone());
-        vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object)).expect("a signed vertex passes the gate past the fence");
+        vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&object))
+            .expect("a signed vertex passes the gate past the fence");
         let tx = s.carrier(object).expect("funding");
         vertex_mass += s.transient_mass(&tx);
         vertex_bytes += tx.payload.len();
@@ -1909,7 +2057,8 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
         "the cross-fence claim licensed on the old path after H"
     );
     assert!(
-        matches!(st.claim(&old_path[2]).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }) && st.vertex_tally_of_v1(&old_path[2]).is_none(),
+        matches!(st.claim(&old_path[2]).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. })
+            && st.vertex_tally_of_v1(&old_path[2]).is_none(),
         "a leaf naming a claim bound before the fence counted for nothing"
     );
     let (rows, tallies, held) = st.vertex_counts_v1();
@@ -1931,8 +2080,14 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
     use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexEquivocationV1, PalwVertexLeafV1};
     let n = s.keys[&seat];
     let leaf = |claim: Hash64, verdict| PalwVertexLeafV1::Verdict { claim: PalwClaimRefV1::Full(claim), verdict };
-    let a = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Valid)], |m, c| Some(sign(n, m, c))).unwrap();
-    let b = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Sampled)], |m, c| Some(sign(n, m, c))).unwrap();
+    let a = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Valid)], |m, c| {
+        Some(sign(n, m, c))
+    })
+    .unwrap();
+    let b = PalwVerificationVertexV1::sign_v1(s.domain, seat, now, vec![leaf(by_tally[0], PalwReceiptVerdictV2::Sampled)], |m, c| {
+        Some(sign(n, m, c))
+    })
+    .unwrap();
     assert_eq!((a.round, a.seat_bond), (b.round, b.seat_bond));
     let tx_a = s.carrier(vertex_object(a.clone())).expect("funding");
     let tx_b = s.carrier(vertex_object(b.clone())).expect("funding");
@@ -1951,7 +2106,8 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
     let evidence_object = Obj::VertexEquivocationV1 { evidence: Box::new(evidence.clone()) };
     {
         let (point, tip, sp, vp) = (s.point(), s.state(), s.chain.bundle.state.clone(), s.vp());
-        vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&evidence_object)).expect("the evidence carries both signatures");
+        vp.palw_v2_validate_objects(&tip, &sp, &point, std::slice::from_ref(&evidence_object))
+            .expect("the evidence carries both signatures");
         // Hostile evidence is refused at the gate by name: a forged signature on one side.
         let mut forged = evidence.clone();
         forged.b.signature = sign(15, b"not the vertex message", PALW_VERTEX_CONTEXT);
@@ -1968,8 +2124,16 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
     assert!(s.state().vertex_round_row_v1(a.round, &seat).unwrap().convicted, "the pair is convicted");
     assert!(matches!(after.status, PalwBondStatusV2::Retiring { .. }), "the bond is ejected");
     let penalty = u64::try_from(before.collateral as u128 * 100 / 1_000).unwrap();
-    assert!(before.collateral - after.collateral >= penalty, "at least 100 per mille of the bond: {} -> {}", before.collateral, after.collateral);
-    assert!(s.vp().palw_v2_pending_vertex_equivocations_impl().iter().all(|ev| ev.a.seat_bond != seat), "convicted evidence leaves the watch");
+    assert!(
+        before.collateral - after.collateral >= penalty,
+        "at least 100 per mille of the bond: {} -> {}",
+        before.collateral,
+        after.collateral
+    );
+    assert!(
+        s.vp().palw_v2_pending_vertex_equivocations_impl().iter().all(|ev| ev.a.seat_bond != seat),
+        "convicted evidence leaves the watch"
+    );
     out_line(format!(
         "{{\"rfc7_vertex_equivocation\":1,\"collateral_before\":{},\"collateral_after\":{},\"penalty_permille\":100,\"status\":\"{:?}\"}}",
         before.collateral, after.collateral, after.status
@@ -1995,7 +2159,8 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
             .unwrap_or_else(|e| panic!("the released node refuses an armed block below H: {e}"));
         let tip = block.header.hash;
         let armed_root = s.vp().palw_state_v2_store.read().state_root_of(tip).expect("the armed node's root of the block");
-        let released_root = released.vp().palw_state_v2_store.read().state_root_of(tip).expect("the released node's root of the block");
+        let released_root =
+            released.vp().palw_state_v2_store.read().state_root_of(tip).expect("the released node's root of the block");
         assert_eq!(released_root, armed_root, "block {tip} at DAA {}: one root below the fence", block.header.daa_score);
         compared += 1;
     }
@@ -2005,10 +2170,20 @@ async fn rfc7_vertex_crosses_its_fence_on_a_real_chain_and_licenses_by_tally() {
         t12_genesis_chain(&config, &bundle, &premine, &floats)
     };
     for block in &armed_blocks {
-        second.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a second armed node takes the chain");
+        second
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone())
+            .virtual_state_task
+            .await
+            .expect("a second armed node takes the chain");
     }
     assert_eq!(second.sink(), s.chain.sink(), "the same sink");
-    assert_eq!(second.tip_state().1.state_root(), s.root(), "the same PALW root on a second armed node: the vertex rules are chain data");
+    assert_eq!(
+        second.tip_state().1.state_root(),
+        s.root(),
+        "the same PALW root on a second armed node: the vertex rules are chain data"
+    );
 }
 
 /// The signing context of a vertex (the test forges a signature under it).
@@ -2079,7 +2254,8 @@ async fn rfc7_vertex_carriage_per_licence() {
         let before = s.daa();
         for _ in 0..8 {
             let txs = s.take_carriers();
-            let carried = txs.iter().filter(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE).count() as u64;
+            let carried =
+                txs.iter().filter(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE).count() as u64;
             let mass: u64 = txs.iter().map(|tx| calc.calc_non_contextual_masses(tx).transient_mass).sum();
             let block = s.chain.heartbeat(s.chain.config.params.target_time_per_block(), txs).await;
             s.blocks += 1;
@@ -2092,7 +2268,13 @@ async fn rfc7_vertex_carriage_per_licence() {
             }
         }
         if rel % 5 == 0 {
-            eprintln!("[cap-verify] rfc7 rel {rel} daa {} accepted {} sent {} elapsed {:?}", s.daa(), accepted.len(), sent.len(), started.elapsed());
+            eprintln!(
+                "[cap-verify] rfc7 rel {rel} daa {} accepted {} sent {} elapsed {:?}",
+                s.daa(),
+                accepted.len(),
+                sent.len(),
+                started.elapsed()
+            );
         }
     }
     let st = s.state();

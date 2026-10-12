@@ -1941,8 +1941,12 @@ pub fn palw_gen_close_verdict_for_row_v1(
         PalwCourtVerdictProofV2::GenCone { close } => {
             g::check_gen_cone_close_v1(close, row, class_id, execution_root, narrowed, prompt_ids_form, &limits)
         }
-        PalwCourtVerdictProofV2::GenDecodeToken { close } => g::check_gen_decode_close_v1(close, row, class_id, execution_root, narrowed),
-        PalwCourtVerdictProofV2::GenOutputTile { close } => g::check_gen_output_close_v1(close, row, class_id, execution_root, narrowed),
+        PalwCourtVerdictProofV2::GenDecodeToken { close } => {
+            g::check_gen_decode_close_v1(close, row, class_id, execution_root, narrowed)
+        }
+        PalwCourtVerdictProofV2::GenOutputTile { close } => {
+            g::check_gen_output_close_v1(close, row, class_id, execution_root, narrowed)
+        }
         // Graded against its phase, in `adjudicate_court_close_v3` — refused here, never read as
         // "no fault found" (which would acquit).
         PalwCourtVerdictProofV2::GenDissection { .. } => return Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
@@ -4344,8 +4348,14 @@ mod decode_close_v4_tests {
     #[test]
     fn a_decode_close_does_not_try_a_claim_accepted_past_the_decode_rules() {
         let id = Hash64::from_u64_word(0xC1);
-        assert_eq!(palw_decode_close_admits_claim_v1(id, true, 1_500, Some(1_500)), Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(id)));
-        assert_eq!(palw_decode_close_admits_claim_v1(id, true, 9_999, Some(1_500)), Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(id)));
+        assert_eq!(
+            palw_decode_close_admits_claim_v1(id, true, 1_500, Some(1_500)),
+            Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(id))
+        );
+        assert_eq!(
+            palw_decode_close_admits_claim_v1(id, true, 9_999, Some(1_500)),
+            Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(id))
+        );
         assert_eq!(palw_decode_close_admits_claim_v1(id, true, 1_499, Some(1_500)), Ok(()), "a V3 claim keeps its verifier");
         assert_eq!(palw_decode_close_admits_claim_v1(id, false, 9_999, Some(1_500)), Ok(()), "an attempt is greedy");
         assert_eq!(palw_decode_close_admits_claim_v1(id, true, u64::MAX, None), Ok(()), "no fence, no V4");

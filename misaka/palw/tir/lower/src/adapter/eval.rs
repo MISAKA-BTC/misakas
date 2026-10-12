@@ -155,7 +155,9 @@ pub fn build_spec(adapter: &Adapter, config: &Value, tensors: Option<&TensorInde
     // A wrapper (a chat model whose decoder is `text_config`) is dispatched to the decoder's adapter, so it is the WRAPPER's class the
     // table must list for the root `model_type`; a flat configuration is claimed by the adapter by exact class name.
     let claimed = if nested {
-        root.get("model_type").and_then(Value::as_str).is_some_and(|m| crate::hf_schema::hf_keys::is_transformers_class(Some(&arch), m))
+        root.get("model_type")
+            .and_then(Value::as_str)
+            .is_some_and(|m| crate::hf_schema::hf_keys::is_transformers_class(Some(&arch), m))
     } else {
         adapter_claims(adapter, &arch)
     };

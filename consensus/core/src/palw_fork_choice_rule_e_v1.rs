@@ -850,7 +850,9 @@ mod tests {
         // With the commitment armed too, the configuration path meets the commitment fence's own refusal first (it ships with no
         // height either): every step stays refused.
         p.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(9_000));
-        assert!(matches!(p.validate_palw_v2(), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_fork_choice_commitment_v1 cannot be armed")));
+        assert!(
+            matches!(p.validate_palw_v2(), Err(PalwModeV2Error::Invalid(why)) if why.contains("palw_fork_choice_commitment_v1 cannot be armed"))
+        );
     }
 
     fn side(participation: u32, frontier: u64, safe: u128, live: u128) -> PalwRuleESideV1 {

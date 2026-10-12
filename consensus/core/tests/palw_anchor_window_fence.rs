@@ -6,9 +6,9 @@
 //! Run: `cargo test -p kaspa-consensus-core --test palw_anchor_window_fence`
 
 use kaspa_consensus_core::config::params::{
-    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS,
-    TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v5_params,
-    palw_t12_shipped_params,
+    DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA, Params, SIMNET_PARAMS,
+    TESTNET_PARAMS, TESTNET11_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
+    palw_t12_release_v5_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_anchor_window_v1::{PALW_T12_ANCHOR_WINDOW_FENCES_V1, palw_anchor_window_value_v1};
@@ -44,7 +44,11 @@ fn it_is_on_the_5300_list_after_the_clock_tick_and_dormant_on_every_other_rulese
     assert_eq!(names[at - 1], "palw_real_clock_tick_v1", "right after the clock tick");
     assert_eq!(names[at + 1], "palw_capacity_network_verify", "and before the capacity entries, which stay the tail");
     let shipped = palw_t12_shipped_params();
-    assert_eq!(shipped.palw_anchor_window_v1.map(|a| a.daa_score()), PALW_T12_INT11_FLAG_DAY_DAA, "testnet-12 as shipped arms it at the flag day");
+    assert_eq!(
+        shipped.palw_anchor_window_v1.map(|a| a.daa_score()),
+        PALW_T12_INT11_FLAG_DAY_DAA,
+        "testnet-12 as shipped arms it at the flag day"
+    );
     assert_eq!(mirror(&shipped), PALW_T12_INT11_FLAG_DAY_DAA, "and the fold's mirror agrees");
     shipped.validate_palw_v2().expect("the shipped ruleset validates with it armed");
     for (name, p) in [
@@ -98,7 +102,11 @@ fn armed_it_moves_the_ruleset_and_the_schedule_never_the_identity_and_the_fork_i
     assert_eq!(ids(&back), b, "set(None) is the shipped ruleset");
     let never = armed(ForkActivation::never());
     never.validate_palw_v2().expect("dormant");
-    assert_eq!(ids(&never).1, b.1, "a never() value collapses out of the identity (the params and schedule ids name the field as they do for every Some-only fence)");
+    assert_eq!(
+        ids(&never).1,
+        b.1,
+        "a never() value collapses out of the identity (the params and schedule ids name the field as they do for every Some-only fence)"
+    );
     assert_eq!(mirror(&never), None);
     // The companion values are hashed with the height: W = 24 with M1 in is the recommended variant, [64, 0] the conservative one.
     assert_eq!(palw_anchor_window_value_v1(), [24, 1]);

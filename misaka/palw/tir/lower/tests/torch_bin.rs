@@ -268,9 +268,9 @@ fn reduce_on_anything_but_an_allowlisted_callable_is_refused() {
 fn the_instantiating_extension_and_buffer_opcodes_are_refused() {
     for (op, why) in [
         (&b"cos\nsystem\n)\x81."[..], "not on the allowlist"), // NEWOBJ after a refused global
-        (&b"N)\x81."[..], "instantiates"),                    // NEWOBJ
-        (&b"(N(No."[..], "instantiates"),                     // OBJ
-        (&b"(S'x'\ni"[..], "protocol-0"),                     // INST via a text string first
+        (&b"N)\x81."[..], "instantiates"),                     // NEWOBJ
+        (&b"(N(No."[..], "instantiates"),                      // OBJ
+        (&b"(S'x'\ni"[..], "protocol-0"),                      // INST via a text string first
         (&b"\x82\x01."[..], "extension-registry"),
         (&b"Pabc\n."[..], "PERSID"),
         (&b"\x8f."[..], "set"),
@@ -378,9 +378,25 @@ fn a_tensor_with_a_lying_size_stride_hook_or_storage_is_refused() {
         .done();
     rejects(bad_rg, "requires_grad");
     // A tensor over something that is not a persistent storage; a persistent id of another kind or shape.
-    rejects(Pk::new().global("torch._utils", "_rebuild_tensor_v2").mark().int(5).int(0).ints(&[1]).ints(&[1]).raw(&[0x89]).ordered_dict().raw(b"tR.").done(), "not a persistent storage");
+    rejects(
+        Pk::new()
+            .global("torch._utils", "_rebuild_tensor_v2")
+            .mark()
+            .int(5)
+            .int(0)
+            .ints(&[1])
+            .ints(&[1])
+            .raw(&[0x89])
+            .ordered_dict()
+            .raw(b"tR.")
+            .done(),
+        "not a persistent storage",
+    );
     rejects(Pk::new().mark().s("module").int(1).raw(b"tQ.").done(), "not (storage");
-    rejects(Pk::new().mark().s("other").global("torch", "FloatStorage").s("0").s("cpu").int(1).raw(b"tQ.").done(), "other than `storage`");
+    rejects(
+        Pk::new().mark().s("other").global("torch", "FloatStorage").s("0").s("cpu").int(1).raw(b"tQ.").done(),
+        "other than `storage`",
+    );
     // BUILD of anything but `_metadata`.
     rejects(Pk::new().ordered_dict().raw(b"}").s("x").int(1).raw(b"sb.").done(), "BUILD");
     // The top-level object must be a flat dict of tensors.
@@ -476,7 +492,10 @@ fn the_archive_the_assembler_and_zip_writer_make_reads_and_each_lie_about_it_is_
     refused(read_header(&write("crypt", &zip(&tiny_checkpoint(pk.clone(), data.clone()), 0, 1))), "encrypted");
     // No pickle; two pickles.
     refused(read_header(&write("nopkl", &zip(&[("a/other", vec![1])], 0, 0))), "no data.pkl");
-    refused(read_header(&write("twopkl", &zip(&[("a/data.pkl", pk.clone()), ("b/data.pkl", pk.clone())], 0, 0))), "more than one data.pkl");
+    refused(
+        read_header(&write("twopkl", &zip(&[("a/data.pkl", pk.clone()), ("b/data.pkl", pk.clone())], 0, 0))),
+        "more than one data.pkl",
+    );
     // The pickle names a storage the archive lacks; the storage is the wrong size for its declaration; the tensor outruns it.
     refused(read_header(&write("nostorage", &zip(&[("a/data.pkl", pk.clone())], 0, 0))), "no member");
     refused(read_header(&write("size", &zip(&tiny_checkpoint(pk.clone(), data[..20].to_vec()), 0, 0))), "declares");
@@ -504,12 +523,7 @@ fn the_archive_the_assembler_and_zip_writer_make_reads_and_each_lie_about_it_is_
     // A stored member of an archive built from an assembler pickle that WOULD run code: the marker is never written.
     let dir = scratch("marker");
     let marker = dir.join("pwned");
-    let evil = Pk::new()
-        .global("os", "system")
-        .mark()
-        .s(&format!("touch {}", marker.display()))
-        .raw(b"tR.")
-        .done();
+    let evil = Pk::new().global("os", "system").mark().s(&format!("touch {}", marker.display())).raw(b"tR.").done();
     let p = dir.join("evil.bin");
     std::fs::write(&p, zip(&tiny_checkpoint(evil, data), 0, 0)).unwrap();
     refused(read_header(&p), "`os.system`");
@@ -663,7 +677,8 @@ fn a_pytorch_checkpoint_converts_to_the_same_artifact_as_its_safetensors_origina
     let cfg: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture("hf/llama/config.json")).unwrap()).unwrap();
     let vocab = cfg["vocab_size"].as_u64().unwrap() as usize;
     let seqs = misaka_palw_tir_lower::fidelity::random_sequences(vocab, 3, 12, 7);
-    let calib = misaka_palw_tir_lower::convert::CalibInput { sequences: seqs, source: serde_json::json!({"source": "torch_bin test"}) };
+    let calib =
+        misaka_palw_tir_lower::convert::CalibInput { sequences: seqs, source: serde_json::json!({"source": "torch_bin test"}) };
     let convert = |model: PathBuf, tag: &str| {
         let mut req = ConvertRequest::new(&model, dir.join(format!("{tag}.palwtir")));
         req.calib = Some(calib.clone());

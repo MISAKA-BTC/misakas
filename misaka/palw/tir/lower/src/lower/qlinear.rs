@@ -119,7 +119,10 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
     // by 128) and the zero point and float offset move into `c`.
     let off: i16 = if layout.offset_term && q.bits == 8 && !q.signed { 128 } else { 0 };
     if !layout.offset_term && q.min.is_some() {
-        return Err(LowerError::eval(format!("internal: quantised weight ({}) has float offsets but its layout has no offset term", q.label)));
+        return Err(LowerError::eval(format!(
+            "internal: quantised weight ({}) has float offsets but its layout has no offset term",
+            q.label
+        )));
     }
     let mut is_outlier = vec![false; inp];
     for c in outliers {
@@ -194,18 +197,7 @@ pub fn build(q: &QWeight, layout: QLayout, outliers: &[usize], ratio: &[f64]) ->
             wo[o * kk + j] = (v / 2f64.powi(g)).round() as i32;
         }
     }
-    Ok(QInts {
-        groups,
-        gs,
-        codes,
-        a,
-        c,
-        order: if layout.order { order } else { Vec::new() },
-        e,
-        wo,
-        og,
-        inexact,
-    })
+    Ok(QInts { groups, gs, codes, a, c, order: if layout.order { order } else { Vec::new() }, e, wo, og, inexact })
 }
 
 /// A quantised projection `W·x (+ b)` from the stored integers (see the module docs).

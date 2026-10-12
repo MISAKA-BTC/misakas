@@ -227,9 +227,7 @@ pub fn palw_operator_da_claim_facts_v1(state: &PalwChainStateV2, claim_id: &Hash
             output_root: claim.output_root,
             work_leaves: claim.work_leaves,
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
-            held_to_final: state
-                .model_lifecycle(&claim.class_id)
-                .is_some_and(crate::palw_work_target_v1::palw_panel_held_to_final_v1),
+            held_to_final: state.model_lifecycle(&claim.class_id).is_some_and(crate::palw_work_target_v1::palw_panel_held_to_final_v1),
         },
     })
 }
@@ -283,8 +281,14 @@ pub fn palw_operator_da_standing_v1(
     let record = state.bond(bond)?;
     let collateral =
         if params.bond_collateral_is_net_v1() { record.collateral } else { record.collateral.saturating_sub(record.slashed) };
-    let accuser_room =
-        crate::palw_state_v2::palw_rcore_gate_room_v1(state, params, bond, now_daa, raw_depth, crate::palw_state_v2::PalwRcoreGateV1::Accuser);
+    let accuser_room = crate::palw_state_v2::palw_rcore_gate_room_v1(
+        state,
+        params,
+        bond,
+        now_daa,
+        raw_depth,
+        crate::palw_state_v2::PalwRcoreGateV1::Accuser,
+    );
     let open = state
         .da_sessions_iter()
         .filter(|((_, accuser), _)| accuser == bond)

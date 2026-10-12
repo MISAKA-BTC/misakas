@@ -397,7 +397,10 @@ fn restored_stratified_entropy_and_seal_are_derived_from_the_frozen_subject() {
         });
         verdicts.push((field, verdict));
     }
-    assert!(verdicts.iter().all(|(_, result)| *result == Err(PanelErrorV1::InvalidCarriage)), "derived commitment refusals: {verdicts:?}");
+    assert!(
+        verdicts.iter().all(|(_, result)| *result == Err(PanelErrorV1::InvalidCarriage)),
+        "derived commitment refusals: {verdicts:?}"
+    );
 }
 
 fn assert_invalid_checkpoint(state: &PermissionlessPanelStateV1) {
@@ -426,7 +429,10 @@ fn terminal_flat_and_stratified_histories_keep_entropy_after_shared_epoch_prunin
         let (retry, _) = bound.advance(&step(h(5), 6, 17), &view).unwrap();
         assert_eq!(retry.claim(&h(10)).unwrap().entropy_output, output);
         let (terminal, _) = retry.advance(&step(h(6), 7, 21), &view).unwrap();
-        assert!(matches!(terminal.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PanelUnavailable, .. }));
+        assert!(matches!(
+            terminal.claim(&h(10)).unwrap().phase,
+            ClaimPhaseV3::Voided { reason: NonFraudReasonV1::PanelUnavailable, .. }
+        ));
         assert!(terminal.beacon_rows().is_empty(), "only the shared epoch row is pruned");
         assert_eq!(terminal.claim(&h(10)).unwrap().entropy_output, output);
         assert_eq!(terminal.claim(&h(10)).unwrap().binding_history.len(), 2);

@@ -407,12 +407,7 @@ fn last_stage(vae: &Vae, cal: &Calib, c: usize, h: usize, w: usize, s_in: f64) -
         DType::I16,
         &[c32, h32, w32],
         (-32_767, 32_767),
-        |pb, sink| {
-            (
-                gn.declare(pb, sink, "decoder.conv_norm_out"),
-                co.declare(pb, sink, "decoder.conv_out"),
-            )
-        },
+        |pb, sink| (gn.declare(pb, sink, "decoder.conv_norm_out"), co.declare(pb, sink, "decoder.conv_out")),
         |b, (rgn, rco): (QGroupNormRefs, QConvRefs), x| {
             let n = lower_group_norm(b, x, &gn, &rgn);
             b.commit(n);

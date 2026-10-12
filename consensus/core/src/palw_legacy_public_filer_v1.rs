@@ -991,13 +991,8 @@ mod tests {
         assert!(palw_fraud_filer_subtree_sessions_v1(1 << 41) <= 34);
         assert!(palw_fraud_filer_subtree_sessions_v1(1 << 42) > 34);
         assert!(PalwLegacyBisectV1::max_demands(1 << 20) > 34, "the linear scan refused this ladder");
-        let reserved = PalwFilerClaimFactsV1 {
-            reservable: true,
-            accusable: true,
-            binding_known: true,
-            reserved: true,
-            ..Default::default()
-        };
+        let reserved =
+            PalwFilerClaimFactsV1 { reservable: true, accusable: true, binding_known: true, reserved: true, ..Default::default() };
         let whole = |leaves: &[Hash64]| {
             let mut levels = vec![leaves.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(i as u64, h)).collect::<Vec<_>>()];
             while levels.last().unwrap().len() > 1 {

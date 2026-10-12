@@ -21,8 +21,7 @@ use crate::palw_vertex_v1::{
     PALW_VERTEX_HELD_MAX_PER_CLAIM_V1, PALW_VERTEX_ROUND_DAA_V1, PALW_VERTEX_SWEEP_PER_BLOCK_V1, PalwClaimRefV1,
     PalwVerificationVertexV1, PalwVertexCountedV1, PalwVertexEquivocationV1, PalwVertexErrorV1, PalwVertexHeldRowV1,
     PalwVertexLeafFateV1, PalwVertexLeafV1, PalwVertexRoundRowV1, PalwVertexTallyV1, palw_vertex_admissible_v1,
-    palw_vertex_leaf_fate_v1, palw_vertex_permille_of_v1, palw_vertex_receipts_of_v1,
-    palw_vertex_resolve_claim_v1,
+    palw_vertex_leaf_fate_v1, palw_vertex_permille_of_v1, palw_vertex_receipts_of_v1, palw_vertex_resolve_claim_v1,
 };
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
@@ -108,7 +107,15 @@ pub(super) fn apply_vertex_v1(
                     return Err(refused(PalwVertexErrorV1::AuditedLeafNotArmed { index: 0 }.to_string()));
                 }
                 let Some(claim_id) = audit_index.resolve(&builder.state, claim) else { continue };
-                super::palw_mesh_fold_v1::count_audited_leaf_v1(builder, ctx, &vertex.seat_bond, vertex.signed_daa, &claim_id, *leaf, *result)?;
+                super::palw_mesh_fold_v1::count_audited_leaf_v1(
+                    builder,
+                    ctx,
+                    &vertex.seat_bond,
+                    vertex.signed_daa,
+                    &claim_id,
+                    *leaf,
+                    *result,
+                )?;
             }
         }
     }

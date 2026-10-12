@@ -655,7 +655,10 @@ pub(crate) fn create_core_with_runtime_inner(
             args.apply_to_config(&mut config);
             config
         }
-        None => ConfigBuilder::new(params).adjust_perf_params_to_consensus_params().apply_args(|config| args.apply_to_config(config)).build(),
+        None => ConfigBuilder::new(params)
+            .adjust_perf_params_to_consensus_params()
+            .apply_args(|config| args.apply_to_config(config))
+            .build(),
     });
 
     let app_dir = get_app_dir_from_args(args);
@@ -1677,12 +1680,19 @@ Do you confirm? (y/n)";
     // RFC-0006: the GPU device is a helper process (its own workspace and lock), spawned here and registered; any failure leaves the CPU.
     if args.palw_tir_shard_gpu {
         let helper = args.palw_tir_shard_gpu_helper.as_ref().map(std::path::PathBuf::from).unwrap_or_else(|| {
-            std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("palw-tir-gpu-helper"))).unwrap_or_else(|| "palw-tir-gpu-helper".into())
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("palw-tir-gpu-helper")))
+                .unwrap_or_else(|| "palw-tir-gpu-helper".into())
         });
         let mirror = args.palw_tir_shard_gpu_mirror || args.palw_tir_shard_shadow;
         match misaka_palw_sdk::lineages::tir::TirProcessDeviceV1::spawn(&helper, &[], mirror) {
             Ok(device) => {
-                info!("PALW-TIR shard cells: device helper {} ({})", helper.display(), misaka_palw_sdk::lineages::tir::TirDeviceV1::name(&device));
+                info!(
+                    "PALW-TIR shard cells: device helper {} ({})",
+                    helper.display(),
+                    misaka_palw_sdk::lineages::tir::TirDeviceV1::name(&device)
+                );
                 misaka_palw_sdk::lineages::tir::register_device_v1(std::sync::Arc::new(device));
             }
             Err(why) => warn!("--palw-tir-shard-gpu: no device helper ({why}): cells run on the CPU"),
@@ -1690,8 +1700,8 @@ Do you confirm? (y/n)";
     }
     // RFC-0006 (D-S3): a drill's consistent lie at a layer-shard boundary — refused on mainnet, as every fault injector is.
     if let Some(spec) = args.palw_drill_tamper_boundary.as_deref() {
-        let (position, boundary) =
-            crate::args::parse_palw_drill_tamper_boundary_v1(spec).unwrap_or_else(|e| panic!("--palw-drill-tamper-boundary={spec}: {e}"));
+        let (position, boundary) = crate::args::parse_palw_drill_tamper_boundary_v1(spec)
+            .unwrap_or_else(|e| panic!("--palw-drill-tamper-boundary={spec}: {e}"));
         if network.is_mainnet() {
             panic!("--palw-drill-tamper-boundary={spec} is a drill fault injector and is refused on mainnet");
         }
@@ -1712,7 +1722,9 @@ Do you confirm? (y/n)";
             // A flag that cannot be honoured is refused by name rather than ignored.
             panic!("--palw-tir-metal: {e}");
         }
-        info!("PALW: IR fused unit-row kernels on the Metal GPU ON (--palw-tir-metal): bit-identical to the CPU kernels, node software only");
+        info!(
+            "PALW: IR fused unit-row kernels on the Metal GPU ON (--palw-tir-metal): bit-identical to the CPU kernels, node software only"
+        );
     }
     // RFC-0002 Part II Proposal B: the seat's executor self-test before its first possession proof (on unless `--palw-no-seat-conformance`).
     crate::palw_panel::set_seat_conformance_v1(!args.palw_no_seat_conformance);
@@ -1877,7 +1889,9 @@ Do you confirm? (y/n)";
                         vertex_full_refs: args.palw_vertex_full_refs,
                         sketch_check: args.palw_sketch_check,
                         vertex_equivocate_at: match args.palw_drill_vertex_equivocate_at {
-                            Some(at) if palw_private_drill && config_for_palw_panel.params.palw_verification_vertex_fence().is_some() => {
+                            Some(at)
+                                if palw_private_drill && config_for_palw_panel.params.palw_verification_vertex_fence().is_some() =>
+                            {
                                 warn!(
                                     "PALW DRILL: this seat will sign a second vertex for one round from DAA {at} (RFC-0007 equivocation). \
                                      Its bond will be slashed and ejected."
@@ -1903,7 +1917,10 @@ Do you confirm? (y/n)";
                         tir_shard_hold: args.palw_tir_shard_hold.clone(),
                         tir_shard_declare: match args.palw_tir_shard_declare.as_deref() {
                             None => None,
-                            Some(spec) => Some(crate::args::parse_palw_tir_shard_declare_v1(spec).unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}"))),
+                            Some(spec) => Some(
+                                crate::args::parse_palw_tir_shard_declare_v1(spec)
+                                    .unwrap_or_else(|e| panic!("--palw-tir-shard-declare: {e}")),
+                            ),
                         },
                         tir_shard_gpu: args.palw_tir_shard_gpu,
                         tir_shard_demand_runs: args.palw_tir_shard_demand_runs,
@@ -1914,7 +1931,11 @@ Do you confirm? (y/n)";
                         tir_shard_shadow: args.palw_tir_shard_shadow,
                         improve_artifact_dir: args.palw_improve_artifact_dir.as_ref().map(std::path::PathBuf::from),
                         root_fetch_cmd: args.palw_root_fetch_cmd.clone(),
-                        root_drop_dir: args.palw_root_drop_dir.as_ref().or(args.palw_improve_artifact_dir.as_ref()).map(std::path::PathBuf::from),
+                        root_drop_dir: args
+                            .palw_root_drop_dir
+                            .as_ref()
+                            .or(args.palw_improve_artifact_dir.as_ref())
+                            .map(std::path::PathBuf::from),
                         improve_capture_dir: args.palw_improve_capture_dir.as_ref().map(std::path::PathBuf::from),
                         improve_tamper: match args.palw_drill_tamper_eval.as_deref() {
                             None => None,
@@ -1971,7 +1992,9 @@ Do you confirm? (y/n)";
                         evidence_provider_dirs: args
                             .palw_evidence_provider_dir
                             .as_deref()
-                            .map(|dirs| dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect())
+                            .map(|dirs| {
+                                dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect()
+                            })
                             .unwrap_or_default(),
                         // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).
                         kernel_models: args.palw_kernel_model.iter().map(std::path::PathBuf::from).collect(),

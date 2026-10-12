@@ -67,7 +67,14 @@ pub(super) fn lower_cross_attention(
     let qg = b.reshape_fixed(q.r, &[kv32, g, hd32]);
     let sc = b.matmul(qg, kt, DType::I64); // [kv, g, rows]
     let (kq, kk_key, vk_key) = (q.key.clone(), site_key(&format!("{site}.k")), site_key(&format!("{site}.v")));
-    let (m, s) = decl_ms(b, cx, lb, &format!("{site}.scores"), 1, Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk_key)? * scale * (1u64 << LOGIT_Q) as f64])))?;
+    let (m, s) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.scores"),
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk_key)? * scale * (1u64 << LOGIT_Q) as f64])),
+    )?;
     let logits = narrow(b, sc, m, s, None, DType::I32);
     let pm = b.softmax_shifted(logits, 24 - LOGIT_Q);
     let o = b.matmul(pm, vt, DType::I64); // [kv, g, hd]
@@ -91,13 +98,18 @@ pub struct CrossKv {
 
 impl CrossKv {
     pub fn of(spec: &ModelSpec) -> Result<CrossKv> {
-        let rows = spec.cross_states.ok_or_else(|| LowerError::not_lowerable("ATTN_CROSS_V1: no states are declared (`ModelSpec::cross_states`)"))?.rows;
+        let rows = spec
+            .cross_states
+            .ok_or_else(|| LowerError::not_lowerable("ATTN_CROSS_V1: no states are declared (`ModelSpec::cross_states`)"))?
+            .rows;
         let mut slots = Vec::new();
         let mut one: Option<CrossAttnSpec> = None;
         for (i, l) in spec.layers.iter().enumerate() {
             if let crate::spec::Mixer::CrossAttention(c) = &l.mixer {
                 match &one {
-                    Some(o) if o != c => return Err(LowerError::not_lowerable("ATTN_CROSS_V1: cross layers of different shapes share one stack")),
+                    Some(o) if o != c => {
+                        return Err(LowerError::not_lowerable("ATTN_CROSS_V1: cross layers of different shapes share one stack"));
+                    }
                     _ => one = Some(c.clone()),
                 }
                 slots.push(i);
@@ -117,7 +129,10 @@ impl CrossKv {
 /// The key of a cross layer's `site` in the TEXT stage's statistics (`L{m}.xattn.ctx.{site}`), from stage 0.
 fn at(layer: usize, site: &str, wide: bool) -> ScaleKey {
     ScaleKey {
-        base: Base::At { prefix: format!("L{layer}."), base: Box::new(Base::Site { names: vec![format!("xattn.ctx.{site}")], wide, split: 0 }) },
+        base: Base::At {
+            prefix: format!("L{layer}."),
+            base: Box::new(Base::Site { names: vec![format!("xattn.ctx.{site}")], wide, split: 0 }),
+        },
         factor: 1.0,
     }
 }
@@ -128,7 +143,10 @@ pub fn hl_cross_kv(spec: &ModelSpec) -> Result<(HlProgram, Binding)> {
     let ck = CrossKv::of(spec)?;
     let (inner, hd, d) = (ck.inner(), ck.spec.head_dim, ck.hidden);
     let name_of = |role: &str, layer: usize| -> Result<String> {
-        spec.hf.name(role).map(|t| t.replace("{L}", &layer.to_string())).ok_or_else(|| LowerError::eval(format!("internal: no tensor name for role `{role}`")))
+        spec.hf
+            .name(role)
+            .map(|t| t.replace("{L}", &layer.to_string()))
+            .ok_or_else(|| LowerError::eval(format!("internal: no tensor name for role `{role}`")))
     };
     let (mut params, mut srcs) = (Vec::new(), Vec::new());
     for (i, m) in ck.slots.iter().enumerate() {
@@ -202,22 +220,51 @@ pub fn lower_cross_kv(hl: &HlProgram, spec: &ModelSpec, unit: f64) -> Result<Low
             // The states at this layer's own code scale (the float stage's `cs` site).
             let ck_key = at(*m, "cs", false);
             let (xf, xt) = (x.key.clone(), ck_key.clone());
-            let (mm, ss) = decl_ms(&mut b, &mut cx, &lb, &format!("xkv{i}.cs"), 1, Arc::new(move |c| Ok(vec![c.scale(&xf)? / c.scale(&xt)?])))?;
+            let (mm, ss) =
+                decl_ms(&mut b, &mut cx, &lb, &format!("xkv{i}.cs"), 1, Arc::new(move |c| Ok(vec![c.scale(&xf)? / c.scale(&xt)?])))?;
             let r = narrow(&mut b, x.r, mm, ss, None, DType::I16);
             b.commit(r);
             let cs = rows_val(r, DType::I16, ck_key, d, &format!("xkv{i}.cs"));
             // K: the projection at a wide scale, then the per-head RMS norm over `[rows·kv, hd]`.
             let raw_key = at(*m, "kraw", true);
-            let raw = linear_rows(&mut b, &mut cx, &mut lb, &cs, &format!("xkv{i}.k.w"), None, &format!("xkv{i}.kraw"), &Want { dt: DType::I32, key: raw_key.clone() })?;
+            let raw = linear_rows(
+                &mut b,
+                &mut cx,
+                &mut lb,
+                &cs,
+                &format!("xkv{i}.k.w"),
+                None,
+                &format!("xkv{i}.kraw"),
+                &Want { dt: DType::I32, key: raw_key.clone() },
+            )?;
             b.commit(raw.r);
             let heads_rows = b.reshape_fixed(raw.r, &[n32 * kv as u32, hd as u32]);
             let hr = rows_val(heads_rows, DType::I32, raw_key, hd, &format!("xkv{i}.kraw"));
             let k_key = at(*m, "k", false);
-            let kn = norm_rows_kind(&mut b, &mut cx, &mut lb, &hr, NormKind::Rms, ck.spec.k_norm.eps, &format!("xkv{i}.k_norm"), false, &Want { dt: DType::I16, key: k_key.clone() })?;
+            let kn = norm_rows_kind(
+                &mut b,
+                &mut cx,
+                &mut lb,
+                &hr,
+                NormKind::Rms,
+                ck.spec.k_norm.eps,
+                &format!("xkv{i}.k_norm"),
+                false,
+                &Want { dt: DType::I16, key: k_key.clone() },
+            )?;
             let kr = b.reshape_fixed(kn.r, &[1, n32, inner as u32]);
             // V.
             let v_key = at(*m, "v", false);
-            let v = linear_rows(&mut b, &mut cx, &mut lb, &cs, &format!("xkv{i}.v.w"), None, &format!("xkv{i}.v"), &Want { dt: DType::I16, key: v_key })?;
+            let v = linear_rows(
+                &mut b,
+                &mut cx,
+                &mut lb,
+                &cs,
+                &format!("xkv{i}.v.w"),
+                None,
+                &format!("xkv{i}.v"),
+                &Want { dt: DType::I16, key: v_key },
+            )?;
             let vr = b.reshape_fixed(v.r, &[1, n32, inner as u32]);
             let kvp = b.concat(&[kr, vr], 0); // [2, rows, inner]
             stacks.push(b.reshape_fixed(kvp, &[1, 2, n32, inner as u32]));

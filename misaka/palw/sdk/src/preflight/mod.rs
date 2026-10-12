@@ -724,10 +724,15 @@ fn run_on_source_cached(
                     && !node.network.is_empty()
                     && node.network != net.id
                 {
-                    return Err(format!("--node is on {} and --network is {}: the conditions would be judged on another chain", node.network, net.id));
+                    return Err(format!(
+                        "--node is on {} and --network is {}: the conditions would be judged on another chain",
+                        node.network, net.id
+                    ));
                 }
                 chain_out = match cache {
-                    Some(c) => c.get_or_judge(JudgeCache::key(program, &analysis, opts), || chain::judge(&net, opts, program, &analysis, src)),
+                    Some(c) => {
+                        c.get_or_judge(JudgeCache::key(program, &analysis, opts), || chain::judge(&net, opts, program, &analysis, src))
+                    }
                     None => chain::judge(&net, opts, program, &analysis, src),
                 };
                 network = Some(chain_out.network.clone());

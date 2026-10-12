@@ -154,7 +154,8 @@ fn token_head_end_to_end_with(name: &str, pad: u32, float_tol: f64, int_tol: f64
         let count = ids.len().min(lmax as usize);
         ids.truncate(lmax as usize);
         ids.resize(lmax as usize, pad as usize);
-        bidir::float_forward_with(&hl, &spec, &cfg, &extras, &params_f, &Padded { ids, count }, Some(&mut stats)).expect("calibration");
+        bidir::float_forward_with(&hl, &spec, &cfg, &extras, &params_f, &Padded { ids, count }, Some(&mut stats))
+            .expect("calibration");
     }
     let lw = bidir::lower_bidir_with(&hl, &spec, &cfg, &extras).expect("lower");
     let loader = Resident(Arc::new(params_f));
@@ -240,7 +241,9 @@ fn a_bert_span_head_with_pair_segments_matches_hf_logits_run_with_token_types() 
     // The two functions differ on the pair sequence (the fixture records both): segments are not a no-op.
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(fixture_dir("bert_qa").join("outputs.json")).unwrap()).unwrap();
     let pair = v["sequences"].as_array().unwrap().iter().find(|s| s.get("logits_segments").is_some()).expect("a pair sequence");
-    let flat = |k: &str| -> Vec<f64> { pair[k].as_array().unwrap().iter().flat_map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap())).collect() };
+    let flat = |k: &str| -> Vec<f64> {
+        pair[k].as_array().unwrap().iter().flat_map(|r| r.as_array().unwrap().iter().map(|x| x.as_f64().unwrap())).collect()
+    };
     let worst = flat("logits").iter().zip(flat("logits_segments")).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
     assert!(worst > 0.1, "the segment-aware logits differ from the single-segment ones by {worst}");
 }
@@ -256,7 +259,8 @@ fn pair_segment_types_start_after_the_first_separator() {
 // ───────────────────────────── masked language models (`OutputSpec::MaskedLm`) ─────────────────────────────
 
 /// (fixture, built-in MLM adapter, pad id)
-const MLM_HEADS: &[(&str, &str, u32)] = &[("bert_mlm", "bert-mlm", 0), ("roberta_mlm", "roberta-mlm", 1), ("distilbert_mlm", "distilbert-mlm", 0)];
+const MLM_HEADS: &[(&str, &str, u32)] =
+    &[("bert_mlm", "bert-mlm", 0), ("roberta_mlm", "roberta-mlm", 1), ("distilbert_mlm", "distilbert-mlm", 0)];
 
 fn mlm_read(name: &str, adapter: &str) -> (std::path::PathBuf, serde_json::Value, misaka_palw_tir_lower::hf_schema::ModelRead) {
     let dir = fixture_dir(name);
@@ -340,7 +344,8 @@ fn masked_lm_end_to_end(name: &str, adapter: &str, pad: u32, float_tol: f64, int
         let count = ids.len().min(lmax as usize);
         ids.truncate(lmax as usize);
         ids.resize(lmax as usize, pad as usize);
-        bidir::float_forward_with(&hl, &spec, &cfg, &extras, &params_f, &Padded { ids, count }, Some(&mut stats)).expect("calibration");
+        bidir::float_forward_with(&hl, &spec, &cfg, &extras, &params_f, &Padded { ids, count }, Some(&mut stats))
+            .expect("calibration");
     }
     let lw = bidir::lower_bidir_with(&hl, &spec, &cfg, &extras).expect("lower");
     let loader = Resident(Arc::new(params_f));

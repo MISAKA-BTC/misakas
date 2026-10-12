@@ -338,7 +338,10 @@ impl TestConsensus {
         let kp = Self::palw_v2_harness_keypair();
         let sign = |message: &[u8], context: &[u8]| -> Vec<u8> {
             if signed {
-                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]).expect("the harness signs").as_ref().to_vec()
+                libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32])
+                    .expect("the harness signs")
+                    .as_ref()
+                    .to_vec()
             } else {
                 vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]
             }

@@ -709,11 +709,12 @@ pub fn palw_v2_collateral_for_class_set_v1(
                 .map(|row| row.declared_leaves)
                 .chain(std::iter::once(floor.declared_leaves))
                 .map(|pwu| {
-                    let per_claim = (crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(
-                        &crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: pwu },
-                    ) as u128)
-                        .saturating_mul(SLASH_VALUE_PER_PWU as u128)
-                        .max(1);
+                    let per_claim =
+                        (crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(&crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 {
+                            pwu_per_inference: pwu,
+                        }) as u128)
+                            .saturating_mul(SLASH_VALUE_PER_PWU as u128)
+                            .max(1);
                     per_claim.saturating_mul(window_bind as u128)
                 })
                 .max()
@@ -724,7 +725,6 @@ pub fn palw_v2_collateral_for_class_set_v1(
     let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);
     collateral.max(MIN_COLLATERAL_SOMPI as u128).min(u64::MAX as u128) as u64
 }
-
 
 /// **The collateral a bond must declare to survive its own bind window.**
 ///

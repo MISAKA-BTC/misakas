@@ -37,8 +37,8 @@ use kaspa_consensus_core::palw_step_refute::{
 };
 use kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1;
 use kaspa_consensus_core::palw_tir_court_v1::{
-    PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirLogitsConsistencyV1,
-    PalwTirTraceLanesV1, PalwTirInventoryIndexV1, build_tir_cone_refutation_bounded_v1, palw_tir_row_node_parts_v1,
+    PalwTirConeRefutationV1, PalwTirCourtRulesV1, PalwTirEvidenceErrorV1, PalwTirEvidenceStoreV1, PalwTirInventoryIndexV1,
+    PalwTirLogitsConsistencyV1, PalwTirTraceLanesV1, build_tir_cone_refutation_bounded_v1, palw_tir_row_node_parts_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirLeafKindV1, PalwTirStepBindingV1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -303,11 +303,24 @@ impl<'a> TirEvidenceV1<'a> {
         super::backend::tir_authenticate_capture_metadata_v1(capture, runner.class_id, prompt_form, cap)?;
         let tree = inputs.proof_tree_v1(capture, runner.class_id, cap)?;
         Ok(Self {
-            runner, binding: &capture.binding, prompt: &capture.prompt,
+            runner,
+            binding: &capture.binding,
+            prompt: &capture.prompt,
             trace: TirTraceV1::Rows { rows: &capture.logits_rows, generated: &capture.generated },
-            tree: Box::new(tree), _tree_memory: None, leaves: Leaves::Sparse(inputs.preimages_v1()), params,
-            prompt_form, cap, cache: RefCell::new(BTreeMap::new()), cache_memory: RefCell::new(None), cache_budget: 0, max_replay_positions: 0, replay_positions_used: Cell::new(0), replay_cost: None,
-            copies: super::copies::TirCarriedCopiesV1::new(), inventory: Self::inventory_index(runner)?,
+            tree: Box::new(tree),
+            _tree_memory: None,
+            leaves: Leaves::Sparse(inputs.preimages_v1()),
+            params,
+            prompt_form,
+            cap,
+            cache: RefCell::new(BTreeMap::new()),
+            cache_memory: RefCell::new(None),
+            cache_budget: 0,
+            max_replay_positions: 0,
+            replay_positions_used: Cell::new(0),
+            replay_cost: None,
+            copies: super::copies::TirCarriedCopiesV1::new(),
+            inventory: Self::inventory_index(runner)?,
         })
     }
 
@@ -392,16 +405,24 @@ impl<'a> TirEvidenceV1<'a> {
         self.copies.admit(self.runner.class_id, &self.binding.job_context, bytes)
     }
     fn copy_leaf(&self, leaf: &PalwStepTileLeafV1) -> Option<PalwStepTileLeafV1> {
-        let bytes = (leaf.values_le.len() as u64).checked_add(std::mem::size_of::<PalwStepTileLeafV1>() as u64)?
-            .checked_mul(2)?.checked_add(256)?;
+        let bytes = (leaf.values_le.len() as u64)
+            .checked_add(std::mem::size_of::<PalwStepTileLeafV1>() as u64)?
+            .checked_mul(2)?
+            .checked_add(256)?;
         self.admit_copy(bytes)?;
         Some(leaf.clone())
     }
     /// Requested native copies over the entire current move and store life. These
     /// counters include conservative proof/hash scratch; they are not measured RSS.
-    pub fn carried_copy_bytes_used_v1(&self) -> u64 { self.copies.used() }
-    pub fn carried_copy_lifetime_bytes_v1(&self) -> u64 { self.copies.lifetime_used() }
-    pub fn carried_copy_reserved_bytes_v1(&self) -> u64 { self.copies.reserved() }
+    pub fn carried_copy_bytes_used_v1(&self) -> u64 {
+        self.copies.used()
+    }
+    pub fn carried_copy_lifetime_bytes_v1(&self) -> u64 {
+        self.copies.lifetime_used()
+    }
+    pub fn carried_copy_reserved_bytes_v1(&self) -> u64 {
+        self.copies.reserved()
+    }
     /// Tool override only. Guards and prior lifetime usage survive tighter limits.
     pub fn with_carried_copy_limits_v1(mut self, per_move: u64, lifetime: u64) -> Self {
         self.copies.set_limits(per_move, lifetime);
@@ -443,15 +464,26 @@ impl<'a> TirEvidenceV1<'a> {
         let bytes = match self.trace {
             TirTraceV1::Rows { rows, generated } => {
                 let lanes = rows.get(row as usize)?;
-                if lane as usize >= lanes.len() || *generated.get(row as usize)? as usize >= lanes.len() { return None; }
-                (generated.len() as u64).checked_mul(4)?
-                    .checked_add(2 * PALW_LOGITS_TILE_LANES as u64 * 4 + 3 * 64 * 64 + 1024)?
+                if lane as usize >= lanes.len() || *generated.get(row as usize)? as usize >= lanes.len() {
+                    return None;
+                }
+                (generated.len() as u64).checked_mul(4)?.checked_add(2 * PALW_LOGITS_TILE_LANES as u64 * 4 + 3 * 64 * 64 + 1024)?
             }
             TirTraceV1::Summary { pins, .. } => {
-                let p = pins.iter().find(|p| p.position == row && p.beat_lane as usize / PALW_LOGITS_TILE_LANES == lane as usize / PALW_LOGITS_TILE_LANES
-                    && lane as usize % PALW_LOGITS_TILE_LANES < p.beat_tile_lanes.len())?;
-                let values = p.generated_token_ids.len().checked_add(p.committed_tile_lanes.len())?.checked_add(p.beat_tile_lanes.len())? as u64;
-                let hashes = p.row_opening.siblings.len().checked_add(p.committed_opening.siblings.len())?.checked_add(p.beat_opening.siblings.len())? as u64;
+                let p = pins.iter().find(|p| {
+                    p.position == row
+                        && p.beat_lane as usize / PALW_LOGITS_TILE_LANES == lane as usize / PALW_LOGITS_TILE_LANES
+                        && lane as usize % PALW_LOGITS_TILE_LANES < p.beat_tile_lanes.len()
+                })?;
+                let values =
+                    p.generated_token_ids.len().checked_add(p.committed_tile_lanes.len())?.checked_add(p.beat_tile_lanes.len())?
+                        as u64;
+                let hashes = p
+                    .row_opening
+                    .siblings
+                    .len()
+                    .checked_add(p.committed_opening.siblings.len())?
+                    .checked_add(p.beat_opening.siblings.len())? as u64;
                 values.checked_mul(4)?.checked_add(hashes.checked_mul(64)?)?.checked_add(1024)?
             }
             TirTraceV1::Absent => return None,
@@ -467,7 +499,11 @@ impl<'a> TirEvidenceV1<'a> {
         Ok(())
     }
 
-    fn reserve_tree(runner: &TirClassRunnerV1<'_>, binding: &PalwTirStepBindingV1, cap: u64) -> Result<Option<super::memory::TirMemoryLeaseV1>, String> {
+    fn reserve_tree(
+        runner: &TirClassRunnerV1<'_>,
+        binding: &PalwTirStepBindingV1,
+        cap: u64,
+    ) -> Result<Option<super::memory::TirMemoryLeaseV1>, String> {
         Self::check_binding(runner, binding)?;
         if runner.space.leaf_count_capped(&binding.job_context, cap).map_err(|e| e.to_string())? != binding.step_leaf_count {
             return Err("the tree leaf count is not its capped job".into());
@@ -495,8 +531,8 @@ impl<'a> TirEvidenceV1<'a> {
 
     /// **The canonical cone refutation of step leaf `leaf`** (F5's builder over this store).
     pub fn cone_refutation(&self, leaf: u64, rules: &PalwTirCourtRulesV1) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
-        build_tir_cone_refutation_bounded_v1(self.binding, leaf, self, rules,
-            super::backend::tir_court_builder_limits_v1(rules)).map(|(object, _)| object)
+        build_tir_cone_refutation_bounded_v1(self.binding, leaf, self, rules, super::backend::tir_court_builder_limits_v1(rules))
+            .map(|(object, _)| object)
     }
 
     /// **The logits-consistency accusation over logits step leaf `leaf`**: the step tile and the
@@ -549,7 +585,9 @@ impl<'a> TirEvidenceV1<'a> {
     /// default to at most 4096 positions and 1 GiB of requested replay buffers.
     pub fn with_replay_limits_v1(mut self, positions: u32, requested_bytes: usize) -> Self {
         self.max_replay_positions = positions;
-        if let Some(cost) = self.replay_cost.as_mut() { cost.set_positions(positions); }
+        if let Some(cost) = self.replay_cost.as_mut() {
+            cost.set_positions(positions);
+        }
         self.cache_budget = requested_bytes;
         self.replay_positions_used.set(0);
         self.cache.borrow_mut().clear();
@@ -557,12 +595,16 @@ impl<'a> TirEvidenceV1<'a> {
         self
     }
 
-    pub fn replay_positions_used_v1(&self) -> u64 { self.replay_positions_used.get() }
+    pub fn replay_positions_used_v1(&self) -> u64 {
+        self.replay_positions_used.get()
+    }
 
     /// Tool override of the shared symbolic §8 cost vector; no public fee or
     /// consensus class limit changes. Clearing the cache prevents policy bypass.
     pub fn with_replay_cost_limits_v1(mut self, limits: misaka_palw_tir::admit::CostV1) -> Self {
-        if let Some(cost) = self.replay_cost.as_mut() { cost.set_limit(limits); }
+        if let Some(cost) = self.replay_cost.as_mut() {
+            cost.set_limit(limits);
+        }
         self.replay_positions_used.set(0);
         self.cache.borrow_mut().clear();
         self.cache_memory.borrow_mut().take();
@@ -577,10 +619,14 @@ impl<'a> TirEvidenceV1<'a> {
     /// Excludes restore/checkpoint serialization, physical instructions and time.
     pub fn replay_requested_cost_v1(&self, a: u32) -> Option<misaka_palw_tir::admit::CostV1> {
         let Leaves::Replay { points, .. } = &self.leaves else { return None };
-        if a >= self.runner.space.job_shape(&self.binding.job_context).ok()?.positions { return None; }
+        if a >= self.runner.space.job_shape(&self.binding.job_context).ok()?.positions {
+            return None;
+        }
         let first = points.iter().rev().find(|p| p.position < a).map_or(Some(0), |p| p.position.checked_add(1))?;
         let span = u64::from(a.checked_add(1)?.checked_sub(first)?);
-        if span > u64::from(self.max_replay_positions) { return None; }
+        if span > u64::from(self.max_replay_positions) {
+            return None;
+        }
         self.replay_cost.as_ref()?.requested(span)
     }
 
@@ -593,28 +639,36 @@ impl<'a> TirEvidenceV1<'a> {
         let ctx = &self.binding.job_context;
         let space = self.runner.space;
         let job = space.job_shape(ctx).ok()?;
-        if a >= job.positions { return None; }
-        let first = points.iter().rev().find(|p| p.position < a)
-            .map_or(Some(0), |p| p.position.checked_add(1))?;
+        if a >= job.positions {
+            return None;
+        }
+        let first = points.iter().rev().find(|p| p.position < a).map_or(Some(0), |p| p.position.checked_add(1))?;
         let end = a.checked_add(1)?;
-        if end.checked_sub(first)? > self.max_replay_positions { return None; }
+        if end.checked_sub(first)? > self.max_replay_positions {
+            return None;
+        }
         let hashes = space.running_total(&job, end).checked_sub(space.running_total(&job, first))?;
         let selected = end.saturating_sub(job.prefill - 1) as u128;
         let rows = selected.checked_sub(first.saturating_sub(job.prefill - 1) as u128)?;
         let post = space.program.schedule.post as usize;
         let width = space.program.blocks.get(post)?.nodes.get(space.program.logits as usize)?.out.elements_at(1) as u128;
-        let leaf_headers = u128::from(space.leaves_at_position(&job, a))
-            .checked_mul(std::mem::size_of::<PalwStepTileLeafV1>() as u128)?;
+        let leaf_headers =
+            u128::from(space.leaves_at_position(&job, a)).checked_mul(std::mem::size_of::<PalwStepTileLeafV1>() as u128)?;
         let leaf_lanes = space.lane_count_at_position_v1(&job, a).checked_mul(4)?;
         let trace = rows.checked_mul(width.checked_mul(4)?.checked_add(std::mem::size_of::<Vec<i32>>() as u128)?)?;
         // drive converts one selecting row through i128 before retaining i32, and
         // reuses an emitter buffer whose canonical leaf has at most 65,536 lanes.
         let row_conversion = if rows == 0 { 0 } else { width.checked_mul(16)? };
         let emitter = (kaspa_consensus_core::palw_step::PALW_STEP_MAX_TILE_LEN as u128).checked_mul(8)?;
-        let bytes = hashes.checked_mul(std::mem::size_of::<Hash64>() as u128)?
-            .checked_add(trace)?.checked_add(row_conversion)?.checked_add(emitter)?
+        let bytes = hashes
+            .checked_mul(std::mem::size_of::<Hash64>() as u128)?
+            .checked_add(trace)?
+            .checked_add(row_conversion)?
+            .checked_add(emitter)?
             .checked_add(selected.checked_mul(4)?)?
-            .checked_add(leaf_headers)?.checked_add(leaf_lanes)?.checked_add(16 << 10)?;
+            .checked_add(leaf_headers)?
+            .checked_add(leaf_lanes)?
+            .checked_add(16 << 10)?;
         usize::try_from(bytes).ok()
     }
 
@@ -622,12 +676,16 @@ impl<'a> TirEvidenceV1<'a> {
     /// Earlier replayed positions are consumed by the executor and never cloned here.
     fn replay_through(&self, a: u32, points: &[TirResumePointV1], disputed: Option<&(u64, PalwStepTileLeafV1)>) -> Option<()> {
         let requested = self.replay_requested_storage_v1(a)?;
-        if requested > self.cache_budget { return None; }
+        if requested > self.cache_budget {
+            return None;
+        }
         let point = points.iter().rev().find(|p| p.position < a);
         let first = point.map_or(Some(0), |p| p.position.checked_add(1))?;
         let span = u64::from(a.checked_add(1)?.checked_sub(first)?);
         let total = self.replay_positions_used.get().checked_add(span)?;
-        if total > u64::from(self.max_replay_positions) { return None; }
+        if total > u64::from(self.max_replay_positions) {
+            return None;
+        }
         // Failed work consumes the move's budget too; cache misses cannot multiply
         // 4096 positions by an unbounded number of logical source reads.
         self.replay_cost.as_ref()?.admit(span)?;
@@ -640,35 +698,53 @@ impl<'a> TirEvidenceV1<'a> {
         // oversized position is refused, rather than retained beyond the cache cap.
         self.cache.borrow_mut().clear();
         self.cache_memory.borrow_mut().take();
-        let cache_memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(),
-            "tir-replay-output", self.runner.class_id, ctx, u64::try_from(requested).ok()?).ok()?;
+        let cache_memory = super::memory::reserve_v1(
+            &super::memory::memory_reserver_v1(),
+            "tir-replay-output",
+            self.runner.class_id,
+            ctx,
+            u64::try_from(requested).ok()?,
+        )
+        .ok()?;
         let mut fresh = Vec::new();
         fresh.try_reserve_exact(count).ok()?;
         let (mut copied_bytes, mut malformed) = (0usize, false);
         self.runner
             .replay(ctx, self.prompt, self.cap, point, Some(a.checked_add(1)?), &mut |leaf| {
-                if leaf.position != a || malformed { return; }
+                if leaf.position != a || malformed {
+                    return;
+                }
                 let preimage = match disputed {
                     Some((index, accused)) if *index == leaf.index => accused,
                     _ => leaf.preimage,
                 };
-                let Some(next) = copied_bytes.checked_add(preimage.values_le.len()) else { malformed = true; return; };
-                if fresh.len() == count || next > lane_bytes { malformed = true; return; }
+                let Some(next) = copied_bytes.checked_add(preimage.values_le.len()) else {
+                    malformed = true;
+                    return;
+                };
+                if fresh.len() == count || next > lane_bytes {
+                    malformed = true;
+                    return;
+                }
                 copied_bytes = next;
                 fresh.push(preimage.clone());
-            }).ok()?;
-        if malformed || fresh.len() != count || copied_bytes != lane_bytes { return None; }
+            })
+            .ok()?;
+        if malformed || fresh.len() != count || copied_bytes != lane_bytes {
+            return None;
+        }
         self.cache.borrow_mut().insert(a, fresh);
         *self.cache_memory.borrow_mut() = cache_memory;
         Some(())
     }
-
 }
 
 impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
     fn begin_builder_move_v1(&self) {
         self.replay_positions_used.set(0);
-        if let Some(cost) = self.replay_cost.as_ref() { cost.reset(); }
+        if let Some(cost) = self.replay_cost.as_ref() {
+            cost.reset();
+        }
         self.copies.reset_move();
     }
 
@@ -795,7 +871,7 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
             TirTraceV1::Rows { rows, .. } => {
                 self.admit_copy(self.trace_scratch_need()?.checked_add(2 * ((1 << 10) + 64) * 64 + 512)?)?;
                 palw_tir_row_node_parts_v1(&self.binding.job_context, rows, level, index)
-            },
+            }
             TirTraceV1::Summary { .. } | TirTraceV1::Absent => None,
         }
     }

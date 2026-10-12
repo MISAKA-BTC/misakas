@@ -12,19 +12,22 @@
 //! All must admit, or refuse with the same code and the same numbers. The reader of the ladder clock (`PalwFitRegimeV1::Shipped`,
 //! the measured model before this change) is shown to differ, so the test would catch its return.
 
+use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::palw_t12_shipped_params;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
 use kaspa_consensus_core::palw_class_admission_v2::{
-    PalwClassAdmissionError, PalwHeldAdmissionV1, palw_admission_shape_at_v1, palw_post_genesis_registration_capped_v1, verify_class_admission_v9,
+    PalwClassAdmissionError, PalwHeldAdmissionV1, palw_admission_shape_at_v1, palw_post_genesis_registration_capped_v1,
+    verify_class_admission_v9,
 };
-use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_measured_model_v1::{PalwMeasureInputsV1, PalwModelManifestV1, palw_measure_model_v1};
+use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_model_fit_v1::{palw_fit_regime_for_v1, palw_model_fit_v2};
 use kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1;
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v7,
+};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
-use kaspa_consensus_core::Hash64;
 use misaka_palw_sdk::{PalwClassEntryV1, PalwClassSdk};
 
 const DAAS: [u64; 6] = [0, 3_599, 3_600, 3_752, 5_299, 5_300];
@@ -50,7 +53,8 @@ fn every_reader_of_the_court_agrees_for_a_9b_shaped_hybrid_on_testnet12() {
     let fingerprint = format!("{}", params.consensus_params_id());
     let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
     let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
-    let dummy = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
+    let dummy =
+        PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
     let root = Hash64::from_u64_word(0x9B);
     let mut disagreements = Vec::new();
     for n_ctx in [16u32, 8_192] {
@@ -148,10 +152,14 @@ fn every_reader_of_the_court_agrees_for_a_9b_shaped_hybrid_on_testnet12() {
             let gate_court_ok = !matches!(&gate, Err((code, ..)) if code == "COURT_WINDOW_TOO_SHORT");
             for (who, said) in [("fit", fit.admitted()), ("measured", measured_ok)] {
                 if said != gate_court_ok {
-                    disagreements.push(format!("n_ctx {n_ctx} daa {daa}: the gate's window bound says {gate_court_ok}, {who} says {said}"));
+                    disagreements
+                        .push(format!("n_ctx {n_ctx} daa {daa}: the gate's window bound says {gate_court_ok}, {who} says {said}"));
                 }
             }
-            assert!(!ladder.admitted(), "the ladder clock would refuse this class (the 5,102 figure) — the reader this test exists to catch");
+            assert!(
+                !ladder.admitted(),
+                "the ladder clock would refuse this class (the 5,102 figure) — the reader this test exists to catch"
+            );
             // The processor-same readers (the node's preflight and the SDK's pre-signing gate) refuse by the SAME code, and never by the window.
             if let Err((code, ..)) = &node_v {
                 assert_ne!(code, "COURT_WINDOW_TOO_SHORT", "n_ctx {n_ctx} daa {daa}: the node charged the window");
@@ -177,6 +185,8 @@ fn every_reader_of_the_court_agrees_for_a_9b_shaped_hybrid_on_testnet12() {
     assert!(disagreements.is_empty(), "readers disagree:\n{}", disagreements.join("\n"));
 }
 
-fn object_registration(o: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 {
+fn object_registration(
+    o: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+) -> kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 {
     o.clone()
 }

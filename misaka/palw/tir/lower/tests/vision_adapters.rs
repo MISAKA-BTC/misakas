@@ -60,7 +60,8 @@ fn spec_json(r: Result<misaka_palw_tir_lower::lower::vision::VisionSpec, misaka_
 fn every_tower_adapter_reads_what_the_rust_reader_read() {
     for c in cases() {
         let a = spec_json(parse_vision(&c.text, c.size, c.ms)).unwrap_or_else(|e| panic!("{}: the adapter refused: {e}", c.name));
-        let r = spec_json(parse_vision_rust(&c.text, c.size, c.ms)).unwrap_or_else(|e| panic!("{}: the Rust reader refused: {e}", c.name));
+        let r =
+            spec_json(parse_vision_rust(&c.text, c.size, c.ms)).unwrap_or_else(|e| panic!("{}: the Rust reader refused: {e}", c.name));
         assert_eq!(a, r, "{}", c.name);
     }
 }
@@ -157,7 +158,12 @@ fn single_key_mutants_agree_or_the_adapter_is_stricter() {
     }
     std::panic::set_hook(hook);
     eprintln!("{same} mutants read the same, {stricter} the adapter refuses where the Rust reader did not");
-    assert!(bad.is_empty(), "{} mutants on which the adapter and the Rust reader disagree:\n{}", bad.len(), bad.iter().take(12).cloned().collect::<Vec<_>>().join("\n"));
+    assert!(
+        bad.is_empty(),
+        "{} mutants on which the adapter and the Rust reader disagree:\n{}",
+        bad.len(),
+        bad.iter().take(12).cloned().collect::<Vec<_>>().join("\n")
+    );
     assert!(same > 1500, "{same}");
 }
 
@@ -174,7 +180,10 @@ fn a_wrapper_is_not_a_vision_tower_but_its_tower_is_reachable_by_name() {
         assert!(builtin::find_vision_for(wrapper, None).is_none(), "{wrapper}: claimed as a tower alone");
         assert_eq!(builtin::find_tower_in(wrapper).map(|a| a.id.as_str()), Some(adapter), "{wrapper}");
     }
-    for (tower, adapter) in [("Qwen2VisionTransformerPretrainedModel", "qwen2-vl-vision"), ("Qwen2_5_VisionTransformerPretrainedModel", "qwen2-5-vl-vision")] {
+    for (tower, adapter) in [
+        ("Qwen2VisionTransformerPretrainedModel", "qwen2-vl-vision"),
+        ("Qwen2_5_VisionTransformerPretrainedModel", "qwen2-5-vl-vision"),
+    ] {
         assert!(is_vision_tower(&json!({"architectures": [tower]})), "{tower}");
         assert_eq!(builtin::find_vision_for(tower, None).map(|a| a.id.as_str()), Some(adapter));
     }
@@ -188,7 +197,8 @@ fn a_towers_unknown_key_is_refused_never_ignored_and_the_wrappers_is_not_its_bus
         let text = std::fs::read_to_string(tests_dir().join("fixtures/hf-vis").join(name).join("config.json")).unwrap();
         let mut cfg: Value = serde_json::from_str(&text).unwrap();
         cfg["a_wrapper_key_nobody_has_heard_of"] = json!(3);
-        parse_vision(&cfg.to_string(), Some((28, 28)), None).unwrap_or_else(|e| panic!("{name}: a wrapper key refused by the tower's adapter: {e}"));
+        parse_vision(&cfg.to_string(), Some((28, 28)), None)
+            .unwrap_or_else(|e| panic!("{name}: a wrapper key refused by the tower's adapter: {e}"));
         cfg["vision_config"]["a_tower_key_nobody_has_heard_of"] = json!(3);
         let e = parse_vision(&cfg.to_string(), Some((28, 28)), None).unwrap_err().to_string();
         assert!(e.contains("a_tower_key_nobody_has_heard_of"), "{name}: {e}");

@@ -141,7 +141,10 @@ fn every_daa_deadline_is_priced_in_wall_clock_not_hashes() {
     ] {
         let hours = daa as f64 * HEARTBEAT_RECOVERY_INTERVAL_MS as f64 / 1000.0 / 3600.0;
         let hashes = daa as u128 * (1u128 << PALW_HEARTBEAT_WORK_LOG2);
-        println!("  {name:<32} {daa:>6} DAA  = {hours:>6.1} h wall clock, {hashes:>14} hashes (2^{:.1}), 0 bond, 0 pwu", (hashes as f64).log2());
+        println!(
+            "  {name:<32} {daa:>6} DAA  = {hours:>6.1} h wall clock, {hashes:>14} hashes (2^{:.1}), 0 bond, 0 pwu",
+            (hashes as f64).log2()
+        );
     }
     // 10,500 DAA is 350 h; the hashing is 2^37.4, which one CPU core produces inside that window.
     let exit_hours = 10_500.0 * HEARTBEAT_RECOVERY_INTERVAL_MS as f64 / 1000.0 / 3600.0;

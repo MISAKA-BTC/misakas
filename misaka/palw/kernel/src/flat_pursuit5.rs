@@ -69,7 +69,11 @@ pub fn flat_pursuit_v5(
     let filing = (worst_filing_bytes as u128).saturating_add(FILE_PROOF_ENVELOPE_BYTES_V1 as u128);
     let filing_chunks = route_object_chunks_v1(filing);
     if !route_object_carriable_v1(filing) {
-        return Err(gap("FLAT_PURSUIT: the worst flat filing does not ride the route's chunk lane (chunks)", filing_chunks as u128, 16));
+        return Err(gap(
+            "FLAT_PURSUIT: the worst flat filing does not ride the route's chunk lane (chunks)",
+            filing_chunks as u128,
+            16,
+        ));
     }
     let w = crate::trace::WiringV1::new(program).map_err(|_| gap("FLAT_PURSUIT: the program does not validate", 1, 0))?;
     let nodes: u64 = w.occurrences.iter().map(|(b, _)| program.blocks[*b as usize].nodes.len() as u64).sum();
@@ -90,9 +94,7 @@ pub fn flat_pursuit_v5(
     let rounds = position_rounds + node_rounds + leaf_rounds + 1;
     let clock = PursuitClockV1::of_opv(ledger, opv);
     let window = response_window_daa_v1(ledger.court_deadline_daa, route_object_chunks_v1(FLAT_ANSWER_MAX_BYTES_V5 as u128));
-    let localized = clock
-        .first_step_daa
-        .saturating_add(u64::from(rounds).saturating_mul(window.saturating_add(clock.turnaround_daa)));
+    let localized = clock.first_step_daa.saturating_add(u64::from(rounds).saturating_mul(window.saturating_add(clock.turnaround_daa)));
     // The protected filing (RFC-0002 P0): seal, wait out its maturity, then reveal.
     let filed_daa = localized
         .saturating_add(ledger.claim_seal_delay_daa)

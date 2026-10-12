@@ -347,19 +347,34 @@ mod tests {
         let (submitter, a, b) = (bond(1), bond(2), bond(3));
         let seed = h(0x77);
         let pool: Vec<PalwDrawEntryV1> = (0..12u8)
-            .map(|i| PalwDrawEntryV1 { id: h(0x40 + i), supplier: if i < 6 { submitter } else if i < 9 { a } else { b } })
+            .map(|i| PalwDrawEntryV1 {
+                id: h(0x40 + i),
+                supplier: if i < 6 {
+                    submitter
+                } else if i < 9 {
+                    a
+                } else {
+                    b
+                },
+            })
             .collect();
         // Without the rule the submitter's six entries are drawn from.
         let plain = palw_improve_draw_v1(&seed, &pool, 8, 1_000);
         assert!(plain.iter().any(|i| pool[*i].supplier == submitter), "the old draw takes the submitter's own items");
         // With it they are not, and what is left (a: 3, b: 3) is two suppliers.
-        let independent = palw_improve_draw_independent_v1(&seed, &pool, 8, 1_000, &[submitter], 2).expect("two independent suppliers");
+        let independent =
+            palw_improve_draw_independent_v1(&seed, &pool, 8, 1_000, &[submitter], 2).expect("two independent suppliers");
         assert!(independent.iter().all(|i| pool[*i].supplier != submitter), "the submitter's items are never drawn");
         assert_eq!(independent.len(), 6, "all that remains");
         // One supplier left is no draw.
-        let sybils: Vec<PalwDrawEntryV1> = (0..12u8).map(|i| PalwDrawEntryV1 { id: h(0x40 + i), supplier: if i < 6 { submitter } else { a } }).collect();
+        let sybils: Vec<PalwDrawEntryV1> =
+            (0..12u8).map(|i| PalwDrawEntryV1 { id: h(0x40 + i), supplier: if i < 6 { submitter } else { a } }).collect();
         assert_eq!(palw_improve_draw_independent_v1(&seed, &sybils, 8, 1_000, &[submitter], 2), None, "a pool of one supplier");
-        assert_eq!(palw_improve_draw_independent_v1(&seed, &pool, 8, 1_000, &[a, b], 2), None, "excluding all but the submitter leaves one");
+        assert_eq!(
+            palw_improve_draw_independent_v1(&seed, &pool, 8, 1_000, &[a, b], 2),
+            None,
+            "excluding all but the submitter leaves one"
+        );
         // The per-supplier cap still applies inside it: 250 ‰ of 8 = 2 each.
         let capped = palw_improve_draw_independent_v1(&seed, &pool, 8, 250, &[submitter], 2).expect("two suppliers at two each");
         assert_eq!(capped.len(), 4);

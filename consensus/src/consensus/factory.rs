@@ -8,8 +8,8 @@ use kaspa_consensusmanager::{ConsensusFactory, ConsensusInstance, DynConsensusCt
 use kaspa_core::{debug, time::unix_now, warn};
 use kaspa_database::{
     prelude::{
-        BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, DirectDbWriter, RocksDbPreset, StoreError, StoreResult,
-        StoreResultExt,
+        BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES, DirectDbWriter,
+        RocksDbPreset, StoreError, StoreResult, StoreResultExt,
     },
     registry::DatabaseStorePrefixes,
 };
@@ -320,9 +320,8 @@ impl Factory {
     /// every point read of a row beside it was a 57 MB disk read (the 2026-10-03 panel starvation,
     /// docs/design/palw/t12-panel-backlog-1003.md §4). Node-local: no consensus rule and no on-disk format reads it.
     fn consensus_cache_budget(&self) -> Option<usize> {
-        self.cache_budget.or_else(|| {
-            matches!(self.rocksdb_preset, RocksDbPreset::Default).then_some(DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES)
-        })
+        self.cache_budget
+            .or_else(|| matches!(self.rocksdb_preset, RocksDbPreset::Default).then_some(DEFAULT_PRESET_CONSENSUS_BLOCK_CACHE_BYTES))
     }
 }
 

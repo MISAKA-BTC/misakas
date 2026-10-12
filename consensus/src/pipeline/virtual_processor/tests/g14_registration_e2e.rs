@@ -1809,7 +1809,8 @@ fn t12_release_compressed_over(int13: Option<u64>) -> (Config, PalwConsensusPara
     use super::t12_round_lane_e2e::t12_with_harness_cards_over;
     use kaspa_consensus_core::config::params::{
         PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1,
-        PALW_T12_TIR_FLAG_DAY_FENCES_V1, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_launch_params_v1,
+        PALW_T12_TIR_FLAG_DAY_FENCES_V1, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1,
+        palw_t12_launch_params_v1,
     };
     let mut params = palw_t12_launch_params_v1();
     for (list, at) in [
@@ -1909,7 +1910,8 @@ async fn g14_a_dissected_class_registered_past_the_int13_court_window_commits_th
     let (tip, state) = past.env.chain.tip_state();
     assert!(past.env.chain.daa_of(tip) > FENCE, "registered past the fence");
     let network = past.env.bundle.state.window_court();
-    let window = state.class_model_court_window_v1(&past.class_id).expect("a dissected class registered past the fence commits its window");
+    let window =
+        state.class_model_court_window_v1(&past.class_id).expect("a dissected class registered past the fence commits its window");
     assert!(window >= network, "never below the network window ({window} < {network})");
     assert_eq!(window, network, "on the held clock the derived window IS the network window for this class");
     assert_eq!(state.tir_class_v1(&past.class_id), Some(&past.record), "the class row is what the gate derived");

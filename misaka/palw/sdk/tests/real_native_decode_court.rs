@@ -89,8 +89,10 @@ fn public_actual_weight_record_binds_final_delivery_and_refuses_mixed_claim_mate
 
 #[test]
 fn recorded_real_32_position_trace_convicts_substituted_delivery_from_public_witness_alone() {
-    let bytes =
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/design/palw/tir/evidence/qwen25-real-native-court-bundle.borsh"));
+    let bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../docs/design/palw/tir/evidence/qwen25-real-native-court-bundle.borsh"
+    ));
     assert_eq!(bytes.len(), 161_675);
     let bundle: DecodeCourtBundleV3 = borsh::from_slice(bytes).unwrap();
     assert_eq!(bundle.version, 1);

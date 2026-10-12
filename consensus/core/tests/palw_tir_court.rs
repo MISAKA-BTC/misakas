@@ -455,7 +455,12 @@ fn the_parameter_carriage_is_one_multiproof_priced_to_the_byte() {
             let leaves: Vec<u32> = r.params.single().iter().flat_map(|p| p.opened.iter().map(|(l, _)| *l)).collect();
             assert_eq!(r.params, multiproof(&f, &leaves), "{} leaf {i}: the builder's multiproof of the leaves read", f.name);
             let carried = borsh::to_vec(&r.params).unwrap().len() as u64;
-            assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves), Some(carried), "{} leaf {i}", f.name);
+            assert_eq!(
+                palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::Multiproof, &leaves),
+                Some(carried),
+                "{} leaf {i}",
+                f.name
+            );
             let openings: Vec<PalwArtifactOpeningV1> = leaves.iter().map(|l| open_artifact_leaf_v1(&f.ops, *l).unwrap()).collect();
             let per_leaf = borsh::to_vec(&openings).unwrap().len() as u64;
             assert_eq!(palw_tir_param_carriage_bytes_v1(&program, PalwTirParamCarriageV1::PerLeafOpenings, &leaves), Some(per_leaf));
@@ -475,7 +480,9 @@ fn the_parameter_carriage_is_one_multiproof_priced_to_the_byte() {
             multiproof_total += carried;
         }
     }
-    println!("closes: {runs} runs, {gaps} with gaps, {singles} single leaves, {none} with none; bytes {multiproof_total} vs {per_leaf_total} per leaf");
+    println!(
+        "closes: {runs} runs, {gaps} with gaps, {singles} single leaves, {none} with none; bytes {multiproof_total} vs {per_leaf_total} per leaf"
+    );
     // The corpus's closes read runs and gapped sets (the single-leaf close is the tiny program's:
     // `palw_tir_court_v1`'s `the_tiny_program_s_closes_carry_a_single_leaf_a_run_and_none`).
     assert!(runs > 0 && gaps > 0 && none > 0, "every shape occurs: {runs} runs, {gaps} gaps, {none} none");

@@ -523,16 +523,20 @@ fn a_seat_that_recomputes_short_products_holds_only_their_weights() {
     assert_eq!((f.pos, f.node), (2, Some(down)));
 }
 
-
 // ---- §II.8: row-block sketches ------------------------------------------------------------------------------------------------
 
 impl Class {
     /// A seat check whose store sketches every weight in `blocks` free-axis blocks.
     fn blocked_check(&self, blocks: usize, w: &TirWitnessV1) -> Result<TirCheckReportV1, Box<TirCheckFailureV1>> {
         let keys = TirSeatSketchSecretV1::from_bytes([0x33; 32]).keys(&CLASS, 1);
-        let store = TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");
+        let store =
+            TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");
         let held = self.held(&served());
-        TirSketchCheckerV1::new(&self.plan, &self.analysis, &store, &keys, &held, served()).expect("a checker").check(&job(), &JOB_ID, w)
+        TirSketchCheckerV1::new(&self.plan, &self.analysis, &store, &keys, &held, served()).expect("a checker").check(
+            &job(),
+            &JOB_ID,
+            w,
+        )
     }
 }
 
@@ -592,7 +596,6 @@ fn the_block_count_and_the_fetch_bound() {
     assert!(b * 1_536 * 8 < 3_300_000, "the extra sketch is about 3 MB ({} B)", b * 1_536 * 8);
 }
 
-
 // ---- §II.8: the failed-block refetch ------------------------------------------------------------------------------------------
 
 use misaka_palw_tir::Ref;
@@ -615,7 +618,8 @@ impl TirBlockTransportV1 for MemTransport<'_> {
         let bytes = t.to_le_bytes();
         let mut out = Vec::new();
         for (start, len) in ranges {
-            let piece = bytes.get(*start as usize..(*start + *len) as usize).ok_or(TirFetchRefusalV1::Malformed("past the end".into()))?;
+            let piece =
+                bytes.get(*start as usize..(*start + *len) as usize).ok_or(TirFetchRefusalV1::Malformed("past the end".into()))?;
             *self.served.borrow_mut() += *len;
             out.push((*start, piece.to_vec()));
         }
@@ -647,12 +651,10 @@ impl Class {
         panic!("no plain weight site reads {name}");
     }
 
-    fn blocked<'a>(
-        &'a self,
-        blocks: usize,
-    ) -> (TirSketchStoreV1, TirSketchKeysV1, misaka_palw_tir::MapParams) {
+    fn blocked<'a>(&'a self, blocks: usize) -> (TirSketchStoreV1, TirSketchKeysV1, misaka_palw_tir::MapParams) {
         let keys = TirSeatSketchSecretV1::from_bytes([0x33; 32]).keys(&CLASS, 1);
-        let store = TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");
+        let store =
+            TirSketchStoreV1::build_blocked(&self.plan, &self.analysis, &self.fx.params, &keys, blocks).expect("the store builds");
         (store, keys, self.held(&served()))
     }
 }
@@ -718,9 +720,7 @@ fn a_routed_weight_is_not_block_addressable() {
     let c = class(dense_moe_v1(4));
     let moe = c.block_named("moe");
     let occ = c.occurrence_of(moe);
-    let routed = c
-        .analysis
-        .blocks[moe as usize]
+    let routed = c.analysis.blocks[moe as usize]
         .matmuls
         .iter()
         .find(|s| matches!(s.kind, TirMatMulKindV1::Weight { source: TirWeightSourceV1::Routed { .. }, .. }))

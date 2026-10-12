@@ -297,7 +297,9 @@ impl PalwTirTensorSourceV1 for TirParamsSourceV1<'_, '_> {
 pub trait TirParamOpenerV1 {
     /// Additional transient provider buffers, excluding returned pieces/proofs. Unknown
     /// providers are refused by bounded evidence stores rather than assumed zero-copy.
-    fn param_scratch_storage_v1(&self, _leaves: &[u32]) -> Option<u64> { None }
+    fn param_scratch_storage_v1(&self, _leaves: &[u32]) -> Option<u64> {
+        None
+    }
     fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1>;
     /// One multiproof over `leaves` ([`TirInventoryTreeV1::multiproof`]).
     fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1>;

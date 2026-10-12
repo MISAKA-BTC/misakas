@@ -22,9 +22,9 @@ use std::sync::Arc;
 pub mod described;
 pub mod expr;
 mod remote;
-pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
 #[cfg(feature = "remote")]
 pub use remote::CurlFetcher;
+pub use remote::{MemoryFetcher, RangeFetcher, RemoteCheckpoint};
 pub mod stream;
 pub mod torchzip;
 
@@ -86,7 +86,9 @@ impl TensorMeta {
 pub trait TensorSource {
     /// A container-backed source may revalidate its acquired header before publishing an artifact.
     /// Raw tensor hashes are independently checked by the frontend writer.
-    fn validate_snapshot(&self) -> Result<()> { Ok(()) }
+    fn validate_snapshot(&self) -> Result<()> {
+        Ok(())
+    }
     fn shape(&self, name: &str) -> Option<Vec<usize>>;
     fn load(&self, name: &str) -> Result<Tensor>;
     fn names(&self) -> Vec<String>;
@@ -232,7 +234,8 @@ pub(crate) fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -
 
 /// Widen stored floats (`BF16`/`F16`/`F32`/`F64`, little-endian) to `f32`.
 pub fn widen_floats(dtype: &str, raw: &[u8]) -> Result<Vec<f32>> {
-    let sz = dtype_size(dtype).ok_or_else(|| LowerError::weights(format!("a {dtype} tensor is not a float type this reader widens")))?;
+    let sz =
+        dtype_size(dtype).ok_or_else(|| LowerError::weights(format!("a {dtype} tensor is not a float type this reader widens")))?;
     if !raw.len().is_multiple_of(sz) {
         return Err(LowerError::weights(format!("{} bytes is not a whole number of {dtype} elements", raw.len())));
     }
@@ -736,9 +739,7 @@ impl Src {
             | Src::Stack { src, .. }
             | Src::Map { src, .. }
             | Src::Reshape { src, .. }
-            | Src::PadRows { src, .. } => {
-                src.is_quant()
-            }
+            | Src::PadRows { src, .. } => src.is_quant(),
         }
     }
     /// The quantised format read inside, if any.
@@ -752,9 +753,7 @@ impl Src {
             | Src::Stack { src, .. }
             | Src::Map { src, .. }
             | Src::Reshape { src, .. }
-            | Src::PadRows { src, .. } => {
-                src.quant_format()
-            }
+            | Src::PadRows { src, .. } => src.quant_format(),
         }
     }
     pub fn t(name: impl Into<String>) -> Src {
@@ -875,9 +874,7 @@ pub fn legacy_layer_norm_name(name: &str) -> Option<String> {
 /// is a feature it may be missing (FR-26) — these are not. Any other buffer (a causal-mask table) is listed by
 /// the adapter that knows its family, in `ignored_prefixes`.
 pub fn is_module_buffer(name: &str) -> bool {
-    ["inv_freq", "cos_cached", "sin_cached", "position_ids"]
-        .iter()
-        .any(|b| name == *b || name.ends_with(&format!(".{b}")))
+    ["inv_freq", "cos_cached", "sin_cached", "position_ids"].iter().any(|b| name == *b || name.ends_with(&format!(".{b}")))
 }
 
 /// `{L/n}` and `{L%n}` — the quotient and the remainder of the layer by `n` (a model whose HF layer holds `n` HL layers:
@@ -896,7 +893,9 @@ fn expand_layer_arithmetic(s: &str, layer: Option<usize>) -> Result<String> {
             }
         };
         let end = after.find('}').ok_or_else(|| LowerError::eval(format!("`{s}`: a `{{L{op}n` without its `}}`")))?;
-        let n: usize = after[..end].parse().map_err(|_| LowerError::eval(format!("`{s}`: `{{L{op}{}}}` takes a positive integer", &after[..end])))?;
+        let n: usize = after[..end]
+            .parse()
+            .map_err(|_| LowerError::eval(format!("`{s}`: `{{L{op}{}}}` takes a positive integer", &after[..end])))?;
         if n == 0 {
             return Err(LowerError::eval(format!("`{s}`: `{{L{op}0}}` divides by zero")));
         }
@@ -1080,7 +1079,12 @@ fn tensors_of(f: &crate::quantfmt::QuantFormat) -> &crate::quantfmt::tensors::Te
 /// The role tensors of the module `module` as a `tensors` descriptor declares them. A role's data is
 /// read when `with_data`, or when it is small (a shape tensor: the shape expressions may read its
 /// elements); otherwise only its header is.
-fn role_tensors(module: &str, t: &crate::quantfmt::tensors::TensorsFormat, r: &Resolver, with_data: bool) -> Result<Vec<Option<RoleTensor>>> {
+fn role_tensors(
+    module: &str,
+    t: &crate::quantfmt::tensors::TensorsFormat,
+    r: &Resolver,
+    with_data: bool,
+) -> Result<Vec<Option<RoleTensor>>> {
     let mut out = Vec::new();
     for (_role, suffix, required) in t.roles() {
         let n = format!("{module}{suffix}");
@@ -1183,7 +1187,10 @@ pub fn quant_layouts(prog: &HlProgram, binding: &Binding) -> Result<BTreeMap<u32
     for (pi, s) in binding.srcs.iter().enumerate() {
         if let Some(fmt) = s.quant_format() {
             if !matches!(prog.params[pi].shape.len(), 2 | 3) {
-                return Err(LowerError::not_lowerable(format!("quantised param `{}` is not a matrix or a stack of experts", prog.params[pi].name)));
+                return Err(LowerError::not_lowerable(format!(
+                    "quantised param `{}` is not a matrix or a stack of experts",
+                    prog.params[pi].name
+                )));
             }
             out.insert(pi as u32, fmt.layout());
         }
@@ -1241,7 +1248,10 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             let Some(cols) = t.shape.last().copied() else { return Err(LowerError::weights("padding the rows of a scalar")) };
             let mut data = t.data;
             if data.len() > rows * cols {
-                return Err(LowerError::weights(format!("{} rows do not fit the {rows} the table is padded to", data.len() / cols.max(1))));
+                return Err(LowerError::weights(format!(
+                    "{} rows do not fit the {rows} the table is padded to",
+                    data.len() / cols.max(1)
+                )));
             }
             data.resize(rows * cols, 0.0);
             Ok(Tensor::new(vec![*rows, cols], data))
@@ -1301,8 +1311,7 @@ pub fn check_weights(prog: &HlProgram, binding: &Binding, source: &dyn TensorSou
     let mut rep = WeightReport::default();
     let none = BTreeMap::new();
     for (pi, d) in prog.params.iter().enumerate() {
-        let layers: Vec<Option<usize>> =
-            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
+        let layers: Vec<Option<usize>> = if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         for l in layers {
             match src_shape(&binding.srcs[pi], &r, l, &none) {
                 Ok(s) if s == d.shape => rep.bound += 1,
@@ -1353,9 +1362,11 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
                     }
                 }
             }
-            Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } | Src::PadRows { src, .. } => {
-                leaves(src, out)
-            }
+            Src::Take { src, .. }
+            | Src::Transpose(src)
+            | Src::Map { src, .. }
+            | Src::Reshape { src, .. }
+            | Src::PadRows { src, .. } => leaves(src, out),
             Src::Combine { srcs, .. } => srcs.iter().for_each(|s| leaves(s, out)),
             Src::Stack { src, var, count } => {
                 let mut inner = vec![];
@@ -1371,8 +1382,7 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
         }
     }
     for (pi, d) in prog.params.iter().enumerate() {
-        let layers: Vec<Option<usize>> =
-            if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
+        let layers: Vec<Option<usize>> = if d.per_layer { model_layers_of_param(prog, pi as u32) } else { vec![None] };
         let mut ls = vec![];
         leaves(&binding.srcs[pi], &mut ls);
         for l in layers {

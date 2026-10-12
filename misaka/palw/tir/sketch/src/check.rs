@@ -469,7 +469,8 @@ impl<'a> TirSketchCheckerV1<'a> {
         let decl = &p.params[j as usize];
         let layer = if decl.per_layer { ctx.layer } else { None };
         let x_ref = if side == TirSideV1::Right { node.inputs[0] } else { node.inputs[1] };
-        let x = ref_value(&self.interp, self.params, ctx, run, values, x_ref).map_err(|e| note(TirEscNoteV1::Malformed(e.to_string())))?;
+        let x =
+            ref_value(&self.interp, self.params, ctx, run, values, x_ref).map_err(|e| note(TirEscNoteV1::Malformed(e.to_string())))?;
         let width = decl.dtype.width();
         let free = g.free();
         let mut honest = out.clone();
@@ -514,8 +515,9 @@ impl<'a> TirSketchCheckerV1<'a> {
         let p = &self.plan.program;
         let node = &p.blocks[ctx.block as usize].nodes[ni];
         let np = &self.occ_plans[occ as usize].nodes[ni];
-        let fail =
-            |fault: TirCheckFaultV1| Box::new(TirCheckFailureV1 { pos: ctx.pos, occurrence: occ, node: Some(ni as u16), fault, blocks: Vec::new() });
+        let fail = |fault: TirCheckFaultV1| {
+            Box::new(TirCheckFailureV1 { pos: ctx.pos, occurrence: occ, node: Some(ni as u16), fault, blocks: Vec::new() })
+        };
         let operand =
             |r| ref_value(&self.interp, self.params, ctx, run, values, r).map_err(|e| fail(TirCheckFaultV1::Recompute(e.to_string())));
         let out = values[ni].as_ref().expect("served");

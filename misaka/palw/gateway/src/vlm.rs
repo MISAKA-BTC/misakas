@@ -149,7 +149,8 @@ pub fn plan(request: &VlmRequest<'_>) -> Result<VlmPlan, String> {
 /// retention for V5 is open: DESIGN_GAP, recorded in the delivery record).
 pub fn commitment_of(job: &PalwFreePromptJobV5, binding: &PalwGenStepBindingV1, retention_daa: u64) -> PalwFreePromptCommitmentV3 {
     let carried = job.into_carried();
-    let facts = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&carried, binding.generated.len() as u32);
+    let facts =
+        kaspa_consensus_core::palw_fp_execution_v3::palw_fp_run_facts_for_executed_v1(&carried, binding.generated.len() as u32);
     PalwFreePromptCommitmentV3 {
         job: carried,
         trace_root: binding.step_root(),
@@ -237,7 +238,10 @@ pub enum VlmReceiptError {
     Unsealed,
     NotThisClaim(&'static str),
     /// The picture the user holds does not produce the committed pixels under the receipt's record.
-    PictureDiffers { index: usize, why: &'static str },
+    PictureDiffers {
+        index: usize,
+        why: &'static str,
+    },
 }
 
 /// **Verify a vision-language receipt** against the claim's binding and the pictures the user holds: the seal; the binding's identities;
@@ -267,7 +271,10 @@ pub fn verify_receipt(
         return Err(VlmReceiptError::NotThisClaim("generated ids"));
     }
     let slots = &row.class.offers.images;
-    if raw_images.len() != slots.len() || receipt.preprocess_digests.len() != slots.len() || receipt.image_input_roots.len() != slots.len() {
+    if raw_images.len() != slots.len()
+        || receipt.preprocess_digests.len() != slots.len()
+        || receipt.image_input_roots.len() != slots.len()
+    {
         return Err(VlmReceiptError::NotThisClaim("picture count"));
     }
     for (k, (raw, slot)) in raw_images.iter().zip(slots).enumerate() {
@@ -429,7 +436,10 @@ mod tests {
         let r_base = VlmReceiptV1::seal(&base, &base_binding, Hash64::default());
         let r_unsampled = VlmReceiptV1::seal(&unsampled_plan, &run(&w, &unsampled_plan), Hash64::default());
         assert_eq!(r_base.execution_root, r_unsampled.execution_root);
-        assert_ne!(r_base.receipt_id, r_unsampled.receipt_id, "the receipt tells the two pictures apart even though the claim does not");
+        assert_ne!(
+            r_base.receipt_id, r_unsampled.receipt_id,
+            "the receipt tells the two pictures apart even though the claim does not"
+        );
         // The prompt (the text stage's input) changes the job and the text stage, not the vision stage.
         let other_prompt = [w.fx.prompt[0], w.fx.prompt[1], w.fx.prompt[2], w.fx.prompt[3] ^ 1];
         let prompt_variant = plan(&VlmRequest {
@@ -513,8 +523,14 @@ mod tests {
         // The user's picture is the only thing that makes the record true: another picture, another fit, another pad.
         let mut other = raw.clone();
         other.rgb[0] ^= 1;
-        assert!(matches!(verify_receipt(&receipt, &p.job, &binding, &w.fx.row, &[other], fit), Err(VlmReceiptError::PictureDiffers { index: 0, .. })));
-        assert!(matches!(verify_receipt(&receipt, &p.job, &binding, &w.fx.row, std::slice::from_ref(&raw), Fit::Stretch), Err(VlmReceiptError::PictureDiffers { .. })));
+        assert!(matches!(
+            verify_receipt(&receipt, &p.job, &binding, &w.fx.row, &[other], fit),
+            Err(VlmReceiptError::PictureDiffers { index: 0, .. })
+        ));
+        assert!(matches!(
+            verify_receipt(&receipt, &p.job, &binding, &w.fx.row, std::slice::from_ref(&raw), Fit::Stretch),
+            Err(VlmReceiptError::PictureDiffers { .. })
+        ));
         assert!(matches!(
             verify_receipt(&receipt, &p.job, &binding, &w.fx.row, std::slice::from_ref(&raw), Fit::Letterbox { pad: [1, 1, 1] }),
             Err(VlmReceiptError::PictureDiffers { .. })
@@ -527,7 +543,10 @@ mod tests {
         };
         let mut hand_edited = receipt.clone();
         hand_edited.execution_root = Hash64::from_u64_word(1);
-        assert_eq!(verify_receipt(&hand_edited, &p.job, &binding, &w.fx.row, std::slice::from_ref(&raw), fit), Err(VlmReceiptError::Unsealed));
+        assert_eq!(
+            verify_receipt(&hand_edited, &p.job, &binding, &w.fx.row, std::slice::from_ref(&raw), fit),
+            Err(VlmReceiptError::Unsealed)
+        );
         let h = Hash64::from_u64_word(1);
         for (field, edit) in [
             ("job", Box::new(move |r: &mut VlmReceiptV1| r.job_id = h) as Box<dyn Fn(&mut VlmReceiptV1)>),
@@ -558,15 +577,18 @@ mod tests {
         let p = plan_of(&w, std::slice::from_ref(&raw), Fit::Letterbox { pad: [0, 0, 0] }, 7).unwrap();
         let binding = run(&w, &p);
         let commitment = commitment_of(&p.job, &binding, 600_000);
-        let payload = payload_of(commitment.clone(), &w.fx.prompt, vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]);
+        let payload =
+            payload_of(commitment.clone(), &w.fx.prompt, vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]);
         let ladder = 1 << 26;
         let domain = p.job.v4.network_domain;
         // Dormant everywhere: `armed = false` is what every preset passes.
         assert_eq!(palw_fp_v5_validate_payload_v1(&payload, domain, false, ladder, None, FORM, false), Err(PalwFpV5Error::NotArmed));
         // Test-armed: the V5 job is recovered from the carried form and the V4 commitment rules pass over its V4 view.
-        let admitted = palw_fp_v5_validate_payload_v1(&payload, domain, false, ladder, None, FORM, true).expect("admissible to a test-armed V5 lane");
+        let admitted = palw_fp_v5_validate_payload_v1(&payload, domain, false, ladder, None, FORM, true)
+            .expect("admissible to a test-armed V5 lane");
         assert_eq!(admitted, p.job);
-        let (resolved, row) = palw_fp_v5_accept_payload_v1(&payload, Some(&w.fx.row), domain, false, ladder, None, FORM, true).expect("and the class resolves");
+        let (resolved, row) = palw_fp_v5_accept_payload_v1(&payload, Some(&w.fx.row), domain, false, ladder, None, FORM, true)
+            .expect("and the class resolves");
         assert_eq!((resolved, row.class_id), (p.job.clone(), w.fx.row.class_id));
         // The claim id covers the pictures: another input_root, another claim.
         let other = plan_of(&w, &[picture(2)], Fit::Letterbox { pad: [0, 0, 0] }, 7).unwrap();

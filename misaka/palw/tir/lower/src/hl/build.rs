@@ -53,7 +53,8 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
                     let fresh = b.blocks.split_off(start);
                     let mut out = Vec::with_capacity(fresh.len());
                     for blk in fresh {
-                        let same = b.blocks.iter().position(|o| o.role == blk.role && o.nodes == blk.nodes && o.outputs == blk.outputs);
+                        let same =
+                            b.blocks.iter().position(|o| o.role == blk.role && o.nodes == blk.nodes && o.outputs == blk.outputs);
                         match same {
                             Some(j) => out.push(j),
                             None => {
@@ -132,7 +133,9 @@ pub fn build_program(spec: &ArchSpec) -> Result<HlProgram> {
             OutputSpec::Embedding { normalize, .. } => HlOutput::Embedding { normalized: normalize },
             // A task head over a bidirectional encoder: its output is a unit-of-its-own tensor, not next-token logits in Q24 (the
             // masked-LM head's params are the language-model head's, declared by the post block below; the label is the output's).
-            OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } | OutputSpec::MaskedLm => HlOutput::Embedding { normalized: false },
+            OutputSpec::Classify { .. } | OutputSpec::TokenLogits { .. } | OutputSpec::MaskedLm => {
+                HlOutput::Embedding { normalized: false }
+            }
         },
         vocab: spec.vocab_size,
         hidden: spec.hidden_size,
@@ -522,7 +525,10 @@ impl Builder<'_> {
         // `WEIGHT_ROTATION_HADAMARD_V1`: a table stored in the rotated basis — the looked-up row restored, `h = R⁻¹·z`.
         if let Some(r) = self.s.hf.embed_rotation {
             if r.width != e.dim || r.block == 0 || e.dim % r.block != 0 {
-                return Err(LowerError::not_lowerable(format!("an embedding rotation of block {} over width {} on a {}-wide table", r.block, r.width, e.dim)));
+                return Err(LowerError::not_lowerable(format!(
+                    "an embedding rotation of block {} over width {} on a {}-wide table",
+                    r.block, r.width, e.dim
+                )));
             }
             let p = self.param(&r.inv_param(), vec![e.dim, r.block], false, Init::Normal(W_STD))?;
             x = bk.f(Op::BlockLinear { block: r.block }, vec![x, p], e.dim, "embed.unrotated");
@@ -657,7 +663,9 @@ impl Builder<'_> {
         // A sequence classifier: the final row through the optional dense + activation and the classification layer; no head.
         if let OutputSpec::Classify { labels, bias, pre, .. } = &s.output {
             if h.transform.is_some() {
-                return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under a classification output: the transform belongs to a language-model head"));
+                return Err(LowerError::not_lowerable(
+                    "HEAD_TRANSFORM_V1 under a classification output: the transform belongs to a language-model head",
+                ));
             }
             if let Some(p) = pre {
                 x = self.linear(&mut bk, x, "classifier.pre", d, d, p.bias, false, "classifier.pre")?;
@@ -676,7 +684,9 @@ impl Builder<'_> {
         // Per-token logits (`OUTPUT_TOKEN_LOGITS_V1`): the position's final row through the classification layer; no pooling, no head.
         if let OutputSpec::TokenLogits { labels, bias, pre } = &s.output {
             if h.transform.is_some() {
-                return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under per-token logits: the transform belongs to a language-model head"));
+                return Err(LowerError::not_lowerable(
+                    "HEAD_TRANSFORM_V1 under per-token logits: the transform belongs to a language-model head",
+                ));
             }
             if let Some(p) = pre {
                 x = self.linear(&mut bk, x, "classifier.pre", d, d, p.bias, false, "classifier.pre")?;
@@ -695,7 +705,9 @@ impl Builder<'_> {
         // An encoder: the final row, projected and normalised as the class says; no head.
         if let OutputSpec::Embedding { proj, normalize } = &s.output {
             if h.transform.is_some() {
-                return Err(LowerError::not_lowerable("HEAD_TRANSFORM_V1 under an embedding output: the transform belongs to a language-model head"));
+                return Err(LowerError::not_lowerable(
+                    "HEAD_TRANSFORM_V1 under an embedding output: the transform belongs to a language-model head",
+                ));
             }
             let mut width = d;
             if let Some((w, bias)) = *proj {
@@ -850,7 +862,9 @@ impl Builder<'_> {
     }
 
     fn altup(&self) -> Result<AltUpSpec> {
-        self.s.altup.ok_or_else(|| LowerError::not_lowerable("RESIDUAL_ALTUP_V1: an AltUp layer needs the model's streams (ModelSpec::altup)"))
+        self.s
+            .altup
+            .ok_or_else(|| LowerError::not_lowerable("RESIDUAL_ALTUP_V1: an AltUp layer needs the model's streams (ModelSpec::altup)"))
     }
 
     /// AltUp's router: `m(x) = tanh(modality_router(router_norm(x)·D⁻¹))`, `[K]`.
@@ -961,7 +975,9 @@ impl Builder<'_> {
     }
 
     fn mhc(&self) -> Result<MhcSpec> {
-        self.s.mhc.ok_or_else(|| LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1: an mHC layer needs the model's streams (ModelSpec::mhc)"))
+        self.s.mhc.ok_or_else(|| {
+            LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1: an mHC layer needs the model's streams (ModelSpec::mhc)")
+        })
     }
 
     /// The carry's lanes past the streams are the layer's own: a block's outputs packed in order and zero-padded to the carry's width.
@@ -1043,7 +1059,9 @@ impl Builder<'_> {
             return Err(LowerError::eval("internal: mhc_blocks of a layer that is not mHC"));
         };
         let Mixer::SharedKv(a) = &ls.mixer else {
-            return Err(LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1 is modelled over the shared-KV attention (ATTN_KV_SHARED_ROTATED_V1) only"));
+            return Err(LowerError::not_lowerable(
+                "RESIDUAL_MHC_SINKHORN_V1 is modelled over the shared-KV attention (ATTN_KV_SHARED_ROTATED_V1) only",
+            ));
         };
         if ls.ffn == Ffn::None || matches!(ls.ffn, Ffn::MlpMoe(_)) {
             return Err(LowerError::not_lowerable("RESIDUAL_MHC_SINKHORN_V1: a layer is a mixer and an FFN (Mlp or Moe)"));
@@ -1226,7 +1244,14 @@ impl Builder<'_> {
                 let iq = self.linear(bk, qr, "attn.idx.wq_b", hi * di, a.q_rank, false, true, "attn.idx.q")?;
                 let ti = self.rope_table(&ix.rope.freqs);
                 let iq = bk.f(
-                    Op::Rope { heads: hi, head_dim: di, rotary_dim: ix.rope.rotary_dim, offset: ix.rope.offset, style: ix.rope.style, table: ti },
+                    Op::Rope {
+                        heads: hi,
+                        head_dim: di,
+                        rotary_dim: ix.rope.rotary_dim,
+                        offset: ix.rope.offset,
+                        style: ix.rope.style,
+                        table: ti,
+                    },
                     vec![iq, Ref::Pos],
                     hi * di,
                     "attn.idx.q_rope",
@@ -1280,7 +1305,11 @@ impl Builder<'_> {
                 bk.f(op, ins, heads * hd, "attn.ctx")
             }
             (Some(c), Some(rows)) => {
-                let sinks = sinks.ok_or_else(|| LowerError::not_lowerable("ATTN_COMPRESSED_KV_V1: the softmax over the window and the entries carries the per-head sink"))?;
+                let sinks = sinks.ok_or_else(|| {
+                    LowerError::not_lowerable(
+                        "ATTN_COMPRESSED_KV_V1: the softmax over the window and the entries carries the per-head sink",
+                    )
+                })?;
                 let m = c.ratio;
                 let blocks = self.s.max_position_embeddings.unwrap_or(self.s.hidden_size).div_ceil(m).max(1);
                 if blocks > 1 << 22 {
@@ -1288,7 +1317,14 @@ impl Builder<'_> {
                 }
                 let pfx = if c.overlap { "attn.csa" } else { "attn.hca" };
                 let store = self.state(&format!("{pfx}.entries"), StateKind::Fixed, vec![blocks, hd], 0.0)?;
-                bk.push(Op::BlockWrite { ratio: m, blocks }, vec![rows.ent, store, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(store)]);
+                bk.push(
+                    Op::BlockWrite { ratio: m, blocks },
+                    vec![rows.ent, store, Ref::Pos],
+                    vec![vec![]],
+                    vec![HlType::Unit],
+                    None,
+                    vec![sid(store)],
+                );
                 let mut ins = vec![q, hist, store, sinks, Ref::Pos];
                 let mut select = false;
                 if let (Some(ix), Some((ient, iq, iw))) = (&c.indexer, rows.index) {
@@ -1305,18 +1341,34 @@ impl Builder<'_> {
                         ),
                         0,
                     );
-                    bk.push(Op::BlockWrite { ratio: m, blocks }, vec![ient, keys, Ref::Pos], vec![vec![]], vec![HlType::Unit], None, vec![sid(keys)]);
+                    bk.push(
+                        Op::BlockWrite { ratio: m, blocks },
+                        vec![ient, keys, Ref::Pos],
+                        vec![vec![]],
+                        vec![HlType::Unit],
+                        None,
+                        vec![sid(keys)],
+                    );
                     ins.push(ids);
                     select = true;
                 }
                 bk.f(Op::EntryAttention { heads, head_dim: hd, ratio: m, blocks, scale: a.scale, select }, ins, heads * hd, "attn.ctx")
             }
-            (Some(_), None) => return Err(LowerError::eval("internal: a compressed layer's attention block without the rows of its compressors")),
+            (Some(_), None) => {
+                return Err(LowerError::eval("internal: a compressed layer's attention block without the rows of its compressors"));
+            }
         };
         // K = V carries the rotation: the output's rope slice is rotated back by the query's position.
         let tb = self.rope_table(&a.rope_back.freqs);
         let o = bk.f(
-            Op::Rope { heads, head_dim: hd, rotary_dim: a.rope_back.rotary_dim, offset: a.rope_back.offset, style: a.rope_back.style, table: tb },
+            Op::Rope {
+                heads,
+                head_dim: hd,
+                rotary_dim: a.rope_back.rotary_dim,
+                offset: a.rope_back.offset,
+                style: a.rope_back.style,
+                table: tb,
+            },
             vec![ctx, Ref::Pos],
             heads * hd,
             "attn.ctx_back",
@@ -1360,7 +1412,9 @@ impl Builder<'_> {
                     let xin = match &ls.pre_branch {
                         Some(pb) => {
                             if pre_mixer.is_none() {
-                                return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the mixer's input norm is where the branch joins"));
+                                return Err(LowerError::not_lowerable(
+                                    "LAYER_PRE_BRANCH_V1: the mixer's input norm is where the branch joins",
+                                ));
                             }
                             let t = self.pre_branch(&mut bk, pb, x)?;
                             bk.f(Op::Add, vec![x, t], d, "pb.sum")
@@ -1493,13 +1547,19 @@ impl Builder<'_> {
     fn pre_branch(&mut self, bk: &mut Bk, pb: &PreBranch, h: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
         let Some(e0) = self.e0 else {
-            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1 reads the embedding carry (EMBED_CARRY_V1), and the model has none"));
+            return Err(LowerError::not_lowerable(
+                "LAYER_PRE_BRANCH_V1 reads the embedding carry (EMBED_CARRY_V1), and the model has none",
+            ));
         };
         if pb.attn.in_dim != Some(2 * d) {
-            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the attention reads [hidden | embedding], in_dim = 2 * hidden"));
+            return Err(LowerError::not_lowerable(
+                "LAYER_PRE_BRANCH_V1: the attention reads [hidden | embedding], in_dim = 2 * hidden",
+            ));
         }
         if pb.attn.kv_share.is_some() || pb.attn.sparse.is_some() || pb.attn.output_gate || pb.attn.gate.is_some() {
-            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: a plain attention (no KV sharing, sparse blocks or output gate)"));
+            return Err(LowerError::not_lowerable(
+                "LAYER_PRE_BRANCH_V1: a plain attention (no KV sharing, sparse blocks or output gate)",
+            ));
         }
         if !pb.mlp.gated || pb.mlp.inner_norm.is_some() || pb.mlp.act == Act::Xielu || !matches!(pb.mlp.glu, Glu::Standard) {
             return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: a plain gated MLP"));
@@ -1554,7 +1614,9 @@ impl Builder<'_> {
             Mixer::None => Err(LowerError::eval("internal: a mixer was asked of a layer with none")),
             Mixer::Parallel(branches) => self.parallel(bk, branches, x),
             Mixer::CrossAttention(c) => self.cross_attention(bk, c, x),
-            Mixer::SharedKv(_) => Err(LowerError::eval("internal: a shared-KV attention is built by its layer's blocks (`mhc_blocks`)")),
+            Mixer::SharedKv(_) => {
+                Err(LowerError::eval("internal: a shared-KV attention is built by its layer's blocks (`mhc_blocks`)"))
+            }
         }
     }
 
@@ -1564,12 +1626,17 @@ impl Builder<'_> {
     fn parallel(&mut self, bk: &mut Bk, branches: &[Branch], x: Ref) -> Result<Ref> {
         let d = self.s.hidden_size;
         if branches.len() < 2 || branches.len() > 4 {
-            return Err(LowerError::not_lowerable(format!("MIXER_PARALLEL_BRANCH_V1: {} branches (2 to 4 are modelled)", branches.len())));
+            return Err(LowerError::not_lowerable(format!(
+                "MIXER_PARALLEL_BRANCH_V1: {} branches (2 to 4 are modelled)",
+                branches.len()
+            )));
         }
         let kind = |m: &Mixer| std::mem::discriminant(m);
         for (i, b) in branches.iter().enumerate() {
             if matches!(b.mixer, Mixer::None | Mixer::Parallel(_)) {
-                return Err(LowerError::not_lowerable("MIXER_PARALLEL_BRANCH_V1: a branch is a mixer, not an empty layer or another parallel mix"));
+                return Err(LowerError::not_lowerable(
+                    "MIXER_PARALLEL_BRANCH_V1: a branch is a mixer, not an empty layer or another parallel mix",
+                ));
             }
             if matches!(&b.mixer, Mixer::Attention(a) if a.kv_share.is_some()) {
                 return Err(LowerError::not_lowerable("MIXER_PARALLEL_BRANCH_V1: KV sharing inside a branch"));
@@ -1644,10 +1711,9 @@ impl Builder<'_> {
     // ───────────────────────────── hyper-connections ─────────────────────────────
 
     fn hyper(&self) -> Result<HyperSpec> {
-        self.s
-            .hyper
-            .clone()
-            .ok_or_else(|| LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: a hyper-connection layer needs the model's streams (ModelSpec::hyper)"))
+        self.s.hyper.clone().ok_or_else(|| {
+            LowerError::not_lowerable("RESIDUAL_GATED_HC_V1: a hyper-connection layer needs the model's streams (ModelSpec::hyper)")
+        })
     }
 
     /// One gated mix of the residual's streams (`hc.{tag}.*`, `RESIDUAL_GATED_HC_V1`): the streams
@@ -1746,7 +1812,14 @@ impl Builder<'_> {
             .unwrap_or(0);
         let win = self.state("ple.ngram.win", StateKind::Fixed, vec![p.ngram_size - 1], p.eos_id as f32)?;
         let ids = Ref::Node(
-            bk.push(Op::NgramIds { ple: p.clone(), layers: vec![] }, vec![Ref::Token, win], vec![vec![heads]], vec![HlType::Idx], None, vec![sid(win)]),
+            bk.push(
+                Op::NgramIds { ple: p.clone(), layers: vec![] },
+                vec![Ref::Token, win],
+                vec![vec![heads]],
+                vec![HlType::Idx],
+                None,
+                vec![sid(win)],
+            ),
             0,
         );
         let table = self.param("ple.ngram.table", vec![rows_max, dpn], true, Init::Normal(0.5))?;
@@ -1788,12 +1861,14 @@ impl Builder<'_> {
         let d = self.s.hidden_size;
         let (n, dim, ratio) = (sp.index_heads, sp.index_dim, sp.ratio);
         if n == 0 || dim == 0 || ratio == 0 || sp.top_blocks == 0 || rp.rotary_dim > dim {
-            return Err(LowerError::bad(format!("ATTN_SPARSE_BLOCK_V1: {n} index heads of {dim}, blocks of {ratio}, rotary {}", rp.rotary_dim)));
+            return Err(LowerError::bad(format!(
+                "ATTN_SPARSE_BLOCK_V1: {n} index heads of {dim}, blocks of {ratio}, rotary {}",
+                rp.rotary_dim
+            )));
         }
-        let max_pos = self
-            .s
-            .max_position_embeddings
-            .ok_or_else(|| LowerError::not_lowerable("ATTN_SPARSE_BLOCK_V1 needs max_position_embeddings (the block-key matrix is sized on it)"))?;
+        let max_pos = self.s.max_position_embeddings.ok_or_else(|| {
+            LowerError::not_lowerable("ATTN_SPARSE_BLOCK_V1 needs max_position_embeddings (the block-key matrix is sized on it)")
+        })?;
         let blocks = max_pos.div_ceil(ratio);
         // The block-key matrix is a state and the scores are `[blocks, index heads]`: both inside NF-8's 2^28 elements.
         if (blocks as u64).saturating_mul(dim.max(n) as u64) > 1 << 27 {
@@ -1850,7 +1925,15 @@ impl Builder<'_> {
         let n = |s: &str| format!("{pf}.{s}");
         // `ATTN_DIFFERENTIAL_V1`: the values are double wide in the history, the context is combined before anything reads it.
         if a.differential.is_some() {
-            if h % 2 != 0 || kv % 2 != 0 || kv == 0 || vd != hd || a.sinks || a.sparse.is_some() || a.kv_share.is_some() || a.output_gate {
+            if h % 2 != 0
+                || kv % 2 != 0
+                || kv == 0
+                || vd != hd
+                || a.sinks
+                || a.sparse.is_some()
+                || a.kv_share.is_some()
+                || a.output_gate
+            {
                 return Err(LowerError::not_lowerable(format!(
                     "ATTN_DIFFERENTIAL_V1 needs an even number of heads and of kv heads and values as wide as keys ({h} heads, {kv} kv heads, {hd}/{vd}), and has no sinks, sparse blocks, KV sharing or fused output gate"
                 )));
@@ -2109,7 +2192,15 @@ impl Builder<'_> {
             ins.push(self.param("xattn.k_norm.gain", vec![hd], true, Init::Uniform(0.6, 1.4))?);
         }
         let ctx = bk.f(
-            Op::CrossAttention { heads: h, kv_heads: kv, head_dim: hd, scale: 1.0 / (hd as f64).sqrt(), rows, k_norm: c.k_norm, slots },
+            Op::CrossAttention {
+                heads: h,
+                kv_heads: kv,
+                head_dim: hd,
+                scale: 1.0 / (hd as f64).sqrt(),
+                rows,
+                k_norm: c.k_norm,
+                slots,
+            },
             ins,
             h * hd,
             "xattn.ctx",
@@ -2145,8 +2236,16 @@ impl Builder<'_> {
             )));
         }
         let r = &moa.router;
-        if r.scoring != Scoring::TopKThenSoftmax || r.selection_bias || r.groups.is_some() || r.per_expert_scale || r.normalize || r.scale != 1.0 {
-            return Err(LowerError::not_lowerable("MIXER_MOA_V1 routes by the top-k of the logits then a softmax (no bias, groups, scale or renormalisation)"));
+        if r.scoring != Scoring::TopKThenSoftmax
+            || r.selection_bias
+            || r.groups.is_some()
+            || r.per_expert_scale
+            || r.normalize
+            || r.scale != 1.0
+        {
+            return Err(LowerError::not_lowerable(
+                "MIXER_MOA_V1 routes by the top-k of the logits then a softmax (no bias, groups, scale or renormalisation)",
+            ));
         }
         let logits = self.linear(bk, x, "moa.router", e, d, r.linear_bias, true, "moa.router")?;
         let route = bk.push(
@@ -2258,7 +2357,12 @@ impl Builder<'_> {
         let kr = match &a.rope {
             Some(rp) => {
                 let t = self.rope_table(&rp.freqs);
-                bk.f(Op::Rope { heads: 1, head_dim: rope, rotary_dim: rope, offset: 0, style: rp.style, table: t }, vec![kr, Ref::Pos], rope, "mla.k_rope")
+                bk.f(
+                    Op::Rope { heads: 1, head_dim: rope, rotary_dim: rope, offset: 0, style: rp.style, table: t },
+                    vec![kr, Ref::Pos],
+                    rope,
+                    "mla.k_rope",
+                )
             }
             None => kr,
         };
@@ -2273,11 +2377,15 @@ impl Builder<'_> {
         let mut extra: Vec<Ref> = Vec::new();
         if let Some(ix) = &a.indexer {
             let Some((qa, qr)) = qlatent else {
-                return Err(LowerError::not_lowerable("a token indexer needs the MLA's q-latent (q_lora_rank): its query is read from it"));
+                return Err(LowerError::not_lowerable(
+                    "a token indexer needs the MLA's q-latent (q_lora_rank): its query is read from it",
+                ));
             };
             let (hi, di) = (ix.heads, ix.head_dim);
             if ix.rope.offset != 0 || ix.rope.rotary_dim > di || ix.rope.rotary_dim == 0 {
-                return Err(LowerError::not_lowerable("a token indexer's rotation must cover the first lanes of its head (offset 0, 0 < rotary_dim <= head_dim)"));
+                return Err(LowerError::not_lowerable(
+                    "a token indexer's rotation must cover the first lanes of its head (offset 0, 0 < rotary_dim <= head_dim)",
+                ));
             }
             let it = self.rope_table(&ix.rope.freqs);
             let iq = self.linear(bk, qa, "mla.idx.q", hi * di, qr, false, true, "mla.idx.q")?;
@@ -2303,12 +2411,8 @@ impl Builder<'_> {
         }
         let mut ins = vec![q, ls, rs, kvb];
         ins.extend(extra);
-        let o = bk.f(
-            Op::MlaAttention { heads: h, nope, rope, v_dim: vd, kv_lora: r, scale: a.scale, indexer },
-            ins,
-            h * vd,
-            "mla.ctx",
-        );
+        let o =
+            bk.f(Op::MlaAttention { heads: h, nope, rope, v_dim: vd, kv_lora: r, scale: a.scale, indexer }, ins, h * vd, "mla.ctx");
         self.linear(bk, o, "mla.o", d, h * vd, false, true, "mla.out")
     }
 
@@ -2340,14 +2444,27 @@ impl Builder<'_> {
         let gl = bk.f(Op::Mul, vec![sp, aa], nv, "gdn.log_decay");
         let st = self.state("gdn.S", StateKind::Fixed, vec![nv, dk, dv], 0.0)?;
         let o = bk.fw(
-            Op::GatedDelta { k_heads: nk, v_heads: nv, dk, dv, head_map: g.head_map, q_scale: 1.0 / (dk as f64).sqrt(), channel_decay: false },
+            Op::GatedDelta {
+                k_heads: nk,
+                v_heads: nv,
+                dk,
+                dv,
+                head_map: g.head_map,
+                q_scale: 1.0 / (dk as f64).sqrt(),
+                channel_decay: false,
+            },
             vec![q, k, v, gl, beta, st],
             nv * dv,
             Some("gdn.core"),
             vec![sid(st)],
         );
         let w = self.param("gdn.norm.gain", vec![dv], true, Init::Uniform(0.6, 1.4))?;
-        let o = bk.f(Op::GatedRmsNorm { eps: g.norm_eps, groups: nv, gate_first: false, act: g.gate_act }, vec![o, z, w], nv * dv, "gdn.normed");
+        let o = bk.f(
+            Op::GatedRmsNorm { eps: g.norm_eps, groups: nv, gate_first: false, act: g.gate_act },
+            vec![o, z, w],
+            nv * dv,
+            "gdn.normed",
+        );
         self.linear(bk, o, "gdn.out", d, nv * dv, false, true, "gdn.out")
     }
 
@@ -2379,7 +2496,15 @@ impl Builder<'_> {
         let gl = bk.f(Op::Mul, vec![sp, aa], n, "kda.log_decay");
         let st = self.state("kda.S", StateKind::Fixed, vec![h, dd, dd], 0.0)?;
         let o = bk.fw(
-            Op::GatedDelta { k_heads: h, v_heads: h, dk: dd, dv: dd, head_map: HeadMap::Group, q_scale: 1.0 / (dd as f64).sqrt(), channel_decay: true },
+            Op::GatedDelta {
+                k_heads: h,
+                v_heads: h,
+                dk: dd,
+                dv: dd,
+                head_map: HeadMap::Group,
+                q_scale: 1.0 / (dd as f64).sqrt(),
+                channel_decay: true,
+            },
             vec![q, k, v, gl, beta, st],
             n,
             Some("kda.core"),
@@ -2388,7 +2513,12 @@ impl Builder<'_> {
         let ga = self.linear(bk, x, "kda.g_a", r, d, false, true, "kda.g_a")?;
         let gate = self.linear(bk, ga, "kda.g_b", n, r, false, true, "kda.g_b")?;
         let w = self.param("kda.norm.gain", vec![dd], true, Init::Uniform(0.6, 1.4))?;
-        let o = bk.f(Op::GatedRmsNorm { eps: g.norm_eps, groups: h, gate_first: false, act: g.gate_act }, vec![o, gate, w], n, "kda.normed");
+        let o = bk.f(
+            Op::GatedRmsNorm { eps: g.norm_eps, groups: h, gate_first: false, act: g.gate_act },
+            vec![o, gate, w],
+            n,
+            "kda.normed",
+        );
         self.linear(bk, o, "kda.out", d, n, false, true, "kda.out")
     }
 
@@ -2501,7 +2631,12 @@ impl Builder<'_> {
             Mamba2Norm::GateFirst | Mamba2Norm::NormFirst => {
                 let w = self.param("mamba2.norm.gain", vec![inner], true, Init::Uniform(0.6, 1.4))?;
                 let gate_first = m.norm_mode == Mamba2Norm::GateFirst;
-                bk.f(Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first, act: Act::Silu }, vec![y, z, w], inner, "mamba2.normed")
+                bk.f(
+                    Op::GatedRmsNorm { eps: m.norm_eps, groups: m.norm_groups, gate_first, act: Act::Silu },
+                    vec![y, z, w],
+                    inner,
+                    "mamba2.normed",
+                )
             }
             Mamba2Norm::Ungated => {
                 let g = bk.f(Op::Act(Act::Silu), vec![z], inner, "mamba2.gate");
@@ -2636,7 +2771,9 @@ impl Builder<'_> {
         plain_act(m.act, "an expert MLP")?;
         // `MOE_EXPERTS_PLAIN_V1`: a plain expert is `down(act(up(x)))`; the gated-only options do not apply to it.
         if !m.gated && (m.expert_bias || m.input_scaled || !matches!(m.glu, Glu::Standard)) {
-            return Err(LowerError::not_lowerable("MOE_EXPERTS_PLAIN_V1: plain experts carry no biases, no clamped GLU and no input scaling"));
+            return Err(LowerError::not_lowerable(
+                "MOE_EXPERTS_PLAIN_V1: plain experts carry no biases, no clamped GLU and no input scaling",
+            ));
         }
         // `MOE_LATENT_PROJ_V1`: the routed experts work in a latent space; the router and the shared expert read the layer's input.
         let dl = m.latent.unwrap_or(d);
@@ -2661,7 +2798,13 @@ impl Builder<'_> {
         // `MLP_MOE_ZERO_EXPERT_V1`: the router (and its bias) run over the real experts plus the identity ones; the tensors of the
         // experts keep `e` rows.
         let z = m.zero_experts;
-        if z > 0 && (m.router.per_expert_scale || m.input_scaled || m.latent.is_some() || !matches!(m.glu, Glu::Standard) || m.router.groups.is_some()) {
+        if z > 0
+            && (m.router.per_expert_scale
+                || m.input_scaled
+                || m.latent.is_some()
+                || !matches!(m.glu, Glu::Standard)
+                || m.router.groups.is_some())
+        {
             return Err(LowerError::not_lowerable(
                 "MLP_MOE_ZERO_EXPERT_V1 with a per-expert scale, input-scaled or latent experts, a clamped GLU or group-limited routing is not modelled",
             ));
@@ -2714,7 +2857,16 @@ impl Builder<'_> {
             ins.push(self.param("moe.bias", vec![d], true, Init::Uniform(-0.1, 0.1))?);
         }
         let mut y = bk.f(
-            Op::MoeExperts { top_k: m.top_k, act: m.act, glu: m.glu, bias: m.expert_bias, input_scaled: m.input_scaled, gated: m.gated, identity: z > 0, out_bias: m.out_bias },
+            Op::MoeExperts {
+                top_k: m.top_k,
+                act: m.act,
+                glu: m.glu,
+                bias: m.expert_bias,
+                input_scaled: m.input_scaled,
+                gated: m.gated,
+                identity: z > 0,
+                out_bias: m.out_bias,
+            },
             ins,
             dl,
             "moe.routed",

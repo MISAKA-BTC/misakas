@@ -203,7 +203,7 @@ fn unpaid_issuer_r_survives_sparse_daa_until_actual_payment_then_uses_payment_pl
 fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranches() {
     use super::super::palw_bond_budget_fold_v1::{native_queued_income_id_v1, reporter_tranche_queue_v1};
     use super::super::palw_kernel_route_fold_v1::{apply_settlements, load_ledger};
-    use crate::palw_kernel_route_v1::{PalwKernelRouteExtrasV1, PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, palw_kernel_bond_id_v1};
+    use crate::palw_kernel_route_v1::{PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, PalwKernelRouteExtrasV1, palw_kernel_bond_id_v1};
     use misaka_palw_kernel::ledger::LedgerEventV1;
     use misaka_palw_kernel::settle::{SettlementInstructionV1, SettlementKindV1};
     for kind in [SettlementKindV1::AccuserReward, SettlementKindV1::DemanderShare] {
@@ -221,23 +221,36 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
         let mut b = TransitionBuilder::new(&registered, &p, false, false, false, false, &extras);
         load_ledger(&mut b, &ctx(2, 100, 2)).unwrap();
         for bond in [bond_key(1), bond_key(2)] {
-            b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, borsh::to_vec(&palw_kernel_bond_id_v1(&bond)).unwrap(),
-                Some(borsh::to_vec(&bond).unwrap()));
+            b.write_kernel_row(
+                PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
+                borsh::to_vec(&palw_kernel_bond_id_v1(&bond)).unwrap(),
+                Some(borsh::to_vec(&bond).unwrap()),
+            );
         }
         b.reserve_bond_income_v1(&ctx(2, 100, 2), bond_key(1), 50, 50, PalwBudgetOriginV1::MarketFee).unwrap();
-        let settlement = |bond, amount, kind| LedgerEventV1::Settlement(SettlementInstructionV1 {
-            bond: palw_kernel_bond_id_v1(&bond), amount, kind, claim: Some(h64(0xD00).as_bytes()),
-        });
+        let settlement = |bond, amount, kind| {
+            LedgerEventV1::Settlement(SettlementInstructionV1 {
+                bond: palw_kernel_bond_id_v1(&bond),
+                amount,
+                kind,
+                claim: Some(h64(0xD00).as_bytes()),
+            })
+        };
         let terminal = |claim| match kind {
             SettlementKindV1::AccuserReward => LedgerEventV1::Convicted {
-                claim, accuser: palw_kernel_bond_id_v1(&bond_key(1)), slashed: 300, accuser_reward: 125, post_final: true,
+                claim,
+                accuser: palw_kernel_bond_id_v1(&bond_key(1)),
+                slashed: 300,
+                accuser_reward: 125,
+                post_final: true,
             },
-            SettlementKindV1::DemanderShare => LedgerEventV1::PostFinalDefault {
-                claim, stage: 0, position: 0, last: None, forfeited: 300,
-            },
+            SettlementKindV1::DemanderShare => {
+                LedgerEventV1::PostFinalDefault { claim, stage: 0, position: 0, last: None, forfeited: 300 }
+            }
             _ => unreachable!(),
         };
-        let debit_kind = if kind == SettlementKindV1::AccuserReward { SettlementKindV1::SlashFraud } else { SettlementKindV1::SlashDefault };
+        let debit_kind =
+            if kind == SettlementKindV1::AccuserReward { SettlementKindV1::SlashFraud } else { SettlementKindV1::SlashDefault };
         // Private emitted-batch seams: a collected debit alone, or a receipt
         // naming another court subject, cannot authorize a reporter entitlement.
         // Production drops the refused object builder; restore that checkpoint
@@ -253,12 +266,23 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
         assert!(b.state.bond_budget().unwrap().reporter_income.is_empty());
         assert!(b.state.pending_payouts.is_empty());
         b.restore(checkpoint);
-        let events = [terminal(h64(0xD00).as_bytes()), settlement(bond_key(2), 300, debit_kind),
-            settlement(bond_key(1), 125, kind), settlement(bond_key(2), 175, SettlementKindV1::Burn)];
+        let events = [
+            terminal(h64(0xD00).as_bytes()),
+            settlement(bond_key(2), 300, debit_kind),
+            settlement(bond_key(1), 125, kind),
+            settlement(bond_key(2), 175, SettlementKindV1::Burn),
+        ];
         apply_settlements(&mut b, &events, true, 100).unwrap();
         assert_eq!(b.state.bond(&bond_key(2)).unwrap().collateral, 700, "the immutable award is funded by a real collateral debit");
         assert!(b.state.pending_payouts.is_empty(), "full recipient R never creates uncapped cash");
-        let (award, row) = b.state.bond_budget().unwrap().claims.iter().find(|(_, row)| row.origin == PalwBudgetOriginV1::DeferredReporterIncome).unwrap();
+        let (award, row) = b
+            .state
+            .bond_budget()
+            .unwrap()
+            .claims
+            .iter()
+            .find(|(_, row)| row.origin == PalwBudgetOriginV1::DeferredReporterIncome)
+            .unwrap();
         let award = *award;
         assert_eq!((row.reserved.reward_sompi, row.consumed.reward_sompi), (125, 0));
         let staged = b.state.clone();
@@ -275,8 +299,10 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
         for (n, expected) in [50, 50, 25].into_iter().enumerate() {
             let queue = reporter_tranche_queue_v1(award, progress);
             assert_eq!(state.pending_payout(&queue).unwrap().amount, expected);
-            assert_eq!(state.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window,
-                PalwBudgetVectorV1 { reward_sompi: expected, ..PalwBudgetVectorV1::ZERO });
+            assert_eq!(
+                state.bond_budget().unwrap().bond_row(&bond_key(1)).unwrap().window,
+                PalwBudgetVectorV1 { reward_sompi: expected, ..PalwBudgetVectorV1::ZERO }
+            );
             let before_pay = state.clone();
             let payment = queued_at + 1_000; // actual sparse drain, never logical queue+W
             let (paid, delta) = apply(&before_pay, &p, &ctx(5 + n as u64 * 3, payment, 5 + n as u64 * 3), &[], None);
@@ -297,8 +323,7 @@ fn funded_kernel_reporter_settlements_defer_full_r_and_redeem_exact_native_tranc
             let (next, delta) = apply(&held, &p, &ctx(7 + n as u64 * 3, payment + 280, 7 + n as u64 * 3), &[], None);
             assert_replayable(&p, &held, &next, &delta);
             assert!(next.bond_budget().unwrap().claim_row(&native_queued_income_id_v1(queue, &bond_key(1))).is_none());
-            assert_eq!(next.bond_budget().unwrap().claim_row(&award).unwrap().consumed.reward_sompi,
-                if n == 0 { 100 } else { 125 });
+            assert_eq!(next.bond_budget().unwrap().claim_row(&award).unwrap().consumed.reward_sompi, if n == 0 { 100 } else { 125 });
             queued_at = payment + 280;
             state = next;
         }
@@ -335,11 +360,22 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
     let collected = b.slash_bond(bond_key(2), 1_250).unwrap();
     assert_eq!(collected, 1_250);
     let offence = h64(0xCD08);
-    b.write_consumed_offence(offence, Some(PalwConsumedOffenceV1 {
-        kind: PalwOffenceKindV1::CourtConviction, accused: bond_key(2).0, amount: 1_250, accepted_daa: 200,
-        execution_root: Hash64::default(), collected, claim_id: Hash64::default(),
-    }));
-    assert_eq!(b.open_reporter_reward(200, offence, 0, PalwConvictionBasisV1::CourtVerdict { challenger: bond_key(1) }).unwrap(), Some(125));
+    b.write_consumed_offence(
+        offence,
+        Some(PalwConsumedOffenceV1 {
+            kind: PalwOffenceKindV1::CourtConviction,
+            accused: bond_key(2).0,
+            amount: 1_250,
+            accepted_daa: 200,
+            execution_root: Hash64::default(),
+            collected,
+            claim_id: Hash64::default(),
+        }),
+    );
+    assert_eq!(
+        b.open_reporter_reward(200, offence, 0, PalwConvictionBasisV1::CourtVerdict { challenger: bond_key(1) }).unwrap(),
+        Some(125)
+    );
     let award = native_reporter_binding_id_v1(offence);
     let frozen = b.state.bond_budget().unwrap().reporter_income[&award];
     assert_eq!(frozen.recipient, Some(bond_key(1)));
@@ -360,7 +396,10 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
     assert_replayable(&p, &registered, &staged, &delta);
     let (closed, delta) = apply(&staged, &p, &ctx(3, reveal_until + 1, 3), &[], None);
     assert_replayable(&p, &staged, &closed, &delta);
-    assert!(closed.reporter_rewards.is_empty() && closed.pending_payouts.is_empty(), "R-full award is exact funded debt, with no uncapped cash");
+    assert!(
+        closed.reporter_rewards.is_empty() && closed.pending_payouts.is_empty(),
+        "R-full award is exact funded debt, with no uncapped cash"
+    );
     assert_eq!(closed.reporter_counters.awarded_sompi, 125);
     assert_eq!(closed.bond(&bond_key(2)).unwrap().collateral, 750);
     let debt = closed.bond_budget().unwrap().claim_row(&award).unwrap();
@@ -373,7 +412,11 @@ fn named_native_reporter_freezes_funded_payee_and_pays_above_one_cap_in_exact_tr
         let queue = reporter_tranche_queue_v1(award, progress);
         let payout = *state.pending_payout(&queue).unwrap();
         assert_eq!(payout, PalwPayoutV2 { payload: frozen.payload, amount: expected });
-        assert_ne!(payout.payload, state.bond(&bond_key(1)).unwrap().payout_payload, "redemption uses the immutable entitlement payload");
+        assert_ne!(
+            payout.payload,
+            state.bond(&bond_key(1)).unwrap().payout_payload,
+            "redemption uses the immutable entitlement payload"
+        );
         let payment = queued_at + 1_000;
         let (paid, delta) = apply(&state, &p, &ctx(5 + 2 * i as u64, payment, 5 + 2 * i as u64), &[], None);
         assert_replayable(&p, &state, &paid, &delta);
@@ -420,7 +463,10 @@ fn reporter_v2_fence_preserves_v1_and_quarantines_old_exact_cash_with_carriage_r
     let book = migrated.bond_budget().unwrap();
     assert_eq!(book.header.version, PALW_BOND_BUDGET_STATE_VERSION_V2);
     assert!(book.has_unattributed_income_v1());
-    assert!(book.reporter_income.values().all(|row| row.recipient.is_none()), "a matching actual bond payout is not authenticated ownership");
+    assert!(
+        book.reporter_income.values().all(|row| row.recipient.is_none()),
+        "a matching actual bond payout is not authenticated ownership"
+    );
     let queue = crate::palw_vesting_v1::palw_reporter_payout_key_v1(&offence);
     assert_eq!(*migrated.pending_payout(&queue).unwrap(), payout);
     let mut b = TransitionBuilder::new(&migrated, &p, false, false, false, false, &extras);
@@ -523,14 +569,26 @@ fn round_draw_handles_overfull_migration_and_duplicate_span_without_partial_tick
         let mut fixture = Vec::new();
         if overfull {
             let cap = palw_bond_budget_caps_v1(&policy, capital).reward_sompi;
-            budget.hold_native_income_v1(&policy, capital, h64(0x7771), bond_key(1), 100, 500, cap + 1, &[], false, &mut fixture).unwrap();
+            budget
+                .hold_native_income_v1(&policy, capital, h64(0x7771), bond_key(1), 100, 500, cap + 1, &[], false, &mut fixture)
+                .unwrap();
         } else {
             budget.reserve_round_rights_v1(&policy, capital, 7, bond_key(1), 100, 1, &mut fixture).unwrap();
         }
         let mut schedule = PalwExecScheduleV1 {
-            span_index: 7, seed: h64(0x7772), domains: Vec::new(), quanta: Vec::new(),
-            finals: vec![PalwExecFinalV1 { domain: h64(1), bond: bond_key(1), operator_id: op_id(21),
-                claim_id: h64(0x7773), execution_root: h64(0x7774), credit: 4, accepted_blue_score: 1 }],
+            span_index: 7,
+            seed: h64(0x7772),
+            domains: Vec::new(),
+            quanta: Vec::new(),
+            finals: vec![PalwExecFinalV1 {
+                domain: h64(1),
+                bond: bond_key(1),
+                operator_id: op_id(21),
+                claim_id: h64(0x7773),
+                execution_root: h64(0x7774),
+                credit: 4,
+                accepted_blue_score: 1,
+            }],
         };
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
@@ -1087,22 +1145,29 @@ fn free_prompt_spends_stop_at_the_export_cap_while_the_liability_holds() {
     assert!(!at(cap - 9).bond_budget_spend_fits_v1(&p, &id, now, || 10), "and one past it");
 }
 
-
 /// Physical native queue confirmation, retirement, import and journal reorg share
 /// the same material receipt. These fixtures use the existing toy execution seam.
 #[test]
 fn material_v3_native_final_retires_only_at_actual_payment_plus_w_and_reorg_restores_the_hold() {
     for w in [280, 436] {
         for material_from in [100, 125] {
-            let p = params().with_worker_carve_permille(620).unwrap()
-                .with_claim_retirement_daa(50).unwrap()
+            let p = params()
+                .with_worker_carve_permille(620)
+                .unwrap()
+                .with_claim_retirement_daa(50)
+                .unwrap()
                 .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
-                    from_daa: 100, policy: PalwBondBudgetPolicyV1 { window_daa: w, ..test_policy(1) }, allocation: None,
+                    from_daa: 100,
+                    policy: PalwBondBudgetPolicyV1 { window_daa: w, ..test_policy(1) },
+                    allocation: None,
                 }))
-                .with_reporter_income_from(Some(100)).with_material_income_from(Some(material_from));
+                .with_reporter_income_from(Some(100))
+                .with_material_income_from(Some(material_from));
             let walked = walk(&p);
             let id = attempt_id_v2(&attempt(40, 1).attempt);
-            for pair in walked.windows(2) { assert_replayable(&p, &pair[0].0, &pair[1].0, &pair[1].1); }
+            for pair in walked.windows(2) {
+                assert_replayable(&p, &pair[0].0, &pair[1].0, &pair[1].1);
+            }
             let (finalized, _) = &walked[4];
             assert!(matches!(finalized.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { final_daa: 124 }));
             // PESG §6 (integration; R6781-F merge): the non-vesting export cap, 0.51 of the 200 collateral.
@@ -1133,8 +1198,11 @@ fn material_v3_native_final_retires_only_at_actual_payment_plus_w_and_reorg_rest
 
 #[test]
 fn material_v3_future_fence_leaves_existing_v2_fold_bytes_and_roots_identical() {
-    let base = params().with_worker_carve_permille(620).unwrap()
-        .with_bond_budget(Some(mirror(100, None))).with_reporter_income_from(Some(100));
+    let base = params()
+        .with_worker_carve_permille(620)
+        .unwrap()
+        .with_bond_budget(Some(mirror(100, None)))
+        .with_reporter_income_from(Some(100));
     let future = base.clone().with_material_income_from(Some(1_000_000));
     for ((a, da), (b, db)) in walk(&base).iter().zip(walk(&future).iter()) {
         assert_eq!(da, db);
@@ -1152,13 +1220,24 @@ fn material_v3_future_fence_leaves_existing_v2_fold_bytes_and_roots_identical() 
 #[test]
 fn material_v3_preserves_abandonment_and_obligation_release_before_retirement() {
     for free_prompt in [true, false] {
-        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50).unwrap()
-            .with_fp_quanta(8, 64).unwrap().with_claim_retirement_daa(200).unwrap()
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_claim_retirement_daa(200)
+            .unwrap()
             .with_capacity_escrow_from_daa((!free_prompt).then_some(100))
             .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
-                from_daa: 100, policy: PalwBondBudgetPolicyV1 { window_daa: 280, block_units_per_unit: 8 * PALW_BUDGET_BLOCK_UNIT_V1, ..test_policy(1) }, allocation: None,
+                from_daa: 100,
+                policy: PalwBondBudgetPolicyV1 {
+                    window_daa: 280,
+                    block_units_per_unit: 8 * PALW_BUDGET_BLOCK_UNIT_V1,
+                    ..test_policy(1)
+                },
+                allocation: None,
             }))
-            .with_reporter_income_from(Some(100)).with_material_income_from(Some(150));
+            .with_reporter_income_from(Some(100))
+            .with_material_income_from(Some(150));
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let env = attempt(40, 1);
         let (id, accepted) = if free_prompt {
@@ -1197,12 +1276,27 @@ fn material_v3_preserves_abandonment_and_obligation_release_before_retirement() 
 }
 
 fn finite_consumer_params(from: u64) -> PalwStateParamsV2 {
-    params().with_worker_carve_permille(620).unwrap().with_claim_retirement_daa(50).unwrap()
-        .with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 100,
-            policy: PalwBondBudgetPolicyV1 { window_daa: 280, ..test_policy(1) }, allocation: None }))
-        .with_reporter_income_from(Some(100)).with_material_income_from(Some(100))
-        .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 { from_daa: from,
-            policy: PalwPaidConsumerLifecyclePolicyV1 { version: 1, service_span_daa: 60, dispute_tail_daa: 700, material_tail_daa: 500 } }))
+    params()
+        .with_worker_carve_permille(620)
+        .unwrap()
+        .with_claim_retirement_daa(50)
+        .unwrap()
+        .with_bond_budget(Some(PalwBondBudgetMirrorV1 {
+            from_daa: 100,
+            policy: PalwBondBudgetPolicyV1 { window_daa: 280, ..test_policy(1) },
+            allocation: None,
+        }))
+        .with_reporter_income_from(Some(100))
+        .with_material_income_from(Some(100))
+        .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
+            from_daa: from,
+            policy: PalwPaidConsumerLifecyclePolicyV1 {
+                version: 1,
+                service_span_daa: 60,
+                dispute_tail_daa: 700,
+                material_tail_daa: 500,
+            },
+        }))
 }
 
 /// Existing toy execution/receipt seams, real admission/Final/queue/import APIs.
@@ -1211,10 +1305,13 @@ fn paid_consumer_v4_freezes_exact_accepted_terms_and_preserves_future_fence_wire
     let active = finite_consumer_params(100);
     let old = active.clone().with_paid_consumer_lifecycle(None);
     let future = active.clone().with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
-        from_daa: 10_000, policy: active.paid_consumer_lifecycle().unwrap().policy,
+        from_daa: 10_000,
+        policy: active.paid_consumer_lifecycle().unwrap().policy,
     }));
     for ((a, da), (b, db)) in walk(&old).iter().zip(walk(&future).iter()) {
-        assert_eq!(da, db); assert_eq!(a.state_root(), b.state_root()); assert_eq!(carriage_bytes(a), carriage_bytes(b));
+        assert_eq!(da, db);
+        assert_eq!(a.state_root(), b.state_root());
+        assert_eq!(carriage_bytes(a), carriage_bytes(b));
         assert_eq!(a.bond_budget().unwrap().header.version, PALW_BOND_BUDGET_STATE_VERSION_V3);
     }
     let steps = walk(&active);
@@ -1231,29 +1328,35 @@ fn paid_consumer_v4_freezes_exact_accepted_terms_and_preserves_future_fence_wire
     assert!(matches!(finalized.paid_consumer_contract_v1(&id).unwrap().status, PalwPaidConsumerStatusV1::Terminal { daa: 124 }));
     let extras = PalwTransitionExtrasV1::default();
     let mut builder = TransitionBuilder::new(finalized, &active, false, false, false, false, &extras);
-    let mut changed = *finalized.paid_consumer_contract_v1(&id).unwrap(); changed.terms.service_until += 1;
+    let mut changed = *finalized.paid_consumer_contract_v1(&id).unwrap();
+    changed.terms.service_until += 1;
     assert!(builder.commit_paid_consumer_v1(id, changed).is_err(), "DA/Panel clocks never rewrite signed terms");
     assert_eq!(builder.state, *finalized);
     let (held, delta) = apply(&steps[6].0, &active, &ctx(8, 1360, 8), &[], None);
-    assert_replayable(&active, &steps[6].0, &held, &delta); assert!(held.claim(&id).is_some());
+    assert_replayable(&active, &steps[6].0, &held, &delta);
+    assert!(held.claim(&id).is_some());
     let (retired, delta) = apply(&held, &active, &ctx(9, 1361, 9), &[], None);
     assert_replayable(&active, &held, &retired, &delta);
-    assert!(retired.claim(&id).is_none()); assert!(retired.paid_consumer_contract_v1(&id).is_none());
+    assert!(retired.claim(&id).is_none());
+    assert!(retired.paid_consumer_contract_v1(&id).is_none());
 }
 
 #[test]
 fn paid_consumer_v4_refuses_unsigned_material_extension_and_closes_service_neutrally() {
     let p = finite_consumer_params(100);
     let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
-    let mut short = attempt(40, 1); short.attempt.trace_retention_daa = 1360;
+    let mut short = attempt(40, 1);
+    short.attempt.trace_retention_daa = 1360;
     let before = carriage_bytes(&base);
     let result = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[], Some(&short));
     assert!(result.is_err(), "the full already-authorized term is required before monetary writes");
     assert_eq!(carriage_bytes(&base), before);
-    let env = attempt(40, 2); let id = attempt_id_v2(&env.attempt);
+    let env = attempt(40, 2);
+    let id = attempt_id_v2(&env.attempt);
     let (accepted, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
     let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
-    let (bound, _) = apply(&accepted, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h64(77), seats }], None);
+    let (bound, _) =
+        apply(&accepted, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h64(77), seats }], None);
     let terms = bound.paid_consumer_terms_v1(&id).unwrap();
     assert!(bound.paid_consumer_service_fits_v1(&id, 161, 161));
     assert!(!bound.paid_consumer_service_fits_v1(&id, 162, 162));
@@ -1262,8 +1365,10 @@ fn paid_consumer_v4_refuses_unsigned_material_extension_and_closes_service_neutr
     assert!(bound.require_paid_consumer_dispute_v1(&id, 161, 862).is_err());
     let (expired, delta) = apply(&bound, &p, &ctx(4, 162, 4), &[], None);
     assert_replayable(&p, &bound, &expired, &delta);
-    assert!(matches!(expired.claim(&id).unwrap().phase,
-        PalwClaimPhaseV2::Voided { voided_daa: 162, reason: PalwVoidReasonV2::PanelUnavailable }));
+    assert!(matches!(
+        expired.claim(&id).unwrap().phase,
+        PalwClaimPhaseV2::Voided { voided_daa: 162, reason: PalwVoidReasonV2::PanelUnavailable }
+    ));
     assert_eq!(expired.paid_consumer_terms_v1(&id), Some(terms));
     assert_eq!(expired.bond(&bond_key(1)).unwrap().slashed, 0);
     assert!(expired.pending_payouts.is_empty());
@@ -1276,7 +1381,8 @@ fn paid_consumer_v4_refuses_unsigned_material_extension_and_closes_service_neutr
 #[test]
 fn paid_consumer_v4_exhaustion_preserves_accepted_court_and_refuses_late_new_sessions() {
     let p = finite_consumer_params(100);
-    let steps = walk(&p); let licensed = &steps[3].0;
+    let steps = walk(&p);
+    let licensed = &steps[3].0;
     let id = attempt_id_v2(&attempt(40, 1).attempt);
     let open = court_open(id, h64(31), bond_key(1), bond_key(1));
     let (courted, delta) = apply(licensed, &p, &ctx(5, 104, 5), &[open], None);
@@ -1290,7 +1396,9 @@ fn paid_consumer_v4_exhaustion_preserves_accepted_court_and_refuses_late_new_ses
     assert!(builder.state.court_session(&sid).is_some(), "a neutral service expiry never cancels an accepted accusation");
     assert!(!builder.state.claim(&id).unwrap().phase.is_terminal());
     assert!(matches!(builder.state.paid_consumer_contract_v1(&id).unwrap().status, PalwPaidConsumerStatusV1::Exhausted { daa: 162 }));
-    let mut late = courted.court_session(&sid).unwrap().clone(); late.opened_daa = 162; late.deadline_daa = 662;
+    let mut late = courted.court_session(&sid).unwrap().clone();
+    late.opened_daa = 162;
+    late.deadline_daa = 662;
     assert!(builder.write_court(h64(0xBAD), Some(late)).is_err());
     assert!(builder.state.court_session(&h64(0xBAD)).is_none());
     // Run the whole block from the untouched actual parent. Its court is

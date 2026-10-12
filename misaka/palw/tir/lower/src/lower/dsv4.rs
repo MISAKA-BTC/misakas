@@ -99,7 +99,25 @@ pub(super) fn mhc_map(
     }
     let n = (2 + hc) * hc;
     // The logits: lanes `[0, hc)` take scale 0, `[hc, 2hc)` scale 1, the rest scale 2.
-    let u = affine_q24(b, cx, lb, m, n, base_p, scale_p, Arc::new(move |i| if i < hc { 0 } else if i < 2 * hc { 1 } else { 2 }), site)?;
+    let u = affine_q24(
+        b,
+        cx,
+        lb,
+        m,
+        n,
+        base_p,
+        scale_p,
+        Arc::new(move |i| {
+            if i < hc {
+                0
+            } else if i < 2 * hc {
+                1
+            } else {
+                2
+            }
+        }),
+        site,
+    )?;
     let eps_q = (eps * ONE as f64).round() as i64;
     let epsc = b.c(DType::I64, eps_q as i128);
     // pre = σ(u₀) + ε, post = 2σ(u₁): Q24 → Q14 codes.
@@ -183,7 +201,14 @@ fn buffer_state(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, st: u32, rows: usize,
 
 /// **`WindowWrite`**: row `pos mod ratio` of the `[ratio, w]` buffer becomes `row`. The buffer after the write is kept for the pool of the
 /// same position, and the rows' scale is recorded for it.
-pub(super) fn window_write(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, node: &hl::Node, row: &Val, ratio: usize) -> Result<()> {
+pub(super) fn window_write(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    node: &hl::Node,
+    row: &Val,
+    ratio: usize,
+) -> Result<()> {
     unsplit(row, &row.site)?;
     let hl::Ref::State(st) = node.inputs[1] else { return Err(LowerError::eval("internal: WindowWrite without a state")) };
     let w = len_of(b, row.r)?;
@@ -226,17 +251,10 @@ pub(super) fn window_pool(
         _ => return Err(LowerError::eval("internal: a window buffer without a scale")),
     };
     // The gate's logits in Q14: `g·s_g·2^14 + ape·2^14` (the position bias is the narrowing's zero term, per row and channel).
-    let (m1, s1) = decl_ms(
-        b,
-        cx,
-        lb,
-        &format!("{site}.gate_scale"),
-        1,
-        {
-            let kg = kg.clone();
-            Arc::new(move |c| Ok(vec![c.scale(&kg)? * (1u64 << LOGIT_Q) as f64]))
-        },
-    )?;
+    let (m1, s1) = decl_ms(b, cx, lb, &format!("{site}.gate_scale"), 1, {
+        let kg = kg.clone();
+        Arc::new(move |c| Ok(vec![c.scale(&kg)? * (1u64 << LOGIT_Q) as f64]))
+    })?;
     let z = decl(
         b,
         cx,
@@ -368,7 +386,8 @@ pub(super) fn entry_attention(
 ) -> Result<Val> {
     unsplit(q, site)?;
     let EntryInputs { heads, hd, ratio, blocks, scale, .. } = *inp;
-    let store = *lb.gx.keys_new.get(&inp.store).ok_or_else(|| LowerError::eval("internal: the entries are attended before their write"))?;
+    let store =
+        *lb.gx.keys_new.get(&inp.store).ok_or_else(|| LowerError::eval("internal: the entries are attended before their write"))?;
     let key_e = lb
         .gx
         .keys_key
@@ -396,31 +415,17 @@ pub(super) fn entry_attention(
     let et = b.transpose(e3, &[0, 2, 1]);
     let se = b.matmul(q3, et, DType::I64);
     let (kq, kw_key) = (q.key.clone(), inp.window.1.clone());
-    let (ms, ss) = decl_ms(
-        b,
-        cx,
-        lb,
-        &format!("{site}.scores_w"),
-        1,
-        {
-            let (kq, kk) = (kq.clone(), kw_key.clone());
-            Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64]))
-        },
-    )?;
+    let (ms, ss) = decl_ms(b, cx, lb, &format!("{site}.scores_w"), 1, {
+        let (kq, kk) = (kq.clone(), kw_key.clone());
+        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64]))
+    })?;
     let lw = narrow(b, sw, ms, ss, None, DType::I32);
     // The logits are commit points: a terminal tile of the court is one matrix product, not the scores' and the context's together.
     let lw = b.commit(lw);
-    let (me, se_) = decl_ms(
-        b,
-        cx,
-        lb,
-        &format!("{site}.scores_e"),
-        1,
-        {
-            let (kq, ke) = (kq.clone(), key_e.clone());
-            Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&ke)? * scale * (1u64 << LOGIT_Q) as f64]))
-        },
-    )?;
+    let (me, se_) = decl_ms(b, cx, lb, &format!("{site}.scores_e"), 1, {
+        let (kq, ke) = (kq.clone(), key_e.clone());
+        Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&ke)? * scale * (1u64 << LOGIT_Q) as f64]))
+    })?;
     let le = narrow(b, se, me, se_, None, DType::I32);
     // Visible entries: `t < (pos + 1) / ratio`, and — selecting — `t` named by `ids`.
     let after = bp_after(b, lb, ratio);

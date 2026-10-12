@@ -2072,7 +2072,12 @@ mod hfv_ibd_lock_verification {
 
     /// `readers` threads loop on `trigger`, `writers` threads loop on the relay poll's writes, until
     /// `budget` elapses or nothing completes for `stall`. Deadlocked threads are leaked.
-    fn stress(trigger: fn(&Registry, &CandidateId) -> Option<BlueWorkType>, readers: usize, writers: usize, budget: Duration) -> Outcome {
+    fn stress(
+        trigger: fn(&Registry, &CandidateId) -> Option<BlueWorkType>,
+        readers: usize,
+        writers: usize,
+        budget: Duration,
+    ) -> Outcome {
         let stall = Duration::from_secs(3);
         let (lock, ids) = reviewing_registry(8);
         let progress = Arc::new(AtomicU64::new(0));
@@ -2142,7 +2147,10 @@ mod hfv_ibd_lock_verification {
         for v in [
             CandidateValidation::Observed,
             CandidateValidation::SummaryReceived { claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(500)) },
-            CandidateValidation::ProofRequested { since: Instant::now(), claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(500)) },
+            CandidateValidation::ProofRequested {
+                since: Instant::now(),
+                claimed_blue_work: ClaimedBlueWork::new(BlueWorkType::from_u64(500)),
+            },
             CandidateValidation::Rejected { reason: CandidateRejectReason::InvalidProof },
             CandidateValidation::ProofValidated { verified_blue_work: BlueWorkType::from_u64(1) },
         ] {
@@ -2156,7 +2164,9 @@ mod hfv_ibd_lock_verification {
     fn hfv_stress_the_shipped_trigger_deadlocks_behind_the_relay_writer() {
         match stress(trigger_as_shipped, 6, 2, Duration::from_secs(60)) {
             Outcome::Deadlocked { after, trigger_calls, writer_bit_set } => {
-                eprintln!("HFV shipped trigger: DEADLOCK after {after:?} and {trigger_calls} trigger calls; writer bit set: {writer_bit_set}");
+                eprintln!(
+                    "HFV shipped trigger: DEADLOCK after {after:?} and {trigger_calls} trigger calls; writer bit set: {writer_bit_set}"
+                );
                 assert!(writer_bit_set, "the D6 shape: a writer holds the writer bit, waiting on a reader that waits on it");
             }
             other => panic!("expected the shipped trigger to deadlock within 60 s, got {other:?}"),
@@ -2415,7 +2425,8 @@ mod hfv_ibd_lock_verification {
         assert!(reentrant_sites(fixed).is_empty(), "{:?}", reentrant_sites(fixed));
         let twice = "fn f() { let x = (a.ibd_candidates.read().x(), a.ibd_candidates.read().y()); }";
         assert_eq!(reentrant_sites(twice).len(), 1);
-        let commented = "fn f() { // match x.ibd_candidates().read() { y.ibd_candidates().read() }\n let s = \"match ibd_candidates.read() {\"; }";
+        let commented =
+            "fn f() { // match x.ibd_candidates().read() { y.ibd_candidates().read() }\n let s = \"match ibd_candidates.read() {\"; }";
         assert!(reentrant_sites(commented).is_empty());
     }
 }

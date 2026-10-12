@@ -23,17 +23,17 @@ mod stage1;
 use stage1::*;
 
 use kaspa_consensus_core::config::params::{
-    PALW_T12_CAPACITY_EMISSION_BUDGET_V1, PALW_T12_CAPACITY_MULTI_CLAIM_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_CAPACITY_RHO_BREAKER_V1,
-    PalwPostLaunchFenceV1,
+    PALW_T12_CAPACITY_EMISSION_BUDGET_V1, PALW_T12_CAPACITY_MULTI_CLAIM_V1, PALW_T12_CAPACITY_RHO_BREAKER_V1,
+    PALW_T12_CAPACITY_RHO10_FENCES_V1, PalwPostLaunchFenceV1,
 };
 use kaspa_consensus_core::palw_admission_v2::{palw_attempt_derived_pwu_v1, palw_effective_class_target_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepOffsetV1};
-use kaspa_consensus_core::palw_attempt_v2::{PALW_ATTEMPT_V2_TRACE_CHUNKS, PalwAttemptEnvelopeV2, attempt_id_v2, attempt_trace_manifest_root_v1};
+use kaspa_consensus_core::palw_attempt_v2::{
+    PALW_ATTEMPT_V2_TRACE_CHUNKS, PalwAttemptEnvelopeV2, attempt_id_v2, attempt_trace_manifest_root_v1,
+};
 use kaspa_consensus_core::palw_capacity_s567_v1::{PALW_RIDERS_WINDOW_DAA_V1, palw_rider_challenge_v1};
 use kaspa_consensus_core::palw_real_share_v1::PalwFloorModeV1::{Idle, Normal};
-use kaspa_consensus_core::palw_real_share_v1::{
-    PALW_FLOOR_IDLE_SLOTS_V1 as IDLE, PALW_T12_FLOOR_RESERVE_ENTRY, PalwFloorStateV1,
-};
+use kaspa_consensus_core::palw_real_share_v1::{PALW_FLOOR_IDLE_SLOTS_V1 as IDLE, PALW_T12_FLOOR_RESERVE_ENTRY, PalwFloorStateV1};
 use kaspa_consensus_core::palw_state_v2::{PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateV2Error, palw_class_admits_claim_v1};
 
 /// The three ADR-0164 entries (F-EM, F-M1, F-K): the riders' fence and what it needs.
@@ -93,7 +93,8 @@ fn block(
     assert!(daa > c.daa, "DAA moves forward");
     let parent = c.s.clone();
     let x = ctx(0xCA_0000 + daa, daa, daa, subsidy);
-    let (child, delta, skips) = peek(c, &parent, &x, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+    let (child, delta, skips) =
+        peek(c, &parent, &x, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
     assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
     assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
     let reloaded = PalwStateCarriageV2::from_state(&child).into_state(&c.sp, Some(child.state_root())).expect("the carriage reloads");
@@ -159,7 +160,16 @@ fn k8_attempt(c: &Chain, k8: Hash64, n: u64, seed: u64, daa: u64) -> (PalwAttemp
 
 /// `count` REAL riders of `lead` by bond `n`, to attach at `daa`: each a K8 attempt re-bound to its lead and its index with the lead's
 /// data-availability pins (`retention` is the lead's `trace_retention_daa`).
-fn k8_riders(c: &Chain, k8: Hash64, lead: Hash64, retention: u64, n: u64, count: usize, seed0: u64, daa: u64) -> (PalwConsensusObjectV2, Vec<Hash64>) {
+fn k8_riders(
+    c: &Chain,
+    k8: Hash64,
+    lead: Hash64,
+    retention: u64,
+    n: u64,
+    count: usize,
+    seed0: u64,
+    daa: u64,
+) -> (PalwConsensusObjectV2, Vec<Hash64>) {
     let mut ids = Vec::new();
     let riders = (0..count as u32)
         .map(|index| {

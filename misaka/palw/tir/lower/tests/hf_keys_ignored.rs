@@ -12,7 +12,10 @@ use std::path::Path;
 
 fn config(tests_rel: &str) -> Value {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join(tests_rel);
-    serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(&std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())))).unwrap()
+    serde_json::from_str(&misaka_palw_tir_lower::hf_config::sanitize_json(
+        &std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+    ))
+    .unwrap()
 }
 
 fn read(c: &Value) -> Result<misaka_palw_tir_lower::hf_schema::ModelRead, String> {
@@ -45,7 +48,9 @@ fn a_llama_with_keys_no_transformers_llama_reads_reads_and_says_which_it_ignored
     // The function is the plain model's: the spec is identical.
     assert_eq!(serde_json::to_value(&r.spec).unwrap(), serde_json::to_value(&plain.spec).unwrap());
     let said = r.assumed_defaults.join("|");
-    for k in ["depth_alpha_enabled", "shard_idx", "organization", "moe_intermediate_size", "freeze_mm_mlp_adapter", "all_reduce_scores"] {
+    for k in
+        ["depth_alpha_enabled", "shard_idx", "organization", "moe_intermediate_size", "freeze_mm_mlp_adapter", "all_reduce_scores"]
+    {
         assert!(said.contains(&format!("ignored `{k}`: never read by transformers' LlamaForCausalLM")), "{k} not reported: {said}");
     }
     assert!(!plain.assumed_defaults.iter().any(|a| a.starts_with("ignored")), "nothing ignored on the plain config");
@@ -80,7 +85,10 @@ fn only_a_transformers_class_is_excused_not_a_custom_architecture_and_not_remote
     // The same key under the transformers class is ignored.
     assert!(read(&with(base.clone(), &[("zzz_unknown_key", json!(1))])).is_ok());
     // Remote code is never the class.
-    let remote = with(base.clone(), &[("zzz_unknown_key", json!(1)), ("auto_map", json!({"AutoModelForCausalLM": "modeling_custom.CustomLlama"}))]);
+    let remote = with(
+        base.clone(),
+        &[("zzz_unknown_key", json!(1)), ("auto_map", json!({"AutoModelForCausalLM": "modeling_custom.CustomLlama"}))],
+    );
     let e = read(&remote).expect_err("remote code");
     assert!(e.contains("modeling_custom") || e.contains("remote"), "{e}");
     // A model_type the table does not list for the class: not excused.
@@ -91,7 +99,8 @@ fn only_a_transformers_class_is_excused_not_a_custom_architecture_and_not_remote
 #[test]
 fn gpt2_ignores_the_openai_gpt_leftovers_and_a_nested_decoder_is_judged_by_its_own_model_type() {
     let gpt2 = config("fixtures/hf/gpt2/config.json");
-    let r = read(&with(gpt2.clone(), &[("predict_special_tokens", json!(true)), ("n_special", json!(0))])).expect("GPT-2 ignores predict_special_tokens");
+    let r = read(&with(gpt2.clone(), &[("predict_special_tokens", json!(true)), ("n_special", json!(0))]))
+        .expect("GPT-2 ignores predict_special_tokens");
     assert!(r.assumed_defaults.iter().any(|a| a.contains("predict_special_tokens")), "{:?}", r.assumed_defaults);
     // A nested decoder: junk inside the text config of a Qwen3.5 chat model is judged by `qwen3_5_text`.
     let vlm = config("fixtures/hf/qwen3_5_vlm/config.json");

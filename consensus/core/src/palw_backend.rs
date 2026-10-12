@@ -866,10 +866,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<(crate::Hash64, Vec<crate::Hash64>, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String> {
         let digest = self.artifact_inventory_digest()?;
         let leaves: Vec<crate::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
-        let opened = draw
-            .iter()
-            .map(|i| self.artifact_row_opening(*i).map(|o| (*i, o.operand)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let opened = draw.iter().map(|i| self.artifact_row_opening(*i).map(|o| (*i, o.operand))).collect::<Result<Vec<_>, _>>()?;
         Ok((digest.root(), leaves, opened))
     }
 
@@ -933,11 +930,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// **A seat's check of a prefix-state claim's state**: the job's named state against the one this backend derives for
     /// the claim's own prompt prefix (from its cache or by recomputation). `Ok(())` is agreement; the error names the
     /// disagreement. A job that is not a prefix-state job is `Ok(())` (it names no state).
-    fn verify_prefix_state_v1(
-        &self,
-        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
-        prompt_ids: &[u32],
-    ) -> Result<(), String> {
+    fn verify_prefix_state_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, prompt_ids: &[u32]) -> Result<(), String> {
         let Some(named) = crate::palw_fp_prefix_v1::palw_fp_prefix_tail_v1(job) else { return Ok(()) };
         let k = named.prefix_tokens as usize;
         if k == 0 || k >= prompt_ids.len() {

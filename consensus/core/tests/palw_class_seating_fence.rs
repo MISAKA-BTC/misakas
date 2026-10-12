@@ -88,7 +88,8 @@ impl Fx {
         let fold = registry_fold(&self.p, self.daa).expect("the registry is in force");
         let exec = executor.map(|i| self.bonds()[i]);
         let terms = self.sp.class_seating_terms_at(self.daa).expect("the fence is in force");
-        palw_class_seating_v1(&self.s, &self.sp, &fold, &self.class, exec.as_ref(), self.daa, terms, true).expect("the executor is a bond")
+        palw_class_seating_v1(&self.s, &self.sp, &fold, &self.class, exec.as_ref(), self.daa, terms, true)
+            .expect("the executor is a bond")
     }
 
     /// The fold's seating door for a genesis executor.
@@ -133,13 +134,16 @@ fn registered_by(fx: Fx, registrant: usize) -> Fx {
 
 #[test]
 fn the_fence_is_dormant_on_every_shipped_preset_and_asks_nothing_below_its_height() {
-    use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, Params as P};
+    use kaspa_consensus_core::config::params::{
+        DEVNET_PARAMS, MAINNET_PARAMS, Params as P, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS,
+    };
     for params in [&DEVNET_PARAMS, &MAINNET_PARAMS, &SIMNET_PARAMS, &TESTNET_PARAMS, &TESTNET11_PARAMS] {
         assert_eq!(params.palw_class_seating, None);
     }
     let t12 = P::from(kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12));
     // int-12: testnet-12 ships it armed at the 5,300 flag day (the list), at the drill's floor (3, no raise).
-    let at_h = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA.map(kaspa_consensus_core::config::params::ForkActivation::new);
+    let at_h = kaspa_consensus_core::config::params::PALW_T12_INT11_FLAG_DAY_DAA
+        .map(kaspa_consensus_core::config::params::ForkActivation::new);
     assert_eq!(t12.palw_class_seating.map(|f| f.activation).map(Some), at_h.map(Some), "testnet-12 arms it at the flag day");
     assert_eq!(palw_t12_shipped_params().palw_class_seating, t12.palw_class_seating);
     // Below the height the terms are absent and the door is `Ok` whatever the seats.
@@ -195,10 +199,12 @@ fn the_fence_is_hashed_into_both_fingerprints_some_only_and_its_floor_with_it() 
     assert_ne!(a.consensus_params_id(), shipped.consensus_params_id(), "an armed fence is a different ruleset");
     assert_ne!(a.consensus_schedule_id(), shipped.consensus_schedule_id());
     // The same height with another floor is another identity; a `never()` fence is the dormant ruleset.
-    let four = armed_with(PalwClassSeatingFenceV1 { independent_floor: 4, ..PalwClassSeatingFenceV1::testnet12_v1(ForkActivation::new(AT)) });
+    let four =
+        armed_with(PalwClassSeatingFenceV1 { independent_floor: 4, ..PalwClassSeatingFenceV1::testnet12_v1(ForkActivation::new(AT)) });
     assert_ne!(a.consensus_params_id(), four.consensus_params_id());
     // A raise moves the schedule (it is a height of the fork id).
-    let raised = armed_with(PalwClassSeatingFenceV1::testnet12_v1(ForkActivation::new(AT)).with_raise(ForkActivation::new(AT + 50), 4));
+    let raised =
+        armed_with(PalwClassSeatingFenceV1::testnet12_v1(ForkActivation::new(AT)).with_raise(ForkActivation::new(AT + 50), 4));
     assert_ne!(a.consensus_schedule_id(), raised.consensus_schedule_id());
     // A scheduled fence never moves the IDENTITY (the handshake's id: the fork id carries the height, so a rollout does not
     // partition), and `Some(never())` collapses whole into the dormant ruleset's.
@@ -296,7 +302,11 @@ fn seat_4_enough_seats_and_the_lifecycle_enters_probation_only_with_independent_
     chain.s = readied(&chain.sp, &chain.s, &bonds[..7], class, chain.daa + 1);
     chain.step(&[]);
     let row = state_of(&chain);
-    assert_eq!((row.state, row.ready_seats), (PalwModelLifecycleV1::Prefetching, 7), "seven ready operators, two independent: held in Prefetching");
+    assert_eq!(
+        (row.state, row.ready_seats),
+        (PalwModelLifecycleV1::Prefetching, 7),
+        "seven ready operators, two independent: held in Prefetching"
+    );
     // A third independent operator (bond 2 serves the floor's class again): the class enters Probation at the next boundary.
     chain.s = edited(&chain.sp, &chain.s, |c| {
         c.bonds.get_mut(&bonds[2]).unwrap().capable_classes = [class, chain.sp.base_class_id()].into_iter().collect();

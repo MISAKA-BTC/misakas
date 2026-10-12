@@ -355,8 +355,15 @@ pub fn palw_mesh_audit_draw_v1(seed: &Hash64, candidates: &[PalwAuditCandidateV1
         })
         .collect();
     keyed_candidates.sort_by(|(l_i, c_i), (l_j, c_j)| {
-        crate::palw_panel_v2::palw_draw_key_cmp_v1(*l_i, c_i.weight_msk.max(1), &c_i.operator_id, *l_j, c_j.weight_msk.max(1), &c_j.operator_id)
-            .then_with(|| c_i.bond.cmp(&c_j.bond))
+        crate::palw_panel_v2::palw_draw_key_cmp_v1(
+            *l_i,
+            c_i.weight_msk.max(1),
+            &c_i.operator_id,
+            *l_j,
+            c_j.weight_msk.max(1),
+            &c_j.operator_id,
+        )
+        .then_with(|| c_i.bond.cmp(&c_j.bond))
     });
     let mut operators: Vec<Hash64> = Vec::new();
     let mut out = Vec::new();
@@ -540,7 +547,9 @@ pub enum PalwMeshErrorV1 {
     TrapSetterDiffers { got: PalwBondKeyV2, committed: PalwBondKeyV2 },
     #[error("the trap is already revealed")]
     TrapAlreadyRevealed,
-    #[error("a trap over {tiles} tiles with planted tile {fault_leaf}: tiles are 1..={PALW_TRAP_MAX_TILES_V1} and the tile is below the count")]
+    #[error(
+        "a trap over {tiles} tiles with planted tile {fault_leaf}: tiles are 1..={PALW_TRAP_MAX_TILES_V1} and the tile is below the count"
+    )]
     TrapTilesInvalid { tiles: u64, fault_leaf: u64 },
     #[error("a trap committed at DAA {committed}, not before the audit draw at {drawn} it is revealed against (palw_audit_1004_v1)")]
     TrapCommittedAfterTheDraw { committed: u64, drawn: u64 },

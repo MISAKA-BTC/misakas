@@ -230,8 +230,7 @@ async fn real_attempt(cw: &mut Cw, card: usize, class: Hash64, nonce: u64) -> Re
     // The native-Final fixture has already found this trace-seam candidate on
     // its deterministic anchor. Re-evaluate the real ticket; changed anchors
     // fall back to the same bounded search. No eligibility/crypto gate changes.
-    let won = [58_535_663].into_iter().find(|draw| wins(*draw))
-        .or_else(|| (0u64..400_000_000).find(|draw| wins(*draw)));
+    let won = [58_535_663].into_iter().find(|draw| wins(*draw)).or_else(|| (0u64..400_000_000).find(|draw| wins(*draw)));
     eprintln!("[x8-g14] the class lottery: {won:?} draws (target {})", facts.class_target);
     assert!(won.is_some(), "the class lottery is winnable");
     let claim = attempt_id_v2(&attempt);

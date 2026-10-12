@@ -368,12 +368,18 @@ pub async fn submit_objects_v2(
 type CarrierBatchEntryV1 = (std::path::PathBuf, String, Transaction, u64, u64);
 
 fn check_carrier_batch_fees_v1(fees: impl IntoIterator<Item = u64>, maximum: Option<u64>) -> Result<u64, CliError> {
-    let total = fees.into_iter().try_fold(0u64, |sum, fee| sum.checked_add(fee))
+    let total = fees
+        .into_iter()
+        .try_fold(0u64, |sum, fee| sum.checked_add(fee))
         .ok_or_else(|| CliError::new(exit::GENERIC, "the total carrier fee overflowed before broadcast"))?;
     if let Some(maximum) = maximum {
         if total > maximum {
-            return Err(CliError::new(exit::GENERIC,
-                format!("the actual batch carrier fee {total} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast")));
+            return Err(CliError::new(
+                exit::GENERIC,
+                format!(
+                    "the actual batch carrier fee {total} sompi exceeds --maximum-total-fee-sompi {maximum}; no carrier was broadcast"
+                ),
+            ));
         }
     }
     Ok(total)
@@ -383,7 +389,9 @@ fn check_carrier_batch_fees_v1(fees: impl IntoIterator<Item = u64>, maximum: Opt
 /// passes its fee cap. A second recipient/carrier cannot fail this preflight
 /// after the first one has already broadcast.
 async fn broadcast_carrier_batch_v1<'a, F, Fut>(
-    carriers: &'a [CarrierBatchEntryV1], maximum: Option<u64>, mut broadcast: F,
+    carriers: &'a [CarrierBatchEntryV1],
+    maximum: Option<u64>,
+    mut broadcast: F,
 ) -> Result<Vec<serde_json::Value>, CliError>
 where
     F: FnMut(&'a CarrierBatchEntryV1) -> Fut,
@@ -594,7 +602,8 @@ pub async fn submit_objects_v2_capped(
             _ => println!("submitted {} — {summary} (fee {fee} sompi)", tx.id()),
         }
         Ok(serde_json::json!({ "object": path.display().to_string(), "txid": tx.id().to_string(), "fee_sompi": fee }))
-    }).await?;
+    })
+    .await?;
     match ctx.output {
         OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "submitted": true, "carriers": submitted })),
         _ => println!("the chain grades them when the carriers are accepted; a chunked object applies in the block that completes it"),
@@ -899,19 +908,17 @@ pub async fn certified(ctx: &Ctx, class_id: &str, json: bool) -> Result<(), CliE
 mod carrier_batch_tests {
     use super::*;
     use kaspa_consensus_core::{
+        Hash64,
         config::params::SIMNET_PARAMS,
         palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2,
         palw_state_v2::PalwConsensusObjectV2,
         tx::{TransactionOutpoint, UtxoEntry},
-        Hash64,
     };
     use kaspa_pq_validator_core::ValidatorKey;
     use std::{cell::Cell, path::PathBuf};
 
     fn object(index: u8) -> PalwConsensusObjectV2 {
-        PalwConsensusObjectV2::ObjectChunk {
-            group: Hash64::from_u64_word(200), index, count: 2, bytes: vec![index as u8; 128],
-        }
+        PalwConsensusObjectV2::ObjectChunk { group: Hash64::from_u64_word(200), index, count: 2, bytes: vec![index as u8; 128] }
     }
 
     fn assert_built_carrier(tx: &Transaction, funding: &UtxoEntry, expected_fee: u64, object: &PalwConsensusObjectV2) {
@@ -947,7 +954,9 @@ mod carrier_batch_tests {
         let submitted = broadcast_carrier_batch_v1(&carriers, Some(total), |entry| async move {
             counter.set(counter.get() + 1);
             Ok(serde_json::json!({"txid": entry.2.id().to_string()}))
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(calls.get(), 2);
         assert_eq!(submitted.len(), 2);
 
@@ -955,7 +964,9 @@ mod carrier_batch_tests {
         let error = broadcast_carrier_batch_v1(&carriers, Some(total - 1), |_| async move {
             counter.set(counter.get() + 1);
             Ok(serde_json::json!({"unexpected": true}))
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(error.msg.contains("exceeds --maximum-total-fee-sompi"));
         assert_eq!(calls.get(), 0, "no actual transport callback may run on a one-sompi excess");
     }
@@ -981,7 +992,9 @@ mod carrier_batch_tests {
         let error = broadcast_carrier_batch_v1(&carriers, Some(u64::MAX), |_| async move {
             counter.set(counter.get() + 1);
             Ok(serde_json::json!({"unexpected": true}))
-        }).await.unwrap_err();
+        })
+        .await
+        .unwrap_err();
         assert!(error.msg.contains("overflowed before broadcast"));
         assert_eq!(calls.get(), 0, "a checked-sum overflow must refuse before the first transport call");
     }
@@ -1076,9 +1089,15 @@ mod duplicate_gate_tests {
         };
         assert_eq!(registration_identity_v1(&reg), Some((Hash64::from_u64_word(1), Hash64::from_u64_word(2))));
         let envelope = O::SignedRegistrationV1 {
-            registration: Box::new(reg), valid_from_daa: 1, valid_until_daa: 32, fork_digest: Default::default(),
-            signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
-                kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0)), signature: vec![],
+            registration: Box::new(reg),
+            valid_from_daa: 1,
+            valid_until_daa: 32,
+            fork_digest: Default::default(),
+            signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                Hash64::from_u64_word(9),
+                0,
+            )),
+            signature: vec![],
         };
         let (class, root) = registration_identity_v1(&envelope).expect("signed registration is duplicate-gated before fees");
         assert_eq!((class, root), (Hash64::from_u64_word(1), Hash64::from_u64_word(2)));

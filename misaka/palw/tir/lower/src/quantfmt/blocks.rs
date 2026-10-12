@@ -128,7 +128,8 @@ pub(super) fn table_of(name: &str, t: &TableDesc) -> R<Table> {
             let sh = 64 - t.bits;
             ((u << sh) as i64) >> sh
         } else {
-            i64::try_from(u).map_err(|_| DslError(format!("table `{name}`: an unsigned 64-bit entry beyond i64 (declare it signed)")))?
+            i64::try_from(u)
+                .map_err(|_| DslError(format!("table `{name}`: an unsigned 64-bit entry beyond i64 (declare it signed)")))?
         });
     }
     Ok(Table { name: name.to_string(), values })
@@ -204,11 +205,22 @@ impl BlocksFormat {
                 if q.is_some() || scale.is_some() || zero.is_some() || min.is_some() || code.is_some() {
                     return Err(DslError("target `floats` declares decode.value only".into()));
                 }
-                Target::Floats { value: comp("value", value)?.ok_or_else(|| DslError("target `floats` declares decode.value".into()))? }
+                Target::Floats {
+                    value: comp("value", value)?.ok_or_else(|| DslError("target `floats` declares decode.value".into()))?,
+                }
             }
             other => return Err(DslError(format!("decode.target `{other}` (integers or floats)"))),
         };
-        Ok(BlocksFormat { stream_id: d.digest(), name: d.name.clone(), elems: *elems, bytes: *bytes, fields: fs, tables, group: group_size, target })
+        Ok(BlocksFormat {
+            stream_id: d.digest(),
+            name: d.name.clone(),
+            elems: *elems,
+            bytes: *bytes,
+            fields: fs,
+            tables,
+            group: group_size,
+            target,
+        })
     }
 
     /// Whether the format decodes to stored integers (else floats).
@@ -293,7 +305,9 @@ impl BlocksFormat {
                 }
                 // Groups.
                 let genv = self.env(raw, r0, nr, inp, true);
-                let scales = eval(scale, &genv, Mask(None)).map_err(|e| DslError(format!("{}: decode.scale: {e}", self.name)))?.into_floats(genv.n);
+                let scales = eval(scale, &genv, Mask(None))
+                    .map_err(|e| DslError(format!("{}: decode.scale: {e}", self.name)))?
+                    .into_floats(genv.n);
                 let zeros: Vec<i16> = match zero {
                     None => vec![0; genv.n],
                     Some(z) => eval(z, &genv, Mask(None))
@@ -305,7 +319,11 @@ impl BlocksFormat {
                 };
                 let mins = match min {
                     None => None,
-                    Some(m) => Some(eval(m, &genv, Mask(None)).map_err(|e| DslError(format!("{}: decode.min: {e}", self.name)))?.into_floats(genv.n)),
+                    Some(m) => Some(
+                        eval(m, &genv, Mask(None))
+                            .map_err(|e| DslError(format!("{}: decode.min: {e}", self.name)))?
+                            .into_floats(genv.n),
+                    ),
                 };
                 debug_assert_eq!(genv.n, nr * ng);
                 Ok((q16, scales, zeros, mins))
@@ -384,8 +402,15 @@ impl BlocksFormat {
         let (bpr, gs) = (inp / self.elems, self.group);
         let (per_row, unit) = if groups { (inp / gs, gs) } else { (inp, 1) };
         let n = nr * per_row;
-        let (mut e, mut j, mut blk, mut row, mut i, mut g, mut base) =
-            (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+        let (mut e, mut j, mut blk, mut row, mut i, mut g, mut base) = (
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+            Vec::with_capacity(n),
+        );
         for r in 0..nr {
             for k in 0..per_row {
                 let col = k * unit; // the first column of the lane's element or group
@@ -423,12 +448,19 @@ impl Env for BEnv<'_> {
         &self.fmt.tables[t]
     }
     fn read(&self, slot: usize, index: &[Col], mask: Mask<'_>) -> R<Col> {
-        self.read_with(slot, index, mask, &|range| self.raw.get(range).map(std::borrow::Cow::Borrowed)
-            .ok_or_else(|| DslError("field reads past the data".into())))
+        self.read_with(slot, index, mask, &|range| {
+            self.raw.get(range).map(std::borrow::Cow::Borrowed).ok_or_else(|| DslError("field reads past the data".into()))
+        })
     }
 }
 impl<'a> BEnv<'a> {
-    fn read_with(&self, slot: usize, index: &[Col], mask: Mask<'_>, read: &dyn Fn(std::ops::Range<usize>) -> R<std::borrow::Cow<'a,[u8]>>) -> R<Col> {
+    fn read_with(
+        &self,
+        slot: usize,
+        index: &[Col],
+        mask: Mask<'_>,
+        read: &dyn Fn(std::ops::Range<usize>) -> R<std::borrow::Cow<'a, [u8]>>,
+    ) -> R<Col> {
         let f = &self.fmt.fields[slot];
         let size = f.ty.size();
         let count = f.count.unwrap_or(1) as i64;
@@ -436,18 +468,26 @@ impl<'a> BEnv<'a> {
         let mut floats: Vec<f64> = Vec::new();
         for k in 0..self.n {
             if !mask.on(k) {
-                if f.ty.is_float() { floats.push(0.0) } else { ints.push(0) }
+                if f.ty.is_float() {
+                    floats.push(0.0)
+                } else {
+                    ints.push(0)
+                }
                 continue;
             }
             let idx = if index.is_empty() { 0 } else { index[0].int_at(k)? };
             if idx < 0 || idx >= count {
                 return Err(DslError(format!("field `{}` has {count} element(s), indexed at {idx}", f.name)));
             }
-            let off = (self.base[k] as usize).checked_add(f.at).and_then(|at| (idx as usize).checked_mul(size).and_then(|i| at.checked_add(i)))
+            let off = (self.base[k] as usize)
+                .checked_add(f.at)
+                .and_then(|at| (idx as usize).checked_mul(size).and_then(|i| at.checked_add(i)))
                 .ok_or_else(|| DslError("block field offset overflows".into()))?;
             let end = off.checked_add(size).ok_or_else(|| DslError("block field offset overflows".into()))?;
             let bytes = read(off..end)?;
-            if bytes.len()!=size { return Err(DslError("FRONTEND_BINDING: short block field range".into())); }
+            if bytes.len() != size {
+                return Err(DslError("FRONTEND_BINDING: short block field range".into()));
+            }
             let b = bytes.as_ref();
             match f.ty {
                 Ty::U8 => ints.push(b[0] as i64),
@@ -458,7 +498,9 @@ impl<'a> BEnv<'a> {
                 Ty::I32 => ints.push(i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as i64),
                 Ty::U64 => {
                     let v = u64::from_le_bytes(b.try_into().expect("8 bytes"));
-                    ints.push(i64::try_from(v).map_err(|_| DslError(format!("field `{}`: a u64 beyond i64 (declare it i64)", f.name)))?);
+                    ints.push(
+                        i64::try_from(v).map_err(|_| DslError(format!("field `{}`: a u64 beyond i64 (declare it i64)", f.name)))?,
+                    );
                 }
                 Ty::I64 => ints.push(i64::from_le_bytes(b.try_into().expect("8 bytes"))),
                 Ty::F16 => floats.push(super::expr::f16_bits_to_f64(u16::from_le_bytes([b[0], b[1]]))?),

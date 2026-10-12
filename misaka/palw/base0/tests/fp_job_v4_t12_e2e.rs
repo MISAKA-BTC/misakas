@@ -383,7 +383,9 @@ fn a_v4_job_goes_produce_verify_license_on_testnet_12_with_the_decode_rules_arme
 /// under V4 rules, and is licensed by a `Valid` quorum through the real fold.
 #[test]
 fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_fence_armed() {
-    use kaspa_consensus_core::palw_fp_prefix_v1::{PALW_DRILL_FP_PREFIX_STATE_ENTRY, PALW_FP_PREFIX_VERSION, palw_fp_prefix_state_root_v1};
+    use kaspa_consensus_core::palw_fp_prefix_v1::{
+        PALW_DRILL_FP_PREFIX_STATE_ENTRY, PALW_FP_PREFIX_VERSION, palw_fp_prefix_state_root_v1,
+    };
     use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
 
     const PREFIX_FENCE: u64 = 111;
@@ -412,8 +414,11 @@ fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_
         anchor_daa: 100,
         job_nonce: [0x6B; 32],
         tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids)
-            .expect("the ids commit"),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            PalwPromptIdsFormV1::MerkleV1,
+            &ids,
+        )
+        .expect("the ids commit"),
         prompt_tokens: ids.len() as u32,
         decode_token_limit: limit,
         max_context_tokens: backend.profile().n_ctx,
@@ -440,7 +445,15 @@ fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_
     let mk = |j: &PalwFreePromptJobV3| {
         let run = backend.execute_free_prompt(j, &prompt).expect("the floor's real engine runs the job");
         let commitment = palw_fp_commitment_v3(j, &class, &run, b"misaka-palw-rc", 9_999_999).expect("the run commits");
-        (PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids.clone(), signature: sig.clone() }, run)
+        (
+            PalwFpCommitmentTxPayloadV3 {
+                version: PALW_FP_V3_VERSION,
+                commitment,
+                prompt_token_ids: ids.clone(),
+                signature: sig.clone(),
+            },
+            run,
+        )
     };
     let (payload, run) = mk(&job);
     let (v4_payload, _) = mk(&v4);
@@ -489,7 +502,15 @@ fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_
             let c = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().binding.job_context;
             backend.checkpoint_root_for_context_v1(&c, &ids, &run.output_token_ids, covered).expect("the seat recomputes");
         }
-        let v = backend.verify_fp_interval_opening_under_job_v1(&opening, roots, index, &ids, run.facts.step_leaf_count, &job, &run.output_token_ids);
+        let v = backend.verify_fp_interval_opening_under_job_v1(
+            &opening,
+            roots,
+            index,
+            &ids,
+            run.facts.step_leaf_count,
+            &job,
+            &run.output_token_ids,
+        );
         assert_eq!(v, PalwFpIntervalVerdictV1::Valid, "interval {index}");
     }
 
@@ -500,7 +521,13 @@ fn a_prefix_state_claim_is_carried_credited_less_replayed_and_licensed_with_its_
         .expect("the panel binds");
     let receipts: Vec<PalwSeatReceiptV2> = bonds[0..3]
         .iter()
-        .map(|(k, _, _)| PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 114, signature: Vec::new() })
+        .map(|(k, _, _)| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: *k,
+            signed_daa: 114,
+            signature: Vec::new(),
+        })
         .collect();
     let s4 = fold_at(&p, &s3, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }])
         .expect("the Valid quorum licenses");
@@ -525,7 +552,10 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
     const SECOND_FORM_FENCE: u64 = 113;
     let mut p = t12_with_v4();
     (PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY.set)(&mut p, Some(ForkActivation::new(CONSTRAINT_FENCE)));
-    (kaspa_consensus_core::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_ENTRY.set)(&mut p, Some(ForkActivation::new(SECOND_FORM_FENCE)));
+    (kaspa_consensus_core::palw_fp_constraint_v2::PALW_DRILL_FP_CONSTRAINT_V2_ENTRY.set)(
+        &mut p,
+        Some(ForkActivation::new(SECOND_FORM_FENCE)),
+    );
     p.validate_palw_v2().expect("testnet-12 with the constraint fences armed assembles (the refusal is lifted)");
     let (s, floor) = chain(&p);
     let backend = common::floor_backend(PalwPromptIdsFormV1::MerkleV1);
@@ -541,7 +571,8 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
     table.tokenizer_id = table.digest();
     let table = Arc::new(table);
     // The constraint: a JSON string that is "abc" or "cab".
-    let schema = misaka_palw_constraint::schema::parse(&serde_json::json!({ "type": "string", "enum": ["abc", "cab"] })).expect("in the subset");
+    let schema = misaka_palw_constraint::schema::parse(&serde_json::json!({ "type": "string", "enum": ["abc", "cab"] }))
+        .expect("in the subset");
     let automaton = misaka_palw_constraint::compile::compile_v1(&schema).expect("compiles");
     let bytes = automaton.to_bytes();
 
@@ -560,8 +591,11 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         anchor_daa: 100,
         job_nonce: [0x7C; 32],
         tokenizer_id: table.tokenizer_id,
-        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids)
-            .expect("the ids commit"),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            PalwPromptIdsFormV1::MerkleV1,
+            &ids,
+        )
+        .expect("the ids commit"),
         prompt_tokens: ids.len() as u32,
         decode_token_limit: limit,
         max_context_tokens: backend.profile().n_ctx,
@@ -590,10 +624,19 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         Ok(_) => panic!("a host without the table cannot run a constrained job"),
     };
     assert!(refused.contains("token table"), "{refused}");
-    let run = palw_fp_with_constraint_scope_v1(Some(mask.clone()), || backend.execute_free_prompt(&job, &prompt)).expect("the masked run");
-    let rendered: Vec<u8> =
-        run.output_token_ids.iter().take_while(|id| **id != vocab - 1).map(|id| table.entries[*id as usize].clone().unwrap()[0]).collect();
-    assert!(rendered == b"\"abc\"" || rendered == b"\"cab\"", "the committed answer is in the schema: {:?}", String::from_utf8_lossy(&rendered));
+    let run =
+        palw_fp_with_constraint_scope_v1(Some(mask.clone()), || backend.execute_free_prompt(&job, &prompt)).expect("the masked run");
+    let rendered: Vec<u8> = run
+        .output_token_ids
+        .iter()
+        .take_while(|id| **id != vocab - 1)
+        .map(|id| table.entries[*id as usize].clone().unwrap()[0])
+        .collect();
+    assert!(
+        rendered == b"\"abc\"" || rendered == b"\"cab\"",
+        "the committed answer is in the schema: {:?}",
+        String::from_utf8_lossy(&rendered)
+    );
     assert_eq!(*run.output_token_ids.last().unwrap(), vocab - 1, "the stop rule commits the lowest end-of-generation id");
     assert_eq!(run.output_token_ids.len(), rendered.len() + 1);
     assert!(run.facts.decode_tokens_executed < limit && run.facts.stop_reason == PalwFpStopReasonV3::EndOfGeneration);
@@ -612,14 +655,21 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
     };
     let claim_id = payload.claim_id();
-    assert_eq!(borsh::from_slice::<PalwFpCommitmentTxPayloadV3>(&borsh::to_vec(&payload).unwrap()).unwrap(), payload, "the wire round-trips");
+    assert_eq!(
+        borsh::from_slice::<PalwFpCommitmentTxPayloadV3>(&borsh::to_vec(&payload).unwrap()).unwrap(),
+        payload,
+        "the wire round-trips"
+    );
     // The job id is its own domain: the same fields as a V3 job are another claim.
     let plain = PalwFreePromptJobV3 { version: PALW_FP_V3_VERSION, tail: None, ..job.clone() };
     assert_ne!(fp_job_id_v3(&job), fp_job_id_v3(&plain));
 
     // ---- carry: not below the fence, not unarmed, and the second form only past its own ------------
     let rules = |at| PalwFpDecodeRulesV1::at(Some(FENCE), at);
-    assert!(walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE - 1), false, false, false, false).is_empty(), "no constrained claim below the fence");
+    assert!(
+        walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE - 1), false, false, false, false).is_empty(),
+        "no constrained claim below the fence"
+    );
     let objects = walk_all(&p, &s, &payload, rules(CONSTRAINT_FENCE + 1), false, false, true, false);
     assert_eq!(objects.len(), 1, "armed, the constrained claim opens (a first-form constraint needs no second fence)");
     // A second-form constraint (a union with a `$ref`) is carried only where `palw_fp_constraint_v2` is.
@@ -644,7 +694,10 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         pl.commitment.job = j;
         pl
     };
-    assert!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE - 1), false, false, true, false).is_empty(), "the second form below its fence");
+    assert!(
+        walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE - 1), false, false, true, false).is_empty(),
+        "the second form below its fence"
+    );
     assert_eq!(walk_all(&p, &s, &second_payload, rules(SECOND_FORM_FENCE), false, false, true, true).len(), 1, "and from it");
 
     // ---- price and fold -----------------------------------------------------------------------
@@ -680,7 +733,11 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
     assert_eq!(held.root(), table.root());
     kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1().register(held);
     for index in 0..count {
-        assert_eq!(verify(None, &run.output_token_ids, index), PalwFpIntervalVerdictV1::Valid, "interval {index} through the held table");
+        assert_eq!(
+            verify(None, &run.output_token_ids, index),
+            PalwFpIntervalVerdictV1::Valid,
+            "interval {index} through the held table"
+        );
         assert_eq!(verify(Some(mask.clone()), &run.output_token_ids, index), PalwFpIntervalVerdictV1::Valid, "interval {index}");
     }
 
@@ -697,7 +754,13 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
         .expect("the panel binds");
     let receipts: Vec<PalwSeatReceiptV2> = bonds[0..3]
         .iter()
-        .map(|(k, _, _)| PalwSeatReceiptV2 { claim: claim_id, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 114, signature: Vec::new() })
+        .map(|(k, _, _)| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: *k,
+            signed_daa: 114,
+            signature: Vec::new(),
+        })
         .collect();
     let s4 = fold_at(&p, &s3, &ctx(5, 114, 5, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }])
         .expect("the Valid quorum licenses");
@@ -707,7 +770,8 @@ fn a_constrained_claim_is_masked_carried_replayed_and_licensed_with_its_fences_a
 #[test]
 fn an_inherited_prefix_claim_is_admitted_only_over_a_class_proven_inheritance_safe() {
     use kaspa_consensus_core::palw_fp_prefix_v1::{
-        PALW_DRILL_FP_PREFIX_INHERIT_ENTRY, PALW_DRILL_FP_PREFIX_STATE_ENTRY, PALW_FP_PREFIX_INHERIT_VERSION, palw_fp_prefix_state_root_v1,
+        PALW_DRILL_FP_PREFIX_INHERIT_ENTRY, PALW_DRILL_FP_PREFIX_STATE_ENTRY, PALW_FP_PREFIX_INHERIT_VERSION,
+        palw_fp_prefix_state_root_v1,
     };
     use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
 
@@ -718,12 +782,20 @@ fn an_inherited_prefix_claim_is_admitted_only_over_a_class_proven_inheritance_sa
     (PALW_DRILL_FP_PREFIX_INHERIT_ENTRY.set)(&mut p, Some(ForkActivation::new(INHERIT_FENCE)));
     p.validate_palw_v2().expect("testnet-12 with both prefix fences assembles");
     let (s, floor) = chain(&p);
-    assert_eq!(s.class_prefix_inherit_safe_v1(&floor), Ok(()), "the floor (integer lane, no KV aux, no fused window, not held) is proven");
+    assert_eq!(
+        s.class_prefix_inherit_safe_v1(&floor),
+        Ok(()),
+        "the floor (integer lane, no KV aux, no fused window, not held) is proven"
+    );
     let backend = common::floor_backend(PalwPromptIdsFormV1::MerkleV1);
     let prompt: Vec<usize> = vec![17, 3, 911, 44, 5];
     let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
     let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
-    let state = PalwFpPrefixStateV1 { state_root: palw_fp_prefix_state_root_v1(&floor, 3, &Hash64::from_u64_word(0xCAFE)), prefix_tokens: 3, class_id: floor };
+    let state = PalwFpPrefixStateV1 {
+        state_root: palw_fp_prefix_state_root_v1(&floor, 3, &Hash64::from_u64_word(0xCAFE)),
+        prefix_tokens: 3,
+        class_id: floor,
+    };
     let mut job = PalwFreePromptJobV3 {
         version: PALW_FP_V3_VERSION,
         network_domain: domain,
@@ -735,8 +807,11 @@ fn an_inherited_prefix_claim_is_admitted_only_over_a_class_proven_inheritance_sa
         anchor_daa: 100,
         job_nonce: [0x6C; 32],
         tokenizer_id: Hash64::default(),
-        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids)
-            .expect("the ids commit"),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            PalwPromptIdsFormV1::MerkleV1,
+            &ids,
+        )
+        .expect("the ids commit"),
         prompt_tokens: ids.len() as u32,
         decode_token_limit: 6,
         max_context_tokens: backend.profile().n_ctx,
@@ -760,11 +835,19 @@ fn an_inherited_prefix_claim_is_admitted_only_over_a_class_proven_inheritance_sa
     let sig = vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs the version-12 job");
     let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 9_999_999).expect("the run commits");
-    let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids.clone(), signature: sig };
+    let payload =
+        PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids.clone(), signature: sig };
     let rules = |at| PalwFpDecodeRulesV1::at(Some(FENCE), at);
     let at = INHERIT_FENCE + 1;
-    assert!(walk_full(&p, &s, &payload, rules(INHERIT_FENCE - 1), true, false, None, false, false).is_empty(), "below the inherit fence");
-    assert_eq!(walk_full(&p, &s, &payload, rules(at), true, true, None, false, false).len(), 1, "armed, over the proven floor, it opens");
+    assert!(
+        walk_full(&p, &s, &payload, rules(INHERIT_FENCE - 1), true, false, None, false, false).is_empty(),
+        "below the inherit fence"
+    );
+    assert_eq!(
+        walk_full(&p, &s, &payload, rules(at), true, true, None, false, false).len(),
+        1,
+        "armed, over the proven floor, it opens"
+    );
     assert!(
         walk_full(&p, &s, &payload, rules(at), true, true, Some(false), false, false).is_empty(),
         "over a class that is not inheritance-safe it is refused by name"

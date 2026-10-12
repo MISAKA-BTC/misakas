@@ -117,9 +117,34 @@ impl M<'_> {
         // any mixer — as the float weight it is; one that yields integers is lowered from them, and only
         // the plain attention and MLP projections are (`crate::lower::qlinear`).
         const ALSO_FLOAT: &[&str] = &[
-            "mla.q_a", "mla.q_b", "mla.q", "mla.kv_a", "mla.kv_b", "mla.o", "gdn.qkvz", "gdn.ba", "gdn.qkv", "gdn.z", "gdn.b", "gdn.a", "gdn.out",
-            "kda.q", "kda.k", "kda.v", "kda.b", "kda.f_a", "kda.f_b", "kda.g_a", "kda.g_b", "kda.out",
-            "mamba.in", "mamba.x", "mamba.dt", "mamba.out", "mamba2.in", "mamba2.out",
+            "mla.q_a",
+            "mla.q_b",
+            "mla.q",
+            "mla.kv_a",
+            "mla.kv_b",
+            "mla.o",
+            "gdn.qkvz",
+            "gdn.ba",
+            "gdn.qkv",
+            "gdn.z",
+            "gdn.b",
+            "gdn.a",
+            "gdn.out",
+            "kda.q",
+            "kda.k",
+            "kda.v",
+            "kda.b",
+            "kda.f_a",
+            "kda.f_b",
+            "kda.g_a",
+            "kda.g_b",
+            "kda.out",
+            "mamba.in",
+            "mamba.x",
+            "mamba.dt",
+            "mamba.out",
+            "mamba2.in",
+            "mamba2.out",
         ];
         let Some(q) = &self.st.quant else { return Ok(None) };
         // A virtual format's tensors are served as the float tensors the export would have: no module is
@@ -418,7 +443,10 @@ fn layer(m: &mut M, spec: &ArchSpec, ls: &LayerSpec, rescale: Option<usize>) -> 
             }
         }
         Residual::HyperConnection { ple } => {
-            let hy = spec.hyper.as_ref().ok_or_else(|| LowerError::eval("internal: a hyper-connection layer without the model's streams"))?;
+            let hy = spec
+                .hyper
+                .as_ref()
+                .ok_or_else(|| LowerError::eval("internal: a hyper-connection layer without the model's streams"))?;
             for tag in ["mix", "ffn"] {
                 let role = |part: &str| format!("hc.{tag}.{part}");
                 m.norm(&role("norm"), &role("norm"), &hy.norm)?;
@@ -476,7 +504,9 @@ fn pre_branch(m: &mut M, pb: &PreBranch) -> Result<()> {
         let mut mlp_spec = pb.mlp.clone();
         mlp_spec.name = Some(pb.mlp_name());
         if m.st.mlp != MlpLayout::FusedGateFirst {
-            return Err(LowerError::not_lowerable("LAYER_PRE_BRANCH_V1: the shared MLP's gate and up projections are one tensor, `[gate | up]` rows"));
+            return Err(LowerError::not_lowerable(
+                "LAYER_PRE_BRANCH_V1: the shared MLP's gate and up projections are one tensor, `[gate | up]` rows",
+            ));
         }
         mlp(m, &mlp_spec, "mlp", m.st.mlp)?;
         if let Some(lr) = pb.lowrank {
@@ -841,7 +871,10 @@ fn kda(m: &mut M, k: &KdaSpec) -> Result<()> {
     m.put("kda.dt_bias", Src::t(m.role("kda.dt_bias")?))?;
     m.put(
         "kda.A",
-        Src::t(m.role("kda.A_log")?).reshape(vec![k.heads]).map(MapFn::NegExp).take(0, Pick::Repeat { each: k.head_dim, groups: k.heads }),
+        Src::t(m.role("kda.A_log")?)
+            .reshape(vec![k.heads])
+            .map(MapFn::NegExp)
+            .take(0, Pick::Repeat { each: k.head_dim, groups: k.heads }),
     )?;
     m.put("kda.norm.gain", Src::t(suffixed(&m.role("kda.norm")?, ".weight")))
 }
@@ -902,7 +935,10 @@ fn mamba2(m: &mut M, s: &Mamba2Spec) -> Result<()> {
         let r = m.role("mamba2.conv")?;
         for (name, start, ch) in [("x", 0, inner), ("b", inner, gn), ("c", inner + gn, gn)] {
             let pick = Pick::Range { start, len: ch };
-            m.put(format!("mamba2.conv.{name}.w"), Src::t(suffixed(&r, ".weight")).rows(pick.clone()).reshape(vec![ch, s.conv_kernel]))?;
+            m.put(
+                format!("mamba2.conv.{name}.w"),
+                Src::t(suffixed(&r, ".weight")).rows(pick.clone()).reshape(vec![ch, s.conv_kernel]),
+            )?;
             if s.conv_bias {
                 m.put(format!("mamba2.conv.{name}.b"), Src::t(suffixed(&r, ".bias")).rows(pick))?;
             }
@@ -1016,7 +1052,9 @@ fn moe(m: &mut M, s: &MoeSpec) -> Result<()> {
         m.lin("moe.latent_out", "moe.latent_out", false)?;
     }
     if !s.gated && m.st.experts != MlpLayout::Separate {
-        return Err(LowerError::not_lowerable("MOE_EXPERTS_PLAIN_V1: plain experts are read from one stored module per expert (the `Separate` layout)"));
+        return Err(LowerError::not_lowerable(
+            "MOE_EXPERTS_PLAIN_V1: plain experts are read from one stored module per expert (the `Separate` layout)",
+        ));
     }
     if s.router.selection_bias {
         m.put("moe.sel_bias", Src::t(m.role("moe.sel_bias")?))?;

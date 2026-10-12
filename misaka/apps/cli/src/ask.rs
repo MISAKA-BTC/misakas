@@ -12,8 +12,8 @@
 //! The one knob that changes the answer and therefore lives in the receipt is `--tokens`
 //! (`num_predict`): a longer budget is a different computation, not merely more of the same one.
 
-use crate::{CliError, CliResult, exit};
 use crate::ollama::{DEFAULT_OLLAMA_URL, OllamaError, PALW_OLLAMA_MODEL_ENV, PALW_OLLAMA_URL_ENV, generate};
+use crate::{CliError, CliResult, exit};
 use std::io::Read;
 
 /// Receipt format tag. Bump if any field or the digest derivation changes.

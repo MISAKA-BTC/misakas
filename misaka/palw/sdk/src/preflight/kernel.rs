@@ -202,9 +202,8 @@ pub fn encoder_route_of(program: &misaka_palw_tir::program_v2::TirProgramV2, daa
         misaka_palw_kernel::seg_encoder::prove_encoder_ranges_v1(&view, &enc)
             .map_err(|e| refused("FRONTEND_REQUIRED", format!("the ranges are not proven from the inputs' intervals: {e}")))?;
         let root = misaka_palw_kernel::public::program_root_v1(&view.encode());
-        let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &view, root, 1).map_err(|(family, why)| {
-            refused("KERNEL_EXTENSION_REQUIRED", format!("a {} relation: {why}", family.name()))
-        })?;
+        let plan = misaka_palw_kernel::plan::plan_for_tir_program_v1(&d, &view, root, 1)
+            .map_err(|(family, why)| refused("KERNEL_EXTENSION_REQUIRED", format!("a {} relation: {why}", family.name())))?;
         let judge = |schedule: &KernelScheduleV1| {
             misaka_palw_kernel::check::check_plan_with_v1(
                 schedule,
@@ -217,12 +216,9 @@ pub fn encoder_route_of(program: &misaka_palw_tir::program_v2::TirProgramV2, daa
             )
         };
         let shipped = match judge(&builtin_schedule_v1()) {
-            Ok(a) => RegistrationOutcomeV1::EligibleAt {
-                daa,
-                descriptor: d.digest(),
-                plan_root: a.plan_root,
-                error_bits: a.error_bits,
-            },
+            Ok(a) => {
+                RegistrationOutcomeV1::EligibleAt { daa, descriptor: d.digest(), plan_root: a.plan_root, error_bits: a.error_bits }
+            }
             Err(o) => o,
         };
         let armed_schedule = KernelScheduleV1::default().with(d.digest(), KernelStatusV1::Active { since_daa: 0 });
@@ -299,8 +295,10 @@ mod tests {
     fn real_qwen25_pilot_tir_fits_unchanged_node_proof_reservation_but_remains_inactive() {
         // Actual lowered program from the pinned real-weight pilot, without its weights.
         // This tests static admission only, never source fidelity, public conviction or Final.
-        let bytes =
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"));
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../docs/design/palw/tir/evidence/qwen25-real-pilot-program.tir"
+        ));
         let program = TirProgramV1::decode_canonical(bytes).unwrap();
         let root = misaka_palw_kernel::public::program_root_v1(bytes);
         let hex = root.iter().map(|b| format!("{b:02x}")).collect::<String>();

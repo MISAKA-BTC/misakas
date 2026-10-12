@@ -3468,10 +3468,10 @@ mod c4r3;
 mod conformance;
 // Lane K2S (K2-TIR-v4, `docs/design/palw/k2-real-scale.md`): segmented claims, element courts, per-position DA, prompt tiles, the
 // mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
-mod real_scale;
 mod artifact_tile;
 mod model_artifact;
 mod model_conformance;
+mod real_scale;
 // Lane RFC02-T: the RFC-0002 P0 residual on the kernel route's own FileProof (re-encoding theft; the sealed-bounty rule).
 mod rfc02t_sealed_bounty;
 // Lane DA16: the public-material transport and the provider court (tags 150–153) — an outsider confirms or refutes a binding from the
