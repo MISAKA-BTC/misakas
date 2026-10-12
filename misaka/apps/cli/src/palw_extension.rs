@@ -737,7 +737,7 @@ mod tests {
     use super::*;
 
     fn doc_manifest(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/extension-manifests").join(name)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../docs/extension-manifests").join(name)
     }
 
     /// `model add --manifest` refuses what `extension submit` would refuse, before any node is asked

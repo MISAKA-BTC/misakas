@@ -125,7 +125,7 @@ bond を持たない攻撃者でも、他人の Active bond outpoint を commitm
 - `consensus/pow/src/palw_admission.rs:113-141`
 - `consensus/src/pipeline/virtual_processor/utxo_validation.rs:699-720`
 - `consensus/pow/tests/palw_admission_fixture.rs:50-60, 88-106`
-- `kaspa-pq-validator-core/src/lib.rs:264-268`
+- `misaka/pq/validator-core/src/lib.rs:264-268`
 
 ### 必須修正
 

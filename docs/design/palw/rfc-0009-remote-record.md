@@ -31,7 +31,7 @@ cargo build --offline -p misaka-palw-remote --features rpc --bin palw-remote-min
 cargo build --offline -p misaka-palw-gateway --bin misaka-palw-fp-rail
 ```
 
-Pre-existing, unrelated: `cargo fmt --check` already differs in `misaka/palw/remote/src/attempt.rs`, `misaka-cli/src/{main,bond,node,…}.rs` and others
+Pre-existing, unrelated: `cargo fmt --check` already differs in `misaka/palw/remote/src/attempt.rs`, `misaka/apps/cli/src/{main,bond,node,…}.rs` and others
 (not touched by this lane except where noted); the many `unused variable: ctx_hash` warnings are in `misaka-palw-base0`.
 
 ## 1. Node-less model registration, detached signing

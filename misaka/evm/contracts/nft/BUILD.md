@@ -31,7 +31,7 @@ deployed contract does not correspond to this source.
 ## Rebuild + verify
 
 ```
-cd contracts/nft
+cd misaka/evm/contracts/nft
 ./build.sh            # installs the exact tags, builds, prints the hashes, runs tests
 ```
 

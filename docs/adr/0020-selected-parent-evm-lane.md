@@ -25,7 +25,7 @@ in both directions. Devnet is likewise genesis-active; **mainnet/simnet stay ine
 > secp-free by default; EVM is an opt-in (`--features evm`) build" no longer describes the tree:
 > `kaspad/Cargo.toml:93` is `default = ["evm"]` since 2026-08-21 and a non-`evm` build refuses an
 > EVM-active network (`EvmLaneRequiresEvmBuild`). F001 WMISAKA is declared and never deployed; F002
-> is a call-frame intercept (`kaspa-evm/src/withdraw.rs`), not a stateless precompile. Everything
+> is a call-frame intercept (`misaka/evm/core/src/withdraw.rs`), not a stateless precompile. Everything
 > else below stands. Map: [`README.md`](README.md).
 
 > **Design superseded by v0.4** — the unified design doc

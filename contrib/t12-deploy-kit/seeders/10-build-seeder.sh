@@ -28,11 +28,11 @@ fi
 
 rev=$(git -C "$WT" rev-parse --short=12 HEAD)
 # Only the seeder's own inputs have to be clean; the worktree may carry unrelated WIP.
-dirty=$(git -C "$WT" status --porcelain -- misaka-dnsseeder misaka-endpoints consensus/core/src/network.rs \
+dirty=$(git -C "$WT" status --porcelain -- misaka/apps/dnsseeder misaka/endpoints consensus/core/src/network.rs \
           rpc/core rpc/wrpc/client Cargo.lock | wc -l | tr -d ' ')
 if [ "$dirty" != 0 ]; then
   echo "seeder inputs are dirty in $WT at $rev — refusing (git status above paths)" >&2
-  git -C "$WT" status --short -- misaka-dnsseeder misaka-endpoints consensus/core/src/network.rs rpc/core rpc/wrpc/client Cargo.lock >&2
+  git -C "$WT" status --short -- misaka/apps/dnsseeder misaka/endpoints consensus/core/src/network.rs rpc/core rpc/wrpc/client Cargo.lock >&2
   exit 5
 fi
 

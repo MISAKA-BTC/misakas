@@ -20,9 +20,9 @@ Confirmed in code:
 - Claim validation checks only amount / timeout / tip — **no check that the destination is a
   registered PQ account** (`consensus/src/processes/evm/mod.rs:90-116`, `validate_one_deposit_claim`).
 - The executor credits the wei to **any** recovered address
-  (`kaspa-evm/src/executor.rs:150-175`, `credit_balance(to_revm_address(claim.evm_address), …)`).
+  (`misaka/evm/core/src/executor.rs:150-175`, `credit_balance(to_revm_address(claim.evm_address), …)`).
 - An EVM tx's sender is recovered by **secp256k1 ECDSA** with no PQ-account gate
-  (`kaspa-evm/src/tx.rs:398-433`, `decode_tx_to_env` → `recover_signer_cached`).
+  (`misaka/evm/core/src/tx.rs:398-433`, `decode_tx_to_env` → `recover_signer_cached`).
 
 So depositing a PQ-protected UTXO to an EOA (or arbitrary contract) drops to classical
 security. The PREA-specified remedies — **F004 registry, strict deposit, direct-ECDSA reject** —
@@ -70,7 +70,7 @@ struct PqAccountRecord {
 - **Read surface:** `is_pq_account(state, addr) -> bool` and `record(state, addr) -> Option<Record>`
   — pure reads against the in-execution CacheDB / a selected-parent EVM-state view. Used by
   controls (2) and (3).
-- **Implementation:** new `kaspa-evm/src/pq_auth_registry.rs` (call-frame interception like F002,
+- **Implementation:** new `misaka/evm/core/src/pq_auth_registry.rs` (call-frame interception like F002,
   registered in `precompiles.rs::register_all_misaka_precompiles` behind `f004_active`), plus the
   record codec in `consensus/core/src/evm/` (secp-free types). Genesis-neutral (no predeploy below
   the fence).
@@ -139,7 +139,7 @@ consensus is the authority.
 
 1. **S1 — F004 record types + codec** (consensus-core, secp-free): `EvmAccountAuthType`,
    `PqAccountRecord`, `record_hash`, borsh byte-stability guard. *Offline.*
-2. **S2 — F004 registry storage + reads** (`kaspa-evm/src/pq_auth_registry.rs`): record read/write
+2. **S2 — F004 registry storage + reads** (`misaka/evm/core/src/pq_auth_registry.rs`): record read/write
    against CacheDB, `is_pq_account` / `record`. *Offline (synthetic CacheDB).*
 3. **S3 — F004 handler + registration** (call-frame interception, F003-verified registration +
    CREATE2 binding), registered behind `f004_active`. Genesis-neutral. *Offline + evm tests.*

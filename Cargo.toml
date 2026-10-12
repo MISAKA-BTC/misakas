@@ -18,16 +18,16 @@ members = [
     "consensus/notify",
     "consensus/pow",
     "consensus/wasm",
-    "kaspa-evm",
-    "evm-indexer/core",
-    "evm-indexer/store-pg",
-    "evm-indexer/service",
+    "misaka/evm/core",
+    "misaka/evm/indexer/core",
+    "misaka/evm/indexer/store-pg",
+    "misaka/evm/indexer/service",
     "kaspad",
-    "kaspa-pq-validator",
-    "kaspa-pq-validator-core",
-    "kaspa-pq-signer",
-    "misaka-cli",
-    "misaka-endpoints",
+    "misaka/pq/validator",
+    "misaka/pq/validator-core",
+    "misaka/pq/signer",
+    "misaka/apps/cli",
+    "misaka/endpoints",
     "misaka/palw/core",
     "misaka/palw/security",
     "misaka/palw/shadow",
@@ -102,9 +102,9 @@ members = [
     "utils",
     "utils/tower",
     "rothschild",
-    "pq-miner",
-    "misaminer",
-    "misaka-dnsseeder",
+    "misaka/pq/miner",
+    "misaka/apps/misaminer",
+    "misaka/apps/dnsseeder",
     "metrics/core",
     "metrics/perf_monitor",
     "utils/alloc",
@@ -143,16 +143,16 @@ default-members = [
     "consensus/notify",
     "consensus/pow",
     "consensus/wasm",
-    "kaspa-evm",
-    "evm-indexer/core",
-    "evm-indexer/store-pg",
-    "evm-indexer/service",
+    "misaka/evm/core",
+    "misaka/evm/indexer/core",
+    "misaka/evm/indexer/store-pg",
+    "misaka/evm/indexer/service",
     "kaspad",
-    "kaspa-pq-validator",
-    "kaspa-pq-validator-core",
-    "kaspa-pq-signer",
-    "misaka-cli",
-    "misaka-endpoints",
+    "misaka/pq/validator",
+    "misaka/pq/validator-core",
+    "misaka/pq/signer",
+    "misaka/apps/cli",
+    "misaka/endpoints",
     "misaka/palw/core",
     "misaka/palw/security",
     "misaka/palw/shadow",
@@ -225,9 +225,9 @@ default-members = [
     "utils",
     "utils/tower",
     "rothschild",
-    "pq-miner",
-    "misaminer",
-    "misaka-dnsseeder",
+    "misaka/pq/miner",
+    "misaka/apps/misaminer",
+    "misaka/apps/dnsseeder",
     "metrics/core",
     "metrics/perf_monitor",
     "utils/alloc",
@@ -268,7 +268,7 @@ kaspa-consensusmanager = { version = "1.1.0", path = "components/consensusmanage
 kaspa-core = { version = "1.1.0", path = "core" }
 kaspa-daemon = { version = "1.1.0", path = "daemon" }
 kaspa-database = { version = "1.1.0", path = "database" }
-kaspa-evm = { version = "1.1.0", path = "kaspa-evm" }
+kaspa-evm = { version = "1.1.0", path = "misaka/evm/core" }
 kaspa-eth-rpc = { version = "1.1.0", path = "rpc/eth" }
 kaspa-grpc-client = { version = "1.1.0", path = "rpc/grpc/client" }
 kaspa-grpc-core = { version = "1.1.0", path = "rpc/grpc/core" }
@@ -310,7 +310,7 @@ kaspa-wrpc-server = { version = "1.1.0", path = "rpc/wrpc/server" }
 kaspa-wrpc-wasm = { version = "1.1.0", path = "rpc/wrpc/wasm" }
 kaspa-wrpc-example-subscriber = { version = "1.1.0", path = "rpc/wrpc/examples/subscriber" }
 kaspad = { version = "1.1.0", path = "kaspad" }
-kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
+kaspa-pq-validator-core = { version = "1.1.0", path = "misaka/pq/validator-core" }
 misaka-palw-base0 = { version = "1.0.1", path = "misaka/palw/base0" }
 misaka-palw-sdk = { version = "1.1.0", path = "misaka/palw/sdk" }
 misaka-palw-derive = { version = "1.1.0", path = "misaka/palw/derive" }
@@ -324,7 +324,7 @@ misaka-palw-tir = { path = "misaka/palw/tir/core" }
 misaka-palw-gen = { path = "misaka/palw/gen" }
 misaka-palw-panel = { path = "misaka/palw/panel" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
-misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
+misaka-endpoints = { version = "1.1.0", path = "misaka/endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka/palw/core" }
 misaka-palw-host-security = { version = "1.1.0", path = "misaka/palw/security" }
 misaka-palw-shadow = { version = "1.1.0", path = "misaka/palw/shadow" }

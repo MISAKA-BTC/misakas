@@ -77,7 +77,7 @@ sinks_agree() {
   for i in "$@"; do s=$(sink_of "$i"); [ "$s" = "$s0" ] || return 1; done
 }
 # the drill-only wallet JSON view: mature / immature / bonded / reserved and the newest outputs.
-# NOTE: `mature` is the CLI's own arithmetic (misaka-cli/src/wallet.rs:333 is_spendable_settled), not
+# NOTE: `mature` is the CLI's own arithmetic (misaka/apps/cli/src/wallet.rs:333 is_spendable_settled), not
 # the node's verdict; only an accepted send is the node's word (C16, C11-fee).
 utxo_json() { cli 0 --output json wallet utxo list --key-file "$1" --recent "${2:-200}" 2>/dev/null; }
 utxo_ge() { # utxo_ge <key-file> <MSK> — a mature, unlocked, non-coinbase output of at least MSK (its outpoint), or nothing
@@ -521,7 +521,7 @@ cmd_b1() {
     reg_expect x1 "$PRODUCER_FLOOR_SOMPI" "no confirmed UTXO to spend" "$E" at-floor-unfunded \
       || { fail C3-b1 "a floor-exact bond was refused for something other than missing funds ($E/x1-at-floor-unfunded.log)"; return 1; }
   fi
-  # key mode (no --bond) answers bonds_registered_to_this_key / bonds_unanswered (misaka-cli/src/bond.rs ~311),
+  # key mode (no --bond) answers bonds_registered_to_this_key / bonds_unanswered (misaka/apps/cli/src/bond.rs ~311),
   # not `registered`: none registered AND every outpoint answered
   cli 0 --output json bond status --key-file "$FRESH/x1.key" > "$E/x1-bond-status-after-refusals.json" 2>&1
   if [ ! -s "$FRESH/x1.bond" ]; then   # (a re-run after C3b registered x1 skips this half)
@@ -855,7 +855,7 @@ PY
 cmd_maturity() {
   # The verdict is the NODE's: a --coinbase-only send of a drill-only coinbase ≥ 600 DAA old is accepted
   # and carried by a block (its output appears in the utxoindex). The wallet's `mature` flag is the CLI's
-  # own arithmetic (misaka-cli/src/wallet.rs:333) and is recorded as evidence only. The negative half — the
+  # own arithmetic (misaka/apps/cli/src/wallet.rs:333) and is recorded as evidence only. The negative half — the
   # node refusing a coinbase younger than 600 DAA — cannot be built with this CLI (it never selects an
   # immature output and has no raw-input send), so it is NOT a PASS item here.
   local E; E=$(ev "C16-coinbase-maturity-$(date -u +%H%M)")

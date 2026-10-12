@@ -729,7 +729,7 @@ impl ValidatorService {
     /// select it. Building an attestation tx that spends a non-releasable bond gets the carrying block
     /// disqualified (`NonReleasableBondSpendInBlock`), so the tx is mempool-accepted but never mines —
     /// a validator self-wedge. The explicit unbond CLI path already excludes it
-    /// (kaspa-pq-validator/src/main.rs); this mirrors that onto the attestation funding path.
+    /// (misaka/pq/validator/src/main.rs); this mirrors that onto the attestation funding path.
     async fn find_funding_candidates(&self, funding_spk: &ScriptPublicKey) -> Vec<(TransactionOutpoint, UtxoEntry)> {
         let bond_outpoint = self.bond_outpoint;
         if let Some(utxoindex) = &self.utxoindex {
@@ -992,7 +992,7 @@ impl ValidatorService {
             //
             // **Why it is safe, corrected** (re-audit R-6). It is NOT because signing is
             // deterministic: `sign_with_context` draws fresh `randomness` from `thread_rng`
-            // (`kaspa-pq-validator-core/src/lib.rs:230-232`) — ML-DSA-87 is hedged — so a rebuild
+            // (`misaka/pq/validator-core/src/lib.rs:230-232`) — ML-DSA-87 is hedged — so a rebuild
             // produces a DIFFERENT signature, and `select_funding` may pick a different funding
             // UTXO, so the transaction differs too. The earlier claim of an "identical signature and
             // identical transaction" was simply false, and a false invariant on a slashing-adjacent

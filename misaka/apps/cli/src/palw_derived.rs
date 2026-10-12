@@ -865,7 +865,7 @@ mod tests {
     /// one note, the smallest thing the MIDI writer can be asked for, and a real derivation rather
     /// than a hand-written hash.
     fn corpus_answer() -> Vec<u8> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka/palw/derive/corpus/music/01-single-note.json");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../palw/derive/corpus/music/01-single-note.json");
         std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
     }
 
@@ -1190,7 +1190,7 @@ mod tests {
 
         // The forgery: an artifact of another answer, filed against THIS claim.
         let other =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka/palw/derive/corpus/music/03-overlapping-melody.json");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../palw/derive/corpus/music/03-overlapping-melody.json");
         let other = std::fs::read(&other).unwrap_or_else(|e| panic!("{}: {e}", other.display()));
         assert_ne!(other, honest.answer, "the forgery must be derived from a different answer");
         let claim = ClaimBinding {

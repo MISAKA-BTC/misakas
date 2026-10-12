@@ -229,7 +229,7 @@ cutover, and a bug can only ever cost that node availability, never chain integr
 - **R4 (P1) — root-CPU unchanged in Stage 1.** Per-block O(state) HashBuilder remains; on a very
   large state this is a throughput ceiling. *Mitigation:* it is not a regression (today's cost);
   Stage 2 addresses it; measure before committing to Stage 2.
-  - **MEASURED (2026-06-25, `kaspa-evm/benches/state_cost.rs`, macOS arm64 dev machine; Linux x86
+  - **MEASURED (2026-06-25, `misaka/evm/core/benches/state_cost.rs`, macOS arm64 dev machine; Linux x86
     likely the same order).** Per NON-EMPTY block (empty mergesets skip all three passes via the
     executor's O(1) fast path), as a function of account count N:
 

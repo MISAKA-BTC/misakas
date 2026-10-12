@@ -7,7 +7,7 @@
 - **再ビルドと段階配備が必要。** 旧 `misaka-dnsseeder-t12`（sha `1174b965…`）は TCP liveness しか見ず、同じ `:26311` を使う別 ruleset を広告できる。新しい `SEEDER_SHA256` を `fleet.env` に記録する。
 - 配備後は `40-verify.sh` と、DNS だけで参加できるかを見る `60-join-check.sh` を実行する。anchor の構成を変える場合は従来どおり `30-swap.sh --anchors` を使う。
 
-### 1.1 コードから見た根拠（`misaka-dnsseeder/src/main.rs`）
+### 1.1 コードから見た根拠（`misaka/apps/dnsseeder/src/main.rs`）
 - `--network-id` から `Params` を作り、genesis hash、`consensus_params_id`、`consensus_identity_id`、`consensus_schedule_id` を anchor 検証の期待値として固定する。
 - P2P handshake を行い、peer の version message が上記 identity と fence schedule に完全一致した場合だけ広告する。TCP ポートが開いているだけの旧／別 ruleset は広告しない。**T12 と同じポートを共有する T11 もここで除外される。**
 - 4 台とも `--anchors-only` で動いている。このモードで co-located node に wRPC で投げるのは `get_server_info` だけで、しかも best-effort（失敗しても anchor は配る）。`get_connected_peer_info` と `get_peer_addresses` は呼ばない。

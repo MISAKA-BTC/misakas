@@ -185,7 +185,7 @@ three refusal codes; nine fold tests re-based on seeded markets, two added), `pa
 every escrow-bearing settlement), `kaspa-evm` (the `Seed` action, the facade's `seed()` door,
 `decimals() == 0`, `constants()` with the least seed, the `Seeded` event, `SeedTooSmall`, the
 executor's `carries_escrow`), RPC (`seedSompi`, `seededBy`, `seedMinSompi`; wire version 3), CLI
-(`model-seed`, `model-evm-seed`, the seed on `model-show`), `contracts/misaka-model/` (the
+(`model-seed`, `model-evm-seed`, the seed on `model-show`), `misaka/evm/contracts/misaka-model/` (the
 interfaces and README), and the drill (`scripts/drills/misaka-palw-model-market-devnet-e2e.sh`: no market
 before a seed, the EVM seed of 100,000 MSK opening the market at 0.2 MSK, the seeder holding
 nothing, a second seed refused, buys in whole positions raising the price). The site's changes are

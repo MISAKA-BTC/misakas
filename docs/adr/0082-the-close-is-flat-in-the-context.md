@@ -133,7 +133,7 @@ not carry it:
   (`:7362`); the ceiling's own doc says so (`palw_mode_v2.rs` "What is NOT yet derived from this,
   and is a wall rather than a rounding").
 * `misaka-cli palw court-close` (W13) refuses a split close by name and lists the three consensus
-  changes it waits on (`misaka-cli/src/palw_court.rs:84-125`); one of the three — `max_close_chunks`
+  changes it waits on (`misaka/apps/cli/src/palw_court.rs:84-125`); one of the three — `max_close_chunks`
   — landed with W3, the other two did not.
 * The free-prompt worker builds its court from `PALW_STEP_MAX_LEAVES` (`2^22`) directly
   (`misaka/palw/base0/src/bin/palw-a16-fp-worker.rs:94`); the W1b fix that prices a job against the

@@ -311,9 +311,9 @@ Every row of §0's table holds, and the virtual reserve adds none:
   `consensus/core/src/evm/model_market.rs` — `virtual_v1_from`, reason 14;
   `consensus/src/…/processor.rs` — the fence at the block's DAA, the EVM window's refused set;
   `consensus/src/consensus/mod.rs` — the read.
-* `kaspa-evm/src/model_market.rs`, `executor.rs` — the window and the writer; `rpc/service` — the
+* `misaka/evm/core/src/model_market.rs`, `executor.rs` — the window and the writer; `rpc/service` — the
   answer; `misaka-cli` — `model-show`, `model-seed`, `model-buy`/`model-sell`, `model-evm-seed`,
-  `misaka model market open`; `contracts/misaka-model/` — the interfaces; `web/misaka-options/` — the
+  `misaka model market open`; `misaka/evm/contracts/misaka-model/` — the interfaces; `web/misaka-options/` — the
   site.
 
 ### 10a. The one fold that takes default model extras has no caller

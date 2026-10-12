@@ -122,7 +122,7 @@ Accounts created from a raw private key or a legacy hard‑coded key MUST stay `
 
 ## Test vectors (to fix as normative)
 
-The current `kaspa-evm/examples/evm_tx_gen.rs` (`PrivateKeySigner::from_bytes([b; 32])`) is a
+The current `misaka/evm/core/examples/evm_tx_gen.rs` (`PrivateKeySigner::from_bytes([b; 32])`) is a
 *signing* smoke test, not a *derivation* test. Add fixed normative vectors:
 
 ```

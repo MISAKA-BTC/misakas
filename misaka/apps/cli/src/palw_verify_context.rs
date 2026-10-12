@@ -342,7 +342,7 @@ mod tests {
     /// the sources the way ADR-0108 I-9 pins its own receipts.
     #[test]
     fn no_consensus_node_or_sdk_crate_reads_a_receipt() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("the workspace");
+        let root = &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let mut offenders = Vec::new();
         for dir in ["consensus/core/src", "consensus/src", "kaspad/src", "misaka/palw/sdk/src", "protocol/flows/src"] {
             let mut stack = vec![root.join(dir)];

@@ -234,5 +234,5 @@ governance key on a chain that has none.
   only if a derivation from BIP39 to this tree's ML-DSA-87 seed is specified and shared with the
   web wallet", and no such derivation is specified in this tree or shared by the wallet as of this
   date. It is not an implementation gap here; it is a specification the wallet must publish first.
-* **D4 is closed by deletion.** `misaka miner` is gone (SA-4), and `misaka-cli/src/main.rs` pins
+* **D4 is closed by deletion.** `misaka miner` is gone (SA-4), and `misaka/apps/cli/src/main.rs` pins
   its absence with a test ("`misaka miner` is back — SA-4 deleted it").

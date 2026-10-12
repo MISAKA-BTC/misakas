@@ -59,7 +59,7 @@ CHAINSTATE="python3 $DRILL_ROOT/chainstate.py"
 
 # ---- HOME: the drill's own (review 2, finding "endpoints.json") -------------------------------
 # kaspad writes its loopback RPC endpoints to ~/.misaka/<network-id>/endpoints.json on every start
-# (kaspad/src/daemon.rs:2032-2049, misaka-endpoints/src/lib.rs:60, dirs::home_dir = $HOME), and every
+# (kaspad/src/daemon.rs:2032-2049, misaka/endpoints/src/lib.rs:60, dirs::home_dir = $HOME), and every
 # `misaka --network testnet-12` run without --rpc reads it. /root/.misaka/testnet-12/endpoints.json is
 # the live t12 node's. The drill runs kaspad AND the CLI with HOME=$DRILL_ROOT/home, so its registry
 # (and any ~/.misaka/config.toml / mining.toml the CLI would read) lives under the drill.

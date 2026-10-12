@@ -17,7 +17,7 @@ Status vocabulary is the matrix's: **IMPLEMENTED_AND_TESTED** (real node path + 
 | Per-block row cache (memory only, 352 B/row) + O(N + F) prefix sweep + one-pass lifecycle closure | same + `certify_native_prefix_v1`, `native_open_from_v1` | the snapshot walked the whole chain with a DB read per block per virtual change and was O(chain × claims) |
 | `latest` survives a failed certificate; genesis ends the executed chain | `native_settlement.rs` | `latest` is a fact about execution; a pruning-point-at-genesis chain read as `MissingHistory` forever |
 | `dns_coinbase_settlement` ignores the frozen DNS anchor once the virtual is retired | `processor.rs` | node mempool vs wallet disagreement (mempool policy only) |
-| `misaka palw settlement`: `FinalizedConflict` is an alarm line and an error exit | `misaka-cli/src/palw_settlement.rs` | a script waiting on `--min-depth` must not wait on a node that cannot settle |
+| `misaka palw settlement`: `FinalizedConflict` is an alarm line and an error exit | `misaka/apps/cli/src/palw_settlement.rs` | a script waiting on `--min-depth` must not wait on a node that cannot settle |
 | Explorer renders `finalizedConflict` as a safety alarm naming the resync | `contrib/misakascan-t12/app.js` | not an ordinary stop reason |
 | Wallet: `dns_shortcut_after_poll` | `wallet/core/src/utxo/processor.rs` | the "clear an unavailable DNS shortcut" rule as a tested function |
 
@@ -128,7 +128,7 @@ follow-up added. **Nothing here changes a shipped preset, a params / schedule / 
 | `native_evaluate` returns the snapshot AND the material it was weighed from (or why nothing was); `native_evm_settlement_snapshot` is `native_evaluate(..).snapshot`; walk faults carry a cause and a block | `consensus/src/pipeline/virtual_processor/native_settlement.rs` | the explanation can never be about other evidence than the certificate; the snapshot path pays nothing for it |
 | `native_safe_readiness(sink)`, memoized by sink plus its evaluated pruning point; `ConsensusApi::get_native_safe_readiness` (default `Ok(None)`), `Consensus` impl, `async_get_native_safe_readiness` | `native_settlement.rs`, `processor.rs` (the memo field), `consensus/src/consensus/mod.rs`, `consensus/core/src/api/mod.rs`, `components/consensusmanager/src/session.rs` | reuse while sink and pruning point both agree; context change requires a fresh evaluation |
 | `getPalwSettlement.nativeReadiness` (**no new op**): wRPC response v3 only when present, gRPC field 12, JSON/wasm key + TypeScript types; served only when version, policy and shared generation/head/stop statements agree with the snapshot | `rpc/core/src/model/message.rs`, `rpc/core/src/wasm/message.rs`, `rpc/grpc/core/proto/rpc.proto`, `rpc/grpc/core/src/convert/message.rs`, `rpc/service/src/service.rs` | item 4 on the existing RFC-0012 RPC |
-| `misaka palw settlement` prints the reasons | `misaka-cli/src/palw_settlement.rs` | operators read it in a terminal |
+| `misaka palw settlement` prints the reasons | `misaka/apps/cli/src/palw_settlement.rs` | operators read it in a terminal |
 | The real-fold fixture moves to a shared module; the existing fold test is unchanged in behaviour | `consensus/core/tests/rfc0012_fold_fixture/mod.rs` (new), `rfc0012_native_evidence_fold.rs` | two test files drive the same claim life |
 
 ### 6.2 Requirement table

@@ -286,9 +286,9 @@ int-3 に無い（gap。production code は書いていない）。**N/A** = 構
 | T47 | `0xFF` key | （上の S 表） | 有 |
 | T48 / T49 | （上の M5 表） | | 有 |
 | T50 | EVM twin | `p2_evm_twin.rs::p2_t50_…` ×2（`--features evm` でのみ build） | 有（evm の battery で走る） |
-| T51 | RPC | `palw_vesting_read_v1.rs::t51_…` ×7、`misaka-cli/src/palw_vesting.rs::t51_…`、`rpc/core/src/model/message.rs` | 有 |
+| T51 | RPC | `palw_vesting_read_v1.rs::t51_…` ×7、`misaka/apps/cli/src/palw_vesting.rs::t51_…`、`rpc/core/src/model/message.rs` | 有 |
 | T52 | CLI | `misaka-cli`（`operator/roles.rs`・`status.rs`・`work.rs`・`wallet.rs`・`main.rs`）、kaspad `palw_panel.rs::t52_the_fee_funder_…` | 有 |
-| T53 | drill の隔離（drill chain の登録・attempt・有罪は公開 t12 で拒否、drill の miner script で coinbase txid が別） | `t53_drill_isolation.rs` ×4、`consensus/core/src/config/drill.rs` ×6、kaspad `palw_drill.rs` ×5、`protocol/flows/src/flow_context.rs`、`utxo_set_override.rs`、`misaka-cli/src/bond.rs` | 有 |
+| T53 | drill の隔離（drill chain の登録・attempt・有罪は公開 t12 で拒否、drill の miner script で coinbase txid が別） | `t53_drill_isolation.rs` ×4、`consensus/core/src/config/drill.rs` ×6、kaspad `palw_drill.rs` ×5、`protocol/flows/src/flow_context.rs`、`utxo_set_override.rs`、`misaka/apps/cli/src/bond.rs` | 有 |
 | T58 | queue の補題 | `p2_mint_path.rs::p2_t58_t03_…`、`vf::t30_t58_…` | 有 |
 
 **参考（release-prep lane が a0af3c92 で所在不明とした番号のうち上に無いもの、と IA-14 9-3）**:

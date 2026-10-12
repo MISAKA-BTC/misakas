@@ -42,9 +42,9 @@ PQ-Rooted EVM Smart Account  EVM資産・NFT・作業残高
 
 **現状確認の精緻化（§1）**
 
-- 公開 `main` では **F001 は precompile ではなく通常の WMISAKA predeploy**、**F002 は executor へ登録された withdraw handler**。**F003 / F004 は未実装**。（`consensus/core/src/evm/mod.rs`, `kaspa-evm/src/withdraw.rs`）
+- 公開 `main` では **F001 は precompile ではなく通常の WMISAKA predeploy**、**F002 は executor へ登録された withdraw handler**。**F003 / F004 は未実装**。（`consensus/core/src/evm/mod.rs`, `misaka/evm/core/src/withdraw.rs`）
 - 現行で唯一の precompile-style runtime handler は **F002 のみ**。deposit は precompile ではなく **`EvmSystemOp::DepositClaim` という system op**（executor が user tx より先に適用）。
-- signer の **`purpose ↔ message_digest variant` 検証は公開 `main` で実装済み**（`kaspa-pq-signer/src/lib.rs`、監査 C-02 相当）。設計はこの domain 分離規律を EVM 側にも適用する。
+- signer の **`purpose ↔ message_digest variant` 検証は公開 `main` で実装済み**（`misaka/pq/signer/src/lib.rs`、監査 C-02 相当）。設計はこの domain 分離規律を EVM 側にも適用する。
 - **`MAX_WITHDRAWALS_PER_EVM_BLOCK` は公開 `main` にも添付 ZIP にも存在しない**。ローカル実装済みでも「完了」とは表記せず、§31 のトライステート（後述）で `[~]` とする。
 
 **必須修正8点（本文へ反映）**
@@ -84,7 +84,7 @@ claim valid  : accepting_daa < timeout_daa_score
 refund valid : spending_daa  >= timeout_daa_score
 ```
 
-claimは未使用lock outpointを検査し、同じchain block内でlockをUTXO diffから消し、EVM残高をcreditします（`consensus/src/pipeline/virtual_processor/processor.rs` が claim view と bridge effect を同一 block へ適用、`consensus/src/processes/evm/mod.rs` が claim 検証 + duplicate 防止）。withdrawはF002でEVM残高をdebitし、同じaccepting blockのUTXO diffへsynthetic UTXOを作ります（`kaspa-evm/src/withdraw.rs`）。これら claim / withdraw の side-effect は EVM state 行と**同一 RocksDB WriteBatch**で commit され、I-4 / I-5 の原子性が成立します。
+claimは未使用lock outpointを検査し、同じchain block内でlockをUTXO diffから消し、EVM残高をcreditします（`consensus/src/pipeline/virtual_processor/processor.rs` が claim view と bridge effect を同一 block へ適用、`consensus/src/processes/evm/mod.rs` が claim 検証 + duplicate 防止）。withdrawはF002でEVM残高をdebitし、同じaccepting blockのUTXO diffへsynthetic UTXOを作ります（`misaka/evm/core/src/withdraw.rs`）。これら claim / withdraw の side-effect は EVM state 行と**同一 RocksDB WriteBatch**で commit され、I-4 / I-5 の原子性が成立します。
 
 したがって、現行設計で修正すべき中心は「価値移動の排他性」ではなく、**claim後のEVM残高が通常のsecp256k1アカウントに帰属すること**です。
 
@@ -101,7 +101,7 @@ EVMへclaimされたnative balance、ERC-20、NFT、admin/minter権限は、通�
 
 ### 1.3 F003 / F004 の実装状況（公開 `main` 基準）
 
-- **F003（ML-DSA-87 verify precompile, `0x…F003`）は未実装。** `kaspa-evm/src` にも `consensus/core/src/evm/mod.rs` にも登録・address 定数が存在しない（`docs/misaka-fsl-design-v0.3.md` §4.3 に予約 interface 案があるのみ）。PQスマートアカウントの前提として、F003 を consensus 実装し、executor と simulation の双方へ同じ handler を登録する必要がある（§9.5）。
+- **F003（ML-DSA-87 verify precompile, `0x…F003`）は未実装。** `misaka/evm/core/src` にも `consensus/core/src/evm/mod.rs` にも登録・address 定数が存在しない（`docs/misaka-fsl-design-v0.3.md` §4.3 に予約 interface 案があるのみ）。PQスマートアカウントの前提として、F003 を consensus 実装し、executor と simulation の双方へ同じ handler を登録する必要がある（§9.5）。
 - **F004（PQ Auth Registry predeploy）は未実装。** `is_pq_account` / `PqAuthRegistry` / direct-ECDSA 拒否いずれも grep ヒットなし。
 - **`MAX_WITHDRAWALS_PER_EVM_BLOCK` は公開 `main` に未マージ。** ローカル監査 remediation では実装済み（`consensus/core/src/evm/mod.rs:166`、executor 両 gas path で enforce、ただし `evm_f002_withdraw_cap_activation_daa_score = u64::MAX` で全 net inert）だが、公開 `main` / 添付 ZIP には存在しない。§31 では `[~]` 扱い。
 - 既存 portable verifier `kaspa_txscript::verify_mldsa87_with_context`（`crypto/txscript/src/lib.rs`）は実在し、consensus-deterministic な libcrux portable path（per-CPU AVX2/NEON multiplexer ではない）かつ PK 2592 / SIG 4627 の事前 length 拒否を備える。F003 はこれを再利用する。
@@ -463,7 +463,7 @@ address preimage / collision 攻撃
 **規則（block を無効化しない）:** 登録済み PQ account を recovered sender とする Legacy/2930/1559 tx は、現 executor が nonce・残高・fee 等の acceptance-time invalidity を扱うのと同じ**決定的 class-2 skip**にします。`return Err(...)` で block 自体を無効化してはなりません（honest chain で c≠v を引き起こす）。
 
 ```rust
-// consensus execution 側（kaspa-evm/src/executor.rs の class-2 skip 経路に合わせる）
+// consensus execution 側（misaka/evm/core/src/executor.rs の class-2 skip 経路に合わせる）
 if registry.is_pq_account(recovered_sender)? {
     outcomes[cand_idx] =
         Some(EvmCandidateOutcome::Skipped {
@@ -1400,16 +1400,16 @@ consensus/core/src/evm/mod.rs
 crypto/txscript/src/script_class.rs
   EvmPqDepositLock parser/builder
 
-kaspa-evm/src/mldsa_verify.rs
+misaka/evm/core/src/mldsa_verify.rs
   F003（versioned）
 
-kaspa-evm/src/pq_auth_registry.rs
+misaka/evm/core/src/pq_auth_registry.rs
   F004 handler / registry access
 
-kaspa-evm/src/executor.rs
+misaka/evm/core/src/executor.rs
   direct ECDSA sender class-2 skip / register_all_misaka_precompiles 登録
 
-kaspa-evm/src/sim.rs
+misaka/evm/core/src/sim.rs
   simulation parity（同一 register_all 呼び出し）
 
 consensus/src/processes/evm/mod.rs
@@ -1418,10 +1418,10 @@ consensus/src/processes/evm/mod.rs
 mining/src/evm_mempool.rs
   soft auth admission（最適化）/ reason codes
 
-contracts/pq-account/
+misaka/evm/contracts/pq-account/
   Account / Factory / EntryPoint / policy modules / tests
 
-misaka-cli/src/pq_account.rs
+misaka/apps/cli/src/pq_account.rs
 wallet-apps/*
   account UX / session / bridge orchestration
 ```
@@ -1799,11 +1799,11 @@ immutable PQ Account / Factory / EntryPoint + `executeRoot`（F003 version 0x02 
 - `consensus/src/processes/transaction_validator/tx_validation_in_utxo_context.rs` — refund timeout rule。
 - `consensus/src/processes/evm/mod.rs` — claim validationとduplicate防止。
 - `consensus/src/pipeline/virtual_processor/processor.rs` — claim viewとbridge effectの同一block適用。
-- `kaspa-evm/src/withdraw.rs` — F002 journal/log/withdraw invariant（唯一の precompile-style handler）。
-- `kaspa-evm/src/executor.rs` — deposit system op、class-2 skip 経路、handler 登録。
-- `kaspa-evm/src/sim.rs` — eth_call/estimateGas simulation（同一 handler 登録）。
+- `misaka/evm/core/src/withdraw.rs` — F002 journal/log/withdraw invariant（唯一の precompile-style handler）。
+- `misaka/evm/core/src/executor.rs` — deposit system op、class-2 skip 経路、handler 登録。
+- `misaka/evm/core/src/sim.rs` — eth_call/estimateGas simulation（同一 handler 登録）。
 - `crypto/txscript/src/lib.rs` — `verify_mldsa87_with_context`（F003 再利用先、portable path）。
-- `kaspa-pq-signer/src/lib.rs` — signer purpose↔digest binding（C-02、EVM 1271/op 側へ転用する規律）。
+- `misaka/pq/signer/src/lib.rs` — signer purpose↔digest binding（C-02、EVM 1271/op 側へ転用する規律）。
 - `docs/misaka-fsl-design-v0.3.md` — reserved F003 interface案（§9.2 で version 0x01 として統一）。
 
 ### 外部標準

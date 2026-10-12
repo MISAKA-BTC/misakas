@@ -7,7 +7,7 @@
 //!   misaka evm wallet address  --mnemonic-file evm.mnemonic
 //!   misaka evm send --mnemonic-file evm.mnemonic --to 0x… --amount 1.5 [--yes] [--wait]
 //!
-//! Signing copies the consensus-tested path in kaspa-evm/examples/evm_tx_gen.rs
+//! Signing copies the consensus-tested path in misaka/evm/core/examples/evm_tx_gen.rs
 //! (TxEip1559 → PrivateKeySigner → EIP-2718 encode). Submit reuses the eth.rs
 //! hand-rolled JSON-RPC client. Keys derive via kaspa-bip32 (BIP-39 + BIP-44
 //! m/44'/60'/0'/0/0), matching docs/misaka-evm-wallet-profile-v1.md and the

@@ -32,7 +32,7 @@ const SCANNED: &[&str] = &[
     "misaka/palw/core/src",
     "misaka/palw/gateway/src",
     "misaka/palw/agent/src",
-    "kaspa-pq-validator-core/src",
+    "misaka/pq/validator-core/src",
 ];
 
 /// **Tier A — the ADJUDICATORS.** Every one of these has a `_capped_v1` sibling that takes the

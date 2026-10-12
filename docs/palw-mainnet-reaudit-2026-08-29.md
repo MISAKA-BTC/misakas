@@ -140,9 +140,9 @@ template path used here. That is the highest-value piece of work left on the M1 
 | R-1 | critical | M1 | the identity split re-admits the exact fork M1-1 creates: pre- and post-fence mainnet builds now peer and diverge silently | `protocol/flows/src/flow_context.rs:1398` |
 | R-2 | high | M1 | the fence-normalisation list is incomplete and unguarded — the VLT/TKN fences this repo documents as the next fork still partition at deploy | `consensus/core/src/config/params.rs:798` |
 | R-3 | high | M1 | the pruning witness is still selectable by one cheap block: blue-work ties are normal and the hash tiebreak is grindable | `consensus/src/pipeline/virtual_processor/processor.rs:10706` |
-| R-4 | high | M1 | the wallet's bond exclusion is unconditional, so a legitimately released bond cannot be reclaimed with the shipped tooling | `misaka-cli/src/wallet.rs:109` |
+| R-4 | high | M1 | the wallet's bond exclusion is unconditional, so a legitimately released bond cannot be reclaimed with the shipped tooling | `misaka/apps/cli/src/wallet.rs:109` |
 | R-7 | medium | M2 | answering is all downside — being wrong is charged in both directions but nothing ever PAYS a panel seat, so the rational seat is silent and the producer bears the void (severity corrected down from `high`; see the finding) | `consensus/core/src/palw_state_v2.rs:3058` |
-| R-5 | low | M1 | the wallet's "surfaced, not swallowed" invariant has a fail-open hole: an unparseable bond outpoint is silently not excluded | `misaka-cli/src/wallet.rs:146` |
+| R-5 | low | M1 | the wallet's "surfaced, not swallowed" invariant has a fail-open hole: an unparseable bond outpoint is silently not excluded | `misaka/apps/cli/src/wallet.rs:146` |
 | R-6 | low | both | M1-4's safety argument is false (signing is hedged, not deterministic); the conclusion happens to hold, the stated invariant does not | `kaspad/src/validator_service.rs:1503` |
 
 Plus one assumption risk, A-1, which is not a code defect but decides whether R-1 is a
@@ -332,7 +332,7 @@ let releasable = effective_bond_status(bond, self.daa_score) == BondStatus::Unbo
 
 `BondStatus` has no terminal "withdrawn" state (`dns_finality.rs:344-358`), so a released bond
 keeps its record and keeps being returned by the RPC. The sidecar's `unbond` command files the
-unbond *request* only — it explicitly refuses to touch output-0 (`kaspa-pq-validator/src/main.rs:977`)
+unbond *request* only — it explicitly refuses to touch output-0 (`misaka/pq/validator/src/main.rs:977`)
 — and no other shipped command spends it.
 
 **Failure scenario.** A mainnet validator unbonds, waits out `unbonding_period_blocks`, and tries
@@ -373,7 +373,7 @@ it should still be an error, not a `continue`.
 > signing is deterministic here (the ML-DSA call takes a fixed `[0u8; 32]`), so the rebuild produces
 > the identical signature and the identical transaction.
 
-`sign_with_context` (`kaspa-pq-validator-core/src/lib.rs:230-232`) does the opposite:
+`sign_with_context` (`misaka/pq/validator-core/src/lib.rs:230-232`) does the opposite:
 
 ```rust
 let mut randomness = [0u8; 32];

@@ -48,7 +48,7 @@ misaka-palw-extension.workspace = true
 misaka-palw-sdk.workspace = true
 misaka-palw-remote.workspace = true
 # `misaka model preflight` of a repository: the lowerer's `curl` range fetcher (cargo feature `remote`; nothing runs unless a repository is named).
-misaka-palw-tir-lower = { path = "../misaka/palw/tir/lower", features = ["remote"] }
+misaka-palw-tir-lower = { path = "../../palw/tir/lower", features = ["remote"] }
 # ADR-0110: `verify-context` reports the process's peak resident set — a host fact, never compared.
 libc.workspace = true
 serde_json.workspace = true

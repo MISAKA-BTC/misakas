@@ -95,7 +95,7 @@ not every individual variant above was run through `pack verify`.
 
 A base artifact and a declared wrapper have different file digests (and possibly program graph
 roots due to the logits scheme), even when their inventory/tokenizer are identical. A pack must
-pin both, not waive digest checking. The CLI [`pack_gate.rs`](../../misaka-cli/src/pack_gate.rs)
+pin both, not waive digest checking. The CLI [`pack_gate.rs`](../../misaka/apps/cli/src/pack_gate.rs)
 requires **artifact and conformance PASS** before constructing a registration; conformance SKIPPED
 is a pre-submission CLI blocker. Consensus does not currently require this runtime-pack policy.
 Other optional SKIPPED checks are reported separately, never called full source fidelity.

@@ -617,12 +617,12 @@ sees a valid, accepted, weight-bearing block with an empty reward. Systematicall
 don't-mint rather than redistributed.
 
 ### S-08 `[high]` The wallet mirrors only the DNS half of `BondSpendFilter::locks` — a PALW V2 bond's collateral is never excluded, and every `wallet send` from a producer's address silently never lands
-`misaka-cli/src/wallet.rs:124`  ·  verifier lenses: high, high
+`misaka/apps/cli/src/wallet.rs:124`  ·  verifier lenses: high, high
 
 **Recorded as fixed.** M1-3, recorded 'fixed' in docs/palw-mainnet-audit-2026-08-28.md:108 ('the wallet marks bonded
 outpoints from the node's own registry and both spenders skip them'), and R-4, recorded 'fixed' in
 docs/palw-mainnet-reaudit-2026-08-29.md:70 ('the wallet mirrors PalwSpendLocks::locks instead of
-the set of all bonds'). The wallet's own doc comment at misaka-cli/src/wallet.rs:116 names
+the set of all bonds'). The wallet's own doc comment at misaka/apps/cli/src/wallet.rs:116 names
 `PalwSpendLocks::locks` as what it mirrors; the predicate it actually reproduces is only the
 `bond_view` branch of `BondSpendFilter::locks`.
 
@@ -670,7 +670,7 @@ and `pay_payee()` takes that payload from `--palw-producer-pay-address`
 (`kaspad/src/palw_panel.rs:430-444`), which `docs/history/testnet11-join-mining.md:59-70` tells the
 operator to produce with `misaka key address --key-file ~/.misaka/miner.seed` — the same key file
 `misaka wallet send --key-file` spends from. It is non-coinbase, so `is_spendable_settled` returns
-`true` unconditionally (`kaspa-pq-validator-core/src/lib.rs:1813-1815`) and it is always `mature`.
+`true` unconditionally (`misaka/pq/validator-core/src/lib.rs:1813-1815`) and it is always `mature`.
 
 The filter runs only at acceptance (`validate_transaction_in_utxo_context`,
 `utxo_validation.rs:1948-1952` -> `TxRuleError::SpendsNonReleasableBond`), reached through the
@@ -1196,7 +1196,7 @@ the genesis is right, but `network.as_bytes()` is `b"Testnet-11"` while the chai
 while looking plausible — the exact outcome the comment three lines above claims to have fixed.
 
 ### S-19 `[low]` `wallet utxo list` counts locked bond collateral in the mature balance it reports, so the diagnostic command contradicts the spender
-`misaka-cli/src/wallet.rs:279`  ·  verifier lenses: low, low
+`misaka/apps/cli/src/wallet.rs:279`  ·  verifier lenses: low, low
 
 **Recorded as fixed.** M1-3, recorded 'fixed' as 'both spenders skip them' (docs/palw-mainnet-audit-2026-08-28.md:108) —
 accurate as far as it goes; the remediation wired the flag into the two spenders and left the
@@ -1450,11 +1450,11 @@ I ran the one suite the sweep left unrun (`cargo test -p kaspa-consensus-core --
 
 **`consensus/core/src/palw_fp_devnet_v3.rs`** (`WINDOW_COURT` 2400→3000, line 49) and **`consensus/core/src/palw_court_v2.rs`** (`PALW_COURT_V2_ALL_DOMAINS` 3→4, line 82) were read as "constants" by M2-court/M2-state, but no lane asked the consequent question — whether the shipped ConsensusV2 bundle's identity moved and whether live testnet-11 state still validates against it.
 
-**`kaspa-pq-validator/src/main.rs`** — R4R5 read lines 1650-1810 for the single-outpoint exclusion and test-integrity ran its 11 tests, but neither judged the M1-5 hunk that sits inside that very range (`main.rs:1714`).
+**`misaka/pq/validator/src/main.rs`** — R4R5 read lines 1650-1810 for the single-outpoint exclusion and test-integrity ran its 11 tests, but neither judged the M1-5 hunk that sits inside that very range (`main.rs:1714`).
 
 ## 2. The claim still verified by reading alone — the next R-8
 
-**M1-5, at `kaspa-pq-validator/src/main.rs:1714.`** The fix replaces `starts_with("Transaction") && ends_with("not found")` with `msg.contains(&txid.to_string()) && msg.contains("not found")`, justified by the assertion that the borsh wRPC client renders the server error through `RpcCall`'s `{0:?}`. Its new test (`main.rs:2205-2215`) hand-builds `format!("RPC response error Text({server:?})")` from that same assumption — it never constructs a real `RpcError`, and the actual string comes from the external `workflow-rpc` `ResponseError` Display, which nothing in this tree exercises (the only in-repo construction is `rpc/macros/src/wrpc/client.rs:74`, `RpcError::RpcSubsystem(e.to_string())`). If the real rendering differs in any way, `MempoolStatus::Gone` stays unreachable exactly as before, `inflight_spent` grows one entry per epoch forever, and M1-5 is recorded fixed while being unfixed — the identical shape to R-8.
+**M1-5, at `misaka/pq/validator/src/main.rs:1714.`** The fix replaces `starts_with("Transaction") && ends_with("not found")` with `msg.contains(&txid.to_string()) && msg.contains("not found")`, justified by the assertion that the borsh wRPC client renders the server error through `RpcCall`'s `{0:?}`. Its new test (`main.rs:2205-2215`) hand-builds `format!("RPC response error Text({server:?})")` from that same assumption — it never constructs a real `RpcError`, and the actual string comes from the external `workflow-rpc` `ResponseError` Display, which nothing in this tree exercises (the only in-repo construction is `rpc/macros/src/wrpc/client.rs:74`, `RpcError::RpcSubsystem(e.to_string())`). If the real rendering differs in any way, `MempoolStatus::Gone` stays unreachable exactly as before, `inflight_spent` grows one entry per epoch forever, and M1-5 is recorded fixed while being unfixed — the identical shape to R-8.
 
 Runner-up: **M1-4/R-6** in `validator_service.rs`, which has neither a reader nor a test.
 

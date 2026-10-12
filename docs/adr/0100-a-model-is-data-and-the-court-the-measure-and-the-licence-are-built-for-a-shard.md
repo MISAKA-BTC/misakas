@@ -362,7 +362,7 @@ order is `main`'s to overwrite.
     extras, seven refusals, the fold arm; `palw_lifecycle_objects_v2.rs` — the ride rule;
     `consensus/src/pipeline/virtual_processor/processor.rs` — the cached fence, the extras' ladder,
     the acceptance arm, the name table; `kaspad/src/palw_panel.rs` — the seat keeps and files
-    its refutation; `kaspad/src/palw_producer.rs` — the fence reader; `misaka-cli/src/palw_shard_court.rs`
+    its refutation; `kaspad/src/palw_producer.rs` — the fence reader; `misaka/apps/cli/src/palw_shard_court.rs`
     — `palw shard-accuse`.
   * `consensus/core/src/palw_mode_v2.rs` — `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`, its root, the
     bundle check, the derivation test; `palw_derived_v1.rs` — the sweep; `config/params.rs` —
@@ -386,7 +386,7 @@ order is `main`'s to overwrite.
     `Params::palw_shard_licensing` at every site, its two assembly rules and its test;
     `processor.rs` — the cached fence, the one-place stratified decision, the extras, the three
     acceptance arms, the stratified binding and its validation, the part assembler;
-    `misaka-cli/src/palw_shard_licensing.rs` — `palw shard-plan` and `palw bond-shards`;
+    `misaka/apps/cli/src/palw_shard_licensing.rs` — `palw shard-plan` and `palw bond-shards`;
     `kaspad/src/palw_panel.rs` — the seat files only where the chain's refutation ladder can try
     the claim, and its source pin reads the new arm.
   * `docs/palw-shard-plan-2026-09-10.md` regenerated; this ADR; the README index.

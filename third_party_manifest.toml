@@ -37,7 +37,7 @@ name = "alloy-consensus"
 version = "0.8"
 license = "Apache-2.0 OR MIT"
 modified = false
-role = "EIP-2718 TxEnvelope (Legacy/2930/1559) decode + ECDSA signer recovery (kaspa-evm/src/tx.rs)"
+role = "EIP-2718 TxEnvelope (Legacy/2930/1559) decode + ECDSA signer recovery (misaka/evm/core/src/tx.rs)"
 
 [[dependency]]
 name = "alloy-eips"
@@ -102,6 +102,6 @@ modified = false
 role = "ERC-20/721/1155, AccessControl, Pausable, etc. — used unmodified by app contracts"
 audit = "dependency review only; custom contracts that USE them are in Scope D"
 
-# Misaka-custom (the audit target — NOT third-party): kaspa-evm/src, rpc/eth/src,
+# Misaka-custom (the audit target — NOT third-party): misaka/evm/core/src, rpc/eth/src,
 # kaspad/src/eth_rpc.rs, consensus/src/processes/evm, crypto/txscript deposit-lock,
 # the EVM DB stores (database/src/registry.rs 201-213). See docs/audit-scope-evm-rpc.md.

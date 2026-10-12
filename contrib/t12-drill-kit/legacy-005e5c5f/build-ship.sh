@@ -62,7 +62,7 @@ for m in "kaspad/src/palw_lane_watch.rs:no PALW work block in the newest" \
          "consensus/core/src/palw_producer_v2.rs:PALW_NOT_READY_CLASS_NOT_ADMITTING_V2" \
          "consensus/core/src/palw_execution_quanta_v1.rs:palw_execution_mint_quanta_windowed_v1" \
          "consensus/core/src/palw_panel_v2.rs:valid_lock" \
-         "misaka-cli/src/operator/catalog.rs:E-MODEL-NOT-ADMITTING" \
+         "misaka/apps/cli/src/operator/catalog.rs:E-MODEL-NOT-ADMITTING" \
          "consensus/core/src/palw_state_v2.rs:fn panel_room_by_rate_v1(" \
          "consensus/core/src/palw_work_target_v1.rs:pub fn palw_panel_capacity_by_rate_v1(" \
          "consensus/core/src/palw_state_v2.rs:fn palw_panel_owed_v1(" \
@@ -87,14 +87,14 @@ for m in "kaspad/src/palw_lane_watch.rs:no PALW work block in the newest" \
          "consensus/core/src/config/premine.rs:misakatest:qtpflz03z576h02mtpn2vtwg5npj8fhlau3fgmsjl2a2uw0venj3573l07uahcs4gnsl8eqc7nlq5phakthxy606q2jyuxh2a08weduxa2yqlxuz" \
          "consensus/core/src/config/premine.rs:pub(super) const TESTNET_MAIN_SEED: &[u8] = b\"misaka-testnet-premine-9b-claude-managed\";" \
          "consensus/core/src/config/premine.rs:misakatest:qffaadrfjpt9gy3705xhr2n6085767w290lgf0xd55nrj8px2lk8cj8w34scu4y7l5avauhul3lu9apzc6vugkeu3jhkltgrvfk4m6emz4hjtsfy" \
-         "misaka-cli/src/main.rs:fn key_import(ctx: &node::Ctx, out: &str, hex_stdin: bool, hex_file: Option<&str>) -> CliResult {" \
+         "misaka/apps/cli/src/main.rs:fn key_import(ctx: &node::Ctx, out: &str, hex_stdin: bool, hex_file: Option<&str>) -> CliResult {" \
          "consensus/core/src/palw_state_v2.rs:pub fn palw_bond_registration_floor_v1" \
          "consensus/core/src/palw_fp_devnet_v3.rs:PALW_MAINNET_MIN_COLLATERAL_SOMPI: u64 = 13_000" \
          "kaspad/src/daemon.rs:let inbound_limit = if connect_peers.is_empty() { args.inbound_limit } else { 0 };" \
          "protocol/flows/src/service.rs:let p2p_adaptor = if self.inbound_limit == 0 {" \
          "components/addressmanager/src/lib.rs:if address.ip.is_loopback() || address.ip.is_unspecified() {" \
          "kaspad/src/daemon.rs:if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {" \
-         "misaka-endpoints/src/lib.rs:dirs::home_dir().map(|h| h.join(\".misaka\").join(network_id).join(\"endpoints.json\"))" \
+         "misaka/endpoints/src/lib.rs:dirs::home_dir().map(|h| h.join(\".misaka\").join(network_id).join(\"endpoints.json\"))" \
          "consensus/core/src/config/premine.rs:misakatest:qf7hzj76mg0wrch9mm89ag8s8apgrz7qgkk77j5z0ypykngrl2ayd2rnvleafk0fxhaxl70kr29x6fakav79jax9ul6jghrcs42nmlqx0tawqn8x" \
          "rpc/service/src/service.rs:state: row.map(|r| format!(\"{:?}\", r.state))" \
          "rpc/service/src/service.rs:consensus_params_id: params.consensus_params_id().to_string()," \
@@ -104,7 +104,7 @@ for m in "kaspad/src/palw_lane_watch.rs:no PALW work block in the newest" \
          "kaspad/src/palw_panel.rs:filed a {:?} receipt for claim {}" \
          "kaspad/src/palw_panel.rs:submitted a readiness proof for class {class_id} (span {span}) in tx {txid}" \
          "kaspad/src/palw_heartbeat_miner.rs:and advanced the clock to DAA {daa}" \
-         "misaka-cli/src/bond.rs:\"bonds_registered_to_this_key\": owned"; do
+         "misaka/apps/cli/src/bond.rs:\"bonds_registered_to_this_key\": owned"; do
   f=${m%%:*}; s=${m#*:}
   grep -qF -- "$s" "$SRC/$f" 2>/dev/null || { say "MARKER MISSING in $f: $s"; miss=1; }
 done

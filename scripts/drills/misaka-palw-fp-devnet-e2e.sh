@@ -709,7 +709,7 @@ MISAKA_BIN="${MISAKA_BIN:-$REPO_ROOT/target/release/misaka}"
 claim_phase_on_node() {  # $1 = node index → prints the phase, "absent", or "NO-FIELD:<keys>"
   local out
   out=$("$MISAKA_BIN" --network devnet --rpc "127.0.0.1:$((RPC_BASE + $1))" palw derived --json "$CLAIM_ID" 2>/dev/null) || { echo absent; return; }
-  # **The field is `claim_phase`** (misaka-cli/src/palw_derived.rs — the schema is
+  # **The field is `claim_phase`** (misaka/apps/cli/src/palw_derived.rs — the schema is
   # `misaka.palw.chain-derived-artifacts.v1`, and the claim's own phase rides in it beside the
   # derivations). Reading `phase` instead returned None on every node, which this loop then read as
   # "has not reached provisional" — run 5 (2026-09-04) reported exactly that for a claim all three

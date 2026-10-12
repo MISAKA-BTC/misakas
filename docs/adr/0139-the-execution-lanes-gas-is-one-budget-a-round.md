@@ -19,7 +19,7 @@ ADR-0125 gives transactions a fast lane — one execution round a second, one pe
 testnet-11 — "without the PALW chain getting a fast clock". Round blocks reach the chain only
 through the chain block that merges them, and the EVM accepts user gas per **chain block**:
 `MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK = EVM_GAS_LIMIT = 30 M`, executed under one 30 M env
-(`kaspa-evm/src/env.rs`). With chain blocks every 120 seconds, "1 BPS" of round blocks was 1 BPS
+(`misaka/evm/core/src/env.rs`). With chain blocks every 120 seconds, "1 BPS" of round blocks was 1 BPS
 of **scheduling** and 30 M gas per 120 s of **throughput** — 250 k gas a second, whatever the
 lane's width. The operator asked which one the lane means.
 

@@ -218,7 +218,7 @@ fn the_tier_sums_have_no_caller_in_the_fold_the_processor_or_the_evm() {
     rust_files(&core.join("src"), &mut files);
     rust_files(&core.join("../src/pipeline"), &mut files);
     rust_files(&core.join("../src/processes"), &mut files);
-    rust_files(&core.join("../../kaspa-evm/src"), &mut files);
+    rust_files(&core.join("../../misaka/evm/core/src"), &mut files);
     assert!(files.iter().any(|f| f.ends_with("palw_state_v2.rs")) && files.iter().any(|f| f.ends_with("processor.rs")));
     let mut callers = Vec::new();
     for file in &files {

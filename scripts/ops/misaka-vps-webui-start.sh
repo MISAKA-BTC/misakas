@@ -408,7 +408,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 
 [[ -f "$REPO_DIR/Cargo.toml" ]] || die "repository root is incomplete: $REPO_DIR/Cargo.toml is missing"
-[[ -f "$REPO_DIR/misaka-cli/Cargo.toml" ]] || die "misaka-cli is missing; clone the complete official misakas repository"
+[[ -f "$REPO_DIR/misaka/apps/cli/Cargo.toml" ]] || die "misaka-cli is missing; clone the complete official misakas repository"
 
 detect_existing_service_user
 detect_existing_appdir

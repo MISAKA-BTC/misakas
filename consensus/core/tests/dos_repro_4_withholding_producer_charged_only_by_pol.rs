@@ -606,7 +606,7 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
     // with nothing served, `?` returns None before any accusation is built.
     let needs_served = panel.contains("Base0FpIntervalOpeningV4::decode_v1(bytes).ok().map(|v4| v4.binding))")
         && panel.contains(".filter(|binding| binding.committed_execution_root == duty.execution_root)?;");
-    let cli = std::fs::read_to_string(root.join("misaka-cli/src/palw_da.rs")).unwrap();
+    let cli = std::fs::read_to_string(root.join("misaka/apps/cli/src/palw_da.rs")).unwrap();
     let cli_builds = cli.contains("PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index, accuser, signature }");
     println!("=== (d) static scan of kaspad/src (policy, not consensus) ===");
     println!("DefaultAccused constructions in kaspad/src: {constructs:?}");

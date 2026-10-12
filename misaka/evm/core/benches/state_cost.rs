@@ -2,7 +2,7 @@
 //! flat-state backend performs on a NON-EMPTY block, as a function of the canonical account
 //! count N:
 //!
-//!   * `state_root`           — the committed keccak-MPT root recompute (kaspa-evm/src/state.rs).
+//!   * `state_root`           — the committed keccak-MPT root recompute (misaka/evm/core/src/state.rs).
 //!                              This is the R4 cost: a full rebuild over ALL accounts every block.
 //!                              An incremental persistent MPT (Stage 2) would make it O(changed).
 //!   * `seed_cachedb`         — building the executor's parent seed CacheDB from the snapshot (the

@@ -965,7 +965,7 @@ M-12's unfunded mint rate, so whoever fixes either must fix both. Single lens.
 nonce, no carrier, no network domain) · `palw_state_v2.rs:2909-2917, 10877-10918` (the only state
 guard is `units_in <= held`) · `palw_lifecycle_objects_v2.rs:371-400` (the carrier binder returns
 `Ok(())` for anything that is not a Buy or a Seed) · `palw_lifecycle_objects_v2.rs:433-467` (the
-extraction walk does no payload deduplication) · `misaka-cli/src/palw_model.rs:390`
+extraction walk does no payload deduplication) · `misaka/apps/cli/src/palw_model.rs:390`
 (`min_msk_out` defaults to 0). Every ADR-0088 registry object signs over `palw_network_domain_v2()`;
 this one does not. A stranger copies the public payload into a new transaction and re-fires it
 whenever the holder holds units again. Not theft of principal — the net leg is paid to the holder —
@@ -1113,7 +1113,7 @@ quoted this document as the specification a card failed to meet and then fixed t
 updating the sentence, so the same sentence is now wrong in the opposite direction.
 
 **L-5. The remote signer's `RESERVED_CONTEXTS` names 6 contexts while `SigningPurpose::Transaction`
-accepts a caller-chosen 64-byte digest under any other.** `kaspa-pq-signer/src/lib.rs:463-504,
+accepts a caller-chosen 64-byte digest under any other.** `misaka/pq/signer/src/lib.rs:463-504,
 489, 577-586` · request shape at `dns_finality.rs:2947-2962, 2812-2814`. The comment at `:487-488`
 claims the derived-artifact context is reserved; the array above it does not contain it. Bond
 retirement, capability, registration, class registration, DA accusation, DA disclosure and receipt
@@ -1126,7 +1126,7 @@ speak the agent protocol. A latent hardening bug in an unwired component — MED
 client lands. Fix by inverting the model so `Transaction` may carry *only* a tx-domain context.
 
 **L-6. The EVM market's 128-action budget is first-come and a refused sell costs only gas.**
-*(MARKET)* `consensus/core/src/evm/model_market.rs:66-70` · `kaspa-evm/src/model_market.rs:1302-1312,
+*(MARKET)* `consensus/core/src/evm/model_market.rs:66-70` · `misaka/evm/core/src/model_market.rs:1302-1312,
 1329-1336, 1354` (a Sell is accepted on value 0 with only `units == 0` refused; there is no position
 check, because ADR-0089 D6 makes the fold's refusal a settlement rather than a fault) ·
 `palw_state_v2.rs:10891`. **The refuter killed the load-bearing claim:** "no per-account share, no
@@ -1435,8 +1435,8 @@ EVM bridge effects and withdraw invariants; the PQ signer and validator-core; th
 the market/registry half of `palw_state_v2.rs` including all thirteen object arms, the fee/position
 writers, `evm_view_v1`, the payout drain and the in-file test modules; the processor's rehearsal
 loop, market acceptance arms and EVM chain-context step; `processes/evm/mod.rs`;
-`kaspa-evm/src/executor.rs`'s MarketSettle application and supply accumulator;
-`kaspa-evm/src/model_market.rs`'s handlers and `write_frame`; the lifecycle may-ride table and
+`misaka/evm/core/src/executor.rs`'s MarketSettle application and supply accumulator;
+`misaka/evm/core/src/model_market.rs`'s handlers and `write_frame`; the lifecycle may-ride table and
 carrier binding; the three fences and their validation clauses; the handshake gate; the coinbase
 assembly; ADR-0087 §Constraints/Decisions/Invariants and the 0088/0089/0090 implementation tables.
 
@@ -1452,7 +1452,7 @@ callers; the O-18 predicate and all five call sites; the retarget arithmetic.
 * **The ADR-0088 proposal / evaluation / version-eviction fold arms and the usage counters** — the
   market finder read their guards and explicitly declined their arithmetic. The market refuter flags
   this as deserving a lane of its own before arming.
-* **The read-precompile ABI encoders** (`kaspa-evm/src/model_market.rs` registry/amm/position/facade
+* **The read-precompile ABI encoders** (`misaka/evm/core/src/model_market.rs` registry/amm/position/facade
   bodies). Declined as "a wrong answer to a caller, not a consensus fault" — which the refuter
   correctly says understates it once ADR-0089's facade exists, since `market_row` / `position`
   answers are what an on-chain contract prices against.

@@ -255,9 +255,9 @@ Items 1–5 landed the same day; item 6 is the operator's release, shared with A
 * RPC: `buybackSompi` / `retiredUnits` on `getPalwModelMarket` (wire version 4, backward-loading;
   proto fields 19–20; both gRPC converters; the service reads them off the row). CLI: `model-show`
   prints "mining bought" with the positions retired, and the JSON carries both.
-* `kaspa-evm/src/model_market.rs` — `market()` answers eleven words, the two appended so every
+* `misaka/evm/core/src/model_market.rs` — `market()` answers eleven words, the two appended so every
   earlier offset holds; an unknown line is eleven zeros. `adr0091_market_words` (B7).
-  `contracts/misaka-model/IMisakaModelAMM.sol` and the README say the same.
+  `misaka/evm/contracts/misaka-model/IMisakaModelAMM.sol` and the README say the same.
 * `web/misaka-options/` — `curve.buybackSlice` / `curve.buyback` (the chain's arithmetic, for the
   self-test and the mock only), the two words read from both lanes (a pre-ADR-0091 node serves
   neither and the site shows a dash, never a zero), "Bought by mining" on the market bar, the line

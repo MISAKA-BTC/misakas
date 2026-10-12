@@ -158,8 +158,8 @@ Rust実装で使える既存RPCは以下です。
 
 おすすめの実装方針です。
 
-1. `misaka-cli/src/main.rs` の `NodeCmd` に `Probe` を追加する。
-2. `misaka-cli/src/node.rs` に `probe(ctx, args)` を追加する。
+1. `misaka/apps/cli/src/main.rs` の `NodeCmd` に `Probe` を追加する。
+2. `misaka/apps/cli/src/node.rs` に `probe(ctx, args)` を追加する。
 3. P2P到達性は `TcpStream::connect_timeout` で見る。
 4. local node側の既知peer判定は `getPeerAddresses` を使う。
 5. local node側の接続中peer判定は `getConnectedPeerInfo` を使う。

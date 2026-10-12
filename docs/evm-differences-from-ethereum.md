@@ -9,7 +9,7 @@ diff**, not "all of Ethereum". The EVM lane is `revm`‑backed (ADR‑0020); the
 
 | Field | Value |
 |---|---|
-| EVM spec | **Shanghai** (`revm::SpecId::SHANGHAI`, compile‑time asserted in `kaspa-evm/src/lib.rs`) |
+| EVM spec | **Shanghai** (`revm::SpecId::SHANGHAI`, compile‑time asserted in `misaka/evm/core/src/lib.rs`) |
 | Tx types | **Legacy / EIP‑2930 / EIP‑1559** (allowlist enforced at admission + execution decode) |
 | Chain id | `0x4D534B` (5067595) — bound by EIP‑155; mandatory |
 | Native unit | 18 decimals; 1e10 wei per L1 sompi (`EVM_NATIVE_SCALE`) |

@@ -58,9 +58,9 @@ honest collateral (M2-1, M2-2, M2-7).
 |---|---|---|---|---|
 | M1-1 | critical | M1 | genesis-active DNS overlay + `u64::MAX` mergeset spend fence ⇒ bonded 20M KAS is withdrawable while the bond stays Active | `consensus/core/src/config/params.rs:1645` |
 | M1-2 | critical | M1 | one PoW block poisons a pruning point forever; the IBD refuses **after** the utxoset is deleted | `consensus/src/pipeline/virtual_processor/processor.rs:10667` |
-| M1-3 | high | M1 | `misaka wallet send`/`utxo consolidate` selects the validator's locked StakeBond output | `misaka-cli/src/wallet.rs:356` |
+| M1-3 | high | M1 | `misaka wallet send`/`utxo consolidate` selects the validator's locked StakeBond output | `misaka/apps/cli/src/wallet.rs:356` |
 | M1-4 | medium | both | in-process validator burns an epoch permanently on any submit failure | `kaspad/src/validator_service.rs:1482` |
-| M1-5 | medium | both | the sidecar's "transaction gone" match can never fire over wRPC | `kaspa-pq-validator/src/main.rs:1714` |
+| M1-5 | medium | both | the sidecar's "transaction gone" match can never fire over wRPC | `misaka/pq/validator/src/main.rs:1714` |
 | M1-6 | medium | both | every fence value is in the consensus fingerprint and a mismatch is a hard handshake refusal ⇒ a scheduled fork partitions at deploy time | `consensus/core/src/config/params.rs:891` |
 | M2-1 | critical | M2 | the pull is gated on pool EMPTINESS, and 4 tiny unauthenticated blobs spend a claim's relay budget ⇒ honest producers and honest seats slashed | `kaspad/src/palw_panel.rs:1672` |
 | M2-2 | critical | M2 | unverified foreign material is persisted, pooled and re-broadcast with no bound ⇒ remote disk, RAM and a ~10^5 bandwidth amplifier | `kaspad/src/palw_panel.rs:966` |
@@ -241,7 +241,7 @@ Independently, move *both* sidecar imports before `async_clear_pruning_utxo_set`
 pruning point's header and the peer's bytes.
 
 ### M1-3 `[high]` The wallet spends the bond; every other spend path excludes it
-`misaka-cli/src/wallet.rs:356`
+`misaka/apps/cli/src/wallet.rs:356`
 
 **Mechanism.** `let mut mature: Vec<Funding> = page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature).collect();
 mature.sort_by(|a, b| b.amount.cmp(&a.amount));` then a greedy take from the front (`:361-367`).
@@ -251,7 +251,7 @@ that address, is non-coinbase, and is typically the largest UTXO there, so it so
 `utxo consolidate` (`:236-248`) drains everything. A grep for `bond` in the file returns exactly one
 hit — a header comment. Every other spender excludes it: `kaspad/src/validator_service.rs:811-830`
 ("EXCLUDE our own `bond_outpoint` from funding candidates … a validator self-wedge"), and
-`kaspa-pq-validator/src/main.rs` threads an `exclude: Option<TransactionOutpoint>` through bond,
+`misaka/pq/validator/src/main.rs` threads an `exclude: Option<TransactionOutpoint>` through bond,
 unbond and equivocate.
 
 **Failure path.** `misaka wallet send --key-file <validator key> … --yes` puts the bond at input 0.
@@ -275,7 +275,7 @@ When epoch E is offered again by any route the guard refuses to act:
 `SignedEpochCheckOutcome::AllowRebroadcast => { info!("…rebroadcast-safe, not re-signing"); None }`
 (`:1482-1484`) — it returns `None`, so nothing is rebuilt or rebroadcast. The submit failure path
 only warns (`:788`). The standalone sidecar does the opposite and is the proof this is an oversight:
-`kaspa-pq-validator/src/main.rs:1438` falls through `Allow | AllowRebroadcast => {}` and rebuilds.
+`misaka/pq/validator/src/main.rs:1438` falls through `Allow | AllowRebroadcast => {}` and rebuilds.
 
 **Failure path.** Any `submit_rpc_transaction` error at epoch E — a full mempool, an orphaned parent,
 a double-spend after the exclusion set was wiped, a storage-mass refusal — and epoch E is never
@@ -289,7 +289,7 @@ every epoch it observed while passive. Live on mainnet because the overlay is ge
 record in non-`Active` modes.
 
 ### M1-5 `[medium]` `MempoolStatus::Gone` is unreachable over the only transport the validator uses
-`kaspa-pq-validator/src/main.rs:1714`
+`misaka/pq/validator/src/main.rs:1714`
 
 **Mechanism.** The arm is
 `Err(RpcError::RpcSubsystem(msg)) if msg.starts_with("Transaction") && msg.ends_with("not found")`.
@@ -1371,7 +1371,7 @@ Four findings that survived the refutation panel did not survive this pass:
   `(self.state.clone(), self.entries.len())`. But 180 ML-DSA-87 verifications at a 120 s cadence is
   tens of milliseconds, and the claim's "permanently recorded multiplier on IBD" rests on M2-3's
   malleability, which is reported there. A cost, not a defect.
-* **`misaka-cli/src/setup/mod.rs:1508` asks the maturity floor.** Real (`coinbase_maturity()` rather
+* **`misaka/apps/cli/src/setup/mod.rs:1508` asks the maturity floor.** Real (`coinbase_maturity()` rather
   than `coinbase_spend_maturity()`), but unreachable as a failure on mainnet — the settlement value is
   0 there, so the two numbers coincide — and the CLI's actual spend path already uses
   `is_spendable_settled` with both numbers (`wallet.rs:108-115`).

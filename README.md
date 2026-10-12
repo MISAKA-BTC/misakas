@@ -43,16 +43,16 @@ records, operations and retained history. The previous, much longer README (test
 ## Repository layout
 
 Upstream rusty-kaspa components keep their places (`consensus/`, `crypto/`, `rpc/`, `protocol/`, `mining/`, `wallet/`, `database/`,
-`kaspad/`, …). MISAKA-specific code is grouped as follows.
+`kaspad/`, `bridge/` (Stratum bridge), …). MISAKA-specific code is grouped under `misaka/`, and package names do not change.
 
 | Path | Contents |
 | --- | --- |
 | `misaka/palw/` | PALW crates: `core`, `kernel`, `base0`, `sdk`, `gateway`, `agent`, `worker`, `remote`, `panel`, `security`, … and `tir/{core,exec,lower,artifact,conformance,sketch}` (package names stay `misaka-palw-*`) |
 | `testing/reference/` | Independent second implementations (`palw-reference2`, `palw-tir-ref2`, `palw-base0-ref2`) |
 | `experiments/` | Isolated prototypes with their own workspace (`palw-tir-gpu`) |
-| `kaspa-pq-*`, `pq-miner/` | Post-quantum signer, validator and miner |
-| `kaspa-evm/`, `evm-indexer/`, `bridge/`, `contracts/` | EVM lane |
-| `misaka-cli/`, `misaminer/`, `misaka-dnsseeder/`, `misaka-endpoints/` | MISAKA applications |
+| `misaka/pq/` | Post-quantum `signer`, `validator`, `validator-core` and `miner` (packages `kaspa-pq-*`) |
+| `misaka/evm/` | EVM lane: `core` (package `kaspa-evm`), `indexer/{core,store-pg,service}`, Solidity `contracts` |
+| `misaka/apps/`, `misaka/endpoints/` | MISAKA applications (`cli` → binary `misaka`, `misaminer`, `dnsseeder`) and the endpoint list |
 | `tools/drills/` | Drill harnesses (combined, gen, improve, tir, vertex) and `tools/` utilities |
 | [`scripts/`](scripts/README.md) | `ci-gates.sh` plus `ci/`, `release/`, `verify/`, `drills/`, `ops/`, `sim/` |
 | `docs/` | Documentation |

@@ -140,7 +140,7 @@ One rule, one place, fenced at 6,001 with the rest of the bundle:
 
 * **EVM (O13).** Gas is capped per chain block (`MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK = EVM_GAS_LIMIT
   = 30 M`), the executor runs every merged payload of a chain block under one 30 M env
-  (`kaspa-evm/src/env.rs:66`), and round blocks reach the chain only through the block that merges
+  (`misaka/evm/core/src/env.rs:66`), and round blocks reach the chain only through the block that merges
   them (`utxo_validation.rs:368-382`). With chain blocks every 120 s, "1 BPS" of round blocks is
   1 BPS of **scheduling**: 30 M gas per 120 s of throughput, whatever the lane's width. The spec
   decision and its implementation are in ADR-0139.

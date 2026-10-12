@@ -97,7 +97,7 @@ L-01=`39e5f6a`(test) / L-02=`b60a9d5` / L-03=`6f5cd85`。I-01/I-02/I-03 = 開示
 | `kaspa-evm` | 15/15（F002 cap テスト含む v1+v2 active/inert） |
 | `kaspa-mining`（+evm） | mempool 17/17 |
 | `kaspa-eth-rpc` / `kaspa-rpc-service` / `kaspa-p2p-flows` / `kaspa-addressmanager` | ビルド緑 |
-| NFT（Foundry, OZ v5.0.2, solc 0.8.28） | forge 30/30、bytecode 再現一致（`contracts/nft/BUILD.md`） |
+| NFT（Foundry, OZ v5.0.2, solc 0.8.28） | forge 30/30、bytecode 再現一致（`misaka/evm/contracts/nft/BUILD.md`） |
 
 **独立敵対的レビュー（F002 cap, consensus-critical）:** サブエージェントが revm 14.0.3 の `transact_commit` ソースまで照合し 7/7 プロパティ PASS（inert byte-identical、cap-skip の supply 中立、決定性、count/materialize 一致、他経路の見落としなし）。
 
@@ -123,7 +123,7 @@ L-01=`39e5f6a`(test) / L-02=`b60a9d5` / L-03=`6f5cd85`。I-01/I-02/I-03 = 開示
 - [x] 修正 commit hash — 本書 §2-4 + `MISAKA-Audit-Remediation-Matrix-2026-06-23.csv`
 - [x] source ブランチ/HEAD — `pr-19-s5f-…` / `117f915`
 - [x] `cargo test` 結果（該当 crate） — §5
-- [x] `forge test` 結果 + reproducible bytecode manifest — §5 / `contracts/nft/BUILD.md`
+- [x] `forge test` 結果 + reproducible bytecode manifest — §5 / `misaka/evm/contracts/nft/BUILD.md`
 - [x] consensus-critical 変更の独立 adversarial レビュー — §5（F002 cap 7/7）
 - [ ] `cargo clippy` / `cargo audit` / `cargo deny` — CI で再実行（本環境では未実行）
 - [ ] RPC adversarial load / EVM state-growth soak / DNS eclipse sim — §6 動的検証（未実施）

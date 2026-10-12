@@ -32,8 +32,8 @@ const SCANNED: &[&str] = &[
     "misaka/palw/worker/src",
     "misaka/palw/sdk/src",
     "misaka/palw/base0/src",
-    "kaspa-pq-validator-core/src",
-    "kaspa-pq-signer/src",
+    "misaka/pq/validator-core/src",
+    "misaka/pq/signer/src",
 ];
 
 /// Only these files under [`SCANNED`] are also scanned from `kaspad`, because `kaspad/src` is the

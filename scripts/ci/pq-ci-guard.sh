@@ -118,12 +118,12 @@ echo "== [6/6] EVM spec id must stay pinned at SHANGHAI (EVM audit C1) =="
 # residual analysis (pre-EIP-6780) and the class-2/4 skip boundary were audited
 # AT SHANGHAI. A bump is a hard fork AND requires re-running the supply +
 # skip-class suites and re-deciding the F002 residual policy (see
-# kaspa-evm/src/lib.rs). This grep (with the const assert next to the const)
+# misaka/evm/core/src/lib.rs). This grep (with the const assert next to the const)
 # makes a silent bump impossible.
-if grep -q "pub const EVM_SPEC_ID: SpecId = SpecId::SHANGHAI;" kaspa-evm/src/lib.rs; then
+if grep -q "pub const EVM_SPEC_ID: SpecId = SpecId::SHANGHAI;" misaka/evm/core/src/lib.rs; then
   echo "OK: EVM_SPEC_ID pinned at SHANGHAI."
 else
-  echo "  -> FAIL: EVM_SPEC_ID is no longer SHANGHAI — follow the spec-bump checklist in kaspa-evm/src/lib.rs before changing this gate."
+  echo "  -> FAIL: EVM_SPEC_ID is no longer SHANGHAI — follow the spec-bump checklist in misaka/evm/core/src/lib.rs before changing this gate."
   fail=1
 fi
 

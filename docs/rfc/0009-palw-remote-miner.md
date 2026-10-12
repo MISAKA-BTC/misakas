@@ -82,7 +82,7 @@ attempt は claim を載せる**block 自体が work**である。外部 node �
 
 1. **Prepare / preflight:** 登録者の PC または委託 worker で artifact、canonical manifest、class ID、inventory root、宣言した context と必要な適合性検査を完成させる。既存の SDK/gate を使い、network/genesis、ruleset/fence、判定 DAA、参照した chain state を固定する。外部 worker の成功表示だけで未検証 artifact を受理しない。HF URL や Torrent magnet だけでは登録 object にならない。
 2. **Read terms / quote:** remote RPC の `getPalwRegistrationTerms` と bond/UTXO 状態を読み、実際の post-genesis 登録 object、carrier と費用明細を構築する。単一 RPC の古い terms を信用せず §6 の鮮度・照合・停止規則を適用する。dry-run の合格は将来の chain 受理を保証しない。
-3. **Sign locally:** 現行の [`signed_class_registration`](../../misaka-cli/src/operator/model_add.rs) と SDK の署名対象・network domain を再利用する。登録者自身の Active bond の鍵で canonical object を署名し、wallet が funding inputs、fee、change を含む完成 carrier transaction を署名する。鍵・seed・wallet backup を worker、relay、サイト、VPS へ渡さない。builder の未署名 bytes はユーザー側で照合する。
+3. **Sign locally:** 現行の [`signed_class_registration`](../../misaka/apps/cli/src/operator/model_add.rs) と SDK の署名対象・network domain を再利用する。登録者自身の Active bond の鍵で canonical object を署名し、wallet が funding inputs、fee、change を含む完成 carrier transaction を署名する。鍵・seed・wallet backup を worker、relay、サイト、VPS へ渡さない。builder の未署名 bytes はユーザー側で照合する。
 4. **Relay:** 完成済み raw transaction を任意の node/relay へ渡す。relay は通常の mempool 検証・gossip を使い、登録者・owner・artifact・費用を改変できない。接続先を選べるものとし、特定 VPS、pool、サイト管理者の承認を登録条件にしない。
 5. **Verify accepted state:** transaction inclusion と registry の accepted state を別々に追跡する。ユーザー PC に `kaspad` がなくても、署名した class/line/root と実際に採用された登録結果が一致することを確認できるようにする。
 
@@ -101,7 +101,7 @@ attempt は claim を載せる**block 自体が work**である。外部 node �
 | Bond / registration exposure | Active bond の存在と残余 collateral を検査する。既存 reservation、live slashable locks、今回の exposure、burn 後の backing を同じ chain gate で確認する。GAS が払えても担保不足なら登録不可。 |
 | その他の filing / 任意サービス | certification 等に追加 filing/rent が必要なら個別に表示する。activation pool、市場開設 deposit、worker/relay/seeding の任意サービス料金は登録 GAS と混ぜず、別承認とする。 |
 
-根拠は [`palw_state_v2.rs`](../../consensus/core/src/palw_state_v2.rs) の登録 burn・exposure・live-lock gate と、[`model_add.rs`](../../misaka-cli/src/operator/model_add.rs) の費用提示・署名・carrier 提出経路である。本 RFC は新しい burn 額や免除規則を設けない。
+根拠は [`palw_state_v2.rs`](../../consensus/core/src/palw_state_v2.rs) の登録 burn・exposure・live-lock gate と、[`model_add.rs`](../../misaka/apps/cli/src/operator/model_add.rs) の費用提示・署名・carrier 提出経路である。本 RFC は新しい burn 額や免除規則を設けない。
 
 quote には `network/genesis`、ruleset/fence、参照 tip/DAA と期限、class/root/object digest、登録 burn とその支払元、carrier mass/fee と wallet の change、必要 collateral/exposure、追加 filing の有無、ユーザーの最大支払額を含める。wallet は funding UTXO と bond の両方を確認し、不足額を分けて返す。**残高不足・quote 期限切れ・terms 変更・署名対象の差替えは、署名/提出前に停止する。** fee を増やす再構築は再見積り・再署名・再承認が必要で、relay に無制限の fee 変更権を与えない。
 

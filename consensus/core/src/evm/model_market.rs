@@ -103,7 +103,7 @@ pub fn send_action_selector() -> [u8; 4] {
 }
 
 /// The four bytes of `keccak256(signature)` — an ABI selector, so a client can build a call to
-/// any of the four doors from the signature strings `contracts/misaka-model/` spells.
+/// any of the four doors from the signature strings `misaka/evm/contracts/misaka-model/` spells.
 pub fn abi_selector(signature: &str) -> [u8; 4] {
     use sha3::{Digest, Keccak256};
     let h = Keccak256::digest(signature.as_bytes());

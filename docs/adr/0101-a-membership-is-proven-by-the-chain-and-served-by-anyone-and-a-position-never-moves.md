@@ -72,7 +72,7 @@ providers that does not put a URL on the chain.
 | sell | debits the seller, to the curve | `model_sell_v1`, the other |
 | the reward's buyback (ADR-0091) | retires units into the market row's `retired_units`; credits no holder | `model_buyback_at_final` |
 | a line's owner transfer (ADR-0088) | moves the LINE's ownership; writes no holding | `ModelLineOwnerTransferred` |
-| the EVM facade (ADR-0089) | `transfer`, `transferFrom`, `approve`, `allowance` answer `NonTransferable()` | `kaspa-evm/src/model_market.rs` |
+| the EVM facade (ADR-0089) | `transfer`, `transferFrom`, `approve`, `allowance` answer `NonTransferable()` | `misaka/evm/core/src/model_market.rs` |
 | the CLI | `palw model-buy`, `model-sell`, their EVM twins, `model-seed`; no transfer command | `misaka-cli` |
 
 No object names two holders. That is the settled rule, and §5 pins it three ways.
@@ -184,7 +184,7 @@ Decisions 2, 3 and 5's pins — **done** (§9); the rest is Decision 7's list.
     registered in `lib.rs`, its domains in `palw_derived_v1`'s uniqueness sweep.
   * `consensus/core/tests/palw_adr0101_membership.rs` — Invariants 4 and 5.
   * `misaka/palw/sdk/tests/service_descriptor_signed.rs` — Invariant 3, with real keys.
-  * `kaspa-evm/src/model_market.rs` — Invariant 6.
+  * `misaka/evm/core/src/model_market.rs` — Invariant 6.
 
 ## ADR-0144 alignment (2026-09-21)
 
