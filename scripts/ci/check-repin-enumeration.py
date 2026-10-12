@@ -60,8 +60,15 @@ PATTERNS = {
 SCOPE = (
     "consensus/core/src/palw_",
     "consensus/core/src/config/",
-    "misaka-",
-    "misaka-cli/",
+    # What the former `misaka-` prefix covered, at the places the 2026-10-12 reorganization moved it: the PALW crates
+    # (misaka/palw/, the second implementations in testing/reference/, the GPU prototype in experiments/), the CLI,
+    # the DNS seeder and the endpoint list. (The PQ and EVM crates and misaminer were never `misaka-` named, so stay out.)
+    "misaka/palw/",
+    "testing/reference/palw-",
+    "experiments/palw-tir-gpu/",
+    "misaka/apps/cli/",
+    "misaka/apps/dnsseeder/",
+    "misaka/endpoints/",
     "kaspad/src/",
 )
 
@@ -177,6 +184,19 @@ FROZEN = [
 ]
 
 
+def split_parent(path, src):
+    """A file split out of its parent module file (2026-10-12/13 behaviour-preserving splits) is classified with that parent:
+    its header says "moved out of `<stem>.rs`", and `<dir>/<stem>.rs` beside its directory exists. Its literals were the
+    parent's before the move, and the decision about them is the parent's."""
+    head = src[:600]
+    m = re.search(r"moved out of `([\w.]+\.rs)`", head)
+    if not m:
+        return None
+    d = os.path.dirname(path)
+    parent = os.path.join(os.path.dirname(d), m.group(1))
+    return parent if os.path.exists(parent) else None
+
+
 def in_scope(path):
     return path.startswith(SCOPE)
 
@@ -199,7 +219,10 @@ def scan():
             spellings = {name: len(rx.findall(src)) for name, rx in PATTERNS.items()}
             spellings = {k: v for k, v in spellings.items() if v}
             if spellings:
-                found[path] = spellings
+                key = split_parent(path, src) or path
+                merged = found.setdefault(key, {})
+                for k, v in spellings.items():
+                    merged[k] = merged.get(k, 0) + v
     return found
 
 

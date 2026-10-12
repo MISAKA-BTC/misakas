@@ -318,6 +318,9 @@ BINDER = "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs"
 PPSTRICT = "consensus/core/tests/pruning_proof_strict_economic_fence.rs"
 LANEORDER = "consensus/core/tests/palw_lane_accept_parents_first_is_t12_only.rs"
 PARAMS = "consensus/core/src/config/params.rs"
+# The preset fingerprints and the state-root goldens live in test modules split out of their files (2026-10-12).
+PARAMS_ID_TESTS = "consensus/core/src/config/params/consensus_params_id_tests.rs"
+STATE_TESTS = "consensus/core/src/palw_state_v2/tests.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
 STATE = "consensus/core/src/palw_state_v2.rs"
 PARITY = "consensus/core/tests/panel_room_t11_dormant_parity.rs"
@@ -442,7 +445,7 @@ def registry() -> list[Pin]:
                                 ("testnet-11", "testnet-11", r'"testnet-11",\s*TESTNET11_PARAMS,'),
                                 ("simnet", "simnet", r'\("simnet", SIMNET_PARAMS, '),
                                 ("devnet", "devnet", r'\("devnet", DEVNET_PARAMS, ')]:
-        pins.append(Pin(f"params.shipped_presets.{name}", scope, PARAMS, [fp_anchor, anchor], f"preset_net.{name}.params_id",
+        pins.append(Pin(f"params.shipped_presets.{name}", scope, PARAMS_ID_TESTS, [fp_anchor, anchor], f"preset_net.{name}.params_id",
                         length=64, until=r"\.into_iter\(\)", tests=fp_test))
 
     # ---- every genesis the build mints --------------------------------------------------------------
@@ -633,9 +636,9 @@ def registry() -> list[Pin]:
                          rf'^\s*(?="[0-9a-f]{{64}}",\s*//\s*{re.escape(record)}\s*$)'], f"v22.t41.record.{record}",
                         length=64, until=r"^\}", tests=(f"{GOLDEN}::t41_the_v22_record_encodings_are_pinned",)))
     v22 = (f"lib::{LIB_GOLDEN_TEST}",)
-    pins.append(Pin("state_v2.want_empty", "layout", STATE, [r"fn the_version_22_state_root_golden_vectors\(\)", r"let want_empty = "],
+    pins.append(Pin("state_v2.want_empty", "layout", STATE_TESTS, [r"fn the_version_22_state_root_golden_vectors\(\)", r"let want_empty = "],
                     "v22.state.empty", tests=v22))
-    pins.append(Pin("state_v2.want_full", "layout", STATE, [r"fn the_version_22_state_root_golden_vectors\(\)", r"let want_full = "],
+    pins.append(Pin("state_v2.want_full", "layout", STATE_TESTS, [r"fn the_version_22_state_root_golden_vectors\(\)", r"let want_full = "],
                     "v22.state.full", tests=v22))
 
     # ---- t11 / dormant goldens that hash a v22 root -------------------------------------------------
