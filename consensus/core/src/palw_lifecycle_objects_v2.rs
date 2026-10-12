@@ -4650,39 +4650,39 @@ pub(crate) mod tests {
         /// same commit and confirms the change rides under the row's fence (or adds a row for the fence it does ride under).
         /// `every_landed_kind_is_pinned_to_its_wire_form` fails on a missing, stale or moved pin and prints the current values.
         const PALW_A2_NEW_KIND_WIRE_V1: &[(u8, u64)] = &[
-            (104, 0x98d7608e0a24ad99),
+            (104, 0xa4185e3a6f30531f),
             (105, 0xa20547aac744e0c7), // Bounded v3 tile court: refresh the stale pre-tile pin; legacy proof declarations remain unchanged.
-            (106, 0x888f101d106c24bc),
-            (107, 0x0081a402000ddbf4),
+            (106, 0x5d47205ed2078bd8),
+            (107, 0x2300ab932b9afc6a),
             (108, 0xac8ecc3ff97ec415),
             (109, 0xcd35f41524be4a4f), // OPVB: PostComplete and the derived-eligibility forms of tag 109 (under palw_probabilistic_constraints_v1)
-            (110, 0x7da0346d0633de78),
-            (111, 0x2d490db20d075bfe),
-            (113, 0x99d687403e235f27), // FlatProofV9 (5) appends its own authenticated actor/maturity lane under the same dormant fence.
-            (120, 0xcbb24fb8f993e5c6),
+            (110, 0xb15fb011723ebbe0),
+            (111, 0x27999d2df751e9c6),
+            (113, 0x2fb1aa3e7e627952), // FlatProofV9 (5) appends its own authenticated actor/maturity lane under the same dormant fence.
+            (120, 0x0811fa945c751a68),
             // X8R's RFC-0008 v2 work-root declaration, under `palw_exec_payload_v2` (lifecycle kind fence 6).
             (130, 0x5774ef35c9a3fdaa),
             // BUDGET's capital assignment (ADR-0177 D3), under `palw_model_bond_allocation_v1`.
-            (140, 0xa4ab9f7696775588),
+            (140, 0xfd16dca7f366aee0),
             (150, 0x5fb8c8b2822f8386),
             (151, 0x6a81242ebaeba7fd),
             (152, 0xc48f175fa3456d1e),
-            (153, 0x74bac59d2cf50cd4),
-            (154, 0x047359d4d8ba0a7b),
-            (155, 0x6d9c4e7671a9cac7),
-            (156, 0xfd9ad539eab02a3c),
-            (157, 0xa5ca85bb4a3be200),
-            (158, 0x1bbcf34fe919b8c4),
-            (159, 0x0395636b651f74fa),
-            (160, 0x730c4ce9aa0ff75e),
-            (161, 0xec0447b18452362b),
-            (162, 0x16fdc18dd12bd954),
-            (163, 0x51ac8be8e6561cbd),
-            (164, 0x1328fec2bbe52c00),
-            (165, 0xf78925778e6fd91f),
-            (166, 0xe436b43fd3c3e30b),
-            (167, 0x54d7108306324203),
-            (131, 0xab59e37a222e6f74),
+            (153, 0x711adb250ce0a96c),
+            (154, 0xcbbc278dd66b6323),
+            (155, 0x0401fa8856e56b95),
+            (156, 0x9fde43f08275c19d),
+            (157, 0x6bb3883f5beafe62),
+            (158, 0x1df205a6cb8b9170),
+            (159, 0xdc26bfcc32f819d8),
+            (160, 0xfeef5ae95aeadd6a),
+            (161, 0x06018728e188eca5),
+            (162, 0x90e3e29a9106ee3c),
+            (163, 0xa30b09c06a2c68f7),
+            (164, 0x4235e47da87f3154),
+            (165, 0x868504c5edc94377),
+            (166, 0x1d9abdb5bb45bba5),
+            (167, 0x38f4084b1c64b5bb),
+            (131, 0xf970df6a8bdc323c),
         ];
 
         /// **The live build's 100 variants of `PalwConsensusObjectV2`, pinned as declared** — an FNV-1a over their declarations (inline
@@ -4690,7 +4690,13 @@ pub(crate) mod tests {
         /// closes that gap: a field added to, or a type changed inside, a kind the live build decodes fails
         /// `every_landed_kind_is_pinned_to_its_wire_form` and is an `Int12Inner` change to classify, never a re-pin. Checked against
         /// `0b1c11b87`'s source on 2026-10-10 (every variant equal on this branch, `g14/r4-fixes` and `adv/c4r4`).
-        const PALW_A2_INT12_VARIANTS_WIRE_V1: u64 = 0xd1982421da455cca;
+        // Re-taken 2026-10-12 (0xd1982421da455cca before): `cargo fmt --all` gave the object enum's struct variants trailing commas.
+        // Checked, not argued: the enum's declaration at 60dceccc1 and now is identical once whitespace and trailing commas are
+        // removed, so no variant's wire form moved — the squashed text this digest hashes did.
+        // PALW_A2_NEW_KIND_WIRE_V1 below re-taken 2026-10-12 for the same reason: the post-int-12 kinds listed in the commit moved only because rustfmt
+        // added trailing commas. Checked by computing both pin sets with a comma-insensitive squash at 60dceccc1 and at this tree:
+        // identical, so no kind's wire form moved.
+        const PALW_A2_INT12_VARIANTS_WIRE_V1: u64 = 0x01d641040ea4a142;
 
         /// The explicitly approved native-only field is excluded from the historical source
         /// fingerprint only with its exact skipped declaration. Existing frozen declarations
