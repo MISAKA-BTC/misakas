@@ -43,6 +43,7 @@ pub fn palw_params_source_v1() -> &'static str {
             include_str!("config/params/validation.rs"),
             include_str!("config/params/activation.rs"),
             include_str!("config/params/mirror.rs"),
+            include_str!("config/params/rc_genesis_bonds.rs"),
         ]
         .join("\n")
     })

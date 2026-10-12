@@ -410,7 +410,7 @@ fn assemble(path: &str, artifact_root: Hash64) {
             println!("  palw_ruleset_id     {}", kaspa_consensus_core::palw_mode_v2::palw_ruleset_id_v2(bundle));
             println!("  consensus_params_id {}", params.consensus_params_id());
             println!();
-            println!("Paste into `consensus/core/src/config/params.rs`:");
+            println!("Paste into `consensus/core/src/config/params/rc_genesis_bonds.rs`:");
             println!();
             println!(
                 "pub const PALW_RC_GENESIS_ARTIFACT_ROOT: Hash64 = Hash64::from_bytes({});",
