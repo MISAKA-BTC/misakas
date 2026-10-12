@@ -200,7 +200,7 @@ nodeの[scope admission](https://github.com/MISAKA-BTC/misakas/blob/34b6c3f5ef13
 
 証拠: [original core check](evidence/core-check-original.log)、[patch後core check](evidence/core-check-after-compile-fix.log)、[資源反例log](evidence/resource-regressions.log)、[回帰テストソース](evidence/g14_review_regressions.rs)。
 
-回帰テストは対象commitの`misaka-palw-kernel/tests/g14_review_regressions.rs`へコピーして、次で実行する。`mod common`は対象branchの既存fixtureを使う。修正後に両テストがPASSすることは最低条件であり、最大profile全体の保証に代わるものではない。
+回帰テストは対象commitの`misaka/palw/kernel/tests/g14_review_regressions.rs`へコピーして、次で実行する。`mod common`は対象branchの既存fixtureを使う。修正後に両テストがPASSすることは最低条件であり、最大profile全体の保証に代わるものではない。
 
 ```sh
 cargo test -p misaka-palw-kernel --test g14_review_regressions --locked -- --nocapture

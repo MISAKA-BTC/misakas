@@ -62,7 +62,7 @@ fi
 DECODE_FLAG=${DECODE_FLAG:-}     # e.g. --palw-drill-decode-at; empty = look for one in kaspad --help
 
 # The head: the tiny HF llama at 32 positions — D-F's small class (class eaabaff9…) — and the model ids of the candidates.
-FIXTURE=${FIXTURE:-$WT/misaka-palw-tir-lower/tests/fixtures/hf/llama}
+FIXTURE=${FIXTURE:-$WT/misaka/palw/tir/lower/tests/fixtures/hf/llama}
 HEAD_MODEL_ID=${HEAD_MODEL_ID:-test/llama-tiny-ir}
 HEAD_CONTEXT=${HEAD_CONTEXT:-32}
 # What a candidate IS: `composite` (parent + PALWTIRS adapter section: RFC-0004's own form, the default — a seat fetches only the

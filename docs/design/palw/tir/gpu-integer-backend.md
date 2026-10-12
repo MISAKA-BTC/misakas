@@ -270,11 +270,11 @@ compiler are part of the computation's trusted base.
 | `random` | 5,700 random primitive applications as one-node programs: reference, CPU executor and device under the CPU's refined plan, operands at random in param (packed) or computed (lane) form | every case on the device equal byte for byte (or failing with the same class): 5,472 device runs (the other 228 are not program nodes), 1,106 of them failures; no fallback in any family |
 | `fast_paths` | the vec4 GEMV and the GEMM at every row-group, tile and chunk-flush boundary, batches, the rails | 131 cases equal |
 | `batch` | `BatchReplay` (§11) vs `TirExecutor` stepping the same tokens until the first failure: how many positions succeed, the failure's class, every value of every successful position (every node, and the staged-lanes path) and the logits | **the seven program vectors** at chunks of 1, 2, 3, 5 and the whole job (chunk boundaries before, inside and after a window's first slide), both sink modes: 340 positions equal and equal to the vectors, Fixed-state occurrences per position and the rest batched, 0 fallbacks; **400 random programs** (`TIR_GPU_BATCH_PROGRAMS`; 3,000 run once: see §11) at random chunks of 1–64; **the Qwen2.5-shaped program** at a small geometry over 40 positions in chunks of 7, 16 and 40, every occurrence batched, 0 fallbacks |
-| `programs` | `GpuExecutor` vs `TirExecutor`, every node of every position ("every node" sink) and every commit point (the staged-lanes path) | **the seven program vectors** (dense GQA, sliding + global, GDN 2 key / 4 value heads, Mamba-2, top-2 MoE with a shared expert, Fixed-state saturation, a 3-row history window): equal to the CPU executor and to the vectors' committed values and logits, 15,738 device node evaluations, 0 fallbacks; **400 random programs** of the CPU executor's own generator (`misaka-palw-tir-exec/tests/common/progen.rs`, included by path): 725 steps equal, 1,015 fail in both with the same class, 40,287 device node evaluations, 60 checked-`i128` nodes on the CPU |
+| `programs` | `GpuExecutor` vs `TirExecutor`, every node of every position ("every node" sink) and every commit point (the staged-lanes path) | **the seven program vectors** (dense GQA, sliding + global, GDN 2 key / 4 value heads, Mamba-2, top-2 MoE with a shared expert, Fixed-state saturation, a 3-row history window): equal to the CPU executor and to the vectors' committed values and logits, 15,738 device node evaluations, 0 fallbacks; **400 random programs** of the CPU executor's own generator (`misaka/palw/tir/exec/tests/common/progen.rs`, included by path): 725 steps equal, 1,015 fail in both with the same class, 40,287 device node evaluations, 60 checked-`i128` nodes on the CPU |
 
 ## 8. The dispatch seam `misaka-palw-tir-exec` would need (specified, not implemented)
 
-`GpuExecutor` (`misaka-palw-tir-gpu/src/exec.rs`) is today a second executor that mirrors
+`GpuExecutor` (`experiments/palw-tir-gpu/src/exec.rs`) is today a second executor that mirrors
 `TirExecutor`. To make the GPU a backend of the ONE executor a node runs, `misaka-palw-tir-exec` would
 grow this seam. It is node software: nothing in it reaches consensus.
 
@@ -378,7 +378,7 @@ and `device_ledger_v1`, "a device's memory when a GPU backend arrives". How a ba
 
 ## 11. Position-batched replay — a job, a layer at a time over all its positions (built)
 
-`BatchReplay` (`misaka-palw-tir-gpu/src/batch.rs`) is §6's bigger lever. A seat replaying a committed
+`BatchReplay` (`experiments/palw-tir-gpu/src/batch.rs`) is §6's bigger lever. A seat replaying a committed
 job — a claim's prefill-and-decode run, a court's step leg, RFC-0006's cell over a position segment —
 holds every token before it starts. So it runs the occurrences in schedule order, and each occurrence
 ONCE over a chunk of positions: ADR-0117's "a draw is one forward", what `forward_prefill_planned`

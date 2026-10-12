@@ -107,7 +107,7 @@ commitment and the lock changed the mixed set, so a producer could steer the bea
   height; delta and carriage are the `NotCarried` rows `PALW_INT12_WIRE_CHANGES_V1` already classifies; the engine crate's types
   are not int-12 wire types.
 * **Status: IMPLEMENTED_AND_TESTED at the engine and the consensus-core fold; dormant; NOT armable** (the fence stays refused and
-  the three locks below are unchanged). Tests: `misaka-palw-panel/tests/stages.rs`
+  the three locks below are unchanged). Tests: `misaka/palw/panel/tests/stages.rs`
   (`an_epochs_source_set_is_frozen_once_at_its_commitment_and_dropped_after_its_window`,
   `an_empty_or_over_cap_derivation_freezes_nothing_and_a_malformed_row_is_refused`) and `rfc0010_production_fold.rs`
   (`the_epochs_source_set_is_frozen_at_its_commitment_and_later_eligibility_changes_do_not_move_the_beacon` — a profile denied

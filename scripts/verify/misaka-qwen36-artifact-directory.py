@@ -8,7 +8,7 @@ term of the floor; a fifth of the weight bytes is the default budget. This print
 
     python3 scripts/verify/misaka-qwen36-artifact-directory.py /root/palw-class/qwen36.palwq36
 
-Mirrors `parse_header_v1` in misaka-palw-base0/src/qwen36.rs: magic, layer kinds, 15 usizes, an
+Mirrors `parse_header_v1` in misaka/palw/base0/src/qwen36.rs: magic, layer kinds, 15 usizes, an
 i64, one byte, the rope table, the parameter rows, the directory, data_start. Reads the header
 (0.71 GiB on the 33 GiB class) and never touches the weight region. No dependencies.
 """

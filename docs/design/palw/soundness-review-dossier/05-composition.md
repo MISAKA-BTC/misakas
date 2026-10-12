@@ -2,8 +2,8 @@
 
 How per-relation soundness (S1–S3) becomes a bound for a whole claim (many relations, many positions), how it composes with the
 beacon (S6) and the adversary's retries, grinding and adaptivity (S8), and where the selection, enforcement and environment terms
-enter. The formula is implemented as a pure integer function, `misaka-palw-challenge/src/composition.rs`
-(`composed_false_accept_bits_v1`), and every number in §5.5 is pinned by `misaka-palw-challenge/tests/composition.rs`.
+enter. The formula is implemented as a pure integer function, `misaka/palw/challenge/src/composition.rs`
+(`composed_false_accept_bits_v1`), and every number in §5.5 is pinned by `misaka/palw/challenge/tests/composition.rs`.
 
 ## 5.1 The event
 

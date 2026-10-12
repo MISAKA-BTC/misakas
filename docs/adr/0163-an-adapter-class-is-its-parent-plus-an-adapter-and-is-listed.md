@@ -26,7 +26,7 @@ and a seat's possession proof both read — so an adapter costs a section, not a
 ## 1. What exists, and the gap
 
 RFC-0004 already built the composite: `artifact_root(Composite) = H(parent_class ‖ parent_root ‖ adapter_root ‖ le32(P))`, a candidate
-lowered with its adapter's params last (`misaka-palw-tir-lower/src/lora.rs`, `lower::adapter_params_last`), its admission
+lowered with its adapter's params last (`misaka/palw/tir/lower/src/lora.rs`, `lower::adapter_params_last`), its admission
 (`palw_tir_candidate_artifact_admits_v1`: the family rule, the composite rule, every terminal close carriable in the composite form) and
 the registry `improvement_composite_classes` (delta 99) that a court opening and a seat's adapter-section possession proof read. But the
 only door to that registry is `CandidateSubmitted` (tag 80): a governed model line's epoch, its fees, its bar and its pool. A person who
@@ -73,7 +73,7 @@ wants to serve a LoRA over a registered class is not entering a competition; the
 through the delta), `consensus/core/tests/palw_rfc1_fences.rs` (dormancy, Some-only fingerprint, `never()` collapse, prerequisites by name,
 in no t12 list), and `t12_an_adapter_class_listing_is_gated_by_its_fence_its_signature_and_its_acceptance` at the processor (below the fence
 dropped by name; armed, a stranger's signature refused, a signed listing of an unregistered class refused by the acceptance half). The
-composite admission itself is RFC-0004's, exercised on real PEFT fixtures in `misaka-palw-sdk/tests/improve_composite_lora.rs`.
+composite admission itself is RFC-0004's, exercised on real PEFT fixtures in `misaka/palw/sdk/tests/improve_composite_lora.rs`.
 
 ## Mission alignment amendment — 2026-10-07
 

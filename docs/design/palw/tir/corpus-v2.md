@@ -5,7 +5,7 @@
 | Status | measured on 100 curated architectures plus a census of 111 further causal-LM families (transformers 5.17.0 / diffusers 0.40, tiny random-init fixtures), on `tir/corpus` after the merge of `tir/generic` `239179132`; the numbers below are regenerable reports, not prose |
 | Lane | H (corpus and coverage), branch `tir/corpus` off `tir/generic` `1a4964205` |
 | Question | RFC-0002's aim is that **no model needs a core developer**. One more supported model is worthless; only infrastructure that admits them all counts. This document measures it |
-| Harness | `misaka-palw-tir-lower/tests/corpus_v2.rs` + `tools/corpus/` (fixture generator, manifest, adapters, blockers, report renderer) |
+| Harness | `misaka/palw/tir/lower/tests/corpus_v2.rs` + `tools/corpus/` (fixture generator, manifest, adapters, blockers, report renderer) |
 | Report | `tools/corpus/report.json` (the 100 curated entries) and `tools/corpus/census_report.json` (the census), machine-readable, one object per entry |
 | Related | [`feature-requests.md`](feature-requests.md) (what is missing, precisely), [`hf-coverage.md`](hf-coverage.md) (the per-family lowering record), [`model-adapter-v1.md`](model-adapter-v1.md) (the data format), [`corpus-v1.md`](corpus-v1.md) (the primitive-set corpus, a different thing) |
 
@@ -610,12 +610,12 @@ is what makes that safe. It is data and a harness, not new protocol.
 ```bash
 export CARGO_TARGET_DIR=~/Downloads/MISAKA-wt-b/corpus-target CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUST_TEST_THREADS=2
 # fixtures (offline, one model at a time, two threads); the light specs are committed under tools/corpus/specs
-HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2 ~/Downloads/MISAKA-wt-b/tir-venv/bin/python misaka-palw-tir-lower/tools/corpus/gen_fixtures.py --specs
+HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2 ~/Downloads/MISAKA-wt-b/tir-venv/bin/python misaka/palw/tir/lower/tools/corpus/gen_fixtures.py --specs
 # quick: manifest + read/lower/admit from the committed light specs, plus the static "no model in the court" scan
 cargo test -p misaka-palw-tir-lower --test corpus_v2
 # full: every stage on the weights (about 4 minutes, debug build)
 PALW_CORPUS_REPORT=report.json cargo test -p misaka-palw-tir-lower --test corpus_v2 corpus_v2_full -- --ignored --nocapture
-python3 misaka-palw-tir-lower/tools/corpus/report.py report.json --md docs/design/palw/tir/corpus-v2.md
+python3 misaka/palw/tir/lower/tools/corpus/report.py report.json --md docs/design/palw/tir/corpus-v2.md
 ```
 
 `PALW_CORPUS_ONLY=id,id` restricts the run, `PALW_CORPUS_FIXTURES` and `PALW_CORPUS_ADAPTERS` redirect the heavy
@@ -626,7 +626,7 @@ switches the convention search off.
 The census (guarded: meta-device sizing first, one family per subprocess, RSS 4 GB, two threads):
 
 ```bash
-cd misaka-palw-tir-lower/tools/corpus
+cd misaka/palw/tir/lower/tools/corpus
 export HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2
 ~/Downloads/MISAKA-wt-b/tir-venv/bin/python census_def.py probe > census_probe.jsonl   # which families derive a tiny model
 ~/Downloads/MISAKA-wt-b/tir-venv/bin/python census_def.py reprobe [id ...]              # re-run the ones with overrides

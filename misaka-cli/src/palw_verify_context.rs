@@ -344,7 +344,7 @@ mod tests {
     fn no_consensus_node_or_sdk_crate_reads_a_receipt() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("the workspace");
         let mut offenders = Vec::new();
-        for dir in ["consensus/core/src", "consensus/src", "kaspad/src", "misaka-palw-sdk/src", "protocol/flows/src"] {
+        for dir in ["consensus/core/src", "consensus/src", "kaspad/src", "misaka/palw/sdk/src", "protocol/flows/src"] {
             let mut stack = vec![root.join(dir)];
             while let Some(path) = stack.pop() {
                 let Ok(entries) = std::fs::read_dir(&path) else { continue };

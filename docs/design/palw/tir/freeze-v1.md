@@ -9,7 +9,7 @@ evidence.
   `61fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589`.
   It is `BLAKE2b-512`, keyed `misaka-palw/tir-prim-set-id/v1`, over `prim_set_descriptor_v1()`
   (`palw-tir/v1/spec=04b-tensor-ir/rev2/q=24/prims=…`). That descriptor covers the 25 primitives of
-  `misaka-palw-tir/src/prim.rs` (`PRIM_SET_ID_V1`; the set was last touched in `a2e6ec35a`).
+  `misaka/palw/tir/core/src/prim.rs` (`PRIM_SET_ID_V1`; the set was last touched in `a2e6ec35a`).
 * **The criteria** (RFC-0002 §1.2; the table under Summary):
   * Criteria 1–4, 6 and 7 hold.
   * Criterion 5 holds for every family's fidelity row: 57/57 tiny fixtures and 7/7 real
@@ -81,7 +81,7 @@ sinks, soft-capping), RoPE (every scaling), attention (GQA/MQA/sliding/ALiBi/MLA
 the selective scans, WKV-4/6/7, routing and the MoE combine are library templates or the lowerer's
 composites — plain primitives in the program bytes.
 
-**Every architecture and the primitives its program uses** (`misaka-palw-tir-lower/tests/admission.rs`,
+**Every architecture and the primitives its program uses** (`misaka/palw/tir/lower/tests/admission.rs`,
 `every_lowered_architecture_uses_only_the_v1_primitives`, over the lowered programs of the 57 HF
 tiny fixtures; per fixture in Appendix A):
 
@@ -102,7 +102,7 @@ The hand-written corpus programs of tir/core (`consensus-vectors/tir-v1/programs
 **RWKV-5/6/7** are expressible: `tir_library_v1` has `rwkv6_step` (`S ← diag(w)·S + kᵀv`, bonus `u`;
 RWKV-5 is the same step with a static per-head decay) and `rwkv7_step` (the generalised delta rule
 `S ← S(diag(w) − k̂ᵀ(a⊙k̂)) + vᵀk`), with `exp_neg_exp_q24` for the data-dependent decay, each checked
-against a closed-form float recurrence in `misaka-palw-tir/tests/library.rs` (within 3·10⁻³ and
+against a closed-form float recurrence in `misaka/palw/tir/core/tests/library.rs` (within 3·10⁻³ and
 5·10⁻³ relative over the tested steps). Their **fidelity is unverified offline**: RWKV-5/6 exist
 only as remote code (`modeling_rwkv5.py`/`modeling_rwkv6.py`) and RWKV-7 in flash-linear-attention,
 not in `transformers` 5.17, so no pinned reference can be run here; `palw-tir-check` names them
@@ -124,7 +124,7 @@ rule (corpus-v1 §8.2's closing paragraph).
 The last families lowered for real were, on the lowerer, **DeepSeek's MLA with group-limited and
 sigmoid + selection-bias routing, and RWKV-4** (`abbcc1240`, "all 57 HF tiny fixtures lower"), after
 the selective scans (`66b37eff6`) and the gated-delta hybrids and gpt-oss (`18535d74d`); in the library,
-the RWKV-6/7 steps and the Mamba-1/2 steps (`925d4a3dd`). None forced a primitive: `misaka-palw-tir/src/prim.rs`
+the RWKV-6/7 steps and the Mamba-1/2 steps (`925d4a3dd`). None forced a primitive: `misaka/palw/tir/core/src/prim.rs`
 has held the same 25 wire tags since the skeleton (`ac7b96ae7`), and its only later change
 (`a2e6ec35a`) moved `prim_set_id` to the spec's key over descriptor `rev2` (ref2 finding F14), not the
 set. The additions the corpus forced came before Gate 1 and are general (corpus-v1 §6.2: `Log2Floor`,

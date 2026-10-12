@@ -4052,7 +4052,7 @@ pub(crate) mod tests {
         /// source; and each row's fence is what [`palw_kernel_route_inner_fence_v1`] answers for that kind (a zero-filled body).
         #[test]
         fn every_kernel_inner_kind_has_exactly_one_row() {
-            let src = std::fs::read_to_string(repo_root().join("misaka-palw-kernel/src/route.rs")).expect("the kernel route's source");
+            let src = std::fs::read_to_string(repo_root().join("misaka/palw/kernel/src/route.rs")).expect("the kernel route's source");
             let kinds = enum_variants_from_source(&src, "KernelRouteObjectV1");
             assert_eq!(kinds.len(), PALW_KERNEL_ROUTE_INNER_KINDS_V1.len(), "{kinds:?}");
             for (name, tag) in &kinds {
@@ -4077,19 +4077,21 @@ pub(crate) mod tests {
         }
 
         /// The source directories whose types a payload can carry: consensus-core and every crate it decodes with (the PALW crates
-        /// and their own PALW dependencies, hashes, math).
-        const WIRE_DIRS: [&str; 11] = [
-            "consensus/core/src",
-            "crypto/hashes/src",
-            "math/src",
-            "misaka-palw-tir/src",
-            "misaka-palw-tir-exec/src",
-            "misaka-palw-tir-lower/src",
-            "misaka-palw-tir-sketch/src",
-            "misaka-palw-gen/src",
-            "misaka-palw-panel/src",
-            "misaka-palw-challenge/src",
-            "misaka-palw-kernel/src",
+        /// and their own PALW dependencies, hashes, math). Each is `(key, dir)`: the manifest keys a type by the path the live
+        /// build had (`key`, frozen in the manifest and in [`PALW_INT12_WIRE_CHANGES_V1`]), and the source is read from `dir`, where
+        /// the 2026-10-12 reorganization put the PALW crates (`misaka/palw/…`) — or from `key` in a tree from before it.
+        const WIRE_DIRS: [(&str, &str); 11] = [
+            ("consensus/core/src", "consensus/core/src"),
+            ("crypto/hashes/src", "crypto/hashes/src"),
+            ("math/src", "math/src"),
+            ("misaka-palw-tir/src", "misaka/palw/tir/core/src"),
+            ("misaka-palw-tir-exec/src", "misaka/palw/tir/exec/src"),
+            ("misaka-palw-tir-lower/src", "misaka/palw/tir/lower/src"),
+            ("misaka-palw-tir-sketch/src", "misaka/palw/tir/sketch/src"),
+            ("misaka-palw-gen/src", "misaka/palw/gen/src"),
+            ("misaka-palw-panel/src", "misaka/palw/panel/src"),
+            ("misaka-palw-challenge/src", "misaka/palw/challenge/src"),
+            ("misaka-palw-kernel/src", "misaka/palw/kernel/src"),
         ];
 
         fn fnv64(bytes: &[u8]) -> u64 {
@@ -4243,13 +4245,18 @@ pub(crate) mod tests {
                 }
             }
             let mut files = Vec::new();
-            for dir in WIRE_DIRS {
-                walk(&root.join(dir), &mut files);
+            for (key, dir) in WIRE_DIRS {
+                let base = if root.join(dir).is_dir() { root.join(dir) } else { root.join(key) };
+                let mut found = Vec::new();
+                walk(&base, &mut found);
+                files.extend(found.into_iter().map(|f| {
+                    let tail = f.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
+                    (format!("{key}/{tail}"), f)
+                }));
             }
             files.sort();
             let mut out = std::collections::BTreeMap::new();
-            for file in files {
-                let rel = file.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            for (rel, file) in files {
                 let raw = std::fs::read_to_string(&file).unwrap();
                 let text = strip_cfg_test_items(&strip_comments(&raw));
                 let b = text.as_bytes();

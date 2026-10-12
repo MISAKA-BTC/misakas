@@ -42,7 +42,7 @@ exact: `i32`/`i64` accumulation is associative and commutative, so the order a d
 reduced in — across SIMD widths, tile shapes, thread counts, GPUs, vendors — **cannot change the
 result**, within the overflow bounds the catalog already makes premises. A float kernel library is
 fast because it renegotiates arithmetic; an integer backend can be fast while performing,
-bit-for-bit, the same function. `misaka-palw-base0/src/optimized.rs` already proves the property in
+bit-for-bit, the same function. `misaka/palw/base0/src/optimized.rs` already proves the property in
 miniature (interleaved, blocked and reversed reductions, all bit-identical to the scalar fold), and
 `kernels.rs` already ships fast grouped matmuls pinned by
 `the_fast_kernel_is_bit_identical_to_the_reference`. This ADR is that precedent, generalized and

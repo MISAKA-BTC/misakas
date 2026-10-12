@@ -18,7 +18,7 @@ Date: 2026-08-26
 Relates to: ADR-0040 (the integer arithmetic this extends), ADR-0047 (the A16 activation tier),
 ADR-0039 (which forbids weight without a complete catalog), ADR-0051 (execution families),
 ADR-0027/0028/0030 (the court this class does not yet reach),
-`consensus/core/src/palw_qwen36_ops.rs`, `misaka-palw-base0/src/qwen36.rs`.
+`consensus/core/src/palw_qwen36_ops.rs`, `misaka/palw/base0/src/qwen36.rs`.
 
 > **Status as of the index reconciliation (2026-09-02).** "Registers no class and activates
 > nothing … must not carry weight" is the 2026-08-26 morning state; the same-day Amendment below

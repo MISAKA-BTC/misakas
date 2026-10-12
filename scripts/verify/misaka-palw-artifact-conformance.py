@@ -2,7 +2,7 @@
 """**Does a player open it?** — the half of the ADR-0078 demonstration no golden can answer.
 
 The tree already proves two things about a derived artifact and neither of them is this one.
-`misaka-palw-derive/corpus/<kind>/golden.json` pins `artifact_bytes` produced by the shipped Rust,
+`misaka/palw/derive/corpus/<kind>/golden.json` pins `artifact_bytes` produced by the shipped Rust,
 so a mismatch means the transformer moved: that is DETERMINISM.
 `scripts/verify/misaka-palw-derive-stranger.py` re-implements the transformer in Python and reproduces
 those same bytes from the ADR's own preimages: that is INDEPENDENT DERIVATION. Both compare the
@@ -373,7 +373,7 @@ def cmd_demo(argv):
     for transformer, answer, pat in plan:
         d = os.path.join(out, transformer.split("/")[0])
         os.makedirs(d, exist_ok=True)
-        src = os.path.join(repo, "misaka-palw-derive/corpus", answer)
+        src = os.path.join(repo, "misaka/palw/derive/corpus", answer)
         if not os.path.exists(src):
             print(f"  SKIP {transformer}: no corpus answer at {src}", file=sys.stderr)
             bad += 1

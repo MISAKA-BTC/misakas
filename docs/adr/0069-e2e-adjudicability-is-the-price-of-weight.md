@@ -73,7 +73,7 @@ The design is half-built, which is what makes this an ADR and not a research pro
   — this build's adjudicable primitive set as one hash (`palw_catalog_coverage.rs:173`). This is the
   exact mechanism ADR-0067 uses to make adjudication a property of the build that two honest nodes
   compute identically.
-* **BASE-0 already carries the end-to-end drill.** `misaka-palw-base0/src/backend.rs`:
+* **BASE-0 already carries the end-to-end drill.** `misaka/palw/base0/src/backend.rs`:
   `execute_with_injected_fault(job, prompt, leaf)` (:189) produces *guilty* material; then for the
   honest and the guilty run alike, `refutation_for_index` opens (:528, :568) and
   `bisect_prefix_state` before and after the fault leaf shows the two executions agree *before* and
@@ -143,7 +143,7 @@ set it vouched for, not the catalog snapshot that covered it — `palw_catalog_c
 A family certifies only if the narrowings its engine actually executes equal the narrowings its
 graph declares. This needs, per engine, a `plan()` and a `check_graph` — the counterpart BASE-0 has
 in `base0_check_graph_v1` and A16 lacks (`A16Engine` has no `plan()`; its `pre` table performs an
-**undeclared requant** that lifts the embedding onto the A16 stream — `misaka-palw-base0/src/legs.rs:113-119`).
+**undeclared requant** that lifts the embedding onto the A16 stream — `misaka/palw/base0/src/legs.rs:113-119`).
 The drill of Decision 3 would catch an undeclared step anyway (the bisection diverges at it), but a
 graph check names it at build time instead of at a conviction, and turns "the class misdescribes its
 engine" from a live-fire discovery into a compile error.
@@ -259,7 +259,7 @@ Everything the tracking list named, and two things the review found it had not s
   root. *Generalisation is by kernel set:* a class may hold weight iff ONE certified family's
   drilled kernel set contains the class's reachable set — never the union, since a class is served
   by one backend and two certificates stitched together vouch for a graph nobody ran.
-* **Decision 3 — the drill, and its two verbs.** `misaka-palw-base0/src/e2e_drill.rs`:
+* **Decision 3 — the drill, and its two verbs.** `misaka/palw/base0/src/e2e_drill.rs`:
   `drill_family_evidence_v1` (needs the model: honest run, one planted fault per (table, call
   class) the profile reaches, both refutations through the same prover, the prefix rung around
   the fault, the operand openings, and the malformed-material arm — nine truncations/extensions

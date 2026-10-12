@@ -519,7 +519,7 @@ cost of the claim. The user therefore pays about `q·m` times the work to have t
 * **The consumer** (`beacon_sealed_sources_v1`) reads `claim_beacon_seals_v1`: live seals **at their latest position**, salted
   reveals, and forfeited seals.
 
-### 4.2 Findings (measured; `misaka-palw-kernel/tests/econ_seal_veto.rs`)
+### 4.2 Findings (measured; `misaka/palw/kernel/tests/econ_seal_veto.rs`)
 
 **F-ECON-1 — one deposit vetoes every attempt (P1 where armed: GAP-B12's real price).**
 * The attacker seals a job at attempt 1's `S`. At attempts 2 and 3 it re-seals the same job: the gap is 83 DAA, under the TTL of 100.
@@ -674,7 +674,7 @@ With S1–S4 in place:
 
 **Implemented / verified / armable.**
 * Implemented: nothing in consensus.
-* Verified: the PoCs and the calculators, in `misaka-palw-kernel/tests/econ_bounty.rs` and `econ_seal_veto.rs`.
+* Verified: the PoCs and the calculators, in `misaka/palw/kernel/tests/econ_bounty.rs` and `econ_seal_veto.rs`.
 * Armable: nothing. Condition 6 is still unmet, and with F-ECON-2, v3's accounting is not sound.
 
 ## 6. Reproduce

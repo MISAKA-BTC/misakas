@@ -1508,7 +1508,7 @@ fn v5_fixture(fixture: &str, lmax: u32) -> (SegFixture, u32, u32) {
     use misaka_palw_tir::ParamSource;
     use misaka_palw_tir_lower::float_ref::{ParamStore, stream::Resident};
     use misaka_palw_tir_lower::lower::bidir::{self, BidirCfg, Padded, Pooling, float_forward};
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-tir-lower/tests/fixtures").join(fixture);
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka/palw/tir/lower/tests/fixtures").join(fixture);
     let json: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
     let spec = misaka_palw_tir_lower::hf_schema::read_model(&json, None, &misaka_palw_tir_lower::hf_schema::ReadOptions::default())
         .unwrap_or_else(|f| panic!("{fixture}: {}", f.error))

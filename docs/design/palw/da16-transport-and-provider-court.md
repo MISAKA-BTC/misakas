@@ -28,7 +28,7 @@ armable, and nothing ran against a live node or network.
 
 ## 1. The public-material transport (non-consensus for artifacts)
 
-`consensus/core/src/palw_public_material_v1.rs` and `misaka-palw-remote/src/public_material.rs` are kept as they were. Each now carries a
+`consensus/core/src/palw_public_material_v1.rs` and `misaka/palw/remote/src/public_material.rs` are kept as they were. Each now carries a
 module-level NON-CONSENSUS label for the artifact half. It covers:
 - the units and their single verification function (artifact leaf, kernel commitments, row-tree node run, kernel row, claim position);
 - the manifests (checked against the chain before any byte);
@@ -169,7 +169,7 @@ segmented positions reach this court's hook generically.
 | §2.4 removed: onboarding restored | `consensus/core/src/palw_onboarding_{v1,fold_v1}.rs` (= `eae67be30^`) | implemented |
 | Court scope: inventory, rule, per-requester tally, node masks, exposure, verifier-operand authentication | `consensus/core/src/palw_court_scope_v1.rs` | implemented, unit tests |
 | Kernel-route enforcement (FileDemand admission + tally past the fence) | `consensus/core/src/palw_kernel_route_fold_v1.rs` → `court_scope_admit_demand_v1` | implemented |
-| GAP-52: court totality over malformed leaves; entry demands | `misaka-palw-kernel/src/spec/{retrieval,ledger_impl,mod}.rs` | implemented, unit test |
+| GAP-52: court totality over malformed leaves; entry demands | `misaka/palw/kernel/src/spec/{retrieval,ledger_impl,mod}.rs` | implemented, unit test |
 | Transport artifact half labelled non-consensus | `misaka-palw-remote`, `palw_public_material_v1` | implemented (docs only) |
 
 ### 6.1 E2E (harness node, fences test-armed without their validation)
@@ -324,7 +324,7 @@ Root equality is not proof of computation; the court still evaluates the relatio
 ### 7.6 GAP-52 — snapshot leaf well-formedness, by making the court total
 
 A registration-time "every leaf is well-formed" attestation cannot be refuted: a leaf with no preimage has nothing anyone can open. So
-the court is made total instead (`misaka-palw-kernel/src/spec/retrieval.rs`):
+the court is made total instead (`misaka/palw/kernel/src/spec/retrieval.rs`):
 - the item at an id is authenticated by its leaf alone;
 - a malformed one is no item the rule retrieves: `WrongItem` convicts a claim that names it, and `MissedBetter` dismisses it;
 - a retrieval claim's own entries are a demand stage, `0xC0 + s` (position = entry index). `classify_entry_response_v1` serves the item
@@ -389,7 +389,7 @@ and block an honest prosecutor. So the bound limits what is **disclosed**, never
   - the court recomputes ONE 64-element leaf from authenticated operands and compares hashes, so a lie is convicted;
   - a withheld response is the producer's default;
   - an honest claim is dismissed.
-- Model-independent values stay clear (`misaka-palw-kernel/tests/court_scope.rs` pins this on F-C4R4-17's own class).
+- Model-independent values stay clear (`misaka/palw/kernel/tests/court_scope.rs` pins this on F-C4R4-17's own class).
 - **G14R** wires the ledger hook: a per-model `served_clear` counter, the mask in classify / layout, and the 64-element leaf court.
   **Wired by G14-S (2026-10-11, `misaka_palw_kernel::court_scope`, `hide`, `seg_scope`):** past `palw_provider_court_v1` the ledger
   bounds each requester to 16 units and 4 dismissed filings per claim (table 28); on the OPV route a K2-TIR-v1/v2 demand past the

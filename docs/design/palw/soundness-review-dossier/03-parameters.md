@@ -3,7 +3,7 @@
 Values at the base commit `b676927de` unless a branch is named. **INTERIM** = a value written for a never-armed fence or a drill,
 explicitly not a production value. **DESIGN** = a document value with no code. **CONSTANT** = a protocol constant whose change is a
 new descriptor/version. **TEST-ONLY** = a value only tests and tools use. No value in this file is approved for production: the
-approval registry is empty (`misaka-palw-challenge/src/policy.rs:193–221`, `approved_v1`), and every fence named here is refused at
+approval registry is empty (`misaka/palw/challenge/src/policy.rs:193–221`, `approved_v1`), and every fence named here is refused at
 every real height.
 
 ## 3.1 The user's targets (2026-10-08 rulings, `activation-readiness-matrix.md` §3a)
@@ -20,7 +20,7 @@ every real height.
 
 | Parameter | Value | Source | Status |
 |---|---|---|---|
-| K2-TIR-v1 dense field | `2^127 − 1` | `misaka-palw-kernel/src/field.rs:15` | CONSTANT |
+| K2-TIR-v1 dense field | `2^127 − 1` | `misaka/palw/kernel/src/field.rs:15` | CONSTANT |
 | bits per repetition, `2^127 − 1` | 126 (`⌊log2 q⌋`) | `field.rs:18` | CONSTANT |
 | K2-TIR-v2 moduli | `2^127 − 1, 2^107 − 1, 2^89 − 1` (all Mersenne primes; product ≈ 2^323) | `field.rs:21` | CONSTANT |
 | bits per repetition, K2-TIR-v2 (descriptor-wide, weakest modulus) | 88 | `family.rs:107–113`, `descriptor.rs:106–113` | CONSTANT |
@@ -35,7 +35,7 @@ every real height.
 
 | Parameter | Value | Source | Status |
 |---|---|---|---|
-| hash suite | keyed BLAKE2b-512, key = domain, payload = `u64_le(len) ‖ borsh` | `misaka-palw-challenge/src/hash.rs:10–24` | CONSTANT (proposed ids) |
+| hash suite | keyed BLAKE2b-512, key = domain, payload = `u64_le(len) ‖ borsh` | `misaka/palw/challenge/src/hash.rs:10–24` | CONSTANT (proposed ids) |
 | field sampler | `GF(2^127 − 1)`, 127-bit mask, reject `p` | `seed.rs:160` | CONSTANT |
 | stream bound | `2^24` words per labelled stream | `seed.rs:74` | CONSTANT |
 | `reference_policy_v1` security bits / retries / soundness id | 40 / 2 / `soundness/unreviewed-test-only/v1` | `policy.rs:242–245` | TEST-ONLY |
@@ -103,4 +103,4 @@ the retry limit, `g = ⌈log2 G⌉` the grinding bits per beacon, `β` beacons p
 | P-BEACON | `G` bounded by an on-chain-enforced quantity (v3: the adversary's withholdable seals and reachable branches), each choice priced; `ε_src ≤ 2^-129` or entered in the composition | every beacon consumer |
 
 Worked instances of every row are in [05-composition.md](05-composition.md) §5.5 and pinned by
-`misaka-palw-challenge/tests/composition.rs`.
+`misaka/palw/challenge/tests/composition.rs`.

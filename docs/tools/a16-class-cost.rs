@@ -3,7 +3,7 @@
 // This measured the A16 court costs quoted in `docs/palw-second-class-weight-2026-08-26.md` §4.
 // It cannot compile on `main`: `qwen25_a16_profile_v1` and `PALW_RC_QWEN25_1_5B` live on
 // `palw-mainnet-rc-integration`, which is where the A16 decomposition is. To re-run it, drop this
-// file into `misaka-palw-base0/examples/` on that branch and:
+// file into `misaka/palw/base0/examples/` on that branch and:
 //
 //     cargo run --release -p misaka-palw-base0 --example a16-class-cost
 //

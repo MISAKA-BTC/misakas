@@ -27,7 +27,7 @@ EV=$WT/docs/evidence/hf-onboarding/$RUN
 SCR=$RUN_ROOT/runs/$RUN                     # bulky outputs (artifact, pack, logs) — never committed
 CACHE_ROOT=$RUN_ROOT/cache
 VENV_PY=${VENV_PY:-/Users/wata/Downloads/MISAKA-wt-b/tir-venv/bin/python}
-TOOLS=$WT/misaka-palw-tir-lower/tools
+TOOLS=$WT/misaka/palw/tir/lower/tools
 SHA=$(git -C "$WT" rev-parse HEAD)
 mkdir -p "$EV" "$SCR"
 FAIL=$EV/failures.json

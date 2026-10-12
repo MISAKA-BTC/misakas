@@ -319,7 +319,7 @@ reproduce; and **silent context compression** — the entrance trims and SAYS so
 ```
 
 1–6 are `consensus/core/tests/palw_adr0097_model_fit.rs` and the module's own tests; 7–8 are
-`misaka-palw-gateway/src/surface.rs`'s. All were run red before green where a negative control
+`misaka/palw/gateway/src/surface.rs`'s. All were run red before green where a negative control
 exists (5, 8) and observed against the generator's own output (1–4).
 
 ## 6. Order of work
@@ -376,9 +376,9 @@ to §9's record. A concurrent claimant renumbers the later writer. **The next fr
   implemented on the same branch the same day:
   `consensus/core/src/palw_model_fit_v1.rs` (Decision 1: the walls, the report, the geometry
   ceiling alone, the stand-ins module with `KIMI_K3_AS_HYBRID_V1`),
-  `misaka-palw-base0/src/bin/palw-model-fit.rs` (the generator: genesis rows, the sweep, the
+  `misaka/palw/base0/src/bin/palw-model-fit.rs` (the generator: genesis rows, the sweep, the
   widest context per wall, the 2M table, the seat), `consensus/core/tests/palw_adr0097_model_fit.rs`
-  (Invariants 1–6; 7 tests, 2 in the module), `misaka-palw-gateway/src/surface.rs` +
+  (Invariants 1–6; 7 tests, 2 in the module), `misaka/palw/gateway/src/surface.rs` +
   `main.rs` (Decision 2: `limits_body`, `refusal_body`, `context_refusal`,
   `prompt_bytes_refusal`, `misaka.decode`; two new tests and the model-list test extended, the
   corpus unchanged at `5cdf9288…`), `docs/palw-freeprompt-gateway.md` (the limits and the refusal), and

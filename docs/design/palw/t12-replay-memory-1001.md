@@ -26,7 +26,7 @@ So the 3.37 GiB an 8k replay reserved is two terms, neither of which is the repl
 | trace scratch | 1.67 | `prefill_run_positions` (64) × one position's committed trace at the widest history (≈ 9.3 MB at 1,024 rows) × `PALW_PREFILL_RUN_COPIES_V1` (3) | a node-local choice of width; every width commits the same bits |
 
 And the shared copy was not safe where it sat: under the host's pressure the kernel evicted it and replays refaulted it 4 KiB at a
-time at 6–11 MB/s (ADR-0112 §1, `misaka-palw-base0/src/mmap.rs`; 845 MB/s for large reads) — the minutes 5.104's replays spent.
+time at 6–11 MB/s (ADR-0112 §1, `misaka/palw/base0/src/mmap.rs`; 845 MB/s for large reads) — the minutes 5.104's replays spent.
 
 ## 2. How each holding is held (CP1)
 

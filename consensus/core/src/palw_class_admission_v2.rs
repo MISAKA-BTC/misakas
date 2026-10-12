@@ -63,7 +63,7 @@ use crate::palw_v2::PalwJobContextV2;
 ///
 /// Provisioning it at the step space's own cap costs almost nothing, because the ladder is
 /// `ceil(log2(leaves)) + terminal` ROUNDS. Measured on this tree
-/// (`misaka-palw-base0/src/bin/base0-class-sizing.rs`), and pinned by
+/// (`misaka/palw/base0/src/bin/base0-class-sizing.rs`), and pinned by
 /// `provisioning_the_whole_step_space_costs_four_rounds`:
 ///
 /// | provisioned for | leaves | bisection rounds |

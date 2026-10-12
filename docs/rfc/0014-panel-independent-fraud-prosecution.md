@@ -918,4 +918,4 @@ effective_deadline = min(proposed_challenge_deadline, hard_deadline)
 
   すべて合意上のDAA単位とする。receiptが早くてもopen_cutoffを早めず、遅いreceiptで時計を延ばさない。新しいinteractive pursuitは `start <= open_cutoff` かつ `start + B_remaining <= hard_deadline` の場合だけ受理する（残り時間が検証・証拠開示・court完了に足りなければ開始させない）。通常Finalはopen_cutoff通過後、未解決の適格pursuitがない場合にだけ可能とし、期限到達だけで未解決claimを自動Finalにしない。direct objective proofは別sessionが開いているだけでは拒否しない。境界は受理 `d <= deadline`、期限切れsweep `d > deadline` のように一意にし、同一blockでの処理順をcanonical orderingで固定する。旧claimには旧rulesetを適用し、新しい期限規則は別のversioned fenceで有効化する。
 - **§16（共通経済部分）:** モデル別claim bond台帳、配分snapshot、係数、正常Finalと非不正終了・没収時の取扱い、閉鎖/公開比較を置く（ADR-0177 2026-10-12改定、受入試験C01〜C18）。
-- **G14との関係:** G14-B（`misaka-palw-kernel/src/budget.rs`）の最悪追及スケジュールは、この `hard_deadline` に収まることを要件にする。長いG14 staged経路にdrill暫定の予算window W = 400 DAAをそのまま適用しない（2026-10-11裁定）。
+- **G14との関係:** G14-B（`misaka/palw/kernel/src/budget.rs`）の最悪追及スケジュールは、この `hard_deadline` に収まることを要件にする。長いG14 staged経路にdrill暫定の予算window W = 400 DAAをそのまま適用しない（2026-10-11裁定）。

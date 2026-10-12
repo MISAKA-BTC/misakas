@@ -8,7 +8,7 @@
 //! units the court's evaluation read) and serialized as the one-move accusation carries it, and it must not exceed the price of its
 //! commit point. The same bound is held, on a class this size, at every position and tile there is — the structural argument is the
 //! twin's; this is its check on a class small enough to enumerate (the reduced SD3 pipeline's sweep is
-//! `misaka-palw-sdk/tests/gen_sd3_class.rs`).
+//! `misaka/palw/sdk/tests/gen_sd3_class.rs`).
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError;

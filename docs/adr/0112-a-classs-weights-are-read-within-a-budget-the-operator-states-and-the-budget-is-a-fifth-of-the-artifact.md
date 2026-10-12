@@ -74,7 +74,7 @@ and re-read, and the routed experts are read as 4 KiB faults. The device is not 
 | `ibm` | **845 MB/s** |
 | `C` | **563 MB/s** (its producer running) |
 
-`misaka-palw-base0/src/mmap.rs` already recorded the mechanism when the root pass was moved off
+`misaka/palw/base0/src/mmap.rs` already recorded the mechanism when the root pass was moved off
 the mapping: a cold page through a mapping is one synchronous 4 KiB fault, and on these disks
 fault readahead never engages — "not under `MADV_SEQUENTIAL`, not under `MADV_WILLNEED`, not
 with the device's readahead window raised" — 6 MB/s against 1.3 GB/s through reads sized to a

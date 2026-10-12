@@ -227,7 +227,7 @@ The HFV source-guard test (§3.2) is the same rule, compiled into the flows test
   - `consensus/src/consensus/mod.rs` `pruning_point_read.pruning_point()` and `pruning_meta_write.set_…`
   - `pruning_processor`, `virtual_processor`
   - `mining/src/cache.rs`, `misaka-palw-pow-driver`, `misaka-palw-worker` (stdin)
-  - `database/src/cache.rs`, `notify/src/address/tracker.rs`, `palw_heartbeat_relay.rs:116`, `misaka-palw-base0/src/qwen36.rs:462`
+  - `database/src/cache.rs`, `notify/src/address/tracker.rs`, `palw_heartbeat_relay.rs:116`, `misaka/palw/base0/src/qwen36.rs:462`
   - `recovery_trace.rs:152`, `verification_trace.rs:153` (`Vec::clear` on the guarded vec)
   - `core/src/core.rs:31`, `core/src/task/runtime.rs:44`
   - wallet `storage/local/interface.rs`, wallet `utxo/*`, `wallet/core/src/account/pskb.rs`
@@ -235,10 +235,10 @@ The HFV source-guard test (§3.2) is the same rule, compiled into the flows test
   - `consensus/mod.rs` reachability and sync-manager calls under `pruning_lock`
   - `header_processor:339`, `virtual_processor:18785`
   - `consensus/core/src/palw_state_v2.rs:28988`: `builder.read()` is a state view, not a lock
-  - `misaka-palw-tir-exec/src/node/residency.rs:660`: an atomic `load`
+  - `misaka/palw/tir/exec/src/node/residency.rs:660`: an atomic `load`
   - `components/consensusmanager/src/lib.rs:151, 199`: `ctl.clone().start()/stop()` spawn the consensus threads and never touch the manager's `inner`
 - **Real nesting, safe by the lock's design:** `consensus/mod.rs:1997→2001`. `get_transactions_by_accepting_daa_score` holds `pruning_lock.blocking_read()` and calls `get_transactions_by_accepting_block`, which takes it again (l. 2058). `pruning_lock` is `SessionLock` = `kaspa_utils::sync::rwlock::RfRwLock`, documented as "Readers-first … this makes it safe to make recursive read calls". Its semaphore lets a reader in ahead of a queued writer, so this is not the parking_lot case.
-- **Guard dropped or moved before the call:** `pruning_processor/processor.rs:208→278` (`RwLockUpgradableReadGuard::upgrade(pruning_point_read)`, then `drop(pruning_point_write)` before `prune()`). Also `misaka-palw-base0/src/inventory.rs:163/168→173` and `misaka-palw-tir-lower/src/lower/fill.rs:344→357`, where the `if let` guards end with their statements.
+- **Guard dropped or moved before the call:** `pruning_processor/processor.rs:208→278` (`RwLockUpgradableReadGuard::upgrade(pruning_point_read)`, then `drop(pruning_point_write)` before `prune()`). Also `misaka/palw/base0/src/inventory.rs:163/168→173` and `misaka/palw/tir/lower/src/lower/fill.rs:344→357`, where the `if let` guards end with their statements.
 - **Plain `if` conditions** (a temporary scope), so safe: `bridge/src/client_handler.rs:76, 84` and `bridge/src/stratum_listener.rs:297`.
 - **Different lock, fixed order:** `kaspad/src/palw_memory_ledger.rs:447, 528`. The pool ledger's std `Mutex` is held while calling the host ledger, which takes its own `local` `Mutex` plus `flock` and never calls back into a pool ledger. The order is always pool → host, so there is no inversion.
 - **Async mutex in client libraries (not the node):** `rpc/wrpc/client/src/client.rs:441, 469, 481` (`connect_guard`/`disconnect_guard` held across `start()/stop()`, which do not take those guards) and `wallet/core/src/wallet/api.rs:301`.

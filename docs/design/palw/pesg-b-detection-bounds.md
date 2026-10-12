@@ -3,7 +3,7 @@
 Lane PESG-B, branch `pesg/detection-bounds` (from integration `0fc729c55`), 2026-10-10. This is the B part of the
 [Probabilistic–Economic Security Gate](probabilistic-economic-security-gate.md). It fills in the T1 coverage table for B and gives
 the T2 analysis: the probability and cryptography terms. The original PESG-B lane added only the tests in
-`misaka-palw-kernel/tests/pesg_b_detection.rs` (§3, §7). The subsequent Codex review fixes F-B1 in the dormant kernel admission
+`misaka/palw/kernel/tests/pesg_b_detection.rs` (§3, §7). The subsequent Codex review fixes F-B1 in the dormant kernel admission
 rules: every generative job now requires exactly `max_new_tokens` tokens. The historical wire field name stays unchanged; there
 is no EOS/stop rule. This semantic tightening needs consensus review before activation; no fence or network id was changed.
 
@@ -141,7 +141,7 @@ of every relation under T3 is **none** (**N3**).
 
 ## 3. Exhaustive small-geometry search
 
-`misaka-palw-kernel/tests/pesg_b_detection.rs` (11 tests). The fixture is RFC-0007 Part II's dense + MoE + history class
+`misaka/palw/kernel/tests/pesg_b_detection.rs` (11 tests). The fixture is RFC-0007 Part II's dense + MoE + history class
 (`dense_moe_v1(7)`), with MatMul, quantization, the integer nonlinears, TopK routing, `Gather` embeddings, `Fixed` and `Hist`
 state, and derived windows. The claim has `P = 5` positions. Every check and every court is the crate's real code.
 

@@ -76,7 +76,7 @@ indicator**, not a measured exact workload. It cannot justify increasing the cap
 that unlimited CPU would make the same protocol comparison pass.
 
 There is also a specific ruleset mismatch:
-[`TirOfflineGateV1::of`](../../misaka-palw-sdk/src/tir_layout.rs) selects the first TIR activation,
+[`TirOfflineGateV1::of`](../../misaka/palw/sdk/src/tir_layout.rs) selects the first TIR activation,
 DAA2000 on this checkout. [`config/params.rs`](../../consensus/core/src/config/params.rs) arms
 `palw_tir_fence2` at DAA3600. This selects the later range/demand rules used by admission; a live
 DAA5767 query is therefore **not the same experiment** as default offline declaration at DAA2000.
@@ -86,9 +86,9 @@ is made that every local/live difference is solely this height choice.
 
 ### 1.4 What the old pack could not reproduce
 
-[`DeclaredClass`](../../misaka-palw-sdk/src/runtime_pack/manifest.rs) recorded context,
+[`DeclaredClass`](../../misaka/palw/sdk/src/runtime_pack/manifest.rs) recorded context,
 checkpoint and `h_tile`, but not `commit_tiles`, `state_tiles` or the effective logits scheme.
-[`declared_check`](../../misaka-palw-sdk/src/runtime_pack/verify.rs) ran a new default-tile search,
+[`declared_check`](../../misaka/palw/sdk/src/runtime_pack/verify.rs) ran a new default-tile search,
 with automatic logits selection, rather than replaying the exact layout. A legal explicit
 logits512 layout cannot be inferred from that incomplete record. This is a code-proven gap;
 not every individual variant above was run through `pack verify`.

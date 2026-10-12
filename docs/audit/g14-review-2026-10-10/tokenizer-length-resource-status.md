@@ -15,8 +15,8 @@ request/default obligation.
 
 The existing raw tokenizer identifier authenticates `le64(actual_length) || bytes`
 under keyed BLAKE2b-512. The code is
-`misaka-palw-base0/src/artifact.rs::Base0ArtifactV1::tokenizer_commitment_of` and
-`misaka-palw-tir-lower/src/artifact.rs::tokenizer_id_of`.
+`misaka/palw/base0/src/artifact.rs::Base0ArtifactV1::tokenizer_commitment_of` and
+`misaka/palw/tir/lower/src/artifact.rs::tokenizer_id_of`.
 Neither identifier exposes an independent length opening. The artifact inventory
 in `consensus/core/src/palw_artifact.rs` commits tensor rows and their lengths;
 `PalwArtifactInventorySummaryV1::artifact_bytes` sums those tensor rows. TIR/Gen

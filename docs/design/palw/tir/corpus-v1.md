@@ -488,7 +488,7 @@ shapes (NF-2) it is not expressible in v1. Raising the block cap is a size decis
 `r` value heads of key head `j` are stored contiguously after it.
 
 **What the live kernel does.** `vh % k_heads` — **tiling** — in four places
-(`misaka-palw-base0/src/qwen36.rs:1242`, `qwen36_plan.rs:790`, `qwen36_reference.rs:277`,
+(`misaka/palw/base0/src/qwen36.rs:1242`, `qwen36_plan.rs:790`, `qwen36_reference.rs:277`,
 `consensus/core/src/palw_step_refute.rs:3222`). The two readings are the same function only if the
 artifact's value-head axis (and every per-value-head tensor: the v block of the conv, `z`, `b`,
 `a`, `A_log`, `dt_bias`, the norm weight, `out_proj`'s input columns) was permuted from grouped to

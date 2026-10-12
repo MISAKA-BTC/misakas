@@ -48,8 +48,8 @@ repository has paid that bill before (`derived-sets-need-one-spelling`).
 | the proposal's layer | what already carries it | where |
 |---|---|---|
 | ① Model Registry | the class **is** the registry row: `class_id == shape_profile_id() == H(profile)`, and the profile is the architecture, the geometry, the quantization map and the context length. Admission is permissionless and on-chain. | ADR-0056, ADR-0067 Decisions 1–2, ADR-0075 |
-| ② Model Artifact Hash | `artifact_root` in the registration; the worker recomputes SHA-256 **from the bytes** on every load; the registered-class path admits a holding only when its *computed* digest equals the registered root | `misaka-palw-worker/src/main.rs::pinned_model_path_v2`, `misaka-palw-sdk/src/sdk.rs::resolve_chain_registered` step 4 |
-| ③ Runtime / Engine Registry | `PalwRuntimeManifestV2` — worker self-hash, patchset root, `libm_arithmetic_digest`, golden-vector root — plus ADR-0075 Decision 5's kernel-coverage binding. There is **one** engine by decision, so this registry names a build, not a choice of engine | `misaka-palw-worker/src/main.rs::runtime_manifest_v2`, ADR-0053, ADR-0067 |
+| ② Model Artifact Hash | `artifact_root` in the registration; the worker recomputes SHA-256 **from the bytes** on every load; the registered-class path admits a holding only when its *computed* digest equals the registered root | `misaka/palw/worker/src/main.rs::pinned_model_path_v2`, `misaka/palw/sdk/src/sdk.rs::resolve_chain_registered` step 4 |
+| ③ Runtime / Engine Registry | `PalwRuntimeManifestV2` — worker self-hash, patchset root, `libm_arithmetic_digest`, golden-vector root — plus ADR-0075 Decision 5's kernel-coverage binding. There is **one** engine by decision, so this registry names a build, not a choice of engine | `misaka/palw/worker/src/main.rs::runtime_manifest_v2`, ADR-0053, ADR-0067 |
 | ④ Input canonicalization | the canonical chat template (frozen, its identity part of the class profile), the canonical job context, the prompt commitment, and segment-wise control tokens | ADR-0044 Decision 10, ADR-0077 Decision 6 |
 | ⑤ Inference Receipt | `execution_commitment_v3` over the whole attempt, the claim, the receipt block | ADR-0072, ADR-0073, ADR-0074 |
 | ⑥ Output root | `output_commitment_v2` over exactly the emitted ids | ADR-0044, ADR-0078 Decision 2 |
@@ -77,7 +77,7 @@ things a practical local-LLM node now touches:
   new privilege in the lineage and it arrives without a confinement rule.
 
 And one gap that is not speculative: the supervisor spawns the worker with
-`Command::new(&state.cfg.worker)` and **no `env_clear()`** (`misaka-palw-agent/src/agent.rs:374`).
+`Command::new(&state.cfg.worker)` and **no `env_clear()`** (`misaka/palw/agent/src/agent.rs:374`).
 Whatever is in the operator's environment when the node starts — `SSH_AUTH_SOCK`, a cloud token, a
 wallet path, an exchange API key — is in the model process's environment too. There is also no
 memory ceiling on that process, on a fleet that has already recorded an 8.4 GB single-minute burst

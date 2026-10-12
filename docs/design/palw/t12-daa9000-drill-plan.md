@@ -115,7 +115,7 @@ refused after H' that was accepted before* (grep every node's log for the fence'
 * A generative class (`toy-image`, `toy-embed`, `wide-embed`, `sd3-tiny` — `rfc3-gen-drill-inputs.md`) registered **before** H' and one
   **after** are admitted on both sides with the same verdict and the same priced closes (the range twin sizes the same read sets).
 * If the census's vision-language class is available as a drill fixture (the 196-px Qwen2/2.5-VL slot that the element twin refuses at the
-  2^26 cap — `misaka-palw-sdk/src/census/vlm.rs`): **refused at the cap before H', admitted after** — the one verdict the fence is meant to
+  2^26 cap — `misaka/palw/sdk/src/census/vlm.rs`): **refused at the cap before H', admitted after** — the one verdict the fence is meant to
   move. If it is not available, the verdict for this leg is "equal on the toy classes, VLM not drilled".
 * **PASS:** no class's admission verdict moves except by the cap relief; no `GenAdmission` refusal after H' that was accepted before.
 

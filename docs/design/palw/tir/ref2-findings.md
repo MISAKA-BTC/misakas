@@ -69,7 +69,7 @@
 
 ### What was built
 
-`misaka-palw-tir-ref2/src/dissect.rs` and `demand::eval_range`, from §9.5 alone: which nodes reduce
+`testing/reference/palw-tir-ref2/src/dissect.rs` and `demand::eval_range`, from §9.5 alone: which nodes reduce
 over `H` and a commit tile's site (reductions in node order, folds, §7 bounds, counts at the
 context's `H`, `h`, `h_tile`); `eval_range` — §9.4 with supplied nodes that are leaves in the
 target's context and a target that reduces over `[from, to)` only, at `to − from` terms per element,
@@ -180,7 +180,7 @@ longest job fits; worth settling before `palw_tir_v1` is armed.
 
 ### What was built
 
-`misaka-palw-tir-ref2/src/demand.rs`, from §9.4 (and the rest of 04b) alone: contexts `(p, o)` with
+`testing/reference/palw-tir-ref2/src/demand.rs`, from §9.4 (and the rest of 04b) alone: contexts `(p, o)` with
 `H = min(p + 1, W)` per block; the two targets; the request refusals before anything is read
 (`Position` for `p ≥ history_bound`; `Malformed` for an occurrence, node, element, state or instance
 that does not exist — every applicable class kept for comparison); the five source questions behind
@@ -347,7 +347,7 @@ The findings below are the record of what the text said at ccd8f6aae.
 
 ### What was built
 
-`misaka-palw-tir-ref2/src/admit.rs`, from §10.3 in its stated order: the inputs' ranges (`tile_len`,
+`testing/reference/palw-tir-ref2/src/admit.rs`, from §10.3 in its stated order: the inputs' ranges (`tile_len`,
 `h_chunk`); decoding, normal form and types (§4.4, §5, §6); the §7 intervals, exact in 256-bit
 integers and checked against each obligation; the §8 node costs at `H = W` and the per-position
 cost (over the occurrences), state bytes (by instance), peak live bytes, commit lanes and step

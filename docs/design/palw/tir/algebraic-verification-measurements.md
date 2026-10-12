@@ -8,7 +8,7 @@ cargo run --release -p misaka-palw-tir-sketch --features measure --bin tir-sketc
 cargo run --release -p misaka-palw-tir-sketch --features measure --bin tir-sketch-measure -- --sites Qwen2.5-1.5B
 ```
 
-The tool lowers real `config.json` files (`misaka-palw-tir-lower/tests/configs/real/`) to PALW-TIR
+The tool lowers real `config.json` files (`misaka/palw/tir/lower/tests/configs/real/`) to PALW-TIR
 programs **without weights**. It then runs the cost model (`misaka_palw_tir_sketch::cost`) on those
 programs and times the kernels on this machine. No weight of any model is read or written. The
 kernels run on synthetic buffers of 512 MiB at most.

@@ -57,10 +57,10 @@ Every item below was read on `main` at `e65ccf20` (misakas) and `7096533` (MISAK
 ### 1.1 The entrance refuses what a stock client sends
 
 * The gateway's surface is `POST /v1/chat/completions`, `GET /health`, `GET /v1/artifacts/<id>`
-  and nothing else (`misaka-palw-gateway/src/main.rs:1561-1563`). Its request parser takes
+  and nothing else (`misaka/palw/gateway/src/main.rs:1561-1563`). Its request parser takes
   `model`, `messages`, `max_tokens`, `stream`, `derive`, `serve_dsl`, `temperature`, `seed`
   (`main.rs:559-594`). A message is `{role, content: String}`; the roles are `system | user |
-  assistant` and any other is refused, not dropped (`misaka-palw-gateway/src/wire.rs:129-137`).
+  assistant` and any other is refused, not dropped (`misaka/palw/gateway/src/wire.rs:129-137`).
 * The Studio's `/v1` (`crates/misaka-studio-runtime/src/api/openai.rs:37-41`) serves `models`,
   `chat/completions`, `completions`, and its `ChatMessage` is likewise `{role, content: String}`
   (`backend/mod.rs:41-45`).
@@ -125,7 +125,7 @@ quantization, context, which lane, who converts, who bonds the line) are not in 
 ### 1.6 The context is 512 and the answer is what is left of it — and the 256 wall is gone
 
 * The row is 512 (ADR-0077 Decision 13); the budget is `prompt + decode ceiling ≤ n_ctx`
-  (`misaka-palw-base0/src/fp_worker.rs:745-749`), so what a person can get back is
+  (`misaka/palw/base0/src/fp_worker.rs:745-749`), so what a person can get back is
   `512 − prompt`. A ChatML frame with a system line costs on the order of ten tokens; a one-shot
   DSL exemplar costs ~130 (the 2026-09-03 drill's `prompt 134`). ADR-0092 Decision 4 says why the
   number does not move on a running chain: the row's history dissection is what eats the court's
@@ -135,7 +135,7 @@ quantization, context, which lane, who converts, who bonds the line) are not in 
 * The 256-token decode wall of 2026-09-05 (the producer hardcoded one retained-trace chunk;
   `PALW_FP_TRACE_CHUNK_EVENTS_V3 = 256`, `palw_freeprompt_v3.rs:151`) is **fixed on `main`**:
   `0001f34c` derives the free-prompt manifest from the trace's own leaves, chunked at 256
-  (`misaka-palw-base0/src/backend.rs:406-408`), and the Studio measured decode 257/257 committed
+  (`misaka/palw/base0/src/backend.rs:406-408`), and the Studio measured decode 257/257 committed
   (`backend/gateway.rs:238-243`). The remaining ceiling is the row and `--max-decode-cap`
   (hard maximum 4,096, `main.rs:114`).
 
@@ -582,7 +582,7 @@ mapping is written down.
   (`kaspad`, `misaka`); the workers, gateway and rail become rows the day the job builds them,
   and the writer refuses any other name rather than guess a kind.
 * **2026-09-10, Part A's node half** (`339ed0ad`, wired to the fence in `cc8b47f7`'s merge and
-  after): `misaka-palw-gateway/src/surface.rs` (the request read once; `admit_request` before the
+  after): `misaka/palw/gateway/src/surface.rs` (the request read once; `admit_request` before the
   queue and before the worker), `wire.rs` (tools as Qwen's own Hermes-style text under the
   `-tools/v1` template ids; `parse_tool_calls` touching no committed byte), the new crate
   `misaka-palw-constraint` (Decision 7's JSON-Schema subset, RFC 8785 — whose Appendix-B vectors
@@ -644,7 +644,7 @@ mapping is written down.
   with a forbidden beating lane not a fault). One thing the text above did not say and the court
   needs: **the EOG ids**, beside the token-to-bytes table — without them it cannot try Decision
   7's stop rule, and either convicts an honest stop or leaves the stop position untriable. The
-  compiler (`misaka-palw-constraint/src/compile.rs`) admits RFC 8785's canonical form with key
+  compiler (`misaka/palw/constraint/src/compile.rs`) admits RFC 8785's canonical form with key
   order free; `pattern` is refused by name, `minimum`/`maximum` stay post-hoc, and a single
   string's `maxLength` is practically about 250 under the 64 KiB cap. §4's producer cost is
   measured and corrected above. Still absent: job version 6, `render_answer_v2`, the engines'

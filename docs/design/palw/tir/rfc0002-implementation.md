@@ -830,7 +830,7 @@ execution. It previously clamped the request to a different length. A successful
 covers exactly the caller's requested length. This changes local conformance diagnostics, not
 integer semantics, commitment preimages, descriptors, network activation or economic rights.
 
-`misaka-palw-sdk/examples/check-kernel-node-execution.rs` accepts an arbitrary canonical
+`misaka/palw/sdk/examples/check-kernel-node-execution.rs` accepts an arbitrary canonical
 PALWTIR1 artifact and a prepared decoder v3 parameter map. It checks positive explicit hash,
 payload and reference-tensor limits, refuses the requested context before payload reads,
 recomputes every instance commitment using the bounded streamed producer, and compares the

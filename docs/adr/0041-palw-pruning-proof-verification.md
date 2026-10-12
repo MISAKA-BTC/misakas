@@ -92,7 +92,7 @@ The 12 s is not 12 s of inference. Each tag spawns a fresh `palw-worker` process
 SHA-256s the whole 1,280,835,840-byte pinned GGUF and reloads the model, then runs an inference the
 module itself quotes at ~1–3 s. The worker's own source already names the fix and the reason it was
 deferred rather than dismissed: *"Costs a full read of the 1.2 GB file per job process; the
-persistent agent (P1) amortizes it, correctness does not wait for it"* (`misaka-palw-worker/src/
+persistent agent (P1) amortizes it, correctness does not wait for it"* (`misaka/palw/worker/src/
 main.rs:419`).
 
 A persistent verification agent — one process, model resident, pin checked once at startup, seeds

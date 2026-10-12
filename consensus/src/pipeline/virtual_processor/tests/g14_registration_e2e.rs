@@ -1469,7 +1469,7 @@ async fn g14_gate_and_chain_agree_across_the_shipped_fence_schedule() {
 
 // ---- classes lowered from REAL local checkpoints (shape-only: headers, no weights) --------------------------
 
-/// The classes `misaka-palw-sdk/tests/g14_registration_fixture.rs` lowered from the local Hugging Face checkpoints: the
+/// The classes `misaka/palw/sdk/tests/g14_registration_fixture.rs` lowered from the local Hugging Face checkpoints: the
 /// program the preflight's shape-only lowering builds from `config.json` and the safetensors header, the layout the SDK's
 /// layout search chose under THIS harness's ruleset, the tokenizer id of the checkpoint's `tokenizer.json`. The artifact
 /// root is synthetic (no weights were loaded) — registration never reads weights.

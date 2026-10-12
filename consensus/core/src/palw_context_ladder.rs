@@ -2713,7 +2713,7 @@ mod the_512_breakdown {
 /// What the tile does buy is real and large — the widest dense row the 80 KiB carrier admits under
 /// the anchored court moves from 30 to 223 — and it is a constant factor, not a change of shape.
 /// The measurement binary that produced every number here is
-/// `misaka-palw-base0/src/bin/palw-tile-measure.rs`.
+/// `misaka/palw/base0/src/bin/palw-tile-measure.rs`.
 ///
 /// Nothing in this module is armed: `Params::palw_context_ladder` is `None` on every preset and
 /// no registered class declares the v3 map.

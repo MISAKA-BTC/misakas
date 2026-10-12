@@ -128,7 +128,7 @@ worker がハングすると `DEFAULT_TIMEOUT_SECS = 300`（`palw.rs:42`）× `r
 blockrelay の blue-work スキップ発見的手法（`flow.rs:260-269`）は、その時点で未検証の `blue_work` を大きく申告すれば
 迂回できる。
 
-**併発する回帰（完全性批評が発見、どの次元も開かなかったファイル）:** `misaka-palw-worker/src/main.rs:432`
+**併発する回帰（完全性批評が発見、どの次元も開かなかったファイル）:** `misaka/palw/worker/src/main.rs:432`
 — B15 修正で v1 の model gate を撤去して v2 の always-recompute gate に統合した結果、
 `--mode verify`（＝ブロック検証が呼ぶモード）の**最初の仕事が 1.28 GB の SHA-256 全読み**になった
 （`main.rs:446-449` の `std::io::copy(&mut file, &mut hasher)`）。
@@ -185,7 +185,7 @@ ADR-0027 の法廷では rounding difference ではなく **conviction**。
 これは既に記録済みの「構造的独立であって著者独立ではない」限界の、具体的で計測された実例である。
 
 **`eb53ac9`（監査中に着地した gemmlowp vendor）は、この指摘を解消せず、むしろ決定的にする。**
-vendor された upstream 原典 `misaka-palw-base0-ref2/vendor/gemmlowp/fixedpoint/fixedpoint.h` を直接読むと、
+vendor された upstream 原典 `testing/reference/palw-base0-ref2/vendor/gemmlowp/fixedpoint/fixedpoint.h` を直接読むと、
 **同一 oracle の中で 2 つの primitive が別の丸め規則を使っている**ことが確認できる:
 
 ```cpp
@@ -260,7 +260,7 @@ shift= 31 -> 0         shift= 62 -> 0       shift= 64 以上 -> PANIC
 | low→**要注意** | `int_recip(v) = (int_rsqrt(v) * int_rsqrt(v)) >> K` が **1 ≤ v ≤ 511 の全てで i64 溢れ**。ADR-0040 の `IntRecip` は総関数ではなく、宣言された定義域の 511 入力で spec と ref2 が別の値を返す | `palw_base0.rs:290` |
 | medium | `rms_norm` の Qk narrowing が `as i32` で**飽和せず wrap**。row 幅 ≥ 16385 で最大活性の符号が反転する。ADR-0040 C3 は "nothing wraps anywhere" と明言 | `palw_base0_ops.rs:194` |
 | medium | `rope_table` の sin 項が i32::MIN 四隅で i64 溢れ（cos 項は溢れないことを導出済み） | `palw_base0_ops.rs:226` |
-| low | RoPE 生成器が未検証の `ln_theta_gen_q` で i128 溢れ、`from_parts` が無制限 vocab で usize 溢れ。`Base0ShapeV1::validate` は非ゼロしか見ていない | `misaka-palw-base0/src/rope.rs:128` |
+| low | RoPE 生成器が未検証の `ln_theta_gen_q` で i128 溢れ、`from_parts` が無制限 vocab で usize 溢れ。`Base0ShapeV1::validate` は非ゼロしか見ていない | `misaka/palw/base0/src/rope.rs:128` |
 | low | `RopeTableV1::digest_bytes` が `cos_q.iter().zip(sin_q.iter())` で長さ不一致を不可視化し、entry 数の接頭辞も無い。`row()` は長さ検査なしで slice | `rope.rs:234` |
 
 class digest については **偽造方向には injective であることが検証された**（engine が読む全フィールド＝Decision H の

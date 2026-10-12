@@ -23,7 +23,7 @@
 | Created | 2026-10-01 |
 | Normative dependencies | RFC-0002 (PALW-TIR v1: commit points, cones, the step space of an IR class, the IR one-move court) |
 | Affects | spec/palw 04b (§10: a cell), 07 (licence by parts, Final), 08 (draw, receipts, quorum, recount, outsider), 10 (locks and pay per cell), 16 (fences) · IR classes only, all networks (dormant until armed) · `consensus/core` (`palw_shard_panel_v1`, `palw_panel_v2`, `palw_state_v2`, `palw_verification_v2`, `palw_receipt`, `palw_tir_class_v1`), kaspad's panel worker, `misaka-palw-tir-exec` (a cell verifier) |
-| Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `misaka-palw-tir-gpu/tests/layer_shard.rs`) |
+| Branch | `rfc6/gpu-shard` (text; an off-chain prototype in `experiments/palw-tir-gpu/tests/layer_shard.rs`) |
 | Related | ADR-0098 (coverage is a number), **ADR-0099 / ADR-0100** (a seat holds a shard: the plan, the stratified draw, `ShardCourtAccused`, `ShardReceiptLicensed` — built for legacy classes, dormant), ADR-0103 (held context; D2 interval, D7 a seat holds a shard of the model and its state), ADR-0111 (leaf demand), ADR-0062 (DA court), ADR-0117 (a draw is one forward), ADR-0133 (verification is its own clock; segment-scoped receipts), **ADR-0147** (independence is drawn: the outsider seat), ADR-0152 (Q-1…Q-7, `basis_k`), ADR-0160 (claim capacity), RFC-0002 Phase F (`TirShardCourtAccused`, `TirStepLeaf`/`TirStepNode`), **RFC-0007** (lane M4: batched verification certificates and algebraic checks — receipt aggregation and cheaper per-shard checks are its subject, not this RFC's), `docs/design/palw/tir/gpu-integer-backend.md` |
 
 ## Current verification boundary — 2026-10-06
@@ -679,7 +679,7 @@ Not projected:
 
 ## 9. The prototype (D4)
 
-`misaka-palw-tir-gpu/tests/layer_shard.rs` is an off-chain test; it changes no consensus code. It runs
+`experiments/palw-tir-gpu/tests/layer_shard.rs` is an off-chain test; it changes no consensus code. It runs
 on the reference evaluator only and needs no GPU.
 
 1. **Produce.** A small PALW-TIR program runs once as a producer would. Every commit point of every

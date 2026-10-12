@@ -222,7 +222,7 @@ only a BART-mini admits, and only at DAA 9,000 where `palw_gen_range_twin_v1` is
 **Defect (H1, `google/flan-t5-small@0fc9ddf7`, `--depth shape --max-context 512`)**: convert OK (adapter `t5`, two RFC-0003 programs, each admitted alone); register and mine printed `unknown (no program to judge)`; exit code 0.
 Cause: a data route (encoder–decoder, vision tower, CNN, diffusers) has no IR program, so `chain::judge` never ran, and `Report::registrable()` treated `unknown` as not blocked.
 
-**Fix** (`misaka-palw-sdk/src/preflight/pipeline.rs`, `misaka-palw-tir-lower/src/model/route.rs`, no consensus change, no fingerprint, params id or schedule id moves):
+**Fix** (`misaka/palw/sdk/src/preflight/pipeline.rs`, `misaka/palw/tir/lower/src/model/route.rs`, no consensus change, no fingerprint, params id or schedule id moves):
 * the class is declared shape-only (`encdec_pipeline_v1`: the encoder reads the job's `TokenSource::Source`, the decoder is the text stream with the decoder-start id forced; placeholder artifact root and tokenizer id; the source price floor derived by admission per layout) and asked of the node's own gate,
   `palw_gen_registration_preflight_at_v1` (`verify_gen_class_admission_v1`), at the judged height, over a short list of layouts; the first refusal's chain code is the blocker (`CLOSE_SIZE_OVER_CAP`, `ADMISSION_EXCEEDS` with `max_position_macs` / `max_job_step_leaves`, `FENCE_NOT_ARMED(palw_gen_v1)`, …) with the numbers;
 * a route this build cannot declare shape-only (a fixed feature-frame source, an encoder alone, a vision / CNN / diffusers route) is `PIPELINE_CLASS_UNDECLARED`, which the census maps to `NOT_RUN_PIPELINE_ADMISSION` (UNTESTED), and the command exits non-zero;
@@ -231,7 +231,7 @@ Cause: a data route (encoder–decoder, vision tower, CNN, diffusers) has no IR 
 
 **Measured**: flan-t5-small at 512 positions is **refused** at DAA 6,900 and at 9,000: `CLOSE_SIZE_OVER_CAP(generative close sizing work)` — 67,108,865 against the cap 67,108,864 (the censored `cap + 1`), at stage 0's terminal closes (the encoder's stacked cross K/V),
 under every layout tried (commit tiles 256 … 16; at 16 lanes `max_job_step_leaves` 5,998,592 > 4,194,304 instead). Exit non-zero. A tiny T5 at 32 positions is admitted, registrable, and shape-ready in the census row.
-Regression tests (`misaka-palw-sdk/tests/preflight_pipeline_class.rs`, 7; `preflight::pipeline` unit test, 1): the H1 case judged at both heights (never `unknown`, never registrable with an `unknown` stage), the pinned flan-t5-small verdict, the fence by name below DAA 5,300, the undeclarable route (Whisper), the legacy default,
+Regression tests (`misaka/palw/sdk/tests/preflight_pipeline_class.rs`, 7; `preflight::pipeline` unit test, 1): the H1 case judged at both heights (never `unknown`, never registrable with an `unknown` stage), the pinned flan-t5-small verdict, the fence by name below DAA 5,300, the undeclarable route (Whisper), the legacy default,
 and the census admit gate reading the same verdict (tiny T5 shape-ready; flan-t5-small `CLOSE_TOO_LARGE`, class `RESOURCE_REFUSED`; an undeclared context is 512, not 8,192).
 
 **What the two rulesets change**: one sampled repository — a BART-mini — is refused at DAA 6,900 by the element-twin close sizing (`CLOSE_TOO_LARGE`) and admitted at 9,000 where `palw_gen_range_twin_v1` is in force: ≈ 451 repositories, the whole difference between A and B (16.64 % and 16.65 %).
@@ -256,12 +256,12 @@ The other fences of the 9,000 schedule (`palw_model_court_window`, `palw_receipt
 
 ```sh
 # tree d368707e0 (cov/p4-census); the sample, cohorts and fetched headers are the snapshot's own
-python3 -I misaka-palw-sdk/tools/hf_census/compact_rows.py classified.jsonl.gz > p4/compact-classified.jsonl
+python3 -I misaka/palw/sdk/tools/hf_census/compact_rows.py classified.jsonl.gz > p4/compact-classified.jsonl
 palw-class census classify --snapshot 2026-10-03T131904Z --tree d368707e0 < <(gzip -dc dall.listing-v2.jsonl.gz) | gzip > p4/classified-v3.jsonl.gz
-python3 -I misaka-palw-sdk/tools/hf_census/compact_rows.py p4/classified-v3.jsonl.gz > p4/compact-v3.jsonl
-python3 -I misaka-palw-sdk/tools/hf_census/shadow_dirs.py --snapshot . --out p4 --cohort adapters --cohort task_unknown --cohort base_unpinned --cohort partial
+python3 -I misaka/palw/sdk/tools/hf_census/compact_rows.py p4/classified-v3.jsonl.gz > p4/compact-v3.jsonl
+python3 -I misaka/palw/sdk/tools/hf_census/shadow_dirs.py --snapshot . --out p4 --cohort adapters --cohort task_unknown --cohort base_unpinned --cohort partial
 palw-class census gates --snapshot 2026-10-03T131904Z --tree d368707e0 --depth shape --height 6900|9000 --dirs p4/<set>.dirs --judge-budget-secs 600
-python3 -I misaka-palw-sdk/tools/hf_census/coverage_report.py --snapshot . --compact-base p4/compact-classified.jsonl --compact-new p4/compact-v3.jsonl --rows a=p4/rows/a --rows b=p4/rows/b --seed … --out p4/report
-python3 -I misaka-palw-sdk/tools/hf_census/assemble_evidence.py …  &&  node docs/rfc/evidence/0011-census-coverage-check.mjs --check
+python3 -I misaka/palw/sdk/tools/hf_census/coverage_report.py --snapshot . --compact-base p4/compact-classified.jsonl --compact-new p4/compact-v3.jsonl --rows a=p4/rows/a --rows b=p4/rows/b --seed … --out p4/report
+python3 -I misaka/palw/sdk/tools/hf_census/assemble_evidence.py …  &&  node docs/rfc/evidence/0011-census-coverage-check.mjs --check
 node docs/rfc/evidence/0011-audit-coverage.mjs --check      # unchanged: the old evidence is not rewritten
 ```

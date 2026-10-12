@@ -81,7 +81,7 @@ EQUIV_PROMPTS=${EQUIV_PROMPTS:-8}
 # (docs/design/palw/tir/evidence-transport-scope.md). The tiny HF llama fixture — lowered unwindowed (its
 # history cone dissected: F7 live), declared at SMALL_CONTEXT positions — has ~38 KB captures. new4 registers
 # and produces it; the same seven IR holders load both artifacts (no artifact node is added).
-SMALL_FIXTURE=${SMALL_FIXTURE:-$WT/misaka-palw-tir-lower/tests/fixtures/hf/llama}
+SMALL_FIXTURE=${SMALL_FIXTURE:-$WT/misaka/palw/tir/lower/tests/fixtures/hf/llama}
 SMALL_CONTEXT=${SMALL_CONTEXT:-32}
 SMALL_MODEL_ID=${SMALL_MODEL_ID:-test/llama-tiny-ir}
 SMALL_LOWERED=$IR_DIR/small.lowered.palwtir

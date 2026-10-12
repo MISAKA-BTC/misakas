@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | from the 100-entry measurement of [`corpus-v2.md`](corpus-v2.md); every request names the entries that need it and how to verify it |
 | Rule | **features, never family code**: each request is a generic addition to the vocabulary of `model/features.rs` (a spec field with a default, a generic lowerer, an adapter-language surface), decomposed into the existing 25 primitives. A request that needs a primitive says so and names the minimal GENERAL one; none of the requests below does |
-| How to verify | every request lists acceptance entries: `PALW_CORPUS_ONLY=<id> cargo test -p misaka-palw-tir-lower --test corpus_v2 corpus_v2_full -- --ignored --nocapture` must show `level B` (or `A`) and no failed stage. The third-party adapters that already exist for them are in `misaka-palw-tir-lower/tools/corpus/adapters/` |
+| How to verify | every request lists acceptance entries: `PALW_CORPUS_ONLY=<id> cargo test -p misaka-palw-tir-lower --test corpus_v2 corpus_v2_full -- --ignored --nocapture` must show `level B` (or `A`) and no failed stage. The third-party adapters that already exist for them are in `misaka/palw/tir/lower/tools/corpus/adapters/` |
 | Size | a rough guess of the lowering lane's effort: S days, M one to two weeks, L weeks, XL months |
 
 Reading guide. "Evidence" says what was *run*: **adapter** = a third-party adapter was written and the harness
@@ -435,7 +435,7 @@ make `arch_of` a strict allow-list (any unread field not equal to its default is
 
 **The ALBERT panic has two causes and two silent errors behind it** (the adapter `tools/corpus/adapters/albert.json` is
 otherwise complete). It panics in `b.add(word, pos, I64)` at `bidir.rs:291` ("Add operands do not broadcast",
-`misaka-palw-tir/src/builder.rs:228-231`). *Cause 1* (HL builder): `hl/build.rs:270-289` builds the embedding in OPT's order and at
+`misaka/palw/tir/core/src/builder.rs:228-231`). *Cause 1* (HL builder): `hl/build.rs:270-289` builds the embedding in OPT's order and at
 hidden width — table `[V,E]`, bias-free `embed.proj_in` (E→d), `embed.pos_table [rows,d]`, `embed.norm` over d, `embed.type_table
 [rows,d]` — while ALBERT/ELECTRA need positions, type rows and the norm at width E and then a *biased* projection after the norm
 (DeBERTa with E≠d wants the bias-free projection after the sum and before the norm). *Cause 2* (`bidir_block`): it takes `d =

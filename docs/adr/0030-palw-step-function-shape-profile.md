@@ -22,7 +22,7 @@ ADR-0026 §2 (activation/GEMM legs, "committed" → "adjudicable"), ADR-0028 §6
 prerequisite), ADR-0029 §3/§6 (carriage mass budgets; chunked evidence),
 `consensus/core/src/palw_reference.rs` (ruleset v1 this extends),
 `consensus/core/src/palw_legs.rs` (the v1 composite this versions past),
-`misaka-palw-worker/src/shim.c` (the execution pins the profile must restate).
+`misaka/palw/worker/src/shim.c` (the execution pins the profile must restate).
 
 ## Facts this design stands on (verified in the pinned tree, 2026-08-16)
 

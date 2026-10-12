@@ -6,7 +6,7 @@
 missing, taken on 2026-08-26 against the running testnet-11 and the hardware its producers run on.
 
 Everything below is a number this repository or that chain produced today. The tool that prints the
-structural half is `misaka-palw-base0/examples/class-weight-report.rs`; run it where the producers
+structural half is `misaka/palw/base0/examples/class-weight-report.rs`; run it where the producers
 run. Nothing here is an estimate unless it says so.
 
 **The short answer: no — and the four reasons are facts, not caution.** The class that exists cannot
@@ -236,7 +236,7 @@ same two machines every other timing here was taken on:
 | W8A8, scalar | 473.7 ms/token | 1409.2 ms/token | 3.0× |
 | W8A16 | **26.3 ms/token** (37.98 tok/s, 58.62 GMAC/s) | **967.7 ms/token** (1.03 tok/s, 1.60 GMAC/s) | **36.8×** |
 
-The 18× the Mac gains from W8A16 is the *kernels*, not the tier: `misaka-palw-base0/src/kernels.rs`
+The 18× the Mac gains from W8A16 is the *kernels*, not the tier: `misaka/palw/base0/src/kernels.rs`
 gates every fast path on `#[cfg(target_arch = "aarch64")]` with `dotprod` and `i8mm`, and x86 falls
 through to the scalar reference — which is why W8A16 buys x86 only 1.5×.
 

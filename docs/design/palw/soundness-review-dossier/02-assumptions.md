@@ -10,7 +10,7 @@ code can; "review" means the reviewer is asked to accept, reject or quantify it.
 |---|---|---|---|
 | A-H1 | **Random oracle.** Keyed BLAKE2b-512, with each distinct domain string (≤ 64 bytes) as the key, behaves as an independent random oracle per domain. Keys of different lengths are distinct BLAKE2b parameter blocks (key length is in the parameter block), so a domain that is a prefix of another (`…/WORK-BEACON/V1` vs `…/WORK-BEACON/ITEM/V1`) is still a separate oracle. Used for seeds, labelled streams, beacon accumulators and the challenge anchor. | S1, S2, S5, S6 | review |
 | A-H2 | **Binding.** BLAKE2b-512 collision and second-preimage resistance, for tensor commitments (row and column Merkle trees), position / segment / claim roots, param commitments, the artifact root and object ids. The kernel prices the binding term at `binding_bits = 256` (`descriptor.rs:154`), the classical collision bound for a 512-bit hash. Against a quantum adversary the generic collision bound (Brassard–Høyer–Tapp) is ≈ `2^(512/3) ≈ 2^170`; second preimage ≈ `2^256` (Grover). The reviewer is asked which figure the production policy uses. | S1–S5, L-COV | review |
-| A-H3 | **Injective encodings.** Every hashed object is a canonical Borsh encoding of a fixed type (length-prefixed vectors, tagged enums, `RootV1::Absent` as typed absence — never a zero wildcard); `h()` prefixes the payload length; the kernel's seed and stream concatenate fixed-width fields only (`misaka-palw-kernel/src/challenge.rs:33–87`). Two different statements therefore never share a seed preimage. | S6 | enforced (review the encodings) |
+| A-H3 | **Injective encodings.** Every hashed object is a canonical Borsh encoding of a fixed type (length-prefixed vectors, tagged enums, `RootV1::Absent` as typed absence — never a zero wildcard); `h()` prefixes the payload length; the kernel's seed and stream concatenate fixed-width fields only (`misaka/palw/kernel/src/challenge.rs:33–87`). Two different statements therefore never share a seed preimage. | S6 | enforced (review the encodings) |
 | A-H4 | **QROM** for the transcript-bound Fiat–Shamir mode, and for any seed an adversary can influence (quantum search gives a quadratic advantage in finding a bad seed among `G`). No checker uses an interactive mode today. | S6.6, S8 | review (external gate, RFC-0007 §VI.6) |
 
 ## 2.2 Semantics assumptions
@@ -29,7 +29,7 @@ honest verifier** `V` such that:
 
 1. `V` starts no later than `verifier_start_cutoff(a)` (`opv.rs:166`) and fetches the claim's public material within `B_cold`;
 2. `V` checks a scope `S_V(c)` of the claim within `B_check`, with **private coins**: its vectors are derived from a salt drawn from a
-   CSPRNG after `c`'s commitment is accepted and never revealed (`OutsiderV1::salt`, `misaka-palw-kernel/src/ledger.rs:1935–1944`;
+   CSPRNG after `c`'s commitment is accepted and never revealed (`OutsiderV1::salt`, `misaka/palw/kernel/src/ledger.rs:1935–1944`;
    `FreshVerifierV1::check_salted`, `public.rs:158–166`);
 3. `V` files a demand or a proof inside the window, and follows a served demand with a proof inside the proof grace.
 

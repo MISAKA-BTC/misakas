@@ -15,11 +15,11 @@ No unarmed fence, no DAA-9,000 list entry, no `public_consensus_params_id` or sc
 ## 1. P1 — `huihui-ai/Huihui-Qwen3.5-9B-abliterated` @`05b9e7c9b978ba29bdb8f50a49c30e4b91183339`
 
 Inputs: config.json, the index and the four safetensors HEADERS (19,306,310,880 B in all) by HTTP range, committed as
-`misaka-palw-tir-lower/tests/fixtures/vlm-generic/huihui-qwen3.5-9b` (no weight byte). Text decoder: **32 layers = 24 Gated DeltaNet
+`misaka/palw/tir/lower/tests/fixtures/vlm-generic/huihui-qwen3.5-9b` (no weight byte). Text decoder: **32 layers = 24 Gated DeltaNet
 + 8 full attention** (not 30 GDN: that count is Qwen3.6-35B-A3B's), hidden 4096, 8,953,803,264 text parameters (vision 456 M and MTP
-243 M are not the text class). Probe: `misaka-palw-sdk/tests/coverage_p1_huihui_9b.rs` (ignored; header snapshot).
+243 M are not the text class). Probe: `misaka/palw/sdk/tests/coverage_p1_huihui_9b.rs` (ignored; header snapshot).
 
-### 1.1 The four past refusals, pinned (`misaka-palw-sdk/tests/coverage_p1_huihui_refusals.rs`, 5/5 PASS)
+### 1.1 The four past refusals, pinned (`misaka/palw/sdk/tests/coverage_p1_huihui_refusals.rs`, 5/5 PASS)
 
 | # | Past refusal | Exact structured refusal now | Commit point | Where it stands |
 |---|---|---|---|---|
@@ -111,7 +111,7 @@ segments, as §1.2).
 
 | Family | Status | Evidence |
 |---|---|---|
-| `deepseek_v32` | lowering + adapter existed; **unit-test PASS**; IR gate **admits** the tiny fixture at 128 positions at DAA 7,000 (6 dissected commit points, ≤ 9 reductions each of 16); K2-TIR-v1 plan **ELIGIBLE_AT** (hyp.; shipped `KERNEL_NOT_ACTIVE`) | `tests/dsa.rs`, `misaka-palw-sdk/tests/coverage_p2_dsa.rs`. The corpus' "refuted: float_vs_hf" is `torch.topk`'s unpinned tie order (IR: lowest index), not a semantic gap. Released **DeepSeek-V3.2 FP8 is refused by name: `quantization_config.scale_fmt = ue8m0` is unread by `FP8_BLOCK`** (a descriptor decision); its bf16 config reads |
+| `deepseek_v32` | lowering + adapter existed; **unit-test PASS**; IR gate **admits** the tiny fixture at 128 positions at DAA 7,000 (6 dissected commit points, ≤ 9 reductions each of 16); K2-TIR-v1 plan **ELIGIBLE_AT** (hyp.; shipped `KERNEL_NOT_ACTIVE`) | `tests/dsa.rs`, `misaka/palw/sdk/tests/coverage_p2_dsa.rs`. The corpus' "refuted: float_vs_hf" is `torch.topk`'s unpinned tie order (IR: lowest index), not a semantic gap. Released **DeepSeek-V3.2 FP8 is refused by name: `quantization_config.scale_fmt = ue8m0` is unread by `FP8_BLOCK`** (a descriptor decision); its bf16 config reads |
 | `glm_moe_dsa` | **new adapter (data)** `glm-moe-dsa` extends `deepseek-v32`: ONE indexer, rotaries interleaved (rope layout as data); fixture: float = HF to 8.3e-7 with the IR tie rule, integer top-1 1.000 / KL 0.00094; IR gate admits @128; K2 ELIGIBLE_AT | `tests/dsa_glm.rs` 5/5; GLM-5 (real config) reads; **GLM-5.1+/5.3 refused by name: cross-layer top-k sharing (`indexer_types` `shared`) = `ATTN_TOKEN_INDEXER_SHARED_V1`, not lowered** |
 | `hy_v4` | same indexer (half-split rope) **with shared layers by default** (full at 0 and every 4th) → `ATTN_TOKEN_INDEXER_SHARED_V1` | read, not built |
 | `axk2` | the DeepSeek-V3.2 indexer; beyond FR-09 an MLA **query gate** (`q_gate_proj` over `[q_resid, q_compressed]`) — a separate feature | read, not built |

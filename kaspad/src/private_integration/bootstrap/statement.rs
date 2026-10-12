@@ -12,11 +12,11 @@ use kaspa_consensus_core::{
 use misaka_palw_sdk::bootstrap_check::{CompleteBootstrapArtifactV1, ConformanceCommitmentV1, RootV1, SubjectKindV1};
 
 const DOMAIN: &[u8] = b"misaka.rfc12.private-complete-code-fixture-statement.v1";
-const SOURCE: &str = include_str!("../../../../misaka-palw-tir-sketch/src/fixture.rs");
+const SOURCE: &str = include_str!("../../../../misaka/palw/tir/sketch/src/fixture.rs");
 const EXPORTER: &str = include_str!("../bootstrap.rs");
-const INTERPRETER: &str = include_str!("../../../../misaka-palw-tir/src/interp.rs");
+const INTERPRETER: &str = include_str!("../../../../misaka/palw/tir/core/src/interp.rs");
 const COMPLETE_CHECK: &str = include_str!("../../../../consensus/core/src/palw_opv_bootstrap_v1.rs");
-const SDK_CHECK: &str = include_str!("../../../../misaka-palw-sdk/src/complete_check.rs");
+const SDK_CHECK: &str = include_str!("../../../../misaka/palw/sdk/src/complete_check.rs");
 
 pub(super) fn scope() -> serde_json::Value {
     serde_json::json!({

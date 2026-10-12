@@ -18,7 +18,7 @@ or a descriptor, never a branch on `model_type`); no sentence says that all Hugg
 * **Before** is the binary built from `febc07f24` run on the same snapshot in this lane (not the matrix's "census update 1", which came from
   another build; the two differ by 0–17 % per bucket, shown in the first column of §2). **After** is the binary built from this branch at
   `138516d31` (the commit that adds this file changes no code). Both ran `palw-class census classify`, `gates --depth headers`,
-  `gates --depth shape`, then `report.py` / `report_local.py` of `misaka-palw-sdk/tools/hf_census`, offline, 2–4 threads.
+  `gates --depth shape`, then `report.py` / `report_local.py` of `misaka/palw/sdk/tools/hf_census`, offline, 2–4 threads.
 * **No network.** The census fetched `config.json`, safetensors / GGUF headers and index files. Anything the fetch never read cannot be
   measured: see §6.
 * **Re-attribution.** When a repository stops later than before, the later bucket grows (`PARTIAL_TASK_ONLY`, `MODALITY_PROFILE_MISSING`,
@@ -27,7 +27,7 @@ or a descriptor, never a branch on `model_type`); no sentence says that all Hugg
 
 ## 1. Task 1 — machine-readable classes
 
-`misaka-palw-sdk/src/census/onboarding.rs` (`GapClassV1`, `classify_census_code_v1`, `classify_blocker_v1`); every census gate result
+`misaka/palw/sdk/src/census/onboarding.rs` (`GapClassV1`, `classify_census_code_v1`, `classify_blocker_v1`); every census gate result
 carries `class` and `class_reason`; the preflight's blockers map through the same table.
 
 | class | meaning | examples (census code → class) |
@@ -133,7 +133,7 @@ Estimated repositories of `D_all`. Headline (shape depth, static admission only;
 
 ## 4. The pickle reader (F5), as the Lead specified
 
-`misaka-palw-tir-lower/src/weights/torchzip.rs`. **Nothing is imported, called or executed.** A `pytorch_model.bin` is a ZIP of `data.pkl` and
+`misaka/palw/tir/lower/src/weights/torchzip.rs`. **Nothing is imported, called or executed.** A `pytorch_model.bin` is a ZIP of `data.pkl` and
 raw storages: the reader parses the central directory (ZIP and ZIP64), runs a **symbolic** pickle interpreter over `data.pkl`, and returns
 absolute-offset tensor entries (the shape a `SafetensorsFile` entry has); storages are read later by range.
 
@@ -265,8 +265,8 @@ cargo test --offline -p misaka-palw-tir-lower --test gguf_rope_freqs --test torc
 cargo test --offline -p misaka-palw-sdk --lib
 cargo test --offline -p misaka-palw-sdk --test preflight --test gen_classifier_class
 # the census (offline, snapshot 2026-10-03T131904Z): classify, headers pass, shape pass, cohorts, then
-#   misaka-palw-sdk/tools/hf_census/report.py       --classified-new … --cohort NAME:ROWS …
-#   misaka-palw-sdk/tools/hf_census/report_local.py … --frame-headers-rows … --frame-shape-rows …
+#   misaka/palw/sdk/tools/hf_census/report.py       --classified-new … --cohort NAME:ROWS …
+#   misaka/palw/sdk/tools/hf_census/report_local.py … --frame-headers-rows … --frame-shape-rows …
 # a preflight of a local model directory:
 palw-class preflight --network testnet-12 <dir> --depth shape --max-context 2048 --json
 ```

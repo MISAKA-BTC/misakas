@@ -55,7 +55,7 @@
 #     wrong again afterwards. The drill READS this number from the gateway's `/health` rather
 #     than assuming it: `grammar_floor.rs`'s header says the MoE row is `n_ctx` 9, which is
 #     `QWEN3_CODER_30B_A3B` and is not the row testnet-11 registers.
-#   * The grammar floors, from `misaka-palw-derive/tests/grammar_floor.rs` — which this script
+#   * The grammar floors, from `misaka/palw/derive/tests/grammar_floor.rs` — which this script
 #     PARSES rather than restates: `cad/stl/v1` 38 tokens, `music/smf/v1` 60, `scene/glb/v1` 104.
 #   * **The MODEL clears the bar.** At `n_ctx` 256 it emits DSL the shipped transformers accept
 #     with no post-processing at all — a real 82-byte format-1 Standard MIDI File and a 684-byte
@@ -105,7 +105,7 @@ GATEWAY_BIN="${GATEWAY_BIN:-$REPO_ROOT/target/release/misaka-palw-gateway}"
 RAIL_BIN="${RAIL_BIN:-$REPO_ROOT/target/release/misaka-palw-fp-rail}"
 DERIVE_BIN="${DERIVE_BIN:-$REPO_ROOT/target/release/palw-derive}"
 STRANGER="${STRANGER:-$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py}"
-FLOOR_FILE="${FLOOR_FILE:-$REPO_ROOT/misaka-palw-derive/tests/grammar_floor.rs}"
+FLOOR_FILE="${FLOOR_FILE:-$REPO_ROOT/misaka/palw/derive/tests/grammar_floor.rs}"
 
 NODES="${NODES:-3}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-launch-derivation}"
@@ -232,9 +232,9 @@ premise "PALW_STEP_MAX_LEAVES is the hardcoded 1 << 22" \
 premise "step_leaf_count counts against that CONSTANT and not against the ruleset" \
         "consensus/core/src/palw_step.rs" 'step_leaf_count_capped_v1\(profile, context, PALW_STEP_MAX_LEAVES\)'
 premise "the dense executor calls the constant-capped step_leaf_count" \
-        "misaka-palw-base0/src/qwen25_a16_backend.rs" 'palw_step::step_leaf_count\(profile, ctx\)'
+        "misaka/palw/base0/src/qwen25_a16_backend.rs" 'palw_step::step_leaf_count\(profile, ctx\)'
 premise "the Qwen3.6 executor calls the constant-capped step_leaf_count" \
-        "misaka-palw-base0/src/qwen36_backend.rs" 'palw_step::step_leaf_count\(profile, ctx\)'
+        "misaka/palw/base0/src/qwen36_backend.rs" 'palw_step::step_leaf_count\(profile, ctx\)'
 # **This stage has TWO regimes, and neither of them is a failure.** ADR-0080 W1b makes the
 # executor read `PalwCourtParamsV2::max_step_leaf_count` instead of the hardcoded constant. When
 # that lands, the old premise stops being true — and that is the drill working, not breaking. A
@@ -253,10 +253,10 @@ premise "the Qwen3.6 executor calls the constant-capped step_leaf_count" \
 # doc comments and as a parameter, so matching it would have been both a miss here and a false
 # positive elsewhere. A gate written against a spec's vocabulary rather than the code's is a gate
 # that watches for a fix nobody is going to write in those words.
-if grep -rq 'with_step_ladder_cap' "$REPO_ROOT/misaka-palw-base0/src/" 2>/dev/null; then
+if grep -rq 'with_step_ladder_cap' "$REPO_ROOT/misaka/palw/base0/src/" 2>/dev/null; then
   RULESET_OK=1
   for f in qwen25_a16_backend qwen36_backend; do
-    if grep -qE 'palw_step::step_leaf_count\(profile, ctx\)' "$REPO_ROOT/misaka-palw-base0/src/$f.rs" 2>/dev/null; then
+    if grep -qE 'palw_step::step_leaf_count\(profile, ctx\)' "$REPO_ROOT/misaka/palw/base0/src/$f.rs" 2>/dev/null; then
       RULESET_OK=0
       record "stage 0b — TWO CAPS: $f.rs still calls the constant-capped step_leaf_count(profile, ctx) while another path reads max_step_leaf_count(). One of them binds and the source does not say which."
     fi

@@ -52,19 +52,19 @@ Where a byte is never changes which byte it is.**
 
 | path | code | how bytes are read | what holds memory | how the node accounts it |
 | --- | --- | --- | --- | --- |
-| IR class, page cache | `TirArtifactV1::open` → `MappedFile` (`misaka-palw-tir-exec/src/node/artifact.rs:199-211`, `node/mapped.rs:18-48`); params bound in place and extended to `'static` (`artifact.rs:103-130`) | demand faults on a `MAP_PRIVATE` mapping | the page cache | the file, per replay (`kaspad/src/palw_backends.rs:1930-1939`), 0 when pinned (`:1946-1962`) |
+| IR class, page cache | `TirArtifactV1::open` → `MappedFile` (`misaka/palw/tir/exec/src/node/artifact.rs:199-211`, `node/mapped.rs:18-48`); params bound in place and extended to `'static` (`artifact.rs:103-130`) | demand faults on a `MAP_PRIVATE` mapping | the page cache | the file, per replay (`kaspad/src/palw_backends.rs:1930-1939`), 0 when pinned (`:1946-1962`) |
 | IR class under a residency | `TirWeightStoreV1` (`node/residency.rs:433-692`) over `TirWeightFileV1` (`:170-234`); tiers read off the program (`tiers.rs:398-493`) | positional reads: the pinned set in parallel at open (`residency.rs:506-518`), one pass over every byte for the root and the ranges (`:519-545`), a route group's rows admitted together (`:701-740`), gathered rows per gather (`:742-785`) | pinned set + routed LRU under `budget − pinned − in flight` (`tiers.rs:575-581`) | the budget (`palw_backends.rs:1934-1937`) |
 | shard-only seat (RFC-0006 §4.2) | `fetch_shard_params_v1`, `TirRowPursuitV1` (`node/shardrows.rs:63-119, 267-361`) | the shard's inventory leaves from a holder, each opening checked against `artifact_root` (`:88-100, 332-344`) | the assembled params AND every opening with its bytes (`:44-58, 99-117`) | nothing |
-| Qwen3.6 (base0, hand-written) | `Qwen36ResidencyV1` (`misaka-palw-base0/src/qwen36.rs:305-534`) | always-set pinned at open; experts told apart by name (`expert_key_v1`, `:378-383`) and admitted per layer (`:460-489`); embedding rows read directly (`:693-706`); with no residency every tensor is read per use through the descriptor (`:633-638`) | always-set + expert LRU | the budget (`palw_backends.rs:1931-1933`) |
-| dense A16 `.palwart` (the 8k class) | `Int8SlabV1::Mapped` (`misaka-palw-base0/src/artifact.rs:261-286`); pinned by int-10.2 A1 (`kaspad/src/palw_artifact_pin.rs`) and by the host pinner (`kaspad/src/main.rs:27-43`, `palw_artifact_pin.rs:488-547`) | in place, from a `MAP_SHARED` mapping populated by 8 MiB reads and `mlock`ed before the lineage maps the file | the locked page cache, one copy per host | reported, never reserved (`palw_backends.rs:914-931`) |
+| Qwen3.6 (base0, hand-written) | `Qwen36ResidencyV1` (`misaka/palw/base0/src/qwen36.rs:305-534`) | always-set pinned at open; experts told apart by name (`expert_key_v1`, `:378-383`) and admitted per layer (`:460-489`); embedding rows read directly (`:693-706`); with no residency every tensor is read per use through the descriptor (`:633-638`) | always-set + expert LRU | the budget (`palw_backends.rs:1931-1933`) |
+| dense A16 `.palwart` (the 8k class) | `Int8SlabV1::Mapped` (`misaka/palw/base0/src/artifact.rs:261-286`); pinned by int-10.2 A1 (`kaspad/src/palw_artifact_pin.rs`) and by the host pinner (`kaspad/src/main.rs:27-43`, `palw_artifact_pin.rs:488-547`) | in place, from a `MAP_SHARED` mapping populated by 8 MiB reads and `mlock`ed before the lineage maps the file | the locked page cache, one copy per host | reported, never reserved (`palw_backends.rs:914-931`) |
 | GPU (prototype) | `misaka-palw-tir-gpu` (its own cargo workspace); seams `TirDeviceV1` (`src/cellstep.rs:115-128`) and `KernelBackendV1` (`node/cell.rs:86-102`); device pool `kaspad/src/palw_memory_ledger.rs:107-110, 631-639` | params uploaded per cell | VRAM, or host on unified memory | the device pool the backend arms |
 
 What each duty runs on top of these: the producer and a full-seat replay step **one position through every occurrence**
 (`TirClassRunnerV1::drive`, `node/run.rs:317-337`); so does the RFC-0006 cell verifier (`node/cell.rs:274-313`); RFC-0004's
 evaluation steps a parent's candidates **occurrence at a time across members** (`src/lockstep.rs:95-101`); the A16 engine walks a
-prefill **a layer at a time over runs of 64 positions** (`misaka-palw-base0/src/qwen25_a16_backend.rs:127-146, 680-700`;
+prefill **a layer at a time over runs of 64 positions** (`misaka/palw/base0/src/qwen25_a16_backend.rs:127-146, 680-700`;
 `engine_a16.rs:2005`); the GPU prototype replays a job **a layer at a time over a chunk of positions** (`BatchReplay`,
-`misaka-palw-tir-gpu/src/batch.rs:184`).
+`experiments/palw-tir-gpu/src/batch.rs:184`).
 
 ### 1.2 What is missing
 
@@ -328,7 +328,7 @@ placement decision widened from 'resident or not' to 'resident where'" (`qwen36.
   activation tables, a mixture's router — stay `Pinned`: ≈ 0.8 MiB a layer at the 7B shape, ≈ 2.4 MiB at the 405B shape
   (≈ 23 and ≈ 151 MiB in all).
 - **A slab** is every streamable instance of one occurrence. A per-layer instance is read by exactly the occurrence of its layer
-  (`tir_param_instances_v1`, `tiers.rs:359-383`; the schedule is `pre`, the layers, `post`, `misaka-palw-tir/src/program.rs:165-173`).
+  (`tir_param_instances_v1`, `tiers.rs:359-383`; the schedule is `pre`, the layers, `post`, `misaka/palw/tir/core/src/program.rs:165-173`).
 - **Globals stay as they are**: the embedding is gathered, the RoPE tables are gathered or small, and `post`'s head — one
   occurrence, read every position — stays pinned (0.29–1.96 GiB in the shapes of §5.10).
 - **A slab is read from per-param extents** — the container is param-major, so a slab is a few extents, each located by the
@@ -425,7 +425,7 @@ every `Fixed` instance twice (current and pending), every history's rows at the 
 kept tails. The executor's histories grow by doubling (`exec.rs:128-141`), up to twice their rows; M2 reserves them at the job's
 positions instead (as the A16 cache does, `qwen25_a16_backend.rs:2517`), and until then they are charged at twice. At 8,192
 positions the K/V of the shapes of §5.10 is 0.44 GiB (7B) to 2.75 GiB (123B) in `i16`; `PositionV1::state_bytes`
-(`misaka-palw-tir/src/admit.rs:124-138, 780-788`) is the worst-case bound admission already computes.
+(`misaka/palw/tir/core/src/admit.rs:124-138, 780-788`) is the worst-case bound admission already computes.
 
 ### 5.8 The floor, and refusal by name
 
@@ -472,7 +472,7 @@ applies in streamed placement only, amends ADR-0112 Decision 3 for it (node soft
 ### 5.10 What it comes to, by arithmetic
 
 Computed from the shapes (`tensor-store-bench.md` §1 fixes them), `i8` projections plus `i64`/`i8` narrowing vectors and `i16`
-activation tables in the bench program's conventions (`misaka-palw-tir-exec/src/bin/tir-exec-bench.rs:117-241`); a slab here
+activation tables in the bench program's conventions (`misaka/palw/tir/exec/src/bin/tir-exec-bench.rs:117-241`); a slab here
 counts its layer's small vectors too, which §5.1 pins instead (≤ 2.4 MiB a layer moves between the columns). **Arithmetic, not
 measurement**: the bench prints the measured terms beside these.
 
@@ -580,7 +580,7 @@ swap — M4 first if producers are the bottleneck when M2 lands, M3 first if sea
 ## 10. Where the code today disagrees with the sketch
 
 - **F1 — mmap is not only a baseline today.** The 8k A16 path reads its weights in place from a mapping (`Int8SlabV1::Mapped`,
-  `misaka-palw-base0/src/artifact.rs:261-272`), and int-10.2 made that mapping `MAP_SHARED` + populated + `mlock`ed on purpose
+  `misaka/palw/base0/src/artifact.rs:261-272`), and int-10.2 made that mapping `MAP_SHARED` + populated + `mlock`ed on purpose
   (`palw_artifact_pin.rs:1-60`; the host pinner, `main.rs:27-43`) so a host's seats share one copy. A demand-paged mapping goes to
   the baseline; the locked shared mapping stays, as the Memory backend's shared form (§3.4).
 - **F2 — the pinner locks an IR container that a residency decides.** `palw_pin_lineage_v1` answers `Ok` for the IR lineage with no
@@ -593,7 +593,7 @@ swap — M4 first if producers are the bottleneck when M2 lands, M3 first if sea
 - **F3 — the executor and the cell verifier are position-major.** `drive` steps one position through every occurrence
   (`run.rs:317-337`) and so does the cell verifier (`cell.rs:274-313`), although RFC-0006 §1.4 specifies a cell "one layer at a time
   over every position of the segment". Only base0 (`engine_a16.rs:2005`, `qwen36_plan.rs:485`) and the GPU prototype
-  (`misaka-palw-tir-gpu/src/batch.rs:184`) run layer-major. With "N resident, N + 1 prefetched, N − 1 evicted" alone, every position
+  (`experiments/palw-tir-gpu/src/batch.rs:184`) run layer-major. With "N resident, N + 1 prefetched, N − 1 evicted" alone, every position
   re-reads every streamed layer — the sketch needs the occurrence-major run (§5.4), an executor change, not only a store. The same
   order is why `runtime-residency.md` §7's replay estimate (every expert read once) does not hold on today's TIR path at a fifth:
   ≈ 363 GiB against ≈ 27 GiB for a 255-position Qwen3-30B-A3B draw under uniform routing (§5.6).

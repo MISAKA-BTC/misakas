@@ -112,7 +112,7 @@ execution.
 
 ```
 MISAKA_PALW_CPU=1 MISAKA_LLAMA_SRC=<cpu-only llama.cpp tree> cargo build --release -p misaka-palw-worker
-export MISAKA_PALW_GOLDEN=misaka-palw-worker/golden/qwen35-2b-v2.cpu-aarch64.golden
+export MISAKA_PALW_GOLDEN=misaka/palw/worker/golden/qwen35-2b-v2.cpu-aarch64.golden
 export MISAKA_PALW_GGUF=<pinned Qwen3.5-2B-Q4_K_M.gguf>
 ./target/release/palw-worker --mode v2-selftest
 ./target/release/palw-worker --mode v2-replay-bench --name golden-prefill96-d16 --runs 5

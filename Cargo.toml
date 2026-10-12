@@ -28,36 +28,36 @@ members = [
     "kaspa-pq-signer",
     "misaka-cli",
     "misaka-endpoints",
-    "misaka-palw",
-    "misaka-palw-host-security",
-    "misaka-palw-shadow",
-    "misaka-palw-agent",
-    "misaka-palw-gateway",
-    "misaka-palw-fp-submit",
-    "misaka-palw-remote",
-    "misaka-palw-kernel",
-    "misaka-palw-challenge",
-    "misaka-palw-constraint",
-    "misaka-palw-worker",
-    "misaka-palw-base0",
-    "misaka-palw-base0-ref2",
-    "misaka-palw-sdk",
-    "misaka-palw-derive",
-    "misaka-palw-extension",
-    "misaka-palw-tir",
-    "misaka-palw-tir-exec",
-    "misaka-palw-tir-ref2",
-    "misaka-palw-tir-artifact",
-    "misaka-palw-tir-conformance",
+    "misaka/palw/core",
+    "misaka/palw/security",
+    "misaka/palw/shadow",
+    "misaka/palw/agent",
+    "misaka/palw/gateway",
+    "misaka/palw/fp-submit",
+    "misaka/palw/remote",
+    "misaka/palw/kernel",
+    "misaka/palw/challenge",
+    "misaka/palw/constraint",
+    "misaka/palw/worker",
+    "misaka/palw/base0",
+    "testing/reference/palw-base0-ref2",
+    "misaka/palw/sdk",
+    "misaka/palw/derive",
+    "misaka/palw/extension",
+    "misaka/palw/tir/core",
+    "misaka/palw/tir/exec",
+    "testing/reference/palw-tir-ref2",
+    "misaka/palw/tir/artifact",
+    "misaka/palw/tir/conformance",
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "tools/opv-meas",
-    "misaka-palw-reference2",
-    "misaka-palw-reexecutor",
-    "misaka-palw-tir-lower",
-    "misaka-palw-tir-sketch",
-    "misaka-palw-gen",
-    "misaka-palw-panel",
+    "testing/reference/palw-reference2",
+    "misaka/palw/reexecutor",
+    "misaka/palw/tir/lower",
+    "misaka/palw/tir/sketch",
+    "misaka/palw/gen",
+    "misaka/palw/panel",
     "simpa",
     "wasm",
     "wasm/core",
@@ -153,34 +153,34 @@ default-members = [
     "kaspa-pq-signer",
     "misaka-cli",
     "misaka-endpoints",
-    "misaka-palw",
-    "misaka-palw-host-security",
-    "misaka-palw-shadow",
-    "misaka-palw-agent",
-    "misaka-palw-gateway",
-    "misaka-palw-fp-submit",
-    "misaka-palw-remote",
-    "misaka-palw-kernel",
-    "misaka-palw-challenge",
-    "misaka-palw-constraint",
-    "misaka-palw-base0",
-    "misaka-palw-base0-ref2",
-    "misaka-palw-sdk",
-    "misaka-palw-derive",
-    "misaka-palw-extension",
-    "misaka-palw-tir",
-    "misaka-palw-tir-exec",
-    "misaka-palw-tir-ref2",
-    "misaka-palw-tir-artifact",
-    "misaka-palw-tir-conformance",
+    "misaka/palw/core",
+    "misaka/palw/security",
+    "misaka/palw/shadow",
+    "misaka/palw/agent",
+    "misaka/palw/gateway",
+    "misaka/palw/fp-submit",
+    "misaka/palw/remote",
+    "misaka/palw/kernel",
+    "misaka/palw/challenge",
+    "misaka/palw/constraint",
+    "misaka/palw/base0",
+    "testing/reference/palw-base0-ref2",
+    "misaka/palw/sdk",
+    "misaka/palw/derive",
+    "misaka/palw/extension",
+    "misaka/palw/tir/core",
+    "misaka/palw/tir/exec",
+    "testing/reference/palw-tir-ref2",
+    "misaka/palw/tir/artifact",
+    "misaka/palw/tir/conformance",
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "tools/opv-meas",
-    "misaka-palw-reference2",
-    "misaka-palw-reexecutor",
-    "misaka-palw-tir-lower",
-    "misaka-palw-tir-sketch",
-    "misaka-palw-gen",
+    "testing/reference/palw-reference2",
+    "misaka/palw/reexecutor",
+    "misaka/palw/tir/lower",
+    "misaka/palw/tir/sketch",
+    "misaka/palw/gen",
     "simpa",
     "wasm",
     "wasm/core",
@@ -311,23 +311,23 @@ kaspa-wrpc-wasm = { version = "1.1.0", path = "rpc/wrpc/wasm" }
 kaspa-wrpc-example-subscriber = { version = "1.1.0", path = "rpc/wrpc/examples/subscriber" }
 kaspad = { version = "1.1.0", path = "kaspad" }
 kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
-misaka-palw-base0 = { version = "1.0.1", path = "misaka-palw-base0" }
-misaka-palw-sdk = { version = "1.1.0", path = "misaka-palw-sdk" }
-misaka-palw-derive = { version = "1.1.0", path = "misaka-palw-derive" }
-misaka-palw-extension = { version = "1.1.0", path = "misaka-palw-extension" }
-misaka-palw-fp-submit = { version = "1.1.0", path = "misaka-palw-fp-submit" }
-misaka-palw-remote = { version = "1.1.0", path = "misaka-palw-remote" }
-misaka-palw-kernel = { version = "1.1.0", path = "misaka-palw-kernel" }
-misaka-palw-challenge = { path = "misaka-palw-challenge" }
-misaka-palw-constraint = { version = "1.1.0", path = "misaka-palw-constraint" }
-misaka-palw-tir = { path = "misaka-palw-tir" }
-misaka-palw-gen = { path = "misaka-palw-gen" }
-misaka-palw-panel = { path = "misaka-palw-panel" }
+misaka-palw-base0 = { version = "1.0.1", path = "misaka/palw/base0" }
+misaka-palw-sdk = { version = "1.1.0", path = "misaka/palw/sdk" }
+misaka-palw-derive = { version = "1.1.0", path = "misaka/palw/derive" }
+misaka-palw-extension = { version = "1.1.0", path = "misaka/palw/extension" }
+misaka-palw-fp-submit = { version = "1.1.0", path = "misaka/palw/fp-submit" }
+misaka-palw-remote = { version = "1.1.0", path = "misaka/palw/remote" }
+misaka-palw-kernel = { version = "1.1.0", path = "misaka/palw/kernel" }
+misaka-palw-challenge = { path = "misaka/palw/challenge" }
+misaka-palw-constraint = { version = "1.1.0", path = "misaka/palw/constraint" }
+misaka-palw-tir = { path = "misaka/palw/tir/core" }
+misaka-palw-gen = { path = "misaka/palw/gen" }
+misaka-palw-panel = { path = "misaka/palw/panel" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
-misaka-palw = { version = "1.1.0", path = "misaka-palw" }
-misaka-palw-host-security = { version = "1.1.0", path = "misaka-palw-host-security" }
-misaka-palw-shadow = { version = "1.1.0", path = "misaka-palw-shadow" }
+misaka-palw = { version = "1.1.0", path = "misaka/palw/core" }
+misaka-palw-host-security = { version = "1.1.0", path = "misaka/palw/security" }
+misaka-palw-shadow = { version = "1.1.0", path = "misaka/palw/shadow" }
 
 # external
 aes = "0.8.3"

@@ -106,7 +106,7 @@ height** (no later fence moves a corpus verdict). **0 disagreements.**
 
 ## 4. Classes lowered from REAL local checkpoints
 
-Generator: `misaka-palw-sdk/tests/g14_registration_fixture.rs` (ignored; shape-only lowering of the SDK preflight — `config.json` and the
+Generator: `misaka/palw/sdk/tests/g14_registration_fixture.rs` (ignored; shape-only lowering of the SDK preflight — `config.json` and the
 safetensors header, **no weights loaded**, so the artifact root is a SYNTHETIC commitment: a keyed hash of config and tokenizer bytes;
 registration never reads weights). The layout is the SDK's layout search under THIS harness's ruleset (launch + `palw_tir_v1` armed),
 judged by the SDK's `tir_class_admission_offline_v1`; the fixtures are `tests/fixtures/g14/*.json`, and the consensus test re-derives the

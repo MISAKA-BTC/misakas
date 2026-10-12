@@ -1,0 +1,45 @@
+[package]
+name = "misaka-palw-base0"
+description = "PALW-BASE-0 (ADR-0040): the integer-only execution class — artifacts, engine, and the pinned rotary table"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+borsh.workspace = true
+kaspa-txscript.workspace = true
+kaspa-consensus-core.workspace = true
+# ADR-0079 Decision 5: the worker stacks the execve denial on itself (seccomp filters stack). The confinement crate, not
+# the `misaka-palw` runtime bridge: consensus links this crate, and ADR-0042 Decision 4 forbids a model-runtime edge.
+misaka-palw-host-security.workspace = true
+# `palw-rc-genesis` only: an operator generates a bond seed with `misaka key gen`, and
+# something has to turn that seed into the PUBLIC values the genesis card wants. The derivation
+# must be the same one the producer uses, so it is imported rather than re-implemented.
+kaspa-pq-validator-core.workspace = true
+kaspa-addresses.workspace = true
+faster-hex.workspace = true
+kaspa-hashes.workspace = true
+blake2b_simd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# RFC-0002 Phase F: the A16 engine written as a PALW-TIR program (the IR's builder and
+# templates), and its artifacts converted into the PALWTIR1 container.
+misaka-palw-tir.workspace = true
+# RFC-0003: the canonical output's digest (the tensor worker's, the court's output close).
+misaka-palw-gen.workspace = true
+misaka-palw-tir-artifact = { path = "../tir/artifact" }
+# The A16 fast kernels run output channels in parallel. Safe to add because ADR-0040 Decision E
+# makes the thread count invisible to the result — in a float class this dependency would be a
+# consensus hazard.
+rayon.workspace = true
+libc.workspace = true
+unicode-normalization.workspace = true
+unicode-properties.workspace = true
+
+[dev-dependencies]
+# RFC-0001 §2.5 / ADR-0096: the constraint a test compiles from a JSON Schema.
+misaka-palw-constraint.workspace = true

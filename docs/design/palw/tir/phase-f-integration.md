@@ -147,19 +147,19 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 
 | Where | What | Phase F change |
 | --- | --- | --- |
-| `misaka-palw-sdk/src/lineage.rs:128` | `PalwModelLineageV1` (entries carry `profile: PalwShapeProfileV3`) | `PalwClassEntryV1` gains a graph enum with a `Legacy(profile)` and a `Tir(Arc<PalwTirClassV1>)` variant |
-| `misaka-palw-sdk/src/sdk.rs:72, 386` | `builtin_lineages_v1` (dense, qwen36), `registration_candidate` | add `TirLineageV1`; candidates may be IR registrations |
-| `misaka-palw-sdk/src/conformance.rs:29` | `check_lineage_v1` | runs over the TIR lineage too |
-| `misaka-palw-sdk/src/bin/palw-class.rs:30-60` | `ledger/inspect/preflight/measure/verify/manifest` | add `check-architecture` (§2.11) |
+| `misaka/palw/sdk/src/lineage.rs:128` | `PalwModelLineageV1` (entries carry `profile: PalwShapeProfileV3`) | `PalwClassEntryV1` gains a graph enum with a `Legacy(profile)` and a `Tir(Arc<PalwTirClassV1>)` variant |
+| `misaka/palw/sdk/src/sdk.rs:72, 386` | `builtin_lineages_v1` (dense, qwen36), `registration_candidate` | add `TirLineageV1`; candidates may be IR registrations |
+| `misaka/palw/sdk/src/conformance.rs:29` | `check_lineage_v1` | runs over the TIR lineage too |
+| `misaka/palw/sdk/src/bin/palw-class.rs:30-60` | `ledger/inspect/preflight/measure/verify/manifest` | add `check-architecture` (§2.11) |
 | `consensus/core/src/palw_backend.rs:242-520` | `PalwExecutionBackendV1` (execute, verify, bisect state, court evidence, dissection responder, segments) | implemented once, generically, by the TIR backend |
-| `misaka-palw-base0/src/backend.rs:465`, `qwen36_backend.rs:1380`, `qwen25_a16_backend.rs:2269` | the three legacy backends | unchanged; the A16 one is the drill's comparison target |
+| `misaka/palw/base0/src/backend.rs:465`, `qwen36_backend.rs:1380`, `qwen25_a16_backend.rs:2269` | the three legacy backends | unchanged; the A16 one is the drill's comparison target |
 | `kaspad/src/args.rs:274, 1636`; `kaspad/src/palw_panel.rs:3459, 6752`; `daemon.rs:1832` | `--palw-register-class` → SDK `registration_candidate` | accepts a TIR artifact; builds `ClassRegisteredTirV1`; duties unchanged (always on) |
 
 ### 1.8 Drills and batteries (reused, not reinvented)
 
 | Where | What | Reuse |
 | --- | --- | --- |
-| `misaka-palw-base0/src/e2e_drill.rs:208, 336` | family certification drill over `PalwExecutionBackendV1` (planted faults, both directions, covering set) | TIR family certificate (D-F2) |
+| `misaka/palw/base0/src/e2e_drill.rs:208, 336` | family certification drill over `PalwExecutionBackendV1` (planted faults, both directions, covering set) | TIR family certificate (D-F2) |
 | `scripts/drills/misaka-palw-t12-rcore-drill.sh`, `consensus/core/src/config/drill.rs` | salted t12 drill chain on the shipping kaspad; `--palw-drill-fenceN-at` | fence-crossing drill (D-F4) |
 | `scripts/drills/misaka-palw-model-registry-devnet-drill.sh` (step 1b clock gate) | registry/listing drill | IR registration → Candidate → Active walk |
 | red-team harness (2026-09-07, 8 block forgeries; a `misaminer` `redteam` bin never committed) | 8/8 rejection battery | commit it as `misaminer/src/bin/redteam.rs` and rerun against the IR class (D-F3) |
@@ -605,7 +605,7 @@ re-tiles and re-commits a program and requires an identical vector). Qwen2.5-1.5
 program (tir/lower's `a16_mirror_program`) prices `dense_matmul` and `weight_traffic_bytes` exactly as
 the legacy graph-v7 class does; its total arithmetic is 1.3-2.1 % higher, because the IR counts every
 integer operation of the requantisation, rotary and norm segments (report in
-`misaka-palw-base0/tests/tir_a16_work_vs_legacy.rs`). The registry's
+`misaka/palw/base0/tests/tir_a16_work_vs_legacy.rs`). The registry's
 `PalwModelWorkV1` comes from the same walk (`tir_model_work_v1`); `palw_economic_compute_v1.rs:
 297-325`'s name heuristics are never reached by an IR class.
 
@@ -633,9 +633,9 @@ a program without a `Select` is unchanged (`tests/palw_tir_select_credit.rs`).
   root by the existing tree (`palw_artifact.rs:40-110, 248`). Lowerers store
   matmul weights output-major (`[N, K]`, consumed through `Transpose`) so a vocabulary tile opens
   `tile_len` rows. The container `PALWTIR1` embeds the program, layout and tokenizer id; the
-  `.palwmanifest` sidecar (`misaka-palw-sdk/src/class_manifest.rs`) records the inventory root.
+  `.palwmanifest` sidecar (`misaka/palw/sdk/src/class_manifest.rs`) records the inventory root.
   The tir-lower crate-local format (`PALWTIRA`) is converted, not reused.
-* **`TirLineageV1`** (`misaka-palw-sdk/src/lineages/tir.rs`): sniffs `PALWTIR1`; `load` verifies
+* **`TirLineageV1`** (`misaka/palw/sdk/src/lineages/tir.rs`): sniffs `PALWTIR1`; `load` verifies
   `H(program)` and computes the root once (streamed); `classes()` yields the IR classes of the
   artifacts the node holds (IR classes are data, not a built-in table); `pair` checks the tensors
   against the declarations; `resolve` builds the backend. `PalwClassEntryV1`'s graph becomes an
@@ -802,7 +802,7 @@ honest executor of such a class loses its terminal-leaf clock.
 VALUE head count (`palw_qwen36_profile.rs:1447`, `gdn_heads: g.gdn_v_heads`); the node widths do use
 both counts (`:727-735`, `Conv = 2·k_dim + v_dim`). Two different things then read that one field:
 
-* **The head mapping** `kh = vh % k_heads` — engine `misaka-palw-base0/src/qwen36.rs:1239-1242`, plan
+* **The head mapping** `kh = vh % k_heads` — engine `misaka/palw/base0/src/qwen36.rs:1239-1242`, plan
   `qwen36_plan.rs:790`, float reference `qwen36_reference.rs:273-277`, court
   `palw_step_refute.rs:3222` (with `k_heads` derived from the ref width there, `:3218`).
 * **The state chunk maps' conv geometry** — the v1 name `conv-row=(2*gdn_head_k_dim+gdn_head_v_dim)
@@ -880,7 +880,7 @@ both counts (`:727-735`, `Conv = 2·k_dim + v_dim`). Two different things then r
    `never()` collapse, `palw_fences_v1`, probe, processor accessor; on testnet-12 an entry in the first
    flag-day list after DAA 1,500 at an unused height. No kernel is added, so `court_catalog_root` does
    not move.
-6. **Fixtures** (`misaka-palw-base0/src/fuzz_qwen36.rs`): tiny hybrids at **16/32 and 16/48** heads
+6. **Fixtures** (`misaka/palw/base0/src/fuzz_qwen36.rs`): tiny hybrids at **16/32 and 16/48** heads
    (head dim 4, hidden 64, four layers at interval 4, tiny experts), plus the existing 2/4 (`qwen36_dev_
    fixture`). **End to end:** (a) capture succeeds at every checkpoint and `resumed == fresh` at every
    covered position (the `fp_recompute.rs:1308` test shape, now green on k≠v); (b) the anchored
@@ -941,7 +941,7 @@ critical path is F5 → F7 → F11, and `tir_admit_v1` gates F6.
 **Risks.**
 
 1. **A16 attention as IR segments** (RFC OQ2). The Gate 1 conformance list has no attention
-   segment (`misaka-palw-tir/tests/legacy_mirror.rs`); if `AttnFused`'s requantised probabilities
+   segment (`misaka/palw/tir/core/tests/legacy_mirror.rs`); if `AttnFused`'s requantised probabilities
    cannot be expressed byte-identically, D-F1's "same logits" fails and must be resolved with
    tir/core before F11.
 2. **Generic backend speed.** The Gate 1 evaluator holds every element as `i128` and clones params;

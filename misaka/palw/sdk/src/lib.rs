@@ -1,0 +1,602 @@
+//! # misaka-palw-sdk — the one interface every PALW model class passes through
+//!
+//! Adding an LLM to a MISAKA network is four agreements that must hold at once: a **graph** the
+//! court can walk (whose id IS the class id), an **artifact** whose root the chain pins, a
+//! **canonical job** the class is paid per, and an **engine** that executes what the graph
+//! describes. Before this crate those agreements were kept per lineage, per consumer: two class
+//! tables of different types, three per-lineage arms in the backend dispatch, two loops in the
+//! panel's registration builder, a magic switch in the artifact loader — and every new model
+//! family meant finding all of them.
+//!
+//! This crate is the seam. One trait — [`PalwModelLineageV1`] — says what a lineage must supply;
+//! one registry — [`PalwClassSdk`] — is the only door node code and tooling go through; one
+//! battery — [`conformance`] — enforces at `cargo test` the invariants the admission gate enforces
+//! on chain.
+//!
+//! ## Canonical TIR and versioned kernels
+//!
+//! The kernel route accepts canonical TIR as data, without a ModelSpec, model name or official
+//! compiler registry. Generic static admission is in [`preflight::kernel`]; bounded v3 parameter
+//! commitment preparation is in [`kernel_params`]. These do not grant activation, source fidelity,
+//! public availability or economic eligibility. Full execution/court/Final evidence remains required.
+//! The lineage agreements below describe the existing profile-based artifact routes.
+//!
+//! ## Adding a new LLM through a profile lineage
+//!
+//! **A new checkpoint of a known lineage** (the common case) is a data change and no SDK code:
+//! add the frozen geometry beside its family's profile module in `kaspa-consensus-core`, add the
+//! table row in `misaka_palw_base0::classes`, convert the weights with the family's converter, and
+//! the whole path — `palw-class inspect`/`preflight`, the node's `--palw-register-class`, backend
+//! resolution — serves it immediately. The SDK's conformance tests cover the new row the moment it
+//! exists.
+//!
+//! **A new model family** implements [`PalwModelLineageV1`] (container sniff/load, class table,
+//! artifact↔class pairing, backend construction), registers it in
+//! [`sdk::builtin_lineages_v1`] (or composes it via [`PalwClassSdk::with_lineage`]), and makes
+//! [`conformance::check_lineage_v1`] its first test. Nothing else in the system learns the family
+//! exists — that is the point.
+//!
+//! What stays OUTSIDE the SDK, deliberately: converting weights (each family's converter binary
+//! owns its container), funding and signing (key custody is the node's), and fleet distribution.
+//! The SDK is where a model becomes a class; it is not a wallet and not a deployment tool.
+
+/// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
+pub mod check_architecture;
+/// RFC-0004's node side (A10): the epoch watcher's plan, adapter prefetch, evaluation jobs.
+pub mod improve;
+/// RFC-0004's evaluation executor (A10): an evaluation job run as its RFC-0003 pipeline.
+pub mod improve_eval;
+/// RFC-0004's objects (A10), built and signed offline: policy, hard cases, setter sets, datasets, teaching
+/// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
+pub mod improve_objects;
+pub mod class_manifest;
+/// RFC-0003 step 7: declaring a generative (pipeline) class — layouts, the registration gate offline, registration, container.
+pub mod gen_class;
+pub mod conformance;
+pub mod lineage;
+pub mod lineages {
+    pub mod dense;
+    pub mod generative;
+    pub mod qwen36;
+    pub mod tir;
+}
+/// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
+pub mod preflight;
+/// RFC-0002 Part II §II.10: the Hugging Face census — one gate row per Hub repository (`palw-class census`).
+pub mod census;
+/// RFC-0002 Part II: runtime packs — the manifest that makes an artifact reproducible and its claims checkable.
+pub mod runtime_pack;
+pub mod sdk;
+/// RFC-0002 Phase F (F3): the `.palwmanifest` of a `PALWTIR1` artifact.
+pub mod tir_equiv;
+pub mod tir_manifest;
+/// RFC-0013 §5/§7.2: a stored Merkle index (one leaf hash per 32 KiB leaf) — authenticated range reads and multiproofs without a pass over the artifact.
+pub mod tir_merkle_index;
+/// RFC-0013 §5: the container as a row source for the tiled independent evaluator, authenticated by the stored index.
+pub mod tir_rows;
+pub mod tir_stream;
+/// Generic bounded preparation of segmented-kernel parameter commitments.
+pub mod kernel_params;
+/// Stream the node's native values into the existing segmented commitment grammar.
+pub mod kernel_execution;
+/// Protected native candidate preparation and private actor-bound seal/reveal material.
+pub mod flat_candidate_v6;
+/// Explicit v7 mixed-court candidate metadata registration.
+pub mod flat_candidate_v7;
+/// Independent full-resource preparation of the opt-in non-reward v9 candidate.
+pub mod flat_candidate_v9;
+pub mod flat_vector_v7;
+pub mod flat_snapshot_v7;
+/// RFC-0002 Phase F (F6, node half): registering an IR class.
+pub mod tir_certification;
+/// RFC-0004 §6.3 (PALW-MIP-15): a LoRA candidate's container as a composite of its parent's.
+pub mod tir_composite;
+pub mod tir_layout;
+pub mod tir_registration;
+/// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
+/// that rebuilds the chain's conformance verdict from public reads.
+pub mod onboarding_chain;
+pub mod onboarding_snapshot;
+/// Bounded complete-check builder and verifier over a rooted public snapshot.
+pub mod complete_check;
+/// File-derived bootstrap preparation with rooted public binding checks.
+pub mod bootstrap_check;
+/// Bounded, ordered collection of the public kernel-route inventory.
+pub mod kernel_rows;
+
+pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
+pub use lineage::{
+    PalwClassEntryV1, PalwGenClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1, PalwWeightResidencyV1,
+};
+pub use sdk::{PalwCandidateError, PalwClassSdk, PalwRegistrationCandidateV1, builtin_lineages_v1};
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+    use kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2;
+    use kaspa_hashes::Hash64;
+
+    use super::*;
+
+    /// **The RULESET's ladder, not the executor's constant** (audit D H-5). This was
+    /// `PALW_STEP_MAX_LEAVES` (2^22) — the executor's own default — while the networks this SDK
+    /// serves froze `PALW_RC_COURT_MAX_STEP_LEAF_COUNT` (2^26) for exactly the rows the ledger now
+    /// carries. A battery run at 2^22 reports "the step space does not enumerate" for the graph-v5
+    /// 512 row, which is a statement about a constant somewhere else and not about the class.
+    fn court() -> PalwCourtParamsV2 {
+        PalwCourtParamsV2::new(kaspa_consensus_core::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2)
+            .expect("shipped court")
+    }
+
+    fn sdk() -> PalwClassSdk {
+        PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+    }
+
+    fn empty_terms() -> PalwRegistrationTermsV2 {
+        PalwRegistrationTermsV2 {
+            min_grantable_share_permille: 1,
+            slash_value_per_pwu: 1,
+            initial_target: 1,
+            registered_class_ids: Vec::new(),
+            registered_artifact_roots: Vec::new(),
+            chain_certified_families: Vec::new(),
+        }
+    }
+
+    /// **The battery, over everything this build ships.** A new table row anywhere is covered by
+    /// this test the moment it exists; a new lineage is covered the moment it joins
+    /// `builtin_lineages_v1`. This is the call the trait's documentation promises.
+    #[test]
+    fn every_builtin_lineage_conforms() {
+        conformance::check_sdk_v1(&sdk()).expect("every built-in class satisfies the adjudicability battery");
+    }
+
+    /// The ledger is the union of the lineage tables, and it names the classes the public
+    /// networks actually run — the floor, both A16 rungs, and both qwen36 members.
+    #[test]
+    fn the_ledger_names_the_shipped_classes() {
+        let ledger = sdk().ledger();
+        for expected in [
+            "PALW-BASE-0/rc",
+            "Qwen/Qwen2.5-1.5B",
+            "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+            "Qwen3.6-35B-A3B",
+            "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated",
+        ] {
+            assert!(ledger.iter().any(|e| e.model_id == expected), "the ledger lost {expected}");
+        }
+        let floor = ledger.iter().find(|e| e.model_id == "PALW-BASE-0/rc").expect("floor");
+        assert!(!floor.needs_artifact_file, "the floor is derived — it must never demand a file");
+    }
+
+    /// **The floor resolves on a node holding nothing** — the property that keeps a plain Linux
+    /// node the liveness anchor — and an unknown class is refused with the sentence operators
+    /// grep for.
+    #[test]
+    fn the_floor_resolves_from_nothing_and_unknown_classes_are_refused() {
+        let s = sdk();
+        let floor_id = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court(), "PALW-BASE-0/rc")
+            .expect("the floor is in the registry")
+            .class_id();
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
+        let backend = s.resolve(floor_id, root, &[]).expect("the derived floor resolves with no holdings");
+        assert_eq!(backend.model_id(), "PALW-BASE-0/rc");
+
+        let err = match s.resolve(Hash64::from_u64_word(0x99), Hash64::from_u64_word(0xA1), &[]) {
+            Err(e) => e,
+            Ok(b) => panic!("a node with no artifacts resolved an unknown class to {}", b.model_id()),
+        };
+        assert!(err.contains("cannot serve the registered class"), "{err}");
+    }
+
+    /// A synthetic lineage exercising the registry rules end to end — and, deliberately, the
+    /// worked example of what adding a new family costs: this impl and one `with_lineage` call.
+    struct TestLineage {
+        entry_model_id: &'static str,
+        weight_key: Hash64,
+        root: Hash64,
+    }
+
+    impl PalwModelLineageV1 for TestLineage {
+        fn lineage_id(&self) -> &'static str {
+            "test-lineage"
+        }
+        fn classes(&self, court: &PalwCourtParamsV2) -> Vec<PalwClassEntryV1> {
+            // The floor's real graph under a synthetic model id: valid, adjudicable, and cheap.
+            let floor = misaka_palw_base0::classes::canonical_class_by_model_id_v1(court, "PALW-BASE-0/rc").expect("floor");
+            vec![PalwClassEntryV1 {
+                model_id: self.entry_model_id,
+                lineage_id: "test-lineage",
+                profile: floor.profile,
+                canonical_job: floor.canonical_job,
+                needs_artifact_file: true,
+            }]
+        }
+        fn sniffs(&self, head: &[u8; 8]) -> bool {
+            head == b"TESTLIN1"
+        }
+        fn load(&self, _path: &std::path::Path, _residency: PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
+            Err("the test lineage loads nothing".into())
+        }
+        fn registered_weight_keys(&self, _artifact: &PalwLoadedArtifactV1) -> Vec<Hash64> {
+            vec![self.weight_key]
+        }
+        fn pair(
+            &self,
+            _court: &PalwCourtParamsV2,
+            _entry: &PalwClassEntryV1,
+            _artifact: &PalwLoadedArtifactV1,
+        ) -> Result<Hash64, String> {
+            Ok(self.root)
+        }
+        fn resolve(
+            &self,
+            _court: &PalwCourtParamsV2,
+            _prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+            _class_id: Hash64,
+            _artifact_root: Hash64,
+            _holdings: &[PalwLoadedArtifactV1],
+            _network_id: &[u8],
+        ) -> Option<Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String>> {
+            None
+        }
+    }
+
+    fn test_holding() -> PalwLoadedArtifactV1 {
+        PalwLoadedArtifactV1::from_parts("test-lineage", None, "a test holding".into(), Arc::new(()))
+    }
+
+    /// **The two candidate rules that exist because seats burned.** Known weights (a registered
+    /// weight key) never candidate for a new class; an already-registered class id is dropped
+    /// after matching, so "nothing matches" and "everything is registered" stay different
+    /// refusals.
+    #[test]
+    fn candidates_refuse_known_weights_and_registered_classes() {
+        let lineage =
+            TestLineage { entry_model_id: "test/model", weight_key: Hash64::from_u64_word(7), root: Hash64::from_u64_word(9) };
+        let class_id = lineage.classes(&court())[0].class_id();
+        let s = PalwClassSdk::with_lineages(
+            vec![Arc::new(lineage)],
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        );
+        let holding = test_holding();
+
+        // Clean terms: the pairing stands, and it is the one candidate.
+        let picked = s.registration_candidate(std::slice::from_ref(&holding), &empty_terms(), None).expect("one candidate stands");
+        assert_eq!(picked.entry.model_id, "test/model");
+        assert_eq!(picked.artifact_root, Hash64::from_u64_word(9));
+
+        // The weights are already on chain: the artifact is not looking for a class.
+        let mut known_weights = empty_terms();
+        known_weights.registered_artifact_roots = vec![Hash64::from_u64_word(7)];
+        match s.registration_candidate(std::slice::from_ref(&holding), &known_weights, None) {
+            Err(PalwCandidateError::NoMatch) => {}
+            other => panic!("known weights must not candidate, got {other:?}"),
+        }
+
+        // The class is already on chain: matched, then dropped — the OTHER sentence.
+        let mut registered = empty_terms();
+        registered.registered_class_ids = vec![class_id];
+        match s.registration_candidate(std::slice::from_ref(&holding), &registered, None) {
+            Err(PalwCandidateError::AllRegistered) => {}
+            other => panic!("a registered class is AllRegistered, got {other:?}"),
+        }
+
+        // The operator names something the matches do not contain.
+        match s.registration_candidate(&[holding], &empty_terms(), Some("not/this")) {
+            Err(PalwCandidateError::FilterMatchesNothing { wanted }) => assert_eq!(wanted, "not/this"),
+            other => panic!("a wrong filter is FilterMatchesNothing, got {other:?}"),
+        }
+    }
+
+    /// Two lineages may not share an id, and only one may claim the container-fallback slot —
+    /// the properties every dispatch above silently relies on.
+    #[test]
+    #[should_panic(expected = "share a lineage id")]
+    fn two_lineages_may_not_share_an_id() {
+        let a = TestLineage { entry_model_id: "a", weight_key: Hash64::default(), root: Hash64::default() };
+        let b = TestLineage { entry_model_id: "b", weight_key: Hash64::default(), root: Hash64::default() };
+        let _ = PalwClassSdk::with_lineages(
+            vec![Arc::new(a), Arc::new(b)],
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            Vec::new(),
+        );
+    }
+
+    /// **Preflight refuses before anything is signed or funded.** The floor's real profile passes
+    /// against a court provisioned for it; the SAME entry against a root is still just the gate's
+    /// answer — so the cheap way to see a refusal is a bundle whose ladder cannot hold the class.
+    #[test]
+    fn preflight_admission_answers_before_submission() {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        let params: kaspa_consensus_core::config::params::Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let s = PalwClassSdk::builtin_v1(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            params.net.to_string().into_bytes(),
+        );
+        let floor = s.ledger().into_iter().find(|e| e.model_id == "PALW-BASE-0/rc").expect("floor");
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
+        let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(&params, bundle, &floor.profile, 0)
+            .expect("the network's court has a shape");
+        s.preflight_admission(bundle, &floor, root, &shape).expect("the floor admits under the network that runs it");
+
+        // A court too shallow for the class: the gate refuses, and the refusal says so BEFORE any
+        // signature or carrier exists. (Ladder depth is a bundle property; 2^4 leaves holds no
+        // real class.)
+        let mut shallow = bundle.clone();
+        shallow.court = PalwCourtParamsV2::new(16, 4, 2).expect("a legal, tiny court");
+        let err = s.preflight_admission(&shallow, &floor, root, &shape).expect_err("a class deeper than the ladder is refused");
+        assert!(err.contains("nothing was signed or funded"), "{err}");
+    }
+
+    /// **Testnet-12 lifecycle audit T12-030, the audit's own case.** `Qwen/Qwen2.5-1.5B` (ctx 16) built
+    /// at its TABLE's canonical job — what `misaka model add` built with a bare (`Legacy`) SDK —
+    /// passed every preflight (`model inspect`, the node's `getPalwModelPreflight`), was mined, and
+    /// the processor dropped it: "the registered canonical job (14, 2) is not the formula's (1, 2)".
+    /// Every preflight now asks the processor's attribution checks and refuses it by name, before
+    /// anything is signed or funded; the chain-rule SDK (`CoreV1`, the node's) registers the formula.
+    #[test]
+    fn t12_030_a_table_canonical_registration_is_refused_before_it_is_paid_for() {
+        use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attempt_rules_of_params_v1};
+        use kaspa_consensus_core::palw_class_admission_v2::{palw_admission_shape_at_v1, palw_post_genesis_registration_capped_v1};
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-12 ships a ConsensusV2 bundle");
+        };
+        assert_eq!(palw_attempt_rules_of_params_v1(&params), PalwAttemptRulesV1::CoreV1);
+        let legacy = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+        let row = legacy.ledger().into_iter().find(|e| e.model_id == "Qwen/Qwen2.5-1.5B").expect("the audit's catalog row");
+        assert_eq!(row.canonical_job, (14, 2), "the table's job, the one the audit registered");
+        let root = Hash64::from_u64_word(0x1_5B);
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("t12's shape");
+        assert!(shape.offence_attribution, "t12 arms palw_offence_attribution from genesis");
+
+        // The SDK gate (what `model add` and `model inspect` build through).
+        let err = legacy.preflight_admission(bundle, &row, root, &shape).expect_err("refused before signing");
+        assert!(err.contains("CLASS_NOT_ATTRIBUTABLE") && err.contains("(14, 2) is not the formula's (1, 2)"), "{err}");
+        assert!(err.contains("nothing was signed or funded"), "{err}");
+
+        // The node's preflight (`getPalwModelPreflight`), on the object the bare SDK used to build.
+        let object = palw_post_genesis_registration_capped_v1(
+            row.profile.clone(),
+            row.canonical_context(),
+            root,
+            0,
+            1,
+            1,
+            0,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::default(),
+                0,
+            )),
+            Vec::new(),
+            bundle.court.max_step_leaf_count(),
+        )
+        .expect("the object expresses");
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
+            &params,
+            bundle,
+            &object,
+            &certified,
+            &[],
+            0,
+            false,
+            None,
+        )
+        .expect("a report");
+        assert!(!report.admissible, "the node no longer answers ADMISSION_OK: {report:?}");
+        assert_eq!(report.reject_code, "CLASS_NOT_ATTRIBUTABLE");
+        assert!(report.checks.iter().any(|c| !c.ok && c.message.contains("(14, 2) is not the formula's (1, 2)")), "{report:?}");
+
+        // The chain-rule SDK registers the formula's job, which the attribution check asks for.
+        let chain = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes())
+            .with_attempt_rules_v1(palw_attempt_rules_of_params_v1(&params));
+        let canonical = chain.registration_canonical_v1(&row).expect("wide enough for the formula");
+        assert_eq!((canonical.declared_prefill_tokens, canonical.exact_decode_tokens), (1, 2));
+        if let Err(err) = chain.preflight_admission(bundle, &row, root, &shape) {
+            assert!(!err.contains("is not the formula's"), "whatever else refuses it, not the canonical job: {err}");
+        }
+        // And the report of which rows t12 would register, for the operator reading this test.
+        for entry in chain.ledger() {
+            let Ok(shape) = palw_admission_shape_at_v1(&params, bundle, &entry.profile, 0) else { continue };
+            let verdict = chain
+                .preflight_admission(bundle, &entry, root, &shape)
+                .map(|_| ())
+                .map_err(|e| e.chars().take(160).collect::<String>());
+            eprintln!("t12 catalog row {} (ctx {}): {verdict:?}", entry.model_id, entry.profile.n_ctx);
+        }
+    }
+
+    /// **The ADR-0082 devnet drill's stage-2 failure, as a unit test.** The graph-v5 row
+    /// preflights under the court devnet arms at genesis (the shape the acceptance path judges
+    /// by), and is refused BY NAME under no court — so a preflight that asked a court-less gate
+    /// reported "would be refused" for a row the chain admits, and the panel never signed.
+    #[test]
+    fn a_fused_row_preflights_under_the_court_the_ruleset_arms_and_not_without_it() {
+        use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionShapeV1, palw_admission_shape_at_v1};
+        let params = kaspa_consensus_core::config::params::devnet_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("devnet ships a ConsensusV2 bundle");
+        };
+        let s = PalwClassSdk::builtin_v1(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            params.net.to_string().into_bytes(),
+        );
+        let row = s
+            .ledger()
+            .into_iter()
+            .find(|e| e.model_id == misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID)
+            .expect("this build's SDK knows the graph-v5 row");
+        let root = kaspa_hashes::Hash64::from_u64_word(0xA16);
+        let armed = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("devnet's court has a shape");
+        assert!(armed.court.is_some(), "devnet arms palw_kary_court at genesis");
+        s.preflight_admission(bundle, &row, root, &armed).expect("the fused row is admissible under the court the ruleset arms");
+
+        let dormant = PalwAdmissionShapeV1 {
+            court: None,
+            ladder: None,
+            token_lift: false,
+            fused_dissectable: false,
+            held: Default::default(),
+            kimi_family: false,
+            attention_geometry_bound: false,
+            legal_job_bound: false,
+            offence_attribution: false,
+            gdn_key_heads: false,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        };
+        let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
+        assert!(err.contains("has no dissection to try it with"), "{err}");
+    }
+
+    /// **The chain we cut is not the chain the drill runs.** Devnet arms `palw_context_ladder`;
+    /// testnet-11 (`palw_rc_shipped_params`) leaves it dormant, so the panel there asks the gate
+    /// with the court armed and `ladder: None` — the bundle's own 2^26 count, no ladder rules.
+    /// The fused row must be admissible through that exact shape too, or a green devnet drill
+    /// would be a network the cut chain is not (8e's question at the freeze).
+    #[test]
+    fn a_fused_row_preflights_under_t11s_court_with_the_ladder_dormant() {
+        use kaspa_consensus_core::palw_class_admission_v2::{PalwAdmissionShapeV1, palw_admission_shape_at_v1};
+        let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        assert!(params.palw_context_ladder.is_none(), "t11 leaves palw_context_ladder dormant (the 5f card §1)");
+        let s = PalwClassSdk::builtin_v1(
+            bundle.court,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            params.net.to_string().into_bytes(),
+        );
+        let row = s
+            .ledger()
+            .into_iter()
+            .find(|e| e.model_id == misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID)
+            .expect("this build's SDK knows the graph-v5 row");
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("t11's court has a shape");
+        assert!(shape.court.is_some(), "t11 arms palw_kary_court at genesis");
+        assert!(shape.ladder.is_none(), "and the dormant ladder fence yields no rules — the gate counts at the bundle's ladder");
+        let root = kaspa_hashes::Hash64::from_u64_word(0xA16);
+        let admitted = s
+            .preflight_admission(bundle, &row, root, &shape)
+            .expect("the fused row is admissible under t11's armed court with the ladder dormant");
+        // Counted at the RULESET's ladder (2^26), the number the gate recounts — above the
+        // executor's 2^22, which is why the probe must be counted against the bundle (audit D H-5b).
+        let counted = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(
+            &row.profile,
+            &row.canonical_context(),
+            bundle.court.max_step_leaf_count(),
+        )
+        .expect("the canonical job counts against the ruleset's ladder");
+        assert_eq!(admitted.canonical_step_leaf_count, counted, "the entry carries the count the gate recomputed");
+        assert!(counted > 1 << 22, "the 512 row does not fit the executor's 2^22 — the bundle's ladder is what admits it");
+
+        // **And the gate prices the row identically whether the ladder fence is armed or dormant**:
+        // the entry with the court's rules passed explicitly is the entry with none passed, byte for
+        // byte — the court, not the context-ladder fence, is what the dissection price follows.
+        let court = shape.court.expect("t11 arms the court");
+        let rules = kaspa_consensus_core::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+            &row.profile,
+            Some(court),
+            bundle.court.max_step_leaf_count(),
+        )
+        .expect("the graph-v5 row has ladder rules under the court");
+        let with_rules = PalwAdmissionShapeV1 {
+            court: Some(court),
+            ladder: Some(rules),
+            token_lift: false,
+            fused_dissectable: false,
+            held: shape.held,
+            kimi_family: false,
+            attention_geometry_bound: false,
+            legal_job_bound: false,
+            offence_attribution: false,
+            gdn_key_heads: false,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        };
+        let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
+        assert_eq!(format!("{priced:?}"), format!("{admitted:?}"), "one price for the fused row under one court");
+    }
+
+    #[test]
+    fn the_2m_dense_row_preflights_when_t11s_held_regime_is_armed() {
+        use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
+
+        let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+        let row = sdk
+            .ledger()
+            .into_iter()
+            .find(|entry| entry.model_id == misaka_palw_base0::classes::A16_GRAPH_V7_2M_MODEL_ID)
+            .expect("the SDK exposes the fixed 2M held row");
+        // **The height comes from the fence, not from a literal.** This read 7,000 and testnet-11's
+        // `palw_held_context` is at 7,100, so the test asserted "held is armed" one height BELOW the
+        // fence that arms it and had been failing ever since the height last moved. A fence height
+        // written into a test goes stale every time an operator moves it, and the failure it produces
+        // looks like a defect in the thing under test rather than in the pin.
+        let armed_at = params.palw_held_context.expect("testnet-11 schedules the held regime").daa_score().max(1);
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, armed_at).expect("the armed t11 shape derives");
+        assert!(shape.held.armed, "the 2M row is only admitted from the held fence at DAA {armed_at}");
+        // And the other side of the fence, so "armed" is a statement about the height and not a
+        // constant that would pass wherever it was evaluated.
+        let before = palw_admission_shape_at_v1(&params, bundle, &row.profile, armed_at - 1).expect("the shape derives below it too");
+        assert!(!before.held.armed, "the held regime is not armed at DAA {}", armed_at - 1);
+        sdk.preflight_admission(bundle, &row, Hash64::from_u64_word(0x2A16_2A16), &shape)
+            .expect("the 2M row is admissible through the exact held t11 registration gate");
+    }
+
+    /// **The preflight asks F4 the way the chain does** (the 2026-09-23 route-matrix audit's #6).
+    /// The acceptance path passes `palw_canonical_work` at the registering block — `true` on
+    /// testnet-12 from genesis — while the SDK passed a literal `false`, so a preflight could admit a
+    /// class the chain then refused after its carrier was paid for. The shape now carries the
+    /// reading, on both sides of each network's fence, and the preflight forwards it.
+    #[test]
+    fn the_preflight_reads_the_legal_job_bound_the_chain_reads() {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
+        for suffix in [11u32, 12] {
+            let params = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, suffix));
+            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+                panic!("testnet-{suffix} ships a ConsensusV2 bundle");
+            };
+            let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+            let row = sdk.ledger().into_iter().next().expect("a catalog row");
+            let height = params.palw_canonical_work_daa();
+            for daa in [0u64, height.unwrap_or(0).saturating_sub(1), height.unwrap_or(0), 1_000_000] {
+                let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, daa).expect("the shape derives");
+                // The processor's own expression (`palw_v2_validate_objects`, F4's argument).
+                assert_eq!(shape.legal_job_bound, height.is_some_and(|h| daa >= h), "testnet-{suffix} at DAA {daa}");
+            }
+        }
+        let t12 = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        assert_eq!(t12.palw_canonical_work_daa(), Some(0), "testnet-12 bounds registrations by the legal job from genesis");
+        // The preflight hands the whole shape to the ONE shared probe (`palw_admission_probe_v1`, the gate's, the SDK's and the manifest
+        // verifier's), which forwards the shape's reading of F4 — so the guard follows the forwarding to where it now happens.
+        let source = include_str!("sdk.rs");
+        assert!(source.contains("palw_admission_probe_v1(bundle, &entry.profile, &canonical, artifact_root, chain_certified, shape)"));
+        let probe = include_str!("../../../../consensus/core/src/palw_class_admission_v2.rs");
+        assert!(probe.contains("shape.legal_job_bound,"), "and the shared probe forwards the shape's reading");
+    }
+}
+
+pub mod flat_vector_v9;
+pub mod flat_snapshot_v9;
+pub mod flat_checkpoint_fixture9;
+pub mod flat_streamed_locator_v9;

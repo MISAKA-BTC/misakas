@@ -13,7 +13,7 @@ node, a real model weight or the t12 network. **No RFC is complete.**
 
 ## 1. Cases
 
-| # | case | path | test (all in `misaka-palw-gateway/src`) | status |
+| # | case | path | test (all in `misaka/palw/gateway/src`) | status |
 |---|---|---|---|---|
 | 1 | Chat request → committed claim (FP V3, the live lane) | `serve_connection` → admission → `prepare_request` → worker → bindings → outbox | `e2e::a_chat_request_becomes_a_queued_commitment_and_says_it_is_not_final` | IMPLEMENTED_AND_TESTED, in process, BASE-0 floor worker (`testkit::FloorWorker`); real family worker / node run: not done |
 | 2 | …into a consensus fold (claim visible; receipt checked against the node's row; seat replay; licence) | gateway → fp-submit `plan_submission`/`execute_handoff` → extraction walk → `apply_palw_transition_v7` | `e2e_chain::a_v3_gateway_request_becomes_a_claim_the_fold_holds_…` | IMPLEMENTED_AND_TESTED in process on testnet-12's shipped params (l5 fixtures: fixture bond key, accepting broadcast, signature = the door's other test) |

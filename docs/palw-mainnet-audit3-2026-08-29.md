@@ -305,7 +305,7 @@ backend.refutation_for_index(capture, index)`.
 
 `refutation_for_index` derives the refutation's binding FROM the material it is handed: `misaka-
 palw-base0/src/backend.rs:151` decodes `(binding, tiles, logits_rows, generated, _) =
-base0_material_decode_v1(material)` and `misaka-palw-base0/src/legs.rs:721-722` carries that
+base0_material_decode_v1(material)` and `misaka/palw/base0/src/legs.rs:721-722` carries that
 decoded `binding` verbatim into `PalwExecutionStepRefutationV1 { binding, .. }`. So a challenger's
 refutation carries the CHALLENGER's `full_logits_trace_root` and `committed_execution_root`.
 
@@ -498,7 +498,7 @@ challenger-side; the inverted test is restored to the guard". The original M2-5 
 only the conviction-on-silence half was addressed, and the remediation table records the finding
 as closed without qualification.
 
-**Mechanism.** `Qwen36Backend` (`misaka-palw-base0/src/qwen36_backend.rs:273`) and `Qwen25A16Backend`
+**Mechanism.** `Qwen36Backend` (`misaka/palw/base0/src/qwen36_backend.rs:273`) and `Qwen25A16Backend`
 (`qwen25_a16_backend.rs:197`) implement only `model_id`, `job_for_anchor`, `execute` and
 `verify_material`; they take the trait defaults `fn bisect_prefix_state(...) -> Option<Hash64> {
 None }` and `fn refutation_for_index(...) -> Err(...)` (`consensus/core/src/palw_backend.rs:128`,

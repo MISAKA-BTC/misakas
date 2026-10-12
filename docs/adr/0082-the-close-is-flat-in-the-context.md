@@ -136,7 +136,7 @@ not carry it:
   changes it waits on (`misaka-cli/src/palw_court.rs:84-125`); one of the three — `max_close_chunks`
   — landed with W3, the other two did not.
 * The free-prompt worker builds its court from `PALW_STEP_MAX_LEAVES` (`2^22`) directly
-  (`misaka-palw-base0/src/bin/palw-a16-fp-worker.rs:94`); the W1b fix that prices a job against the
+  (`misaka/palw/base0/src/bin/palw-a16-fp-worker.rs:94`); the W1b fix that prices a job against the
   ruleset's ladder (`bb4f145b`) is not an ancestor of 5f. On the shipped commit path that is about
   38 positions, prompt and answer together, whatever the row admits.
 
@@ -789,7 +789,7 @@ and the devnet rulesets both DERIVE 2 with the v5 row in `genesis_objects` (wind
 deadline 42, ruleset ladder `2^26`, 512 positions at a 16-position tile, an 8-lane disputed site) —
 not the 4 an earlier sweep reported, not the 16 the ADR worked its table at — and the test prints
 its whole configuration on the line beside the number
-(`misaka-palw-base0/src/classes.rs`, `consensus/core/src/palw_context_ladder.rs`), so a reader who
+(`misaka/palw/base0/src/classes.rs`, `consensus/core/src/palw_context_ladder.rs`), so a reader who
 moves the arity is told by how much.
 
 Corrected above: Decision 6's 80,504 / 200,732 and its "flat" sweep; §4's bottom-opening bullet.

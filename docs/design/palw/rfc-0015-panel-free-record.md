@@ -23,7 +23,7 @@ repository-implementable and not done; **EXTERNAL_GATE** = needs something outsi
 
 ## 2. Requirement → code → test → status
 
-Tests: `K` = `misaka-palw-kernel/tests/k2_opv.rs`, `KP` = `k2_opv_pipeline.rs`, `L` = `src/lifecycle.rs` unit tests, `O` =
+Tests: `K` = `misaka/palw/kernel/tests/k2_opv.rs`, `KP` = `k2_opv_pipeline.rs`, `L` = `src/lifecycle.rs` unit tests, `O` =
 `src/opv.rs` unit tests, `F` = `consensus/core/tests/rfc0015_panel_free.rs`. Every ledger test runs through the mini consensus consumer
 (strict encodings, refused objects leave the root byte-identical, settlement instructions applied to a bond book that must equal the
 ledger's own view and balance) and then `opv_invariants()`. Verifiers are built fresh from the replayed chain and public DA bytes with

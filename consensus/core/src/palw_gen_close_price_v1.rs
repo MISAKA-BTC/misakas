@@ -11,7 +11,7 @@
 //! proof; and a catalog entry that records the low number lies about the class.
 //!
 //! **The price here is an upper bound of the measured close at every leaf of every job** (the sweep that holds it to that:
-//! `misaka-palw-sdk/tests/gen_sd3_class.rs`). It is the PALW-TIR-38 twin ([`crate::palw_tir_close_size_v1`]) run over every stage of
+//! `misaka/palw/sdk/tests/gen_sd3_class.rs`). It is the PALW-TIR-38 twin ([`crate::palw_tir_close_size_v1`]) run over every stage of
 //! the pipeline: the abstract twin of the court's own evaluation over element SETS — the same contexts, the same index maps primitive by
 //! primitive (the generative court's evaluator is the IR's over the stage's version-1 view, `demand_v2`), a superset where the court
 //! reads by a value — with the three things a pipeline stage's court does differently supplied:
@@ -66,7 +66,7 @@ use misaka_palw_tir::validate_v2::validate_v2;
 /// The reduced SD3 pipeline (13 stages, 168 commit points) sizes in **66,871,506 steps — 237,358 (0.35 %) under it**: three quarters of
 /// it the ten VAE stages, a fifth the denoiser, the text stages almost nothing (the sizing walks every tile of a node at its widest
 /// position, and a tile of a convolution's output reads `3 · Cin` input leaves). That margin is the drill class's, and it is pinned
-/// (`misaka-palw-sdk/tests/gen_sd3_class.rs`, `the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap`): a lowering change that
+/// (`misaka/palw/sdk/tests/gen_sd3_class.rs`, `the_gate_sizes_every_close_of_the_sd3_class_within_its_work_cap`): a lowering change that
 /// eats it fails there, by name, before the gate refuses the class. A real-size image stack is past any cap until the sizing walks a tile
 /// CLASS rather than every tile (the recorded follow-up).
 pub const PALW_GEN_CLOSE_SIZING_WORK_CAP_V1: u64 = crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_WORK_CAP_V1;

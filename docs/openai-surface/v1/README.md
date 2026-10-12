@@ -16,7 +16,7 @@ dropped; and OpenAI's no-effect fields are accepted and listed. A refusal is tes
 SUBSTRING of the reason so the sentence can grow without the corpus moving, and every verdict is
 decided with dormant chain facts — the state of every shipped network.
 
-The gateway runs the corpus in `misaka-palw-gateway/src/surface.rs`
+The gateway runs the corpus in `misaka/palw/gateway/src/surface.rs`
 (`the_conformance_corpus_passes_on_this_gateway`): every file, in name order, through
 `parse_and_admit` — the same function the route calls before the queue and before the worker —
 and then hashes the directory (`OPENAI_SURFACE_V1_CORPUS_SHA256`: SHA-256 over each file's name,

@@ -42,7 +42,7 @@ through faults on a mapping. The ranges are now memoised per instance in `TirPar
 supplies them from its open pass), so a node reads its weights' ranges once per artifact, not once
 per run.
 
-## 2. The tiers, read off the dataflow (`misaka-palw-tir-exec/src/tiers.rs`)
+## 2. The tiers, read off the dataflow (`misaka/palw/tir/exec/src/tiers.rs`)
 
 `TirTiersV1::of(program, rules)` is a pure function of the program and the node's
 `TirTierRulesV1 { pin_below_bytes }` (default 1 MiB). Per param:
@@ -66,8 +66,8 @@ per run.
   vector: rows not worth a read each, and a budget cannot notice them); a forward that reads at least
   as many rows as there are; views of different row shapes.
 
-What the corpus says (`misaka-palw-tir-lower/tests/residency_tiers.rs` over every Hugging Face
-fixture's lowered program, `tests/residency.rs`, `misaka-palw-sdk/tests/tir_residency.rs`): every
+What the corpus says (`misaka/palw/tir/lower/tests/residency_tiers.rs` over every Hugging Face
+fixture's lowered program, `tests/residency.rs`, `misaka/palw/sdk/tests/tir_residency.rs`): every
 mixture routes its expert stacks and the scales gathered with them, and no dense model routes a stack;
 every lowered model gathers its token embedding; Gemma-4's per-layer input table is gathered by the
 token at every layer; the two-level RoPE tables are gathered by the position's
@@ -109,7 +109,7 @@ class that routes and is declined is the case ADR-0112 was written for, and `kas
 forward never re-reads what it read earlier in the same forward; the in-flight term keeps a row a
 gather is copying alive past an eviction inside the budget.
 
-## 4. The store (`misaka-palw-tir-exec/src/node/residency.rs`)
+## 4. The store (`misaka/palw/tir/exec/src/node/residency.rs`)
 
 * **Opening is one pass.** `TirWeightStoreV1::open` reads the pinned set in parallel (8 MiB reads at
   the device's queue depth) and then every byte of the file once, in inventory order, in chunks of
@@ -180,7 +180,7 @@ read + gathered bytes` on every run (every read is counted). The fleet measureme
 `tir-exec-bench --container <path> --resident-bytes <n>` (the mapping's run without the flag); this
 lane runs nothing on a fleet host.
 
-**Real checkpoints, from their configs alone** (`misaka-palw-tir-lower/tests/residency_tiers.rs`:
+**Real checkpoints, from their configs alone** (`misaka/palw/tir/lower/tests/residency_tiers.rs`:
 each program lowered at its real shapes, no weight read; the node's rule; GiB; "replay" is a
 4,097-forward canonical job — a 4,096-position context — at the cold expected union of its routes
 plus its gathered rows, ESTIMATED at 845 MB/s):
@@ -207,7 +207,7 @@ arithmetic at its size: ~116 GiB a replay is ~2.5 min at 845 MB/s, ~4.1 min at 5
 through faults. The registration preflight (`tir/residency-preflight`) prints these terms for any
 model from its headers.
 
-## 8. Candidates of one parent, weight-stationary (`misaka-palw-tir-exec/src/lockstep.rs`)
+## 8. Candidates of one parent, weight-stationary (`misaka/palw/tir/exec/src/lockstep.rs`)
 
 **The API.** `TirLockstepV1` steps several executors — a parent's composite candidates, over the one
 store they share — a position at a time and an OCCURRENCE at a time: every member's layer `L`

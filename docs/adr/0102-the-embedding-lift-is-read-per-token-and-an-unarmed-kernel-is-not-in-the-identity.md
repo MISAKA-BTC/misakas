@@ -241,7 +241,7 @@ the prerequisite for measuring and serving K3-class artifacts this way (§8).
     `palw_genesis_reaches_fenced_kernel_v1`; `consensus/src/pipeline/virtual_processor/processor.rs` —
     the cached fence and the acceptance call through v7.
   * `consensus/core/src/palw_measured_model_v1.rs` — `HybridQwen36TokenLift`; the manifest test.
-  * `misaka-palw-base0/src/inventory.rs` — the per-token branch, `qwen36_registers_inventory_root_v1`;
+  * `misaka/palw/base0/src/inventory.rs` — the per-token branch, `qwen36_registers_inventory_root_v1`;
     `qwen36_plan.rs` — the lift accepts the kernel; `qwen36_backend.rs` — the court test.
   * `misaka-palw-sdk` — the memoized root (`registered_root_of`), the chain-registered lookup by
     either root, the preflight through v7, the test; `palw-class measure` under graph-v6.

@@ -10,7 +10,7 @@
 > **Residency note (2026-09-02).** This ADR was written on `palw-mainnet-rc-integration`
 > (`d3880149`) and never reached `main`'s `docs/adr/`, although the tier it specifies did:
 > `palw_base0_a16`, the `qwen25_a16_*` profiles, ADR-0052 ("Activations are A16 codes (ADR-0047)"),
-> and code comments in `misaka-palw-base0/src/{artifact,engine_a16}.rs` and
+> and code comments in `misaka/palw/base0/src/{artifact,engine_a16}.rs` and
 > `consensus/core/src/palw_base0_a16.rs` all cite it by number. It is restored here verbatim so the
 > number resolves. Later ADRs moved the A16 class, not this arithmetic: the registered class is
 > the court-capable graph-v2 row (ADR-0067 — its `artifact_root` is the openable inventory root,

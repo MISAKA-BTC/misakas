@@ -28,7 +28,7 @@ PALW の唯一の主張は「ブロックの対価は**実際の LLM 推論**で
   争議を有罪判定まで最後まで回せること——を **certification** で証明する必要がある(ADR-0069)。
 
 このガイドは、あなたのモデルを weightless から weight-bearing へ引き上げるための手順書だ。
-唯一の完成参照は **BASE-0**(`misaka-palw-base0/src/backend.rs`)。以下、随所でその file:line を
+唯一の完成参照は **BASE-0**(`misaka/palw/base0/src/backend.rs`)。以下、随所でその file:line を
 写経対象として指す。
 
 ---
@@ -76,7 +76,7 @@ PALW の唯一の主張は「ブロックの対価は**実際の LLM 推論**で
 - `operand_openings_for(...)`(`:257`)、`job_anchor_v1(...)`(`:230`)
 
 QWEN36 / QWEN25-A16 は現在、**court に必須の3つが既定のまま**(`None`/`Err`/`false`)。だから
-weight を持ってはならない、とコード自身が書いている(`misaka-palw-base0/src/qwen36_backend.rs:13-18`)。
+weight を持ってはならない、とコード自身が書いている(`misaka/palw/base0/src/qwen36_backend.rs:13-18`)。
 
 ---
 
@@ -106,7 +106,7 @@ check_lineage_v1(&your_lineage, &court)   // misaka-palw-sdk::conformance
 
 これが緑になると、profile validate / 参照が厳密に後方 / 全 kernel catalogued / 全 node shape
 servable / canonical job が worst case と n_ctx の内側 / court cost 導出可、が一括で保証される
-(`misaka-palw-sdk/src/conformance.rs:29`)。**新クラスの最初のテストはこれにする。**
+(`misaka/palw/sdk/src/conformance.rs:29`)。**新クラスの最初のテストはこれにする。**
 
 ### ステップ 3: court の手番を実装する
 
@@ -205,13 +205,13 @@ certification の前後で、これらを自分のコードに対して確認す
 
 ## 6. 写経の順番(BASE-0 を最小完成例として読む)
 
-1. `misaka-palw-base0/src/backend.rs:189` `execute_with_injected_fault` — drill の入口
+1. `misaka/palw/base0/src/backend.rs:189` `execute_with_injected_fault` — drill の入口
 2. 同 `:239` `bisect_prefix_state` — prefix commitment の最小形
 3. 同 `:245-` `refutation_for_index` — 終端証拠の組み方
 4. 同 `:503-730` テスト群 — E2E 往復の完成形(= certification vector)
-5. `misaka-palw-base0/src/legs.rs` — `base0_bisect_prefix_state_v1` / `Base0StepCaptureV1` /
+5. `misaka/palw/base0/src/legs.rs` — `base0_bisect_prefix_state_v1` / `Base0StepCaptureV1` /
    checkpoint leg / `a16_captured_rows_v1`(A16 橋渡しの半分)
-6. `misaka-palw-sdk/src/conformance.rs:29` `check_lineage_v1` — 静的バッテリの中身
+6. `misaka/palw/sdk/src/conformance.rs:29` `check_lineage_v1` — 静的バッテリの中身
 
 BASE-0 が court を最後まで回せる唯一のクラスである理由は、この6ファイルに全部書いてある。
 新しいモデルを weight-bearing にするとは、この6つを自分の family について再現することだ。

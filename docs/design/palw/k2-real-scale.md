@@ -442,8 +442,8 @@ the residuals of GAP 8 and GAP 6 (§8); and the parts of detection §11 lists as
 
 ## 10. SmolVLM-256M's text class under K2-TIR-v4
 
-The SDK probe (`misaka-palw-sdk/tests/coverage_p1_huihui_9b.rs`, `COV_P1_K2=1 COV_P1_K2_ONLY=1`) over the committed header-only
-fixture of SmolVLM-256M-Instruct (`misaka-palw-tir-lower/tests/fixtures/vlm-generic/smolvlm-256m-instruct`, revision `7e3e67e…`). The
+The SDK probe (`misaka/palw/sdk/tests/coverage_p1_huihui_9b.rs`, `COV_P1_K2=1 COV_P1_K2_ONLY=1`) over the committed header-only
+fixture of SmolVLM-256M-Instruct (`misaka/palw/tir/lower/tests/fixtures/vlm-generic/smolvlm-256m-instruct`, revision `7e3e67e…`). The
 class is the text decoder only, a partial-task class (`coverage-p1p2-record.md` §2.1), with 8,031 committed values a position:
 
 | SmolVLM-256M text class | K2-TIR-v1 / v2 | K2-TIR-v4 |
@@ -636,7 +636,7 @@ question is therefore finer here: the court is per element, and the tiles are th
 
 ### 12.2 Numbers at 512 tokens
 
-Shape level (`misaka-palw-sdk/tests/k2s_encoder_court.rs`). The configurations are as published, lowered by `lower::bidir` with no
+Shape level (`misaka/palw/sdk/tests/k2s_encoder_court.rs`). The configurations are as published, lowered by `lower::bidir` with no
 weight read. Each is judged as ONE position under the v4 plan, `check_plan_v1`, the per-prosecution gate and the node's carrier.
 
 | Class @ tokens | relations | ε | MACs a position | position material B / parts | public B a prosecution | verifier RAM B | worst court B (where) | filing B | on chain B |
@@ -761,7 +761,7 @@ Branch `k2/real-scale`. Integration merged K2S at `8fae728a2` (integration `5286
 - the canonical harness: 23/23.
 
 **Implemented, NOT compiled or tested — WIP commit after `52868f3b9`: DA16b option (c)** (§4.2, the Lead's decision):
-- `misaka-palw-kernel/src/seg_scope.rs`: the withheld mask (model-dependent and a whole-value court ≤ 1 MiB, closed-form price), `whole_value_court_cost_v1`, `seg_scope_report_v1` (`court_scope_complete()`: the explicit not-reward-bearing flag);
+- `misaka/palw/kernel/src/seg_scope.rs`: the withheld mask (model-dependent and a whole-value court ≤ 1 MiB, closed-form price), `whole_value_court_cost_v1`, `seg_scope_report_v1` (`court_scope_complete()`: the explicit not-reward-bearing flag);
 - `seg_da`: `ChunkSpecV1::Withheld` / `ChunkBodyV1::Withheld = 2`; withheld values served as their node opening alone; `assemble_position_v1` now returns `(values, siblings, commitments)`; `position_material_v1` excludes withheld bytes;
 - `element.rs`:
   - `SegFaultV1::WholeValue = 3` (`WholeValueFaultV1`, `WholeOperandV1`, `WholeTensorV1`), with its court in `verify_seg_fault_v1` and its prover `build_whole_value_fault`;

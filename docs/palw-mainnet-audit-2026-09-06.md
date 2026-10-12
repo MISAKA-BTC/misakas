@@ -286,9 +286,9 @@ rather than a patch"); it is in fact a steered, evidence-free, funded attack tha
 **Location.** `kaspad/src/palw_panel.rs:4118-4119` (the seat's counts), `:2661` (`ctx =
 resolved.fp_job_context_v1(&material.job)`), `:1236-1247` (`fp_job_material_for_claim` accepts a
 payload on class_id + bond alone), `:2669` (`break 'verdict Some(Valid)` short-circuits the
-re-pricing arm at `:2733`) · `misaka-palw-base0/src/qwen25_a16_backend.rs:1513-1522`
+re-pricing arm at `:2733`) · `misaka/palw/base0/src/qwen25_a16_backend.rs:1513-1522`
 (`decode_tokens_executed: job.decode_token_limit`), same at `qwen36_backend.rs:1464`,
-`backend.rs:651` · `misaka-palw-base0/src/fp_interval.rs:286-296, 334-364, 1877-1894` ·
+`backend.rs:651` · `misaka/palw/base0/src/fp_interval.rs:286-296, 334-364, 1877-1894` ·
 `consensus/core/src/palw_state_v2.rs:9616, 9690-9697, 9814` ·
 `consensus/core/src/palw_freeprompt_v3.rs:1067-1085` ·
 `consensus/core/src/palw_step_leg.rs:353, 365-410` (prover-supplied siblings).
@@ -424,7 +424,7 @@ anywhere.
 
 **Location.** `consensus/core/src/config/params.rs:8241` (the arming) against `:1023-1033` (the
 field's own prohibition) · `consensus/core/src/palw_backend.rs:257-266` (the defaulted responder) ·
-`misaka-palw-base0/src/qwen25_a16_backend.rs:1016` and `qwen36_backend.rs:993` (the two impl blocks
+`misaka/palw/base0/src/qwen25_a16_backend.rs:1016` and `qwen36_backend.rs:993` (the two impl blocks
 that do not override it; only `backend.rs:484` does) · `kaspad/src/palw_panel.rs:2556-2574` (`Err`
 → `continue`, nothing filed) · `consensus/core/src/palw_state_v2.rs:9420` (`DefaultAccused`),
 `:8132-8134` (the sweep), `:5988-5997` (`void_and_slash`).
@@ -683,8 +683,8 @@ still owed is here, and the trigger is not the "~1-in-L" event both the audit an
 `:1286`), reached from `:2755` · `consensus/core/src/palw_step_refute.rs:4090-4094` (the uncapped
 one-line forwarder passing the 2²² default), against the capped sibling three lines below at `:4100`
 · `consensus/core/src/palw_step_leg.rs:80, 723-725, 1702-1705` ·
-`misaka-palw-base0/src/qwen25_a16_backend.rs:841` (built at `self.step_ladder_cap`) ·
-`misaka-palw-sdk/src/lineages/dense.rs:228` (= `court.max_step_leaf_count()` = 2²⁶).
+`misaka/palw/base0/src/qwen25_a16_backend.rs:841` (built at `self.step_ladder_cap`) ·
+`misaka/palw/sdk/src/lineages/dense.rs:228` (= `court.max_step_leaf_count()` = 2²⁶).
 
 **Mechanism.** Built at 2²⁶, checked at 2²². `step_opening_root_capped_v1` refuses at its first
 line with `LeafCountOutOfRange { max: 4194304 }` before a byte of evidence is read; in the panel

@@ -1,0 +1,80 @@
+[package]
+name = "misaka-palw-gateway"
+description = "MISAKA free-prompt gateway (ADR-0044 FP-07): an OpenAI-compatible /v1/chat/completions front end whose ONE inference answers the user AND produces the consensus-grade execution commitment inputs, via a resident family worker on the v3-serve contract (ADR-0077 Decisions 1-4)"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "misaka-palw-gateway"
+path = "src/main.rs"
+
+[[bin]]
+name = "misaka-palw-rfc1-drill-claim"
+path = "src/bin/rfc1_drill_claim.rs"
+
+[[bin]]
+name = "misaka-palw-fp-rail"
+path = "src/bin/rail.rs"
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-txscript.workspace = true
+kaspa-hashes.workspace = true
+kaspa-pq-validator-core.workspace = true
+# RFC-0009 stage A: `--signer-socket` builds the carrier through the sidecar, so the bond key never enters the rail's process.
+kaspa-pq-signer = { path = "../../../kaspa-pq-signer" }
+# ADR-0078: the derivation step — registered grammars and content-named transformers.
+misaka-palw-derive.workspace = true
+# RFC-0009 stage A: `--relay` (idempotent multi-node relay of the locally signed carrier).
+misaka-palw-remote.workspace = true
+# ADR-0077 Decision 6: the chat template a lane renders, and the rule that picks it from the
+# model's own declared tokens. Already in this binary's tree via `misaka-palw-derive`, so this
+# names a coupling that existed rather than adding one — and it buys the property that the gateway
+# and the model gates cannot spell the same template two ways.
+misaka-palw-base0.workspace = true
+# ADR-0079: the ONE spelling of the host posture — the worker spawn discipline, the public-bind
+# guard, and the reachable-secret check. A second copy here would be a second answer to the same
+# question, and this repository has paid that bill before.
+misaka-palw.workspace = true
+# ADR-0096 Decisions 3 and 7: the JSON-Schema subset a `response_format` may name, its RFC 8785
+# bytes (also what the tool convention renders JSON with — one canonical form, both trees), and
+# the constraint id. The gateway validates with it after the run (advisory); Part B's compiler is
+# meant to be built beside it.
+misaka-palw-constraint.workspace = true
+# RFC-0001 §2.8, §2.11: the decoded image a V5 slot references and the embedding output kind a claim's job names.
+misaka-palw-tir.workspace = true
+misaka-palw-gen.workspace = true
+# ADR-0077 Decision 4: the ONE submit path's shared vocabulary — the anchor TTL and the `.expired`
+# suffix, so the gateway's sweep and the rail's refusal cannot disagree about what "stale" is.
+misaka-palw-fp-submit.workspace = true
+# ADR-0077 Decision 3: the gateway reads the chain it commits to, over the SAME wRPC-borsh client
+# `misaka --rpc` uses. A second answer to "which node, which encoding" is a way for two answers to
+# disagree.
+kaspa-rpc-core.workspace = true
+kaspa-wrpc-client.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+borsh.workspace = true
+faster-hex.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# `misaka.format.canonical_sha256`: the digest a consumer checks its stored canonical JSON against.
+sha2.workspace = true
+
+[dev-dependencies]
+# RFC-0003 §II.1 + the gateway's image-generation path: the SDK declares and holds a generative class, tir-lower builds the tiny SD3 pipeline
+# the SDK's own tests run (`tests/gen_sd3_class.rs`), tir-artifact is the container a worker holds. Tests only: the gateway binary links none.
+misaka-palw-sdk.workspace = true
+misaka-palw-tir-lower = { path = "../tir/lower" }
+misaka-palw-tir-artifact = { path = "../tir/artifact" }
+
+[lints]
+workspace = true

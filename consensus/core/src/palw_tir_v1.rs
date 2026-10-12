@@ -142,7 +142,7 @@ impl PalwTirCeilingsV1 {
 }
 
 /// **testnet-12's IR ceilings, v1** — set from admission v10's measurement of the Qwen2.5 A16
-/// decoders as IR programs at the small history bound (`misaka-palw-base0/tests/
+/// decoders as IR programs at the small history bound (`misaka/palw/base0/tests/
 /// tir_a16_admission_measure.rs`, 2026-09-28): the 1.5B costs 12,928 program bytes, 7,762 unrolled
 /// nodes, 24.1 G MACs a position at `H = W = 2^18`, 7.5 GB of state, 549 MB peak live and 838 units of
 /// admission work; the 3B 12,936 B, 9,970 nodes, 41.7 G MACs, 9.7 GB, 554 MB and 838.

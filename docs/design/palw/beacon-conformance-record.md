@@ -23,8 +23,8 @@ policy) tuple exists.
 | loader boundary for canonical beacon facts | `runtime_pack/facts.rs` (`BeaconFactSource`, `ChainBeaconFactsV1`) | lane D implements it over RPC; `FileFactSource` / `MemoryFactSource` exist today |
 | selection, evidence, resume, verify | `runtime_pack/beacon_run.rs`, `pack run-conformance`, `pack verify-conformance` | contract functions only: `collect_work_beacon_v1`, `verify_work_beacon_v1`, `challenge_seed_v1`, `ChallengeStreamV1`, `verify_conformance_evidence_v1` |
 | per-implementation vector runner | `runtime_pack/conformance.rs` (`TripleRunner`) | digests from each implementation's own outputs |
-| implementation revisions | `misaka-palw-sdk/build.rs` | BLAKE2b-512 of the source of reference / ref2 / typed backend / container reader / checker, taken at build |
-| tests | `misaka-palw-sdk/tests/runtime_pack_beacon.rs` | 17 tests, all attack-by-attack below |
+| implementation revisions | `misaka/palw/sdk/build.rs` | BLAKE2b-512 of the source of reference / ref2 / typed backend / container reader / checker, taken at build |
+| tests | `misaka/palw/sdk/tests/runtime_pack_beacon.rs` | 17 tests, all attack-by-attack below |
 
 Commits (cherry-pickable, in order): `8906aa73b` bind commitment · `43fcb810d` facts boundary · `d7d50b1d5` triple runner ·
 `62d8c5205` challenge/evidence/verify · `97020c2ae` CLI · `3a4218e55` tests · `55326aa07` Final path (contract `47bacfa74`) ·

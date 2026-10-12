@@ -161,7 +161,7 @@ pub struct Base0IrNodeV1 {
 use Base0IrInputV1::{CachedK, CachedV, LayerIn, Step};
 use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvPerHead, KvScaled, Vocab};
 
-/// The thirty-six steps, in the engine's own order (`misaka-palw-base0/src/engine.rs`).
+/// The thirty-six steps, in the engine's own order (`misaka/palw/base0/src/engine.rs`).
 pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     // --- attention ---------------------------------------------------------------------------
     // **No weight operand, and that is the engine's own shape** (ADR-0049 Decision F, audit

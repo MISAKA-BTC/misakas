@@ -107,7 +107,7 @@ one is adding a feature, once, for everyone.
 
 The JSON schema of `spec::ModelSpec` (serde; additive-only changes with defaults, so a V1 adapter
 keeps working). Its layers are fully expanded (`layers[i]`); the HL builder groups equal layers into
-block kinds. `ModelSpec::features()` lists the features it uses; each [`FeatureInfo`](../../../../misaka-palw-tir-lower/src/model/features.rs)
+block kinds. `ModelSpec::features()` lists the features it uses; each [`FeatureInfo`](../../../../misaka/palw/tir/lower/src/model/features.rs)
 states its lowering status, the primitives it emits (checked against every lowered fixture), its protocol
 requirement (none, or a named capability with the general primitive that would close it) and its tests.
 

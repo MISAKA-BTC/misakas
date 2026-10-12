@@ -301,7 +301,7 @@ claimant renumbers the later writer. **The next free number is 0099.**
 
 * **2026-09-10** — ADR written and implemented the same day:
   * `consensus/core/src/palw_seat_coverage_v1.rs` — Decision 1, with seven tests.
-  * `misaka-palw-base0/src/bin/palw-seat-coverage.rs` — the generator, classified in the
+  * `misaka/palw/base0/src/bin/palw-seat-coverage.rs` — the generator, classified in the
     float-free scan as a measurement tool.
   * `docs/palw-seat-coverage-2026-09-10.md` — the generator's output, as a dated record and not
     as a source.

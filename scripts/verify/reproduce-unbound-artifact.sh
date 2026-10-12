@@ -21,7 +21,7 @@
 set -uo pipefail
 B="${1:-./target/debug/palw-derive}"
 [ -x "$B" ] || { echo "no palw-derive at $B — cargo build -p misaka-palw-derive --bin palw-derive"; exit 2; }
-CORPUS="misaka-palw-derive/corpus/music/01-single-note.json"
+CORPUS="misaka/palw/derive/corpus/music/01-single-note.json"
 [ -f "$CORPUS" ] || { echo "run from the repo root: $CORPUS not found"; exit 2; }
 
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT

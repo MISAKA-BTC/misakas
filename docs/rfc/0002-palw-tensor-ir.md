@@ -133,7 +133,7 @@ The problem is how coarse the existing kernel relations are.
   (`palw_step_refute.rs:286-331`). BASE-0's ten are primitives; the Q36 and Kimi kernels are whole
   subgraphs (`GatedDeltaNet`, `AttnFused`, the router, the MoE combine).
 - **Conventions live in code, not in the identity.** GDN value head `vh` reads key head
-  `vh % k_heads`, hard-coded three times (engine `misaka-palw-base0/src/qwen36.rs:1239-1262`, float
+  `vh % k_heads`, hard-coded three times (engine `misaka/palw/base0/src/qwen36.rs:1239-1262`, float
   reference `qwen36_reference.rs:273-277`, court `palw_step_refute.rs:3218-3222`). The schema has one
   `gdn_heads` (`palw_step.rs:459`); the key-head count is not in the class id. The state chunk maps
   size the conv row as `(2k+v)·gdn_heads` (`palw_state_chunk_map.rs:1038-1039,1109-1111`) where the

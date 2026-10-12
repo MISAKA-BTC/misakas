@@ -12,7 +12,7 @@ So this file re-derives, from scratch and from the ADR's own preimages, everythi
 carries about a derivation:
 
 ```text
-  source_tree_sha256 = SHA-256( for each file under misaka-palw-derive/src, sorted by path:
+  source_tree_sha256 = SHA-256( for each file under misaka/palw/derive/src, sorted by path:
                                  path \0 len(u64 le) \0 bytes )
   transformer_id     = H_transformer( manifest canonical bytes )
   grammar_id         = H_grammar( name )
@@ -34,10 +34,10 @@ Rust crate.
 **What makes this trustworthy rather than merely different.** `selftest` checks it against three
 oracles that already live in the tree, and needs no build to do it:
 
-  1. `misaka-palw-derive/tests/transformer_id_pin.rs` — the pinned `source_tree_sha256` and the
+  1. `misaka/palw/derive/tests/transformer_id_pin.rs` — the pinned `source_tree_sha256` and the
      eight pinned `transformer_id`s. Recomputing two of those ids from the manifest bytes proves
      the framing, the field order and the source-tree walk are all right.
-  2. `misaka-palw-derive/corpus/<kind>/golden.json` — `dsl_hash`, `artifact_hash` and
+  2. `misaka/palw/derive/corpus/<kind>/golden.json` — `dsl_hash`, `artifact_hash` and
      `artifact_bytes` for every corpus answer, produced by the shipped Rust. Reproducing them
      byte for byte proves the canonicalizer and the transformer.
   3. The refusal corpus (`9x-*.json`) — answers the shipped grammar refuses, which this
@@ -79,7 +79,7 @@ import sys
 
 # ---------------------------------------------------------------------------------------------
 # The domains. Byte-for-byte from `consensus/core/src/palw_derived_v1.rs`,
-# `consensus/core/src/palw_v2.rs` and `misaka-palw-base0/src/qwen*_backend.rs`.
+# `consensus/core/src/palw_v2.rs` and `misaka/palw/base0/src/qwen*_backend.rs`.
 # ---------------------------------------------------------------------------------------------
 
 DOMAIN_DERIVED_ID = b"misaka-palw/derived-v1/derived-id/v1"
@@ -226,7 +226,7 @@ def derived_id_v1(obj: dict) -> bytes:
 
 
 # ---------------------------------------------------------------------------------------------
-# The source-tree hash (`misaka-palw-derive/src/source_tree.rs`), recomputed from a checkout.
+# The source-tree hash (`misaka/palw/derive/src/source_tree.rs`), recomputed from a checkout.
 # ---------------------------------------------------------------------------------------------
 
 
@@ -265,7 +265,7 @@ def source_tree_sha256_hex(crate_root: str) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
-# canon_json — `misaka-palw-derive/src/canon_json.rs`, re-implemented.
+# canon_json — `misaka/palw/derive/src/canon_json.rs`, re-implemented.
 #
 # Integers only (no float has a canonical text and none has an integer transformer downstream),
 # no duplicate keys at any depth (serde keeps the last, which is a semantic choice this layer
@@ -427,7 +427,7 @@ def integer_one_of(v, allowed, what: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
-# kind `music` — `misaka-palw-derive/src/kinds/music.rs`.
+# kind `music` — `misaka/palw/derive/src/kinds/music.rs`.
 # ---------------------------------------------------------------------------------------------
 
 MUSIC_PPQ_ALLOWED = (96, 192, 480, 960)
@@ -615,7 +615,7 @@ def music_run(dsl: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------------------------
-# kind `cad` — `misaka-palw-derive/src/kinds/cad.rs`, the axis-aligned CSG subset.
+# kind `cad` — `misaka/palw/derive/src/kinds/cad.rs`, the axis-aligned CSG subset.
 # ---------------------------------------------------------------------------------------------
 
 CAD_FRAC_BITS_MAX = 16
@@ -859,7 +859,7 @@ def _cad_six_times_volume(triangles) -> int:
 
 
 def f32_bits_exact(value: int, frac_bits: int) -> int:
-    """`misaka-palw-derive/src/fixed.rs` — the binary32 bit pattern of `value / 2^frac_bits`,
+    """`misaka/palw/derive/src/fixed.rs` — the binary32 bit pattern of `value / 2^frac_bits`,
     built with integers only, refusing anything the format cannot hold exactly."""
     if value == 0:
         return 0
@@ -1403,7 +1403,7 @@ def cmd_verify(args) -> int:
             entry["status"] = (
                 "UNVERIFIABLE by this path: no transformer in this verifier's implemented subset "
                 "has that transformer_id under this source tree. Either the kind is outside the "
-                "subset, or the producing build's `misaka-palw-derive/src` differs from this "
+                "subset, or the producing build's `misaka/palw/derive/src` differs from this "
                 "checkout (ADR-0078 Decision 3: the id names the code)."
             )
             unverifiable.append(entry["status"])
@@ -1514,7 +1514,7 @@ def cmd_verify(args) -> int:
 
 def main() -> int:
     here = os.path.dirname(os.path.abspath(__file__))
-    default_root = os.path.join(os.path.dirname(os.path.dirname(here)), "misaka-palw-derive")
+    default_root = os.path.join(os.path.dirname(os.path.dirname(here)), "misaka", "palw", "derive")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--crate-root", default=default_root, help="the misaka-palw-derive crate root")
     sub = p.add_subparsers(dest="cmd", required=True)

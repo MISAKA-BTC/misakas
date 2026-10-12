@@ -1,7 +1,7 @@
 # PALW execution-commitment legs — worker capture, and the measurement it stands on
 
 **Date:** 2026-08-15 · **Branch:** `palw-llm-pow-iso` · **Stage:** Land (consensus-inert)
-**Code:** `misaka-palw-worker/src/shim.c`, `misaka-palw-worker/src/main.rs`,
+**Code:** `misaka/palw/worker/src/shim.c`, `misaka/palw/worker/src/main.rs`,
 `consensus/core/src/palw_legs.rs` (producer half) · **Normative:** ADR-0026 §2, ADR-0027 §1–§2
 
 The schema (`misaka-palw/execution-commitment/v1`) was frozen first, deliberately, so the capture
@@ -104,7 +104,7 @@ non-2-D node, or a model whose depth/width is not the pins' — each aborts the 
 
 ```bash
 export MISAKA_PALW_GGUF=/path/to/Qwen3.5-2B-Q4_K_M.gguf
-export MISAKA_PALW_GOLDEN=misaka-palw-worker/golden/qwen35-2b-v2.metal-arm64.golden
+export MISAKA_PALW_GOLDEN=misaka/palw/worker/golden/qwen35-2b-v2.metal-arm64.golden
 cargo build --release -p misaka-palw-worker
 ./target/release/palw-worker --mode v2-legs-selftest
 ```

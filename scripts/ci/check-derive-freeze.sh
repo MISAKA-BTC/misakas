@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Which unmerged branches would MOVE `misaka-palw-derive/src` if merged into the
+# Which unmerged branches would MOVE `misaka/palw/derive/src` if merged into the
 # release branch — i.e. which ones still have to land before `transformer_id` can be
 # pinned once and stay pinned.
 #

@@ -21,7 +21,7 @@
 //!     base0_whole_capture_refusal_v1(leaves, materialize_cap, class_ladder) =
 //!         Some(_)  iff  leaves == 0 || leaves > class_ladder || leaves > materialize_cap
 //!
-//! (misaka-palw-base0/src/fp_interval.rs:4059). For a held class `class_ladder ==
+//! (misaka/palw/base0/src/fp_interval.rs:4059). For a held class `class_ladder ==
 //! palw_class_step_ladder_v1(network, profile) == network.max(2^40) == 2^40 == materialize_cap`,
 //! so for ANY leaf count the class ladder admits (`leaves <= 2^40`) the refusal can never fire and
 //! the seat re-executes the whole job DENSE (`dense_capture_from_fold_v1` → `DenseTiles`).

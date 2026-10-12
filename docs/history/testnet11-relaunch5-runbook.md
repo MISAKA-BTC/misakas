@@ -9,7 +9,7 @@ Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`d38abe44�
 > card pinned `PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT` as the file's flat digest (`c00faa48…`)
 > while the graph-v2 row resolves by the operand-inventory root (`1a7457f1…`) — the two-mappings
 > defect the resolver's own comment names. Re-pinned; the fingerprint moves, the genesis does not.
-> Verify with `misaka-palw-base0/tests/a16_root_probe.rs` (`PALW_A16_PATH=… --ignored`).
+> Verify with `misaka/palw/base0/tests/a16_root_probe.rs` (`PALW_A16_PATH=… --ignored`).
 
 > **`accaadce…` was deployed and taken back the same evening.** It froze the attempt lane's Layer-0
 > target (ADR-0071 Decision 1) and the live network measured what that costs: the floor produced
@@ -234,7 +234,7 @@ every node wipes, exactly as 5c.
 **Pre-checks**: 03:20 CEST on tip `9d038706` — pin test ok, `f6afe2e2…` / `fd041c40…`, A16 pin
 present, `a16_root_probe` green (superseded). 03:45 CEST on tip `697f1d0c` ("admission item 8 reaches the free-prompt lane",
 parent `9d038706`) — pin test ok, `e2b91c16…` / `3f25063d…`, A16 pin present, `a16_root_probe`
-green. 03:55 CEST on tip `85d3b547` (test-only — both hunks inside in-file test modules of `misaka-palw-base0/src/backend.rs` and `misaka-palw-sdk/src/sdk.rs`, fixture collateral 1,000 → 100,000 / 10,000) — pin test ok, pins unchanged. Step (2)
+green. 03:55 CEST on tip `85d3b547` (test-only — both hunks inside in-file test modules of `misaka/palw/base0/src/backend.rs` and `misaka/palw/sdk/src/sdk.rs`, fixture collateral 1,000 → 100,000 / 10,000) — pin test ok, pins unchanged. Step (2)
 below is satisfied only for the exact commit the user pushes.
 
 **5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;

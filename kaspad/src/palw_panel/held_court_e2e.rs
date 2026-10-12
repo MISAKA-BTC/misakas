@@ -934,7 +934,7 @@ fn t_a10_every_node_registry_answers_held_dissections_through_one_constructor() 
     let constructor = body(registry, "    pub fn for_node_v1(");
     assert!(constructor.contains(".with_held_answerability_v1(params.palw_held_answerability_v1())"), "off the node's params");
     assert!(constructor.contains("palw_attempt_rules_of_params_v1(params)"), "beside the attempt rule");
-    let sdk = include_str!("../../../misaka-palw-sdk/src/sdk.rs");
+    let sdk = include_str!("../../../misaka/palw/sdk/src/sdk.rs");
     assert!(
         body(sdk, "    fn ruled_v1(").contains("backend.set_held_answerability_v1(self.held_answerability);"),
         "every lineage's backend"

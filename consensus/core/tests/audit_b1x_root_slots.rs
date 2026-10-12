@@ -198,14 +198,14 @@ fn only_one_of_the_three_t12_roots_is_derivable_by_ci() {
     assert_eq!(manifests, 3, "one manifest per artifact the fleet measured: dense 2M, dense 8k, and the Qwen3.6 mapping");
 
     // The floor: derivable, and the test that does it is live.
-    let rc = std::fs::read_to_string(repo.join("misaka-palw-base0/src/rc.rs")).expect("rc.rs");
+    let rc = std::fs::read_to_string(repo.join("misaka/palw/base0/src/rc.rs")).expect("rc.rs");
     let at = rc.find("fn the_pinned_rc_artifact_root_is_the_one_the_floor_derives").expect("present");
     let before = &rc[at.saturating_sub(200)..at];
     println!("floor derivation test ignored? {}", before.contains("#[ignore]"));
     assert!(!before.contains("#[ignore]"), "the floor's root is re-derived on every CI run");
 
     // The dense 2M root: the only re-derivation is ignored and needs an out-of-repo file.
-    let probe = std::fs::read_to_string(repo.join("misaka-palw-base0/tests/a16_root_probe.rs")).expect("probe");
+    let probe = std::fs::read_to_string(repo.join("misaka/palw/base0/tests/a16_root_probe.rs")).expect("probe");
     let at = probe.find("fn print_a16_2m_root_forms").expect("present");
     let before = &probe[at.saturating_sub(120)..at];
     assert!(before.contains("#[ignore]"), "the 2M re-derivation is ignored");
@@ -261,7 +261,7 @@ fn the_typed_identities_reach_neither_consensus_crate() {
         assert_eq!(*hits, 0, "{label} carries {hits} typed-identity mentions");
     }
     // For contrast, the type IS used — in the operator SDK, which is not consensus.
-    let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../misaka-palw-sdk/src");
+    let sdk = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../misaka/palw/sdk/src");
     let mut sdk_hits = 0usize;
     let mut stack = vec![sdk];
     while let Some(dir) = stack.pop() {
@@ -280,7 +280,7 @@ fn the_typed_identities_reach_neither_consensus_crate() {
             }
         }
     }
-    println!("misaka-palw-sdk/src: {sdk_hits} typed-identity mentions (an operator tool, not consensus)");
+    println!("misaka/palw/sdk/src: {sdk_hits} typed-identity mentions (an operator tool, not consensus)");
     assert!(sdk_hits > 0, "the split lives entirely here");
 
     // And the class-id type is not the type the genesis card's class ids are, either.

@@ -199,10 +199,10 @@ DSL
           "material": "oak", "children": [] } ] } ] }
 DSL
     ;;
-  cad) cp "$REPO_ROOT/misaka-palw-derive/corpus/cad/01-extrude-l-bracket.json" "$WORK_DIR/dsl/cad.not-an-inference.json" ;;
-  image) cp "$REPO_ROOT/misaka-palw-derive/corpus/image/02-rect-and-circle.json" "$WORK_DIR/dsl/image.not-an-inference.json" ;;
-  map) cp "$REPO_ROOT/misaka-palw-derive/corpus/map/02-graph-and-attributes.json" "$WORK_DIR/dsl/map.not-an-inference.json" ;;
-  simulation) cp "$REPO_ROOT/misaka-palw-derive/corpus/simulation/02-gosper-gun.json" "$WORK_DIR/dsl/simulation.not-an-inference.json" ;;
+  cad) cp "$REPO_ROOT/misaka/palw/derive/corpus/cad/01-extrude-l-bracket.json" "$WORK_DIR/dsl/cad.not-an-inference.json" ;;
+  image) cp "$REPO_ROOT/misaka/palw/derive/corpus/image/02-rect-and-circle.json" "$WORK_DIR/dsl/image.not-an-inference.json" ;;
+  map) cp "$REPO_ROOT/misaka/palw/derive/corpus/map/02-graph-and-attributes.json" "$WORK_DIR/dsl/map.not-an-inference.json" ;;
+  simulation) cp "$REPO_ROOT/misaka/palw/derive/corpus/simulation/02-gosper-gun.json" "$WORK_DIR/dsl/simulation.not-an-inference.json" ;;
   esac
 }
 
@@ -222,12 +222,12 @@ transformer_of() {
 # that kind for, which is the floor a row has to clear before this layer works at all.
 floor_dsl_of() {
   case "$1" in
-    music) echo "$REPO_ROOT/misaka-palw-derive/corpus/music/01-single-note.json" ;;
-    scene) echo "$REPO_ROOT/misaka-palw-derive/corpus/scene/01-cube.json" ;;
-    cad) echo "$REPO_ROOT/misaka-palw-derive/corpus/cad/07-box.json" ;;
-    image) echo "$REPO_ROOT/misaka-palw-derive/corpus/image/01-flat-background.json" ;;
-    map) echo "$REPO_ROOT/misaka-palw-derive/corpus/map/01-small-grid.json" ;;
-    simulation) echo "$REPO_ROOT/misaka-palw-derive/corpus/simulation/01-blinker.json" ;;
+    music) echo "$REPO_ROOT/misaka/palw/derive/corpus/music/01-single-note.json" ;;
+    scene) echo "$REPO_ROOT/misaka/palw/derive/corpus/scene/01-cube.json" ;;
+    cad) echo "$REPO_ROOT/misaka/palw/derive/corpus/cad/07-box.json" ;;
+    image) echo "$REPO_ROOT/misaka/palw/derive/corpus/image/01-flat-background.json" ;;
+    map) echo "$REPO_ROOT/misaka/palw/derive/corpus/map/01-small-grid.json" ;;
+    simulation) echo "$REPO_ROOT/misaka/palw/derive/corpus/simulation/01-blinker.json" ;;
   esac
 }
 prompt_of() {
@@ -918,12 +918,12 @@ log "--- ADR-0078 Decision 1: the bytes never ride ---"
 D1_KIND=$(echo "$KINDS" | awk '{print $1}')
 D1_T="$(transformer_of "$D1_KIND")"
 case "$D1_KIND" in
-  music) D1_BIG="$REPO_ROOT/misaka-palw-derive/corpus/music/04-many-notes.json" ;;
-  scene) D1_BIG="$REPO_ROOT/misaka-palw-derive/corpus/scene/05-tetrahedral-rotations.json" ;;
-  cad) D1_BIG="$REPO_ROOT/misaka-palw-derive/corpus/cad/04-revolve-twelve-rational-directions.json" ;;
-  image) D1_BIG="$REPO_ROOT/misaka-palw-derive/corpus/image/03-polygon-chart.json" ;;
-  map) D1_BIG="$REPO_ROOT/misaka-palw-derive/corpus/map/05-large-dungeon.json" ;;
-  simulation) D1_BIG="$REPO_ROOT/misaka-palw-derive/corpus/simulation/04-agents-jitter.json" ;;
+  music) D1_BIG="$REPO_ROOT/misaka/palw/derive/corpus/music/04-many-notes.json" ;;
+  scene) D1_BIG="$REPO_ROOT/misaka/palw/derive/corpus/scene/05-tetrahedral-rotations.json" ;;
+  cad) D1_BIG="$REPO_ROOT/misaka/palw/derive/corpus/cad/04-revolve-twelve-rational-directions.json" ;;
+  image) D1_BIG="$REPO_ROOT/misaka/palw/derive/corpus/image/03-polygon-chart.json" ;;
+  map) D1_BIG="$REPO_ROOT/misaka/palw/derive/corpus/map/05-large-dungeon.json" ;;
+  simulation) D1_BIG="$REPO_ROOT/misaka/palw/derive/corpus/simulation/04-agents-jitter.json" ;;
 esac
 mkdir -p "$WORK_DIR/decision1"
 "$DERIVE_BIN" derive --transformer "$D1_T" --answer "$D1_BIG" --out "$WORK_DIR/decision1" >"$WORK_DIR/decision1/big.json" 2>&1 \

@@ -1,6 +1,6 @@
 # How deep can PALW-BASE-0 go? — measured 2026-08-21
 
-Harness: `misaka-palw-base0/src/bin/base0-depth-sweep.rs`, run `--release`. Seed
+Harness: `misaka/palw/base0/src/bin/base0-depth-sweep.rs`, run `--release`. Seed
 `0xba5e0deed0d00001`, 8 tokens, vocab 4096, two widths (`d_model` 256 and 1024), depths 4/8/16/24/32.
 
 **Why this was run.** ADR-0040 Decision D fixes `AddElem` at `i8 → i32`, so the residual stream

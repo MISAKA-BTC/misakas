@@ -304,7 +304,7 @@ for label, c in classes.items():
     c["end_to_end_measured"] = False
     c["why_not_end_to_end"] = d(
         {"min_verifier_ram_bytes": 16 * c["artifact"]["params"]["v"], "host_ram_bytes": 32 * 2**30},
-        "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka-palw-kernel/src/verify.rs)",
+        "16 bytes x params: Ctx::param_cache keeps every parameter instance as i128 for the scope (misaka/palw/kernel/src/verify.rs)",
     )
     wp = c.get("weights_pass_streaming")
     if wp:

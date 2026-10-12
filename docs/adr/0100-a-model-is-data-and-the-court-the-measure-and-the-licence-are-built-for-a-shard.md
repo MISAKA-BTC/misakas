@@ -371,7 +371,7 @@ order is `main`'s to overwrite.
     measurement, the shard rows, the derived-row rule.
   * `consensus/core/src/palw_measured_model_v1.rs` — Decision 3: the held artifact in the
     inputs and the document, `rms_eps_q` in the manifest, `NeedsTheArtifact`; the context renamed
-    to the convention; `misaka-palw-sdk/src/bin/palw-class.rs` — `measure` and `verify`.
+    to the convention; `misaka/palw/sdk/src/bin/palw-class.rs` — `measure` and `verify`.
   * `consensus/core/src/palw_shard_licensing_v1.rs` — Decision 4's pure half.
   * **Decision 4's consensus half (same day):** `palw_shard_licensing_v1.rs` — the plan record,
     the two message functions and contexts, the extras parameters, the shard slice, the by-parts

@@ -297,7 +297,7 @@ readiness class can be added under its own fence.
 
 | Deliverable | Test |
 |---|---|
-| Engine strata | `misaka-palw-panel/tests/strata.rs`: per-stratum seats and operators, outsiders distinct, alternates per stratum, thin stratum → `NoCapablePanel`, reservations once per bond, tampered stratified binding refused, flat claims unchanged |
+| Engine strata | `misaka/palw/panel/tests/strata.rs`: per-stratum seats and operators, outsiders distinct, alternates per stratum, thin stratum → `NoCapablePanel`, reservations once per bond, tampered stratified binding refused, flat claims unchanged |
 | Sharded class bound by a per-shard V3 draw | `consensus/core/tests/rfc0010_shard_v3.rs`: an IR class with a 2-shard plan, readiness per shard, a V3 claim sealed, certified and bound per shard; the per-shard record written; two parts license it by cells; the delta reverts and the carriage reloads at every block |
 | Non-seat watcher acting | `rfc0010_shard_v3.rs`: the watch duties (both shards for a non-seat bond, the other shard for a seat, none for the producer), a bond outside every seat convicts the V3-bound sharded claim with `TirShardCourtAccused` from public material, and a non-seat `TirStepRun` demand holds the engine's window and defaults to `ProducerWithholding`; `kaspad/src/palw_panel/tir_shard_e2e.rs` (`a_non_seat_watcher_…`): the watch duty verifies whole shards and builds, with the watcher's bond as accuser, the accusation the one-move gate convicts |
 | Per-segment pricing | `consensus/core/tests/palw_tir_shard_segment_v2.rs`: the fence's refusals and dormancy; resident table sums to 1,000 and grows with the segment; lock and pay by `max(work, resident)` past the fence, unchanged below it |

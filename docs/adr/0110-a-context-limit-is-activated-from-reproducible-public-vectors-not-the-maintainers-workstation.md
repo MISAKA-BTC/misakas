@@ -357,7 +357,7 @@ changes:
 | `document_id` | `9c5a772c…` | `848d9352…` | `7bc3f88b…` |
 
 The 131,072-position vector's first reproduction is this run. Its id is pinned in
-`misaka-palw-base0/tests/context_vector_external.rs` — its own test target, so the release-mode
+`misaka/palw/base0/tests/context_vector_external.rs` — its own test target, so the release-mode
 job's filter (which pins its count at two) cannot see it — and it runs by hand:
 `cargo test --release -p misaka-palw-base0 --test context_vector_external -- --ignored`. Every
 chain-side term still reads a constant number of bytes a doubling: the evidence grew 320 bytes

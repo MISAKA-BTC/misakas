@@ -1140,7 +1140,7 @@ pub fn check_arithmetic_close_binding(claim_trace_root: Hash64, refutation_root:
 /// **Which root of the binding a claim's `trace_root` is.**
 ///
 /// A claim commits the LOGITS trace root: `palw_producer.rs` sets `trace_root` from
-/// `Base0ExecutionV1::trace_root`, which `misaka-palw-base0/src/produce.rs` computes as
+/// `Base0ExecutionV1::trace_root`, which `misaka/palw/base0/src/produce.rs` computes as
 /// `base0_logits_trace_root_v1`, and which `base0_binding_from_capture_v1` then carries into the
 /// binding as `full_logits_trace_root`. `step_merkle_root` is a DIFFERENT root over the step
 /// leaves; it is pinned, but transitively — `committed_execution_root` is

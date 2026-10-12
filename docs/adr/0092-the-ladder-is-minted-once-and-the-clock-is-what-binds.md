@@ -175,7 +175,7 @@ reaches the semantics question deliberately instead of discovering it after the 
 > does not produce has found a bug in this document, not a decision.
 
 The table this ADR needs — provisioned leaves, arity, bisection rounds, worst-case duration, margin
-against `window_court` — must come from `misaka-palw-base0/src/bin/base0-class-sizing.rs` extended
+against `window_court` — must come from `misaka/palw/base0/src/bin/base0-class-sizing.rs` extended
 to print the duration and the margin, and be pinned by a test the way
 `provisioning_the_whole_step_space_costs_four_rounds` pins the round count today. **No number in
 this section is written by hand.** This project's own lesson is that a worked example with no test

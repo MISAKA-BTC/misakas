@@ -227,7 +227,7 @@ C4 F-C4R4-08). "Bits" is what the lever subtracts from a sampled conformance's e
 | Adaptive statements (Sybil classes of one model) | `⌈log2 Q⌉` | same | same | registration price, binding reservation |
 
 **Effective bits of the interim conformance** (two families of 2.885 bits, one repetition): `2 − 1 − 2 − h → 0` under every rule — and
-`0` even with `G = 9,120` (no last contributor). The interim policy is a drill. `misaka-palw-challenge/tests/grinding.rs` demonstrates the
+`0` even with `G = 9,120` (no last contributor). The interim policy is a drill. `misaka/palw/challenge/tests/grinding.rs` demonstrates the
 last contributor: with one honest source settled, 4,096 offline nonces of ONE attacker job give 4,096 distinct beacons (an 8-bit target
 is hit), under the distinct rule — far past the live-cap bound of 32.
 
@@ -432,7 +432,7 @@ so the result never overstates the bound.
   `palw_onboarding_grinding_choices_v1`), one beacon, one statement — must reach the fence's `min_effective_bits` (interim 128). The
   bits bound the check's math and the manipulation of its challenge. Whether a refuter that holds the model exists is A-ACQ, which
   they do not cover (§14.2).
-* Golden vectors (`misaka-palw-challenge/tests/soundness.rs`): the interim drill = 0; a production-shaped tuple (4 × 64 bits × 3 reps,
+* Golden vectors (`misaka/palw/challenge/tests/soundness.rs`): the interim drill = 0; a production-shaped tuple (4 × 64 bits × 3 reps,
   `G = 992`, `Q = 2^20`) = 158; exactly 128 at the target and 127 one statement later; complete = `Complete`; a staged beacon of three
   rounds at `G = 2^10` loses 30; the chain's whole check bound against `h = 128` = 239; saturation never wraps.
 
@@ -473,9 +473,9 @@ Real node (`consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/
 
 Pure: the graph (`palw_opv_bootstrap_v1::tests`: reachable only through the complete check; a bootstrap that needs the beacon closes
 the cycle; every eligibility reason is an edge and every edge a reason; the complete-check policy draws no beacon); the effective
-bound, approval and the complete-check shape (`misaka-palw-challenge/tests/soundness.rs`); the grinding attacks
-(`misaka-palw-challenge/tests/grinding.rs`); the sealed-source beacon v3 against SG-01/SG-01a and its accounting
-(`misaka-palw-challenge/tests/sealed_beacon.rs`); the fence (`consensus/core/tests/rfc0015_panel_free.rs`). The pre-derivation OPV and
+bound, approval and the complete-check shape (`misaka/palw/challenge/tests/soundness.rs`); the grinding attacks
+(`misaka/palw/challenge/tests/grinding.rs`); the sealed-source beacon v3 against SG-01/SG-01a and its accounting
+(`misaka/palw/challenge/tests/sealed_beacon.rs`); the fence (`consensus/core/tests/rfc0015_panel_free.rs`). The pre-derivation OPV and
 conformance worlds (`g14_opv_*`, `g14_conformance_*`, `g14_c4r3_opv_*`) run on the `cfg(test)` seam, and the conformance worlds on the
 drill floor (§12).
 
@@ -656,7 +656,7 @@ bound.
 - **Row and reads:** `ConformanceAttemptRowV1` gained a field. Op 231 serves the row raw, and the SDK decodes it with the same type.
 
 **F-C4R4-01 (P2, design): recorded.** The distinct source rules tell BONDS apart, not parties. Two Sybil producer bonds and two
-Sybil posters own every v2 source position and grind all of them offline (`misaka-palw-challenge/tests/c4r4_grinding.rs` on
+Sybil posters own every v2 source position and grind all of them offline (`misaka/palw/challenge/tests/c4r4_grinding.rs` on
 `adv/c4r4`).
 
 - No bound in this lane credits distinctness. v2's onboarding accounting already states `G = 2^128`

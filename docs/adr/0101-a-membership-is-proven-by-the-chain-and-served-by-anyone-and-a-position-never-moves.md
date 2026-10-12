@@ -55,7 +55,7 @@ its developer's and its roles its owner's — ownership of a line is not permiss
 reward buys the line's pair with nobody's hand on it (ADR-0091); the tier is the chain's and the
 early-access window is the fold's (ADR-0095).
 
-Two corrections. **The reference gateway check exists** — `misaka-palw-gateway/src/membership.rs`
+Two corrections. **The reference gateway check exists** — `misaka/palw/gateway/src/membership.rs`
 (`773f6e7c`) on `feat/adr-0095-membership-serving`, ADR-0095 §7 step 6 "done 2026-09-10" — and
 is not on `main` (`a60f78e7` is not an ancestor of `main`'s tip), which is why a review of `main`
 saw it missing. And **it is already provider-neutral**: its configuration is a line id and a
@@ -149,7 +149,7 @@ Nothing on chain. One module of pure functions and types in `consensus-core`; th
    whatever the arguments.
 ```
 
-1–2 are `palw_service_descriptor_v1`'s; 3 `misaka-palw-sdk/tests/service_descriptor_signed.rs`;
+1–2 are `palw_service_descriptor_v1`'s; 3 `misaka/palw/sdk/tests/service_descriptor_signed.rs`;
 4–5 `consensus/core/tests/palw_adr0101_membership.rs`; 6 `kaspa-evm`'s
 `a_position_has_no_transfer_door_on_the_evm`.
 
@@ -183,7 +183,7 @@ Decisions 2, 3 and 5's pins — **done** (§9); the rest is Decision 7's list.
   * `consensus/core/src/palw_service_descriptor_v1.rs` — Decisions 2 and 3, with their tests;
     registered in `lib.rs`, its domains in `palw_derived_v1`'s uniqueness sweep.
   * `consensus/core/tests/palw_adr0101_membership.rs` — Invariants 4 and 5.
-  * `misaka-palw-sdk/tests/service_descriptor_signed.rs` — Invariant 3, with real keys.
+  * `misaka/palw/sdk/tests/service_descriptor_signed.rs` — Invariant 3, with real keys.
   * `kaspa-evm/src/model_market.rs` — Invariant 6.
 
 ## ADR-0144 alignment (2026-09-21)

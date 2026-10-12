@@ -27,11 +27,11 @@ const SCANNED: &[&str] = &[
     "consensus/src",
     "consensus/pow/src",
     "kaspad/src",
-    "misaka-palw-base0/src",
-    "misaka-palw-sdk/src",
-    "misaka-palw/src",
-    "misaka-palw-gateway/src",
-    "misaka-palw-agent/src",
+    "misaka/palw/base0/src",
+    "misaka/palw/sdk/src",
+    "misaka/palw/core/src",
+    "misaka/palw/gateway/src",
+    "misaka/palw/agent/src",
     "kaspa-pq-validator-core/src",
 ];
 
@@ -81,8 +81,8 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "step_merkle_root_v1",
         "PalwStepBindingV2's own leaf-hash root: the binding's own count is the bound",
     ),
-    ("misaka-palw-base0/src/legs.rs", "base0_binding_from_capture_with_profile_v1", "the uncapped forwarder's own body"),
-    ("misaka-palw-base0/src/fp_interval.rs", "base0_open_fp_interval_v1", "the uncapped forwarder's own body"),
+    ("misaka/palw/base0/src/legs.rs", "base0_binding_from_capture_with_profile_v1", "the uncapped forwarder's own body"),
+    ("misaka/palw/base0/src/fp_interval.rs", "base0_open_fp_interval_v1", "the uncapped forwarder's own body"),
     // ---- trees that are NOT the step tree ----
     (
         "consensus/core/src/palw_prompt_ids_v1.rs",
@@ -97,10 +97,10 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the tiled decode-token event tree (rows and tiles), not the step tree",
     ),
     ("consensus/core/src/palw_step_refute.rs", "step_opening_v1", "the tiled decode-token event tree, as above"),
-    ("misaka-palw-base0/src/legs.rs", "step_merkle_root_v1", "the checkpoint leg's own leaf vector, bounded by the checkpoint count"),
-    ("misaka-palw-base0/src/legs.rs", "step_opening_v1", "the checkpoint leg, as above"),
-    ("misaka-palw-base0/src/fp_interval.rs", "step_opening_v1", "the checkpoint leg, as above"),
-    ("misaka-palw-base0/src/fp_interval.rs", "step_opening_root_v1", "opened against binding.checkpoint_count, the checkpoint leg"),
+    ("misaka/palw/base0/src/legs.rs", "step_merkle_root_v1", "the checkpoint leg's own leaf vector, bounded by the checkpoint count"),
+    ("misaka/palw/base0/src/legs.rs", "step_opening_v1", "the checkpoint leg, as above"),
+    ("misaka/palw/base0/src/fp_interval.rs", "step_opening_v1", "the checkpoint leg, as above"),
+    ("misaka/palw/base0/src/fp_interval.rs", "step_opening_root_v1", "opened against binding.checkpoint_count, the checkpoint leg"),
     // ---- CONSENSUS paths whose ladder is a FENCED question, not a bug ----
     (
         "consensus/core/src/palw_carriage.rs",
@@ -128,7 +128,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     // ---- no production caller today ----
     (
-        "misaka-palw-base0/src/produce.rs",
+        "misaka/palw/base0/src/produce.rs",
         "base0_replay_from_checkpoint_v1",
         "base0_anchored_leaf_replay_v1, whose only callers in the tree are its own tests; the capped sibling exists at \
          base0_replay_from_checkpoint_capped_v1 and is what a production caller must use",

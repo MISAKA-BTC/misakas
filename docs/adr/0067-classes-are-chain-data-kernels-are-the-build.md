@@ -368,7 +368,7 @@ The mmap (Qwen3.6) interpreter was staged second on the rollout above because it
 piece. Building it turned up something the sequencing did not anticipate: **it cannot be built
 correctly against the graph this class has registered, because that graph misdescribes the engine.**
 Three of them are unambiguous, and all are measured mechanically by
-`misaka-palw-base0/tests/qwen36_profile_conformance.rs` rather than argued from a reading:
+`misaka/palw/base0/tests/qwen36_profile_conformance.rs` rather than argued from a reading:
 
 * **The shared expert's gate is two different tensors under one name.** The engine reads
   `blk.N.ffn_shared_gate.weight` as the mixture's SCALAR gate — one output, through a sigmoid,
@@ -438,7 +438,7 @@ registration is an operator action with a bond and a fee, and it stays one.
 
 **The interpreter is built, and building it convicted a fourth defect (2026-09-01, same day).**
 `Qwen36Engine::plan_from_profile` / `forward_token_planned`
-(`misaka-palw-base0/src/qwen36_plan.rs`): the A16 seam for the mmap container — construction is
+(`misaka/palw/base0/src/qwen36_plan.rs`): the A16 seam for the mmap container — construction is
 the admission check and it is width-sound; execution is one committed row per declared node in
 the declared order, cache writes where the declared roles sit, and the `RESOLUTION_V2` fusion
 rules (the conformance test's own table) implemented as the mapping from each fused name to the
@@ -567,7 +567,7 @@ the shape the SDK seam was for.
 
 **The fuzz gate now covers this container too (2026-09-01, same day), and its design pass
 convicted a panic before the first iteration ran.** `fuzz_qwen36_profiles_v1`
-(`misaka-palw-base0/src/fuzz_qwen36.rs`, saturation runner `palw-qwen36-profile-fuzz`) is the
+(`misaka/palw/base0/src/fuzz_qwen36.rs`, saturation runner `palw-qwen36-profile-fuzz`) is the
 dense harness's clause for the mmap space: mutate the corrected profile — structural, nominal,
 and ROLE edits, because this family declares its cache writes per node, plus REAL operand names
 landed on wrong nodes, which stress the width checks harder than foreign names the planner

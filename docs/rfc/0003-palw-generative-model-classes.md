@@ -1700,8 +1700,8 @@ against the float run (the measured fidelity); the court battery; the record.
 ### 6.1 As built — the first image profile, recorded 2026-10-01 (lane D)
 
 Everything below was built and measured on the reduced fixture; nothing in it changes a consensus rule, and the whole
-profile stays dormant behind `palw_gen_v1`. Sources: `misaka-palw-tir-lower/src/diffusion/*` (branch `rfc3/lower`, merged
-into `rfc3/gen-claim`), `tests/diffusers_sd3.rs`, `misaka-palw-sdk/tests/gen_sd3_class.rs`,
+profile stays dormant behind `palw_gen_v1`. Sources: `misaka/palw/tir/lower/src/diffusion/*` (branch `rfc3/lower`, merged
+into `rfc3/gen-claim`), `tests/diffusers_sd3.rs`, `misaka/palw/sdk/tests/gen_sd3_class.rs`,
 `tools/gen_diffusers_sd3_fixture.py`. The fixture is diffusers 0.40.0 (`SD3Transformer2DModel` 284,304 parameters,
 `CLIPTextModelWithProjection` 20,736, `AutoencoderKL` 43,619; BF16; seeded; generated offline, one model per subprocess).
 

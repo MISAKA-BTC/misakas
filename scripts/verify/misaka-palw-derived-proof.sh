@@ -11,7 +11,7 @@
 #      the bytes handed to tools that are NOT ours: `file(1)`'s magic tables, and (on macOS)
 #      Apple's AudioToolbox, ModelIO and ImageIO, which are three shipping readers that know
 #      nothing about this repository. The in-tree half is
-#      `misaka-palw-derive/tests/artifact_structure.rs`, run here too when a cargo is available.
+#      `misaka/palw/derive/tests/artifact_structure.rs`, run here too when a cargo is available.
 #   2. THE CONSUMER PATH WORKS FROM THE ANSWER ALONE (Decision 5 / X6). Derive, sign the object
 #      with the executor's own bond key through `misaka-palw-fp-rail --derive-artifact`, and
 #      verify it with `palw-derive verify` — including the claim's `output_root` recomputed from
@@ -44,7 +44,7 @@ CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/debug/misaka}"
 CARGO="${CARGO:-cargo}"
 CROSS_TARGET="${CROSS_TARGET:-x86_64-apple-darwin}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-derived-proof}"
-CORPUS="$REPO_ROOT/misaka-palw-derive/corpus"
+CORPUS="$REPO_ROOT/misaka/palw/derive/corpus"
 MISAKA_NETWORK="${MISAKA_NETWORK:-testnet-11}"
 
 log()  { printf '[derived-proof] %s\n' "$*" >&2; }

@@ -230,8 +230,8 @@ renumbers the LATER writer). What the branches held when this was written:
     `PalwArtifactRowDigestV1`, `PalwArtifactInventoryDigestV1`, `PalwArtifactInventorySummaryV1`,
     `PalwArtifactInventoryStreamV1`, `PalwArtifactInventoryV1::summary`, the streaming tests;
     `palw_shard_plan_v1.rs` — `PalwInventoryRowMetaV1` from a row digest.
-  * `misaka-palw-base0/src/qwen36.rs` — `tensor_len`, `read_tensor_range_into`.
-  * `misaka-palw-base0/src/inventory.rs` — the plan (`qwen36_inventory_plan_v1`), the canonical
+  * `misaka/palw/base0/src/qwen36.rs` — `tensor_len`, `read_tensor_range_into`.
+  * `misaka/palw/base0/src/inventory.rs` — the plan (`qwen36_inventory_plan_v1`), the canonical
     emission (`qwen36_emit_plan_v1`), `qwen36_visit_inventory_rows_v1`, the four sinks, the
     `adr0106_cases` record and tests.
   * `misaka-palw-sdk` — `palw-class measure`/`verify` through `qwen36_inventory_measure_v1`;

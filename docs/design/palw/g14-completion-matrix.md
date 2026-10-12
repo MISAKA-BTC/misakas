@@ -170,7 +170,7 @@ the old "awaiting user decision" descriptions below are historical. Required fam
 
 The gate (`gate.rs`) bounds what one prosecution reads, opens and holds. G14-B asks the other half of the bar: **can the pursuit
 FINISH** — every search round, every chunk of every demanded response, the filing — before the claim's liability horizon, against a
-producer that answers every demand on the last DAA it may? The derivations are code (`misaka-palw-kernel/src/budget.rs`); nothing
+producer that answers every demand on the last DAA it may? The derivations are code (`misaka/palw/kernel/src/budget.rs`); nothing
 below is measured. Verifier compute enters only through the OPV policy's declared budgets (cold 10, check 10, localize 2, court 3,
 carrier 2, reorg 2 DAA — claims an external gate must measure).
 
@@ -771,7 +771,7 @@ Tests: `palw_legacy_parallel_v1::tests::the_legacy_profile_table_on_the_t12_latt
 **3.1b Violations NOT reached on the node.** For each row, C2–C5 are V-ref only (the kernel's in-process ledger; the outsider
 replays from genesis with a public DA store). C7 is a GAP. All rows are under **GAP-10**.
 
-| Violation | Reference evidence (V-ref, `misaka-palw-kernel/tests/…`) |
+| Violation | Reference evidence (V-ref, `misaka/palw/kernel/tests/…`) |
 |---|---|
 | Quantize / round / carry / range (exact families) | `k2_e2e::a_false_value_in_every_exact_family_is_recomputed_and_convicted` |
 | `i128` accumulator (K2-TIR-v2 CRT, alias mod 2^127−1) | `k2_wide::every_scalar_lie_in_the_i128_product_is_caught_and_convicted`, `k2_wide::a_lie_that_aliases_to_zero_mod_2_127_minus_1_is_caught_by_the_second_modulus` |
@@ -838,7 +838,7 @@ Family-wide:
 
 ### 3.4 F4 — K2-TIR-v5 encoders and heads (KS WIP)
 
-`misaka-palw-sdk/tests/k2s_encoder_court.rs::k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_material`:
+`misaka/palw/sdk/tests/k2s_encoder_court.rs::k2s_v5_encoders_and_heads_are_judged_one_element_at_a_time_from_public_material`:
 V-unit level, **FAILS** at `98d7780ae` (an honest filing of 2,673 B against a priced 2,592 B). The fix is not committed.
 
 Every node column is GAP (GAP-40). This includes the court for `HEAD_DECODE_V1` (arg-max, multi-label, regression, best span).
@@ -1135,7 +1135,7 @@ A level is the level of the test, not of the cell.
 
 | Id | Test | Status |
 |---|---|---|
-| — | kernel `misaka-palw-kernel/tests/c4r4.rs::f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court` | V-ref (record m1) |
+| — | kernel `misaka/palw/kernel/tests/c4r4.rs::f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court` | V-ref (record m1) |
 | — | kernel `…::f_c4r4_04_the_pre_final_default_liability_horizon_convicts_on_its_last_day_and_not_after` | V-ref |
 | — | kernel `…::f_c4r4_02_obs_watcher_absence_leaves_an_unverified_lie_permanent_and_quantifies_the_loss` | V-ref observation |
 | — | kernel `…::f_c4r4_07_obs_a_lying_producers_sybil_takes_the_bounty_of_its_own_conviction` | V-ref observation |
@@ -1153,7 +1153,7 @@ A level is the level of the test, not of the cell.
 | S04 | `g14_k2s_the_mempool_runs_the_kernel_acceptance_gate` |
 | S05 | `g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_and_convicted` |
 
-KS kernel tests (V-ref / V-unit), in `misaka-palw-kernel/tests/k2_real_scale.rs`:
+KS kernel tests (V-ref / V-unit), in `misaka/palw/kernel/tests/k2_real_scale.rs`:
 - `k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers`
 - `k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions`
 - `k2s_every_tile_and_part_constant_fits_the_node_carrier`

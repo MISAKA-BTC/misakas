@@ -453,7 +453,7 @@ fn b2_06_same_canonical_class_id_different_compute() {
 /// = 2 and everything else = 1 per MAC; `dtype_cost` (`:330`) reads `node.weight_dtypes[layer]`.
 /// Repo-wide, the only other readers of `weight_dtypes` are `palw_class_weight_dtype_v1` (whose
 /// caller `PalwCanonicalClassDescriptorV1::of` has no production call site) and one plan gate in
-/// `misaka-palw-base0/src/qwen36_plan.rs:1133`. The A16 (dense) backend contains no dtype check at
+/// `misaka/palw/base0/src/qwen36_plan.rs:1133`. The A16 (dense) backend contains no dtype check at
 /// all, the adjudicator (`palw_step_refute`) never reads the field, and the inventory root — the
 /// one value that binds the artifact — is built from tile geometry, not dtypes.
 #[test]

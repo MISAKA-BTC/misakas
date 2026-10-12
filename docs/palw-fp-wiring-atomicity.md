@@ -22,7 +22,7 @@ that were load-bearing and are now false:
 | the page said | the tree says |
 |---|---|
 | `calculate_l1_tag` "has arms for algo 1/2/3/4/5" and falls to `UnknownAlgoId` for 6 and 7 | it has the algo-6 arm (shared with algo-9, ADR-0072 SA-4) at `POW_ALGO_ID_PALW_COMMITTED_V2 \| POW_ALGO_ID_PALW_EXEC_V3`, the algo-7 arm at `POW_ALGO_ID_PALW_RECEIPT_V3`, and the heartbeat arm at algo 8 |
-| "no worker path on this tree captures a step leg at all" | the family workers capture one per job — `misaka-palw-base0/src/fp_capture.rs`, `legs.rs`, and both backends |
+| "no worker path on this tree captures a step leg at all" | the family workers capture one per job — `misaka/palw/base0/src/fp_capture.rs`, `legs.rs`, and both backends |
 
 Unit B's subtle item survived intact, which is worth noting because it was the one most likely to
 be got wrong: `check_pow_layer0` returns `(true, digest)` for algo 7 without a `bits` comparison,
@@ -258,7 +258,7 @@ same `InvalidPoW` — and the daemon suite aborts in the same place. `kaspa-cons
 
 > **Closed.** The gap this section ends on — "no worker path on this tree captures a step leg at
 > all" — was the runtime work it said it was, and it was done: the family workers capture the leg
-> per job (`misaka-palw-base0/src/fp_capture.rs`, `legs.rs`), and the un-captured chat drivers
+> per job (`misaka/palw/base0/src/fp_capture.rs`, `legs.rs`), and the un-captured chat drivers
 > that made `court_capable: false` reachable are deleted. The reasoning below is why the shape
 > had to be this one; the last two paragraphs are no longer a description of the tree.
 

@@ -359,16 +359,16 @@ or below its height (`the_fence_is_dormant_everywhere_refused_when_armed_and_has
 
 | Piece | Where |
 | --- | --- |
-| wire, kinds, class id, bounds, typed root, `K2-TR-v1` | `misaka-palw-kernel/src/spec/mod.rs` |
+| wire, kinds, class id, bounds, typed root, `K2-TR-v1` | `misaka/palw/kernel/src/spec/mod.rs` |
 | memory (slots, overlays, steps, line) | `spec/memory.rs` |
 | retrieval (snapshot, rule, courts, slices) | `spec/retrieval.rs` |
 | composite (stages, edges, stage records) | `spec/composite.rs` |
 | the ledger's typed rules (child of `ledger`) | `spec/ledger_impl.rs`; hooks in `ledger.rs`, tables in `rows.rs`, root in `state.rs` |
 | the outsider | `spec/outsider.rs` |
 | an honest (or lying) producer | `spec/produce.rs` |
-| fixtures (`memory_v1`, `memory_ttt_v1`) | `misaka-palw-tir-sketch/src/fixture.rs` |
+| fixtures (`memory_v1`, `memory_ttt_v1`) | `misaka/palw/tir/sketch/src/fixture.rs` |
 | fence | `consensus/core/src/palw_typed_roots_v1.rs`, `config/params.rs`, `fork_id_v1.rs`, `processor.rs`, `palw_kernel_route_{v1,fold_v1}.rs` |
-| tests | `misaka-palw-kernel/tests/typed_roots.rs` (ledger), `consensus/.../tests/r4x_typed_roots_e2e.rs` (real node) |
+| tests | `misaka/palw/kernel/tests/typed_roots.rs` (ledger), `consensus/.../tests/r4x_typed_roots_e2e.rs` (real node) |
 
 ## 13. The design premise, condition by condition (`docs/PRINCIPLES.md` §6)
 

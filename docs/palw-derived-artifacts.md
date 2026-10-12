@@ -304,7 +304,7 @@ false object (ADR-0078 Decision 5)` is the refutation: re-running the named gram
 transformer over this answer gives something else. Nothing on chain convicts the executor for it
 (Decision 5 says so plainly); what it costs is the executor's name on a provenance anyone can show
 is wrong. `UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)` is *not* an
-accusation: `transformer_id` covers `misaka-palw-derive/src/`, so any build whose derive crate
+accusation: `transformer_id` covers `misaka/palw/derive/src/`, so any build whose derive crate
 differs by a byte publishes different ids and simply cannot re-run the derivation — run
 `palw-derive manifest --all` to see the ids the build in your hand does have. Both exit 2, because
 a reader who could not check an object must not treat it as checked; only one of them means
@@ -433,7 +433,7 @@ palw-derive drill --report x86.json                         # on an Intel/AMD ho
 palw-derive drill --check x86.json                          # on either: byte-identical or exit 3
 ```
 
-The corpus lives in `misaka-palw-derive/corpus/<kind>/`, with each kind's `golden.json` pinned by
+The corpus lives in `misaka/palw/derive/corpus/<kind>/`, with each kind's `golden.json` pinned by
 its tests. The drill checks four things and says which failed. **The exit code is the finding —
 a job that treats "nonzero" as one meaning cannot act on any of them:**
 

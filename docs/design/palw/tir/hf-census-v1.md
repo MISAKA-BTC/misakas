@@ -2,7 +2,7 @@
 
 *Lane HF, branch `rfc2/hf-majority`. The method behind every dated census report (`hf-census-report-*.md`). It measures; it
 claims nothing a row does not show. Code: `misaka_palw_sdk::census` (`palw-class census classify|gates`) and
-`misaka-palw-sdk/tools/hf_census/` (the HTTP side, the sample, the statistics).*
+`misaka/palw/sdk/tools/hf_census/` (the HTTP side, the sample, the statistics).*
 
 ## 概要(日本語)
 

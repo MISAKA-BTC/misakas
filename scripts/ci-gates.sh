@@ -208,7 +208,7 @@ expected_reds() {
     known_red "palw_freeprompt_v3::tests::golden_vector_ids_are_frozen" &&
         printf '    known red: palw_freeprompt_v3::tests::golden_vector_ids_are_frozen -- same re-pin. NOT the namesake in palw_derived_v1.rs\n'
     grep -qE "source_tree_sha256.*MISMATCH|MISMATCH.*source_tree_sha256" "$log" 2>/dev/null &&
-        printf '    known red: the transformer_id pins -- a87cc282 rustfmt-ed misaka-palw-derive/src/kinds/scene.rs, which moved all eight ids. Same re-pin.\n'
+        printf '    known red: the transformer_id pins -- a87cc282 rustfmt-ed misaka/palw/derive/src/kinds/scene.rs, which moved all eight ids. Same re-pin.\n'
     known_red "the_transformer_ids_are_the_ones_this_build_was_pinned_with" &&
         printf '    known red: transformer_id_pin::the_transformer_ids_are_the_ones_this_build_was_pinned_with -- the Rust half of the same re-pin.\n'
     return 0
@@ -337,7 +337,7 @@ gate_artifact_conformance() {
 
 gate_artifact_stranger() {
     python3 "$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py" \
-        --crate-root "$REPO_ROOT/misaka-palw-derive" selftest
+        --crate-root "$REPO_ROOT/misaka/palw/derive" selftest
 }
 
 # The two selftests above prove the checkers REFUSE damage. Neither proves either one ACCEPTS a
@@ -357,14 +357,14 @@ gate_artifact_roundtrip() {
     mkdir -p "$ARTIFACT_DIR" || return 1
     local rc=0
     python3 "$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py" \
-        --crate-root "$REPO_ROOT/misaka-palw-derive" derive \
+        --crate-root "$REPO_ROOT/misaka/palw/derive" derive \
         --transformer music/smf/v1 \
-        --answer "$REPO_ROOT/misaka-palw-derive/corpus/music/02-two-track-chords.json" \
+        --answer "$REPO_ROOT/misaka/palw/derive/corpus/music/02-two-track-chords.json" \
         --out "$ARTIFACT_DIR" >/dev/null || rc=1
     python3 "$REPO_ROOT/scripts/verify/misaka-palw-derive-stranger.py" \
-        --crate-root "$REPO_ROOT/misaka-palw-derive" derive \
+        --crate-root "$REPO_ROOT/misaka/palw/derive" derive \
         --transformer cad/stl/v1 \
-        --answer "$REPO_ROOT/misaka-palw-derive/corpus/cad/05-boolean-box-with-a-notch.json" \
+        --answer "$REPO_ROOT/misaka/palw/derive/corpus/cad/05-boolean-box-with-a-notch.json" \
         --out "$ARTIFACT_DIR" >/dev/null || rc=1
     [ "$rc" -eq 0 ] || { echo "the stranger could not re-derive the corpus answers"; return 1; }
 

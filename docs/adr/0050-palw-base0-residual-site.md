@@ -16,7 +16,7 @@ Date: 2026-08-21
 Relates to: ADR-0040 (`PALW-BASE-0`; Decision D's op set is **unchanged** by this, and Decision H is
 the precedent that decides the amplification question), ADR-0049 (the adjudication contract — this
 ADR is an instance of its Decision F, found by looking for one), `palw_base0_profile.rs`,
-`misaka-palw-base0/src/engine.rs`, `consensus/core/src/palw_step_refute.rs`.
+`misaka/palw/base0/src/engine.rs`, `consensus/core/src/palw_step_refute.rs`.
 
 **The premises are untouched.** Block production stays a hash-independent PALW lottery; the
 free-prompt lane stays. This is arithmetic inside one class's graph.

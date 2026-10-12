@@ -3,7 +3,7 @@
 
     HF_HUB_OFFLINE=1 python -I hf_reference_streamed.py <model dir> <out dir> --tokens tokens.json [--dtype float32]
 
-Writes exactly what misaka-palw-tir-lower/tools/hf_reference.py writes (misaka.palw.hf-reference.v1: hf-reference.json +
+Writes exactly what misaka/palw/tir/lower/tools/hf_reference.py writes (misaka.palw.hf-reference.v1: hf-reference.json +
 hf-reference.f32, positions x vocab little-endian float32), computed by transformers' OWN modules: the CausalLM is built on the meta
 device from the checkpoint's config; the rotary embedding and the final norm are materialised; each decoder layer is materialised from
 the safetensors (bf16 -> --dtype) just before its forward and returned to the meta device right after; the embedding gathers only the

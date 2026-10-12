@@ -536,11 +536,11 @@ The reference evaluator (every value an `i128`) takes ~20 s a position at 1.5B a
 export CARGO_TARGET_DIR=…/tir-lower-target CARGO_BUILD_JOBS=3
 cargo test --release -p misaka-palw-tir-lower  # HF fixtures are skipped if absent
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  …/tir-venv/bin/python misaka-palw-tir-lower/tools/gen_hf_fixtures.py [name …]   # regenerate
+  …/tir-venv/bin/python misaka/palw/tir/lower/tools/gen_hf_fixtures.py [name …]   # regenerate
 cargo run -p misaka-palw-tir-lower --bin palw-tir-check -- \
-  --config misaka-palw-tir-lower/tests/configs/real/qwen3-next-80b-a3b-instruct.json [--tile-len 64 --h-chunk 64]
+  --config misaka/palw/tir/lower/tests/configs/real/qwen3-next-80b-a3b-instruct.json [--tile-len 64 --h-chunk 64]
 # The real checkpoint (one process at a time; ~7.4 GB peak):
-HF_HUB_OFFLINE=1 …/tir-venv/bin/python misaka-palw-tir-lower/tools/tokenize_docs.py …   # calib / eval token files
+HF_HUB_OFFLINE=1 …/tir-venv/bin/python misaka/palw/tir/lower/tools/tokenize_docs.py …   # calib / eval token files
 cargo run --release -p misaka-palw-tir-lower --bin palw-tir-fidelity -- ~/Downloads/Qwen2.5-1.5B-Instruct \
   --calib qwen25-calib.json --eval qwen25-eval.json --eval-seqs 2 --positions 128 \
   --artifact-out qwen25.palwtir --tir-out qwen25.tir --json
@@ -1400,7 +1400,7 @@ cross-attention is not lowered: the cross layers are dropped as `transformers` d
 `zamba2` (FR-13) and `chatglm3` (FR-24: Level B with its reference *unverified* — the remote-code source is pinned by hash, the verdict is `LOWERABLE_UNVERIFIED`; the corpus's copy of the modeling file is reconstructed, not the vendor's) joined them. The 8 left at Level C: the image-generation denoisers `unet2d_condition`, `unet_sdxl`,
 `dit`, `flux` (FR-22) and the audio models `wav2vec2`, `speecht5`, `musicgen`, `encodec` (FR-23).
 
-**A golden preflight per entry** (`misaka-palw-sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each entry is
+**A golden preflight per entry** (`misaka/palw/sdk/tests/corpus_preflight.rs`, pins in `tests/golden/corpus_preflight_v1.json`): each entry is
 preflighted at the `shape` depth on testnet-12 from its committed light spec written back as header-only safetensors, at a declared context of 128
 positions. **87 of 100 reach `convert: ok`**: encoder–decoders, vision towers and convolutional networks now lower to their RFC-0003 programs and are
 admitted rather than refused; the blocked ones are the Level-C entries and the diffusers components whose light spec carries no weights (the route needs

@@ -8,9 +8,9 @@ given. "Design" means a document on a branch with no code yet. A statement's **a
 
 | Symbol | Meaning |
 |---|---|
-| `H(d; x)` | keyed BLAKE2b-512 with the domain string `d` as the key, over `u64_le(len x) ‖ x`, `x` a canonical Borsh encoding (`misaka-palw-challenge/src/hash.rs:10`, `misaka-palw-kernel/src/hash.rs:19`) |
-| `C(T)` | a tensor commitment (row tree and column tree over the elements, BLAKE2b-512; `misaka-palw-kernel/src/merkle.rs`, `tensor_commitment_v2`) |
-| `q` | a Mersenne prime used as a check modulus: `2^127 − 1`, `2^107 − 1` or `2^89 − 1` (`misaka-palw-kernel/src/field.rs:15,21`) |
+| `H(d; x)` | keyed BLAKE2b-512 with the domain string `d` as the key, over `u64_le(len x) ‖ x`, `x` a canonical Borsh encoding (`misaka/palw/challenge/src/hash.rs:10`, `misaka/palw/kernel/src/hash.rs:19`) |
+| `C(T)` | a tensor commitment (row tree and column tree over the elements, BLAKE2b-512; `misaka/palw/kernel/src/merkle.rs`, `tensor_commitment_v2`) |
+| `q` | a Mersenne prime used as a check modulus: `2^127 − 1`, `2^107 − 1` or `2^89 − 1` (`misaka/palw/kernel/src/field.rs:15,21`) |
 | `b(q)` | `⌊log2 q⌋` = 126, 106, 88: the bits one repetition buys (`field.rs:18`, `family.rs:107`) |
 | `t` | repetitions per relation instance (the descriptor's `soundness.repetitions`, `descriptor.rs:154`) |
 | `R` | the number of probabilistic relation instances in a statement (`plan.rs:352`, `probabilistic_instances_per_position × positions`) |
@@ -53,7 +53,7 @@ The batched form compares the weight's commitment at every position with the one
 falls back to the per-instance form. The verifier computes `W·r` itself from the authenticated `W` — no projection is ever taken
 from the producer (RFC-0007 §V.3).
 
-**Vector derivation.** `r` comes from `ChallengeStreamV1` (`misaka-palw-kernel/src/challenge.rs:56–113`) keyed by
+**Vector derivation.** `r` comes from `ChallengeStreamV1` (`misaka/palw/kernel/src/challenge.rs:56–113`) keyed by
 `ChallengeBindingV1::seed()` (`challenge.rs:33`) and the label `(kind, position, occurrence, node, repetition, slice)`; each element
 reads a 128-bit word, keeps `e` bits and rejects the single value `2^e − 1` — exactly uniform on `F_q` given uniform words (§S6.4).
 
@@ -84,10 +84,10 @@ Pr[ all t·|M| checks pass ] ≤ max_{q∈M} q^(−t) ≤ (2^89 − 1)^(−t) < 
 **Descriptor accounting.** The whole K2-TIR-v2 descriptor prices every repetition at 88 bits (`descriptor.rs:106–113`,
 `family.rs:107–113`), even for relations whose span needs only `2^127 − 1`. This is conservative (finding SG-08).
 
-**Tests.** `misaka-palw-kernel/tests/k2_wide.rs` (`a_lie_that_aliases_to_zero_mod_2_127_minus_1_is_caught_by_the_second_modulus`,
+**Tests.** `misaka/palw/kernel/tests/k2_wide.rs` (`a_lie_that_aliases_to_zero_mod_2_127_minus_1_is_caught_by_the_second_modulus`,
 `every_scalar_lie_in_the_i128_product_is_caught_and_convicted`, `moduli_are_the_fewest_whose_product_exceeds_the_span`);
 `field.rs` unit tests (`an_integer_error_below_the_moduli_product_survives_in_some_modulus`); the toy-field experiment of this dossier
-(`misaka-palw-challenge/tests/composition.rs`, `toy_crt_…`): with moduli 7 and 31, `e = 31` passes with probability 1/7 and
+(`misaka/palw/challenge/tests/composition.rs`, `toy_crt_…`): with moduli 7 and 31, `e = 31` passes with probability 1/7 and
 `e = 217 = 7·31` always passes — a span at the product is a hole, which is why admission refuses it.
 
 ---
@@ -161,7 +161,7 @@ probability `m/P`, and a whole-claim check reads `P·M_pos` (≈ 16 TB at 9B-8k)
 
 ## S5. Sampled conformance (RFC-0011 §17, RFC-0013 §9, OB-P0 tag 109)
 
-Code: `consensus/core/src/palw_conformance_evidence_v1.rs` (the pure half; the fold applies it), `misaka-palw-challenge/src/
+Code: `consensus/core/src/palw_conformance_evidence_v1.rs` (the pure half; the fold applies it), `misaka/palw/challenge/src/
 conformance.rs`. A committed scope (`ConformanceScopeV1`, `:91`) fixes, before randomness: `vectors_per_repetition` prompts (full
 forward passes of the reference, the independent and the typed-backend implementation, all three required — `:141–145`),
 `leaves_per_repetition` artifact leaves (opened against the artifact root and decoded by each implementation), and the fault model
@@ -185,7 +185,7 @@ a dtype-local decoder bug touching fewer than `f` of the leaves) is outside S5. 
 whole-model fidelity and not per-claim correctness** (`statement()`, `:197`).
 
 **On-chain judgement (optimistic).** The fold rebuilds the selection from the chain's own beacon and seed and recomputes every
-count, status and root it can (`verify_conformance_evidence_v1`, `misaka-palw-challenge/src/conformance.rs:209`); forward passes
+count, status and root it can (`verify_conformance_evidence_v1`, `misaka/palw/challenge/src/conformance.rs:209`); forward passes
 and leaf decodes are not in the block, so a posted pass opens a refutation window (80 DAA interim) for `LeafDecode` (an opening whose
 reference decode differs) and `VectorTokens` (a Final kernel claim on the selected prompt whose greedy tokens differ). Stated residual:
 a vector outcome's logits / commit digests have no on-chain court (`:30–34`).
@@ -211,7 +211,7 @@ function of `(context, the multiset of events settled by the tip, the tip)`:
 * `Locked` once `k` sources exist and the tip is `D` past the `k`-th settlement; `Unavailable` (never a fallback) if the window closes
   with fewer (`:321–348`); a presented beacon is a claim to recompute (`verify_work_beacon_v1`, `:367`).
 
-Tests: `misaka-palw-challenge/tests/contract.rs` (canonical order, dedup, lock depth, no fallback, reorg recompute, forged evidence,
+Tests: `misaka/palw/challenge/tests/contract.rs` (canonical order, dedup, lock depth, no fallback, reorg recompute, forged evidence,
 ties), C4's `adv_c4_contract` (720 permutations; every field edit refused; branch `adv/c4-e2e`).
 
 **S6.2 Seed binding.** `challenge_seed_v1 = H(CHALLENGE; subject, anchor, output)` (`seed.rs:30–49`) is minted only from a
@@ -243,7 +243,7 @@ seal forfeits its deposit) times the branches it can make canonical: `G ≤ 2^{a
 | `index_below(n)` | `seed.rs:130` | reject `w ≥ 2^64 − (2^64 mod n)`, return `w mod n` | uniform on `[0, n)`; rejection probability `< n/2^64` |
 | `distinct_indices(n, c)` | `seed.rs:145` | Floyd's algorithm over `index_below` | uniform over the `C(n, c)` subsets |
 | `field_m127` | `seed.rs:160` | two words, mask to 127 bits, reject `2^127 − 1` | uniform on `GF(2^127 − 1)`; rejection `2^-127` |
-| kernel `next_in::<Mersenne<e>>` | `misaka-palw-kernel/src/challenge.rs:90` | one 128-bit word, mask to `e` bits, reject `2^e − 1` | uniform on `GF(2^e − 1)`; rejection `2^-e` |
+| kernel `next_in::<Mersenne<e>>` | `misaka/palw/kernel/src/challenge.rs:90` | one 128-bit word, mask to `e` bits, reject `2^e − 1` | uniform on `GF(2^e − 1)`; rejection `2^-e` |
 
 Exhaustion is a named error, never a biased fallback: a challenge-crate stream draws at most `STREAM_MAX_WORDS_V1 = 2^24` words
 (`seed.rs:74`) — a `GF(2^127 − 1)` vector longer than `2^23` elements exhausts it (finding SG-09). The kernel's stream has no bound.
@@ -263,7 +263,7 @@ grinding) is an external gate (RFC-0007 §VI.6); `verify()` does not know the ex
 
 ## S7. OPV: window, economics and liability (RFC-0015)
 
-Code: `misaka-palw-kernel/src/opv.rs`, `consensus/core/src/palw_panel_free_v1.rs` (dormant fence, refused at every real height).
+Code: `misaka/palw/kernel/src/opv.rs`, `consensus/core/src/palw_panel_free_v1.rs` (dormant fence, refused at every real height).
 
 **S7.1 Timing (proved: the relations are validated; their premises are assumptions).** `OpvPolicyV1::validate` (`opv.rs:185`)
 enforces, with `W = base window + verification horizon`, `L` the ledger policy:
@@ -317,7 +317,7 @@ eff = min_i (r · s_i) − ⌈log2 m⌉ − ⌈log2 (R_a + 1)⌉ − β · ⌈lo
 
 with `s_i` the per-repetition soundness of relation family `i`, `m` the families (union bound), `r` the repetitions, `R_a` the
 retry limit, `G` the grinding choices per beacon, `β` beacons per attempt, `Q` adaptive statements; `approved_v1` would require
-`eff ≥ security_bits ≥ 128`. The dossier's calculator (`misaka-palw-challenge/src/composition.rs`) reproduces this formula exactly
+`eff ≥ security_bits ≥ 128`. The dossier's calculator (`misaka/palw/challenge/src/composition.rs`) reproduces this formula exactly
 when given no binding term and complete coverage, and extends it with the binding and selection terms (§5.2). Reviewer notes on the
 formula itself:
 

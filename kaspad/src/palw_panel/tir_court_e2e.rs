@@ -2925,7 +2925,7 @@ mod t12_walk {
         use misaka_palw_tir_lower::weights::Checkpoint;
         use misaka_palw_tir_lower::{artifact, fidelity};
         const CONTEXT: u32 = 64;
-        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-tir-lower/tests/fixtures/hf/llama");
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../misaka/palw/tir/lower/tests/fixtures/hf/llama");
         if !fixture.join("model.safetensors").exists() {
             eprintln!("the llama fixture is missing: skipped");
             return;

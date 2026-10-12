@@ -126,7 +126,7 @@ def seed_of(seat):
 def model_line_id(class_id, founder_bond, name):
     """`model_line_id_v1`, offline: the id of a non-founding line — keyed blake2b-64 over the class, the founder's bond (borsh: the transaction id, the
     index as u32 LE) and the name (length u32 LE, bytes). Known before the chain exists, so a drill's lying executor can be told which line to spoil;
-    pinned against the chain's own function by misaka-palw-sdk/tests/improve_line_id.rs."""
+    pinned against the chain's own function by misaka/palw/sdk/tests/improve_line_id.rs."""
     txid, index = founder_bond.rsplit(":", 1)
     nb = name.encode()
     msg = bytes.fromhex(class_id) + bytes.fromhex(txid) + int(index).to_bytes(4, "little") + len(nb).to_bytes(4, "little") + nb
@@ -2145,7 +2145,7 @@ def selftest():
     assert verdict_cap({"data": {"cap-armed": {"capacity_step2": True, "capacity_step3": True}, "cap-summary": two}})[0] == "PASS"
     two["rho100"]["diverges"] = True
     assert verdict_cap({"data": {"cap-armed": {"capacity_step2": True, "capacity_step3": True}, "cap-summary": two}})[0] == "FAIL", "ρ=100 diverges"
-    # The line id derived offline is the chain's: golden values pinned by misaka-palw-sdk/tests/improve_line_id.rs.
+    # The line id derived offline is the chain's: golden values pinned by misaka/palw/sdk/tests/improve_line_id.rs.
     g_class, g_bond = "ab" * 64, "07" * 64 + ":1"
     assert model_line_id(g_class, g_bond, "T") == "17131be198686c865fff3483f36c895a686bd10d8d92c0a894920e2a7923450c89f8e8061afefc2b29ab5667516311de410d614e2811d1379e11cee4fa89dacd"
     assert model_line_id(g_class, "07" * 64 + ":3", "W2") == "7d1e43e6c6cc6dadc5b93e262bf559252feacb19508696972ffba06980aa28975049a00df7c2626ee6d03eff66453e46a71c1782983fd178a3e2b721737546b2"

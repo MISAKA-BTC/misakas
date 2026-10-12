@@ -38,7 +38,7 @@ itself is unedited.
 
 ## C-01 実workerがcourt用のstep legを生成していない
 
-最も大きい穴です。`misaka-palw-worker/src/main.rs:1644-1671` に、次の事実がコードコメントとして明記されています。
+最も大きい穴です。`misaka/palw/worker/src/main.rs:1644-1671` に、次の事実がコードコメントとして明記されています。
 
 * workerはstep legを取得していない
 * shimが公開するのはtapとlogitsで、kernelごとのtile出力ではない

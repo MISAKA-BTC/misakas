@@ -33,7 +33,7 @@ The beacon authorizes no semantics. One contract: `misaka-palw-challenge` (Lead-
 | Lead | `misaka-palw-challenge`, central enums/tags/serialization/fingerprint, these matrices, merges, full regression | `claude/g14-public-prosecution-integration-9bee39` |
 | A — frontend & tasks | `misaka-palw-tir-lower` (hf_config, hf_schema, gguf, weights, adapter, model, encoder, embedding), SDK census/preflight frontend paths | `onboard/a-frontend` |
 | B — kernel / plan / G14 | `misaka-palw-kernel` (ledger, gate, families, courts), reusable semantic extensions | `g14/b-kernel` |
-| C — beacon conformance & runtime pack | `misaka-palw-sdk/src/runtime_pack/*`, `tir_layout.rs`, `conformance.rs`, `pack bind-class`, pack gate | `onboard/c-beacon-pack` |
+| C — beacon conformance & runtime pack | `misaka/palw/sdk/src/runtime_pack/*`, `tir_layout.rs`, `conformance.rs`, `pack bind-class`, pack gate | `onboard/c-beacon-pack` |
 | D — real registration E2E & adversarial (+ real-node G14 carriage) | consensus tests (T12Chain), RPC reads, kernel-route fold wiring under Lead's tags | `g14/d-node-e2e` |
 
 ## 3. Model / family matrix (Wave 1 first)
@@ -141,6 +141,6 @@ Each fix records **before N / after M** here.
   fidelity. Gaps: tiled range evaluator for 40-bit policies (≈56 vector draws ≈ 3 h), stored Merkle index, on-chain conformance
   commitment + beacon-facts RPC (lane D / Lead), contract proposals 1–8 (record §5).
 
-* 2026-10-08 — lane A milestone 1 (branch `onboard/a-frontend`, not yet integrated): census gate results carry a machine class (`misaka-palw-sdk/src/census/onboarding.rs`; `NOT_RUN_*` never a semantic gap; PROFILE_REQUIRED = task profile, lifecycle KERNEL_EXTENSION_REQUIRED "task profile"); KERNEL_EXTENSION_REQUIRED list empty (845/847 sampled decoders ELIGIBLE_AT, 2 BOUNDS_EXCEEDED ≥70B); GGUF `rope_freqs.weight` → ROPE_FREQ_FACTORS_V1 (NOT_RUN_NEEDS_TENSOR_DATA headers pass est 5,715 → 440; GGUF frame 18 members → shape-ready); tokenizer file table (TOKENIZER_MISSING est 32,517 → 27,443); GGUF LoRA relabelled ADAPTER_REFUSED; pre-existing `adapter_pins` failure (16 adapters) recorded.
+* 2026-10-08 — lane A milestone 1 (branch `onboard/a-frontend`, not yet integrated): census gate results carry a machine class (`misaka/palw/sdk/src/census/onboarding.rs`; `NOT_RUN_*` never a semantic gap; PROFILE_REQUIRED = task profile, lifecycle KERNEL_EXTENSION_REQUIRED "task profile"); KERNEL_EXTENSION_REQUIRED list empty (845/847 sampled decoders ELIGIBLE_AT, 2 BOUNDS_EXCEEDED ≥70B); GGUF `rope_freqs.weight` → ROPE_FREQ_FACTORS_V1 (NOT_RUN_NEEDS_TENSOR_DATA headers pass est 5,715 → 440; GGUF frame 18 members → shape-ready); tokenizer file table (TOKENIZER_MISSING est 32,517 → 27,443); GGUF LoRA relabelled ADAPTER_REFUSED; pre-existing `adapter_pins` failure (16 adapters) recorded.
 
 * 2026-10-08 — matrix created; contract `misaka-palw-challenge` landed.

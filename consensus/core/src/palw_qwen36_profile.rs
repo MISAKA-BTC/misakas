@@ -34,7 +34,7 @@
 //! # What this module is not
 //!
 //! It is the graph, not the weights, and not the registration. The artifact
-//! (`misaka-palw-base0/src/qwen36.rs`) and the wiring that answers
+//! (`misaka/palw/base0/src/qwen36.rs`) and the wiring that answers
 //! [`crate::palw_step_refute::PalwWeightOracleV1`] for these tensor names are separate things, and
 //! no function here can invent either.
 
@@ -252,7 +252,7 @@ pub const QWEN38_27B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
 };
 
 /// **The epsilon every artifact of this lineage executes.** The fifth finding
-/// (`misaka-palw-base0/src/qwen36_plan.rs`, the real-weights differential): the three geometries
+/// (`misaka/palw/base0/src/qwen36_plan.rs`, the real-weights differential): the three geometries
 /// above declare `rms_eps_q: 17` while `qwen36-convert` hardcodes `eps_q = 1` into every artifact
 /// header, and the engine normalizes with the ARTIFACT's constant — so the declared epsilon was
 /// not the executed one, and the planner's geometry gate refused each row over its own class's
@@ -545,7 +545,7 @@ const QWEN36_ATTN_IR: &[Ir] = &{
 // graph-v2 — the corrected tables
 // -------------------------------------------------------------------------------------------------
 //
-// Measured on 2026-09-01 (`misaka-palw-base0/tests/qwen36_profile_conformance.rs`): the v1 tables
+// Measured on 2026-09-01 (`misaka/palw/base0/tests/qwen36_profile_conformance.rs`): the v1 tables
 // misdescribe `Qwen36Engine` in three ways, and the fix cannot be an edit because the class id is
 // the borsh of the whole profile and the genesis id is pinned as a live chain fact. So the
 // correction is a SECOND graph — the same computation, described with the names the engine reads —
@@ -578,7 +578,7 @@ const QWEN36_ATTN_IR: &[Ir] = &{
 //    routed and the shared expert carry the swap. The name-conformance measurement cannot see
 //    this (the names are right); the fixture differential cannot either when every row sits
 //    inside the code rail (narrow and wide agree there by construction). What convicts it is the
-//    hot-row differential in `misaka-palw-base0/src/qwen36_plan.rs`, which drives a gate row past
+//    hot-row differential in `misaka/palw/base0/src/qwen36_plan.rs`, which drives a gate row past
 //    the rail and holds the interpreter to the engine's bits.
 //
 // 5. (Found by the same differential run on real weights, 2026-09-01.) The declared epsilon was

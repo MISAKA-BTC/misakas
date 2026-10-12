@@ -8,7 +8,7 @@ Pure standard library; no network; no consensus or policy code calls it. Money i
 is checked; sweeps over probabilities and allocation curves use floats.
 
 Every printed number carries one label:
-  MEASURED  read from consensus code, or from the ledger PoCs misaka-palw-kernel/tests/econ_bounty.rs / econ_seal_veto.rs
+  MEASURED  read from consensus code, or from the ledger PoCs misaka/palw/kernel/tests/econ_bounty.rs / econ_seal_veto.rs
   INTERIM   a value the code marks interim (palw_kernel_route_policy_v1, PalwPanelFreeFenceV1::interim_v1) — not production
   DERIVED   computed here from labelled inputs
   ASSUMED   an input chosen for illustration (no measurement exists yet); the user or MEAS must replace it

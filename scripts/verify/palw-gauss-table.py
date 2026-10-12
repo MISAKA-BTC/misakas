@@ -26,8 +26,8 @@ Decision 11's Gumbel table (`scripts/verify/palw-gumbel-table.py`), which this s
 The pin is BLAKE2b-512 keyed with the ASCII bytes `misaka-palw/rand/gauss-q24/v1` over the 65,536
 entries as little-endian i32 — exactly the bytes of the table file.
 
-Usage:  python3 scripts/verify/palw-gauss-table.py --out misaka-palw-gen/data/gauss-q24-v1.bin   # write it, print the pin
-        python3 scripts/verify/palw-gauss-table.py --check misaka-palw-gen/data/gauss-q24-v1.bin # regenerate and compare
+Usage:  python3 scripts/verify/palw-gauss-table.py --out misaka/palw/gen/data/gauss-q24-v1.bin   # write it, print the pin
+        python3 scripts/verify/palw-gauss-table.py --check misaka/palw/gen/data/gauss-q24-v1.bin # regenerate and compare
         python3 scripts/verify/palw-gauss-table.py --hash                                        # print the pin only
 
 Standard library only (no mpmath), so the table can be regenerated on any machine with Python 3.

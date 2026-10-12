@@ -2,7 +2,7 @@
 # check-repin-predictions.sh <tree-ish>
 #
 # The re-pin ceremony's mechanical guard. Every value below was PREDICTED before the freeze, from
-# a tree whose `misaka-palw-derive/src` hash is recorded here. At the paste, each value is read
+# a tree whose `misaka/palw/derive/src` hash is recorded here. At the paste, each value is read
 # again from the frozen tree and must EQUAL its prediction.
 #
 # Why this is a script and not a checklist line: tonight three separate rules that existed only as
@@ -106,11 +106,11 @@ printf '%s\n' "-- the tree the predictions came from ---------------------------
 
 # THIS IS THE FIRST CHECK ON PURPOSE. Every other prediction is a function of these bytes, so a
 # moved derive/src invalidates the whole set at once and there is no point reading the rest.
-actual_derive=$(git rev-parse "${tree}:misaka-palw-derive/src")
+actual_derive=$(git rev-parse "${tree}:misaka/palw/derive/src")
 check "derive/src tree" "$PREDICTED_DERIVE_SRC" "$actual_derive"
 [ "$fail" -eq 0 ] || die "derive/src moved. Every prediction below is a function of these bytes,
         so they are ALL stale — do not read them and do not paste them. Name the commit
-        that touched misaka-palw-derive/src, re-derive, and re-predict."
+        that touched misaka/palw/derive/src, re-derive, and re-predict."
 
 printf '%s\n' "-- the predicted values, against an EXTRACTION table ----------------------"
 

@@ -25,7 +25,7 @@ record of that milestone.
 **Executable model:** `python3 -I scripts/sim/misaka-palw-econ-verifier-model.py`. It covers §1–§8 and exits 1 if any of its checks
 fails.
 
-**Ledger PoCs:** `misaka-palw-kernel/tests/econ_bounty.rs` and `econ_seal_veto.rs`. These test only claims about consensus code.
+**Ledger PoCs:** `misaka/palw/kernel/tests/econ_bounty.rs` and `econ_seal_veto.rs`. These test only claims about consensus code.
 
 Amounts are in BILI.
 
@@ -85,7 +85,7 @@ Amounts are in BILI.
 
 ### 1.2 Flows on the kernel route
 
-The code is `misaka-palw-kernel/src/ledger.rs`. Values are INTERIM, from `palw_kernel_route_policy_v1` and `interim_v1`, with
+The code is `misaka/palw/kernel/src/ledger.rs`. Values are INTERIM, from `palw_kernel_route_policy_v1` and `interim_v1`, with
 `a` = 49%.
 
 | Flow | Amount | Code |

@@ -17185,7 +17185,7 @@ pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
 /// gives `PALW-QWEN25-A16` the kernel set of the graph-v2 profile — which does not reach
 /// `KDESC_A16_ATTN_FUSED`. So `verify_class_admission_v5` refuses this share by name
 /// (`NotEndToEndCertified { share: 489 }`), measured by
-/// `misaka-palw-base0/tests/a16_root_probe.rs::the_genesis_registered_row_is_admissible_under_the_armed_rc_court`.
+/// `misaka/palw/base0/tests/a16_root_probe.rs::the_genesis_registered_row_is_admissible_under_the_armed_rc_court`.
 ///
 /// A GENESIS registration does not pass through that gate — it is verified against the committed
 /// catalog — so this number is granted and the class holds the cadence. What it does not hold is
@@ -18011,7 +18011,7 @@ pub const PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::f
 /// resolver compares the inventory root of every holding against this constant, so with the digest
 /// pinned here seat2 refused its own artifact nine times at Relaunch 5 ("holds no artifact whose
 /// registered root form is c00faa48…") and the dense tier produced zero blocks. Measured
-/// 2026-09-02 with `misaka-palw-base0/tests/a16_root_probe.rs` over the deployed file:
+/// 2026-09-02 with `misaka/palw/base0/tests/a16_root_probe.rs` over the deployed file:
 /// `artifact_digest = c00faa48…`, `inventory_root = 1a7457f1…`. The comment on
 /// `CanonicalClassV1::artifact_root` names this exact failure ("deciding it here a second time is
 /// the two-mappings defect"); this constant was the second mapping.
@@ -18049,7 +18049,7 @@ pub const PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash6
 ///   `158314b5…` against the deployed file's `c00faa48…` — binding writes the commitment field, and
 ///   the commitment field is not an operand.
 ///
-/// **Measured 2026-09-03 with `misaka-palw-base0/tests/a16_root_probe.rs`
+/// **Measured 2026-09-03 with `misaka/palw/base0/tests/a16_root_probe.rs`
 /// (`print_a16_v5_root_forms`) over BOTH files under `palw_a16_context_row_profile_v5(512)`:**
 ///
 /// | file | `artifact_digest()` | `a16_inventory_v1(.., v5).root()` |

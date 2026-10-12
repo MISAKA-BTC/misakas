@@ -81,8 +81,8 @@ kaspad --testnet --netsuffix=11 --palw-dump-classes
 
 <sub>Where the numbers come from: the class's registered width is `n_ctx` in the class row, and a
 job is refused when `prompt + decode ceiling > n_ctx`
-(`misaka-palw-base0/src/fp_worker.rs`). The token counts are the shipped Qwen2.5 tokenizer over
-`misaka-palw-derive/corpus/`; the commands are in the launch report.</sub>
+(`misaka/palw/base0/src/fp_worker.rs`). The token counts are the shipped Qwen2.5 tokenizer over
+`misaka/palw/derive/corpus/`; the commands are in the launch report.</sub>
 
 ---
 
@@ -113,7 +113,7 @@ transformers:
 
 **The ids are elided above on purpose, and the ones this page used to print were already
 wrong.** A `transformer_id` is a hash of the transformer's SOURCE TREE — every file under
-`misaka-palw-derive/src/`, comments included — so it moves whenever that code is edited, including
+`misaka/palw/derive/src/`, comments included — so it moves whenever that code is edited, including
 by an edit that changes no behaviour at all. The repository's own `transformer_id_pin` test exists
 to record each move. A page that prints today's ids as though they were constants is a page that
 is wrong after the next commit, and the reader who compares them concludes their build is broken.
@@ -130,12 +130,12 @@ Eight are registered in this build: music (`.mid`), CAD (`.stl`), 3D scenes (`.g
 The input is a **description** — structured JSON in the transformer's own vocabulary. That
 description is what a model is meant to write for you; until a class is wide enough to write one,
 you can write it yourself, or start from the worked examples in
-`misaka-palw-derive/corpus/<kind>/`.
+`misaka/palw/derive/corpus/<kind>/`.
 
 ```bash
 ./target/debug/palw-derive derive \
   --transformer music/smf/v1 \
-  --answer misaka-palw-derive/corpus/music/03-overlapping-melody.json \
+  --answer misaka/palw/derive/corpus/music/03-overlapping-melody.json \
   --out ./out
 ```
 

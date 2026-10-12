@@ -297,11 +297,11 @@ the court cannot reproduce is a false conviction waiting for its first dispute.
 > **Landed (2026-08-26, `09bd647f` / `df63a916` / `de1b67c1`).** The generator exists and the interim
 > obligation is a gate rather than a rule.
 >
-> `misaka-palw-base0/src/plan.rs` compiles `BASE0_LAYER_IR` — and now `BASE0_PRE_IR` and
+> `misaka/palw/base0/src/plan.rs` compiles `BASE0_LAYER_IR` — and now `BASE0_PRE_IR` and
 > `BASE0_POST_IR` — into the engine's op sequence: which step runs, in what order, reading which
 > earlier step, against which operand, producing how many values. The kernels are untouched, because
 > that arithmetic is the class; what is generated is what the divergences were actually made of.
-> **No kernel is called in `engine.rs` any more.** `misaka-palw-base0/src/operands.rs` is the one
+> **No kernel is called in `engine.rs` any more.** `misaka/palw/base0/src/operands.rs` is the one
 > binding from an IR tensor name to an artifact's bytes, keyed the way the court asks (template name
 > + layer index), and the engine and the inventory both read through it. Both classes' profiles project
 > every table — neither file writes a `PalwStepNodeV1`.

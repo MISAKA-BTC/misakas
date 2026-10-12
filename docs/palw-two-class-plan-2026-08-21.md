@@ -105,7 +105,7 @@ from Hugging Face's `config.json` and the real `safetensors` header: `QWEN25_1_5
 the same closed catalog, with GQA carried, the RMSNorm gain folded into the following linears, the
 QKV biases riding the requantize zero point (an ADR-0040 amendment), and coverage at **100 %**.
 
-Priced against the ladder — `misaka-palw-base0/src/bin/base0-class-sizing.rs` — one number does not
+Priced against the ladder — `misaka/palw/base0/src/bin/base0-class-sizing.rs` — one number does not
 work:
 
 | class | reachable kernels | coverage | longest job (whole context as prefill) |

@@ -99,7 +99,7 @@ An operation outside the registered semantics needs a versioned shared primitive
 with its checker and terminal court. For a native engine/container outside the generic TIR path,
 the SDK integration is one impl:
 
-1. Implement `PalwModelLineageV1` in `misaka-palw-sdk/src/lineages/<family>.rs`, delegating to the
+1. Implement `PalwModelLineageV1` in `misaka/palw/sdk/src/lineages/<family>.rs`, delegating to the
    family's own crates (the built-in `dense.rs` / `qwen36.rs` are the worked examples; the
    `TestLineage` in `lib.rs` is the minimal one).
 2. Add it to `builtin_lineages_v1` (or compose it at a call site with

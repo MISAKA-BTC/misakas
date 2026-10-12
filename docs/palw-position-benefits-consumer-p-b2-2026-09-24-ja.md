@@ -55,7 +55,7 @@ ADR 上の答えは次のとおりです。**消費者は、line の holder に 
 | line の宣言を読む RPC | あり: `getPalwModelLine.benefits`（in-effect tiers、pending、lapse、lead）、`service_facts` | message.rs :3418 |
 | 保有量を読む RPC | `getPalwModelPositions` は **`(lineId, units)` しか返さない** | message.rs :3200 |
 | `getPalwModelBenefitTier` RPC | **ない**。unmerged の cdc5cd26 で op 177 として実装されたが、t12 では 177 が `GetPalwClaims` | — |
-| gateway の membership check | **t12 にはない**。773f6e7c（`misaka-palw-gateway/src/membership.rs`、`--membership-line`、`GET /v1/membership/challenge`、`PRIORITY_INFERENCE` を優先キューに） | unmerged branch |
+| gateway の membership check | **t12 にはない**。773f6e7c（`misaka/palw/gateway/src/membership.rs`、`--membership-line`、`GET /v1/membership/challenge`、`PRIORITY_INFERENCE` を優先キューに） | unmerged branch |
 | CLI `misaka palw benefits` と証明の署名 | **t12 にはない**。cdc5cd26 にある | — |
 | descriptor の検査（ADR-0101 D2、D3） | あり。純関数と pin | `palw_service_descriptor_v1.rs` |
 

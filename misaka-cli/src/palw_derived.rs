@@ -794,7 +794,7 @@ pub async fn verify(ctx: &Ctx, args: DerivedVerifyArgs<'_>) -> CliResult {
 /// `MISMATCH` is ADR-0078 Decision 5's word: the executor filed a derivation that re-running the
 /// named grammar and transformer over the answer refutes, and the whole value of the sentence is
 /// that it is an accusation somebody can act on. `UNVERIFIABLE` is SA-5's: `transformer_id` covers
-/// `misaka-palw-derive/src/`, so any edit there moves all eight ids and this build simply is not
+/// `misaka/palw/derive/src/`, so any edit there moves all eight ids and this build simply is not
 /// the one the derivation names. Nobody lied; the reader is holding the wrong ruler.
 ///
 /// This summary used to be `if all_consistent { .. } else { "MISMATCH — a demonstrable false
@@ -861,11 +861,11 @@ mod tests {
         Evidence::Unbound { answer: Some(answer), output_root_inputs: Some((family, job_context_hash, ids)) }
     }
 
-    /// The shipped corpus's first row (`misaka-palw-derive/corpus/music/01-single-note.json`) —
+    /// The shipped corpus's first row (`misaka/palw/derive/corpus/music/01-single-note.json`) —
     /// one note, the smallest thing the MIDI writer can be asked for, and a real derivation rather
     /// than a hand-written hash.
     fn corpus_answer() -> Vec<u8> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-derive/corpus/music/01-single-note.json");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka/palw/derive/corpus/music/01-single-note.json");
         std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
     }
 
@@ -985,7 +985,7 @@ mod tests {
     /// **A derivation this build cannot re-run is not a derivation this build has refuted.**
     ///
     /// `transformer_id` names the source tree that produced the artifact, so a node upgrade that
-    /// touches `misaka-palw-derive/src/` moves all eight ids and every derivation already on chain
+    /// touches `misaka/palw/derive/src/` moves all eight ids and every derivation already on chain
     /// becomes one THIS build cannot check. `compare` reports that as `Err` — SA-5 — and the row
     /// is rendered `UNVERIFIABLE`. This is the fixture the summary-line test below stands on: if
     /// `compare` ever started returning `Ok(vec![...])` here, `UNVERIFIABLE` would silently become
@@ -1190,7 +1190,7 @@ mod tests {
 
         // The forgery: an artifact of another answer, filed against THIS claim.
         let other =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-derive/corpus/music/03-overlapping-melody.json");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../misaka/palw/derive/corpus/music/03-overlapping-melody.json");
         let other = std::fs::read(&other).unwrap_or_else(|e| panic!("{}: {e}", other.display()));
         assert_ne!(other, honest.answer, "the forgery must be derived from a different answer");
         let claim = ClaimBinding {

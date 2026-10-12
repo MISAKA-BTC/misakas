@@ -66,7 +66,7 @@ honest collateral (M2-1, M2-2, M2-7).
 | M2-2 | critical | M2 | unverified foreign material is persisted, pooled and re-broadcast with no bound ⇒ remote disk, RAM and a ~10^5 bandwidth amplifier | `kaspad/src/palw_panel.rs:966` |
 | M2-3 | critical | M2 | ADR-0058 pays a merged block the transition refuses, anti-replay keyed on "a claim exists" | `consensus/src/processes/coinbase.rs:270` |
 | M2-4 | critical | M2 | both court parties bisect the accused's own capture ⇒ the ladder can never find a fault, and the sweep then convicts the responder | `kaspad/src/palw_panel.rs:1463` |
-| M2-5 | critical | M2 | 2 of 3 genesis classes have no court responder, and the opening rung convicts on silence | `misaka-palw-base0/src/qwen36_backend.rs:273` |
+| M2-5 | critical | M2 | 2 of 3 genesis classes have no court responder, and the opening rung convicts on silence | `misaka/palw/base0/src/qwen36_backend.rs:273` |
 | M2-6 | critical | M2 | the class-registration signature covers 5 of the object's 9 fields and nothing binds it to a carrier | `consensus/core/src/palw_state_v2.rs:1437` |
 | M2-7 | critical | M2 | the chain charges seats for silence it cannot observe (`&[]` at timeout; the submitter's inbox at license) | `consensus/core/src/palw_state_v2.rs:4219` |
 | M2-8 | critical | M2 | a future-`activation_daa` registration is permanent, free and unbounded — no cap, no expiry, no reclaim | `consensus/core/src/palw_state_v2.rs:4409` |
@@ -571,7 +571,7 @@ let Some(capture) = materials.get(&duty.claim_id)
 (`consensus/core/src/palw_producer_v2.rs:588-589`). Both arms then read that same `capture`: the
 responder at `:1506` (`backend.bisect_prefix_state(capture, midpoint)`) and the CHALLENGER at
 `:1531` (`let Some(ours) = backend.bisect_prefix_state(capture, disclosed.0)`, then
-`agree: ours == disclosed.1`). `base0_bisect_prefix_state_v1` (`misaka-palw-base0/src/legs.rs:305`)
+`agree: ours == disclosed.1`). `base0_bisect_prefix_state_v1` (`misaka/palw/base0/src/legs.rs:305`)
 is a pure function of `(job_context, leaves, index)`, so identical bytes at an identical index give
 an identical hash by construction. `verify_material` does not re-execute — it checks the anchor and
 `base0_material_matches_claim_v1` (`backend.rs:81-101`), which a lying capture satisfies by
@@ -619,7 +619,7 @@ what honest challenger software computes — reaches the same terminal index, an
 (`write_court(session_id, None)` → `palw_state_v2.rs:2805-2812`). Attacker cost: 23 transaction fees,
 zero collateral at risk.
 
-The two-material property IS tested — `misaka-palw-base0/src/backend.rs:349-355` asserts
+The two-material property IS tested — `misaka/palw/base0/src/backend.rs:349-355` asserts
 `honest_before == lying_before` and `honest_after != lying_after` across TWO materials — but the
 panel wiring feeds one material to both sides, so the tested property is not the shipped one. Same
 shape as the 2026-08-22 item-7 defect.
@@ -633,7 +633,7 @@ ladder terminates on the tampered leaf index and the close reads `ExecutorGuilty
 what hid this.
 
 ### M2-5 `[critical]` Two of the three genesis classes have no court responder, and the opening rung convicts on silence
-`misaka-palw-base0/src/qwen36_backend.rs:273`
+`misaka/palw/base0/src/qwen36_backend.rs:273`
 
 **Mechanism.** Only `Base0Backend` implements the court half of `PalwExecutionBackendV1`.
 `impl … for Qwen36Backend` (`qwen36_backend.rs:273`) and `impl … for Qwen25A16Backend`
@@ -863,7 +863,7 @@ it (`:481`): node 19 is
 (`AddElem [Step(20), Step(19)]`, `:380`) is then left with one input and folded away to node 20, the
 `attn_align` rescale of the layer input.
 
-The ENGINE does the opposite. `misaka-palw-base0/src/qwen36.rs:1028` is
+The ENGINE does the opposite. `misaka/palw/base0/src/qwen36.rs:1028` is
 `let out = self.project(&n("attn_o.weight"), &gated, d, false)?;` — unconditional, outside every
 `if gate_raw.is_some()` — and the converter writes `attn_o.weight` and its a16 params for both
 families. Nothing catches the divergence: `validate_shape` passes (references still point backwards,
@@ -1037,7 +1037,7 @@ is the bond's own collateral" as a fourth distinct reason in the failure log at 
 (`:191-198`). `class_artifacts` is `Vec<Base0ArtifactV1>` held BY VALUE (`:171`), and
 `Base0ArtifactV1` derives `Clone` over owned weight buffers — `pub embed: Vec<i8>`,
 `pub unembed: Vec<i8>`, `pub layers: Vec<Base0LayerWeightsV1>` with `wq/wk/wv/wo/w_gate/w_up/w_down:
-Vec<i8>` (`misaka-palw-base0/src/artifact.rs:216-261`). No `Arc` on that path, so `.clone()` is a full
+Vec<i8>` (`misaka/palw/base0/src/artifact.rs:216-261`). No `Arc` on that path, so `.clone()` is a full
 deep copy. For the registered A16 class (QWEN25_1_5B: 28 layers, hidden 1536, ffn 8960, vocab 151,936
 — `consensus/core/src/palw_qwen25_profile.rs:79-90`) that is
 233,373,696 + 233,373,696 + 28 × 46,792,704 = **1,776,943,104 bytes ≈ 1.65 GiB per call**.

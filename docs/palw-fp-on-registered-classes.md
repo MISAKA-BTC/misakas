@@ -33,7 +33,7 @@ What works today, measured rather than assumed:
 * testnet-11 runs `palw_rc_params` — a `ConsensusV2` network with the free-prompt bundle installed.
 
 Two documents disagreed with that code and both have since been corrected:
-`docs/palw-freeprompt-gateway.md` and `misaka-palw-gateway/src/bin/rail.rs` said no network accepts
+`docs/palw-freeprompt-gateway.md` and `misaka/palw/gateway/src/bin/rail.rs` said no network accepts
 subnetwork 0x4a. One does, and both now say so.
 
 ## Why the obvious route is the wrong one

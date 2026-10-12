@@ -47,7 +47,7 @@
 
 ### 1.2 The programs
 
-- **S1** — the bench's own programs, written in the dense lowering's conventions (`misaka-palw-tir-exec/src/bin/tir-exec-bench.rs:117-241`:
+- **S1** — the bench's own programs, written in the dense lowering's conventions (`misaka/palw/tir/exec/src/bin/tir-exec-bench.rs:117-241`:
   `i32` residual carry, `i8` weights `[out, in]` read by `MatMul → i64` and narrowed per channel `(m, s, z)`, the wide RMS norm,
   two-level RoPE tables, GQA over `k`/`v` histories, SiLU as a 65,536-entry `i16` table, the LM head over the whole vocabulary).
   The bench already runs it at three geometries (`:52-57`, `--geo 1.5b|32b|70b`); W3a, W3b, W4 and W4b are four more.
@@ -56,7 +56,7 @@
   per-(expert, row) scales `[E·rows]` reshaped to `[E, rows]` and gathered by the same index, `moe_combine_q36` for the weighted
   sum, q/k norms. `TirTiersV1::of` must classify the stacks and their scales `Routed`.
 - **S2 cross-check** (H5) — the real configs in the repo, lowered at real shapes with no weight read, as
-  `misaka-palw-tir-lower/tests/residency_tiers.rs:100-157` does: `tests/configs/real/qwen3-30b-a3b.json` (W1),
+  `misaka/palw/tir/lower/tests/residency_tiers.rs:100-157` does: `tests/configs/real/qwen3-30b-a3b.json` (W1),
   `qwen2.5-7b-instruct.json` (W3a), `phi-4.json` (W3b). S1's tier arithmetic (weights, pinned, routed, routed a token, in flight,
   the per-occurrence slab bytes) must be within ±3 % of S2's, or the report uses S2's numbers for sizing and says so. W4 and W4b
   have no config in the repo; their arithmetic is S1's own.
@@ -97,7 +97,7 @@ Writing W4 at ~0.5 GB/s is about 4 minutes, W4b about 7.
 | **J-D(P+D)** | a generating job: `P` prompt positions then `D` generated tokens | the runner over a job of `D` decode tokens | W1 64+8; W3a/W3b 64+8; W4 16+4; W4b 8+2 |
 | **J-C** | RFC-0006 cells: `S_L` = 4 shards, `S_P` = 1 segment, over J-P's dense capture | `tir_verify_capture_cells_over_v1` (`node/cell.rs:796-828`) per shard | W3a P=63 (informative in M2; M3's gate) |
 | **J-X(P+D)** | executor-only, no commitment: today's bench loop | `TirExecutor::step` with tokens `(i·7919 + 1013) mod vocab` (`tir-exec-bench.rs:380, 498`) | the M1 regression cells |
-| **J-8k** | the 8k seat replay | canonical job (1023, 2), anchor `0x8000_1001`, `execute_for_verdict` at widths 64 / 32 / 16 / 8 — the existing harness `a_real_8k_replay_at_every_width_commits_one_set_of_roots` (`misaka-palw-base0/src/qwen25_a16_backend.rs:4694-4751`); also the attempt job (1023, 1) | W2 |
+| **J-8k** | the 8k seat replay | canonical job (1023, 2), anchor `0x8000_1001`, `execute_for_verdict` at widths 64 / 32 / 16 / 8 — the existing harness `a_real_8k_replay_at_every_width_commits_one_set_of_roots` (`misaka/palw/base0/src/qwen25_a16_backend.rs:4694-4751`); also the attempt job (1023, 1) | W2 |
 
 ## 2. Metrics
 
@@ -253,7 +253,7 @@ or T10 alone, with T1–T3 passing, is a performance defect to fix before the fl
 
 ## 9. What the harness needs — described, not written
 
-**H1 — `tir-exec-bench`** (`misaka-palw-tir-exec/src/bin/tir-exec-bench.rs`):
+**H1 — `tir-exec-bench`** (`misaka/palw/tir/exec/src/bin/tir-exec-bench.rs`):
 1. `--geo 7b | 14b | 123b | 405b-64 | 30b-a3b` beside `1.5b | 32b | 70b` (the geometries of §1.1), and the S1-MoE builder for
    `30b-a3b`; `--layers N` already truncates (W4-t4).
 2. The integer-only activation table (§1.3) and a declared layout written into the container (`--layout max_context=2048,ckpt=64,h_tile=64,tile=64`).
@@ -272,7 +272,7 @@ or T10 alone, with T1–T3 passing, is a performance defect to fix before the fl
 8. `--json <file>`: one line per run with every metric, the predicted figures of §7 beside the measured ones, the digest, and the
    facts of §4.
 
-**H2 — `palw-a16-replay-bench`** (new binary in `misaka-palw-base0/src/bin/`): the body of the env-gated 8k test
+**H2 — `palw-a16-replay-bench`** (new binary in `misaka/palw/base0/src/bin/`): the body of the env-gated 8k test
 (`qwen25_a16_backend.rs:4694-4751`) with `--hold mapped | pinned | owned`, `--widths`, `--job canonical | attempt`, `--cold`,
 `--repeat`, the readings of H1.7 and `--json`. The test stays as the correctness gate; the binary is the measurement.
 
@@ -283,7 +283,7 @@ repeats, appends the JSON lines, and refuses to start on a host whose hostname i
 **H4 — `scripts/tensor-store-bench-report.py`**: JSON lines → the result tables (§10), measured beside predicted, pass or fail per
 threshold.
 
-**H5 — the S2 cross-check**: a test beside `misaka-palw-tir-lower/tests/residency_tiers.rs` that lowers the three configs of §1.2
+**H5 — the S2 cross-check**: a test beside `misaka/palw/tir/lower/tests/residency_tiers.rs` that lowers the three configs of §1.2
 and compares their arithmetic with S1's `--write-only` output (±3 %).
 
 **Command lines, once H1–H3 exist** (paths illustrative):

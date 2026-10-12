@@ -909,7 +909,7 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
 /// `qwen25-1.5b-a16.palwart` declares it — so a row at any other width is a class those weights
 /// cannot execute. `misaka-palw-base0::classes::A16_CONVERTER_ROTARY_SPAN_V1` is the same number in
 /// the producer crate (which cannot be read from here: it depends on this one, not the other way
-/// round) and `misaka-palw-base0/tests/a16_root_probe.rs`'s
+/// round) and `misaka/palw/base0/tests/a16_root_probe.rs`'s
 /// `the_genesis_row_and_the_shipped_row_are_one_class` is the falsifier — it fails the moment the
 /// two spellings disagree, because a moved width is a moved `shape_profile_id` and therefore a
 /// different class.

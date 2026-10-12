@@ -17,8 +17,8 @@ source, records every known gap, and gives the composition into a whole-claim bo
 | [06-reviewer-questions.md](06-reviewer-questions.md) | The open questions, ranked by risk |
 | [07-reproducibility.md](07-reproducibility.md) | How to run the golden vectors, the kernel tests, lane D's `g14_*` and this dossier's checks |
 
-Executable half: `misaka-palw-challenge/src/composition.rs` (a pure integer calculator; no consensus or policy code calls it) and
-`misaka-palw-challenge/tests/composition.rs` (rows A–M pinned, plus toy-field Freivalds and CRT experiments with the crate's own
+Executable half: `misaka/palw/challenge/src/composition.rs` (a pure integer calculator; no consensus or policy code calls it) and
+`misaka/palw/challenge/tests/composition.rs` (rows A–M pinned, plus toy-field Freivalds and CRT experiments with the crate's own
 sampler). No consensus behaviour, wire id, fence, parameter or golden vector of the protocol changes.
 
 ## The argument in one page

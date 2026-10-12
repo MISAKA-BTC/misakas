@@ -523,7 +523,7 @@ dependency, not a preference.**
     8  the re-pins                                mine, last, and nothing touches derive/src after
 
 **Steps 3 and 4 are in that order for a reason that is not obvious.** FH writes in
-`misaka-palw-derive/src/`, which `palw-launch-consolidated` also edits (`5e369d10`, `928b4081`,
+`misaka/palw/derive/src/`, which `palw-launch-consolidated` also edits (`5e369d10`, `928b4081`,
 `ce9a6a24`, `e2341aec`), so FH must land *after* the merge or it collides with four fixes it agrees
 with. FG touches only the profile, params and test files, so it can come last and merge impl at its
 end without racing anything.
@@ -533,12 +533,12 @@ see 3b below. It is run twice because step 5 is itself a change to the crate bei
 
 
 `transformer_id` is a function of `source_tree_sha256`, which covers **every byte** under
-`misaka-palw-derive/src/` — comments included. It moves silently and everything stays green when it
+`misaka/palw/derive/src/` — comments included. It moves silently and everything stays green when it
 does. A published derivation whose id no longer reproduces is unverifiable, so this is the last
 thing done before the cut and it is done ONCE.
 
 **Order:**
-1. Freeze `misaka-palw-derive/src/` completely. Three doc edits and one formatting pass are already
+1. Freeze `misaka/palw/derive/src/` completely. Three doc edits and one formatting pass are already
    inside the hashed bytes.
 2. Run `cargo +<pinned> fmt --all` LAST among source-changing steps — formatting is inside the hash.
 3. Then re-pin `transformer_id_pin` and `shipped_presets_have_pinned_fingerprints`, in one commit.
@@ -568,14 +568,14 @@ thing done before the cut and it is done ONCE.
    branches and 1c's do. Two sessions reached the same wrong shape independently and by the same
    route: measure the thing in front of you, assert the conclusion for the population.
 
-4. Nothing under `misaka-palw-derive/src/` may be touched after step 3, for any reason, including a
+4. Nothing under `misaka/palw/derive/src/` may be touched after step 3, for any reason, including a
    typo in a comment.
 
 **The re-pins, by owner. Nothing touches both sides.**
 
 | pin | where | owner |
 |---|---|---|
-| `transformer_id_pin` | `misaka-palw-derive/tests/` | here, at the cut |
+| `transformer_id_pin` | `misaka/palw/derive/tests/` | here, at the cut |
 | `shipped_presets_have_pinned_fingerprints` | `consensus/core/src/config/params.rs` | here, at the cut |
 | `golden_vector_ids_are_frozen` | `consensus/core/src/palw_freeprompt_v3.rs` — ADR-0082 stream H gave the job two fields | here, at the cut |
 | **genesis `utxo_commitment`** | `all_networks_genesis_constants_match_premine` | here, **FIRST OF ALL** — via the `config::premine` CEREMONY tool, not a hand edit |
@@ -711,7 +711,7 @@ The other three are accounted for and none of them is a silent hole:
   the right shape; nothing is left for the freeze.
 - **re-pin 2, `PALW_RC_COURT_E2E_ROOT_BYTES`: gated, and currently NOT stale.** The gate is real and
   it is not in consensus-core — `the_pinned_rc_e2e_root_is_what_this_build_certifies`
-  (`misaka-palw-base0/src/e2e_drill.rs:1745`), a plain `#[test]`, which compares
+  (`misaka/palw/base0/src/e2e_drill.rs:1745`), a plain `#[test]`, which compares
   `palw_court_e2e_root_v1()` (computed from the registered families) against the pin. base0 is
   360/0, so on this tree the root has not moved. The `581466da… → 8f08d303…` move measured elsewhere
   was against a per-kernel drill rule that is **not merged**; if it lands, this becomes a live re-pin
@@ -956,7 +956,7 @@ whether it worked.*
 A hash arrived with a sentence: *"derive/src tree hash after the fmt: `4969f8dc…` (the fmt moved it
 as expected)."* **The hash was right. The sentence was wrong** — that is the value from *before* the
 fmt too, and `git diff` across the fmt shows nothing under that crate. The fmt ran (17 files, 211
-insertions) and touched base0, the tests and the sdk; `misaka-palw-derive/src` was already formatted.
+insertions) and touched base0, the tests and the sdk; `misaka/palw/derive/src` was already formatted.
 
 The cause was two hashes over one directory that are easy to conflate: **`source_tree_sha256`**, the
 project's own hash and the transformer ids' input — which **FH did move**, `d2419027…` →
@@ -1185,14 +1185,14 @@ measurements.** Each branch conflicts with 5f in exactly one file — and that s
 merge actually being done, because the remaining four conflicts are between the two BRANCHES, and
 neither pairwise merge contains both:
 
-    5f + palw-adr0082-impl                 -> 1   misaka-palw-base0/src/fuzz_a16.rs
-    5f + palw-artifact-names-genesis-row   -> 1   misaka-palw-base0/src/fuzz_a16.rs
+    5f + palw-adr0082-impl                 -> 1   misaka/palw/base0/src/fuzz_a16.rs
+    5f + palw-artifact-names-genesis-row   -> 1   misaka/palw/base0/src/fuzz_a16.rs
 
     5f + impl, THEN + artifact-names       -> 5   fuzz_a16.rs (as above), plus
                                                  consensus/core/src/palw_class_admission_v2.rs
                                                  consensus/core/src/palw_state_v2.rs
-                                                 misaka-palw-base0/src/classes.rs
-                                                 misaka-palw-base0/src/fp_recompute.rs
+                                                 misaka/palw/base0/src/classes.rs
+                                                 misaka/palw/base0/src/fp_recompute.rs
 
 Order does not help: five either way. *`5f + A` and `5f + B` do not predict `5f + A + B`* — and the
 whole point of a trial merge is to trial the merge you are going to do, which this card asserted
@@ -1234,7 +1234,7 @@ let a stranger check a derivation was answering a different question than the wo
 and `palw-launch-qwen36-demo` (verified by ancestry). It adds 35 commits over the re-merged tree and
 conflicts in exactly one file.
 
-**That conflict is pre-ruled: `misaka-palw/src/host_security.rs`, and it is DOC-ONLY.** Two hunks,
+**That conflict is pre-ruled: `misaka/palw/core/src/host_security.rs`, and it is DOC-ONLY.** Two hunks,
 zero non-doc lines inside either. Both sides independently discovered the same defect — that
 `MISAKA_PALW_NETWORK_ID` missing from `PALW_WORKER_ENV_ALLOWLIST` made every free-prompt worker
 unstartable, with SA-7 withholding the real reason so the gateway reported only "the worker exited
@@ -1270,7 +1270,7 @@ trial merge — not the conflict count, which expires.
 
 ### The artifact binding, verified by running — and the WALL CLOCK is what proves it ran
 
-FH closes the hole the audit found. Verified here, not read: `misaka-palw-derive/tests/answer_binding.rs`,
+FH closes the hole the audit found. Verified here, not read: `misaka/palw/derive/tests/answer_binding.rs`,
 **10 passed / 0 failed / 0 ignored / 0 filtered out, finished in 18.40s**, with
 `instruct-bound.palwart` (1,795,427,276 B) at the path the fixtures name and `qwen25-tokenizer.json`
 where they expect it.
@@ -1513,7 +1513,7 @@ apart:
   independent Python implementation reproduces the Rust byte for byte.
 - **The 3 reds are all `recomputed X, pinned Y`** — `source_tree_sha256` and the two
   `transformer_id`s. Nothing is disagreeing with anything except a frozen constant, and it is stale
-  for a reason the tree can name: two commits have touched `misaka-palw-derive/src/` since the pin
+  for a reason the tree can name: two commits have touched `misaka/palw/derive/src/` since the pin
   was last set at `d16fb54e` — `a87cc282` (a formatting pass; formatting is inside the hash) and
   `81c1ca1d` (the alphaMode fix). This is re-pin #5, on schedule.
 
@@ -1524,7 +1524,7 @@ and accuses the innocent."* A red PIN is a chore. Both print under one `SELFTEST
 cut this gate must be green outright; before then, check that the reds are exactly three and all of
 them of the `recomputed/pinned` shape.
 
-*(The pins live in `misaka-palw-derive/tests/`, outside the `src/` tree the hash covers, so writing
+*(The pins live in `misaka/palw/derive/tests/`, outside the `src/` tree the hash covers, so writing
 the new pin does not move the hash it pins. That is why §4 step 3 can be a single commit.)*
 
 **On the MERGED tree** (`5f + adr0082-impl + the family branch`), measured by a session that wrote
@@ -1664,9 +1664,9 @@ gate above is the one that would have caught all three.
 
   Every piece is already in the right crate, checked rather than assumed:
 
-      misaka-palw-derive/Cargo.toml:30      misaka-palw-base0 is a real [dependencies] entry
-      misaka-palw-base0/src/fp_worker.rs:851  render_answer_v1(&QwenTokenizer, &[u32]) -> Vec<u8>
-      misaka-palw-derive/src/derive.rs:226    already calls misaka_palw_base0::* on this path
+      misaka/palw/derive/Cargo.toml:30      misaka-palw-base0 is a real [dependencies] entry
+      misaka/palw/base0/src/fp_worker.rs:851  render_answer_v1(&QwenTokenizer, &[u32]) -> Vec<u8>
+      misaka/palw/derive/src/derive.rs:226    already calls misaka_palw_base0::* on this path
 
   so the missing step is one call — `canonicalize(render_answer_v1(tok, ids)).dsl_hash ==
   object.dsl_hash` — and the only input not in hand is the tokenizer, which `PalwJobContextV2`
@@ -1677,7 +1677,7 @@ gate above is the one that would have caught all three.
   does not read as "this artifact came from that inference". (2) `--artifact <path>` loads the
   tokenizer and performs the join, skipping by name when absent.
 
-  **Ordering:** both files are under `misaka-palw-derive/src/`, so this moves all eight
+  **Ordering:** both files are under `misaka/palw/derive/src/`, so this moves all eight
   `transformer_id`s. It must land **before** the single `fmt --all` and before the tree is declared
   frozen, or the re-pin is stale on arrival. `scripts/ci/check-derive-freeze.sh` is the check.
 
@@ -2497,7 +2497,7 @@ class means. Re-convert it with a tokenizer bound … binding a tokenizer moves
 **The final clause is false for this row**, and the tree says so in two places:
 
 ```
-misaka-palw-base0/src/classes.rs:1331
+misaka/palw/base0/src/classes.rs:1331
   assert_eq!(v5.artifact_root(&bound), v5_root,
     "a court-capable row registers the operand inventory, which the tokenizer is not in — so
      binding one is NOT a genesis input for this row and the registered root does not move")
@@ -3139,7 +3139,7 @@ prevent* — and it would have been eight plausible hex strings.
 ## A valid drill on 5f — and three things it settles
 
 ```
-palw-derive drill --corpus misaka-palw-derive/corpus --report drill-5f.json
+palw-derive drill --corpus misaka/palw/derive/corpus --report drill-5f.json
 {"arch":"aarch64","golden_checked":43,"golden_mismatched":[],"golden_unpinned":[],
  "bounds_enforced":8,"bounds_not_enforced":[],"refused":10,"rows":33,
  "verdict":"the corpus reproduces its goldens on this architecture and every declared bound
@@ -3336,7 +3336,7 @@ for `head`.
 ## The paste is verified by a SECOND IMPLEMENTATION, before the paste
 
 `scripts/verify/misaka-palw-derive-stranger.py` is a Python re-implementation that reads the pins out of
-`misaka-palw-derive/tests/transformer_id_pin.rs` and **recomputes them from the crate's actual
+`misaka/palw/derive/tests/transformer_id_pin.rs` and **recomputes them from the crate's actual
 bytes.** It takes `--crate-root`, so it can be pointed at any tree. Pointed at impl's:
 
 ```
@@ -4215,7 +4215,7 @@ answer's length exactly.** The fence was never the cause — a fenceless answer 
 > directly and never see a tail, which is why nothing before tonight measured this.
 
 *The repair is a design question for after the pin, and cheaper than it looks:*
-`render_answer_v1(tokenizer, ids)` lives in **`misaka-palw-base0/src/fp_worker.rs:860`, not in
+`render_answer_v1(tokenizer, ids)` lives in **`misaka/palw/base0/src/fp_worker.rs:860`, not in
 `derive/src`** — so a rule that cuts the rendering at the **first committed EOG id** (the A16
 manifest declares `eog_token_ids` from `<|im_end|>`/`<|endoftext|>`, fp_worker.rs:426) would
 not move `transformer_id` or `source_tree_sha256`. But it changes the bytes a verifier
@@ -4325,7 +4325,7 @@ TABLE=/path/to/extracted-pins.txt scripts/ci/check-repin-predictions.sh <frozen-
 
 # 2. the merge impl -> 5f — RE-MEASURED 2026-09-04 against impl 971b2eff x 5f ee27ef4e:
 #    merge-tree exit 0, ZERO conflicts (the five once pre-ruled were resolved upstream), and the
-#    merged tree's misaka-palw-derive/src is 4969f8dc… — the pin basis, verbatim. A merge
+#    merged tree's misaka/palw/derive/src is 4969f8dc… — the pin basis, verbatim. A merge
 #    surface is a measurement with a timestamp; re-measure on the frozen tip. Then the pin
 #    tests must go GREEN on the merged tree — the same three that were red are the proof
 cargo test -p kaspa-consensus-core --lib -- every_genesis_commits_to_the_premine shipped_presets_have_pinned_fingerprints golden_vector_ids_are_frozen
@@ -5277,7 +5277,7 @@ ibm has no client library), node0:
 
 Binaries built from `candidate-6e01ba07` on ibm at 19:44–19:55 CEST: `misaka-palw-gateway` sha `bd9c9150…`,
 `palw-a16-fp-worker` `a113d351…`, `palw-derive` `c6e6b608…` (the Aug-31 gateway file and the 14:11 workers were NOT
-these; `misaka-palw-base0/src/classes.rs` had moved since my Mac smoke tree, so only a rebuild counts). Inputs:
+these; `misaka/palw/base0/src/classes.rs` had moved since my Mac smoke tree, so only a rebuild counts). Inputs:
 `bound-candidate.palwart` (v5 class `4277d84f…`), tokenizer `/root/palw-class/qwen25-src/tokenizer.json`,
 `MISAKA_PALW_NETWORK_ID=testnet-11`; offline `--anchor` form, identity with the v5 class id (no chain, no bond).
 
@@ -5320,7 +5320,7 @@ chain-side reasons; a chat answered — job `4916876c…`, claim `1bd0e0a7…`) 
 
     Rejected transaction f89b61c7…: transaction … is not standard: transaction output #0: non-standard script form
 
-Mechanism (read by 3e in both directions): `misaka-palw-gateway/src/bin/rail.rs:288` builds the funding `UtxoEntry`
+Mechanism (read by 3e in both directions): `misaka/palw/gateway/src/bin/rail.rs:288` builds the funding `UtxoEntry`
 with `ScriptPublicKey::default()`; `build_funded_overlay_tx` mirrors that script into the change output →
 `ScriptClass::NonStandard` → `check_transaction_standard.rs:156`; and `calc_mldsa87_signature_hash` commits to the
 entry's script, so the signature was over the wrong digest — the tx could never have been valid. No drill had reached
@@ -5333,7 +5333,7 @@ So the announcement's `[PENDING] a free-prompt job committed ON the public chain
 tonight with the shipped rail; the local (D5-bound) commitments and derivations of 7a stand as stated.
 
 **7b, continued (18:45 UTC).** 3e's fix is `b037cdc2` on `palw-adr0082-impl` (= `7aa3d5ad` the fix + the `Cargo.lock`
-follow-up; parent the frozen `4d572142`; files `misaka-palw-gateway/Cargo.toml`, `misaka-palw-gateway/src/bin/rail.rs`,
+follow-up; parent the frozen `4d572142`; files `misaka/palw/gateway/Cargo.toml`, `misaka/palw/gateway/src/bin/rail.rs`,
 two `Cargo.lock` lines — verified locally before it was carried anywhere). It closes **two** defects found live, one
 behind the other:
 1. the empty funding script (above);
@@ -5390,8 +5390,8 @@ a CPU sampler to read.
   97 tokens (198-token prompt) in **247 s** — about two seconds per token on this 8-core VM. A 512-context producer
   job is minutes to tens of minutes here; 3e's Mac produced v5 blocks 2.8–11 min apart on one producer.
 
-**Rail (7b) — the sha.** Series verified locally (parent `4d572142`; exactly `Cargo.lock`, `misaka-palw-gateway/Cargo.toml`,
-`misaka-palw-gateway/src/bin/rail.rs`), carried to ibm as two patches, `git am` over `candidate-6e01ba07` on the branch
+**Rail (7b) — the sha.** Series verified locally (parent `4d572142`; exactly `Cargo.lock`, `misaka/palw/gateway/Cargo.toml`,
+`misaka/palw/gateway/src/bin/rail.rs`), carried to ibm as two patches, `git am` over `candidate-6e01ba07` on the branch
 `candidate-6e01ba07+rail-b037cdc2` (HEAD `d272eb57`; 3 files, 46+/9−; 0 files under consensus/, kaspad/,
 kaspa-pq-validator-core/), `cargo build --release --locked -j 2 -p misaka-palw-gateway --bin misaka-palw-fp-rail` in 3 m 25 s:
 
