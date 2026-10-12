@@ -1,4 +1,5 @@
 //! **`palw_step_refute`'s `tests` module**, moved out of `palw_step_refute.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
+#![cfg(test)]
 
 /// No gather: the challenged coordinate is the graph's origin and no prompt ids are carried.
 /// Every kernel but `Embed` ignores it, and `Embed` has its own tests.

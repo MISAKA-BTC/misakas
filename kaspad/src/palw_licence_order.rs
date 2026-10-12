@@ -431,7 +431,7 @@ mod tests {
 
     fn production_panel() -> &'static str {
         let whole = include_str!("palw_panel.rs");
-        &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")]
+        &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")]
     }
 
     /// **The service walks this order** (V04's first node-side cause, read off the production source

@@ -1359,7 +1359,7 @@ mod tests {
     #[test]
     fn the_panel_notes_proofs_and_runs_the_step_where_it_should() {
         let whole = include_str!("palw_panel.rs");
-        let source = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        let source = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the test module")];
         let fault = source.find("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {").expect("the arm");
         let recorded = fault + source[fault..].find("self.note_seat_fault_v1(duty.claim_id, leaf, 1);").expect("recorded");
         let noted = fault + source[fault..].find("false_valid.note_step_refutation_v1(").expect("noted");
@@ -1392,7 +1392,7 @@ mod tests {
         assert!(step < filer_tick && filer_tick < submitter, "handed before the filer ticks");
         assert!(!source.contains("palw_false_valid_queued_v1"), "the lane queues nothing of its own");
         let this = include_str!("palw_filer_false_valid.rs");
-        let body = &this[..this.find("#[cfg(test)]\nmod tests {").expect("the tests")];
+        let body = &this[..this.find("#[cfg(test)]\nmod tests").expect("the tests")];
         assert!(
             !body.contains("court_pending:") && !body.contains("court_pending.") && !body.contains("court_moved:"),
             "the lane never touches the court queue"

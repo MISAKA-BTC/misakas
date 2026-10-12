@@ -1767,9 +1767,11 @@ mod tests {
         let reporter = panel.find("// --- P2-8: the reporter's commit–reveal filer").expect("the reporter filer");
         let carriers = panel.find("// --- the collector + submitter's half ---").expect("the carriers");
         assert!(reporter < tick && tick < carriers, "after the reporter filer, before the priority lane carries the court queue");
-        assert!(panel.contains(
+        // Compared without whitespace and trailing commas: rustfmt may wrap the call (2026-10-12).
+        let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>().replace(",)", ")");
+        assert!(squash(panel).contains(&squash(
             "palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params))"
-        ));
+        )));
         assert!(panel[tick..carriers].contains("seat_replays.has_room(false)"), "the lane's replay yields to the seat's slots");
         let args = include_str!("args.rs");
         assert!(!args.contains("operator-da") && !args.contains("operator_da"), "no opt-in or opt-out flag");

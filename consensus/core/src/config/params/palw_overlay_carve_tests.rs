@@ -1,4 +1,5 @@
 //! **`params`'s `palw_overlay_carve_tests` module**, moved out of `params.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
+#![cfg(test)]
 
 use super::*;
 use crate::dns_finality::split_block_subsidy;

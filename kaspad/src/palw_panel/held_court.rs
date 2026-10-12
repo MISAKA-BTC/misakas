@@ -2311,7 +2311,7 @@ mod tests {
                 .contains(held)
         );
         let panel = include_str!("../palw_panel.rs");
-        let production = &panel[..panel.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
+        let production = &panel[..panel.find("#[cfg(test)]\nmod tests").expect("the unit tests follow the code")];
         let root = &production[production.find("AttnMove::Root => {").expect("the dense root arm")..];
         let root = &root[..root.find("AttnMove::Round => {").expect("its end")];
         assert!(!root.contains("palw_court_params_at_v2("), "never the plain derivation");
@@ -2416,7 +2416,7 @@ mod tests {
     #[test]
     fn t_a10_the_panel_routes_a_held_dissection_to_the_windowed_builders_and_files_c2() {
         let panel = include_str!("../palw_panel.rs");
-        let production = &panel[..panel.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
+        let production = &panel[..panel.find("#[cfg(test)]\nmod tests").expect("the unit tests follow the code")];
         let begin =
             production.find("held_court.begin_tick_v1(&court_duties, current_daa).await;").expect("the tick collects held builds");
         let route = production.find("held_court.routes_v1(&held_host, duty, current_daa) {").expect("the held route");
@@ -2453,7 +2453,7 @@ mod tests {
         );
 
         let module = include_str!("held_court.rs");
-        let module = &module[..module.find("#[cfg(test)]\nmod tests {").expect("this module")];
+        let module = &module[..module.find("#[cfg(test)]\nmod tests").expect("this module")];
         assert!(module.contains("offence_attribution_active && class_is_held && duty.fused_class && duty.terminal_index.is_some()"));
         assert!(
             module.contains("self.panel.consensus_config.params.palw_offence_attribution_active_at(daa)"),

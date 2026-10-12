@@ -1,4 +1,5 @@
 //! **`palw_panel_v2`'s `tests` module**, moved out of `palw_panel_v2.rs` (2026-10-12, a behaviour-preserving split: the module path and every item in it are unchanged; only the file moved).
+#![cfg(test)]
 
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2};
