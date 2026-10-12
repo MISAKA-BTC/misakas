@@ -1,4 +1,4 @@
-//! **RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.**
+//! **RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt, behind `palw_fp_prefix_state`** (testnet-12 arms it at DAA 5,300).
 //!
 //! (The module's logic follows its fence: this first section is the fence's own plumbing — the accessor, the
 //! prerequisites `validate_palw_v2` asks by name, and the drill entry a salted chain arms it with.)

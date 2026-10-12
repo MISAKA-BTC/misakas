@@ -60,7 +60,7 @@ RFC-0015 §7のとおり、監視市場を作るだけではhonest verifierの�
 ### W1・W2・X4・X5
 - **W1:** Gatewayの整数seed変換を `le64(n+1)` に統一し、オーバーフローとなる入力を拒否する。gateway側の表示・入力変換規則であり、直ちにコンセンサス分岐が起こると断定しない。
 - **W2:** 「FP V4自体のtext規則は変更しない。TextStream pipelineには追加規則を適用する」と明記する。
-- **X4:** FP Job V6を「実装済み・dormant。ただしcourtの一部に未完了事項あり」と記録する。
+- **X4:** FP Job V6を「実装済み・**testnet-12でDAA 5,300から有効**（int-11 flag day、`palw_fp_decode_constraint`）。nodeによる直接証明の生成などcourtの一部に未完了事項あり」と記録する。*（2026-10-12訂正: 当初の「dormant」はコードと異なる。[台帳](mainnet-spec-register-2026-10-12.md) X4）*
 - **X5:** `palw_dns_retirement_v1` は設計上のfence識別子、`Params::palw_dns_retirement` はRustの内部フィールド名である（異なる階層の名前であり矛盾ではない）。
 
 ## 最終的な方針
@@ -71,3 +71,13 @@ RFC-0015 §7のとおり、監視市場を作るだけではhonest verifierの�
 
 追加の経済設計（Miner＋Panelの適格claim bondの合算と1.3〜2倍の配分係数、Panel=1、Bond/time予算の具体化、受入試験B01〜M01・C01〜C18）は
 [Panel=1・Bond/time予算・モデル拘束資本倍率の改定案](panel1-bond-budget-model-capital-amendments-2026-10-12.md)に置く。
+
+## ユーザー判断 — 2026-10-12（台帳 §3）
+
+[mainnet対象仕様・未解決事項の台帳](mainnet-spec-register-2026-10-12.md) の判断5点を次のとおり決定した。いずれも稼働中のtestnet-12（L）の挙動は変えず、旧claimは旧rulesetで処理する。
+
+1. **X3 期限:** 延長禁止（窓の再付与・期限の後ろ倒しを含む）は**新しいversioned fenceだけ**で適用する。Lの `rearm_after_challenger_side_close` とstaged courtの延長は旧規則として残す。固定時点はRFC-0014 2026-10-12改定節（d0＝claim受理時）に従う（§7.2本文の「最初のpursuit受理」より新しい記述を採る）。
+2. **N4 プライバシー:** 必要な証拠を公開できない経路（V5の画像・source ID、`PanelDa` 等）は、**新しいfence**以後に受理したclaimを新規の報酬・weight対象から除外する。
+3. **ADR-0177 D2:** Lで有効なモデルbytes強制のcourt経路4本（`HeldStepLeaf`・`AttnRootClaimOperands`・`TirGenRootClaimParams`・`SeatReadinessLeaves`）を、**休眠の制限fence**で閉じる（RFC-0014 §16.4の案）。
+4. **W1 整数seed:** gatewayは整数seedを**拒否のまま**とする（64桁hexの32 byteのみ）。`le64(n+1)` 写像案は撤回し、RFC-0003の記述を訂正した。
+5. **N3 bootstrap:** 独立したbootstrapが設計・検証で成立するまで、新しい報酬profileは**休眠のまま**とする（Panel=0の `OpvFinal` 経由のbootstrapは有効化しない）。

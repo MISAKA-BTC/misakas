@@ -1127,7 +1127,8 @@ struct RequestCtx<'a> {
 /// order:
 ///
 /// 1. **The fence decides, and the chain holds the fence.** While
-///    `ChainFacts::fp_decode_rules_armed` is false — every shipped preset — anything but the
+///    `ChainFacts::fp_decode_rules_armed` is false — every shipped preset but testnet-12, which arms
+///    `palw_fp_decode_rules` at DAA 5,300 — anything but the
 ///    greedy defaults is refused HERE, with the fence's name. It is not a gateway flag: a flag
 ///    could disagree with the network, and the direction it would disagree in is the expensive one
 ///    (every commitment refused by the transition, after the inference is already paid for). It is

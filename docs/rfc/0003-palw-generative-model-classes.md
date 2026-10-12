@@ -197,8 +197,9 @@ gen_job_id_v1 = H64(key "misaka-palw/gen-v1/job-id/v1", borsh(job))
   exactly when the class declares no random input: a seed on a deterministic class is `SeedNotUsed`, so
   a deterministic class never has two job ids for one computation, and an all-zero seed on a class that
   draws randomness is `SeedRequired` (the all-zero seed is the deterministic classes' encoding of "no
-  seed"). A gateway that maps an integer seed `n` to bytes therefore maps it to a non-zero seed
-  (`le64(n + 1) ‖ 0^24`, say); the mapping is the gateway's, not consensus's. *(Built 2026-10-01,
+  seed"). The shipped gateway does not map integer seeds: it takes the 32-byte seed as 64 hex characters and refuses an
+  integer by name (decided 2026-10-12, W1 — the `le64(n + 1) ‖ 0^24` suggestion is withdrawn); seed handling is the
+  gateway's, not consensus's. *(Built 2026-10-01,
   04b §15.13; the biconditional is this bullet's own wording, and the integer mapping in §II.1.1 follows
   it.)*
 - **The class binds the tokenizer.** A pipeline class's id commits to its tokenizer (Phase F D4), so
@@ -296,8 +297,9 @@ seed:
   (FP V3 docs), so it cannot change after the fact.
 - **Execution facts stay cacheable.** Identical computations have identical randomness (ADR-0145 §6).
 
-Gateways SHOULD map a user-typed integer seed `n` to `le64(n) ‖ 0^24`, so that "seed 42" is the same
-image on every gateway. That is a presentation convention, not consensus.
+Gateways take the seed as 32 bytes (64 hex characters) and refuse a user-typed integer seed by name, so the same seed
+string is the same image on every gateway. *(Decided 2026-10-12, W1: the earlier `le64(n) ‖ 0^24` / `le64(n + 1) ‖ 0^24`
+mappings are withdrawn.)* That is a presentation convention, not consensus.
 
 **R is never a lottery input.** Eligibility still consumes a beacon that postdates the claim
 (ADR-0044 F5/F6/F15). R decides only *what the execution computes*. A chosen seed buys a different
@@ -1093,7 +1095,7 @@ holds.
 | prompt | ids under the class tokenizer, **without** the class's template tokens (the class adds them, §3.4); the gateway pre-truncates and says so | `PromptTokenOutOfRange` (id ≥ `token_bound`), `PromptTooLong` (> the class maximum) |
 | negative prompt | ids, or empty; empty means "the class's unconditional prompt" | `NegativePromptNotOffered` (non-empty on a class without true CFG), `PromptTokenOutOfRange`, `PromptTooLong` |
 | guidance | one grid index `guidance_q = round(16 · g)`; a class declares `[g_min, g_max]`; a class with a fixed or distilled guidance declares a single value | `GuidanceOutOfRange`, `GuidanceNotOffered` |
-| seed | any non-zero 32 bytes (`PalwGenJobV1.seed`; the all-zero seed is the deterministic classes', §I.0); gateways map an integer `n` to `le64(n + 1) ‖ 0^24` | `SeedRequired` (all zeros on this class), `SeedNotUsed` (non-zero on a class that draws none) |
+| seed | any non-zero 32 bytes (`PalwGenJobV1.seed`; the all-zero seed is the deterministic classes', §I.0); gateways take 64 hex characters and refuse an integer seed (W1, 2026-10-12) | `SeedRequired` (all zeros on this class), `SeedNotUsed` (non-zero on a class that draws none) |
 | sampler/scheduler | the class's `sampler_id = H64(key "misaka-palw/image/sampler/v1", descriptor text)`; the math is in the program, and the descriptor is the registrant's label | `SamplerNotOffered` |
 | steps | an element of the class's offered set (at most 8 values, each ≤ 64) | `StepsNotOffered` |
 | resolution | exactly the class's `width × height` | `ResolutionNotOffered` |

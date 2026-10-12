@@ -3417,12 +3417,12 @@ pub fn check_tiled_decode_token_refutation_capped_v1(
 /// lane. The claim's job carries both, inside `fp_job_id_v3` and therefore inside the claim id
 /// (ADR-0082 Decision 11), which is why the fields are there and not on the commitment.
 ///
-/// **What the caller owes, and does not yet pay.** The court's close arms reach this through a
-/// `PalwStepBindingV2`, whose `job_context` (`PalwJobContextV2`) does not carry the sampler — so
-/// the shipped caller passes `GREEDY` and every shipped row is adjudicated exactly as it is
-/// today. Arming `Params::palw_fp_decode_rules` requires the pair to reach here from the claim;
-/// the ruleset move that arms it is the one that moves `PalwJobContextV2`, because that is the
-/// structure whose hash the execution root already binds.
+/// **What the caller passes.** The court's close arms reach this through a `PalwStepBindingV2`,
+/// whose `job_context` (`PalwJobContextV2`) does not carry the sampler, so the caller passes
+/// `GREEDY`. `Params::palw_fp_decode_rules` is armed on testnet-12 (DAA 5,300) without moving
+/// `PalwJobContextV2`: instead a decode-token close is REFUSED for a free-prompt claim accepted
+/// past that fence (`palw_court_v2`), and its selection is judged only by seat replay and the
+/// arithmetic closes (corrected 2026-10-12).
 pub fn check_tiled_decode_token_refutation_v2(
     binding: &PalwStepBindingV2,
     pin: &PalwTiledDecodePinV1,

@@ -32,7 +32,7 @@ use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use std::sync::Arc;
 
 /// **The entry a drill arms `palw_fp_decode_constraint` with** (`--palw-drill-fp-constraint-at`,
-/// [`crate::config::drill`]). In NO testnet-12 flag-day list: dormant on every network.
+/// [`crate::config::drill`]). testnet-12's int-11 flag day (`PALW_T12_INT11_FENCES_V1`) arms it at DAA 5,300.
 pub const PALW_DRILL_FP_DECODE_CONSTRAINT_ENTRY: crate::config::params::PalwPostLaunchFenceV1 =
     crate::config::params::PalwPostLaunchFenceV1 {
         name: "palw_fp_decode_constraint",

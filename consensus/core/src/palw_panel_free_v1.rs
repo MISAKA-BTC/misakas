@@ -8,9 +8,9 @@
 //! E2E with recovery and migration, and a separately coordinated schedule — and none of it exists.
 //!
 //! **Dormant**: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only into `consensus_params_id` and
-//! `consensus_schedule_id`, collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`. Nothing in
-//! consensus reads it. Arming it is refused by [`Params::validate_palw_panel_free_v1`]: the kernel route is not wired into the node
-//! (no carrier, fold or RPC), so a network cannot switch on a verification mode this binary has no acceptance rule for.
+//! `consensus_schedule_id`, collapsed whole from `Some(never())`, its activation alone visited by `for_each_fence`. Consensus reads it
+//! (`palw_model_conformance_fold_v2`) and the node E2E suite runs it with test-armed params; arming it on a real network is
+//! refused by [`Params::validate_palw_panel_free_v1`] (RFC-0015 amendment 2026-10-12: Panel=0 is not activated).
 
 use crate::Hash64;
 use crate::config::params::{ForkActivation, Params};

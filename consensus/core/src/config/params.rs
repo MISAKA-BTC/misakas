@@ -1897,7 +1897,8 @@ pub struct Params {
     /// Some-only so a build that has not reached the height still peers with one that has it in
     /// the future schedule.
     pub palw_execution_quanta: Option<ForkActivation>,
-    /// A public source URI on new model registrations. `None` on every preset; hashed Some-only.
+    /// A public source URI on new model registrations. testnet-12 sets it from genesis (`palw_t12_base_params`); `None` on the
+    /// other shipped presets; hashed Some-only.
     pub palw_public_model_source_required: Option<PalwPublicModelSourceRuleV1>,
     /// **ADR-0145 §1–§5: a claim's work is DERIVED, not declared** (the 2026-09-19 reward audit,
     /// finding F1 — CRITICAL and live). `claim.pwu` is `expected_attempts(class_target) ×
@@ -2579,8 +2580,8 @@ pub struct Params {
     /// and bond lock return, nothing is slashed, no strike is written, the seats get nothing and the fee is not
     /// refunded. The producer is slashed only for a proven producer fault (a court loss, an invalid commitment, an
     /// unanswered DA demand). Refused by `validate_palw_v2` off ConsensusV2 and without `palw_audit_2026_09_23` at or
-    /// below it. Mirrored by [`Self::sync_palw_panel_unavailable_expiry`]; dormant on every shipped preset; hashed
-    /// Some-only with the `never()` collapse.
+    /// below it. Mirrored by [`Self::sync_palw_panel_unavailable_expiry`]; testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there); `None` on the other shipped
+    /// presets; hashed Some-only with the `never()` collapse.
     pub palw_panel_unavailable_expiry: Option<ForkActivation>,
     /// **Panel-liveness lane PL, part D (ADR-0166): a fast switch to a fresh panel.** Past this fence the FIRST panel of a
     /// claim has `T_fast = clamp(W_r(c) / 20, 30, W_r(c) / 2)` DAA from its bind (30 DAA at the shipped 600-DAA window) to
@@ -2844,12 +2845,12 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_rules`
     /// shape directly above, for its reasons.
     ///
-    /// **BUILT (RFC-0001 §2.5, lane U, 2026-10-03) and still dormant** — `None` on every preset and in no testnet-12 flag-day
-    /// list. Armed, a free-prompt job may be FP job version 6 carrying a decode constraint
+    /// **BUILT (RFC-0001 §2.5, lane U, 2026-10-03).** testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there); `None` on the other shipped presets. Armed, a free-prompt job may be FP job version 6 carrying a decode constraint
     /// ([`crate::palw_fp_constraint_job_v1`]): the committed token is the argmax over the lanes the constraint admits, the
-    /// seat replays it through the same mask, and `palw_fp_constraint_v2` may ride it. What this build does NOT yet carry is
-    /// the court's third arm as a proof kind on the wire (the pure check, `check_tiled_decode_token_refutation_v3`, exists):
-    /// a lying constrained claim is stopped by the seat quorum. [`Self::validate_palw_v2`] refuses it off ConsensusV2.
+    /// seat replays it through the same mask, and `palw_fp_constraint_v2` may ride it. The court's third arm is on the wire
+    /// (`PalwCourtVerdictProofV2::DecodeTokenConstrained`, tag 17) and the direct offence contradictions are tags 14/15 (those
+    /// need the dormant `palw_legacy_public_filer_v1`); the node does not yet generate the direct proof end to end
+    /// (docs/audit/g14-review-2026-10-10/constrained-direct-proof-status.md). [`Self::validate_palw_v2`] refuses it off ConsensusV2.
     pub palw_fp_decode_constraint: Option<ForkActivation>,
 
     /// **ADR-0099 Decision 5's fence: a court opened at a NAMED leaf, decided in one move.**
@@ -2930,7 +2931,7 @@ pub struct Params {
     ///
     /// The value carries the program version, the primitive set, the rand and output sets, the
     /// generative court version and per-profile ceilings ([`crate::palw_gen_v1::PalwGenFenceV1`]).
-    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both
+    /// testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there); `None` on the other shipped presets; hashed Some-only in both
     /// fingerprints with the value, the activation alone visited by `for_each_fence`, and the whole
     /// option collapsed from `Some(never())` — `palw_tir_v1`'s shape. [`Self::validate_palw_gen_v1`]
     /// holds its refusals.
@@ -2942,7 +2943,7 @@ pub struct Params {
     /// image slots; below it, and on every network that leaves it `None`, a V5 job is refused by
     /// name and FP Job V4 is exactly what it was.
     ///
-    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both
+    /// testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there); `None` on the other shipped presets; hashed Some-only in both
     /// fingerprints, the whole option collapsed from `Some(never())`. Requires `palw_gen_v1` (a
     /// vision-language class is a generative class) and `palw_fp_decode_rules` (V5 embeds V4) in
     /// force at or below it ([`Self::validate_palw_fp_job_v5_v1`]).
@@ -3093,7 +3094,7 @@ pub struct Params {
     /// context ([`crate::palw_v2::PalwJobContextV2::prefix_context_hash_v1`], context version 3), so every claim over the same prefix
     /// commits byte-identical leaves there — a seat holds them once, and a court opens them against any claim that committed them.
     ///
-    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only. Requires `palw_fp_prefix_state` in force at
+    /// testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there); `None` on the other shipped presets; hashed Some-only. Requires `palw_fp_prefix_state` in force at
     /// or below it ([`Self::validate_palw_fp_prefix_inherit_v1`]).
     pub palw_fp_prefix_inherit: Option<ForkActivation>,
 
@@ -3101,8 +3102,8 @@ pub struct Params {
     /// version 11: a V4 job whose tail names the KV prefix state it consumed ([`crate::palw_fp_prefix_v1`]), credited for the new
     /// positions only. Below it, and on every network that leaves it `None`, such a job is refused by name.
     ///
-    /// Dormant: `None` on every preset and in no testnet-12 flag-day list; hashed Some-only in both fingerprints, the whole option
-    /// collapsed from `Some(never())`. Requires `palw_fp_derived_work` (the price reads the state) and `palw_fp_decode_rules` (V11
+    /// testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there); `None` on the other shipped presets; hashed Some-only in both fingerprints, the
+    /// whole option collapsed from `Some(never())`. Requires `palw_fp_derived_work` (the price reads the state) and `palw_fp_decode_rules` (V11
     /// embeds V4) in force at or below it ([`Self::validate_palw_fp_prefix_state_v1`]).
     pub palw_fp_prefix_state: Option<ForkActivation>,
 
@@ -3235,7 +3236,7 @@ pub struct Params {
     /// (an IR or legacy attempt class, a generative class, a composite class) is admitted only if the class is *seated* for its
     /// executor — `seat_count` distinct ready operators besides the executor, and `independent_floor` of them independent of the
     /// registrant and the executor and of the network's base population — and the lifecycle leaves `Prefetching`/`Held` only on
-    /// the same count. The value carries `independent_floor`. Dormant: `None` on every preset and in no flag-day list; hashed
+    /// the same count. The value carries `independent_floor`. testnet-12 arms it at DAA 5,300 through `PALW_T12_INT11_FENCES_V1` (corrected 2026-10-12; it was not dormant there) (floor 3); `None` on the other shipped presets; hashed
     /// Some-only in both fingerprints with its value, only the activations visited by `for_each_fence`, the whole option collapsed
     /// from `Some(never())` — `palw_gen_v1`'s shape. Mirrored on the V2 bundle's state params
     /// (`PalwStateParamsV2::class_seating`, [`Self::sync_palw_class_seating`]); [`Self::validate_palw_class_seating`] holds its

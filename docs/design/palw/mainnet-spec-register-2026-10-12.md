@@ -79,7 +79,11 @@
 | REQ-X5-1 | `set_fence_for_probe`、`rfc0012_fork_id_and_cost.rs` | 既存 |
 | REQ-T11-1 | `palw_t12_flag_day_int11.rs` | 既存 |
 
-## 3. 判断が必要なもの（ユーザー）
+## 3. 判断（ユーザー、2026-10-12 決定）
+
+決定内容は [レビュー整理](rfc-adr-review-resolution-2026-10-12.md) の「ユーザー判断 — 2026-10-12」に記録した。要約: X3 は新fenceのみで延長禁止（固定時点はd0）、N4 は新fence以後の非公開経路を新規報酬・weight対象外、D2 の4経路は休眠の制限fenceで閉じる、W1 は整数seed拒否のまま、N3 は成立まで新profile休眠。これにより REQ-X3-1〜5・REQ-N4-1 は「新fence側の要求」、REQ-T6-3 は「制限fence側の要求」、W1 は既存テスト `identity_valued_knobs_…` で充足、REQ-N3-3 は現状（全fence None・拒否）で充足となる。新fence（X3・N4・D2制限）の名前と実装は未着手。
+
+以下は判断前の論点（記録として残す）:
 
 1. **X3:** Lで有効な窓の再付与（`rearm_after_challenger_side_close`）と有料staged courtの期限延長を、旧rulesetとして残し、新しいversioned fenceでのみ禁止するか。RFC-0014 §7.2本文と改定節のどちらの固定時点（最初のpursuit受理 / d0）を採るか。
 2. **N4:** Lで有効な非公開経路（V5の画像・source ID、`PanelDa`）を、新fenceで新規報酬・weightの対象外にするか。
@@ -87,7 +91,9 @@
 4. **W1:** gatewayの整数seedを拒否のままにするか、`le64(n+1)` に写すか（どちらでもRFC-0003の :299 を直す）。
 5. **N3:** bootstrapをPanel=0（`OpvFinal`）に依らずに成立させる設計。成立までは新profileを休眠に置く（REQ-N3-3）。
 
-## 4. 文書・コメントの訂正一覧（実装の挙動を変えない）
+## 4. 文書・コメントの訂正一覧（実装の挙動を変えない）— 2026-10-12 実施済み
+
+`palw_panel_free_v1.rs:174` の有効化拒否メッセージ（「no palw_bond_budget_v1 engine」）は実行時文字列のため残した（`palw_bond_budget_v1` 自体は休眠で存在する）。
 
 コードがLで有効にしているのに「休眠」「どのpresetでもNone」と書く箇所。訂正はコメント・文書のみで、fingerprintも挙動も動かさない。
 

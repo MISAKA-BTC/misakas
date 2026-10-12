@@ -391,6 +391,8 @@ claim の形(1 推論 = 1 claim)は変わらない。各リクエストが自分
 
 1〜3 は P0(§A、Job V4 / fence `palw_fp_decode_rules`)で実装済み。4〜6 を次のとおり採択し、実装した(いずれも休眠 fence、どの preset でも arm しない)。
 
+> **2026-10-12 訂正:** その後、testnet-12 は int-11 flag day(`PALW_T12_INT11_FENCES_V1`)で `palw_fp_decode_rules`・`palw_fp_decode_constraint`(FP Job V6)・`palw_fp_prefix_state`・`palw_fp_prefix_inherit`・`palw_fp_job_v5` を DAA 5,300 で arm した。上の「どの preset でも arm しない」は採択時点の記述であり、稼働中の testnet-12 には当てはまらない([台帳](../design/palw/mainnet-spec-register-2026-10-12.md) X4・T11)。
+
 4. **KV キャッシュ段階 2 は今、専用の休眠 fence で**:`palw_fp_prefix_state`(FP Job version 11、`PalwFpPrefixStateV1` を carry)。段階 1(node のみ)は answer-only 経路で出荷済み。報酬側(credit)のみで、fold は全 prefill leaf を ctx 束縛 hash で畳むままなので、**キャッシュした prefix は commit 実行を速くしない**(段階 2b「継承 leaf」は残課題)。decode rules が有効な状況では D10 が既に prefill を 0 として credit するため、version 11 が価格を動かすのは「宣言された状態を seat が検証する」点であり、価格差ではない(e2e で等値を確認)。
 5. **embeddings の claim 化は RFC-0003 の Embedding profile で**:ローカル `/v1/embeddings` は claim 無しのまま、claim 形は `PalwGenJobV1`(`Embedding` body)。gateway に job 構築器と `misaka.claim` の名前付き拒否を置いた(free-prompt レーンの worker しか持たない gateway は拒否する)。
 6. **マルチモーダルはデコード済み整数 tensor のみ**:`palw_image_tensor` 部品(`u8` HWC RGB の hex)だけを受け、URL・エンコード済み画像は名前付きで拒否。画像は FP Job V5 の slot 参照(`input_root`)になる。encoder を持たない class の背後では実行時に名前付きで拒否する。

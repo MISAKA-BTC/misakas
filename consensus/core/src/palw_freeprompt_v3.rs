@@ -55,8 +55,8 @@ pub const PALW_FP_V3_VERSION: u16 = 5;
 
 /// **RFC-0001 §A.4: the FP Job V4 version** — a [`PalwFreePromptJobV3`] at this version is a
 /// `PalwFreePromptJobV4`: every V3 field, then [`DecodeConfigV4`], hashed under its own domain
-/// ([`fp_job_id_v4`]). Not 6: version 6 is ADR-0096 Decision 8's constraint job, named and
-/// unbuilt, and a version is never reused. Admitted only past `Params::palw_fp_decode_rules`
+/// ([`fp_job_id_v4`]). Not 6: version 6 is ADR-0096 Decision 8's constraint job
+/// (`palw_fp_constraint_job_v1`, armed on testnet-12 at DAA 5,300), and a version is never reused. Admitted only past `Params::palw_fp_decode_rules`
 /// ([`PalwFpDecodeRulesV1`]); every other wrapper (payload, commitment, worker result) keeps
 /// [`PALW_FP_V3_VERSION`] because its own layout does not change — the job it carries says which
 /// job it is.

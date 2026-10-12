@@ -3,7 +3,8 @@
 //! side of it: the terms, the value `Params::palw_class_seating` carries, the entry a flag day or a drill arms it with, the
 //! bundle's mirror, and the refusals `validate_palw_v2` makes.
 //!
-//! **Dormant.** `None` on every preset (testnet-12 included) and in no flag-day list: it is hashed Some-only into both
+//! **Armed on testnet-12 at DAA 5,300** through `PALW_T12_INT11_FENCES_V1` (floor 3; corrected 2026-10-12 — it was not dormant
+//! there), `None` on the other shipped presets: it is hashed Some-only into both
 //! fingerprints with its value, only its activation is visited by `for_each_fence`, and the whole option collapses from
 //! `Some(never())` — `palw_gen_v1`'s shape — so a dormant network fingerprints as a build without the field. Arming is the
 //! RFC-0003/0004 flag day's entry, which names the height and the floor; until then a drill arms it
@@ -111,7 +112,7 @@ impl PalwClassSeatingFenceV1 {
 }
 
 /// **The entry a flag day (or a drill) arms the seating rule with**, through its own `set`, which writes the bundle's mirror.
-/// In NO testnet-12 flag-day list today: the fence is dormant on every network.
+/// testnet-12's int-11 flag day (`PALW_T12_INT11_FENCES_V1`) arms it at DAA 5,300; `None` on the other shipped presets.
 pub const PALW_CLASS_SEATING_ENTRY_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
     name: "palw_class_seating",
     set: |params, at| {

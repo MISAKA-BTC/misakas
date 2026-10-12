@@ -49,8 +49,8 @@ use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
 use crate::tx::{Transaction, TransactionOutpoint};
 use misaka_palw_tir::pipeline::{TokenSource, stage_job_facts};
 
-/// **FP job version 10** (RFC-0003 §I.4): a tensor job. 5 is V3, 6 ADR-0096 D8's constraint job (named,
-/// unbuilt), 7 is V4, 8 is V5, 9 is RFC-0004's evaluation job. Provisional as 8 is: RFC-0001 may renumber
+/// **FP job version 10** (RFC-0003 §I.4): a tensor job. 5 is V3, 6 ADR-0096 D8's constraint job
+/// (`palw_fp_constraint_job_v1`), 7 is V4, 8 is V5, 9 is RFC-0004's evaluation job. Provisional as 8 is: RFC-0001 may renumber
 /// at freeze, and it binds nothing a network runs until the fence arms.
 pub const PALW_FP_GEN_VERSION: u16 = 10;
 /// Key of [`palw_gen_work_id_v1`].

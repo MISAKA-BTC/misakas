@@ -60,7 +60,7 @@ use crate::palw_gen_class_v1::{
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
 /// **The FP Job V5 version**: 8, the next unused job version (5 is V3, 6 ADR-0096 D8's constraint
-/// job, named and unbuilt, 7 is V4). RFC-0001 may assign another number at freeze; this one is
+/// job (`palw_fp_constraint_job_v1`), 7 is V4). RFC-0001 may assign another number at freeze; this one is
 /// provisional and binds nothing a network runs.
 pub const PALW_FP_V5_VERSION: u16 = 8;
 /// The V5 job id's key: a domain no V3 or V4 id uses.
