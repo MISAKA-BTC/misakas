@@ -4218,6 +4218,16 @@ impl Params {
                 return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why));
             }
         }
+        // D2's first half is LG14-B's StepLeaf rule (a StepLeaf answer owes no model rows; the accuser supplies them), so the scope
+        // fence needs `palw_legacy_held_da_v2` in force at or below it. Checked even though arming is refused above, so the ordering
+        // is already pinned when the refusal is lifted.
+        if let Some(scope) = self.palw_court_model_scope_v1.filter(|f| *f != ForkActivation::never())
+            && !self.palw_legacy_held_da_v2.is_some_and(|held| held != ForkActivation::never() && held.daa_score() <= scope.daa_score())
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "palw_court_model_scope_v1 needs palw_legacy_held_da_v2 in force at or below it (its StepLeaf half)",
+            ));
+        }
         Ok(())
     }
 
