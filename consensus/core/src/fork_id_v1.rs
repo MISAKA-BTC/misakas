@@ -852,6 +852,10 @@ mod tests {
             "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),
             // Lane LG14-A's public filer: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
             "palw_legacy_public_filer_v1" => params.palw_legacy_public_filer_v1 = Some(at),
+            // The three fences of the 2026-10-12 rulings: bare heights, refused when armed by `validate_palw_v2`.
+            "palw_court_model_scope_v1" => params.palw_court_model_scope_v1 = Some(at),
+            "palw_public_evidence_reward_v1" => params.palw_public_evidence_reward_v1 = Some(at),
+            "palw_claim_hard_deadline_v1" => params.palw_claim_hard_deadline_v1 = Some(at),
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

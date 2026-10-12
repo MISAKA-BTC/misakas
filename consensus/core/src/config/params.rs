@@ -3088,6 +3088,18 @@ pub struct Params {
     /// `Some(never())`, refused when armed ([`Self::validate_palw_legacy_public_filer_v1`]) until the full-activation release names its
     /// height; needs `palw_rcore_plus` and `palw_offence_attribution` in force at or below it.
     pub palw_legacy_public_filer_v1: Option<ForkActivation>,
+    /// **palw_court_model_scope_v1** — ADR-0177 D2 / RFC-0014 §16.4 (register D2): past it no court route compels model bytes. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
+    /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
+    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
+    pub palw_court_model_scope_v1: Option<ForkActivation>,
+    /// **palw_public_evidence_reward_v1** — register N4: past it a claim whose evidence cannot be published earns no new reward or weight. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
+    /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
+    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
+    pub palw_public_evidence_reward_v1: Option<ForkActivation>,
+    /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
+    /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
+    /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
+    pub palw_claim_hard_deadline_v1: Option<ForkActivation>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -4184,6 +4196,46 @@ impl Params {
         self
     }
 
+    /// **The three fences of the 2026-10-12 rulings** (register §3): `palw_court_model_scope_v1` (D2), `palw_public_evidence_reward_v1`
+    /// (N4) and `palw_claim_hard_deadline_v1` (X3). Each is refused when armed at a real height until its rule is built and verified;
+    /// `None` and `Some(never())` pass.
+    pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        for (fence, why) in [
+            (
+                self.palw_court_model_scope_v1,
+                "palw_court_model_scope_v1 cannot be armed: its rule (register D2, ruling 2026-10-12) is not built and verified yet",
+            ),
+            (
+                self.palw_public_evidence_reward_v1,
+                "palw_public_evidence_reward_v1 cannot be armed: its rule (register N4, ruling 2026-10-12) is not built and verified yet",
+            ),
+            (
+                self.palw_claim_hard_deadline_v1,
+                "palw_claim_hard_deadline_v1 cannot be armed: its rule (register X3, ruling 2026-10-12) is not built and verified yet",
+            ),
+        ] {
+            if fence.is_some_and(|f| f != ForkActivation::never()) {
+                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why));
+            }
+        }
+        Ok(())
+    }
+
+    /// `palw_court_model_scope_v1` is in force at `daa_score` (register D2).
+    pub fn palw_court_model_scope_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_court_model_scope_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// `palw_public_evidence_reward_v1` is in force at `daa_score` (register N4).
+    pub fn palw_public_evidence_reward_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_public_evidence_reward_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// `palw_claim_hard_deadline_v1` is in force at `daa_score` (register X3).
+    pub fn palw_claim_hard_deadline_v1_active_at(&self, daa_score: u64) -> bool {
+        self.palw_claim_hard_deadline_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// **The model-specific court window's prerequisite** (`palw_model_court_window`, the DAA-3,600 flag day): the
     /// k-ary court in force at or below it — a model-specific window has no executable court until the court
     /// that dissects is active. `Ok` while the fence is dormant (`None` or `never()`). Public so the rule is
@@ -4306,6 +4358,8 @@ impl Params {
         self.validate_palw_reporter_share_v2()?;
         // **Lane LG14-A's public filer** (`crate::palw_legacy_public_filer_v1`): refused when armed.
         self.validate_palw_legacy_public_filer_v1()?;
+        // **The three fences of the 2026-10-12 rulings** (register §3): refused when armed until their rules are built.
+        self.validate_palw_2026_10_12_ruling_fences_v1()?;
         self.validate_palw_permissionless_panel_v1()?;
         // **A-2 uniformity** (`crate::palw_lifecycle_objects_v2`): every lifecycle kind's owning fence needs the audit fence declared.
         self.validate_palw_lifecycle_kind_fences_v1()?;
@@ -6752,6 +6806,16 @@ impl Params {
         // The legacy route's public filer (lane LG14-A), likewise.
         if self.palw_legacy_public_filer_v1 == Some(ForkActivation::never()) {
             self.palw_legacy_public_filer_v1 = None;
+        }
+        // The three fences of the 2026-10-12 rulings, likewise.
+        if self.palw_court_model_scope_v1 == Some(ForkActivation::never()) {
+            self.palw_court_model_scope_v1 = None;
+        }
+        if self.palw_public_evidence_reward_v1 == Some(ForkActivation::never()) {
+            self.palw_public_evidence_reward_v1 = None;
+        }
+        if self.palw_claim_hard_deadline_v1 == Some(ForkActivation::never()) {
+            self.palw_claim_hard_deadline_v1 = None;
         }
         if self.palw_fp_prefix_inherit == Some(ForkActivation::never()) {
             self.palw_fp_prefix_inherit = None;
@@ -10561,6 +10625,9 @@ impl Params {
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
+            palw_court_model_scope_v1,
+            palw_public_evidence_reward_v1,
+            palw_claim_hard_deadline_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -10856,6 +10923,9 @@ impl Params {
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
             ("palw_legacy_public_filer_v1", *palw_legacy_public_filer_v1),
+            ("palw_court_model_scope_v1", *palw_court_model_scope_v1),
+            ("palw_public_evidence_reward_v1", *palw_public_evidence_reward_v1),
+            ("palw_claim_hard_deadline_v1", *palw_claim_hard_deadline_v1),
             ("palw_fp_prefix_inherit", *palw_fp_prefix_inherit),
             ("palw_fp_prefix_state", *palw_fp_prefix_state),
             ("palw_fp_tokenizer_match", *palw_fp_tokenizer_match),
@@ -11257,6 +11327,19 @@ impl Params {
         // The legacy route's public filer (lane LG14-A), NAMED likewise. Some-only.
         if let Some(at) = self.palw_legacy_public_filer_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_legacy_public_filer_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        // The three fences of the 2026-10-12 rulings, NAMED likewise. Some-only.
+        if let Some(at) = self.palw_court_model_scope_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_court_model_scope_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_public_evidence_reward_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_public_evidence_reward_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_claim_hard_deadline_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_claim_hard_deadline_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         // palw_fp_prefix_inherit, NAMED likewise.
@@ -11971,6 +12054,9 @@ impl Params {
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
+            palw_court_model_scope_v1,
+            palw_public_evidence_reward_v1,
+            palw_claim_hard_deadline_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -12809,6 +12895,16 @@ impl Params {
         if let Some(activation) = palw_legacy_public_filer_v1.as_mut() {
             fork(activation, visit);
         }
+        // The three fences of the 2026-10-12 rulings. Some-only.
+        if let Some(activation) = palw_court_model_scope_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_public_evidence_reward_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_claim_hard_deadline_v1.as_mut() {
+            fork(activation, visit);
+        }
         // palw_fp_prefix_inherit. Some-only.
         if let Some(activation) = palw_fp_prefix_inherit.as_mut() {
             fork(activation, visit);
@@ -13374,6 +13470,9 @@ impl Params {
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
             palw_legacy_public_filer_v1,
+            palw_court_model_scope_v1,
+            palw_public_evidence_reward_v1,
+            palw_claim_hard_deadline_v1,
             palw_fp_prefix_inherit,
             palw_fp_prefix_state,
             palw_fp_tokenizer_match,
@@ -14294,6 +14393,19 @@ impl Params {
             h.write(b"palw_legacy_public_filer_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The three fences of the 2026-10-12 rulings, Some-only for the same reason.
+        if let Some(activation) = palw_court_model_scope_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_court_model_scope_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_public_evidence_reward_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_public_evidence_reward_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_claim_hard_deadline_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_claim_hard_deadline_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // palw_fp_prefix_inherit, Some-only for the same reason.
         if let Some(activation) = palw_fp_prefix_inherit {
             h.write(b"palw_fp_prefix_inherit");
@@ -15120,6 +15232,9 @@ impl Params {
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
             palw_legacy_public_filer_v1: self.palw_legacy_public_filer_v1,
+            palw_court_model_scope_v1: self.palw_court_model_scope_v1,
+            palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
+            palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_fp_prefix_inherit: self.palw_fp_prefix_inherit,
             palw_fp_prefix_state: self.palw_fp_prefix_state,
             palw_fp_tokenizer_match: self.palw_fp_tokenizer_match,
@@ -16239,6 +16354,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
+    palw_court_model_scope_v1: None,
+    palw_public_evidence_reward_v1: None,
+    palw_claim_hard_deadline_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16554,6 +16672,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
+    palw_court_model_scope_v1: None,
+    palw_public_evidence_reward_v1: None,
+    palw_claim_hard_deadline_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -16851,6 +16972,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
+    palw_court_model_scope_v1: None,
+    palw_public_evidence_reward_v1: None,
+    palw_claim_hard_deadline_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
@@ -24494,6 +24618,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
     palw_legacy_public_filer_v1: None,
+    palw_court_model_scope_v1: None,
+    palw_public_evidence_reward_v1: None,
+    palw_claim_hard_deadline_v1: None,
     palw_fp_prefix_inherit: None,
     palw_fp_prefix_state: None,
     palw_fp_tokenizer_match: None,
