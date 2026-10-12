@@ -18,6 +18,9 @@ marked only by what this repository can show. The mark is not a plan or an inten
 | **PARTIAL** | some of it is done; the rest is named on the line |
 | **TODO** | not done yet |
 
+> **2026-10-12:** この表の各行は下記の 2026-09-25 / `0e8ec984e` を基準とし、冒頭の 2026-10-10 注記は別基準の設計記録である。単一の「現在のPASS表」として読まない。
+> 対象SHA・ruleset 付きの論点台帳は [mainnet対象仕様・未解決事項の台帳](design/palw/mainnet-spec-register-2026-10-12.md)。
+
 Last reviewed: **2026-09-25**, against `main` at testnet-12's release commit `0e8ec984e`. A PASS
 turns back into PARTIAL or TODO when later work removes its evidence. Anybody changing a mark
 changes it in the same commit as the evidence. Every CI run counts the marks in this file into its
