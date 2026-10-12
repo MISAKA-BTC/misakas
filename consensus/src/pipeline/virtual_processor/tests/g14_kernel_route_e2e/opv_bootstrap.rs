@@ -1029,7 +1029,7 @@ fn opv_bootstrap_the_complete_check_passes_the_truth_and_fails_every_lie() {
 /// eligible except through the derived rule.
 #[test]
 fn opv_test_eligibility_hook_is_test_only() {
-    let src = include_str!("../../processor.rs");
+    let src = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     assert!(
         src.contains("#[cfg(test)]\n                    test_eligible: kernel_route_test_opv_eligible_list_v1(),\n                    #[cfg(not(test))]\n                    test_eligible: Vec::new(),"),
         "the extras' test_eligible is the hook only under cfg(test), empty otherwise"

@@ -382,7 +382,7 @@ fn the_9b_8k_text_class_meets_every_class_rule_at_daa_7000() {
     //    ADR-0152 §4-ter C5 is the LEGACY arm's (`ClassRegistered`); the IR arm does not ask it.
     assert_eq!(p.history_bound, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
     assert_eq!(p.states.iter().filter(|s| matches!(s.kind, misaka_palw_tir::program::StateKind::Fixed { .. })).count(), 2);
-    let processor = include_str!("../../../../consensus/src/pipeline/virtual_processor/processor.rs");
+    let processor = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let arm =
         processor.split("Obj::ClassRegisteredTirV1 { class_id, share_permille, admission, .. } => {").nth(1).expect("the IR arm");
     let arm = &arm[..arm.find("Obj::FamilyCertified").expect("the next arm")];

@@ -26311,8 +26311,7 @@ mod model_market_virtual {
 
         // The other half: the extras every production fold takes are written field by field from
         // the block's own DAA, never left to a default.
-        let processor = std::fs::read_to_string(root.join("consensus/src/pipeline/virtual_processor/processor.rs"))
-            .expect("the virtual processor's source");
+        let processor = crate::palw_source_guard_v1::palw_processor_source_v1().to_string(); // the processor and its split files (2026-10-13)
         let start = processor.find("fn palw_transition_extras_for(").expect("the chain walk's extras builder");
         let body = &processor[start..];
         let body = &body[..body.find("\n    }\n").expect("the builder's end")];

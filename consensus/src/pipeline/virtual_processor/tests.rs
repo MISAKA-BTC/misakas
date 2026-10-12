@@ -13586,7 +13586,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         "palw_pruning_point_allowed_v2",
         "capture_pruning_point_palw_state",
     ];
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let mut enclosing = String::new();
     let mut found: Vec<String> = Vec::new();
     for line in source.lines() {
@@ -13622,7 +13622,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
 /// `palw_mempool_market_refusal`, the one function that asks `palw_model_market_carrier_refusal_v1`.
 #[test]
 fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let body_of = |name: &str| -> String {
         let start = source.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("{name} exists"));
         let rest = &source[start..];
@@ -13655,7 +13655,7 @@ fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
 /// behavioural test that drives only the other one green.
 #[test]
 fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let body_of = |name: &str| -> String {
         let start = source.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("{name} exists"));
         let rest = &source[start..];
@@ -15128,7 +15128,7 @@ async fn a_replayed_root_claim_signature_with_a_foreign_binding_cannot_crowd_out
 /// fold would have applied at `2^40` — the two layers disagreeing about one object.
 #[test]
 fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let arm = |name: &str| {
         let at = source.find(&format!("Obj::{name} {{")).unwrap_or_else(|| panic!("{name}'s arm"));
         let end = at + source[at..].find("\n                Obj::").unwrap_or(source.len() - at);
@@ -15150,7 +15150,7 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
 /// object.
 #[test]
 fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
     let end = at + source[at..].find("\n                Obj::").expect("the next arm");
     let arm = &source[at..end];
@@ -15167,7 +15167,7 @@ fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
 /// the gate and the fold cannot disagree about which fused accusation opens a session.
 #[test]
 fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold_does() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
     let end = at + source[at..].find("\n                Obj::").expect("the next arm");
     let arm = &source[at..end];
@@ -15197,7 +15197,7 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
 /// gate, at the block's own DAA.
 #[test]
 fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_unattributable_class() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     let at = source.find("Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }").expect("the move-1 arm");
     let end = at + source[at..].find("\n                Obj::CourtAttnDissected").expect("the next arm");
     let arm = &source[at..end];
@@ -17350,7 +17350,7 @@ mod msk26a_slash_genuineness {
 /// signature, the ruleset's arity and the finalize at the court's limits.
 #[test]
 fn the_processor_gates_the_evaluation_courts_objects_below_palw_improvement_v1() {
-    let source = include_str!("processor.rs");
+    let source = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     assert!(
         source.contains("palw_object_is_eval_v1(&object) && !self.palw_improvement_at(point.daa_score)"),
         "the acceptance walk drops an evaluation court object by name below the fence"

@@ -765,7 +765,7 @@ fn the_over_ladder_class_is_refused_at_admission() {
         gate.contains("worst_case_step_leaf_count_deepest_job_capped_v1(profile, cap)"),
         "the admission gate can reach the deepest-legal-job bound"
     );
-    let processor = include_str!("../../src/pipeline/virtual_processor/processor.rs");
+    let processor = crate::palw_source_guard_v1::palw_processor_source_v1();
     assert!(
         processor.contains("self.palw_canonical_work_daa.is_some_and(|height| point.daa_score >= height)"),
         "and the block's own fence is what selects it"
@@ -1648,7 +1648,7 @@ fn the_price_unit_stays_raw_because_it_is_a_denominator() {
 fn every_construction_of_the_admission_fences_names_the_canonical_work_height() {
     let sources = [
         ("palw_state_v2.rs", crate::palw_state_v2::palw_state_v2_fold_source_v1()),
-        ("processor.rs", include_str!("../../src/pipeline/virtual_processor/processor.rs")),
+        ("processor.rs", crate::palw_source_guard_v1::palw_processor_source_v1()),
     ];
     let mut checked = 0;
     for (name, source) in sources {

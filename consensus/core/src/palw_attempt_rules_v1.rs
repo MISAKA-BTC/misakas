@@ -1004,7 +1004,7 @@ mod tests {
     /// change to either side fails here and must be made to both.
     #[test]
     fn t12_030_the_processors_attribution_calls_are_the_shared_gates() {
-        let processor = include_str!("../../src/pipeline/virtual_processor/processor.rs");
+        let processor = crate::palw_source_guard_v1::palw_processor_source_v1();
         let arm = &processor[processor
             .find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(\n                        bundle,")
             .expect("the ClassRegistered arm's gate")..];

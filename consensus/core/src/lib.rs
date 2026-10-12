@@ -619,6 +619,8 @@ pub mod palw_shard_plan_v1;
 /// MISAKA PALW-S slash objects (ADR-0027): unilateral, objectively-checkable evidence.
 /// Land-stage, consensus-inert — no slashing is enabled by this module existing.
 pub mod palw_slash;
+#[doc(hidden)]
+pub mod palw_source_guard_v1;
 /// MISAKA PALW checkpoint state chunk map (ADR-0030 §3): the DERIVED byte layout of the
 /// deterministic-integer family's replay state, and the `state_chunk_map_id` that names it.
 /// Land-stage: a map, not a capture — nothing here reads an engine or writes a checkpoint.

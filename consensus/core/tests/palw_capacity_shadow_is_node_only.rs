@@ -38,7 +38,8 @@ const ALLOWED: &[(&str, &str)] = &[
     // The read API: the trait's `None` default, the forwarding, the processor's read impl.
     ("core/src/api/mod.rs", "palw_capacity_shadow_v1"),
     ("src/consensus/mod.rs", "palw_capacity_shadow_v1"),
-    ("src/pipeline/virtual_processor/processor.rs", "palw_capacity_shadow_v1_impl"),
+    // The processor was split by responsibility on 2026-10-13; the read impl lives with the other PALW methods.
+    ("src/pipeline/virtual_processor/processor/palw.rs", "palw_capacity_shadow_v1_impl"),
 ];
 
 /// The two node-only modules: every path through them is a needle.

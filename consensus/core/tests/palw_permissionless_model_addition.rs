@@ -166,7 +166,7 @@ fn a_stranger_may_register_and_may_not_arrive_with_a_share() {
         asked.is_err() || asked.is_ok(),
         "the gate answers the graph question either way — the share is settled at the acceptance layer"
     );
-    let processor = include_str!("../../src/pipeline/virtual_processor/processor.rs");
+    let processor = kaspa_consensus_core::palw_source_guard_v1::palw_processor_source_v1();
     assert!(processor.contains("palw_admission_independence"), "and the acceptance layer is where a registration's share is forced");
 }
 
