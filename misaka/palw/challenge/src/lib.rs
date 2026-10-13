@@ -48,8 +48,9 @@ pub use sealed::{
 };
 pub use seed::{ChallengeStreamV1, FiatShamirTranscriptV1, StreamKindV1, StreamLabelV1, challenge_seed_v1, staged_round_challenge_v1};
 pub use soundness::{
-    APPROVAL_MIN_TARGET_BITS_V1, EffectiveBitsV1, EffectiveSoundnessInputV1, RelationSoundnessV1, SoundnessRefusalV1,
-    beacon_grinding_choices_bound_v1, competing_works_bound_v1, effective_false_accept_bits_v1,
+    APPROVAL_MIN_TARGET_BITS_V1, CumulativeFailureTermV1, EffectiveBitsV1, EffectiveSoundnessInputV1, RelationSoundnessV1,
+    SoundnessRefusalV1, beacon_grinding_choices_bound_v1, competing_works_bound_v1, cumulative_failure_bits_v1,
+    effective_false_accept_bits_v1,
 };
 pub use subject::{ChallengeSubjectV1, RootV1, SubjectKindV1};
 

@@ -75,6 +75,10 @@ impl EffectiveBitsV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SoundnessRefusalV1 {
+    #[error("no cumulative failure term is stated")]
+    NoFailureTerm,
+    #[error("a cumulative failure term has zero opportunities")]
+    ZeroOpportunities,
     #[error("no relation family is stated")]
     NoRelation,
     #[error("zero repetitions")]
@@ -85,6 +89,43 @@ pub enum SoundnessRefusalV1 {
     ZeroBeacons,
     #[error("zero adaptive queries (the adversary always has at least its one statement)")]
     ZeroQueries,
+}
+
+/// One reviewed per-opportunity failure bound over an explicit finite horizon.
+/// Each term may describe a different suite, source window, binding or court.
+/// `Complete` means that particular event is impossible under its stated
+/// assumptions; an unbounded/unknown event must instead be `Bits(0)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CumulativeFailureTermV1 {
+    pub per_opportunity: EffectiveBitsV1,
+    /// Includes every retry, adaptive subject and fork/seed choice relevant to
+    /// this event. Counts are not reset by policy changes, restart or reorg.
+    pub opportunities: u128,
+}
+
+/// A conservative union bound across heterogeneous policies and failure events:
+/// `Σ_i n_i · ε_i`. Counts may overlap: no independence is assumed. Each count
+/// is charged separately, then the union of nonzero terms is charged once.
+/// This calculator cannot authenticate or enforce a caller's horizon/counts.
+pub fn cumulative_failure_bits_v1(terms: &[CumulativeFailureTermV1]) -> Result<EffectiveBitsV1, SoundnessRefusalV1> {
+    if terms.is_empty() {
+        return Err(SoundnessRefusalV1::NoFailureTerm);
+    }
+    if terms.iter().any(|term| term.opportunities == 0) {
+        return Err(SoundnessRefusalV1::ZeroOpportunities);
+    }
+    let mut weakest = u64::MAX;
+    let mut sampled = 0u128;
+    for term in terms {
+        if let EffectiveBitsV1::Bits(bits) = term.per_opportunity {
+            sampled += 1;
+            weakest = weakest.min(u64::from(bits).saturating_sub(ceil_log2_v1(term.opportunities)));
+        }
+    }
+    if sampled == 0 {
+        return Ok(EffectiveBitsV1::Complete);
+    }
+    Ok(EffectiveBitsV1::Bits(weakest.saturating_sub(ceil_log2_v1(sampled)) as u16))
 }
 
 /// `⌈log2 x⌉` for `x ≥ 1` (`0` for 1; `128` for `u128::MAX`); `0` for 0 as well (callers refuse 0 first).

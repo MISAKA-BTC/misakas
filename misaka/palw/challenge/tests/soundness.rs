@@ -6,6 +6,58 @@ use misaka_palw_challenge::policy::{ImplementedV1, PolicyRefusalV1};
 use misaka_palw_challenge::soundness::{ceil_log2_v1, sampled_family_millibits_v1};
 use misaka_palw_challenge::*;
 
+#[test]
+fn cumulative_policies_sources_and_retries_do_not_reset_the_error_budget() {
+    let term = |bits, opportunities| CumulativeFailureTermV1 { per_opportunity: EffectiveBitsV1::Bits(bits), opportunities };
+    // Two policy versions with 2^20 subjects each, three attempts per subject.
+    // Per-attempt algebra is 152 bits: count loss 22, policy union loss 1.
+    let attempts = 3 * (1 << 20);
+    assert_eq!(cumulative_failure_bits_v1(&[term(152, attempts); 2]), Ok(EffectiveBitsV1::Bits(129)));
+    // A 128-bit source assumption per window becomes only 108 bits over 2^20
+    // windows, then the three-term union costs another two bits. An algebraic
+    // surplus cannot make an unreviewed source floor into a 128-bit guarantee.
+    let terms = [term(152, attempts), term(152, attempts), term(128, 1 << 20)];
+    assert_eq!(cumulative_failure_bits_v1(&terms), Ok(EffectiveBitsV1::Bits(106)));
+    let mut reordered = terms;
+    reordered.reverse();
+    assert_eq!(cumulative_failure_bits_v1(&terms), cumulative_failure_bits_v1(&reordered));
+    assert_eq!(cumulative_failure_bits_v1(&[term(152, attempts), term(0, 1)]), Ok(EffectiveBitsV1::Bits(0)));
+}
+
+#[test]
+fn cumulative_exact_events_and_counter_edges_never_invent_security() {
+    use EffectiveBitsV1::{Bits, Complete};
+    let term = |per_opportunity, opportunities| CumulativeFailureTermV1 { per_opportunity, opportunities };
+    assert_eq!(cumulative_failure_bits_v1(&[]), Err(SoundnessRefusalV1::NoFailureTerm));
+    assert_eq!(cumulative_failure_bits_v1(&[term(Complete, 0)]), Err(SoundnessRefusalV1::ZeroOpportunities));
+    assert_eq!(cumulative_failure_bits_v1(&[term(Complete, u128::MAX)]), Ok(Complete));
+    assert_eq!(cumulative_failure_bits_v1(&[term(Bits(256), u128::MAX)]), Ok(Bits(128)));
+    assert_eq!(cumulative_failure_bits_v1(&[term(Bits(256), u128::MAX); 2]), Ok(Bits(127)));
+    assert_eq!(cumulative_failure_bits_v1(&[term(Bits(1), u128::MAX)]), Ok(Bits(0)));
+    assert_eq!(cumulative_failure_bits_v1(&[term(Complete, u128::MAX), term(Bits(128), 1)]), Ok(Bits(128)));
+}
+
+#[test]
+fn cumulative_bound_dominates_an_exact_dyadic_union_without_independence() {
+    // Independent oracle: compute Σ n_i / 2^b_i on a common 2^16 denominator.
+    // Our integer bound must cover even the full sum (before capping it at 1).
+    for a in 1..=16u16 {
+        for b in 1..=16u16 {
+            for na in 1..=9u128 {
+                for nb in 1..=9u128 {
+                    let terms = [
+                        CumulativeFailureTermV1 { per_opportunity: EffectiveBitsV1::Bits(a), opportunities: na },
+                        CumulativeFailureTermV1 { per_opportunity: EffectiveBitsV1::Bits(b), opportunities: nb },
+                    ];
+                    let EffectiveBitsV1::Bits(result) = cumulative_failure_bits_v1(&terms).unwrap() else { panic!("nonzero errors") };
+                    let exact_numerator = ((na << (16 - a)) + (nb << (16 - b))).min(1 << 16);
+                    assert!(1u128 << (16 - result) >= exact_numerator, "{a}/{na}, {b}/{nb}: {result}");
+                }
+            }
+        }
+    }
+}
+
 fn input(relations: Vec<RelationSoundnessV1>, r: u32, retry: u32, g: u128, beacons: u32, q: u128) -> EffectiveSoundnessInputV1 {
     EffectiveSoundnessInputV1 {
         relations,

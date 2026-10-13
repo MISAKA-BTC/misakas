@@ -91,6 +91,38 @@ fn row_g_a_sampled_check_is_bounded_by_its_selection_term() {
 }
 
 #[test]
+fn horizon_charges_binding_even_when_the_arithmetic_is_exact() {
+    let budget = AdversaryBudgetV1 { adaptive_statements: 2, ..AdversaryBudgetV1::NONE };
+    let result =
+        composed_false_accept_bits_v1(&[], InstanceCompositionV1::UnionBound, Some(128), CoverageV1::Complete, &budget).unwrap();
+    assert_eq!(result.effective_bits, Some(127), "two commitments do not retain a per-commitment 128-bit bound");
+    assert_eq!(
+        min_repetitions_v1(256, 1, Some(128), &budget, 128),
+        None,
+        "more algebraic repetitions cannot repair a cumulative binding deficit"
+    );
+}
+
+#[test]
+fn horizon_charges_scope_selection_under_retries_and_adaptivity() {
+    // A single lie is missed in exactly one of four equally likely scopes.
+    // Two adaptive statements, each with two attempts, have four opportunities
+    // for that event. No independence is assumed: the union bound is 1.
+    let budget = AdversaryBudgetV1 { retry_limit: 1, adaptive_statements: 2, ..AdversaryBudgetV1::NONE };
+    let result = composed_false_accept_bits_v1(
+        &[],
+        InstanceCompositionV1::UnionBound,
+        None,
+        CoverageV1::Sampled { units: 4, checked: 3 },
+        &budget,
+    )
+    .unwrap();
+    assert_eq!(result.selection_bits, Some(2));
+    assert_eq!(result.loss_bits, 2);
+    assert_eq!(result.effective_bits, Some(0), "per-scope miss bits are not horizon miss bits");
+}
+
+#[test]
 fn row_h_the_single_false_instance_alternative_drops_the_instance_union() {
     let h = composed_false_accept_bits_v1(
         &fam(B_M89, 2, R_9B_8K),

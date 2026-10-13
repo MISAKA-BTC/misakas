@@ -7,9 +7,9 @@
 //! count is floored, a loss is ceiled.
 //!
 //! ```text
-//! P_FA ≤ ε_sel + Q·(R+1)·G^β · Σ_f R_f·2^(−t_f·b_f) + ε_bind
+//! P_FA ≤ Q·(R+1)·G^β · (ε_sel + Σ_f R_f·2^(−t_f·b_f) + ε_bind)
 //!
-//! effective = min(check − loss, binding, selection) − ⌈log2 #terms⌉           (a union of the present terms)
+//! effective = min(check, binding, selection) − loss − ⌈log2 #terms⌉          (a union of the present terms)
 //!   check     = min_f (t_f·b_f) − ⌈log2 Σ_f R_f⌉       [UnionBound]   or   min_f (t_f·b_f)   [SingleFalseInstance]
 //!   loss      = ⌈log2 (R+1)⌉ + β·g + ⌈log2 Q⌉          (g = ⌈log2 G⌉, the adversary's grinding bits per beacon)
 //!   selection = ⌊log2 (N / (N − s))⌋                   (a verifier that checks s of N units; absent when s = N)
@@ -102,7 +102,8 @@ pub struct ComposedBoundV1 {
     pub binding_bits: Option<u32>,
     /// `None`: complete coverage.
     pub selection_bits: Option<u32>,
-    /// `−log2` of the composed bound, floored. `≤ 0` means no security from this composition. `None`: no term at all.
+    /// `−log2` of the composed horizon bound, floored. Every present term pays
+    /// `loss_bits`; `≤ 0` means no security. `None`: no term at all.
     pub effective_bits: Option<i64>,
 }
 
@@ -188,11 +189,15 @@ pub fn composed_false_accept_bits_v1(
         CoverageV1::Sampled { units, checked } => selection_bits_v1(units, checked)?,
     };
     let loss_bits = adversary.loss_bits();
-    let terms: Vec<i128> =
-        [check_bits_wide.map(|c| c - i128::from(loss_bits)), binding_bits.map(i128::from), selection_bits.map(i128::from)]
-            .into_iter()
-            .flatten()
-            .collect();
+    // Binding and coverage are per-opportunity statements too. Even exact
+    // arithmetic leaves binding failures possible over Q commitments, and a
+    // sampled scope can be missed on any retry. The same conservative strategy
+    // tree union applies to every event, without assuming independent attempts.
+    let terms: Vec<i128> = [check_bits_wide, binding_bits.map(i128::from), selection_bits.map(i128::from)]
+        .into_iter()
+        .flatten()
+        .map(|bits| bits - i128::from(loss_bits))
+        .collect();
     let effective_bits = terms
         .iter()
         .min()

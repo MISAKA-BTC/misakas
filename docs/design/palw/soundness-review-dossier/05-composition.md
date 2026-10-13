@@ -9,8 +9,8 @@ enter. The formula is implemented as a pure integer function, `misaka/palw/chall
 
 Fix a **false claim** `c`: a committed claim whose committed trace is not the reference execution of its class on its job (A-REF).
 Its **false acceptance** `FA(c)` is: `c` reaches Final (or a Panel licence that weighs) and no conviction of `c` lands before its
-liability horizon ends. The unit of the bound is one claim; a network-wide statement over a horizon multiplies the algebraic term by
-the number `Q` of claims the adversary tries (§5.3).
+liability horizon ends. The unit of each input error is one opportunity. A network-wide statement over a finite horizon must
+charge the number of opportunities for **every** event, including binding and scope selection, not just algebra (§5.3).
 
 ## 5.2 Decomposition
 
@@ -95,7 +95,7 @@ deterrence:  reservation · (1 − a) · P_dc ≥ gain ,   P_dc ≤ 1 − ε_sel
 ## 5.5 The full bound and the 9B-8k worked numbers
 
 ```text
-effective bits = min( check − loss , binding , selection ) − ⌈log2 #present terms⌉
+effective bits = min( check , binding , selection ) − loss − ⌈log2 #present terms⌉
 
 check     = min_f (t_f · b_f) − ⌈log2 Σ_f R_f⌉            [UnionBound]      (SingleFalseInstance drops the R term)
 loss      = ⌈log2 (R_a + 1)⌉ + β · ⌈log2 G⌉ + ⌈log2 Q⌉
@@ -104,6 +104,15 @@ selection = ⌊log2 (N / (N − s))⌋                           (absent for com
 ```
 
 `ε_enf` and `ε_env` are not inside this number: they are the assumptions' failure probabilities and are reported beside it (§5.6).
+
+**2026-10-13 correction.** The earlier calculator charged `loss` only to `check`. That was unsafe for a horizon statement:
+two exact-arithmetic statements with a per-commitment binding bound of 128 bits were reported as 128 rather than 127 bits;
+four opportunities to miss a false unit with probability 1/4 were reported as 2 rather than 0 bits. Both counterexamples failed
+against the earlier implementation. `composed_false_accept_bits_v1` now unions the entire per-opportunity failure event over
+`Q·(R_a+1)·G^β` strategy leaves. This conservative bound needs no independence between attempts. If a particular binding event
+has a stronger global oracle-query bound, the reviewer may supply that as a separate horizon term; it must not silently reuse
+a per-commitment number as a lifetime guarantee. Rows A–M below retain their final values because binding is not the limiting
+term in their multi-opportunity cases, and row G has only one opportunity.
 
 **Inputs (9B-8k, `coverage-p1p2-record.md` §1.2):** `P = 8,192` positions; 2,210 probabilistic instances per position, so
 `R = 18,104,320` and `⌈log2 R⌉ = 25`; `t = 2`; `b = 126` (K2-TIR-v1) or 88 (K2-TIR-v2, descriptor-wide).
@@ -145,3 +154,29 @@ selection = ⌊log2 (N / (N − s))⌋                           (absent for com
 `ε_enf` (A-NET, the censorship and laundering paths C4 round 3 found and G14-R4 fixed on its branch) and `ε_env` (`ε_src`, fork-choice
 safety — see the fork-choice safety analysis (internal, FINX) — budgets, DA) have no number yet; each must be bounded or accepted as
 an explicit operating assumption before an effective-bits figure means what it says.
+
+## 5.7 Cumulative policies, sources and upgrade horizons
+
+`soundness::cumulative_failure_bits_v1` computes a conservative heterogeneous union
+`P_FA(H) ≤ Σ_i n_i·ε_i`, with integer upward-rounded opportunity losses and a union over the nonzero terms. Each input declares
+its per-opportunity bound and an explicit positive `u128` count. Exact events contribute zero; unknown events contribute a
+zero-bit bound, not an exact event. Empty input and zero counts are refused. An all-exact result is conditional on the input
+assumptions and does not turn a hash binding, source or transport assumption into an exact guarantee.
+
+For example, two policy versions each allowing `3·2^20` attempts with a per-attempt bound of 152 bits have a conservative
+cumulative bound of 129 bits. Adding a source-participation bound of 128 bits per window over `2^20` windows lowers the full
+three-term bound to 106 bits. Stronger algebra does not compensate for that source floor. Source censorship, withholding,
+enforcement, DA and reorg failures must each be included or explicitly left unbounded. Cross-term or cross-attempt independence
+is not assumed. A bound already composed over its full horizon must have multiplicity 1 when composed again; its earlier
+opportunities must not be confused with a fresh per-attempt bound.
+
+The counts belong to the network horizon across classes, target kinds, policy versions and retries. Restart, target changes,
+upgrades and reorganizations do not reset adversarial opportunities. A finite epoch cap alone gives no finite lifetime count
+over arbitrarily many epochs. A release review must state the horizon and show how every admission/adapter preserves its
+count or supply an explicit global computational assumption. Approval of an algebraic `ApprovedTupleV1` is only that helper's
+algebraic calculation; its currently empty shipped registry supplies no approval of the full union.
+
+Tests cover the two former counterexamples, heterogeneous source/policy counts, unknown/complete/zero-count cases, `u128::MAX`
+without wrapping, input-order invariance, and an independent exact dyadic union oracle over 20,736 two-term configurations.
+These prove the calculator's accounting. Authenticated lifetime counts, all target adapters, actual source independence and
+participation/censorship bounds, and an independent 128-bit review remain required; the calculator alone does not close them.
