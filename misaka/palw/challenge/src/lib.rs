@@ -39,8 +39,9 @@ pub use conformance::{BeaconConformanceEvidenceV1, ConformanceCommitmentV1, Conf
 pub use hash::Digest;
 pub use lifecycle::{OnboardingFailureV1, OnboardingRecordV1, OnboardingStateV1, OnboardingStepV1};
 pub use policy::{
-    ApprovedTupleV1, InteractiveModeV1, PostCommitChallengePolicyV1, SourceRuleV1, approved_v1, complete_check_policy_v1,
-    reference_policy_v1, sealed_source_policy_v3, shipped_registry_v1,
+    ApprovedTupleV1, InteractiveModeV1, PostCommitChallengePolicyV1, ReviewedFailureBoundV2, ReviewedTupleV2, SourceRuleV1,
+    approved_v1, approved_v2, complete_check_policy_v1, reference_policy_v1, sealed_source_policy_v3, shipped_registry_v1,
+    shipped_registry_v2,
 };
 pub use sealed::{
     SealRevealV3, SealedBeaconStateV3, SealedSourceV3, SourceFateV3, collect_sealed_work_beacon_v3, combine_failure_bits_v1,

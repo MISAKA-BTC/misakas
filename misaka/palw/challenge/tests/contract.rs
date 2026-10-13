@@ -123,7 +123,10 @@ fn nothing_is_approved_by_default_and_a_weaker_repetition_is_refused() {
         beacons_per_attempt: 1,
         adaptive_queries: 1,
     };
-    approved_v1(std::slice::from_ref(&tuple), &suite, &p).unwrap();
+    assert_eq!(
+        approved_v1(std::slice::from_ref(&tuple), &suite, &p),
+        Err(PolicyRefusalV1::Missing("full binding/source/coverage review"))
+    );
     let mut weaker = p.clone();
     weaker.repetition_count = 3;
     assert_eq!(

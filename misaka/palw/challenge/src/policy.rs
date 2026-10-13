@@ -371,11 +371,10 @@ impl PostCommitChallengePolicyV1 {
     }
 }
 
-/// One approved (checker suite, challenge policy, soundness policy) tuple with its minimum repetitions **and the reviewed soundness
-/// statement the effective accounting reads**: each relation family's per-repetition soundness, the grinding choices per beacon its
-/// grinding budget states, the beacons one attempt draws and the adaptive statements an adversary may commit against it. A release
-/// supplies these after review; a policy outside the registry, asking fewer repetitions than approved, with a target below
-/// [`crate::soundness::APPROVAL_MIN_TARGET_BITS_V1`], or whose EFFECTIVE bits fall below its own target, is refused.
+/// Historical algebraic tuple and its finite declared strategy budget. This codec
+/// omits binding, source and scope assumptions: [`approved_v1`] therefore refuses
+/// to interpret it as full effective approval. [`ReviewedTupleV2`] adds the full
+/// review without changing historical bytes.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ApprovedTupleV1 {
     pub checker_suite_id: Digest,
@@ -408,34 +407,135 @@ pub fn shipped_registry_v1() -> Vec<ApprovedTupleV1> {
     Vec::new()
 }
 
-/// Whether `policy` is valid AND approved for `checker_suite_id` under `registry`: a matching tuple with at most the policy's
-/// repetitions, a target of at least [`crate::soundness::APPROVAL_MIN_TARGET_BITS_V1`], and an effective bound
-/// ([`crate::soundness::effective_false_accept_bits_v1`] — retries, grinding, relations, adaptivity counted) at or above the target.
+/// A reviewed per-opportunity bound for a non-algebraic failure event.
+/// `Unknown` always contributes probability one. `Exact` requires an explicit
+/// review of why that event is impossible; complete arithmetic alone does not
+/// make commitment binding, source bias or scope omissions exact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum ReviewedFailureBoundV2 {
+    Unknown,
+    Bits(u16),
+    Exact,
+}
+
+/// Full review attached to the historical algebraic tuple. Kept outside the v1
+/// codec: an old serialized tuple must never acquire invented binding/source
+/// assumptions merely because this binary learned to compose them.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ReviewedTupleV2 {
+    /// Full descriptor needed to evaluate every authorized policy across upgrades.
+    pub policy: PostCommitChallengePolicyV1,
+    pub algebraic: ApprovedTupleV1,
+    /// Commitment/hash/transcript binding per adversarial opportunity.
+    pub binding: ReviewedFailureBoundV2,
+    /// Source independence, bias, participation and censorship failure per beacon.
+    /// For a complete check a trusted review may state `Exact`: no beacon exists.
+    pub source: ReviewedFailureBoundV2,
+    /// Missing relation or scope coverage per adversarial opportunity.
+    pub coverage: ReviewedFailureBoundV2,
+    /// Digest of the trusted release review declaring all these assumptions and
+    /// the tuple's finite query/grinding horizon. A nonzero digest alone is NOT
+    /// evidence that the review took place or the live counters obey that horizon.
+    pub review_root: Digest,
+}
+
+pub fn shipped_registry_v2() -> Vec<ReviewedTupleV2> {
+    Vec::new()
+}
+
+fn algebraic_bound(
+    tuple: &ApprovedTupleV1,
+    checker_suite_id: &Digest,
+    policy: &PostCommitChallengePolicyV1,
+) -> Result<crate::soundness::EffectiveBitsV1, PolicyRefusalV1> {
+    use crate::soundness::{APPROVAL_MIN_TARGET_BITS_V1, effective_false_accept_bits_v1};
+    policy.validate()?;
+    if tuple.checker_suite_id != *checker_suite_id
+        || tuple.challenge_policy_id != policy.id()
+        || tuple.soundness_policy_id != policy.soundness_policy_id
+        || policy.repetition_count < tuple.min_repetitions
+    {
+        return Err(PolicyRefusalV1::NotApproved);
+    }
+    if policy.security_bits < APPROVAL_MIN_TARGET_BITS_V1 {
+        return Err(PolicyRefusalV1::TargetBelowFloor { target: policy.security_bits, floor: APPROVAL_MIN_TARGET_BITS_V1 });
+    }
+    effective_false_accept_bits_v1(&tuple.effective_input(policy)).map_err(PolicyRefusalV1::Soundness)
+}
+
+/// Legacy tuples state algebraic assumptions only. Preserve their codec and
+/// diagnostics, but refuse to interpret them as full effective 128-bit approval.
+/// Consumers needing approval must use [`approved_v2`] with a trusted full review.
 pub fn approved_v1(
     registry: &[ApprovedTupleV1],
     checker_suite_id: &Digest,
     policy: &PostCommitChallengePolicyV1,
 ) -> Result<(), PolicyRefusalV1> {
-    use crate::soundness::{APPROVAL_MIN_TARGET_BITS_V1, effective_false_accept_bits_v1};
     policy.validate()?;
-    let id = policy.id();
     let tuple = registry
         .iter()
-        .find(|t| {
-            t.checker_suite_id == *checker_suite_id
-                && t.challenge_policy_id == id
-                && t.soundness_policy_id == policy.soundness_policy_id
-                && policy.repetition_count >= t.min_repetitions
-        })
+        .find(|t| t.checker_suite_id == *checker_suite_id && t.challenge_policy_id == policy.id())
         .ok_or(PolicyRefusalV1::NotApproved)?;
-    if policy.security_bits < APPROVAL_MIN_TARGET_BITS_V1 {
-        return Err(PolicyRefusalV1::TargetBelowFloor { target: policy.security_bits, floor: APPROVAL_MIN_TARGET_BITS_V1 });
+    let effective = algebraic_bound(tuple, checker_suite_id, policy)?;
+    if !effective.meets(policy.security_bits) {
+        return Err(PolicyRefusalV1::BelowTarget { effective, target: policy.security_bits });
     }
-    let effective = effective_false_accept_bits_v1(&tuple.effective_input(policy)).map_err(PolicyRefusalV1::Soundness)?;
+    Err(PolicyRefusalV1::Missing("full binding/source/coverage review"))
+}
+
+/// Full composed approval over the trusted tuple's finite declared horizon.
+/// Every binding/coverage event pays retries, grinding and adaptive queries;
+/// the source term also pays the number of beacons per attempt. The union does
+/// not assume independent failure events. This evaluates a trusted release
+/// registry; it does not authenticate a review or enforce live lifetime counts.
+pub fn approved_v2(
+    registry: &[ReviewedTupleV2],
+    checker_suite_id: &Digest,
+    policy: &PostCommitChallengePolicyV1,
+) -> Result<(), PolicyRefusalV1> {
+    use crate::soundness::{CumulativeFailureTermV1, cumulative_failure_bits_v1};
+    policy.validate()?;
+    if !registry.iter().any(|t| t.algebraic.checker_suite_id == *checker_suite_id && t.policy == *policy) {
+        return Err(PolicyRefusalV1::NotApproved);
+    }
+    // Every authorized tuple may be attempted during this registry's declared
+    // lifetime. Changing suite/policy does not give the failure union a fresh
+    // budget. Overlapping horizons and duplicate entries are conservative.
+    let terms = registry
+        .iter()
+        .map(|reviewed| reviewed_bound(reviewed).map(|per_opportunity| CumulativeFailureTermV1 { per_opportunity, opportunities: 1 }))
+        .collect::<Result<Vec<_>, _>>()?;
+    let effective = cumulative_failure_bits_v1(&terms).map_err(PolicyRefusalV1::Soundness)?;
     if !effective.meets(policy.security_bits) {
         return Err(PolicyRefusalV1::BelowTarget { effective, target: policy.security_bits });
     }
     Ok(())
+}
+
+fn reviewed_bound(reviewed: &ReviewedTupleV2) -> Result<crate::soundness::EffectiveBitsV1, PolicyRefusalV1> {
+    use crate::soundness::{CumulativeFailureTermV1, EffectiveBitsV1, ceil_log2_v1, cumulative_failure_bits_v1};
+    let policy = &reviewed.policy;
+    let algebraic = algebraic_bound(&reviewed.algebraic, &reviewed.algebraic.checker_suite_id, policy)?;
+    if reviewed.review_root == [0; 64] {
+        return Err(PolicyRefusalV1::Missing("full soundness review root"));
+    }
+    let tuple = &reviewed.algebraic;
+    let loss = ceil_log2_v1(u128::from(policy.retry_limit) + 1)
+        + u64::from(tuple.beacons_per_attempt) * ceil_log2_v1(tuple.grinding_choices_per_beacon)
+        + ceil_log2_v1(tuple.adaptive_queries);
+    let charge = |bound, extra: u64| match bound {
+        ReviewedFailureBoundV2::Unknown => EffectiveBitsV1::Bits(0),
+        ReviewedFailureBoundV2::Bits(bits) => EffectiveBitsV1::Bits(u64::from(bits).saturating_sub(loss + extra) as u16),
+        ReviewedFailureBoundV2::Exact => EffectiveBitsV1::Complete,
+    };
+    let terms = [
+        algebraic,
+        charge(reviewed.binding, 0),
+        charge(reviewed.source, ceil_log2_v1(u128::from(tuple.beacons_per_attempt))),
+        charge(reviewed.coverage, 0),
+    ]
+    .map(|per_opportunity| CumulativeFailureTermV1 { per_opportunity, opportunities: 1 });
+    cumulative_failure_bits_v1(&terms).map_err(PolicyRefusalV1::Soundness)
 }
 
 /// [`reference_policy_v1`]'s numbers under the **sealed-source beacon v3** (the distinct rule; `window` is the seal window `W`, the
