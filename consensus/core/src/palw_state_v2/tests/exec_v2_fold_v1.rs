@@ -3719,8 +3719,10 @@ mod amendment_1 {
         let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
         budget.capital_unit_sompi = 100_000_000;
         budget.claims_per_unit = 100;
+        budget.block_units_per_unit = 100_000_000;
         budget.reward_per_unit_sompi = 100_000_000;
         budget.final_weight_per_unit = 1_000_000_000;
+        budget.max_open_claims_per_bond = 1_000;
         for extra in [1, 0] {
             let p = base
                 .clone()

@@ -106,6 +106,14 @@ provider leases/DA transfer, signed prefix and root carriers, checks no ledger/m
 then re-signs a sufficient expiry and requires admission without rewriting any provider term. Both controls await
 fresh compilation/execution. They do not claim to bound future physical payment or renew a finite provider contract.
 
+The first core command compiled successfully in 9m05s but its new test failed before reaching the material guard:
+the private fixture retained the numeric probe's B rate of one while increasing its capital unit to 100 million.
+Ten units of that bond therefore had only ten block units, below one whole block's required one million. Native
+attempt admission correctly refused the underfunded fixture and the subsequent Panel bind found no claim.
+[The failed core log](evidence/rfc08-paid-material-core-fixture-failure-2026-10-13.log) is retained. The fixture now fixes
+its B rate and open-claim ceiling to the same adequate pre-genesis mechanics values as the native control. The
+production material guard is unchanged. Fresh execution remains required; the failed fixture is not a guard PASS.
+
 ## Remaining acceptance
 
 Signed provider TTL and collectible collateral must cover each admitted whole path. The current finite native
