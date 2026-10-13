@@ -5565,6 +5565,29 @@ impl VirtualStateProcessor {
         self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
     }
 
+    /// Test-only OS-kill rendezvous. Production builds contain no environment
+    /// switch or pause path. The exact child process owns the rendezvous directory.
+    #[cfg(test)]
+    fn pruning_import_crash_checkpoint(&self, label: &str) {
+        if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE").ok().as_deref() != Some(label) {
+            return;
+        }
+        let Ok(root) = std::env::var("MISAKA_RFC12_IMPORT_CRASH_DIRECTORY") else { return };
+        // Genesis startup also imports its premine. The worker arms only after
+        // its baseline and expected cold-recovery manifest are durable.
+        if std::fs::read(std::path::Path::new(&root).join("armed")).ok().as_deref() != Some(label.as_bytes()) {
+            return;
+        }
+        let mut file = std::fs::File::create(std::path::Path::new(&root).join("ready")).unwrap();
+        use std::io::Write;
+        file.write_all(label.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        // Parent Child::kill supplies the crash. No DB close or flush executes.
+        loop {
+            std::thread::park();
+        }
+    }
+
     pub fn pruning_import_session(&self) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
         self.pruning_meta_stores.read().import_session().map_err(|e| {
             PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
@@ -5720,7 +5743,11 @@ impl VirtualStateProcessor {
         }
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
         self.write_pruning_import_barrier(batch);
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("utxo-before-clear");
         meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("utxo-after-clear");
         Ok(())
     }
 
@@ -5803,12 +5830,20 @@ impl VirtualStateProcessor {
         }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
+            #[cfg(test)]
+            self.pruning_import_crash_checkpoint("utxo-before-virtual-copy");
             virtual_write.utxo_set.clear().unwrap();
+            #[cfg(test)]
+            self.pruning_import_crash_checkpoint("utxo-after-virtual-clear");
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
+                #[cfg(test)]
+                self.pruning_import_crash_checkpoint("utxo-mid-virtual-copy");
             }
             // ADR-0109 Decision 1: the set was replaced wholesale; the index follows it wholesale.
             self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
+            #[cfg(test)]
+            self.pruning_import_crash_checkpoint("utxo-after-virtual-copy");
         }
 
         drop(pruning_meta_read);
@@ -5933,7 +5968,11 @@ impl VirtualStateProcessor {
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("import-before-complete");
         self.write_pruning_import_barrier(batch);
+        #[cfg(test)]
+        self.pruning_import_crash_checkpoint("import-after-complete");
         Ok(())
     }
 
@@ -6211,8 +6250,6 @@ impl VirtualStateProcessor {
         carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
         declarations: Option<(Vec<(kaspa_hashes::Hash64, Vec<u8>)>, bool)>,
     ) -> PruningImportResult<()> {
-        kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(pruning_point, None)
-            .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
         };
@@ -6220,14 +6257,20 @@ impl VirtualStateProcessor {
             self.palw_validate_snapshot_declarations_v1_impl(&carriage, &offered, complete).map_err(|why| {
                 PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("snapshot declarations: {why}"))
             })?;
-            offered.into_iter().map(|(id, bytes)| {
-                let class = &carriage.classes[&id]; // membership was checked above
-                (id, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
-                    registered_daa: class.registered_daa,
-                    artifact_root: class.artifact_root,
-                    carriage: bytes,
+            offered
+                .into_iter()
+                .map(|(id, bytes)| {
+                    let class = &carriage.classes[&id]; // membership was checked above
+                    (
+                        id,
+                        crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                            registered_daa: class.registered_daa,
+                            artifact_root: class.artifact_root,
+                            carriage: bytes,
+                        },
+                    )
                 })
-            }).collect::<Vec<_>>()
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -6324,6 +6367,11 @@ impl VirtualStateProcessor {
                 ));
             }
         }
+        // Install uses the actual typed, authenticated state and its rebuilt
+        // indices, never the sender's byte length or local Serve metadata. Keep
+        // this operation's demand reserved through the durable WAL barrier.
+        let _native_install_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_v1(pruning_point, &state)
+            .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
         // Pin the established target after validation and through the durable batch.
         // Pruning -> PALW -> metadata matches pruning advancement's lock order.
         let pruning_point_read = self.pruning_point_store.read();

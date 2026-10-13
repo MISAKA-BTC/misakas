@@ -21,21 +21,21 @@
 //! the one that won can share a key while differing in the weights they name and the canonical
 //! job that prices them — and the canonical job is not covered by the id at all.
 //!
-//! # The one place this index is NOT complete, said plainly
+//! # Pruning-point declaration transport
 //!
-//! **A node that joins by a pruned sync gets the class state and none of these rows.** The only
-//! writer is the chain-candidate accept path, and a pruning-point IBD never walks the blocks
-//! below the pruning point: `import_pruning_point_palw_state` brings the class table over
-//! wholesale and touches nothing here. Such a node therefore holds classes whose declarations it
-//! does not have, and — with the ADR-0067 arm armed — REFUSES to serve them, which reads as "this
-//! node cannot serve the registered class" rather than as the missing index it is.
+//! Protocol 107 carries snapshot-bound accepted declarations alongside PALW
+//! state. The importer validates the complete offered set before mutation and
+//! stages the tip, servable snapshot, declarations and incomplete-import marker
+//! in one durable recovery batch. The store guard remains held until commit;
+//! staged rows never populate a positive cache. A joined node can serve the same
+//! authenticated declarations without replaying a pruned registration block.
 //!
-//! That refusal is the safe direction (it never serves a class it cannot prove), and it is a real
-//! gap: on a pruned-sync fleet only the nodes that watched a registration go by can judge its
-//! class, and judging is what decides quorums. Closing it means either carrying the accepted
-//! carriages in the pruning-point sidecar beside `PalwStateCarriageV2`, or serving a row from a
-//! peer on demand — which needs no trust, because `profile.shape_profile_id() == class_id` makes
-//! the bytes self-authenticating. Neither is built; the ADR records it as open.
+//! A profile id alone does not authenticate its canonical tokenizer/runtime/job.
+//! Complete transport requires retained semantic identity or exact binary-known
+//! genesis identity, plus the retained PWU and fused-attention geometry. A legacy
+//! post-genesis class lacking that authority is refused as unsupported rather
+//! than supplying an invented canonical identity. Protocol 106's historical
+//! sparse compatibility path does not prove complete declaration coverage.
 
 use std::sync::Arc;
 
@@ -105,12 +105,13 @@ impl DbPalwClassCarriageStore {
     }
 
     /// Record an accepted registration's declaration. Idempotent for one class id by the module
-    /// doc's argument (the id is the profile's hash).
+    /// doc's argument: service additionally checks the current root, registration
+    /// position and canonical semantic authority against the consensus snapshot.
     pub fn insert(&mut self, class_id: Hash64, record: PalwClassCarriageRecord) -> StoreResult<()> {
         self.access.write(DirectDbWriter::new(&self.db), class_id, Arc::new(record))
     }
 
-    /// Genesis declarations share the native UTXO/PALW commit. Do not publish
+    /// Genesis and pruning-snapshot declarations share their PALW commit. Do not publish
     /// a positive cache row before the containing RocksDB batch commits.
     /// The caller retains its store write guard through that commit.
     pub(crate) fn insert_batch(
