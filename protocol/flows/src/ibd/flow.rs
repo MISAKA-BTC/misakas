@@ -2846,14 +2846,11 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // **Lane PA, B-F2**: the cap is the shared one (`PALW_PRUNING_STATE_MAX_BYTES`, 384 MiB — the 64 MiB it was sat just above today's
         // ≈ 57 MB state), it covers the class declarations beside the carriage (they were unbounded in total), and it is asked of the
         // whole message before either is decoded.
-        const MAX_PALW_STATE_BYTES: usize = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES;
-        let total_bytes = msg
-            .palw_state
-            .len()
-            .saturating_add(msg.class_carriages.iter().map(|e| e.carriage.len()).fold(0usize, usize::saturating_add));
-        if msg.palw_state.len() > MAX_PALW_STATE_BYTES || total_bytes > MAX_PALW_STATE_BYTES {
-            return Err(ProtocolError::Other("PruningPointPalwState exceeds the accepted size cap"));
-        }
+        crate::palw_snapshot_chunks::snapshot_payload_size(
+            msg.palw_state.len() as u64,
+            msg.class_carriages.iter().map(|e| e.carriage.len() as u64),
+        )
+        .map_err(|_| ProtocolError::Other("PruningPointPalwState exceeds the accepted size cap"))?;
         let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 = borsh::from_slice(&msg.palw_state)
             .map_err(|_| ProtocolError::Other("invalid PALW state carriage in PruningPointPalwState"))?;
         // ADR-0067 Decision 6: the declarations ride along. Additive, so a peer that does not send

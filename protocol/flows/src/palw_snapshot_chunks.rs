@@ -118,6 +118,45 @@ impl Write for BoundedHashWriter<'_> {
 const SNAPSHOT_FORMAT: u16 = 1;
 pub(crate) type Snapshot = (PalwStateCarriageV2, Vec<(Hash64, Vec<u8>)>);
 
+/// One size policy for chunked and legacy snapshots. Count the canonical envelope's
+/// version/state-length/count (14 bytes) and each declaration's class id/length (68
+/// bytes), even when the legacy protobuf carries those fields separately. Otherwise
+/// an accepted legacy snapshot can deterministically exceed the chunked peer's cap.
+pub(crate) fn snapshot_payload_size(state_bytes: u64, declarations: impl IntoIterator<Item = u64>) -> io::Result<u64> {
+    if state_bytes == 0 {
+        return Err(invalid("empty snapshot state"));
+    }
+    let mut total = state_bytes.checked_add(14).ok_or_else(|| invalid("snapshot length overflow"))?;
+    let mut count = 0u32;
+    for bytes in declarations {
+        if bytes > u32::MAX as u64 {
+            return Err(invalid("snapshot declaration exceeds Borsh length"));
+        }
+        count = count.checked_add(1).ok_or_else(|| invalid("snapshot declaration count overflow"))?;
+        total = total.checked_add(68).and_then(|n| n.checked_add(bytes)).ok_or_else(|| invalid("snapshot length overflow"))?;
+        if total > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 {
+            return Err(invalid("snapshot exceeds existing total byte cap"));
+        }
+    }
+    if total > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 {
+        return Err(invalid("snapshot exceeds existing total byte cap"));
+    }
+    Ok(total)
+}
+
+/// Preflight canonical serialization without allocating the encoded state. The
+/// existing bounded SizeWriter also stops oversized carriages during their walk.
+pub(crate) fn snapshot_encoded_size(carriage: &PalwStateCarriageV2, declarations: &[(Hash64, Vec<u8>)]) -> io::Result<u64> {
+    let mut size = SizeWriter(0);
+    carriage.serialize(&mut size)?;
+    snapshot_payload_size(size.0, declarations.iter().map(|(_, bytes)| bytes.len() as u64))
+}
+
+pub(crate) fn encode_legacy_snapshot(carriage: &PalwStateCarriageV2, declarations: &[(Hash64, Vec<u8>)]) -> io::Result<Vec<u8>> {
+    snapshot_encoded_size(carriage, declarations)?;
+    borsh::to_vec(carriage)
+}
+
 // PalwStateCarriageV2 reads its optional tagged tails to EOF. A direct tuple is
 // undecodable: the declaration count is mistaken for another tail. This envelope
 // gives that decoder an exact EOF without allocating another whole state Vec.
@@ -142,6 +181,7 @@ impl BorshSerialize for SnapshotEnvelope<'_> {
     fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let mut size = SizeWriter(0);
         self.carriage.serialize(&mut size)?;
+        snapshot_payload_size(size.0, self.declarations.iter().map(|(_, bytes)| bytes.len() as u64))?;
         SNAPSHOT_FORMAT.serialize(writer)?;
         size.0.serialize(writer)?;
         self.carriage.serialize(writer)?;
@@ -411,6 +451,45 @@ mod tests {
     }
     fn lease(budget: &Arc<Semaphore>) -> SnapshotSpill {
         SnapshotSpill::with_budget(Arc::clone(budget)).unwrap()
+    }
+    #[test]
+    fn legacy_and_chunked_payload_caps_include_all_declaration_framing() {
+        let cap = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64;
+        assert_eq!(snapshot_payload_size(cap - 14, []).unwrap(), cap);
+        assert!(snapshot_payload_size(cap - 13, []).is_err());
+        // Legacy previously admitted this near-cap payload; the same state's
+        // canonical chunk envelope cannot fit. Both consumers now refuse it.
+        assert!(snapshot_payload_size(cap - 4, []).is_err());
+        let state = cap - 14 - 2 * 68 - 17;
+        assert_eq!(snapshot_payload_size(state, [8, 9]).unwrap(), cap);
+        assert!(snapshot_payload_size(state, [8, 10]).is_err());
+        assert!(snapshot_payload_size(state, [8, 9, 0]).is_err(), "empty/unknown declarations still cost their header");
+        assert_eq!(snapshot_payload_size(cap - 14 - 1024 * 68, std::iter::repeat_n(0, 1024)).unwrap(), cap);
+        assert!(snapshot_payload_size(0, []).is_err());
+        assert!(snapshot_payload_size(u64::MAX, []).is_err());
+        assert!(snapshot_payload_size(1, [u32::MAX as u64 + 1]).is_err());
+        assert!(snapshot_payload_size(1, [u64::MAX]).is_err());
+    }
+
+    #[test]
+    fn canonical_snapshot_measurement_and_legacy_encoding_match_actual_bytes() {
+        let carriage = native_carriage();
+        let declarations = vec![(h(7), vec![1, 2]), (h(9), vec![3; 101]), (h(7), vec![])];
+        let envelope = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
+        assert_eq!(snapshot_encoded_size(&carriage, &declarations).unwrap(), envelope.len() as u64);
+        let legacy = encode_legacy_snapshot(&carriage, &declarations).unwrap();
+        assert_eq!(legacy, borsh::to_vec(&carriage).unwrap(), "legacy state bytes and optional tails are unchanged");
+        let old_field_sum = legacy.len() + declarations.iter().map(|(_, bytes)| bytes.len()).sum::<usize>();
+        assert_eq!(envelope.len() - old_field_sum, 14 + 68 * declarations.len());
+        eprintln!(
+            "[rfc06-snapshot-size] old_field_sum={old_field_sum} canonical_bytes={} omitted_bytes={}",
+            envelope.len(),
+            envelope.len() - old_field_sum
+        );
+        assert_eq!(
+            snapshot_payload_size(legacy.len() as u64, declarations.iter().map(|(_, b)| b.len() as u64)).unwrap(),
+            envelope.len() as u64
+        );
     }
     #[test]
     fn chunked_snapshot_preserves_bytes_and_authenticates_complete_stream() {

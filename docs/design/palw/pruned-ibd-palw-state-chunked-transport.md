@@ -1,6 +1,8 @@
 # Pruned-IBD PALW state transport: chunked, back-pressured (audit 2026-10-04, B-F2)
 
-Status: design note; the interim change (below) is in lane PA's branch `rcore/post5300-audit`. Node/p2p only: no consensus rule, no params id.
+Status: the original lane-PA design history is retained below. Protocol 106 now implements bounded spill/reassembly,
+stream identity, sequential backpressure and cross-peer resume. Genuine multiprocess pruning/IBD and native 100k
+resource acceptance remain unproven. Node/p2p only: no consensus rule, no params id.
 
 ## Problem
 
@@ -42,5 +44,24 @@ New p2p messages (protocol version bump, gated like `RequestPruningPointPalwStat
 * Old peers: a node that sees no chunk message registered answers nothing; the requester falls back to the single message while the state is
   under the interim cap (negotiated by protocol version, never by timeout).
 
-Not done in lane PA: this needs a two-node drill (serve while a reorg moves the pruning point, drop mid-transfer, resume), which lane PA may
+Historical lane-PA outstanding work: this needs a two-node drill (serve while a reorg moves the pruning point, drop mid-transfer, resume), which lane PA may
 not run. Implementation order: proto + server flow, requester spill + streaming decode, then the drill.
+
+## Current byte accounting (2026-10-13)
+
+Both negotiated modes retain the same 384 MiB total policy. The protocol-106 canonical stream costs
+14 bytes for version/state-frame length/declaration count, plus carriage bytes and 68 bytes per declaration
+for class id/byte length, plus each declaration's bytes. Legacy protobuf carries the metadata separately;
+its sender/requester previously omitted those costs. A state accepted by that old metric could therefore
+be deterministically refused by the chunked receiver at the same policy boundary.
+
+The shared `snapshot_payload_size` now checks that canonical total on both modes. Unknown/duplicate/empty
+declarations still consume wire headroom before the existing filtering rules. Legacy serving preflights
+the complete size with a bounded streaming writer on the blocking pool before allocating its encoded state;
+oversized state returns not-found. Valid legacy state bytes and native consensus-root verification are unchanged.
+
+Chunking reduces live encoded buffers, but does not remove total state or decoded-native memory limits.
+The engine's 256 MiB import bound is not a whole-carriage budget: native registry keys, other tables and class
+declarations must fit beside every retained population. The actual funded 100k/four-seal native test must
+measure that carriage and the genuine network transfer. Neither an accounting correction nor successful
+small codec tests certify the 100k/pruned-P2P acceptance condition.

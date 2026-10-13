@@ -221,7 +221,15 @@ impl RequestPruningPointPalwStateFlow {
                 .spawn_blocking(move |c| match c.pruning_point_palw_state(pp) {
                     Some(state) => {
                         let declarations = c.palw_class_carriages_for_sync_v1();
-                        (Some(state), declarations)
+                        // Refuse before allocating a whole encoded Vec on the legacy
+                        // path. Chunked and legacy peers use the same canonical total.
+                        match crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations) {
+                            Ok(bytes) => (Some(bytes), declarations),
+                            Err(error) => {
+                                kaspa_core::warn!("[palw-sidecar] cannot serve PALW snapshot for {pp}: {error}");
+                                (None, Vec::new())
+                            }
+                        }
                     }
                     None => (None, Vec::new()),
                 })
@@ -229,7 +237,7 @@ impl RequestPruningPointPalwStateFlow {
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,
-                    palw_state: borsh::to_vec(&c).expect("PalwStateCarriageV2 borsh is infallible"),
+                    palw_state: c,
                     class_carriages: class_carriages
                         .into_iter()
                         .map(|(class_id, carriage)| kaspa_p2p_lib::pb::PalwClassCarriageEntry {
@@ -247,26 +255,35 @@ impl RequestPruningPointPalwStateFlow {
             // transfer is answered `found: false` instead (the same answer an unprepared peer gives, so the requester tries another
             // peer at once), and a state over half the cap is logged where an operator reads it, long before it matters.
             let reply = {
-                let bytes = reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>();
-                if bytes > crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES {
+                let bytes = crate::palw_snapshot_chunks::snapshot_payload_size(
+                    reply.palw_state.len() as u64,
+                    reply.class_carriages.iter().map(|e| e.carriage.len() as u64),
+                )
+                .ok();
+                if reply.found && bytes.is_none() {
                     kaspa_core::warn!(
-                        "[palw-sidecar] the PALW state for {pp} is {bytes} bytes, over the {} byte transport cap (PALW_PRUNING_STATE_MAX_BYTES): \
-                         answering not-found; pruned IBD needs the chunked transport (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
+                        "[palw-sidecar] the PALW snapshot for {pp} exceeds the {} byte transport cap (PALW_PRUNING_STATE_MAX_BYTES): answering not-found",
                         crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
                     );
                     PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() }
                 } else {
-                    if bytes > crate::palw_gossip::PALW_PRUNING_STATE_WARN_BYTES {
+                    if let Some(bytes) = bytes
+                        && bytes > crate::palw_gossip::PALW_PRUNING_STATE_WARN_BYTES as u64
+                    {
                         kaspa_core::warn!(
-                            "[palw-sidecar] the PALW state for {pp} is {bytes} bytes: past half of the {} byte single-message cap — the chunked \
-                             transport is due (docs/design/palw/pruned-ibd-palw-state-chunked-transport.md)",
+                            "[palw-sidecar] the PALW snapshot for {pp} is {bytes} canonical bytes: past half of the {} byte total cap; \
+                             protocol-106 chunking bounds transfer buffers but retains this total limit",
                             crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
                         );
                     }
                     reply
                 }
             };
-            let served = (reply.palw_state.len() + reply.class_carriages.iter().map(|e| e.carriage.len()).sum::<usize>()) as u64;
+            let served = crate::palw_snapshot_chunks::snapshot_payload_size(
+                reply.palw_state.len() as u64,
+                reply.class_carriages.iter().map(|e| e.carriage.len() as u64),
+            )
+            .unwrap_or(0); // A not-found reply has no state payload and spends only the attempt floor.
             self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
             self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
         }
