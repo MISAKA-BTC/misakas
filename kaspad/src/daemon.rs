@@ -1468,15 +1468,14 @@ Do you confirm? (y/n)";
                         // salted chain; refused again here, on the chain this node RUNS, so a lost params swap cannot
                         // arm it on public testnet-12.
                         drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {
-                            Some(seconds) if config.palw_drill_genesis_salt.is_none() || !palw_private_drill => {
-                                panic!("--palw-drill-real-submit-delay-s={seconds} is a drill and is a salted testnet-12 drill only")
-                            }
                             Some(seconds) => {
+                                let delay = crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(seconds))
+                                    .unwrap_or_else(|error| panic!("{error}"));
                                 warn!(
                                     "PALW DRILL: this producer will hold every REAL (non-floor) attempt it wins for {seconds} s after its \
                                      template before submitting it, to emulate an 8k inference. Its blocks reach the chain late on purpose."
                                 );
-                                Some(std::time::Duration::from_secs(seconds))
+                                delay
                             }
                             None => None,
                         },

@@ -802,6 +802,16 @@ pub fn palw_private_drill_network_v1(config: &Config) -> bool {
             && config.params.genesis.hash != kaspa_consensus_core::config::params::Params::from(config.params.net).genesis.hash)
 }
 
+/// Resolve the actual running chain's authorization before a producer waits.
+/// A salt without the matching private genesis does not authorize a delay.
+pub(crate) fn palw_drill_real_submit_delay_v1(config: &Config, seconds: Option<u64>) -> Result<Option<std::time::Duration>, String> {
+    let Some(seconds) = seconds else { return Ok(None) };
+    if config.palw_drill_genesis_salt.is_none() || !palw_private_drill_network_v1(config) {
+        return Err(format!("--palw-drill-real-submit-delay-s={seconds} is a drill and is a salted testnet-12 drill only"));
+    }
+    Ok(Some(std::time::Duration::from_secs(seconds)))
+}
+
 /// **What a drill that crosses the post-launch release's flag day prints at start-up**
 /// (`--palw-drill-fence-at`): a header with the params and schedule ids the move produced, then one
 /// line per fence — armed (dormant in the release) or moved (from the release's height). Empty on

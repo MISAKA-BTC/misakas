@@ -2337,7 +2337,27 @@ mod real_submit_delay_tests {
         );
         let daemon = include_str!("daemon.rs");
         assert!(daemon.contains("drill_real_submit_delay: match args.palw_drill_real_submit_delay_s {"));
-        assert!(daemon.contains("!config.palw_drill_genesis_salt.is_some() || !palw_private_drill"), "refused off a salted chain");
+        // Exercise the same authorization resolver the daemon calls rather than
+        // pinning whether its source spells a missing Option as !is_some/is_none.
+        use kaspa_consensus_core::config::{
+            Config,
+            drill::{PalwDrillSaltV1, palw_chain_params_v1, palw_drill_network_v1},
+        };
+        let salt = PalwDrillSaltV1::from_bytes([0x74; 32]).unwrap();
+        let mut config = Config::new(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt)).unwrap());
+        config.palw_drill_genesis_salt = Some(salt);
+        assert_eq!(
+            crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(7)).unwrap(),
+            Some(std::time::Duration::from_secs(7))
+        );
+        config.params.genesis = kaspa_consensus_core::config::genesis::PALW_T12_GENESIS;
+        assert!(
+            crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(7)).is_err(),
+            "a lost private params swap grants nothing"
+        );
+        config.palw_drill_genesis_salt = None;
+        assert!(crate::palw_drill::palw_drill_real_submit_delay_v1(&config, Some(7)).is_err(), "no salt, no private delay");
+        assert_eq!(crate::palw_drill::palw_drill_real_submit_delay_v1(&config, None).unwrap(), None);
     }
 }
 
