@@ -52,6 +52,7 @@ pub(super) fn seal(
     }
     let (_, class, book, plan) = original_job(builder, id)?;
     let claim = book.claim().ok_or_else(|| refused("native own seal has no claim"))?;
+    capacity::check_fresh_start(builder, id, ctx.daa_score, claim.challenge_end)?;
     let actor = palw_kernel_bond_id_v1(signer);
     let operator = builder.state.bonds.get(signer).unwrap().operator_id.as_bytes();
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
@@ -142,10 +143,12 @@ pub(super) fn seal(
     };
     state.retained_seal_keys.push(protected_key.root());
     state.required_retained_until = state.required_retained_until.max(horizon);
+    let physical = capacity::plan_owner(builder, id, protected_key.root(), horizon)?;
     write_shard(builder, &shard, id);
     write_trace(builder, &trace, 1, protected_key.root());
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&protected_key.root()), Some(key(&row)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    capacity::commit_owner(builder, id, physical);
     builder.note_kernel_bond(signer);
     Ok(())
 }
@@ -279,7 +282,7 @@ pub(super) fn reveal(
         return Err(refused("native original slash no longer conserved"));
     }
     let s = book.adjudicate(class.record(), &result, claim.reserved_original).map_err(refused)?;
-    close_adjudicated_quota(builder,ctx,p,id,&class,&book,&plan,*signer)?;
+    close_adjudicated_quota(builder, ctx, p, id, &class, &book, &plan, *signer)?;
     let collected = builder.slash_bond(row.header.producer, s.collected_original_slash as u128)?;
     if collected != s.collected_original_slash {
         return Err(refused("native court collected a different original slash"));

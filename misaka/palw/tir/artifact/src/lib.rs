@@ -546,3 +546,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+/// Explicit provenance parsing, independent of implicit float feature unification.
+pub mod metadata_v16;

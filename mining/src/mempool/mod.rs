@@ -171,6 +171,21 @@ impl Mempool {
         self.transaction_pool.build_selector(latest_ready_epoch)
     }
 
+    pub(crate) fn build_selector_with_native_carriage(
+        &self,
+        latest_ready_epoch: Option<u64>,
+        native: Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22>,
+    ) -> Box<dyn TemplateTransactionSelector> {
+        self.transaction_pool.build_selector_with_native_carriage(latest_ready_epoch, native)
+    }
+
+    pub(crate) fn refresh_native_carriers(&mut self, consensus: &dyn kaspa_consensus_core::api::ConsensusApi) {
+        if self.transaction_pool.has_native_carriers() {
+            let snapshot = consensus.native_carriage_snapshot_v22();
+            self.transaction_pool.refresh_native_carriers(snapshot.as_ref());
+        }
+    }
+
     /// Builds a feerate estimator based on internal state of the ready transactions frontier
     pub(crate) fn build_feerate_estimator(&self, args: FeerateEstimatorArgs) -> FeerateEstimator {
         self.transaction_pool.build_feerate_estimator(args)

@@ -168,6 +168,8 @@ mod palw_flat_model_vector_fold_v7;
 mod palw_flat_model_vector_fold_v9;
 #[path = "palw_flat_stage_fold_v14.rs"]
 mod palw_flat_stage_fold_v14;
+#[path = "palw_native_initial_fold_v31.rs"]
+mod palw_native_initial_fold_v31;
 #[path = "palw_model_refutation_seal_fold_v4.rs"]
 mod palw_model_refutation_seal_fold_v4;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.

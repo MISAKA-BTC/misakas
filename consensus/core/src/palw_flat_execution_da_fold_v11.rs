@@ -218,6 +218,7 @@ pub(super) fn demand(
     state.latest_answer_proof_until = state.latest_answer_proof_until.max(proof_until);
     state.required_retained_until = state.required_retained_until.max(proof_until);
     let demand = d.id();
+    capacity::request(builder, id, request.lane, request.entitlement, request.slot, 1, demand.as_bytes(), ctx.daa_score, deadline)?;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(14u8, id, counts.next_ordinal)), Some(key(&demand)));
     counts.next_ordinal += 1;
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)), Some(key(&counts)));
@@ -247,25 +248,40 @@ pub(super) fn answer(
     p: &NativeExecutionPoliciesV11,
     bytes: &[u8],
 ) -> Result<(), PalwStateV2Error> {
-    if bytes.len() < 68 {
+    if bytes.len() < 64 {
         return Err(refused("native answer fixed prefix"));
     }
     let id = Hash64::from_bytes(fixed_id(&bytes[..64])?);
-    let n = u32::from_le_bytes(bytes[64..68].try_into().unwrap()) as usize;
-    if n != bytes.len() - 68 || n > FLAT_VECTOR_ANSWER_MAX_BYTES_V9 {
-        return Err(refused("native answer bounded exact count"));
-    }
     let r = builder.state.kernel_route.as_ref().unwrap();
     let d = r.execution_demand_v11(&id).ok_or_else(|| refused("native original DA request absent"))?;
+    let complete23 = r.aux.contains_key(&(EXECUTION_POLICY_TABLE_V11, key(&(23u8, d.job_id))));
+    if bytes.len() > 68 + FLAT_VECTOR_ANSWER_MAX_BYTES_V9 {
+        return Err(refused("native answer exceeds original wire cap"));
+    }
+    let frame = || {
+        let raw = bytes.get(64..68).ok_or_else(|| refused("native answer nested count absent"))?;
+        let n = u32::from_le_bytes(raw.try_into().unwrap()) as usize;
+        if n != bytes.len() - 68 {
+            return Err(refused("native answer bounded exact count"));
+        }
+        Ok(())
+    };
+    if !complete23 {
+        frame()?;
+    }
     if d.body.settled || ctx.daa_score > d.body.deadline_daa || *signer != d.body.poster {
         return Err(refused("native producer answer unauthorized/closed/late"));
     }
+    capacity::debit_trace_attempt(builder, d.job_id, id.as_bytes())?;
     let trace_plan = trace_plan(builder, p, d.job_id)?;
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let producer = palw_kernel_bond_id_v1(signer);
     let mut trace = trace_shard(builder, p, &trace_plan, producer, d.job_id, 0, d.job_id)?;
     trace.debit_reserved(&p.quota, &epoch, &trace_plan, &d.job_id, 0).map_err(refused)?;
     write_trace(builder, &trace, 0, d.job_id);
+    if complete23 {
+        frame()?;
+    }
     let (_, class, book, plan) = original_job(builder, d.job_id)?;
     if book.terminal() != ExecutionTerminalV11::Challengeable {
         return Err(refused("native DA book terminal"));
@@ -335,7 +351,7 @@ pub(super) fn settle(
         return Err(refused("native original DA default slash unavailable"));
     }
     let settlement = book.adjudicate(class.record(), &result, reserve).map_err(refused)?;
-    close_adjudicated_quota(builder,ctx,p,d.job_id,&class,&book,&plan,*signer)?;
+    close_adjudicated_quota(builder, ctx, p, d.job_id, &class, &book, &plan, *signer)?;
     let collected = builder.slash_bond(row.header.producer, reserve as u128)?;
     if collected != reserve {
         return Err(refused("native original DA default debit changed"));

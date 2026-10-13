@@ -3284,3 +3284,100 @@ The current D_all full end-to-end coverage remains0/128. Independent native
 Final/redemption, stage source court/DA, calibrated economic/carriage guarantees,
 and the two A6 receipt windows/A8 population criteria remain open. Every shipped
 new namespace fence stays absent and activation validation remains closed.
+
+### Original physical capacity, Stage courts and restored source evidence
+
+After snapshot2, native physical22 admission and explicit Consent23/Fund24 were
+connected behind the independent dormant text fence. They bind the original
+producer consent, pursuit deadline, complete mass envelope and shared global
+lease, with per-unit two-attempt counters and original stream cooldowns. Three
+capacity controls pass, including the ordinary3 plus owned8 stream bound;
+they do not prove delivery. The new bounded native mempool index authenticates
+original pending/owner/lease metadata and the populated UTXO carrier at admission
+and again at the template's exact selected-parent snapshot. It separates all
+namespace/unit/part identities, bounds variants/count/bytes, protects admitted
+entries from the fee market and composes a packet before the H1/ordinary
+remainder. Consumer service still uses `probe(implemented=false)`: real delivery,
+refill, stage physical leases and the service clock assumptions remain open.
+The new mining/consensus connection passed a compiler check; its runtime controls
+and latest signed-node transitions are being tested separately. Do not count the
+old remote snapshot's failed test compilation as a new-code pass.
+
+Stage14 original computation/source/header terminal courts and paid target7
+assembly now connect through their own fold before the ordinary chunk pool.
+Current producer/source/default and Convicted quota-terminal transitions, plus
+expired paid seal collection, still require runtime node evidence. Public
+pre-proof source acquisition needs its new caller supplement and a deadline
+derived before funding; the old protected two-request allowance is unchanged.
+
+Missing source payloads were restored without overwriting unrelated files: eight
+safetensor files for five pinned checkpoints match their original byte counts
+and SHA256 values. See [restoration evidence](evidence/rfc02-checkpoint-payload-restoration-20261013.json).
+The original Qwen8 artifact was reconstructed byte for byte and matches the
+historical whole-file SHA256; see [exact reconstruction](evidence/rfc02-qwen05-original8-exact-reconstruction-20261013.json).
+Historical manual-prompt fixed32 failures are retained. A separately frozen
+publisher-chat/first-EOS v2 run gives linear16 23/23 token agreement and3/3 exact
+jobs, but both source and integer translation fail the original English-answer
+criterion: combined task acceptance remains FAIL. The restored original8 run
+remains FAIL as well. These are reduced-context diagnostics, not original full
+context, complete multimodal or A6/A8 coverage. No acceptance threshold or
+population denominator was weakened.
+
+The user then changed the execution order to **all code first, integrated
+verification afterward**. No new build, runtime, checkpoint or coverage run is
+started during this implementation phase. The earlier native metadata controls
+(2), bounded local reserve controls (2) and existing H1/readiness regression
+controls (14, including the reserve control) passed before that instruction.
+Subsequent shared refill and same-unit fee-replacement protection are implemented
+but await the integrated verification phase. The false consumer service probe
+continues to deny delivery authority. Remaining code includes the new full-court
+contract, versioned maximum/actual EOS stopping, original temporal/final consent,
+public acquisition/retirement and independent Final/redemption drivers. Frozen
+v7/v9/v11/v14 bytes, counts and pricing are preserved; new larger court/transport
+or final conditions require their own complete versioned contract.
+
+### Code-first integration: Final27, Stage28, stopping29 and queue30
+
+New code adds separate Final27 and Stage28 Params/identity/fence plumbing,
+the full-court25 and paid paged29 contracts, maximum/actual EOS stopping29,
+and shared original burst residency30. The trusted Final27 policy binds
+Queue30. A private checked quotation derives from the original checked class,
+real PC/job/pursuit or the independently checked paged carriage29, accounting
+for four complete copies and bounded index/UTXO metadata. Global admission
+jointly reserves physical service and count/bytes; a live legacy23 lease without
+new queue consent refuses. Genuine closure jointly retires both exact leases
+once, without returning old quota credits. Native Text29 and Stage28 adapters
+are being connected to these original rows.
+
+Consumer code provisions the native queue at startup separately from ordinary
+mempool capacity. RAM scaling preserves its promise, high-priority ordinary
+traffic cannot borrow unused native slots, and confirmed-input carrier bounds
+exclude unpriced ancestor delivery. Original-unit RBF conserves aliases, and
+generic expiry does not erase a paid indexed packet. The Final27-active consumer
+resolves the implemented reserved scheduler profile; dormant/old contracts
+continue to resolve the false probe. This implementation marker does not
+replace Final27's independent source/detection/economic/delivery evidence.
+
+All these changes and newly written queue/identity/mempool controls are
+**UNVERIFIED** during the requested code-first phase. No subsequent compilation,
+node run, checkpoint conversion or A6/A8 measurement has been started. Independent
+native Final/redemption and full original-context corpus measurements remain
+required. The latest D_all end-to-end result is still0/128, not a code-completion
+estimate. New shipping activation fields remain absent.
+
+The user additionally authorized periodic commit/push of this workspace branch.
+`codex/workspace-rfc02` was pushed through2b9e268b7; a30-minute thread heartbeat
+saves coherent progress on the same branch and labels unverified snapshots.
+It does not push `pre`, force-push, or start verification during code-first work.
+
+The next unverified progress snapshot also contains initial registration31's
+separate paid pre-Fund fragmentation and native audit32's anchored readonly
+openings. Initial31 preserves the old TIR program and old object/proof count
+limits; its512-part body transport invokes only Text29/Stage28 registration.
+The Qwen11MB fixture includes a full trace directory: its original program is
+about14KB, and no program limit increase was needed. Audit32 extends the readonly
+state-proof API with explicit native aux/payout labels and exact commitment
+positions, preserving the underlying state hash. Genuine fixed11 Final27
+extraction is on disk; Text29's actual fold, full V2 component execution/composed
+Final, node audit export and some Stage28 transitions remain under implementation.
+This snapshot is a backup for review, not a compile/test pass or RFC02 completion.

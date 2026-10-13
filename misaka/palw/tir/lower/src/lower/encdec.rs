@@ -1465,6 +1465,7 @@ pub(super) fn new_cx(hl: &HlProgram, hb: u32, max_window: u32) -> Cx<'_> {
         table_shift: 0,
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
+        linear_weight_bits: 8,
         conv_weight_bits: 8,
         out_major_rows: false,
         gdn_core_wide: false,

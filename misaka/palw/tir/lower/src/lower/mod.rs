@@ -117,6 +117,10 @@ pub struct LowerOpts {
     /// matmul either way, so the choice is the weight parameter's dtype: no primitive, no court change. Honoured by the
     /// convolutional-network lowering ([`cnn::lower_cnn_opts`]); any other value is refused by name.
     pub conv_weight_bits: u8,
+    /// Decoder float-source linear projections: per-row 8 (default) or 16 bit main weights.
+    /// Includes split outlier main rows and expert stacks; stored quant formats stay exact.
+    /// Opt-in changes canonical program/parameter identities, never an existing artifact.
+    pub linear_weight_bits: u8,
     /// **The gated-delta core on a fine grid** (registrant's choice of fidelity; default off, and off leaves every program and artifact
     /// byte for byte as before). A gated-delta layer's core output is `i32` on the wire but carries ONE scale per tensor, set by the
     /// calibrated absmax of the 16-bit grid; the gated RMS norm after it is per head, so a head whose core is far smaller than the
@@ -137,6 +141,7 @@ impl Default for LowerOpts {
             table_shift: 0,
             table_chunk_rows: None,
             conv_weight_bits: 8,
+            linear_weight_bits: 8,
             gdn_core_wide: false,
         }
     }
@@ -239,12 +244,12 @@ pub enum RowKind {
     /// Per-row `i16` codes (`quantize_rows16`): a gathered table, and a head that reads it.
     T16,
     /// The main codes of a projection whose input has split outlier channels
-    /// ([`FillCtx::split_rows`]): per-row `i8` codes of the weight with the outlier columns zeroed.
+    /// ([`FillCtx::split_rows`]): per-row `i8` (legacy) or `i16` codes with the outlier columns zeroed.
     /// The same split yields the projection's outlier columns (`.wo`), their shifts (`.of`) and the
     /// per-row scales its narrowing needs — all per row, all small — which a streaming conversion
     /// computes in a first pass over the blocks and hands the sibling fills ready-made
     /// ([`FillCtx::inject_split`]); this param's own codes are made in a second.
-    SplitMain { kx: ScaleKey, f_max: i32 },
+    SplitMain { kx: ScaleKey, f_max: i32, bits: u8 },
     /// **A gathered table's codes at ONE scale per (layer, table)** (the hashed n-gram per-layer embedding's chunks;
     /// any huge `Gather` table whose rows share a scale): the artifact's rows are NOT the checkpoint's rows in
     /// order — the [`RowMap`] says which HL rows feed which artifact rows — and the scale is a reduction over the
@@ -400,6 +405,9 @@ pub fn program_summary(p: &TirProgramV1) -> String {
 
 /// Lower an HL program.
 pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
+    if !matches!(opts.linear_weight_bits, 8 | 16) {
+        return Err(LowerError::bad(format!("linear_weight_bits {}: expected 8 or 16", opts.linear_weight_bits)));
+    }
     let hb = opts.history_bound;
     if hb != tir::program::HISTORY_BOUND_V1_SMALL && hb != tir::program::HISTORY_BOUND_V1_HELD {
         return Err(LowerError::bad(format!("history_bound {hb} is neither 2^18 nor 2^21")));
@@ -468,6 +476,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         carry_keys: BTreeMap::new(),
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
         conv_weight_bits: 8,
+        linear_weight_bits: opts.linear_weight_bits,
         out_major_rows: false,
         gdn_core_wide: opts.gdn_core_wide,
     };
@@ -635,6 +644,7 @@ struct Cx<'h> {
     table_chunk: i64,
     /// [`LowerOpts::conv_weight_bits`] (8 or 16).
     conv_weight_bits: u8,
+    linear_weight_bits: u8,
     /// **Encoder rows' projections stored OUT-major** (`[out, in]`, as the decoder's): `linear_rows` computes `(W · Xᵀ)ᵀ` instead
     /// of `X · Wᵀ` — the same integers — so a commit tile of `T` output channels reads `T` contiguous weight rows (`T` inventory
     /// pieces) rather than a column slice through every input row (`in` pieces). Off by default (the programs every existing
@@ -2670,7 +2680,8 @@ fn lower_block_linear(
         )));
     }
     let nb = n / bs;
-    let wt = decl_rows(b, cx, lb, &d.name, &[n, bs], d.per_layer, RowKind::W8, w)?;
+    let rows16 = cx.linear_weight_bits == 16;
+    let wt = decl_rows(b, cx, lb, &d.name, &[n, bs], d.per_layer, if rows16 { RowKind::T16 } else { RowKind::W8 }, w)?;
     let wt = b.reshape_fixed(wt, &[nb as u32, bs as u32, bs as u32]);
     let xc = b.reshape_fixed(x.r, &[nb as u32, bs as u32, 1]);
     let (kx, ky) = (x.key.clone(), want.key.clone());
@@ -2681,7 +2692,7 @@ fn lower_block_linear(
         site,
         n,
         Arc::new(move |c| {
-            let scales = c.row_scales(w, false)?;
+            let scales = c.row_scales(w, rows16)?;
             let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, n)?);
             Ok(scales.iter().zip(&sy).map(|(sw, sy)| sw * sx / sy).collect())
         }),
@@ -2751,7 +2762,7 @@ fn lower_linear(
     // too: the wide input gives up the outlier split, whose high-precision weight columns carried
     // most of such an input's energy (Mamba-370m: KL 0.0012 → 0.0041 at `i8`). `i16 × i32` over
     // `inp ≤ 2^16` terms stays inside `i64`.
-    let wide16 = x.dt == DType::I32 || lb.w16_now;
+    let wide16 = x.dt == DType::I32 || lb.w16_now || cx.linear_weight_bits == 16;
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
         let rows16 = table || wide16;
@@ -2773,8 +2784,10 @@ fn lower_linear(
         let acc = b.reshape_fixed(acc, &[out as u32]);
         narrow(b, acc, m, s, z, want.dt)
     } else {
-        // `acc · 2^f` stays inside i64 for any i8 × i16 accumulator of `inp` terms.
-        let acc_bits = 22 + (inp as f64).log2().ceil() as i32;
+        // Reserve the selected main weight width before the outlier shift: both
+        // i8 × i16 and i16 × i16 accumulators retain the same i64 headroom.
+        let bits = cx.linear_weight_bits;
+        let acc_bits = (i32::from(bits) - 1) + 15 + (inp as f64).log2().ceil() as i32;
         let f_max = (62 - acc_bits).clamp(0, 24);
         let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());
         let wt = decl_rows_with(
@@ -2782,14 +2795,18 @@ fn lower_linear(
             cx,
             lb,
             &d.name,
-            DType::I8,
+            if bits == 16 { DType::I16 } else { DType::I8 },
             &[out, inp],
             d.per_layer,
-            RowKind::SplitMain { kx: kx.clone(), f_max },
+            RowKind::SplitMain { kx: kx.clone(), f_max, bits },
             w,
             Arc::new(move |c| {
-                let sc = c.split_rows(w, &k1, f_max)?;
-                Ok(IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()))
+                let sc = c.split_rows_bits(w, &k1, f_max, bits)?;
+                if bits == 16 {
+                    Ok(IntTensor::i16(vec![sc.main.rows, sc.main.cols], sc.main16.clone().expect("16-bit split")))
+                } else {
+                    Ok(IntTensor::i8(vec![sc.main.rows, sc.main.cols], sc.main.codes.clone()))
+                }
             }),
         )?;
         let oidx = decl(
@@ -2811,7 +2828,7 @@ fn lower_linear(
             &[out, k],
             pl,
             Arc::new(move |c| {
-                let sc = c.split_rows(w, &k3, f_max)?;
+                let sc = c.split_rows_bits(w, &k3, f_max, bits)?;
                 Ok(IntTensor::i32(vec![out, k], sc.wo.clone()))
             }),
         )?;
@@ -2823,7 +2840,7 @@ fn lower_linear(
             DType::I8,
             &[out],
             pl,
-            Arc::new(move |c| Ok(IntTensor::i8(vec![out], c.split_rows(w, &k4, f_max)?.f.clone()))),
+            Arc::new(move |c| Ok(IntTensor::i8(vec![out], c.split_rows_bits(w, &k4, f_max, bits)?.f.clone()))),
         )?;
         let (m, s) = decl_ms(
             b,
@@ -2832,7 +2849,7 @@ fn lower_linear(
             site,
             out,
             Arc::new(move |c| {
-                let sc = c.split_rows(w, &kx, f_max)?;
+                let sc = c.split_rows_bits(w, &kx, f_max, bits)?;
                 let (sx, sy) = (c.scale(&kx)?, c.scale_vec(&ky, out)?);
                 Ok((0..out).map(|o| sc.main.scales[o] * sx / (2f64.powi(sc.f[o] as i32) * sy[o])).collect())
             }),
@@ -3970,7 +3987,9 @@ fn lower_moe(
         }
         let pd = &hl.params[p as usize];
         let (rows, cols) = (pd.shape[1], pd.shape[2]);
-        let codes = decl_rows(b, cx, lb, &pd.name, &[e, rows, cols], pd.per_layer, RowKind::W8, p)?;
+        let rows16 = cx.linear_weight_bits == 16;
+        let codes =
+            decl_rows(b, cx, lb, &pd.name, &[e, rows, cols], pd.per_layer, if rows16 { RowKind::T16 } else { RowKind::W8 }, p)?;
         let (ki, ko) = (in_key.clone(), out.clone());
         let (m, s) = decl_ms(
             b,
@@ -3979,7 +3998,7 @@ fn lower_moe(
             name,
             e * rows,
             Arc::new(move |c| {
-                let scales = c.row_scales(p, false)?;
+                let scales = c.row_scales(p, rows16)?;
                 let (si, so) = (c.scale(&ki)?, c.scale(&ko)?);
                 Ok(scales.iter().map(|sw| sw * si / so).collect())
             }),
@@ -4169,7 +4188,8 @@ fn lower_expert_linear(
     }
     let out_key = ScaleKey::site(vec![site.to_string()], wide);
     let dt = if wide { DType::I32 } else { DType::I16 };
-    let codes = decl_rows(b, cx, lb, &pd.name, &[e, rows, cols], pd.per_layer, RowKind::W8, p)?;
+    let rows16 = cx.linear_weight_bits == 16;
+    let codes = decl_rows(b, cx, lb, &pd.name, &[e, rows, cols], pd.per_layer, if rows16 { RowKind::T16 } else { RowKind::W8 }, p)?;
     let (ki, ko) = (x.key.clone(), out_key.clone());
     let (m, s) = decl_ms(
         b,
@@ -4178,7 +4198,7 @@ fn lower_expert_linear(
         site,
         e * rows,
         Arc::new(move |c| {
-            let scales = c.row_scales(p, false)?;
+            let scales = c.row_scales(p, rows16)?;
             let (si, so) = (c.scale(&ki)?, c.scale(&ko)?);
             Ok(scales.iter().map(|sw| sw * si / so).collect())
         }),

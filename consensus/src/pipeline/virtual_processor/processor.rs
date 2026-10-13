@@ -716,6 +716,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_funded_execution_v11: Option<kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
     pub(super) palw_stage_execution_v14: Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    pub(super) palw_native_final_v27: Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
+    pub(super) palw_stage_execution_v28: Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     pub(super) native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
     /// `Params::palw_fork_choice_commitment_v1` (RFC-0009 L2): past it a header commits its selected parent's post-state as
     /// `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`. Every site that produces or checks a header root goes through
@@ -1412,6 +1414,8 @@ impl VirtualStateProcessor {
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
             palw_funded_execution_v11: params.palw_funded_execution_v11.clone(),
             palw_stage_execution_v14: params.palw_stage_execution_v14.clone(),
+            palw_native_final_v27: params.palw_native_final_v27.clone(),
+            palw_stage_execution_v28: params.palw_stage_execution_v28.clone(),
             native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(
                 params,
             ),

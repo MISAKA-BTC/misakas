@@ -935,6 +935,7 @@ pub(super) fn apply_kernel_route_object_v1(
         return Ok(());
     }
     match misaka_palw_kernel::route::borrowed_native_action_v1(bytes) {
+        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && matches!(a.action,41..=44)=>return super::palw_native_initial_fold_v31::apply(builder,ctx,signer,a.action,a.body),
         Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11=>return super::palw_flat_execution_fold_v11::apply(builder,ctx,signer,a.action,a.body),
         Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14=>return super::palw_flat_stage_fold_v14::apply(builder,ctx,signer,a.action,a.body),
         Err(_)=>return Ok(()),
@@ -1621,6 +1622,9 @@ pub(super) fn apply_kernel_route_chunk_v1(
     }
     if matches!(chunk.target, PalwKernelChunkTargetV1::FundedProofV11 { .. }) {
         return super::palw_flat_execution_fold_v11::apply_chunk(builder, ctx, chunk);
+    }
+    if matches!(chunk.target, PalwKernelChunkTargetV1::StageProofV14 { .. }) {
+        return super::palw_flat_stage_fold_v14::apply_chunk(builder, ctx, chunk);
     }
     if chunk.count == 0 || chunk.count > PALW_OBJECT_CHUNK_MAX_COUNT {
         return Err(PalwStateV2Error::ChunkCountOutOfRange { count: chunk.count, max: PALW_OBJECT_CHUNK_MAX_COUNT });

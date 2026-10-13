@@ -421,6 +421,10 @@ pub struct NativeStagePursuitV14 {
     pub open_demands: u32,
     pub retained_seals: u32,
     pub retained_discovery: u32,
+    pub seal_keys: [Digest; 4],
+    pub discovery_keys: [Digest; 4],
+    pub source_requests: [Digest; 32],
+    pub source_units: [Digest; 32],
     pub requests_admitted: u32,
     pub required_until: u64,
 }
@@ -438,6 +442,39 @@ pub struct NativeStageCollectedV14 {
     pub source_retired: Digest,
     pub trace_retired: Digest,
     pub collected_daa: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageSealV14 {
+    pub version: u16,
+    pub id: Digest,
+    pub job: Digest,
+    pub class: Digest,
+    pub claim: Digest,
+    pub original_book: Digest,
+    pub book: Digest,
+    pub consent18: Digest,
+    pub stage_quota: Digest,
+    pub trace_plan: Digest,
+    pub bond: PalwBondKeyV2,
+    pub actor: Digest,
+    pub operator: Digest,
+    pub producer_operator: Digest,
+    pub proof_root: Digest,
+    pub seal: Digest,
+    pub posted_daa: u64,
+    pub matures_daa: u64,
+    pub reveal_until: u64,
+    pub horizon_daa: u64,
+    pub paid_root: Digest,
+    pub original_debit: u64,
+    pub debit_receipt: Digest,
+    pub spent: bool,
+}
+pub fn stage_proof_root_v14(filing: &[u8]) -> Digest {
+    object_id(b"misaka-palw/native/stage-original-proof-filing/v14", &filing)
+}
+pub fn stage_proof_seal_v14(proof: Digest, salt: Digest, actor: Digest, job: Digest, claim: Digest) -> Digest {
+    object_id(b"misaka-palw/native/stage-original-proof-seal/v14", &(proof, salt, actor, job, claim))
 }
 pub fn stage_delivery_fee_plan_v20(
     ledger: &misaka_palw_kernel::ledger::LedgerPolicyV1,

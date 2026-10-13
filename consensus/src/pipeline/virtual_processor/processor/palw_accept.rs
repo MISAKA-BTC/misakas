@@ -696,6 +696,12 @@ impl VirtualStateProcessor {
             }
             // Older builds cannot decode target 6. Below its own fence it
             // consumes neither ordinary chunk slots nor a funded reservation.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteV1 { bytes, .. } = &object
+                && self.palw_native_action_active_at_v1(&folded, bytes, point.daa_score) == Some(false)
+            {
+                info!("Block {block}: a native action was dropped before its original owning contract, and the block stands");
+                continue;
+            }
             if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } = &object
                 && matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. })
                 && !self.palw_kernel_inner_fence_at(
@@ -704,6 +710,16 @@ impl VirtualStateProcessor {
                 )
             {
                 info!("Block {block}: a funded proof chunk was dropped below palw_funded_execution_v11, and the block stands");
+                continue;
+            }
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } = &object
+                && matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. })
+                && !self.palw_kernel_inner_fence_at(
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14,
+                    point.daa_score,
+                )
+            {
+                info!("Block {block}: a typed stage proof chunk was dropped before its owning fence, and the block stands");
                 continue;
             }
             // **Lane BUDGET: below `palw_model_bond_allocation_v1` a capital assignment (tag 140) is dropped by name**, first and charged
@@ -2292,13 +2308,20 @@ impl VirtualStateProcessor {
             ));
         }
         let fact = match collection {
+            c if c==kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32=>
+                kaspa_consensus_core::palw_native_audit_proof_v32::prove_native_aux_v32(&state)?,
+            c if c==kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32=>
+                kaspa_consensus_core::palw_native_audit_proof_v32::prove_native_payouts_v32(&state)?,
             c if c == proof::PALW_PROOF_LABEL_BONDS => proof::prove_bonds_v1(&state),
             c if c == proof::PALW_PROOF_LABEL_CLASSES => proof::prove_classes_v1(&state),
             c if c == proof::PALW_PROOF_LABEL_CLAIMS => proof::prove_claims_v1(&state),
             other => return Err(format!("no such collection {:?}: bonds, classes or claims", String::from_utf8_lossy(other))),
         };
         let bytes: usize = fact.state.preimage.len() + fact.collection.rows.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
-        if bytes > PALW_STATE_PROOF_MAX_BYTES {
+        let cap=if matches!(collection,b"kernel-aux-v32"|b"pending-payouts-v32") {
+            kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_PROOF_MAX_BYTES_V32
+        } else {PALW_STATE_PROOF_MAX_BYTES};
+        if bytes > cap {
             return Err(format!(
                 "the {} table is {bytes} bytes, over the {PALW_STATE_PROOF_MAX_BYTES} a flat proof may carry: the state commitment is flat, and a tree-shaped one is a consensus change",
                 String::from_utf8_lossy(collection)

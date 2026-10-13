@@ -1,6 +1,9 @@
 //! Signed native original escrow/nonce/quota mechanics on independently replayed
 //! nodes. Small synthetic fixtures are not checkpoint/model coverage evidence.
 use super::*;
+mod chunks;
+mod real_checkpoint;
+mod source16;
 use kaspa_consensus_core::palw_flat_execution_v11::*;
 use kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11;
 use misaka_palw_kernel::flat_execution11::{ExecutionTerminalV11, nonce_bytes_v11};
@@ -67,7 +70,7 @@ async fn execution11_native_original_escrow_monotone_nonce_unclaimed_refund_once
     let (id, _, _, _) = funded(&mut net, &f).await;
     let original = net.api().unwrap().execution_job_row_v11(&id).unwrap();
     assert_eq!(original.header.terminal, ExecutionTerminalV11::Funded);
-    let op = net.chain.tip_state().1.bonds[&net.bond(2)].operator_id.as_bytes();
+    let op = net.chain.tip_state().1.bond(&net.bond(2)).unwrap().operator_id.as_bytes();
     assert_eq!(net.api().unwrap().execution_nonce_counter_v11(&op).unwrap().next_nonce, 1);
     let class = net.api().unwrap().execution_class_header_v11(&original.header.class_id).unwrap().checked_fixed_header().unwrap();
     let book = original.restore_book(&class).unwrap();

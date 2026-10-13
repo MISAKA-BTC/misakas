@@ -28,6 +28,29 @@ pub struct SourcePlanV16 {
     answer: QuotaQuantitiesV11,
     guarantee: QuotaQuantitiesV11,
 }
+// The only stage28 entry carries a private constructor derived from original
+// checked book/class25, signed source quote and native shared89 epoch/nonce.
+pub(super) fn from_checked_stage_admission_v28(checked:stage14::bounded28::CheckedStageSourceAdmissionV28,plan:&SourcePlanV16)->Result<CheckedSourceAdmissionV16,String>{
+    let (binding,consent,source,operator,epoch)=checked.into_parts();
+    if source!=plan.root()||binding.class_id!=plan.class||binding.quota_plan_root!=plan.job_plan||binding.policy_root!=plan.quota||binding.admitted_interval!=epoch.network_interval||consent==[0;64]||operator==[0;64]{return Err("stage28 source bridge lacks original checked consent/real-PC/quote/epoch".into());}
+    Ok(CheckedSourceAdmissionV16{binding,consent,producer_operator:operator,epoch})
+}
+// New28 exact bytes/work distinction. Original16 quote factories retain their
+// bytes and conservative accounting; only checked stage28 geometry reaches here.
+pub(super) fn derive_source_plan_from_stage_v28(class:&crate::flat_inputs12::bounded28::CheckedStageClassV28,stage:&stage14::bounded28::CheckedStageQuotaV28,quota:&QuotaPolicyV11,requests:u32)->Result<SourcePlanV16,String>{
+    quota.check()?;
+    if requests==0||requests>1<<20||stage.plan().class_scope_root()!=class.maximum_scope().root(){return Err("source28 checked original maximum/count differs".into());}
+    let r=stage.plan().record();
+    let admission=action_envelope(SOURCE_JOURNAL_BYTES_V16 as u128*64,SOURCE_JOURNAL_BYTES_V16,None)?;
+    let bytes=stage.restore_bytes().checked_add(SOURCE_ANSWER_MAX_BYTES_V16).and_then(|n|n.checked_add(SOURCE_JOURNAL_BYTES_V16)).ok_or("source28 complete restore extent overflow")?;
+    let work=native_action_metadata_v11(r.native_restore_work,r.native_post_carrier_cap,SOURCE_ANSWER_MAX_BYTES_V16,false)?;
+    let mut answer=action_envelope(work,bytes,None)?.checked_add(&admission)?;
+    include_native_post_io_v11(&mut answer,r.native_post_carrier_cap)?;
+    include_source_court_io_v11(&mut answer,class.source().parameters())?;
+    let guarantee=answer.checked_mul(requests.checked_mul(2).ok_or("source28 original attempt overflow")?)?;
+    admission.checked_add(&guarantee)?.within(&quota.plan)?;
+    Ok(SourcePlanV16{class:class.root(),parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),quota:quota.root(),job_plan:r.root(),requests,admission,answer,guarantee})
+}
 /// Raw fixed documentary record. It grants no capacity; its expected root must
 /// come from original native consent18/obligation membership, never a carrier.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

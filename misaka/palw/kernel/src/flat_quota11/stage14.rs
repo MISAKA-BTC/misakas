@@ -9,6 +9,8 @@ use crate::{
         source14::CheckedStageClassV14,
     },
 };
+pub mod source26;
+pub mod bounded28;
 
 pub struct CheckedStageQuotaV14 {
     class: Digest,
@@ -955,6 +957,121 @@ impl StageJobBookV14 {
 }
 
 impl QuotaStateV11 {
+    /// A mature original Stage seal pays its own Court attempt. Capture the
+    /// real post-debit counters before class/proof restoration; a receipt or
+    /// wire flag cannot fabricate this private terminal snapshot token.
+    pub fn debit_stage_protected_verdict_v14(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        actor: Digest,
+        binding: &SubjectBindingV11,
+        plan: &CheckedStageQuotaV14,
+        key: &Digest,
+        original_paid: &Digest,
+        carrier: &[u8],
+    ) -> Result<StageVerdictDebitV14, String> {
+        let subject = self.subjects.get(&binding.job_id).ok_or("stage owncourt original subject absent")?;
+        let seal = self.protected_seals.get(key).ok_or("stage owncourt original paid seal absent")?;
+        if subject.binding != *binding
+            || subject.closed
+            || binding.class_id != plan.class
+            || binding.quota_plan_root != plan.plan.record().root()
+            || seal.subject_binding_root != binding.root()
+            || seal.key.seal_actor != actor
+            || seal.original_paid_seal_root != *original_paid
+            || *original_paid == [0; 64]
+            || seal.producer_operator_id == seal.seal_operator_id
+        {
+            return Err("stage owncourt original paid subject/actor/source/class differs".into());
+        }
+        let remaining = subject.guarantee_remaining.clone();
+        let receipt = self.debit_protected(policy, epoch, actor, key, plan.plan(), ProtectedActionKindV11::Court, carrier)?;
+        Ok(StageVerdictDebitV14 {
+            paid: ExpiredTerminalDebitV11 {
+                receipt: QuotaReceiptV11 {
+                    policy_root: policy.root(),
+                    epoch: epoch.clone(),
+                    subject_binding: binding.root(),
+                    kind: QuotaActionKindV11::Court,
+                    consumed: receipt.consumed,
+                    added_guarantee: QuotaQuantitiesV11::default(),
+                    remaining_guarantee: remaining,
+                },
+                actor,
+                after_block: self.block.consumed.clone(),
+                after_network: self.network.consumed.clone(),
+                after_actor: self.actors.get(&actor).ok_or("stage owncourt lost original actor")?.consumed.clone(),
+            },
+        })
+    }
+    /// Current public verdict work has its own ordinary debit; it cannot borrow
+    /// the original producer Close slot or refund an old retained guarantee.
+    pub fn debit_stage_verdict_v14(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        actor: Digest,
+        class: &CheckedStageClassV14,
+        book: &StageJobBookV14,
+        plan: &CheckedStageQuotaV14,
+    ) -> Result<StageVerdictDebitV14, String> {
+        book.check_restored(class, plan)?;
+        let binding = book.quota_subject(plan, policy)?;
+        let subject = self.subjects.get(&binding.job_id).ok_or("stage verdict original subject absent")?;
+        if book.terminal != StageTerminalV14::Challengeable
+            || subject.binding != binding
+            || subject.closed
+            || binding.admitted_interval > epoch.network_interval
+        {
+            return Err("stage verdict lacks original open claimed subject".into());
+        }
+        let remaining = subject.guarantee_remaining.clone();
+        let quantities = action_envelope(16 << 10, MAX_FIXED_ACTION_BYTES_V11, None)?;
+        self.debit_unreserved(policy, epoch, actor, &quantities)?;
+        Ok(StageVerdictDebitV14 {
+            paid: ExpiredTerminalDebitV11 {
+                receipt: QuotaReceiptV11 {
+                    policy_root: policy.root(),
+                    epoch: epoch.clone(),
+                    subject_binding: binding.root(),
+                    kind: QuotaActionKindV11::Close,
+                    consumed: quantities,
+                    added_guarantee: QuotaQuantitiesV11::default(),
+                    remaining_guarantee: remaining,
+                },
+                actor,
+                after_block: self.block.consumed.clone(),
+                after_network: self.network.consumed.clone(),
+                after_actor: self.actors.get(&actor).ok_or("stage verdict lost current actor")?.consumed.clone(),
+            },
+        })
+    }
+    pub fn mark_stage_verdict_closed_v14(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        terminal: &CheckedQuotaTerminalV11,
+        debit: &StageVerdictDebitV14,
+    ) -> Result<(), String> {
+        self.check_context(policy, epoch)?;
+        let paid = &debit.paid;
+        let subject = self.subjects.get_mut(&terminal.binding.job_id).ok_or("stage verdict original subject absent")?;
+        if self.epoch != *epoch
+            || subject.binding != terminal.binding
+            || subject.closed
+            || paid.receipt.policy_root != self.policy_root
+            || paid.receipt.epoch != *epoch
+            || paid.receipt.subject_binding != terminal.binding.root()
+            || paid.after_block != self.block.consumed
+            || paid.after_network != self.network.consumed
+            || self.actors.get(&paid.actor).is_none_or(|a| a.consumed != paid.after_actor)
+        {
+            return Err("stage verdict lacks exact current paid debit and original native terminal".into());
+        }
+        subject.closed = true;
+        Ok(())
+    }
     /// Same frozen current ordinary expired-close debit, followed only by an
     /// authenticated stage14 terminal book and original escrow transition.
     /// Native authenticates the original row, beneficiary and shared nonce
@@ -995,6 +1112,197 @@ impl QuotaStateV11 {
         subject.closed = true;
         Ok(())
     }
+}
+
+/// No wire codec or public constructor: only a real current ordinary debit
+/// creates this token. It carries no original guarantee or payout authority.
+pub struct StageVerdictDebitV14 {
+    paid: ExpiredTerminalDebitV11,
+}
+
+/// Original native paid proof commitment, never a route-deserialized grant.
+/// Source PC remains separate from the combined real-weight/input PC.
+pub struct NativeStageProofAnchorV14 {
+    pub job: Digest,
+    pub original_book: Digest,
+    pub current_book: Digest,
+    pub claim: Digest,
+    pub class: Digest,
+    pub source: Digest,
+    pub source_parameters: Digest,
+    pub inventory: Digest,
+    pub admission: Digest,
+    pub combined_parameters: Digest,
+    pub maximum_scope: Digest,
+    pub policy: Digest,
+    pub quota: Digest,
+    pub consent18: Digest,
+    pub proof_root: Digest,
+    pub actor: Digest,
+    pub actor_operator: Digest,
+    pub producer_operator: Digest,
+    pub posted_daa: u64,
+    pub matures_daa: u64,
+    pub horizon_daa: u64,
+    pub original_paid_root: Digest,
+    pub original_debit: u64,
+    pub original_debit_receipt: Digest,
+    pub shared_live: u32,
+    pub actor_live: u32,
+    pub job_live: u32,
+}
+pub fn stage_paid_seal_record_root_v14(n: &NativeStageProofAnchorV14) -> Digest {
+    object_id(
+        b"misaka-palw/kernel/stage-original-paid-seal/v14",
+        &(
+            (n.job, n.original_book, n.current_book, n.claim, n.class, n.source, n.source_parameters, n.inventory),
+            (n.admission, n.combined_parameters, n.maximum_scope, n.policy, n.quota, n.consent18, n.proof_root),
+            (
+                n.actor,
+                n.actor_operator,
+                n.producer_operator,
+                n.posted_daa,
+                n.matures_daa,
+                n.horizon_daa,
+                n.original_debit,
+                n.original_debit_receipt,
+            ),
+        ),
+    )
+}
+pub(super) struct CheckedStageProofGrantV14 {
+    binding: SubjectBindingV11,
+    key: ProtectedSealKeyV11,
+    original_paid: Digest,
+    actor_operator: Digest,
+    producer_operator: Digest,
+    posted: u64,
+    matures: u64,
+}
+impl CheckedStageProofGrantV14 {
+    pub(super) fn into_parts(self) -> (SubjectBindingV11, ProtectedSealKeyV11, Digest, Digest, Digest, u64, u64) {
+        (self.binding, self.key, self.original_paid, self.actor_operator, self.producer_operator, self.posted, self.matures)
+    }
+}
+pub fn check_stage_paid_seal_v14(
+    class: &CheckedStageClassV14,
+    book: &StageJobBookV14,
+    plan: &CheckedStageQuotaV14,
+    quota: &QuotaPolicyV11,
+    execution: &ExecutionPolicyV11,
+    epoch: &TrustedEpochV11,
+    n: &NativeStageProofAnchorV14,
+) -> Result<CheckedPaidSealV11, String> {
+    book.check_restored(class, plan)?;
+    epoch.check(quota)?;
+    execution.check(quota)?;
+    let actual = class.check_job(book.job())?;
+    if book.terminal != StageTerminalV14::Challengeable
+        || book.settlement.is_some()
+        || book.execution_policy != execution.root()
+        || n.job != book.id()
+        || n.original_book != book.original_funded_root()
+        || n.current_book != book.root()
+        || Some(n.claim) != book.claim_root
+        || n.class != class.root()
+        || n.source != class.source().id()
+        || n.source_parameters != class.source().parameters().root()
+        || n.inventory != class.source().inventory_root()
+        || n.admission != actual.admission().root()
+        || n.combined_parameters != actual.combined_parameters().root()
+        || n.maximum_scope != class.maximum_resources().court_scope
+        || n.policy != book.policy
+        || n.quota != plan.root()
+        || n.consent18 != book.acceptance
+        || n.proof_root == [0; 64]
+        || n.actor == [0; 64]
+        || n.actor == book.job.producer
+        || n.actor_operator == [0; 64]
+        || n.actor_operator == n.producer_operator
+        || n.producer_operator != book.producer_operator
+        || n.posted_daa != epoch.block_daa
+        || n.posted_daa < book.committed_daa.ok_or("stage paid seal commit absent")?
+        || n.posted_daa > book.challenge_end_daa.ok_or("stage paid seal challenge window absent")?
+        || n.matures_daa != n.posted_daa.checked_add(execution.horizons.seal_maturity).ok_or("stage seal maturity overflow")?
+        || n.horizon_daa
+            != n.posted_daa
+                .checked_add(execution.horizons.seal_ttl)
+                .and_then(|n| n.checked_add(execution.horizons.proof_grace))
+                .ok_or("stage seal horizon overflow")?
+        || n.horizon_daa > book.deadline_daa
+        || epoch.network_interval != book.admitted_interval
+        || n.original_paid_root != stage_paid_seal_record_root_v14(n)
+        || n.original_debit == 0
+        || n.original_debit_receipt == [0; 64]
+        || n.shared_live == 0
+        || n.shared_live > PROTECTED_SEALS_MAX_V11
+        || n.actor_live == 0
+        || n.actor_live > PROTECTED_SEALS_PER_ACTOR_V11
+        || n.job_live == 0
+        || n.job_live > PROTECTED_SEALS_PER_JOB_V11
+    {
+        return Err("stage protected proof lacks exact original paid independent native seal/claim/source/input/maximum/slots".into());
+    }
+    super::protected::from_checked_stage_proof_v14(CheckedStageProofGrantV14 {
+        binding: book.quota_subject(plan, quota)?,
+        key: ProtectedSealKeyV11 {
+            job_id: book.id(),
+            vector_id: n.claim,
+            seal_actor: n.actor,
+            proof_root: object_id(
+                b"misaka-palw/kernel/stage-protected-proof-namespace/v14",
+                &(n.proof_root, n.source, n.admission, n.quota),
+            ),
+            horizon_daa: n.horizon_daa,
+        },
+        original_paid: n.original_paid_root,
+        actor_operator: n.actor_operator,
+        producer_operator: n.producer_operator,
+        posted: n.posted_daa,
+        matures: n.matures_daa,
+    })
+}
+
+pub(super) struct CheckedStageTraceProofGrantV14 {
+    binding: SubjectBindingV11,
+    key: Digest,
+    actor: Digest,
+    original: Digest,
+    trace: Digest,
+    horizon: u64,
+    epoch: TrustedEpochV11,
+}
+impl CheckedStageTraceProofGrantV14 {
+    pub(super) fn into_parts(self) -> (SubjectBindingV11, Digest, Digest, Digest, Digest, u64, TrustedEpochV11) {
+        (self.binding, self.key, self.actor, self.original, self.trace, self.horizon, self.epoch)
+    }
+}
+pub fn check_stage_trace_seal_v14(
+    class: &CheckedStageClassV14,
+    book: &StageJobBookV14,
+    stage: &CheckedStageQuotaV14,
+    quota: &QuotaPolicyV11,
+    execution: &ExecutionPolicyV11,
+    epoch: &TrustedEpochV11,
+    trace: &trace17::TracePlanV17,
+    n: &NativeStageProofAnchorV14,
+) -> Result<trace17::CheckedTraceAdmissionV17, String> {
+    let seal = check_stage_paid_seal_v14(class, book, stage, quota, execution, epoch, n)?;
+    if trace.root() != book.trace_plan_root() || derive_stage_trace_plan_v14(class, stage, quota)?.root() != trace.root() {
+        return Err("stage paid seal restore quote changes original18 trace contract".into());
+    }
+    trace17::from_checked_stage_proof_v14(
+        CheckedStageTraceProofGrantV14 {
+            binding: seal.binding().clone(),
+            key: seal.key().root(),
+            actor: n.actor,
+            original: n.original_paid_root,
+            trace: trace.root(),
+            horizon: n.horizon_daa,
+            epoch: epoch.clone(),
+        },
+        trace,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -1116,6 +1424,48 @@ pub fn check_stage_quota_terminal_v14(
         || native.principal_queue == [0; 64]
     {
         return Err("stage terminal grant lacks genuine original18 refunded escrow/header/shared nonce".into());
+    }
+    Ok(CheckedQuotaTerminalV11 {
+        binding: book.quota_subject(plan, policy)?,
+        funded_job_root: book.original_funded_root(),
+        terminal_book_root: book.root(),
+        request_key: object_id(
+            b"misaka-palw/kernel/stage-original-request-key/v14",
+            &(book.class, book.job.requester, book.job.producer, book.job.nonce, book.acceptance),
+        ),
+    })
+}
+/// Native supplies this only after collecting the exact original producer
+/// collateral and recording the immutable original-principal credit. A source
+/// denial flag or another job's verdict cannot manufacture a closed subject.
+pub fn check_stage_conviction_terminal_v14(
+    class: &CheckedStageClassV14,
+    book: &StageJobBookV14,
+    plan: &CheckedStageQuotaV14,
+    policy: &QuotaPolicyV11,
+    native: &NativeStageTerminalAnchorV14,
+    outcome: &StageSettlementV14,
+    collected_original: u64,
+) -> Result<CheckedQuotaTerminalV11, String> {
+    book.check_restored(class, plan)?;
+    outcome.check()?;
+    if book.terminal != StageTerminalV14::Convicted
+        || book.settlement.as_ref() != Some(outcome)
+        || native.job_id != book.id()
+        || native.original_funded_book_root != book.original_funded_root()
+        || native.terminal_book_root != book.root()
+        || native.acceptance18 != book.acceptance
+        || native.nonce.requester != book.job.requester
+        || native.nonce.requester_operator_id != book.requester_operator
+        || native.nonce.next_nonce <= canonical_nonce_v11(&book.job.nonce)?
+        || native.nonce.counter_root != native_requester_nonce_counter_root_v11(&book.requester_operator, native.nonce.next_nonce)
+        || native.established_daa != outcome.established_daa
+        || native.established_daa > book.deadline_daa
+        || native.principal_refund != outcome.requester_refund
+        || native.principal_queue == [0; 64]
+        || collected_original != outcome.collected_original_slash
+    {
+        return Err("stage convicted terminal lacks its original per-job proof, actual slash and principal credit".into());
     }
     Ok(CheckedQuotaTerminalV11 {
         binding: book.quota_subject(plan, policy)?,

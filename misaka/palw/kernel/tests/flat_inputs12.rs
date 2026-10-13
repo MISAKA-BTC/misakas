@@ -481,6 +481,134 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
     assert_eq!(claimed.commit(&class, &plan, &execution, job.producer, 130, &claim, 11).unwrap(), 130);
     assert!(check_stage_quota_admission_v14(&class, &claimed, &plan, &policy, &anchor).is_err());
     assert!(claimed.refund_unclaimed(book.deadline_daa() + 1).is_err());
+    let caller_source =
+        source26::derive_stage_source_caller_plan_v26(&class, &claimed, &plan, &policy, &execution, &discovery).unwrap();
+    assert_eq!(caller_source.requests(), (source_plan.requests() - discovery.ordinary_lifetime_requests) / 4);
+    assert_eq!(caller_source.attempts(), 2 * caller_source.requests());
+    assert_eq!(
+        caller_source.required_horizon(),
+        caller_source.requests() as u64 * execution.horizons.da_answer + execution.horizons.proof_grace
+    );
+    for (held,unit) in caller_source.guarantee().0.iter().zip(&caller_source.request_cost().0) {
+        assert_eq!(*held,*unit*caller_source.attempts() as u128);
+    }
+    assert!(
+        caller_source.request_cost().get(misaka_palw_kernel::flat_resources10::ResourceAxisV10::StoredEvidenceBytes)
+            >= misaka_palw_kernel::flat_quota11::source16::SOURCE_ANSWER_MAX_BYTES_V16 as u128
+    );
+    assert!(
+        source26::derive_stage_source_caller_plan_v26(&class, &book, &plan, &policy, &execution, &discovery).is_err(),
+        "an uncommitted book cannot manufacture source ownership"
+    );
+    let proof_epoch = TrustedEpochV11::from_chain(&policy, [42; 64], 12).unwrap();
+    let mut proof_anchor = NativeStageProofAnchorV14 {
+        job: book.id(),
+        original_book: book.root(),
+        current_book: claimed.root(),
+        claim: claimed.claim_root().unwrap(),
+        class: class.root(),
+        source: class.source().id(),
+        source_parameters: class.source().parameters().root(),
+        inventory: class.source().inventory_root(),
+        admission: actual.admission().root(),
+        combined_parameters: actual.combined_parameters().root(),
+        maximum_scope: class.maximum_resources().court_scope,
+        policy: class.policy_root(),
+        quota: plan.root(),
+        consent18: book.acceptance(),
+        proof_root: [43; 64],
+        actor: job.requester,
+        actor_operator: [11; 64],
+        producer_operator: [12; 64],
+        posted_daa: 12,
+        matures_daa: 12 + execution.horizons.seal_maturity,
+        horizon_daa: 12 + execution.horizons.seal_ttl + execution.horizons.proof_grace,
+        original_paid_root: [0; 64],
+        original_debit: 7,
+        original_debit_receipt: [44; 64],
+        shared_live: 1,
+        actor_live: 1,
+        job_live: 1,
+    };
+    proof_anchor.original_paid_root = stage_paid_seal_record_root_v14(&proof_anchor);
+    proof_anchor.source_parameters = actual.combined_parameters().root();
+    proof_anchor.original_paid_root = stage_paid_seal_record_root_v14(&proof_anchor);
+    assert!(
+        check_stage_paid_seal_v14(&class, &claimed, &plan, &policy, &execution, &proof_epoch, &proof_anchor).is_err(),
+        "actual input PC cannot replace original source PC even with a self-consistent paid-record hash"
+    );
+    proof_anchor.source_parameters = class.source().parameters().root();
+    proof_anchor.maximum_scope[0] ^= 1;
+    proof_anchor.original_paid_root = stage_paid_seal_record_root_v14(&proof_anchor);
+    assert!(check_stage_paid_seal_v14(&class, &claimed, &plan, &policy, &execution, &proof_epoch, &proof_anchor).is_err());
+    proof_anchor.maximum_scope[0] ^= 1;
+    proof_anchor.original_paid_root = stage_paid_seal_record_root_v14(&proof_anchor);
+    let protected = check_stage_paid_seal_v14(&class, &claimed, &plan, &policy, &execution, &proof_epoch, &proof_anchor).unwrap();
+    assert_ne!(protected.key().proof_root, proof_anchor.proof_root, "stage14 proof namespace remains explicit");
+    let mut protected_state = state.clone();
+    protected_state.admit_protected_seal(&policy, &proof_epoch, job.requester, &protected, plan.plan()).unwrap();
+    assert!(protected_state.admit_protected_seal(&policy, &proof_epoch, job.requester, &protected, plan.plan()).is_err());
+    proof_anchor.actor_operator = [12; 64];
+    proof_anchor.original_paid_root = stage_paid_seal_record_root_v14(&proof_anchor);
+    assert!(
+        check_stage_paid_seal_v14(&class, &claimed, &plan, &policy, &execution, &proof_epoch, &proof_anchor).is_err(),
+        "another bond on the original producer operator is not independent"
+    );
+    // A producer-bound PC default is tied to this exact original claim, source,
+    // consent and actual collected liability; a global source flag is no grant.
+    let mut judgment = NativeStageJudgmentV14 {
+        job: book.id(),
+        original_book: book.root(),
+        book: claimed.root(),
+        class: class.root(),
+        claim: claimed.claim_root().unwrap(),
+        source: class.source().id(),
+        source_parameters: class.source().parameters().root(),
+        inventory: class.source().inventory_root(),
+        consent18: book.acceptance(),
+        proof: [29; 64],
+        finder: job.requester,
+        finder_operator: [11; 64],
+        established_daa: 12,
+        current_daa: 12,
+        kind: StageAdjudicationKindV14::BoundSourceUnavailable,
+    };
+    judgment.source_parameters[0] ^= 1;
+    assert!(claimed.clone().adjudicate(&class, &plan, &execution, &judgment, 130).is_err());
+    judgment.source_parameters[0] ^= 1;
+    assert!(claimed.clone().adjudicate(&class, &plan, &execution, &judgment, 129).is_err());
+    let verdict_epoch = TrustedEpochV11::from_chain(&policy, [28; 64], 12).unwrap();
+    let mut verdict_state = state.clone();
+    let old_guarantee = verdict_state.subject(&book.id()).unwrap().guarantee_remaining.clone();
+    let stale_verdict =
+        verdict_state.debit_stage_verdict_v14(&policy, &verdict_epoch, job.requester, &class, &claimed, &plan).unwrap();
+    let paid_verdict = verdict_state.debit_stage_verdict_v14(&policy, &verdict_epoch, job.requester, &class, &claimed, &plan).unwrap();
+    let outcome = claimed.adjudicate(&class, &plan, &execution, &judgment, 130).unwrap();
+    assert_eq!(claimed.original_funded_root(), book.root());
+    assert_eq!(outcome.finder_credit + outcome.burned, 130);
+    let native_verdict = NativeStageTerminalAnchorV14 {
+        job_id: book.id(),
+        original_funded_book_root: book.root(),
+        terminal_book_root: claimed.root(),
+        acceptance18: book.acceptance(),
+        nonce: NativeRequesterNonceWitnessV11 {
+            requester: job.requester,
+            requester_operator_id: [11; 64],
+            next_nonce: 1,
+            counter_root: native_requester_nonce_counter_root_v11(&[11; 64], 1),
+        },
+        established_daa: 12,
+        principal_refund: 20,
+        principal_queue: [30; 64],
+    };
+    assert!(check_stage_conviction_terminal_v14(&class, &claimed, &plan, &policy, &native_verdict, &outcome, 129).is_err());
+    let convicted = check_stage_conviction_terminal_v14(&class, &claimed, &plan, &policy, &native_verdict, &outcome, 130).unwrap();
+    assert!(verdict_state.mark_stage_verdict_closed_v14(&policy, &verdict_epoch, &convicted, &stale_verdict).is_err());
+    verdict_state.mark_stage_verdict_closed_v14(&policy, &verdict_epoch, &convicted, &paid_verdict).unwrap();
+    assert!(verdict_state.subject(&book.id()).unwrap().closed);
+    assert_eq!(verdict_state.subject(&book.id()).unwrap().guarantee_remaining, old_guarantee);
+    assert!(verdict_state.mark_stage_verdict_closed_v14(&policy, &verdict_epoch, &convicted, &paid_verdict).is_err());
+    assert!(claimed.adjudicate(&class, &plan, &execution, &judgment, 130).is_err());
     let mut unclaimed = book;
     let original_root = unclaimed.root();
     let binding = unclaimed.quota_subject(&plan, &policy).unwrap();

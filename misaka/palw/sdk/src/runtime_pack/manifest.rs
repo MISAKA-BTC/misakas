@@ -164,6 +164,13 @@ pub struct CalibrationRec {
     pub sequences_file: Option<String>,
 }
 
+fn legacy_linear_bits() -> u8 {
+    8
+}
+fn is_legacy_linear_bits(bits: &u8) -> bool {
+    *bits == 8
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSection {
@@ -173,6 +180,9 @@ pub struct ProfileSection {
     /// `LowerOpts::gdn_core_wide`, pinned so `verify --rebuild` lowers the same way. Absent (false) in every pack built without it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gdn_core_wide: bool,
+    /// Explicit decoder main-weight profile; absent means the legacy 8-bit profile.
+    #[serde(default = "legacy_linear_bits", skip_serializing_if = "is_legacy_linear_bits")]
+    pub linear_weight_bits: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<usize>,
     pub calibration: CalibrationRec,
@@ -191,6 +201,9 @@ pub struct MathRec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConverterSection {
+    /// Absent retains the historical parser and manifest image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_parsing_profile: Option<String>,
     pub name: String,
     pub crate_version: String,
     /// [`super::manifest::LOWERING_VERSION_V1`].
@@ -495,6 +508,17 @@ impl RuntimePackV1 {
             if let Some(f) = &d.file {
                 safe_name(f)?;
             }
+        }
+        if self
+            .converter
+            .metadata_parsing_profile
+            .as_ref()
+            .is_some_and(|s| misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16::parse(s).is_none())
+        {
+            return Err("unknown converter.metadata_parsing_profile".into());
+        }
+        if !matches!(self.profile.linear_weight_bits, 8 | 16) {
+            return Err("profile.linear_weight_bits must be 8 or 16".into());
         }
         hexn("profile.calibration.stats_digest", &self.profile.calibration.stats_digest, 64)?;
         safe_name(&self.profile.calibration.stats_file)?;

@@ -1157,6 +1157,7 @@ pub fn lower_vision_with(hl: &HlProgram, s: &VisionSpec, out_major: bool) -> Res
         table_shift: 0,
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
+        linear_weight_bits: 8,
         conv_weight_bits: 8,
         out_major_rows: out_major,
         gdn_core_wide: false,

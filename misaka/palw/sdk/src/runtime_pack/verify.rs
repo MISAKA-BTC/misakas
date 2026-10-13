@@ -241,6 +241,7 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
                 };
                 req.max_window = pack.profile.max_window;
                 req.gdn_core_wide = pack.profile.gdn_core_wide;
+                req.linear_weight_bits = pack.profile.linear_weight_bits;
                 req.context = pack.profile.context;
                 req.math = MathMode::parse(&pack.converter.math.mode).ok_or("the pack's math mode")?;
                 req.quant_formats = supplied.clone();
@@ -417,7 +418,12 @@ fn frontend_check(acc: &mut Acc, pack: &RuntimePackV1, model: &Path, dir: &Path,
         }
         None => misaka_palw_tir_lower::hf_schema::ReadOptions::default(),
     };
-    let opts = misaka_palw_tir_lower::lower::LowerOpts { max_window: pack.profile.max_window, ..Default::default() };
+    let opts = misaka_palw_tir_lower::lower::LowerOpts {
+        max_window: pack.profile.max_window,
+        gdn_core_wide: pack.profile.gdn_core_wide,
+        linear_weight_bits: pack.profile.linear_weight_bits,
+        ..Default::default()
+    };
     if let Some(m) = MathMode::parse(&pack.converter.math.mode) {
         misaka_palw_tir_lower::detmath::set_mode(m);
     }

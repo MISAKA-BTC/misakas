@@ -91,3 +91,59 @@ fn stage_contract_is_independent_and_never_collapses_its_entire_policy() {
     assert_eq!(p.palw_stage_execution_v14.as_ref().unwrap().policies, policy);
     assert!(p.palw_fences_v1().iter().any(|(name, _)| *name == "palw_stage_execution_v14"));
 }
+
+// Implemented for the integrated verification phase; not run during code-first work.
+#[test]
+fn native_final_policy_is_separate_and_all_values_leave_with_its_fence() {
+    use crate::palw_native_final_v27::PalwNativeFinalFenceV27;
+    for mut p in [MAINNET_PARAMS, TESTNET_PARAMS] {
+        assert!(p.palw_native_final_v27.is_none());
+        let baseline = (p.consensus_params_id(), p.consensus_schedule_id(), p.consensus_identity_id());
+        p.palw_native_final_v27 = Some(PalwNativeFinalFenceV27::unapproved_probe_at(ForkActivation::never(), [8; 64]));
+        assert_eq!(baseline.2, p.consensus_identity_id());
+        assert_ne!(baseline.0, p.consensus_params_id());
+        assert_ne!(baseline.1, p.consensus_schedule_id());
+        p.validate_palw_native_final_v27().unwrap();
+        let fence = p.palw_native_final_v27.as_mut().unwrap();
+        fence.activation = ForkActivation::always();
+        assert!(p.validate_palw_native_final_v27().is_err());
+        let active = p.consensus_identity_id();
+        p.palw_native_final_v27.as_mut().unwrap().policy.finder_profit_margin_sompi += 1;
+        assert_ne!(active, p.consensus_identity_id(), "active numerical Final conditions are network identity");
+        let before_queue = p.consensus_identity_id();
+        p.palw_native_final_v27.as_mut().unwrap().policy.queue_policy.max_owned_bytes += 1;
+        assert_ne!(before_queue, p.consensus_identity_id(), "original simultaneous queue promise is network identity");
+        let policy = p.palw_native_final_v27.as_ref().unwrap().policy.clone();
+        p.for_each_fence(&mut |score| *score = 1000);
+        assert_eq!(p.palw_native_final_v27.as_ref().unwrap().policy, policy);
+        assert_eq!(p.palw_native_final_v27.as_ref().unwrap().activation, ForkActivation::new(1000));
+        assert!(p.palw_fences_v1().iter().any(|(name, _)| *name == "palw_native_final_v27"));
+        assert!(p.palw_funded_execution_v11.is_none());
+        assert!(p.palw_stage_execution_v14.is_none());
+    }
+}
+
+#[test]
+fn stage28_does_not_grant_old14_and_preserves_future_peer_compatibility() {
+    use crate::palw_flat_stage_v28::PalwStageExecutionFenceV28;
+    let mut p = TESTNET_PARAMS;
+    let before = (p.consensus_params_id(), p.consensus_schedule_id(), p.consensus_identity_id());
+    p.palw_stage_execution_v28 = Some(PalwStageExecutionFenceV28::unapproved_probe_at(ForkActivation::never(), [10; 64]));
+    assert!(p.palw_stage_execution_v14.is_none());
+    assert!(!p.palw_stage_execution_active_at_v28(0));
+    assert_eq!(p.consensus_identity_id(), before.2);
+    assert_ne!(p.consensus_params_id(), before.0);
+    assert_ne!(p.consensus_schedule_id(), before.1);
+    p.validate_palw_stage_execution_v28().unwrap();
+    p.palw_stage_execution_v28.as_mut().unwrap().activation = ForkActivation::new(1000);
+    assert!(p.validate_palw_stage_execution_v28().is_err());
+    assert_eq!(p.consensus_identity_id(), before.2);
+    p.palw_stage_execution_v28.as_mut().unwrap().activation = ForkActivation::always();
+    let active = p.consensus_identity_id();
+    p.palw_stage_execution_v28.as_mut().unwrap().policies.maximum_horizon += 1;
+    assert_ne!(p.consensus_identity_id(), active);
+    let policy = p.palw_stage_execution_v28.as_ref().unwrap().policies.clone();
+    p.for_each_fence(&mut |daa| *daa = 1500);
+    assert_eq!(p.palw_stage_execution_v28.as_ref().unwrap().policies, policy);
+    assert_eq!(p.palw_stage_execution_v28.as_ref().unwrap().activation, ForkActivation::new(1500));
+}

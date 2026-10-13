@@ -2979,6 +2979,11 @@ pub struct Params {
     pub palw_funded_execution_v11: Option<crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
     /// Independent typed Rows/Final stage source and funded execution contract.
     pub palw_stage_execution_v14: Option<crate::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    /// Original native Final's numerical, whole-claim and environment contract.
+    /// No preset authorizes this policy; never() normalizes the complete tuple.
+    pub palw_native_final_v27: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
+    /// Original stage28 book/source/court/Final consent, independent of frozen14.
+    pub palw_stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -5906,6 +5911,8 @@ impl Params {
             palw_probabilistic_constraints_v1: self.palw_probabilistic_constraints_v1,
             palw_funded_execution_v11: self.palw_funded_execution_v11.clone(),
             palw_stage_execution_v14: self.palw_stage_execution_v14.clone(),
+            palw_native_final_v27: self.palw_native_final_v27.clone(),
+            palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
@@ -7030,6 +7037,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_probabilistic_constraints_v1: None,
     palw_funded_execution_v11: None,
     palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7350,6 +7359,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_probabilistic_constraints_v1: None,
     palw_funded_execution_v11: None,
     palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -7652,6 +7663,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_probabilistic_constraints_v1: None,
     palw_funded_execution_v11: None,
     palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
@@ -13116,6 +13129,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_probabilistic_constraints_v1: None,
     palw_funded_execution_v11: None,
     palw_stage_execution_v14: None,
+    palw_native_final_v27: None,
+    palw_stage_execution_v28: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,

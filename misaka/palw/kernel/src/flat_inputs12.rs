@@ -18,6 +18,7 @@ use misaka_palw_tir::{
 use std::collections::BTreeMap;
 
 pub mod bounded14;
+pub mod bounded28;
 pub mod source14;
 
 pub const INPUT_COUNT_MAX_V12: usize = 16;

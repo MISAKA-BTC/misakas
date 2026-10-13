@@ -3444,6 +3444,7 @@ impl VirtualStateProcessor {
                     if matches!(
                         chunk.target,
                         kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. }
+                            | kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. }
                     ) {
                         continue;
                     }

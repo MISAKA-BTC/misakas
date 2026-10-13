@@ -98,9 +98,48 @@ impl TemplateTransactionSelectorFactory for MiningSelectorFactory<'_> {
     fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector> {
         self.manager.build_selector(latest_ready_epoch)
     }
+    fn build_selector_with_native_carriage(
+        &self,
+        latest_ready_epoch: Option<u64>,
+        native: Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22>,
+    ) -> Box<dyn TemplateTransactionSelector> {
+        self.manager.mempool.read().build_selector_with_native_carriage(latest_ready_epoch, native)
+    }
 }
 
 impl MiningManager {
+    /// Startup builder. A configured native contract receives its original
+    /// queue plus the ordinary pool, even after local RAM scaling. Rebuilding a
+    /// populated pool would lose paid carriers and is therefore refused.
+    pub fn with_native_queue_v30(
+        mut self,
+        policy: Option<kaspa_consensus_core::palw_native_queue_v30::NativeQueuePolicyV30>,
+    ) -> Result<Self, String> {
+        let Some(policy) = policy else { return Ok(self) };
+        policy.check(policy.network_domain)?;
+        if let Some(previous) = &self.config.native_queue_policy_v30 {
+            return if previous == &policy {
+                Ok(self)
+            } else {
+                Err("native queue30 cannot replace an original startup contract".into())
+            };
+        }
+        if self.mempool.read().transaction_count(TransactionQuery::All) != 0 {
+            return Err("native queue30 must be provisioned before transaction admission".into());
+        }
+        let mut config = self.config.as_ref().clone();
+        let bytes = usize::try_from(policy.max_owned_bytes).map_err(|_| "native queue30 exceeds platform address space")?;
+        config.mempool_size_limit = config.mempool_size_limit.checked_add(bytes).ok_or("native queue30 pool capacity overflow")?;
+        config.maximum_transaction_count = config
+            .maximum_transaction_count
+            .checked_add(policy.max_packets as usize)
+            .ok_or("native queue30 packet capacity overflow")?;
+        config.native_queue_policy_v30 = Some(policy);
+        self.config = Arc::new(config);
+        self.mempool = RwLock::new(Mempool::new(self.config.clone(), self.counters.clone()));
+        Ok(self)
+    }
+
     pub fn new(
         target_time_per_block: u64,
         relay_non_std_transactions: bool,
@@ -1178,6 +1217,7 @@ impl MiningManager {
             let unorphaned = mempool.handle_new_block_transactions(block_daa_score, block_transactions)?;
             // M1: the DAA moved and rows renewed — re-ask the tip which possession proofs escalate.
             mempool.refresh_palw_readiness(consensus);
+            mempool.refresh_native_carriers(consensus);
             // V01: the carriers this block's sweep puts to the H-1 gate, and (the V01 review's LOW 3)
             // the market carriers it puts to the market gate — both empty off testnet-12.
             let sweep = PalwCarrierSweepV1 {

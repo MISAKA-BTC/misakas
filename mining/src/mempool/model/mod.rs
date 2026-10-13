@@ -1,6 +1,7 @@
 pub(crate) mod accepted_transactions;
 pub(crate) mod frontier;
 pub(crate) mod map;
+pub(crate) mod native_carriers_v22;
 pub(crate) mod orphan_pool;
 pub(crate) mod palw_carriers;
 pub(crate) mod pool;

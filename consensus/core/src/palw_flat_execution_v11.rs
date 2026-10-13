@@ -1361,6 +1361,8 @@ pub const EXECUTION_ACTION_ACCEPT_V18: u8 = 18;
 pub const EXECUTION_ACTION_SOURCE_REQUEST_V16: u8 = 14;
 pub const EXECUTION_ACTION_SOURCE_ANSWER_V16: u8 = 15;
 pub const EXECUTION_ACTION_SOURCE_SETTLE_V16: u8 = 16;
+pub const EXECUTION_ACTION_ACCEPT_V23: u8 = 23;
+pub const EXECUTION_ACTION_FUND_V23: u8 = 24;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeSourceRequestV16 {
     pub job: Digest,

@@ -8,8 +8,23 @@ use misaka_palw_kernel::{
     flat_inputs12::{FlatInputBudgetV12, RawExternalInputV12, RawExternalInputsV12, bounded14::FlatStageJobV14},
     flat_quota11::{NativeRequesterNonceWitnessV11, QuotaActionKindV11, TrustedEpochV11, stage14::*},
 };
+#[path = "palw_flat_stage_court_fold_v14.rs"]
+mod court;
+
+pub(super) fn apply_chunk(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    chunk: &crate::palw_kernel_route_v1::PalwKernelChunkV1,
+) -> Result<(), PalwStateV2Error> {
+    match court::apply_chunk(builder, ctx, chunk) {
+        Err(PalwStateV2Error::KernelRouteRefused(_)) => Ok(()),
+        other => other,
+    }
+}
 #[path = "palw_flat_stage_source_fold_v14.rs"]
 mod source;
+#[path="palw_flat_stage_fold_v28.rs"]
+mod next28;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())
@@ -95,9 +110,10 @@ fn prepay_restore(
 }
 impl PalwChainStateV2 {
     pub fn native_stage_reserved_v14(&self, bond: &PalwBondKeyV2, daa: u64) -> u128 {
-        self.kernel_route.as_ref().map(|r| r.stage_source_reserved_v14(bond, daa) + r.stage_producer_reserved_v14(bond)).unwrap_or(0)
+        self.kernel_route.as_ref().map(|r| r.stage_source_reserved_v14(bond, daa) + r.stage_producer_reserved_v14(bond)+next28::reserved(r,bond,daa)).unwrap_or(0)
     }
 }
+pub(super) fn reveal_paged_v28(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,seal:&crate::palw_native_paged_proof_v29::NativePagedSealV29,file:&[u8])->Result<(),PalwStateV2Error>{next28::reveal_paged_v28(builder,ctx,signer,seal,file)}
 
 fn checked_class(
     builder: &TransitionBuilder<'_>,
@@ -531,6 +547,10 @@ fn fund(
             open_demands: 0,
             retained_seals: 0,
             retained_discovery: 0,
+            seal_keys: [[0; 64]; 4],
+            discovery_keys: [[0; 64]; 4],
+            source_requests: [[0; 64]; 32],
+            source_units: [[0; 64]; 32],
             requests_admitted: 0,
             required_until: book.deadline_daa(),
         })),
@@ -1146,8 +1166,8 @@ fn collect_terminal(
     let id: Digest = body.try_into().map_err(|_| refused("stage GC exact original job frame"))?;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let h = r.stage_job_header_v14(&id).ok_or_else(|| refused("stage GC original terminal absent"))?;
-    if h.terminal != StageTerminalV14::Refunded || ctx.daa_score <= h.deadline_daa {
-        return Err(refused("stage GC needs original refunded job after complete deadline"));
+    if !matches!(h.terminal, StageTerminalV14::Refunded | StageTerminalV14::Convicted) || ctx.daa_score <= h.deadline_daa {
+        return Err(refused("stage GC needs original settled job after complete deadline"));
     }
     let pursuit: NativeStagePursuitV14 =
         r.aux_row(STAGE_TABLE_V14, &stage_key_v14(16, &id)).ok_or_else(|| refused("stage GC original pursuit counters absent"))?;
@@ -1160,20 +1180,49 @@ fn collect_terminal(
         || pursuit.retained_seals != 0
         || pursuit.retained_discovery != 0
         || ctx.daa_score <= pursuit.required_until
+        || pursuit.requests_admitted > 32
+        || pursuit.source_requests.iter().filter(|k| **k != [0; 64]).count() != pursuit.requests_admitted as usize
+        || pursuit.source_units.iter().filter(|k| **k != [0; 64]).count() != pursuit.requests_admitted as usize
     {
         return Err(refused("stage GC original pending/retained counters are live or rebound"));
+    }
+    let mut cached_bytes = 8192u64 + (pursuit.requests_admitted as u64) * 1536;
+    for unit in pursuit.source_units.iter().take(pursuit.requests_admitted as usize) {
+        if let Some(raw) = r.aux.get(&(crate::palw_flat_execution_v11::EXECUTION_SERVED_TABLE_V11, bytes(&(16u8, *unit)))) {
+            if raw.len() as u64 > misaka_palw_kernel::flat_quota11::source16::SOURCE_ANSWER_MAX_BYTES_V16 {
+                return Err(refused("stage GC original source cache exceeds unit envelope"));
+            }
+            cached_bytes =
+                cached_bytes.checked_add(raw.len() as u64).ok_or_else(|| refused("stage GC cache journal extent overflow"))?;
+        }
     }
     let ch = r.stage_class_header_v14(&h.class).ok_or_else(|| refused("stage GC original class absent"))?;
     let sh = r.stage_source_header_v14(&ch.source_binding).ok_or_else(|| refused("stage GC original source absent"))?;
     if !prepay_restore(builder, ctx, signer, p, sh.source_bytes_len, ch.wire_bytes_len, 64, restore_tariff(builder, h.class, 64)?)? {
         return Ok(());
     }
-    let restore = derive_stage_restore_metadata_v14(0, 0, h.book_bytes_len, h.input_raw_bytes, 0).map_err(refused)?;
+    let restore = derive_stage_restore_metadata_v14(
+        0,
+        0,
+        h.book_bytes_len,
+        h.input_raw_bytes.checked_add(cached_bytes).ok_or_else(|| refused("stage GC full cache restore overflow"))?,
+        0,
+    )
+    .map_err(refused)?;
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut restored =
         super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), id)?;
     restored.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
     super::palw_flat_execution_fold_v11::write_shard(builder, &restored, id);
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let mut collected_source = Vec::with_capacity(pursuit.requests_admitted as usize);
+    for request in pursuit.source_requests.iter().take(pursuit.requests_admitted as usize) {
+        let demand = super::palw_flat_execution_fold_v11::source::demand(r, *request)?;
+        if !demand.settled || demand.request.job != id {
+            return Err(refused("stage GC indexed original source pending unit remains live/rebound"));
+        }
+        collected_source.push(demand);
+    }
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let row = builder
         .state
@@ -1199,27 +1248,37 @@ fn collect_terminal(
         return Err(refused("stage GC principal credit changes original beneficiary/coins"));
     }
     let counter = r.execution_nonce_counter_v11(&h.requester_operator).map_err(refused)?;
-    let terminal = check_stage_quota_terminal_v14(
-        &class,
-        &book,
-        &plan,
-        &p.execution.quota,
-        &NativeStageTerminalAnchorV14 {
-            job_id: id,
-            original_funded_book_root: h.original_book_root,
-            terminal_book_root: book.root(),
-            acceptance18: h.acceptance,
-            nonce: NativeRequesterNonceWitnessV11 {
-                requester: book.job().requester,
-                requester_operator_id: h.requester_operator,
-                next_nonce: counter.next_nonce,
-                counter_root: counter.root(),
-            },
-            established_daa: credit.established_daa,
-            principal_refund: credit.amount,
-            principal_queue: credit.queue.as_bytes(),
+    let native_terminal = NativeStageTerminalAnchorV14 {
+        job_id: id,
+        original_funded_book_root: h.original_book_root,
+        terminal_book_root: book.root(),
+        acceptance18: h.acceptance,
+        nonce: NativeRequesterNonceWitnessV11 {
+            requester: book.job().requester,
+            requester_operator_id: h.requester_operator,
+            next_nonce: counter.next_nonce,
+            counter_root: counter.root(),
         },
-    )
+        established_daa: credit.established_daa,
+        principal_refund: credit.amount,
+        principal_queue: credit.queue.as_bytes(),
+    };
+    let terminal = if book.terminal() == StageTerminalV14::Refunded {
+        check_stage_quota_terminal_v14(&class, &book, &plan, &p.execution.quota, &native_terminal)
+    } else {
+        let outcome: StageSettlementV14 = r
+            .aux_row(STAGE_TABLE_V14, &stage_key_v14(13, &id))
+            .ok_or_else(|| refused("stage GC original actual settlement absent"))?;
+        check_stage_conviction_terminal_v14(
+            &class,
+            &book,
+            &plan,
+            &p.execution.quota,
+            &native_terminal,
+            &outcome,
+            outcome.collected_original_slash,
+        )
+    }
     .map_err(refused)?;
     fn rooted<T: borsh::BorshDeserialize>(
         r: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
@@ -1284,7 +1343,27 @@ fn collect_terminal(
     for kind in [5u8, 12, 16] {
         builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(kind, &id), None);
     }
-    for key in [bytes(&(16u8, id)), bytes(&(16u8, id, 1u8)), bytes(&(17u8, 0u8, id))] {
+    for request in pursuit.source_requests.iter().take(pursuit.requests_admitted as usize) {
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_TABLE_V11, bytes(&(16u8, *request)), None);
+        builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, request), None);
+    }
+    for demand in collected_source {
+        let slot = bytes(&(16u8, demand.requester, demand.request.slot));
+        if builder
+            .state
+            .kernel_route
+            .as_ref()
+            .unwrap()
+            .aux_row::<Digest>(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, &slot)
+            == Some(demand.id())
+        {
+            builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_DEMAND_SLOT_TABLE_V11, slot, None);
+        }
+    }
+    for unit in pursuit.source_units.iter().take(pursuit.requests_admitted as usize) {
+        builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_SERVED_TABLE_V11, bytes(&(16u8, *unit)), None);
+    }
+    for key in [bytes(&(2u8, id)), bytes(&(16u8, id)), bytes(&(16u8, id, 1u8)), bytes(&(17u8, 0u8, id))] {
         builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11, key, None);
     }
     Ok(())
@@ -1296,6 +1375,9 @@ pub(super) fn apply(
     action: u8,
     body: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    if action>=crate::palw_flat_stage_v28::STAGE_ACTION_FIRST_V28 {
+        return next28::apply(builder,ctx,signer,action,body);
+    }
     let p = policies(builder, ctx)?;
     let result = match action {
         STAGE_ACTION_BIND_V14 => bind(builder, ctx, signer, &p, body),
@@ -1310,6 +1392,9 @@ pub(super) fn apply(
         7 => source::request(builder, ctx, signer, &p, body),
         8 => source::answer(builder, ctx, signer, &p, body),
         9 => source::settle(builder, ctx, signer, &p, body),
+        16 => court::seal(builder, ctx, signer, &p, body),
+        17 => court::reveal(builder, ctx, signer, &p, body),
+        18 => court::retire(builder, ctx, signer, &p, body),
         // No wire boolean can enable an unconnected money, source conviction,
         // protected discovery/DA or tensor-output Final path.
         _ => return Err(refused("stage14 action lacks complete native funding/court/DA/Final guarantees")),

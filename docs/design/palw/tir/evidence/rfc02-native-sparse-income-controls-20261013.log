@@ -231,4 +231,3 @@ running 1 test
 test palw_state_v2::tests::bond_budget_fold_v1::funded_reward_and_source_fee_hold_r_through_sparse_partial_payment_and_replay ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3921 filtered out; finished in 0.02s
-

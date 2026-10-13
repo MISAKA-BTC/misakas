@@ -8,13 +8,84 @@ use misaka_palw_kernel::{
     merkle::{AXIS_COL, AXIS_ROW},
     merkle3::LayoutV3,
 };
+#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct StageSourcePendingV14 {
+    version: u16,
+    job: Digest,
+    original_book: Digest,
+    consent18: Digest,
+    fee_plan: Digest,
+    original_demand: Digest,
+    requester_operator: Digest,
+    producer_operator: Digest,
+}
+fn original_demand(d: &NativeSourceDemandV16) -> Digest {
+    let mut original = d.clone();
+    original.attempts = 0;
+    original.settled = false;
+    misaka_palw_kernel::hash::object_id(b"misaka-palw/native/stage-original-source-pending/v14", &original)
+}
+fn pending_authority(
+    r: &crate::palw_kernel_route_v1::PalwKernelRouteStateV1,
+    d: &NativeSourceDemandV16,
+) -> Result<StageSourcePendingV14, PalwStateV2Error> {
+    let a: StageSourcePendingV14 = r
+        .aux_row(STAGE_TABLE_V14, &stage_key_v14(18, &d.id()))
+        .ok_or_else(|| refused("stage source original operator authority absent"))?;
+    let h = r.stage_job_header_v14(&d.request.job).ok_or_else(|| refused("stage source original typed header absent"))?;
+    if a.version != 14
+        || a.job != d.request.job
+        || a.original_book != h.original_book_root
+        || a.consent18 != h.acceptance
+        || a.original_demand != original_demand(d)
+        || a.requester_operator == [0; 64]
+        || a.requester_operator == h.producer_operator
+        || a.producer_operator != h.producer_operator
+    {
+        return Err(refused("stage source pending operator/consent/fee/source provenance differs"));
+    }
+    Ok(a)
+}
+impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+    /// Fixed authenticated original pending metadata only, before the native
+    /// signature/body path allocates or checks a 128-KiB source answer.
+    pub fn stage_source_answer_owner_v14(&self, id: &Digest, now: u64) -> Option<PalwBondKeyV2> {
+        use misaka_palw_kernel::flat_quota11::source16::{SOURCE_ROW_BYTES_V16, SourceObligationV16};
+        let d = native::source::demand(self, *id).ok()?;
+        let h = self.stage_job_header_v14(&d.request.job)?;
+        let a = pending_authority(self, &d).ok()?;
+        if d.settled
+            || d.attempts >= 2
+            || now > d.deadline
+            || d.producer != h.producer
+            || h.terminal != StageTerminalV14::Challengeable
+        {
+            return None;
+        }
+        let raw = self.aux.get(&(EXECUTION_QUOTA_TABLE_V11, bytes(&(16u8, d.request.job))))?;
+        if raw.len() != 64 + SOURCE_ROW_BYTES_V16 as usize {
+            return None;
+        }
+        let (root, row): (Digest, SourceObligationV16) = borsh::from_slice(raw).ok()?;
+        if root != row.root()
+            || row.retired
+            || row.job_id != d.request.job
+            || row.producer != palw_kernel_bond_id_v1(&d.producer)
+            || row.original_consent_root != a.consent18
+            || row.answers_used >= row.requests_admitted.checked_mul(2)?
+        {
+            return None;
+        }
+        Some(d.producer)
+    }
+}
 fn pending_key(id: Digest) -> Vec<u8> {
     bytes(&(16u8, id))
 }
 fn slot_key(bond: PalwBondKeyV2, slot: u8) -> Vec<u8> {
     bytes(&(16u8, bond, slot))
 }
-fn pursuit(builder: &TransitionBuilder<'_>, id: Digest) -> Result<NativeStagePursuitV14, PalwStateV2Error> {
+pub(super) fn pursuit(builder: &TransitionBuilder<'_>, id: Digest) -> Result<NativeStagePursuitV14, PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
     let h = r.stage_job_header_v14(&id).ok_or_else(|| refused("stage source original job absent"))?;
     let s: NativeStagePursuitV14 =
@@ -27,6 +98,12 @@ fn pursuit(builder: &TransitionBuilder<'_>, id: Digest) -> Result<NativeStagePur
         || s.open_demands > 32
         || s.retained_seals > 4
         || s.retained_discovery > 4
+        || s.seal_keys.iter().filter(|k| **k != [0; 64]).count() != s.retained_seals as usize
+        || s.discovery_keys.iter().filter(|k| **k != [0; 64]).count() != s.retained_discovery as usize
+        || s.retained_seals + s.retained_discovery > 4
+        || s.requests_admitted > 32
+        || s.source_requests.iter().filter(|k| **k != [0; 64]).count() != s.requests_admitted as usize
+        || s.source_units.iter().filter(|k| **k != [0; 64]).count() != s.requests_admitted as usize
     {
         return Err(refused("stage source original counters rebound"));
     }
@@ -81,6 +158,11 @@ pub(super) fn request(
     if !prepay_restore(builder, ctx, signer, p, sh.source_bytes_len, ch.wire_bytes_len, 147, restore_tariff(builder, h.class, 147)?)? {
         return Ok(());
     }
+    let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let restore = derive_stage_restore_metadata_v14(0, 0, h.book_bytes_len, h.input_raw_bytes, 0).map_err(refused)?;
+    let mut restored = native::quota_shard(builder, &p.execution, &epoch, palw_kernel_bond_id_v1(signer), req.job)?;
+    restored.debit_ordinary(&p.execution.quota, &epoch, &restore).map_err(refused)?;
+    native::write_shard(builder, &restored, req.job);
     let class = checked_class(builder, ctx, p, h.class, false)?;
     let row = builder
         .state
@@ -176,6 +258,16 @@ pub(super) fn request(
         attempts: 0,
         settled: false,
     };
+    let authority = StageSourcePendingV14 {
+        version: 14,
+        job: req.job,
+        original_book: h.original_book_root,
+        consent18: h.acceptance,
+        fee_plan: fee.plan.root(),
+        original_demand: original_demand(&d),
+        requester_operator: payer.operator_id.as_bytes(),
+        producer_operator: h.producer_operator,
+    };
     let epoch = TrustedEpochV11::from_chain(&p.execution.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let (plan, mut shard) = native::source::original_source(builder, &p.execution, req.job)?;
     if plan.root() != book.source_plan_root() {
@@ -183,10 +275,13 @@ pub(super) fn request(
     }
     shard.admit_valid_request(&p.execution.quota, &epoch, &plan, &req.job).map_err(refused)?;
     state.open_demands += 1;
+    state.source_requests[state.requests_admitted as usize] = d.id();
+    state.source_units[state.requests_admitted as usize] = native::source::unit_key(&req);
     state.requests_admitted += 1;
     state.required_until = state.required_until.max(proof_until);
     native::write_source_shard(builder, &shard, req.job);
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(18, &d.id()), Some(bytes(&authority)));
     builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(*signer, req.slot), Some(bytes(&d.id())));
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &req.job), Some(bytes(&state)));
     builder.note_kernel_bond(signer);
@@ -216,6 +311,7 @@ pub(super) fn answer(
         return Err(refused("stage source answer exceeds original128KiB unit"));
     }
     let mut d = native::source::demand(builder.state.kernel_route.as_ref().unwrap(), id)?;
+    let authority = pending_authority(builder.state.kernel_route.as_ref().unwrap(), &d)?;
     let h = builder
         .state
         .kernel_route
@@ -229,6 +325,7 @@ pub(super) fn answer(
         || d.attempts >= 2
         || ctx.daa_score > d.deadline
         || h.terminal != StageTerminalV14::Challengeable
+        || builder.state.bonds.get(signer).is_none_or(|b| b.operator_id.as_bytes() != authority.producer_operator)
     {
         return Err(refused("stage source original own producer/pending/attempt/window differs"));
     }
@@ -272,10 +369,22 @@ pub(super) fn answer(
     if fee.version != 20
         || fee.original_book != h.original_book_root
         || fee.consent18 != h.acceptance
+        || fee.plan.root() != authority.fee_plan
         || fee.earned > fee.plan.maximum
         || d.bond != fee.plan.source_unit_fee
     {
         return Err(refused("stage source actual fee is outside original20 income envelope"));
+    }
+    if builder.state.bonds.get(&d.requester).is_none_or(|b| b.collateral < d.bond) {
+        return Err(refused("stage source original requester fee is not fully collectible"));
+    }
+    let mut closed_pursuit = pursuit(builder, d.request.job)?;
+    closed_pursuit.open_demands =
+        closed_pursuit.open_demands.checked_sub(1).ok_or_else(|| refused("stage source pending counter underflow"))?;
+    let expected_credit = d.bond.min(fee.plan.maximum - fee.earned);
+    let payout_queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&h.producer_payout);
+    if builder.state.pending_payouts.get(&payout_queue).is_some_and(|p| p.amount.checked_add(expected_credit).is_none()) {
+        return Err(refused("stage source original producer payout sum overflow"));
     }
     let paid = builder.slash_bond(d.requester, d.bond as u128)?;
     if paid != d.bond {
@@ -290,7 +399,10 @@ pub(super) fn answer(
     }
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(12, &d.request.job), Some(bytes(&fee)));
     builder.write_kernel_row(EXECUTION_SERVED_TABLE_V11, pending_key(native::source::unit_key(&d.request)), Some(body[68..].to_vec()));
-    close(builder, d)
+    d.settled = true;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(d.id()), Some(bytes(&d)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &d.request.job), Some(bytes(&closed_pursuit)));
+    Ok(())
 }
 pub(super) fn settle(
     builder: &mut TransitionBuilder<'_>,
@@ -301,6 +413,7 @@ pub(super) fn settle(
 ) -> Result<(), PalwStateV2Error> {
     let id: Digest = body.try_into().map_err(|_| refused("stage source default exact original pending id"))?;
     let d = native::source::demand(builder.state.kernel_route.as_ref().unwrap(), id)?;
+    let authority = pending_authority(builder.state.kernel_route.as_ref().unwrap(), &d)?;
     let h = builder
         .state
         .kernel_route
@@ -337,6 +450,8 @@ pub(super) fn settle(
     let mut book = StageJobBookV14::from_rooted_bytes(&row.book_bytes, h.book_root).map_err(refused)?;
     let actual = class.check_job(book.job()).map_err(refused)?;
     let plan = derive_stage_quota_v14(&class, &actual).map_err(refused)?;
+    let verdict_debit = paid.debit_stage_verdict_v14(&p.execution.quota, &epoch, &class, &book, &plan).map_err(refused)?;
+    native::write_shard(builder, &paid, d.request.job);
     let layer = if d.request.layer_code == 0 { None } else { Some((d.request.layer_code - 1) as u16) };
     if class.source().parameters().by_instance.get(&(d.request.param, layer)) != Some(&d.pc)
         || d.producer_payout != h.producer_payout
@@ -345,6 +460,9 @@ pub(super) fn settle(
         return Err(refused("stage source default pending PC/producer is not the original real source namespace"));
     }
     let finder = builder.state.bonds.get(&d.requester).ok_or_else(|| refused("stage source original requester absent"))?;
+    if finder.operator_id.as_bytes() != authority.requester_operator {
+        return Err(refused("stage source original requester operator changed"));
+    }
     let established = d.deadline.checked_add(1).ok_or_else(|| refused("stage source default clock overflow"))?;
     let proof =
         misaka_palw_kernel::hash::object_id(b"misaka-palw/native/stage-original-bound-PC-default/v14", &(id, d.pc, d.deadline));
@@ -369,7 +487,7 @@ pub(super) fn settle(
                 consent18: h.acceptance,
                 proof,
                 finder: palw_kernel_bond_id_v1(&d.requester),
-                finder_operator: finder.operator_id.as_bytes(),
+                finder_operator: authority.requester_operator,
                 established_daa: established,
                 current_daa: ctx.daa_score,
                 kind: StageAdjudicationKindV14::BoundSourceUnavailable,
@@ -387,6 +505,41 @@ pub(super) fn settle(
         || builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(STAGE_TABLE_V14, stage_key_v14(11, &d.request.job)))
     {
         return Err(refused("stage source default original principal already credited"));
+    }
+    let counter = builder.state.kernel_route.as_ref().unwrap().execution_nonce_counter_v11(&h.requester_operator).map_err(refused)?;
+    let terminal = check_stage_conviction_terminal_v14(
+        &class,
+        &book,
+        &plan,
+        &p.execution.quota,
+        &NativeStageTerminalAnchorV14 {
+            job_id: d.request.job,
+            original_funded_book_root: h.original_book_root,
+            terminal_book_root: book.root(),
+            acceptance18: h.acceptance,
+            nonce: NativeRequesterNonceWitnessV11 {
+                requester: book.job().requester,
+                requester_operator_id: h.requester_operator,
+                next_nonce: counter.next_nonce,
+                counter_root: counter.root(),
+            },
+            established_daa: established,
+            principal_refund: outcome.requester_refund,
+            principal_queue: queue.as_bytes(),
+        },
+        &outcome,
+        reserve,
+    )
+    .map_err(refused)?;
+    paid.mark_stage_verdict_closed_v14(&p.execution.quota, &epoch, &terminal, &verdict_debit).map_err(refused)?;
+    let mut closed_pursuit = pursuit(builder, d.request.job)?;
+    closed_pursuit.open_demands =
+        closed_pursuit.open_demands.checked_sub(1).ok_or_else(|| refused("stage source original pending counter underflow"))?;
+    if !builder.params.reporter_income_active_at(ctx.daa_score) {
+        let finder_queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&d.requester_payout);
+        if builder.state.pending_payouts.get(&finder_queue).is_some_and(|p| p.amount.checked_add(outcome.finder_credit).is_none()) {
+            return Err(refused("stage source original finder payout sum overflow"));
+        }
     }
     let collected = builder.slash_bond(h.producer, reserve as u128)?;
     if collected != outcome.collected_original_slash {
@@ -439,5 +592,10 @@ pub(super) fn settle(
         established_daa: established,
     };
     builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(11, &d.request.job), Some(bytes(&credit)));
-    close(builder, d)
+    native::write_shard(builder, &paid, d.request.job);
+    let mut settled = d;
+    settled.settled = true;
+    builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, pending_key(settled.id()), Some(bytes(&settled)));
+    builder.write_kernel_row(STAGE_TABLE_V14, stage_key_v14(16, &settled.request.job), Some(bytes(&closed_pursuit)));
+    Ok(())
 }

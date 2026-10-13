@@ -2147,11 +2147,11 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource (prepaid source fees)",
         true,
     ),
-    a2_row(PalwA2SlotV1::KernelInner { lo: 63, hi: 63 }, "palw_funded_execution_v11", "RFC-0002 native funded execution11", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 63, hi: 63 }, "palw_funded_execution_v11", "RFC-0002 native funded execution11, explicit consent23/Fund24", true),
     a2_row(PalwA2SlotV1::KernelInner { lo: 64, hi: 64 }, "palw_stage_execution_v14", "RFC-0002 typed external stage14", true),
     a2_row(
         PalwA2SlotV1::StateEncoding {
-            what: "kernel route aux table 112 stage14 source/class/funded job catalogs, immutable policy and source liabilities; shared text11/stage14 requester operator nonce counter",
+            what: "kernel route aux table 112 stage14 source/class/job and owner catalogs, explicit18 producer consent,20 delivery fee cap, original operator-bound source pending/pursuit, actual per-job settlement/principal and terminal GC anchor; shared text11/stage14 operator nonce counter and quota92 source16/trace17 liabilities",
         },
         "palw_stage_execution_v14",
         "RFC-0002 typed source namespace and bounded T/P/A stage admission",
@@ -2205,6 +2205,18 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FlatProofV9 (5) inside KernelRouteChunkV1 (tag 113)" },
         "palw_panel_free_v1",
         "RFC-0002 actor-owned mature v9 proof chunks (also needs tag 113 probabilistic constraints fence)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::FundedProofV11 (6) inside KernelRouteChunkV1 (tag 113)" },
+        "palw_funded_execution_v11",
+        "RFC-0002 original paid native11 proof, own fence before fees or ordinary chunk pools",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::KernelNested { what: "PalwKernelChunkTargetV1::StageProofV14 (7) inside KernelRouteChunkV1 (tag 113)" },
+        "palw_stage_execution_v14",
+        "RFC-0002 original paid typed-stage proof, independent stage14 fence and assembly",
         true,
     ),
     a2_row(

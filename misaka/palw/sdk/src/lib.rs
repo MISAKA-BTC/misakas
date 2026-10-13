@@ -72,6 +72,13 @@ pub mod flat_candidate_v6;
 pub mod flat_candidate_v7;
 /// Independent full-resource preparation of the opt-in non-reward v9 candidate.
 pub mod flat_candidate_v9;
+/// Explicit bounded full-court25 preparation; original artifact context is preserved.
+pub mod flat_court_v25;
+/// Same native derivation for full25 / first-EOS29 maximum contracts.
+pub mod native_text_v29;
+pub mod native_payload_v29;
+/// Complete component manifest/Stage28 pipeline artifacts.
+pub mod full_component_v28;
 pub mod flat_snapshot_v7;
 pub mod flat_vector_v7;
 /// Stream the node's native values into the existing segmented commitment grammar.

@@ -1,0 +1,11 @@
+[    0.4s] Qwen2ForCausalLM — TIR program v1: 3 blocks, 24 layers, 314 nodes, 70 params, 12 consts (3716 B), 2 states, 14308 bytes encoded
+[    0.4s] frontend: built-in data file `qwen2` (76777c6779beb792) (level B), spec e0b3e03aae456035
+[    0.4s] text-generation: token ids → next-token logits; nothing left out
+[    0.6s] calibration statistics from /Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f92976a633d80611/pack/stats.json
+[    0.7s] calibration statistics 460 sites, digest 699c5f6a99095a24c3cd928188b13e188ae77a746703cc2d508d70a2cd0379c7 (from "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f92976a633d80611/pack/stats.json")
+[    0.7s] converting
+[   35.0s]   materialise 8/26
+[   53.0s]   materialise 16/26
+[   71.7s]   materialise 24/26
+[   79.9s]   materialise 26/26
+[   82.9s] target/rfc02-qwen05-linear16.palwtir: 1404 tensors, 971.3 MiB in the tensors, 971.3 MiB file; 1612 chunks (1408 distinct); file digest df6f61c93800c164dd0a39788d169a58d0fd08ff1b30f45ae6faacdb0a4ef3789aa8d09d573797fd71f82f0d3b3e1bea222dc227c7aaddd60dbb8c877a4c39b2

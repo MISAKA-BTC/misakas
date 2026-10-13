@@ -9,7 +9,9 @@ fn fixed_checkpoint() -> RealCheckpointExecutionFixtureV11 {
         .expect("set RFC02_NATIVE_CHECKPOINT_FIXTURE to the pinned actual full-weight execution fixture");
     let raw = std::fs::read(path).unwrap();
     assert_eq!(raw.len(), 11_046_405);
-    let f: RealCheckpointExecutionFixtureV11 = borsh::from_slice(&raw).unwrap();
+    let mut pin = [0u8; 32];
+    faster_hex::hex_decode(b"dde723b3007925bd6c94d9f8cd55fabb80387a9913d7407356f3aa7f42c2c7ca", &mut pin).unwrap();
+    let f = RealCheckpointExecutionFixtureV11::from_pinned_bytes(&raw, pin).unwrap();
     assert_eq!(f.version, 11);
     assert_eq!(faster_hex::hex_string(&f.artifact_sha256), "9af80e4e459cc2334519295fb100c58291382e3e4b4a5ee3e7098e7d1d8a17b6");
     assert_eq!(f.generated, [19, 17, 151645]);
@@ -125,7 +127,7 @@ async fn execution11_actual_qwen05_original64_scope26_fund_commit_and_independen
         &descriptor,
         24,
         &prompt_root_of_ids_v1(&f.prompt),
-        &[],
+        &f.generated[..f.generated.len() - 1],
         &directory,
     );
     let mut body = FlatModelVectorPostV9 {

@@ -804,12 +804,35 @@ pub fn tir_declare_layout_with_parent_v1(
     model_id: Option<&str>,
     parent: Option<&Path>,
 ) -> Result<TirDeclaredLayoutV1, String> {
+    tir_declare_layout_with_metadata_profile_v16(params, bundle, input, output, choice, model_id, parent, None)
+}
+
+/// Explicit provenance parsing profile; None preserves historical declaration behavior.
+#[allow(clippy::too_many_arguments)]
+pub fn tir_declare_layout_with_metadata_profile_v16(
+    params: &Params,
+    bundle: &PalwConsensusParamsV2,
+    input: &Path,
+    output: &Path,
+    choice: &TirLayoutChoiceV1,
+    model_id: Option<&str>,
+    parent: Option<&Path>,
+    profile: Option<misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16>,
+) -> Result<TirDeclaredLayoutV1, String> {
+    use misaka_palw_tir_artifact::metadata_v16::{parse_metadata_v16, parse_recorded_metadata_v16, record_metadata_profile_v16};
     let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(input)?;
     let container = artifact.container();
     let program = &tir_program_with_scheme_v1(&container.program, choice.logits_scheme)?;
     let program_bytes = program.encode();
     let (inventory_root, leaf_count) = artifact.inventory_root()?;
-    let meta0 = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
+    let meta0 = match profile {
+        Some(p) => parse_metadata_v16(&container.header.meta, p)?,
+        None => match serde_json::from_str::<serde_json::Value>(&container.header.meta) {
+            Ok(v) if v.get("metadata_parsing").is_some() => parse_recorded_metadata_v16(&container.header.meta)?,
+            Ok(v) => v,
+            Err(_) => serde_json::json!({}),
+        },
+    };
     let composite = composite_binding(container, program, &meta0, parent)?;
     let artifact_root = composite.as_ref().map_or(inventory_root, |c| c.r.artifact_root());
     let carriable = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(&bundle.court);
@@ -860,7 +883,7 @@ pub fn tir_declare_layout_with_parent_v1(
         &judge,
     )?;
     let (layout, admission) = (chosen.layout, chosen.admission);
-    let mut meta = serde_json::from_str::<serde_json::Value>(&container.header.meta).unwrap_or_else(|_| serde_json::json!({}));
+    let mut meta = meta0;
     tir_calibration_covers_context_v1(program, &meta, layout.max_context)?;
     tir_window_covers_context_v1(&meta, layout.max_context)?;
     if !meta.is_object() {
@@ -868,6 +891,9 @@ pub fn tir_declare_layout_with_parent_v1(
     }
     if let Some(id) = model_id {
         meta["model_id"] = serde_json::Value::String(id.to_string());
+    }
+    if let Some(p) = profile {
+        record_metadata_profile_v16(&mut meta, p)?;
     }
     let layout_bytes = borsh::to_vec(&layout).map_err(|e| format!("the layout does not serialize: {e}"))?;
     if input == output {

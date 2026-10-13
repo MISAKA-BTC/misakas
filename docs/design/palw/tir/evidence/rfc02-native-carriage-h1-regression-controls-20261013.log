@@ -1,0 +1,21 @@
+   Compiling kaspa-mining v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/mining)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.57s
+     Running unittests src/lib.rs (/tmp/rfc02-native-check/debug/deps/kaspa_mining-1b66599a6ccd3758)
+
+running 14 tests
+test mempool::model::transactions_pool::palw_carrier_lane_tests::one_reporters_flood_holds_one_reserved_place ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::native_carrier_reserve_survives_a_higher_fee_market_and_takes_ordinary_room ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_carrier_leads_the_template_under_a_block_of_better_paying_traffic ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_proof_is_promoted_when_its_row_nears_staleness_and_demoted_when_it_is_renewed ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_full_pool_keeps_room_for_a_carrier_and_the_carrier_leads ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::only_h1_kinds_ride_the_lane ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::the_lane_follows_readiness_and_removal ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_da_storm_does_not_keep_a_lapsing_proof_out_of_the_template ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::the_lane_takes_the_first_carrier_of_each_key ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::the_lane_takes_half_a_block_best_payer_first_earlier_first_on_a_tie ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::without_the_flag_there_is_no_lane ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_conviction_still_lands_while_escalated_proofs_keep_coming ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_full_pool_admits_and_templates_a_proof_whose_row_is_about_to_lapse ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::a_flood_of_copies_of_one_row_takes_neither_the_head_nor_the_lane ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 0.11s

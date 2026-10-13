@@ -4323,3 +4323,93 @@ authenticate the governing mass constants from Params. New delivery leases
 must share block room with existing H1/readiness lanes, include paid failed
 attempts and proof transport, and prevent fast slot reuse from exceeding the
 promised service rate. A mass quotation alone does not establish that scheduler.
+
+### 14.55 Original physical leases and native carrier selection
+
+Native text Consent23 and Fund24 explicitly bind the original Consent18,
+Pursuit19 and physical service/lease22 roots. Frozen Fund2 and Consent18 are not
+silently upgraded. A consent23 preparation cannot fall back to Fund2 to omit
+its physical obligations. Global lease admission includes failed answer attempts,
+original proof fragments and localization/transport deadlines. An ordinary stream
+or owned proof stream retains its original slot until its original deadline;
+answering early, copying a pending ID or converting a discovery owner to a proof
+owner cannot manufacture an additional concurrent stream.
+
+The native mempool/template path must authenticate the original pending unit,
+producer/owner, remaining attempt and live lease against the template's exact
+selected-parent state. A route tag, parser success, fee or caller-declared mass
+does not grant priority. Recheck the complete populated transaction against its
+original payload/input/output/script/sigop/contextual-storage envelope. Limit
+UTXO variants of the same unit/part and take at most one such variant in the
+reserved selection for a block. The original unit survives transaction fee,
+signature encoding and UTXO changes; source/trace/proof and text/stage namespaces
+remain distinct. Local index count and retained-byte ceilings also apply, and
+every removal or original-unit retirement releases its exact local entry.
+
+Selection uses the same virtual read snapshot as transaction validation. It may
+not substitute the mutable store tip if the selected-parent state is unavailable.
+Existing H1/readiness carriage and the ordinary fee market share the actual block
+mass left by the native packet. A service boundary crossed by a DAA jump must not
+be ignored merely because the new DAA is not an exact multiple of the period.
+Boundary selection alone does not prove the promised duration: bounds on DAA
+advancement, relay/admission, template refill, competing leases and actual
+inclusion require separate measured evidence. A node-local reserved index is not
+a censorship theorem or an independent Final authority.
+
+The current consumer service remains a non-authorizing probe until the reserved
+builder and its delivery assumptions are verified. Stage14 requires its own
+original physical consent/lease before using this lane; a text23 lease cannot
+authorize a stage response. All shipping activation fields remain absent.
+
+### 14.56 Original burst residency and the new full-court contracts
+
+The full-court25 checker, actual/max EOS stopping29 and Stage28 contracts have
+their own records, roots and bounded decoders. They do not enlarge the frozen
+v7/v9/v11/v14 court, count, pricing or length semantics. Text29 reserves the
+original maximum before Fund, checks the actual first-EOS-or-cap length at
+Commit, and retains the maximum reservation after early stopping. Stage28
+reserves the full original component bundle, real source namespace and the
+whole acquisition/discovery/prove/delivery horizon before Fund. New paid
+transport29 uses u16 parts and at most512 parts; old target6/7 carriers retain
+their u8 and64-part meanings.
+
+Every new Final27 consent must additionally bind Queue30's original policy and
+independently derived plan. Delivery density alone cannot admit a burst: account
+for all answer/proof variants, complete carrier envelopes, populated input UTXO
+scripts and retained index/transaction copies. Reserve both packet count and
+owned bytes in the SAME shared native global before collateral or escrow moves.
+Text and Stage share that global. Joint physical22/Queue30 admission is atomic;
+a live legacy23 lease without an original Queue30 promise cannot be silently
+relabeled. A caller-supplied serialized memory quote is not a checked plan.
+
+An honest consumer provisions the declared native queue in addition to its
+ordinary mempool. Ordinary transactions, including local high-priority entries,
+cannot borrow that earmarked capacity. Local RAM scaling cannot reduce the
+original native reservation. The new queue's complete singleton envelope uses
+confirmed inputs; an unconfirmed ancestor is not an additional free carriage
+slot. Same-unit fee replacement subtracts the superseded original variant once,
+while a third independent variant gets no position. Generic fee/expiry removal
+must retain live indexed native units. Genuine terminal collection releases
+the exact Queue30 and physical22 leases together after their original horizon,
+all pending answers/owners/fragments and physical cooldowns close; it never
+restores frozen21 quota credits.
+
+Final27's trusted public profile binds Queue30 policy in network identity.
+An implemented node selector is distinct from measured whole-claim detection,
+complete cold-reference cost, actual delivery and independent Final/redemption.
+These conditions and A6/A8 evidence still gate activation. All shipping fences
+remain absent until completion evidence passes the contract.
+
+Initial registration31 is a separate, ordinary paid pre-Fund transport for a
+large canonical source/class body. Its signed Start binds original owner,
+permanent network sequence, exact target (Text29 class or Stage28 source/class),
+whole-body root, byte extent, u16 count and expiry inside the original interval.
+At most4 objects and1 per mature operator are retained, with512 parts of32KiB,
+16MiB total and2 original attempts per part/assembly. Charge whole retained and
+assembly buffers in the SAME21-axis global before allocating/storing them;
+malformed inner lengths consume their paid attempt before decoding. Assembly
+rechecks all extents and the original hash, then invokes the target's genuine
+registration checks. The transport cannot dispatch Fund, Commit or Final and
+offers no protected delivery guarantee before Fund. Expired paid collection
+deletes exact bounded fragments while retaining the permanent sequence.
+Frozen object/proof chunk counts and canonical TIR program limits are unchanged.

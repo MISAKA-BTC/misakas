@@ -84,6 +84,53 @@ impl Mempool {
         let replaced_attestation = self.resolve_attestation_dedup(&transaction, priority)?;
         self.validate_attestation_pool_capacity(&transaction, priority, replaced_attestation.is_some())?;
 
+        // Native priority requires the original pending unit, producer and
+        // capacity lease, plus this complete populated transaction's mass.
+        // A signed object copied into an oversized UTXO carrier cannot occupy
+        // the reserve. No raw class/proof is restored by this lookup.
+        let native =
+            kaspa_consensus_core::palw_native_carrier_index_v22::native_carrier_candidate_v22(&transaction.tx).and_then(|candidate| {
+                let snapshot = consensus.native_carriage_snapshot_v22()?;
+                self.transaction_pool.refresh_native_carriers(Some(&snapshot));
+                let e = snapshot.qualify(&candidate, &transaction.as_verifiable())?;
+                let bytes = if let Some(policy) = &snapshot.queue_policy {
+                    let configured = self.config.native_queue_policy_v30.as_ref()?;
+                    if configured.root() != policy.root() {
+                        return None;
+                    }
+                    let bytes =
+                        usize::try_from(policy.check_transaction(&e.envelope, &snapshot.mass, &transaction.as_verifiable()).ok()?)
+                            .ok()?;
+                    if transaction.mempool_estimated_bytes() > bytes {
+                        return None;
+                    }
+                    bytes
+                } else {
+                    transaction.mempool_estimated_bytes()
+                };
+                Some(crate::mempool::model::native_carriers_v22::NativeCarrierAdmissionV22 {
+                    candidate,
+                    deadline: e.deadline,
+                    bytes,
+                    pool_bytes: transaction.mempool_estimated_bytes(),
+                })
+            });
+        if let Some(a) = &native
+            && !self.transaction_pool.can_index_native_carrier(transaction_id, a, &transaction)
+        {
+            return Err(RuleError::RejectNonStandard(
+                transaction_id,
+                "native carrier reserve or two-variant unit limit exceeded".into(),
+            ));
+        }
+
+        if !self.transaction_pool.native_replacement_preserves_units(&transaction, native.as_ref()) {
+            return Err(RuleError::RejectNonStandard(
+                transaction_id,
+                "fee replacement would erase an original paid native unit".into(),
+            ));
+        }
+
         // Check double spends and try to remove them if the RBF policy requires it
         let removed_transaction = self.execute_replace_by_fee(&transaction, rbf_policy)?;
 
@@ -103,7 +150,12 @@ impl Mempool {
         // whose row is lapsing at the tip may take a reserved place and lead the lane (asked once, here).
         let transaction_size = transaction.mempool_estimated_bytes();
         let palw_readiness = self.palw_readiness_admission(consensus, &transaction);
-        let txs_to_remove = self.transaction_pool.limit_transaction_count_with(&transaction, transaction_size, palw_readiness)?;
+        let txs_to_remove = self.transaction_pool.limit_transaction_count_with_native(
+            &transaction,
+            transaction_size,
+            palw_readiness,
+            native.is_some(),
+        )?;
         if !txs_to_remove.is_empty() {
             let transaction_pool_len_before = self.transaction_pool.len();
             for x in txs_to_remove.iter() {
@@ -116,9 +168,7 @@ impl Mempool {
                 //
                 // Note that self.transaction_pool.len() < self.config.maximum_transaction_count means we have
                 // at least one available slot in terms of the count limit
-                if self.transaction_pool.len() < self.config.maximum_transaction_count
-                    && self.transaction_pool.get_estimated_size() + transaction_size <= self.config.mempool_size_limit
-                {
+                if self.transaction_pool.has_admission_capacity_v30(transaction_size, native.is_some()) {
                     break;
                 }
             }
@@ -128,8 +178,7 @@ impl Mempool {
         }
 
         assert!(
-            self.transaction_pool.len() < self.config.maximum_transaction_count
-                && self.transaction_pool.get_estimated_size() + transaction_size <= self.config.mempool_size_limit,
+            self.transaction_pool.has_admission_capacity_v30(transaction_size, native.is_some()),
             "Transactions in mempool: {}, max: {}, mempool bytes size: {}, max: {}",
             self.transaction_pool.len() + 1,
             self.config.maximum_transaction_count,
@@ -144,6 +193,10 @@ impl Mempool {
             .mtx
             .tx
             .clone();
+
+        if let Some(a) = native {
+            self.transaction_pool.index_native_carrier(transaction_id, a);
+        }
 
         // Now that the replacement shard is safely in the pool, drop the superseded same-key shard.
         // Tolerate it already being gone (e.g. evicted above as "making room"); never fail the

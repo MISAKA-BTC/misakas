@@ -562,6 +562,95 @@ impl DiscoveryShardV13 {
     }
 }
 
+/// A fixed, paid fifth-row projection for a third-party expiration. Native must
+/// journal every returned row and the exact original ticket deletion together.
+/// The original nonce/debit remains a separate durable tombstone.
+pub struct DiscoveryPublicRetirementV13 {
+    pub global: QuotaGlobalRowV11,
+    pub payer: QuotaActorRowV11,
+    pub owner: QuotaActorRowV11,
+    pub subject: QuotaSubjectSummaryV11,
+    pub original_ticket: Digest,
+    pub original_paid_root: Digest,
+}
+impl DiscoveryShardV13 {
+    pub fn retire_expired_for(
+        &self,
+        caller: &CheckedQuotaShardV11,
+        quota: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        plan: &DiscoveryPlanV13,
+        terminal: &CheckedQuotaTerminalV11,
+    ) -> Result<DiscoveryPublicRetirementV13, String> {
+        quota.check()?;
+        epoch.check(quota)?;
+        let row = self.row.as_ref().ok_or("public discovery retirement original row absent")?;
+        let original_global = caller.global_row();
+        let original_payer = caller.actor_row();
+        let original_subject = caller.subject_row().ok_or("public discovery retirement selected subject absent")?;
+        if original_global.root() != self.global.root()
+            || original_subject.row_root() != self.subject.row_root()
+            || !self.subject.closed
+            || terminal.binding != self.subject.binding
+            || original_payer.actor == row.actor
+            || self.actor.actor != row.actor
+            || self.policy_root != plan.policy_root
+            || plan.quota_plan_root != row_plan_quota(&self.subject)
+            || row.plan_root != plan.root()
+            || row.subject_root != self.subject.binding.root()
+            || epoch.network_interval <= row.admitted_interval
+            || epoch.block_daa <= row.horizon_daa
+            || epoch.block_daa <= self.subject.binding.deadline_daa
+            || row.admitted_interval != self.subject.binding.admitted_interval
+            || row.consumed.checked_add(&row.guarantee_remaining)? != row.committed
+            || self.global.protected_seal_count == 0
+            || self.actor.retained_protected_seals == 0
+            || self.subject.retained_protected_seals == 0
+        {
+            return Err("public discovery retirement lacks exact expired closed original owner/counters".into());
+        }
+        let bytes = QUOTA_GLOBAL_ROW_BYTES_V11
+            + 2 * QUOTA_SELECTED_ACTOR_ROW_BYTES_V11
+            + QUOTA_SELECTED_SUBJECT_ROW_BYTES_V11
+            + 2048
+            + DISCOVERY_JOURNAL_BYTES_V13;
+        let quantities = action_envelope(bytes as u128 * 64, bytes, None)?.checked_add(&plan.transition)?;
+        if caller.seal_row().is_some() {
+            return Err("public discovery payer must select no proof seal".into());
+        }
+        let mut paid = CheckedQuotaShardV11::from_native_rows(
+            quota,
+            &original_global,
+            &original_global.root(),
+            original_payer.actor,
+            self.subject.binding.job_id,
+            None,
+            Some((&original_payer, &original_payer.root())),
+            Some((original_subject, &original_subject.row_root())),
+            None,
+        )?;
+        paid.debit_ordinary(quota, epoch, &quantities)?;
+        let mut global = paid.global_row();
+        let payer = paid.actor_row();
+        let mut owner = self.actor.clone();
+        let mut subject = self.subject.clone();
+        global.protected_seal_count -= 1;
+        owner.retained_protected_seals -= 1;
+        subject.retained_protected_seals -= 1;
+        Ok(DiscoveryPublicRetirementV13 {
+            global,
+            payer,
+            owner,
+            subject,
+            original_ticket: row.key,
+            original_paid_root: row.original_paid_root,
+        })
+    }
+}
+fn row_plan_quota(subject: &QuotaSubjectSummaryV11) -> Digest {
+    subject.binding.quota_plan_root
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

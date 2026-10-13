@@ -11,6 +11,7 @@ use crate::{
                 selectors::{PalwCarrierLaneSelector, SequenceSelectorTransaction},
             },
             map::MempoolTransactionCollection,
+            native_carriers_v22::{NativeCarrierAdmissionV22, NativeCarrierIndexV22},
             palw_carriers::{
                 PALW_H1_CARRIER_LANE_MASS_DIVISOR, PALW_H1_CARRIER_LANE_SCAN, PalwCarrierIndexV1, PalwCarrierReserveV1,
                 PalwMarketCarrierSetV1, PalwReadinessAdmissionV1,
@@ -25,6 +26,7 @@ use crate::{
 };
 use kaspa_consensus_core::{
     block::TemplateTransactionSelector,
+    palw_native_carrier_index_v22::NativeCarriageSnapshotV22,
     tx::{MutableTransaction, TransactionId, TransactionOutpoint},
 };
 use kaspa_core::{debug, time::unix_now, trace};
@@ -112,6 +114,8 @@ pub(crate) struct TransactionsPool {
     /// `Config::palw_h1_carrier_priority` is set.
     palw_market_carriers: PalwMarketCarrierSetV1,
 
+    native_carriers: NativeCarrierIndexV22,
+
     /// **M1: whether the last block this pool saw carried a possession proof** — the turn the lane's
     /// head reads ([`Self::build_palw_carrier_lane`]): after such a block, H-1 carriers that wait and
     /// that the head would leave no room for lead the lane, and the head follows them if it still
@@ -125,6 +129,13 @@ impl TransactionsPool {
         let target_time_per_block = 1.0 / (config.network_blocks_per_second as f64);
         let palw_carrier_reserve = PalwCarrierReserveV1::of(&config);
         let palw_lane_budget = config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR;
+        let (native_packets, native_bytes) = config
+            .native_queue_policy_v30
+            .as_ref()
+            .map_or(((config.maximum_transaction_count as usize / 4).min(16_384), config.mempool_size_limit / 4), |p| {
+                (p.max_packets as usize, p.max_owned_bytes as usize)
+            });
+        let native_carriers = NativeCarrierIndexV22::new(native_packets, native_bytes);
         Self {
             config,
             all_transactions: MempoolTransactionCollection::default(),
@@ -139,6 +150,7 @@ impl TransactionsPool {
             attestation_quarantine: AttestationQuarantine::default(),
             palw_carriers: PalwCarrierIndexV1::new(palw_carrier_reserve, palw_lane_budget),
             palw_market_carriers: PalwMarketCarrierSetV1::default(),
+            native_carriers,
             palw_last_block_carried_readiness: false,
         }
     }
@@ -290,6 +302,7 @@ impl TransactionsPool {
         // ADR-0152 H-1: the carrier index follows the pool through the same single removal site.
         self.palw_carriers.remove(transaction_id);
         self.palw_market_carriers.remove(transaction_id);
+        self.native_carriers.remove(transaction_id);
 
         // TODO: consider using `self.parent_transactions.get(transaction_id)`
         // The tradeoff to consider is whether it might be possible that a parent tx exists in the pool
@@ -314,6 +327,7 @@ impl TransactionsPool {
             self.estimated_size -= tx.mtx.mempool_estimated_bytes();
             tx.mtx = transaction;
             self.estimated_size += tx.mtx.mempool_estimated_bytes();
+            self.native_carriers.update_pool_bytes(&tx.id(), tx.mtx.mempool_estimated_bytes());
             true
         } else {
             false
@@ -355,6 +369,143 @@ impl TransactionsPool {
         Box::new(PalwCarrierLaneSelector::new(carriers, rest))
     }
 
+    pub(crate) fn can_index_native_carrier(&self, id: TransactionId, a: &NativeCarrierAdmissionV22, tx: &MutableTransaction) -> bool {
+        self.native_carriers.can_insert_replacing(id, a, self.get_double_spend_transaction_ids(tx).into_iter().map(|d| d.owner_id))
+    }
+
+    pub(crate) fn index_native_carrier(&mut self, id: TransactionId, a: NativeCarrierAdmissionV22) {
+        assert!(self.all_transactions.contains_key(&id));
+        assert!(self.native_carriers.insert(id, a), "native admission was checked under this pool lock");
+    }
+
+    pub(crate) fn refresh_native_carriers(&mut self, snapshot: Option<&NativeCarriageSnapshotV22>) {
+        // A temporarily unavailable selected-parent view suspends priority; it
+        // does not erase an original bounded reserve and expose it to eviction.
+        // A later authoritative view retires vanished/expired/consumed units.
+        let Some(snapshot) = snapshot else { return };
+        let expired: Vec<_> = self
+            .native_carriers
+            .entries()
+            .filter_map(|(id, c)| {
+                let live = self
+                    .all_transactions
+                    .get(&id)
+                    .is_some_and(|tx| tx.mtx.is_fully_populated() && snapshot.qualify(c, &tx.mtx.as_verifiable()).is_some());
+                (!live).then_some(id)
+            })
+            .collect();
+        for id in expired {
+            self.native_carriers.remove(&id);
+        }
+    }
+
+    pub(crate) fn has_native_carriers(&self) -> bool {
+        self.native_carriers.entries().next().is_some()
+    }
+    fn admission_pool_limits_v30(&self, native: bool) -> (usize, usize) {
+        if native {
+            return (self.config.maximum_transaction_count, self.config.mempool_size_limit);
+        }
+        self.config.native_queue_policy_v30.as_ref().map_or(
+            (self.config.maximum_transaction_count, self.config.mempool_size_limit),
+            |p| {
+                let (count, bytes) = self.native_carriers.pool_occupation();
+                (
+                    self.config.maximum_transaction_count.saturating_sub(p.max_packets as usize) + count,
+                    self.config.mempool_size_limit.saturating_sub(p.max_owned_bytes as usize) + bytes,
+                )
+            },
+        )
+    }
+    pub(crate) fn has_admission_capacity_v30(&self, size: usize, native: bool) -> bool {
+        let (count, bytes) = self.admission_pool_limits_v30(native);
+        self.len() < count && self.estimated_size.checked_add(size).is_some_and(|n| n <= bytes)
+    }
+
+    pub(crate) fn native_replacement_preserves_units(
+        &self,
+        tx: &MutableTransaction,
+        admission: Option<&NativeCarrierAdmissionV22>,
+    ) -> bool {
+        if !self.has_native_carriers() {
+            return true;
+        }
+        // Fee replacement must not erase a paid native unit, including a
+        // reserved descendant of the replaced transaction. An independently
+        // qualified replacement may preserve exactly that same original unit.
+        for spent in self.get_double_spend_transaction_ids(tx) {
+            for id in self.get_redeemer_ids_in_pool(&spent.owner_id).into_iter().chain(once(spent.owner_id)) {
+                if self.native_carriers.contains(&id) && !admission.is_some_and(|a| self.native_carriers.same_unit(&id, &a.candidate))
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub(crate) fn build_selector_with_native_carriage(
+        &self,
+        latest_ready_epoch: Option<u64>,
+        native: Option<NativeCarriageSnapshotV22>,
+    ) -> Box<dyn TemplateTransactionSelector> {
+        let Some(native) = native.filter(|s| s.is_service_turn()) else { return self.build_selector(latest_ready_epoch) };
+        if let Some(policy) = &native.queue_policy
+            && !self
+                .config
+                .native_queue_policy_v30
+                .as_ref()
+                .is_some_and(|p| p.root() == policy.root() && p.consumer_capacity(p.max_packets as usize, p.max_owned_bytes as usize))
+        {
+            return self.build_selector(latest_ready_epoch);
+        }
+        let selected = self.native_carriers.entries().find_map(|(id, c)| {
+            let tx = self.all_transactions.get(&id)?;
+            if !self.parent_transactions.get(&id).is_none_or(|p| p.is_empty()) || !tx.mtx.is_fully_populated() {
+                return None;
+            }
+            let e = native.qualify(c, &tx.mtx.as_verifiable())?;
+            let mass = native.mass.check_transaction(&e.envelope, &tx.mtx.as_verifiable()).ok()?;
+            (mass <= native.service.slot_mass && mass <= self.config.maximum_mass_per_block).then_some((id, c, mass))
+        });
+        let Some((id, c, mass)) = selected else { return self.build_selector(latest_ready_epoch) };
+        let tx = self.all_transactions.get(&id).expect("indexed ready native carrier");
+        let mut exclude: HashSet<TransactionId> = self.native_carriers.aliases(c).collect();
+        let mut lane = vec![SequenceSelectorTransaction::new(tx.mtx.tx.clone(), mass)];
+        let mut remaining = self.config.maximum_mass_per_block - mass;
+        for h1 in self
+            .build_palw_carrier_lane_with_budget(remaining.min(self.config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR))
+        {
+            if exclude.contains(&h1.tx.id()) || h1.mass > remaining {
+                continue;
+            }
+            remaining -= h1.mass;
+            exclude.insert(h1.tx.id());
+            lane.push(h1);
+        }
+        // Share occupation with the refill lane. A stale UTXO or classifier
+        // rejection of the native/H1 packet must release mass immediately,
+        // rather than leaving the rest under a permanently reduced budget.
+        let policy = &self.config.attestation_policy;
+        let base_policy = Policy::new(self.config.maximum_mass_per_block)
+            .with_max_attestation_shard_txs(policy.max_attestation_shard_txs_per_block)
+            .with_max_attestation_shard_mass(policy.max_attestation_shard_mass_per_block);
+        if let Some(epoch) = latest_ready_epoch.filter(|_| policy.enabled) {
+            for (txid, meta) in self.attestation_index.by_txid.iter() {
+                if meta.shard_epoch > epoch || self.attestation_quarantine.is_active(txid, epoch) {
+                    exclude.insert(*txid);
+                }
+            }
+            for priority in self.build_attestation_priority_set(epoch) {
+                if exclude.insert(priority.tx.id()) {
+                    lane.push(priority);
+                }
+            }
+        }
+        let remainder = self.ready_transactions.sequence_excluding(&exclude);
+        Box::new(crate::mempool::model::frontier::selectors::AttestationPrioritySelector::new(lane, remainder, base_policy))
+    }
+
     /// **ADR-0152 v3.1 H-1 (P2-9): the lifecycle carriers a template takes before anything else.**
     ///
     /// A carrier pays the minimum relay fee (the panel's funder does), so under a block's worth of
@@ -390,10 +541,13 @@ impl TransactionsPool {
     /// (`MAX_INFLIGHT_CARRIERS`), so halving proof throughput would cost them more than the lane
     /// gives back (kaspad `palw_readiness_escalation`'s network model).
     pub(crate) fn build_palw_carrier_lane(&self) -> Vec<SequenceSelectorTransaction> {
+        self.build_palw_carrier_lane_with_budget(self.config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR)
+    }
+
+    fn build_palw_carrier_lane_with_budget(&self, budget: u64) -> Vec<SequenceSelectorTransaction> {
         if !self.config.palw_h1_carrier_priority || self.palw_carriers.is_empty() {
             return Vec::new();
         }
-        let budget = self.config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR;
         let head = self.palw_carriers.readiness_heads().take(PALW_H1_CARRIER_LANE_SCAN).find_map(|(id, mass)| {
             let transaction = self.all_transactions.get(&id).filter(|_| self.is_ready_in_pool(&id) && mass <= budget)?;
             Some(SequenceSelectorTransaction::new(transaction.mtx.tx.clone(), mass))
@@ -501,6 +655,15 @@ impl TransactionsPool {
     /// The pre-H-1 composition within `block_mass` (what the carrier lane left; the whole block when
     /// it is empty, and then exactly the selector this pool built before the lane existed).
     fn build_selector_within(&self, latest_ready_epoch: Option<u64>, block_mass: u64) -> Box<dyn TemplateTransactionSelector> {
+        self.build_selector_within_excluding(latest_ready_epoch, block_mass, &HashSet::new())
+    }
+
+    fn build_selector_within_excluding(
+        &self,
+        latest_ready_epoch: Option<u64>,
+        block_mass: u64,
+        extra_exclude: &HashSet<TransactionId>,
+    ) -> Box<dyn TemplateTransactionSelector> {
         let policy = &self.config.attestation_policy;
         let base_policy = Policy::new(block_mass)
             .with_max_attestation_shard_txs(policy.max_attestation_shard_txs_per_block)
@@ -508,10 +671,18 @@ impl TransactionsPool {
 
         // Fast path: overlay off, no ready epoch, or no attestation shards in the pool.
         let Some(latest_ready_epoch) = latest_ready_epoch else {
-            return self.ready_transactions.build_selector(&base_policy);
+            return if extra_exclude.is_empty() {
+                self.ready_transactions.build_selector(&base_policy)
+            } else {
+                self.ready_transactions.build_selector_excluding(&base_policy, extra_exclude)
+            };
         };
         if !policy.enabled || self.attestation_index.is_empty() {
-            return self.ready_transactions.build_selector(&base_policy);
+            return if extra_exclude.is_empty() {
+                self.ready_transactions.build_selector(&base_policy)
+            } else {
+                self.ready_transactions.build_selector_excluding(&base_policy, extra_exclude)
+            };
         }
 
         let priority = self.build_attestation_priority_set(latest_ready_epoch);
@@ -527,7 +698,7 @@ impl TransactionsPool {
         // Computing this BEFORE the `priority.is_empty()` fallback closes the single-eligible-shard /
         // DNS-overlay-wedge case (only shard is quarantined/future ⇒ empty priority set), where the
         // old fallback returned an UNFILTERED selector and leaked the shard.
-        let mut exclude: std::collections::HashSet<TransactionId> = std::collections::HashSet::new();
+        let mut exclude: std::collections::HashSet<TransactionId> = extra_exclude.clone();
         for (tx_id, meta) in self.attestation_index.by_txid.iter() {
             if meta.shard_epoch > latest_ready_epoch || self.attestation_quarantine.is_active(tx_id, latest_ready_epoch) {
                 exclude.insert(*tx_id);
@@ -707,16 +878,26 @@ impl TransactionsPool {
     /// lapsing row's proof the reserve will hold (`PalwCarrierIndexV1::would_reserve_readiness_admission`:
     /// ready, within the lane, its row not yet represented, inside the proofs' quarter) takes its room
     /// exactly as an H-1 carrier does; any other proof is an ordinary transaction.
+    #[cfg(test)]
     pub(crate) fn limit_transaction_count_with(
         &self,
         transaction: &MutableTransaction,
         transaction_size: usize,
         palw_readiness: Option<PalwReadinessAdmissionV1>,
     ) -> RuleResult<Vec<TransactionId>> {
+        self.limit_transaction_count_with_native(transaction, transaction_size, palw_readiness, false)
+    }
+
+    pub(crate) fn limit_transaction_count_with_native(
+        &self,
+        transaction: &MutableTransaction,
+        transaction_size: usize,
+        palw_readiness: Option<PalwReadinessAdmissionV1>,
+        native_takes_reserve: bool,
+    ) -> RuleResult<Vec<TransactionId>> {
         // No eviction needed -- return
-        if self.len() < self.config.maximum_transaction_count
-            && self.estimated_size + transaction_size <= self.config.mempool_size_limit
-        {
+        let (count_limit, bytes_limit) = self.admission_pool_limits_v30(native_takes_reserve);
+        if self.has_admission_capacity_v30(transaction_size, native_takes_reserve) {
             return Ok(Default::default());
         }
 
@@ -724,24 +905,25 @@ impl TransactionsPool {
         // asked through the index's own rule, so the carrier let evict for the reserve is the one
         // the insertion then reserves (the evictions below never touch a reserved carrier).
         // M1: an escalating possession proof the reserve will hold takes its room the same way.
-        let takes_reserve = self.config.palw_h1_carrier_priority
-            && (kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(&transaction.tx).is_some_and(
-                |object| {
-                    let lane_key = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_lane_key_v1(&object);
-                    self.palw_carriers.would_reserve(transaction_size, lane_key.as_ref())
-                },
-            ) || palw_readiness.is_some_and(|admission| {
-                admission.urgency.is_some_and(|urgency| urgency.is_lapsing())
-                    && self.palw_carriers.would_reserve_readiness_admission(
-                        &admission,
-                        transaction_size,
-                        // The frontier's own weight (`FeerateTransactionKey`), which the lane compares.
-                        transaction
-                            .calculated_non_contextual_masses
-                            .map_or(0, |masses| kaspa_consensus_core::mass::ContextualMasses::new(transaction.tx.mass()).max(masses)),
-                        self.get_parent_transaction_ids_in_pool(transaction).is_empty(),
-                    )
-            }));
+        let takes_reserve = native_takes_reserve
+            || self.config.palw_h1_carrier_priority
+                && (kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(&transaction.tx).is_some_and(
+                    |object| {
+                        let lane_key = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_lane_key_v1(&object);
+                        self.palw_carriers.would_reserve(transaction_size, lane_key.as_ref())
+                    },
+                ) || palw_readiness.is_some_and(|admission| {
+                    admission.urgency.is_some_and(|urgency| urgency.is_lapsing())
+                        && self.palw_carriers.would_reserve_readiness_admission(
+                            &admission,
+                            transaction_size,
+                            // The frontier's own weight (`FeerateTransactionKey`), which the lane compares.
+                            transaction.calculated_non_contextual_masses.map_or(0, |masses| {
+                                kaspa_consensus_core::mass::ContextualMasses::new(transaction.tx.mass()).max(masses)
+                            }),
+                            self.get_parent_transaction_ids_in_pool(transaction).is_empty(),
+                        )
+                }));
 
         // Returns a vector of transactions to be removed (the caller has to actually remove)
         let feerate_threshold = transaction.calculated_feerate().unwrap();
@@ -762,7 +944,7 @@ impl TransactionsPool {
             // transaction, not for another carrier — nor is anything whose eviction would take one
             // with it. An unreserved carrier is an ordinary transaction here. (The index is empty
             // where the flag is off.)
-            if redeemers.iter().any(|id| self.palw_carriers.is_reserved(id)) {
+            if redeemers.iter().any(|id| self.palw_carriers.is_reserved(id) || self.native_carriers.contains(id)) {
                 continue;
             }
 
@@ -777,8 +959,8 @@ impl TransactionsPool {
             txs_to_remove.push(tx.id());
             selection_overall_size += tx.mtx.mempool_estimated_bytes();
 
-            if self.len() + 1 - txs_to_remove.len() <= self.config.maximum_transaction_count
-                && self.estimated_size + transaction_size - selection_overall_size <= self.config.mempool_size_limit
+            if self.len() + 1 - txs_to_remove.len() <= count_limit
+                && self.estimated_size + transaction_size - selection_overall_size <= bytes_limit
             {
                 return Ok(txs_to_remove);
             }
@@ -860,6 +1042,7 @@ impl TransactionsPool {
             .values()
             .filter_map(|x| {
                 if (x.priority == Priority::Low)
+                    && !self.native_carriers.contains(&x.id())
                     && virtual_daa_score > x.added_at_daa_score + self.config.transaction_expire_interval_daa_score
                 {
                     Some(x.id())
@@ -1352,6 +1535,87 @@ mod palw_carrier_lane_tests {
         let (size, id) = (mtx.mempool_estimated_bytes(), mtx.id());
         pool.add_transaction(mtx, 0, Priority::Low, size).unwrap();
         id
+    }
+
+    #[test]
+    fn original_queue_capacity_is_kept_even_when_ordinary_entries_are_high_priority() {
+        use kaspa_consensus_core::{
+            palw_flat_execution_capacity_v22::NativePaidCarrierRequestV22, palw_native_carrier_index_v22::NativeCarrierCandidateV22,
+            palw_native_queue_v30::NativeQueuePolicyV30,
+        };
+        let size = mtx(SUBNETWORK_ID_NATIVE, vec![], 1, 1000, 1).mempool_estimated_bytes();
+        let mut policy = NativeQueuePolicyV30::probe([9; 64]);
+        policy.max_packets = 2;
+        policy.max_owned_bytes = (2 * size) as u64;
+        let mut config = Config::build_default(1000, false, BLOCK_MASS);
+        config.maximum_transaction_count = 6;
+        config.mempool_size_limit = 6 * size;
+        config.native_queue_policy_v30 = Some(policy);
+        let mut pool = TransactionsPool::new(Arc::new(config));
+        for salt in 1..=4 {
+            let tx = mtx(SUBNETWORK_ID_NATIVE, vec![], salt, 1000, 100_000);
+            pool.add_transaction(tx, 0, Priority::High, size).unwrap();
+        }
+        let ordinary = mtx(SUBNETWORK_ID_NATIVE, vec![], 5, 1000, 200_000);
+        assert!(!pool.has_admission_capacity_v30(size, false));
+        assert!(pool.limit_transaction_count(&ordinary, size).is_err(), "ordinary priority cannot consume a promised native slot");
+        assert!(pool.limit_transaction_count_with_native(&ordinary, size, None, true).unwrap().is_empty());
+        let id = add(&mut pool, ordinary);
+        let candidate = NativeCarrierCandidateV22 {
+            namespace: 63,
+            request: NativePaidCarrierRequestV22::SourceAnswer { pending: [1; 64] },
+            owner: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+        };
+        pool.index_native_carrier(id, NativeCarrierAdmissionV22 { candidate, deadline: 100, bytes: size, pool_bytes: size });
+        assert_eq!(pool.native_carriers.pool_occupation(), (1, size));
+        assert!(!pool.has_admission_capacity_v30(size, false));
+        assert!(pool.has_admission_capacity_v30(size, true));
+        assert!(
+            !pool.collect_expired_low_priority_transactions(u64::MAX / 2).contains(&id),
+            "generic expiry cannot erase an original bounded native reserve"
+        );
+        pool.remove_transaction(&id).unwrap();
+        assert_eq!(pool.native_carriers.pool_occupation(), (0, 0));
+        assert!(pool.has_admission_capacity_v30(size, true));
+        assert!(!pool.has_admission_capacity_v30(size, false), "retirement restores the original earmarked slot");
+    }
+
+    #[test]
+    fn native_carrier_reserve_survives_a_higher_fee_market_and_takes_ordinary_room() {
+        use kaspa_consensus_core::palw_flat_execution_capacity_v22::NativePaidCarrierRequestV22;
+        use kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarrierCandidateV22;
+        let mut config = Config::build_default(1000, false, BLOCK_MASS);
+        config.maximum_transaction_count = 8;
+        config.palw_h1_carrier_priority = false;
+        let mut pool = TransactionsPool::new(Arc::new(config));
+        let held = add(&mut pool, mtx(SUBNETWORK_ID_NATIVE, vec![], 1, 1000, 1));
+        // Trusted admission is injected here solely to exercise local pool
+        // conservation. Original-row/owner/mass authentication is independent.
+        let candidate = NativeCarrierCandidateV22 {
+            namespace: 63,
+            request: NativePaidCarrierRequestV22::SourceAnswer { pending: [1; 64] },
+            owner: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+        };
+        let held_bytes = pool.all_transactions[&held].mtx.mempool_estimated_bytes();
+        pool.index_native_carrier(
+            held,
+            NativeCarrierAdmissionV22 { candidate, deadline: 100, bytes: held_bytes, pool_bytes: held_bytes },
+        );
+        pool.refresh_native_carriers(None);
+        assert!(pool.has_native_carriers(), "missing parent state suspends priority without erasing the bounded reserve");
+        for n in 2..9 {
+            add(&mut pool, mtx(SUBNETWORK_ID_NATIVE, vec![], n, 1000, 100_000));
+        }
+        let ordinary = mtx(SUBNETWORK_ID_NATIVE, vec![], 10, 1000, 200_000);
+        let evicted = pool.limit_transaction_count(&ordinary, ordinary.mempool_estimated_bytes()).unwrap();
+        assert!(!evicted.contains(&held), "a higher fee cannot take an original admitted native place");
+        let paid = mtx(SUBNETWORK_ID_NATIVE, vec![], 11, 1000, 1);
+        assert!(pool.limit_transaction_count(&paid, paid.mempool_estimated_bytes()).is_err());
+        let evicted = pool.limit_transaction_count_with_native(&paid, paid.mempool_estimated_bytes(), None, true).unwrap();
+        assert!(!evicted.is_empty());
+        assert!(!evicted.contains(&held), "a new paid unit evicts only ordinary room");
+        pool.remove_transaction(&held).unwrap();
+        assert!(!pool.has_native_carriers(), "every removal path releases its exact native metadata reserve");
     }
 
     /// Fifty native transactions paying 100 sompi a gram, 1,000 mass each: five blocks' worth.

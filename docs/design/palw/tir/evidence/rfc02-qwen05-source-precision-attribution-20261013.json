@@ -1,0 +1,73 @@
+{
+  "schema": "misaka.rfc02.source-precision-attribution.v1",
+  "hashed_inputs": {
+    "rfc02-qwen05-context512-task-protocol-20261013.json": "4336f7660c1bff144711983084aba8b64b91314c495df876fccf0bed432cc191",
+    "rfc02-qwen05-independent-task-source-20261013.json": "084fd3bb3363429eea2435d968f165a52fcda3ccb32c8580cb9c37de4e81ab9e",
+    "rfc02-qwen05-integer-task-20261013.json": "b7f969acc32e15739948666082595beb55bfe4f91a078935ac1dbb25a5b9c322",
+    "rfc02-qwen05-linear16-context512-task-protocol-20261013.json": "cbc90725023c5678d3b4c23e24e404fa0cb57fdf3ac9d231892d68eab020fa69",
+    "rfc02-qwen05-linear16-independent-task-source-20261013.json": "92f60c14274f1b3568c705727d46ed0f225de30dbdffea82a087308e5462789c",
+    "rfc02-qwen05-linear16-integer-task-20261013.json": "a235ec04e09382e77d90972be14d21b80f9eb8586d98a028345a3707a79b343c",
+    "rfc02-qwen05-linear16-task-score-20261013.json": "909949274b2ead62c4ae93df2f09b7df16df776138b5c098a4ff51d8d823053f",
+    "rfc02-qwen05-HL-prefix-observation-20261013.json": "59dc7020383d24dacc4f0a09d526e45dbef38e40e41a1c99be850eefc707b937",
+    "rfc02-qwen05-linear16-EOS-prefix-observation-20261013.json": "9e06fa4afaa06a21e31d80c10af3eb589c2c48a48b3ea852f3445aa8a7e3d2cf"
+  },
+  "old_source_and_integer_exact_prompt_token_equality": true,
+  "old_vs_new_source_jobs_byte_equal": true,
+  "old_same_input_fidelity_observation": true,
+  "old_vs_publisher_template_mismatch": "Both old source and integer were fed identical manually encoded user/assistant IDs; the source tokenizer chat_template would prepend its default system message. This is a preprocessing mismatch versus the publisher template, not a source/integer input mismatch. Old fixed32 fidelity FAIL and source answer failures remain.",
+  "linear16_profile_artifact": "1c3ca91bed1b71f2e98ca01ffd8ea72be2fcf3ce57537c37d5c5d9de2565bc9c",
+  "linear16_program_sha256": "546c75c4a044ce47266aa90924aa30b215785dbc1490dfdaa34bf9b585787bff",
+  "same_prefix_source_HF_EOS_score": 14.237072944641113,
+  "same_prefix_source_HL_EOS_score": 14.236946105957031,
+  "same_prefix_source_HF_rival_score": 14.14610481262207,
+  "same_prefix_source_HL_rival_score": 14.146061897277832,
+  "linear16_same_prefix_scores": [
+    {
+      "declared_float_units": 14.273643732070926,
+      "integer_raw": 239472004,
+      "token_id": 151645
+    },
+    {
+      "declared_float_units": 14.120771229267124,
+      "integer_raw": 236907229,
+      "token_id": 6313
+    },
+    {
+      "declared_float_units": 5.250739455223084,
+      "integer_raw": 88092790,
+      "token_id": 151643
+    }
+  ],
+  "linear16_same_prefix_selected_source_EOS": true,
+  "linear16_layout15_all21_position_logits_bitexact": true,
+  "linear16_frozen_fixed32_score": {
+    "generated_token_agreement": 0.90625,
+    "exact_generated_job_fraction": 0.6666666666666666,
+    "source_task_answer_fraction": 0.6666666666666666,
+    "integer_task_answer_fraction": 0.6666666666666666,
+    "predeclared_generation_and_answer_thresholds_met": false
+  },
+  "linear16_divergences": [
+    {
+      "id": "arithmetic-512-1",
+      "first_divergence_index": null,
+      "source_first_EOS": 2,
+      "divergence_after_source_and_integer_EOS": true
+    },
+    {
+      "id": "translation-512-1",
+      "first_divergence_index": 23,
+      "source_first_EOS": 1,
+      "divergence_after_source_and_integer_EOS": true
+    },
+    {
+      "id": "code-512-1",
+      "first_divergence_index": null,
+      "source_first_EOS": 11,
+      "divergence_after_source_and_integer_EOS": true
+    }
+  ],
+  "no_thresholds_or_original_source_task_pins_modified": true,
+  "new_publisher_template_first_EOS_v2_diagnostics_are_separate": "predeclared fresh task/decode identities, actual terminated output lengths, never substitute for old fixed32 records",
+  "fullcontext_sourcefidelity_nativeFinal_or_A6_A8_established": false
+}

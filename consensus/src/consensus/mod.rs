@@ -2565,6 +2565,12 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_readiness_urgency_v1_impl(carriers)
     }
 
+    fn native_carriage_snapshot_v22(
+        &self,
+    ) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+        self.virtual_processor.native_carriage_snapshot_v22()
+    }
+
     fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
         self.virtual_processor.palw_h1_carrier_refusals_v1_impl(txs)
     }

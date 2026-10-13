@@ -155,6 +155,10 @@ pub struct ConvertRequest {
     pub max_window: Option<u32>,
     /// [`LowerOpts::gdn_core_wide`]: recorded in the artifact's meta (only when set) and pinned by the runtime pack.
     pub gdn_core_wide: bool,
+    /// Explicit decoder linear weight profile; 8 preserves legacy artifact bytes.
+    pub linear_weight_bits: u8,
+    /// Explicit pins for a freshly converted full25 artifact; legacy conversion has none.
+    pub full_court_source_pin: Option<crate::full_court_source25::SourcePinV25>,
     pub chunk_store: Option<std::path::PathBuf>,
     pub keep_chunks: bool,
     /// MiB of `f32` per block of rows, and the size from which a row-wise tensor is made by blocks.
@@ -190,6 +194,8 @@ impl ConvertRequest {
             policy: QuantPolicy::default(),
             max_window: None,
             gdn_core_wide: false,
+            linear_weight_bits: 8,
+            full_court_source_pin: None,
             chunk_store: None,
             keep_chunks: false,
             block_mib: 16,
@@ -236,7 +242,12 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     let t0 = std::time::Instant::now();
     // Before the model is opened: lowering evaluates RoPE frequencies and the like, in this mode.
     crate::detmath::set_mode(req.math);
-    let opts = LowerOpts { max_window: req.max_window, gdn_core_wide: req.gdn_core_wide, ..LowerOpts::default() };
+    let opts = LowerOpts {
+        max_window: req.max_window,
+        gdn_core_wide: req.gdn_core_wide,
+        linear_weight_bits: req.linear_weight_bits,
+        ..LowerOpts::default()
+    };
     let reg = QuantRegistry::with_files(&req.quant_formats)?;
     let read = match &req.adapter {
         Some(p) => {
@@ -245,6 +256,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         }
         None => crate::hf_schema::ReadOptions::default(),
     };
+    if let Some(pin) = &req.full_court_source_pin {
+        pin.verify_files(&req.model)?;
+    }
     let opened = crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?;
     let prep = &opened.prepared;
     let ck = opened.source.as_ref();
@@ -271,6 +285,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         Some(&tensor_index),
         &crate::model::sibling_files(&req.model),
     );
+    if let Some(pin) = &req.full_court_source_pin {
+        pin.check_frontend(&tensor_index, &scope, prep.spec.max_position_embeddings, req.context, req.max_window)?;
+    }
     log(scope.headline());
     let features = prep.spec.features();
 
@@ -415,6 +432,16 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
             // The platform is recorded only for `std`: libm-v1 does not depend on it.
             "math": if math == MathMode::Std { serde_json::json!({ "mode": "std", "platform": crate::detmath::platform() }) } else { serde_json::json!({ "mode": "libm-v1" }) },
         });
+        if let Some(pin) = &req.full_court_source_pin {
+            meta["full_court_source25"] = serde_json::json!({
+                "schema": "misaka.palw.fresh-full-court-conversion.v25", "source": pin,
+                "lowered_context_max": req.context, "complete_component_inventory": true,
+                "source_fidelity_or_native_eligibility": false
+            });
+        }
+        if req.linear_weight_bits == 16 {
+            meta["linear_weight_profile"] = serde_json::json!({"schema": "misaka.palw.decoder-linear-weights.v16", "main_bits": 16, "stored_quant_formats": "unchanged"});
+        }
         if req.gdn_core_wide {
             // Only when set: an artifact built without the option keeps its meta byte for byte.
             meta["gdn_core_wide"] = serde_json::json!(true);
@@ -445,6 +472,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         report.distinct_chunks,
         report.file_digest
     ));
+    if let Some(pin) = &req.full_court_source_pin {
+        pin.verify_files(&req.model)?;
+    }
     Ok(ConvertOutcome {
         report,
         frontend: opened.frontend.clone(),

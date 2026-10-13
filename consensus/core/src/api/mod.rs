@@ -1372,6 +1372,12 @@ pub trait ConsensusApi: Send + Sync {
         vec![None; carriers.len()]
     }
 
+    /// Original paid native carrier metadata at one coherent virtual / selected
+    /// parent snapshot. No priority is granted by a transaction's route tag.
+    fn native_carriage_snapshot_v22(&self) -> Option<crate::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+        None
+    }
+
     /// **The 2026-09-25 sweep, V01: the H-1 carrier gate's answer on each of `txs` at the tip** — one
     /// per transaction, in order: `Some(reason)` for a carrier the tip's fold would refuse, by the
     /// one predicate the mempool asks at admission and the template asks at every build

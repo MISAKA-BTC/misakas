@@ -5,7 +5,7 @@ const DISCOVERY_FIXED_BYTES: usize = 2 + 9 * 64 + 4 * 8 + 4 + 3 * 21 * 16;
 fn native_key(id: &Digest) -> Vec<u8> {
     key(&(13u8, *id))
 }
-fn native_row(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeExecutionDiscoveryV13, PalwStateV2Error> {
+pub(super) fn native_row(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeExecutionDiscoveryV13, PalwStateV2Error> {
     let bytes =
         r.aux.get(&(EXECUTION_SEAL_TABLE_V11, native_key(id))).ok_or_else(|| refused("native original discovery ticket absent"))?;
     if bytes.len() > 2048 {
@@ -17,7 +17,7 @@ fn native_row(r: &PalwKernelRouteStateV1, id: &Digest) -> Result<NativeExecution
     }
     Ok(row)
 }
-fn shard(
+pub(super) fn shard(
     builder: &TransitionBuilder<'_>,
     p: &NativeExecutionPoliciesV11,
     plan: &DiscoveryPlanV13,
@@ -46,7 +46,7 @@ fn shard(
     )
     .map_err(refused)
 }
-fn write(builder: &mut TransitionBuilder<'_>, s: &DiscoveryShardV13, id: Digest, job: Digest) {
+pub(super) fn write(builder: &mut TransitionBuilder<'_>, s: &DiscoveryShardV13, id: Digest, job: Digest) {
     let g = s.global_row();
     let a = s.actor_row();
     let j = s.subject_row();
@@ -94,6 +94,7 @@ pub(super) fn admit(
     }
     let next = counter.advance(&nonce).map_err(refused)?;
     let claim = book.claim().ok_or_else(|| refused("native discovery no original claim"))?;
+    capacity::check_fresh_start(builder, id, ctx.daa_score, claim.challenge_end)?;
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let matures = ctx
         .daa_score
@@ -165,11 +166,13 @@ pub(super) fn admit(
         converted_to: None,
     };
     state.retained_discovery_keys.push(ticket);
+    let physical = capacity::plan_owner(builder, id, ticket, claim.challenge_end)?;
     write(builder, &shard, ticket, id);
     write_trace(builder, &trace, 2, ticket);
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&row)));
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, counter_key, Some(key(&next)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    capacity::commit_owner(builder, id, physical);
     builder.note_kernel_bond(signer);
     Ok(())
 }
@@ -309,6 +312,7 @@ pub(super) fn convert(
     state.retained_discovery_keys.retain(|k| *k != ticket);
     state.retained_seal_keys.push(seal_key);
     state.required_retained_until = state.required_retained_until.max(horizon);
+    let physical = capacity::plan_transfer(builder, id, ticket, seal_key, horizon)?;
     write(builder, &shard, ticket, id);
     write_trace(builder, &trace, 1, seal_key);
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, trace_row_key(2, ticket), None);
@@ -316,5 +320,6 @@ pub(super) fn convert(
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&seal_key), Some(key(&seal)));
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&original)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
+    capacity::commit_owner(builder, id, physical);
     Ok(())
 }

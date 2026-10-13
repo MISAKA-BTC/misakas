@@ -104,7 +104,7 @@ fn preparation(net: &Net, f: &StageFixture, class: &CheckedStageClassV14) -> (St
         nonce: misaka_palw_kernel::flat_execution11::nonce_bytes_v11(
             net.api()
                 .unwrap()
-                .execution_nonce_counter_v11(&net.chain.tip_state().1.bonds[&net.bond(2)].operator_id.as_bytes())
+                .execution_nonce_counter_v11(&net.chain.tip_state().1.bond(&net.bond(2)).unwrap().operator_id.as_bytes())
                 .unwrap()
                 .next_nonce,
         ),
@@ -207,7 +207,7 @@ async fn stage14_native_consent18_prevents_victim_reservation_and_original_refun
     assert!(net.api().unwrap().stage_owner_ids_v14(7, &net.bond(0)).unwrap().is_empty());
     let second = funded_stage(&mut net, &f, &class).await;
     assert_ne!(second, id);
-    let operator = net.chain.tip_state().1.bonds[&net.bond(2)].operator_id.as_bytes();
+    let operator = net.chain.tip_state().1.bond(&net.bond(2)).unwrap().operator_id.as_bytes();
     assert_eq!(net.api().unwrap().execution_nonce_counter_v11(&operator).unwrap().next_nonce, 2);
     let replay = net.replay().await;
     net.assert_same(&replay, "typed original18 consent, shared nonce, principal refund once");
@@ -215,14 +215,7 @@ async fn stage14_native_consent18_prevents_victim_reservation_and_original_refun
     assert_eq!(paid.0 + paid.1, 20);
 }
 
-#[tokio::test]
-async fn stage14_native_rows_commit_authenticates_tensor_output_and_closed_final_replays_independently() {
-    let f = stage_fixture();
-    let mut net = Net::over_cfg(stage_config(), TestConsensus::new);
-    let (_, class) = admitted_stage(&mut net, &f).await;
-    let id = funded_stage(&mut net, &f, &class).await;
-    let row = net.api().unwrap().stage_job_row_v14(&id).unwrap();
-    let book = StageJobBookV14::from_rooted_bytes(&row.book_bytes, row.header.book_root).unwrap();
+fn stage_claim(f: &StageFixture, class: &CheckedStageClassV14, book: &StageJobBookV14) -> StageTraceV14 {
     let actual = class.check_job(book.job()).unwrap();
     let plan = derive_stage_quota_v14(&class, &actual).unwrap();
     struct Combined<'a>(&'a MapParams, &'a Tensor);
@@ -245,16 +238,27 @@ async fn stage14_native_rows_commit_authenticates_tensor_output_and_closed_final
             .collect(),
     );
     let post = (program.occurrences().len() - 1) as u16;
-    let claim = StageTraceV14 {
+    StageTraceV14 {
         version: 14,
         class: class.root(),
-        job_id: id,
+        job_id: book.id(),
         job_input: book.job().root(),
         admission: actual.admission().root(),
         quota: plan.root(),
         segment_roots: commitments.segment_roots(),
         output_openings: (0..3).map(|p| commitments.node_opening(p, post, program.logits).unwrap()).collect(),
-    };
+    }
+}
+
+#[tokio::test]
+async fn stage14_native_rows_commit_authenticates_tensor_output_and_closed_final_replays_independently() {
+    let f = stage_fixture();
+    let mut net = Net::over_cfg(stage_config(), TestConsensus::new);
+    let (_, class) = admitted_stage(&mut net, &f).await;
+    let id = funded_stage(&mut net, &f, &class).await;
+    let row = net.api().unwrap().stage_job_row_v14(&id).unwrap();
+    let book = StageJobBookV14::from_rooted_bytes(&row.book_bytes, row.header.book_root).unwrap();
+    let claim = stage_claim(&f, &class, &book);
     action(&mut net, 0, STAGE_ACTION_COMMIT_V14, borsh::to_vec(&claim).unwrap()).await;
     let committed = net.api().unwrap().stage_job_row_v14(&id).unwrap();
     assert_eq!(committed.header.terminal, StageTerminalV14::Challengeable);
@@ -268,4 +272,145 @@ async fn stage14_native_rows_commit_authenticates_tensor_output_and_closed_final
     assert_eq!(minted_and_owed(&net, &net.chain, 0), (0, 0));
     let replay = net.replay().await;
     net.assert_same(&replay, "typed full-graph authenticated Rows output and incomplete Final refusal");
+}
+
+#[tokio::test]
+async fn stage14_original_real_pc_delivery_then_default_collects_original_coins_once_and_replays() {
+    use kaspa_consensus_core::palw_flat_execution_v11::{
+        EXECUTION_DEMAND_SLOT_TABLE_V11, EXECUTION_QUOTA_TABLE_V11, NativeSourceRequestV16,
+    };
+    use misaka_palw_kernel::flat_quota11::source16::opening::{AnswerV16, HeaderV16};
+    let f = stage_fixture();
+    let mut net = Net::over_cfg(stage_config(), TestConsensus::new);
+    let (_, class) = admitted_stage(&mut net, &f).await;
+    let id = funded_stage(&mut net, &f, &class).await;
+    let row = net.api().unwrap().stage_job_row_v14(&id).unwrap();
+    let original = StageJobBookV14::from_rooted_bytes(&row.book_bytes, row.header.book_root).unwrap();
+    let claim = stage_claim(&f, &class, &original);
+    action(&mut net, 0, STAGE_ACTION_COMMIT_V14, borsh::to_vec(&claim).unwrap()).await;
+    let mut request = NativeSourceRequestV16 {
+        job: id,
+        param: 1,
+        layer_code: 0,
+        kind: 0,
+        axis: 0,
+        level: 0,
+        index: 0,
+        lane: 0,
+        entitlement: [0; 64],
+        slot: 0,
+    };
+    action(&mut net, 3, 7, borsh::to_vec(&request).unwrap()).await;
+    let slot = borsh::to_vec(&(16u8, net.bond(3), 0u8)).unwrap();
+    assert!(
+        net.api().unwrap().aux_row::<Digest>(EXECUTION_DEMAND_SLOT_TABLE_V11, &slot).is_none(),
+        "external input PC cannot be acquired as original source weight"
+    );
+    request.param = 0;
+    action(&mut net, 3, 7, borsh::to_vec(&request).unwrap()).await;
+    let pending: Digest = net.api().unwrap().aux_row(EXECUTION_DEMAND_SLOT_TABLE_V11, &slot).unwrap();
+    assert_eq!(net.api().unwrap().stage_source_answer_owner_v14(&pending, net.daa()), Some(net.bond(0)));
+    assert_eq!(
+        net.api().unwrap().execution_source_answer_owner_v16(&pending, net.daa()),
+        None,
+        "typed source demand cannot enter text settlement namespace"
+    );
+    let weight = &f.params.tensors[&(0, None)];
+    let trees = misaka_palw_kernel::merkle3::TreesV3::of(weight);
+    let payload = borsh::to_vec(&AnswerV16::Header(HeaderV16::of(weight, &trees).unwrap())).unwrap();
+    let mut answer = pending.to_vec();
+    answer.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    answer.extend_from_slice(&payload);
+    action(&mut net, 0, 8, answer).await;
+    assert!(net.api().unwrap().execution_source_demand_v16(&pending).unwrap().settled);
+    let fees: NativeStageFeesV20 = net.api().unwrap().aux_row(STAGE_TABLE_V14, &stage_key_v14(12, &id)).unwrap();
+    assert_eq!(fees.earned, fees.plan.source_unit_fee.min(fees.plan.maximum));
+    assert!(20 + fees.earned <= fees.plan.reward + fees.plan.maximum);
+    request.kind = 2;
+    request.axis = misaka_palw_kernel::merkle::AXIS_ROW;
+    action(&mut net, 3, 7, borsh::to_vec(&request).unwrap()).await;
+    let pending: Digest = net.api().unwrap().aux_row(EXECUTION_DEMAND_SLOT_TABLE_V11, &slot).unwrap();
+    let demand = net.api().unwrap().execution_source_demand_v16(&pending).unwrap();
+    let before = net.chain.tip_state().1.bond(&net.bond(0)).unwrap().collateral;
+    net.beat_to(demand.deadline + 1).await;
+    action(&mut net, 1, 9, pending.to_vec()).await;
+    let settled = net.api().unwrap().stage_job_header_v14(&id).unwrap();
+    assert_eq!(settled.terminal, StageTerminalV14::Convicted);
+    assert_eq!(net.chain.tip_state().1.bond(&net.bond(0)).unwrap().collateral, before - 130);
+    let principal = minted_and_owed(&net, &net.chain, 2);
+    assert_eq!(principal.0 + principal.1, 20);
+    let outcome: StageSettlementV14 = net.api().unwrap().aux_row(STAGE_TABLE_V14, &stage_key_v14(13, &id)).unwrap();
+    let finder = minted_and_owed(&net, &net.chain, 3);
+    assert_eq!(finder.0 + finder.1, outcome.finder_credit);
+    let (_, subject): (Digest, misaka_palw_kernel::flat_quota11::QuotaSubjectSummaryV11) =
+        net.api().unwrap().aux_row(EXECUTION_QUOTA_TABLE_V11, &borsh::to_vec(&(2u8, id)).unwrap()).unwrap();
+    assert!(subject.closed);
+    action(&mut net, 1, 9, pending.to_vec()).await;
+    assert_eq!(net.chain.tip_state().1.bond(&net.bond(0)).unwrap().collateral, before - 130);
+    net.beat_to(1001).await;
+    action(&mut net, 1, STAGE_ACTION_COLLECT_V14, id.to_vec()).await;
+    assert!(net.api().unwrap().stage_job_header_v14(&id).is_none());
+    let replay = net.replay().await;
+    net.assert_same(&replay, "typed original bound-PC fee/default actual130slash20refund once, genuine quota close and publicGC");
+}
+
+#[tokio::test]
+async fn stage14_original_paid_header_court_and_public_proof_retirement_replay_once() {
+    use kaspa_consensus_core::palw_flat_execution_v11::NativeSourceHeaderFaultV16;
+    use misaka_palw_kernel::flat_quota11::source16::opening::HeaderV16;
+    let mut f = stage_fixture();
+    // Producer signs an opaque PC for [2], while original V2/R declares [1].
+    // Header authenticity, not unavailable external R, establishes the fault.
+    let false_weight = Tensor::new(DType::I8, vec![2], vec![5, 6]).unwrap();
+    let false_params = MapParams { tensors: [((0, None), false_weight.clone())].into() };
+    f.source.source_parameters = ParamCommitmentsV1::of_v3(&false_params);
+    f.template.source_parameters = f.source.source_parameters.root();
+    let mut net = Net::over_cfg(stage_config(), TestConsensus::new);
+    let (_, class) = admitted_stage(&mut net, &f).await;
+    let id = funded_stage(&mut net, &f, &class).await;
+    let row = net.api().unwrap().stage_job_row_v14(&id).unwrap();
+    let book = StageJobBookV14::from_rooted_bytes(&row.book_bytes, row.header.book_root).unwrap();
+    let claim = stage_claim(&f, &class, &book);
+    action(&mut net, 0, STAGE_ACTION_COMMIT_V14, borsh::to_vec(&claim).unwrap()).await;
+    let fault = NativeSourceHeaderFaultV16 {
+        param: 0,
+        layer_code: 0,
+        header: HeaderV16::of(&false_weight, &misaka_palw_kernel::merkle3::TreesV3::of(&false_weight)).unwrap(),
+    };
+    let payload = borsh::to_vec(&fault).unwrap();
+    let mut filing = 14u16.to_le_bytes().to_vec();
+    filing.push(2);
+    filing.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    filing.extend_from_slice(&payload);
+    let proof = stage_proof_root_v14(&filing);
+    let salt = [51; 64];
+    let binding = stage_proof_seal_v14(proof, salt, net.kid(3), id, claim.root());
+    let mut body = id.to_vec();
+    body.extend_from_slice(&proof);
+    body.extend_from_slice(&binding);
+    action(&mut net, 3, 16, body).await;
+    let pursuit: NativeStagePursuitV14 = net.api().unwrap().aux_row(STAGE_TABLE_V14, &stage_key_v14(16, &id)).unwrap();
+    let seal = *pursuit.seal_keys.iter().find(|k| **k != [0; 64]).unwrap();
+    let own = net.api().unwrap().stage_seal_v14(&seal).unwrap();
+    assert_eq!(own.original_debit > 0, true);
+    net.beat_to(own.matures_daa).await;
+    let producer = net.collateral(0);
+    let mut reveal = seal.to_vec();
+    reveal.extend_from_slice(&salt);
+    reveal.extend_from_slice(&(filing.len() as u32).to_le_bytes());
+    reveal.extend_from_slice(&filing);
+    action(&mut net, 3, 17, reveal.clone()).await;
+    assert_eq!(net.api().unwrap().stage_job_header_v14(&id).unwrap().terminal, StageTerminalV14::Convicted);
+    assert_eq!(net.collateral(0), producer - 130);
+    assert!(net.api().unwrap().stage_source_refuted_relation_v14(&class.source().relation_root()));
+    let expected = minted_and_owed(&net, &net.chain, 3);
+    action(&mut net, 3, 17, reveal).await;
+    assert_eq!(minted_and_owed(&net, &net.chain, 3), expected);
+    net.beat_to(1001).await;
+    action(&mut net, 1, 18, seal.to_vec()).await;
+    assert!(net.api().unwrap().stage_seal_v14(&seal).is_none());
+    action(&mut net, 1, STAGE_ACTION_COLLECT_V14, id.to_vec()).await;
+    assert!(net.api().unwrap().stage_job_header_v14(&id).is_none());
+    let replay = net.replay().await;
+    net.assert_same(&replay, "typed originalpaid realPCheader court actual130slash20refund once and public proof/job retirement");
 }

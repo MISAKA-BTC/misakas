@@ -282,6 +282,7 @@ pub(super) fn request(
     let pending = d.id();
     let (source_plan, mut source) = original_source(builder, p, req.job)?;
     source.admit_valid_request(&p.quota, &epoch, &source_plan, &req.job).map_err(refused)?;
+    capacity::request(builder, req.job, req.lane, req.entitlement, req.slot, 0, pending, ctx.daa_score, deadline)?;
     state.open_demands += 1;
     if req.lane == 0 {
         state.ordinary_requests += 1;

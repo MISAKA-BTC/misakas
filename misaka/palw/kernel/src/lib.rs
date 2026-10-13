@@ -98,14 +98,17 @@ pub mod flat_court4;
 pub mod flat_court5;
 pub mod flat_court7;
 pub mod flat_court9;
+pub mod flat_court25;
 pub mod flat_detect5;
 pub mod flat_detect7;
 pub mod flat_detect9;
+pub mod flat_detect25;
 pub mod flat_execution11;
 pub mod flat_history8;
 pub mod flat_inputs12;
 pub mod flat_lengths7;
 pub mod flat_point9;
+pub mod flat_point25;
 pub mod flat_price15;
 pub mod flat_price20;
 /// RFC-0002 item 3 (RFC02-T): a flat-v5 candidate's worst-case public pursuit on G14-B's clock and carriage.
@@ -114,11 +117,15 @@ pub mod flat_quota11;
 pub mod flat_replay6;
 pub mod flat_replay7;
 pub mod flat_replay9;
+pub mod flat_replay25;
 pub mod flat_resources10;
+pub mod flat_resources29;
 /// Staged complete flat-v5 court resource admission.
 pub mod flat_scope5;
 pub mod flat_scope7;
 pub mod flat_scope9;
+pub mod flat_scope25;
+pub mod flat_component_source28;
 /// Staged actor-bound sealed flat evidence; not a consensus route or payout.
 pub mod flat_seal6;
 pub mod flat_seal7;
@@ -126,6 +133,7 @@ pub mod flat_seal7;
 /// No consensus route implicitly accepts the new v7 proof grammar.
 pub mod flat_topk7;
 pub mod flat_topk_locator21;
+pub mod flat_topk_locator25;
 pub mod gate;
 pub mod hash;
 pub mod hide;

@@ -12,12 +12,18 @@ use misaka_palw_kernel::{
     hash::{Digest, object_id},
 };
 
+#[path = "palw_flat_execution_capacity_fold_v23.rs"]
+mod capacity;
 #[path = "palw_flat_execution_court_fold_v11.rs"]
 mod court;
 #[path = "palw_flat_execution_da_fold_v11.rs"]
 mod da;
 #[path = "palw_flat_execution_discovery_fold_v13.rs"]
 mod discovery;
+#[path = "palw_flat_execution_final_fold_v27.rs"]
+mod final27;
+#[path = "palw_flat_execution_gc_fold_v24.rs"]
+mod gc;
 #[path = "palw_flat_execution_source_fold_v16.rs"]
 pub(super) mod source;
 
@@ -158,7 +164,7 @@ pub(super) fn quota_shard(
 ) -> Result<CheckedQuotaShardV11, PalwStateV2Error> {
     quota_shard_seal(builder, p, epoch, actor, job, None)
 }
-fn quota_shard_seal(
+pub(super) fn quota_shard_seal(
     builder: &TransitionBuilder<'_>,
     p: &NativeExecutionPoliciesV11,
     epoch: &TrustedEpochV11,
@@ -218,7 +224,7 @@ fn trace_plan(builder: &TransitionBuilder<'_>, p: &NativeExecutionPoliciesV11, i
     }
     trace_plan_from_native_record_v17(h.class_id, &plan, &h.quota_plan_root, &p.quota).map_err(refused)
 }
-fn trace_shard_from_rows(
+pub(super) fn trace_shard_from_rows(
     p: &NativeExecutionPoliciesV11,
     plan: &TracePlanV17,
     g: &QuotaGlobalRowV11,
@@ -229,7 +235,7 @@ fn trace_shard_from_rows(
     TraceShardV17::from_native_rows(&p.quota, plan, g, &g.root(), a.actor, Some((a, &a.root())), (s, &s.row_root()), row)
         .map_err(refused)
 }
-fn trace_shard(
+pub(super) fn trace_shard(
     builder: &TransitionBuilder<'_>,
     p: &NativeExecutionPoliciesV11,
     plan: &TracePlanV17,
@@ -446,6 +452,8 @@ fn fund(
     signer: &PalwBondKeyV2,
     p: &NativeExecutionPoliciesV11,
     bytes: &[u8],
+    complete_pursuit23: bool,
+    final_authority27: bool,
 ) -> Result<(), PalwStateV2Error> {
     let id = request_class(bytes)?;
     if !prepay(builder, ctx, signer, class_work(builder, id, bytes.len())?)? {
@@ -507,6 +515,9 @@ fn fund(
     }
     let (contract_root, contract): (Digest, NativeExecutionConsentV18) =
         borsh::from_slice(contract_raw).map_err(|_| refused("native v18 consent decode"))?;
+    if !complete_pursuit23 && r.aux.contains_key(&(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)))) {
+        return Err(refused("original producer consent23 requires Fund24; mechanics Fund2 cannot downgrade it"));
+    }
     if contract.version != 18
         || contract.root() != contract_root
         || contract.original_consent13_root != consent_root
@@ -606,6 +617,19 @@ fn fund(
     if fees.root() != contract.fee_plan19_root {
         return Err(refused("Fund delivery income cap/rates differ from explicitly signed original contract"));
     }
+    let capacity = if complete_pursuit23 {
+        Some(capacity::plan_fund(builder, p, &request, &class, &prepared.quota_plan, job_id, consent_root, contract_root)?)
+    } else {
+        None
+    };
+    let final_admission = if final_authority27 {
+        Some(final27::plan_fund(builder, ctx, p, &request, &class, &prepared.quota_plan)?)
+    } else {
+        if r.aux.contains_key(&(EXECUTION_PREPARATION_TABLE_V11, key(&(27u8, request.preparation)))) {
+            return Err(refused("initial Final27 producer consent requires Fund26; old Fund cannot downgrade"));
+        }
+        None
+    };
     let source_admission = misaka_palw_kernel::flat_quota11::source16::check_native_source_admission_v16(
         &class,
         &book,
@@ -678,11 +702,18 @@ fn fund(
     write_trace(builder, &trace, 0, job_id);
     write_source_shard(builder, &source, job_id);
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(16u8, job_id, 1u8)), Some(key(&source_plan.record())));
+    if let Some(c) = final_admission {
+        final27::write_fund(builder, job_id, c);
+    }
     owners.push(job_id);
     producer_jobs.push(job_id);
     builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, key(&(1u8, producer)), Some(key(&producer_jobs)));
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&requester_operator), Some(key(&next)));
     builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&job_id), Some(key(&row)));
+    if let Some(admission) = capacity {
+        capacity::write(builder, admission, job_id);
+        builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(23u8, request.preparation)), None);
+    }
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         key(&(19u8, job_id)),
@@ -711,11 +742,24 @@ pub(super) fn apply(
     action: u8,
     body: &[u8],
 ) -> Result<(), PalwStateV2Error> {
+    if action >= 25
+        && !builder
+            .extras
+            .kernel_route
+            .as_ref()
+            .and_then(|e| e.native_final.as_ref())
+            .is_some_and(|f| f.activation.is_active(ctx.daa_score))
+    {
+        return Ok(());
+    }
     let p = policies(builder, ctx)?;
     let result = match action {
         EXECUTION_ACTION_REGISTER_V11 => register(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_PREPARE_V11 => prepare(builder, ctx, signer, &p, body),
-        EXECUTION_ACTION_FUND_V11 => fund(builder, ctx, signer, &p, body),
+        EXECUTION_ACTION_FUND_V11 => fund(builder, ctx, signer, &p, body, false, false),
+        EXECUTION_ACTION_FUND_V23 => fund(builder, ctx, signer, &p, body, true, false),
+        25 => final27::accept(builder, ctx, signer, &p, body),
+        26 => fund(builder, ctx, signer, &p, body, true, true),
         EXECUTION_ACTION_COMMIT_V11 => commit(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_CLOSE_V11 => close(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SEAL_V11 => court::seal(builder, ctx, signer, &p, body),
@@ -727,9 +771,11 @@ pub(super) fn apply(
         EXECUTION_ACTION_CONVERT_V11 => discovery::convert(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_ACCEPT_V13 => accept(builder, ctx, signer, &p, body, false),
         EXECUTION_ACTION_ACCEPT_V18 => accept(builder, ctx, signer, &p, body, true),
+        EXECUTION_ACTION_ACCEPT_V23 => capacity::accept(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SOURCE_REQUEST_V16 => source::request(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SOURCE_ANSWER_V16 => source::answer(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SOURCE_SETTLE_V16 => source::settle(builder, ctx, signer, &p, body),
+        EXECUTION_ACTION_EXPIRE_V11 => gc::apply(builder, ctx, signer, &p, body),
         // Unconnected protected action grammars remain closed.
         _ => Err(refused("funded execution action is not connected to native court/DA/terminal guarantees")),
     };
@@ -913,24 +959,53 @@ fn credit(
     builder.write_kernel_row(EXECUTION_CREDIT_TABLE_V11, key(&row.header.job_id), Some(key(&credit)));
     Ok(())
 }
-fn close_adjudicated_quota(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,p:&NativeExecutionPoliciesV11,
-    id:Digest,class:&CheckedNativeExecutionClassHeaderV11,book:&ExecutionJobStateV11,plan:&CheckedJobQuotaPlanV11,caller:PalwBondKeyV2)->Result<(),PalwStateV2Error>{
-    let epoch=TrustedEpochV11::from_chain(&p.quota,ctx.block.as_bytes(),ctx.daa_score).map_err(refused)?;
-    let binding=book.job().quota_subject(class.record()).map_err(refused)?;
-    let actor=if ctx.daa_score<=binding.deadline_daa{binding.producer}else{palw_kernel_bond_id_v1(&caller)};
-    let mut shard=quota_shard(builder,p,&epoch,actor,id)?;
-    if shard.subject_row().is_some_and(|s|s.closed){return Err(refused("native original adjudicated subject already closed"));}
-    if ctx.daa_score<=binding.deadline_daa {
-        let paid=shard.debit_terminal(&p.quota,&epoch,&binding,plan,&key(&id)).map_err(refused)?;
-        let row=builder.state.kernel_route.as_ref().unwrap().execution_job_header_v11(&id).ok_or_else(||refused("native terminal original job absent"))?;
-        let nonce=builder.state.kernel_route.as_ref().unwrap().execution_nonce_counter_v11(&row.requester_operator).map_err(refused)?;
-        let terminal=check_native_quota_terminal_v11(class,book,&NativeQuotaTerminalAnchorV11{job_id:id,funded_job_root:row.funded_job_root,terminal_book_root:book.root(),request_key:book.job().request_key(),nonce_witness:nonce_witness(book.job().requester,&nonce)}).map_err(refused)?;
-        shard.mark_terminal_closed(&p.quota,&epoch,&terminal,&paid).map_err(refused)?;
-    } else {
-        let paid=shard.debit_expired_terminal(&p.quota,&epoch,&binding,plan).map_err(refused)?;
-        shard.mark_expired_terminal_closed(&p.quota,&epoch,&binding,class,book,&paid).map_err(refused)?;
+fn close_adjudicated_quota(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    p: &NativeExecutionPoliciesV11,
+    id: Digest,
+    class: &CheckedNativeExecutionClassHeaderV11,
+    book: &ExecutionJobStateV11,
+    plan: &CheckedJobQuotaPlanV11,
+    caller: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let binding = book.job().quota_subject(class.record()).map_err(refused)?;
+    let actor = if ctx.daa_score <= binding.deadline_daa { binding.producer } else { palw_kernel_bond_id_v1(&caller) };
+    let mut shard = quota_shard(builder, p, &epoch, actor, id)?;
+    if shard.subject_row().is_some_and(|s| s.closed) {
+        return Err(refused("native original adjudicated subject already closed"));
     }
-    write_shard(builder,&shard,id);Ok(())
+    if ctx.daa_score <= binding.deadline_daa {
+        let paid = shard.debit_terminal(&p.quota, &epoch, &binding, plan, &key(&id)).map_err(refused)?;
+        let row = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .unwrap()
+            .execution_job_header_v11(&id)
+            .ok_or_else(|| refused("native terminal original job absent"))?;
+        let nonce =
+            builder.state.kernel_route.as_ref().unwrap().execution_nonce_counter_v11(&row.requester_operator).map_err(refused)?;
+        let terminal = check_native_quota_terminal_v11(
+            class,
+            book,
+            &NativeQuotaTerminalAnchorV11 {
+                job_id: id,
+                funded_job_root: row.funded_job_root,
+                terminal_book_root: book.root(),
+                request_key: book.job().request_key(),
+                nonce_witness: nonce_witness(book.job().requester, &nonce),
+            },
+        )
+        .map_err(refused)?;
+        shard.mark_terminal_closed(&p.quota, &epoch, &terminal, &paid).map_err(refused)?;
+    } else {
+        let paid = shard.debit_expired_terminal(&p.quota, &epoch, &binding, plan).map_err(refused)?;
+        shard.mark_expired_terminal_closed(&p.quota, &epoch, &binding, class, book, &paid).map_err(refused)?;
+    }
+    write_shard(builder, &shard, id);
+    Ok(())
 }
 fn close(
     builder: &mut TransitionBuilder<'_>,
@@ -951,8 +1026,11 @@ fn close(
         return Ok(());
     }
     let (mut row, class, mut book, plan) = original_job(builder, id)?;
+    if book.terminal() == ExecutionTerminalV11::Challengeable {
+        return final27::close(builder, ctx, signer, p, row, class, book, plan);
+    }
     if book.terminal() != ExecutionTerminalV11::Funded {
-        return Err(refused("Final remains closed until native own-seal/DA/discovery guarantees are connected"));
+        return Err(refused("native original execution is already terminal"));
     }
     if *signer != header.requester || ctx.daa_score <= book.job().commit_deadline {
         return Err(refused("native unclaimed cancellation is unauthorized or immature"));

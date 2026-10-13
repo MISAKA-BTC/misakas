@@ -9,4 +9,3 @@ test source16_fixed_native_quote_cache_cannot_rebind_price_job_policy_or_root ..
 test source16_original_producer_consent_shared_guarantee_and_failed_answers_preserve_frozen11 ... ok
 
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.00s
-

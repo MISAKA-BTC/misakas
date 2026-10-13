@@ -32,6 +32,7 @@ mod protected_tests;
 /// Explicit typed-stage bindings reuse the frozen 21-axis accounting engine;
 /// they cannot enter the legacy text admission constructors.
 pub mod stage14;
+pub mod initial31;
 
 pub const QUOTA_AXES_V11: usize = 21;
 pub const FUTURE_ACTION_KINDS_V11: usize = 6;
@@ -169,13 +170,13 @@ impl TrustedEpochV11 {
         policy.check()?;
         Ok(Self { block_hash, block_daa, network_interval: block_daa / policy.interval_daa })
     }
-    fn check(&self, policy: &QuotaPolicyV11) -> Result<(), String> {
+    pub fn check(&self, policy: &QuotaPolicyV11) -> Result<(), String> {
         if self.network_interval != self.block_daa / policy.interval_daa {
             return Err("quota epoch interval differs from trusted DAA".into());
         }
         Ok(())
     }
-    fn interval_end(&self, policy: &QuotaPolicyV11) -> Result<u64, String> {
+    pub fn interval_end(&self, policy: &QuotaPolicyV11) -> Result<u64, String> {
         self.network_interval
             .checked_add(1)
             .and_then(|v| v.checked_mul(policy.interval_daa))

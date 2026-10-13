@@ -171,9 +171,17 @@ pub struct PalwKernelRouteExtrasV1 {
     pub funded_execution: Option<crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
     /// Independent V2 external stage semantics and native policy.
     pub stage_execution: Option<crate::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    /// Trusted, independently fenced complete native Final profile. Never
+    /// supplied by a route action, metadata acceptance or an old funded job.
+    pub native_final: Option<crate::palw_native_final_v27::PalwNativeFinalFenceV27>,
+    /// New stage book and full-source/temporal/court contract, independent of14.
+    pub stage_execution_v28: Option<crate::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     /// Actual physical mass constants, resolved from Params only where a new
     /// native namespace is active. They do not assert reserved-lane readiness.
     pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,
+    /// Original physical service declaration. The current consumer publishes
+    /// only an unimplemented probe; capacity admission cannot infer a scheduler.
+    pub native_carriage_service: Option<crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22>,
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,
@@ -940,6 +948,11 @@ pub enum PalwKernelChunkTargetV1 {
         seal: Digest,
         actor: Digest,
     } = 6,
+    /// Original paid typed-stage proof, independent of text native11 groups.
+    StageProofV14 {
+        seal: Digest,
+        actor: Digest,
+    } = 7,
 }
 
 /// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
@@ -1044,7 +1057,7 @@ pub fn palw_kernel_chunks_v1(
     cap: usize,
 ) -> Result<Vec<PalwKernelChunkV1>, String> {
     use crate::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, palw_object_chunk_group_id_v1};
-    let native = matches!(target, PalwKernelChunkTargetV1::FundedProofV11 { .. });
+    let native = matches!(target, PalwKernelChunkTargetV1::FundedProofV11 { .. } | PalwKernelChunkTargetV1::StageProofV14 { .. });
     let count_cap = if native { 64usize } else { PALW_OBJECT_CHUNK_MAX_COUNT as usize };
     let byte_cap =
         if native { misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize } else { PALW_OBJECT_CHUNK_MAX_BYTES };
@@ -1092,7 +1105,13 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
         }
         (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FundedProofV11 { seal, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
-                && matches!(K::decode(bytes),Ok(K::FundedExecutionV11 {action:6,body}) if body.get(..64)==Some(seal.as_slice()))
+                && matches!(misaka_palw_kernel::route::borrowed_native_action_v1(bytes),Ok(Some(a))
+                    if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && a.action==6 && a.body.get(..64)==Some(seal.as_slice()))
+        }
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::StageProofV14 { seal, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(misaka_palw_kernel::route::borrowed_native_action_v1(bytes),Ok(Some(a))
+                    if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && a.action==17 && a.body.get(..64)==Some(seal.as_slice()))
         }
         (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV9 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
@@ -1258,6 +1277,7 @@ impl PalwKernelRouteStateV1 {
                     && daa < original.reveal_until)
                     .then(|| original.reveal_until.saturating_sub(1))
             }
+            PalwKernelChunkTargetV1::StageProofV14 { seal, actor } => self.stage_proof_deadline_v14(seal, actor, daa),
             PalwKernelChunkTargetV1::FlatProofV9 { vector, actor } => {
                 let header = self.flat_model_vector_header_v3(vector)?;
                 let seal = self.flat_model_seal_v9(vector, actor)?.seal;
@@ -1279,6 +1299,9 @@ impl PalwKernelRouteStateV1 {
     pub fn chunk_completion_v1(&self, chunk: &PalwKernelChunkV1) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
         if matches!(chunk.target, PalwKernelChunkTargetV1::FundedProofV11 { .. }) {
             return self.funded_proof_chunk_completion_v11(chunk);
+        }
+        if matches!(chunk.target, PalwKernelChunkTargetV1::StageProofV14 { .. }) {
+            return None; // prepaid Stage assembly belongs to its own fold
         }
         if chunk.count == 0 || chunk.index >= chunk.count || chunk.bytes.is_empty() {
             return None;

@@ -53,6 +53,12 @@ struct Args {
     /// Keep at most this many positions of history in any block (`LowerOpts::max_window`).
     #[arg(long)]
     max_window: Option<u32>,
+    /// Explicit decoder float-source linear main-weight profile, 8 (legacy) or 16.
+    #[arg(long, default_value_t = 8)]
+    linear_weight_bits: u8,
+    /// Predeclared exact original source/context/component pins for NEW full-court25 artifacts.
+    #[arg(long)]
+    full_court_source_pin: Option<PathBuf>,
     /// Where the chunks spool (default `<out>.chunks`).
     #[arg(long)]
     chunk_store: Option<PathBuf>,
@@ -111,6 +117,13 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     req.context = a.context;
     req.policy = QuantPolicy { headroom16: a.headroom16, headroom32: a.headroom32, headroom_resid: a.headroom_resid };
     req.max_window = a.max_window;
+    req.linear_weight_bits = a.linear_weight_bits;
+    req.full_court_source_pin = a
+        .full_court_source_pin
+        .as_ref()
+        .map(|p| misaka_palw_tir_lower::full_court_source25::SourcePinV25::from_file(p))
+        .transpose()
+        .map_err(|e| e.to_string())?;
     req.chunk_store = a.chunk_store.clone();
     req.keep_chunks = a.keep_chunks;
     req.block_mib = a.block_mib;

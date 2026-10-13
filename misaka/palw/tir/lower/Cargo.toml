@@ -45,6 +45,7 @@ rand_chacha.workspace = true
 clap = { workspace = true, features = ["derive"] }
 rayon.workspace = true
 blake2b_simd.workspace = true
+sha2.workspace = true
 # The conversion's transcendental functions (activation and RoPE tables, scale arithmetic) are the
 # pure-Rust libm's, not the platform's, so an artifact rebuilt anywhere has the same bytes
 # (`detmath`, math mode `libm-v1`). Already in Cargo.lock.

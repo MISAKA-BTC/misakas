@@ -153,6 +153,17 @@ pub struct CheckedTraceAdmissionV17 {
     horizon: u64,
     epoch: TrustedEpochV11,
 }
+// Only Stage14 can construct this non-wire checked original paid proof token.
+pub(super) fn from_checked_stage_proof_v14(checked:stage14::CheckedStageTraceProofGrantV14,
+    plan:&TracePlanV17)->Result<CheckedTraceAdmissionV17,String> {
+    let (binding,key,actor,original,trace,horizon,epoch)=checked.into_parts();
+    if trace!=plan.root() || binding.class_id!=plan.class || binding.quota_plan_root!=plan.job_plan
+        || binding.policy_root!=plan.quota || binding.admitted_interval!=epoch.network_interval
+        || actor==binding.producer || original==[0;64] || key==[0;64] || horizon>binding.deadline_daa {
+        return Err("stage paid seal trace adapter lacks original checked quote/actor/epoch/horizon".into());
+    }
+    Ok(CheckedTraceAdmissionV17 {binding,key,actor,original,role:1,cap:2,horizon,epoch})
+}
 // Only stage14's private checked token reaches this bridge; raw wire roots and
 // caller flags cannot manufacture a producer-owned reservation.
 pub(super) fn from_checked_stage_admission_v17(checked:stage14::CheckedStageTraceGrantV14,

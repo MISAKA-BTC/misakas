@@ -49,8 +49,21 @@ USAGE:
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
     palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
     palw-class close-sizes --network <id> [--anchor <hex>] [--json] <artifact-path>
+    palw-class produce-complete-pipeline28 --pipeline-borsh <canonical> --source-bundle <borsh> --tensor-directory <dir>
+                         --original-source-dir <dir> --tokenizer <128hex> --out <fresh.palwtir2> --file-limit-mib N
+    palw-class declare-complete-pipeline28 <fresh.palwtir2> --source-bundle <borsh> --class-wire <borsh> [--class-wire ...]
+                         --input-sha256 <hex> --original-source-dir <dir> --out <new.palwtir2> --file-limit-mib N
+    palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
+                         --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
+                         [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
+                         [--initial-sequence N --initial-now-daa N --initial-interval-end N --initial-expires-daa N]
+                         (initial31 writes an ordered directory; --bond pins its owner even when unsigned)
+    palw-class prepare-canonical-full-court25 <artifact> --source-declaration-borsh <file> --input-sha256 <hex>
+                         --out-class29 <file> --out-params <file> --file-limit-mib N --payload-limit-mib N --tensor-workspace-mib N
+    palw-class declare-full-court25 <fresh.palwtir> --input-sha256 <hex> --original-source-dir <dir> --out <new.palwtir>
+                         --file-limit-mib N --payload-limit-mib N --tensor-workspace-mib N [--transpose-history15]
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
-                         [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>]
+                         [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] [--metadata-profile legacy-build-v1|correctly-rounded-v16]
                          [--parent <the parent's declared .palwtir>] <lowered.palwtir>
     palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|adapter-list|rollback>
                          --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
@@ -545,10 +558,422 @@ fn run(args: &[String]) -> Result<(), String> {
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
             drill_leaves(&view, &path, wanted.as_deref(), decode)
         }
+        "produce-complete-pipeline28" => {
+            use std::io::Read;
+            fn bounded(path: &str, cap: usize) -> Result<Vec<u8>, String> {
+                let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                if file.metadata().map_err(|e| e.to_string())?.len() > cap as u64 {
+                    return Err("fresh28 input byte cap".into());
+                }
+                let mut bytes = Vec::new();
+                file.take(cap as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                if bytes.len() > cap {
+                    return Err("fresh28 input grew beyond cap".into());
+                }
+                Ok(bytes)
+            }
+            let source_bundle = take_flag(&mut args, "--source-bundle").ok_or("--source-bundle required")?;
+            let pipeline_path = take_flag(&mut args, "--pipeline-borsh").ok_or("--pipeline-borsh required")?;
+            let source_directory =
+                PathBuf::from(take_flag(&mut args, "--original-source-dir").ok_or("--original-source-dir required")?);
+            let tensor_directory = PathBuf::from(take_flag(&mut args, "--tensor-directory").ok_or("--tensor-directory required")?)
+                .canonicalize()
+                .map_err(|e| e.to_string())?;
+            let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh artifact required")?);
+            let tokenizer = take_flag(&mut args, "--tokenizer").ok_or("--tokenizer exact128 hex required")?;
+            let tokenizer: kaspa_hashes::Hash64 = tokenizer.parse().map_err(|e| format!("tokenizer: {e}"))?;
+            let cap = take_flag(&mut args, "--file-limit-mib")
+                .ok_or("--file-limit-mib required")?
+                .parse::<u64>()
+                .ok()
+                .and_then(|v| v.checked_mul(1 << 20))
+                .filter(|v| *v > 0)
+                .ok_or("fresh28 positive bounded file limit")?;
+            if !args.is_empty() || network.is_some() || output.exists() {
+                return Err("fresh28 explicit fresh output/options required".into());
+            }
+            let native_bundle = kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28::from_bytes(&bounded(
+                &source_bundle,
+                16 << 20,
+            )?)?;
+            let (bundle, sources) = native_bundle.check()?;
+            let programs = sources.iter().map(|s| s.program().clone()).collect::<Vec<_>>();
+            let pipeline = misaka_palw_tir::pipeline::TirPipelineV1::decode_canonical(
+                &bounded(&pipeline_path, misaka_palw_tir::pipeline::MAX_PIPELINE_BYTES)?,
+                &programs,
+            )
+            .map_err(|e| e.to_string())?;
+            let sha = misaka_palw_sdk::full_component_v28::produce_fresh_complete_pipeline_v28(
+                &output,
+                &source_directory,
+                &pipeline,
+                &programs,
+                *tokenizer.as_bytes(),
+                serde_json::json!({"canonical_pipeline_input":"explicit-source28;all-components-and-original-contexts"}),
+                bundle.manifest(),
+                &sources,
+                cap,
+                &mut |stage, param, layer, out| {
+                    // The compiler emits canonical tensor bytes, not a guessed
+                    // model filename. Every name is a numeric bounded coordinate.
+                    let name = format!(
+                        "stage-{stage}-param-{param}-layer-{}.bin",
+                        layer.map(|v| v.to_string()).unwrap_or_else(|| "global".into())
+                    );
+                    let path = tensor_directory.join(name).canonicalize().map_err(|e| e.to_string())?;
+                    if !path.starts_with(&tensor_directory) {
+                        return Err("fresh28 tensor escapes original tensor directory".into());
+                    }
+                    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+                    let mut bytes = [0u8; 65536];
+                    loop {
+                        let count = file.read(&mut bytes).map_err(|e| e.to_string())?;
+                        if count == 0 {
+                            break;
+                        }
+                        out.write_all(&bytes[..count]).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                },
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"schema":"misaka.palw.fresh-complete-pipeline-preparation.v28", "out":output,
+                "sha256":misaka_palw_sdk::runtime_pack::commit::hex(&sha),"original_source_bundle":misaka_palw_sdk::runtime_pack::commit::hex(&bundle.root()),
+                "native_application_or_fidelity":false})
+            );
+            Ok(())
+        }
+        "declare-complete-pipeline28" => {
+            use std::io::Read;
+            fn bounded(path: &str, cap: usize) -> Result<Vec<u8>, String> {
+                let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                if f.metadata().map_err(|e| e.to_string())?.len() > cap as u64 {
+                    return Err("complete28 input byte cap".into());
+                }
+                let mut b = Vec::new();
+                f.take(cap as u64 + 1).read_to_end(&mut b).map_err(|e| e.to_string())?;
+                if b.len() > cap {
+                    return Err("complete28 file grew beyond cap".into());
+                }
+                Ok(b)
+            }
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out required")?);
+            let source_dir = PathBuf::from(take_flag(&mut args, "--original-source-dir").ok_or("--original-source-dir required")?);
+            let bundle_path = take_flag(&mut args, "--source-bundle").ok_or("--source-bundle canonical Source28 required")?;
+            let sha = take_flag(&mut args, "--input-sha256").ok_or("--input-sha256 required")?;
+            if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("complete28 exact input SHA256 required".into());
+            }
+            let mut pin = [0u8; 32];
+            for (i, b) in pin.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+            }
+            let cap = take_flag(&mut args, "--file-limit-mib")
+                .ok_or("--file-limit-mib required")?
+                .parse::<u64>()
+                .ok()
+                .and_then(|v| v.checked_mul(1 << 20))
+                .filter(|v| *v > 0)
+                .ok_or("bounded positive file limit required")?;
+            let native_bundle =
+                kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28::from_bytes(&bounded(&bundle_path, 16 << 20)?)?;
+            let (bundle, sources) = native_bundle.check()?;
+            let mut classes = Vec::new();
+            while let Some(path) = take_flag(&mut args, "--class-wire") {
+                let wire = misaka_palw_kernel::flat_inputs12::bounded28::FlatStageClassWireV28::from_bytes(&bounded(&path, 1 << 20)?)?;
+                let mut class = wire.check(sources.get(wire.stage as usize).ok_or("complete28 original source stage absent")?)?;
+                class.bind_complete_bundle(&bundle)?;
+                classes.push(class);
+            }
+            if args.len() != 1 || network.is_some() {
+                return Err(
+                    "declare-complete-pipeline28 takes one fresh complete artifact and exact ordered --class-wire files".into()
+                );
+            }
+            let (layout, sha) = misaka_palw_sdk::full_component_v28::write_complete_pipeline_v28(
+                std::path::Path::new(&args[0]),
+                pin,
+                &out,
+                &source_dir,
+                bundle.manifest(),
+                &mut classes,
+                cap,
+            )?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            println!(
+                "{}",
+                serde_json::json!({"schema":"misaka.palw.complete-pipeline-artifact.v28","artifact":out,"artifact_sha256":hex(&sha),"layout_root":hex(&layout.root()),"component_manifest":hex(&layout.component_manifest),"complete_source":hex(&layout.complete_source),"original_source_restore_bytes":layout.source_restore_bytes,"stage_classes":layout.stage_classes.iter().map(|v|hex(v)).collect::<Vec<_>>(),"source_fidelity_or_native_final":false})
+            );
+            Ok(())
+        }
+        "native-payload" => {
+            use borsh::BorshDeserialize;
+            use std::io::{Read, Write};
+            fn bounded(path: &str, cap: usize) -> Result<Vec<u8>, String> {
+                let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                if f.metadata().map_err(|e| e.to_string())?.len() > cap as u64 {
+                    return Err("native payload input exceeds explicit cap".into());
+                }
+                let mut b = Vec::new();
+                f.take(cap as u64 + 1).read_to_end(&mut b).map_err(|e| e.to_string())?;
+                if b.len() > cap {
+                    return Err("native payload file grew beyond cap".into());
+                }
+                Ok(b)
+            }
+            let kind = take_flag(&mut args, "--kind").ok_or("--kind explicit text29/stage28 action required")?;
+            let body = take_flag(&mut args, "--body").ok_or("--body canonical Borsh required")?;
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out required")?);
+            let p = take_flag(&mut args, "--program")
+                .map(|p| {
+                    bounded(&p, misaka_palw_tir::program::MAX_PROGRAM_BYTES)
+                        .and_then(|b| misaka_palw_tir::TirProgramV1::decode_canonical(&b).map_err(|e| e.to_string()))
+                })
+                .transpose()?;
+            let request = take_flag(&mut args, "--request-borsh")
+                .map(|p| {
+                    bounded(&p, 2048).and_then(|b| {
+                        kaspa_consensus_core::palw_native_text_stop_v29::NativeTextRequestV29::try_from_slice(&b)
+                            .map_err(|e| e.to_string())
+                    })
+                })
+                .transpose()?;
+            let positions = take_flag(&mut args, "--positions").map(|v| v.parse::<u32>().map_err(|e| e.to_string())).transpose()?;
+            let key_file = take_flag(&mut args, "--key-file");
+            let bond_raw = take_flag(&mut args, "--bond");
+            let initial_sequence = take_flag(&mut args, "--initial-sequence");
+            let initial_now = take_flag(&mut args, "--initial-now-daa");
+            let initial_end = take_flag(&mut args, "--initial-interval-end");
+            let initial_expiry = take_flag(&mut args, "--initial-expires-daa");
+            if !args.is_empty() || out.exists() {
+                return Err("native-payload requires a fresh output and recognized explicit options".into());
+            }
+            let payload = misaka_palw_sdk::native_payload_v29::decode_native_payload_v29(
+                &kind,
+                &bounded(&body, 16 << 20)?,
+                p.as_ref(),
+                request.as_ref(),
+                positions,
+            )?;
+            let bond = bond_raw.as_deref().map(misaka_palw_sdk::improve_objects::spec::bond).transpose()?;
+            let signer = key_file
+                .map(|path| kaspa_pq_validator_core::load_validator_seed(&path).map(kaspa_pq_validator_core::ValidatorKey::from_seed))
+                .transpose()?;
+            let domain = if signer.is_some() {
+                let view = network_view(network.as_deref().ok_or("--network required for signing")?)?;
+                Some(kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                    view.params.net.to_string().as_bytes(),
+                    Some(view.params.genesis.hash),
+                ))
+            } else {
+                None
+            };
+            let encode = |payload: &misaka_palw_sdk::native_payload_v29::PreparedNativePayloadV29| -> Result<Vec<u8>, String> {
+                if let Some(key) = signer.as_ref() {
+                    borsh::to_vec(&misaka_palw_sdk::native_payload_v29::sign_native_payload_v29(
+                        key,
+                        domain.ok_or("network domain missing")?,
+                        bond.ok_or("--bond required for signing")?,
+                        payload,
+                    )?)
+                    .map_err(|e| e.to_string())
+                } else {
+                    // A direct object must fit the unchanged ordinary carrier.
+                    misaka_palw_kernel::route::KernelRouteObjectV1::decode(&payload.bytes()).map_err(|e| e.to_string())?;
+                    Ok(payload.bytes())
+                }
+            };
+            if let Some(sequence) = initial_sequence {
+                let number = |value: Option<String>, name: &str| -> Result<u64, String> {
+                    value
+                        .ok_or_else(|| format!("{name} required for paid initial31 transport"))?
+                        .parse::<u64>()
+                        .map_err(|e| e.to_string())
+                };
+                let plan = misaka_palw_sdk::native_payload_v29::prepare_initial_transport_v31(
+                    &payload,
+                    &bond.ok_or("--bond required to pin initial31 owner")?,
+                    sequence.parse::<u64>().map_err(|e| e.to_string())?,
+                    number(initial_now, "--initial-now-daa")?,
+                    number(initial_end, "--initial-interval-end")?,
+                    number(initial_expiry, "--initial-expires-daa")?,
+                )?;
+                // Prepare all signatures before creating output, so a refused carrier
+                // cannot leave a misleading partial submission manifest.
+                let objects = plan.carriers.iter().map(encode).collect::<Result<Vec<_>, _>>()?;
+                std::fs::create_dir(&out).map_err(|e| e.to_string())?;
+                let mut files = Vec::new();
+                for (index, bytes) in objects.iter().enumerate() {
+                    let name = format!("{index:04}.borsh");
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(out.join(&name))
+                        .map_err(|e| e.to_string())?
+                        .write_all(bytes)
+                        .map_err(|e| e.to_string())?;
+                    files.push(serde_json::json!({"file":name,"bytes":bytes.len()}));
+                }
+                let manifest = serde_json::json!({"schema":"misaka.palw.paid-initial-preparation.v31", "kind":kind,
+                    "namespace":plan.start.namespace,"action":plan.start.action,"sequence":plan.start.sequence,
+                    "original_body_bytes":plan.start.bytes,"count":plan.start.count,"original_object":misaka_palw_sdk::runtime_pack::commit::hex(&plan.start.original_object),
+                    "id":misaka_palw_sdk::runtime_pack::commit::hex(&plan.id),"expires_daa":plan.start.expires_daa,"ordered_objects":files,
+                    "submission_order":"start; all parts in index order; assemble", "native_application_or_funding":false});
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(out.join("manifest.json"))
+                    .map_err(|e| e.to_string())?
+                    .write_all(serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?.as_bytes())
+                    .map_err(|e| e.to_string())?;
+                println!("{manifest}");
+                return Ok(());
+            }
+            if initial_now.is_some() || initial_end.is_some() || initial_expiry.is_some() {
+                return Err("initial31 clock options require --initial-sequence from the live node".into());
+            }
+            if signer.is_none() && bond.is_some() {
+                return Err("direct --bond requires --key-file".into());
+            }
+            let bytes = encode(&payload)?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&out)
+                .map_err(|e| e.to_string())?
+                .write_all(&bytes)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "{}",
+                serde_json::json!({"schema":"misaka.palw.native-action-preparation.v29","kind":kind,"out":out,"bytes":bytes.len(),"native_application_or_funding":false})
+            );
+            Ok(())
+        }
+        "prepare-canonical-full-court25" => {
+            use borsh::BorshDeserialize;
+            use std::io::{Read, Write};
+            let mib = |v: Option<String>, name: &str| -> Result<u64, String> {
+                v.ok_or_else(|| format!("{name} required"))?
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|v| v.checked_mul(1 << 20))
+                    .filter(|v| *v > 0)
+                    .ok_or_else(|| format!("{name}:positive bounded MiB required"))
+            };
+            let sha = take_flag(&mut args, "--input-sha256").ok_or("--input-sha256 required")?;
+            if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("--input-sha256 exact SHA256 hex required".into());
+            }
+            let mut pin = [0u8; 32];
+            for (i, b) in pin.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+            }
+            let source =
+                PathBuf::from(take_flag(&mut args, "--source-declaration-borsh").ok_or("--source-declaration-borsh required")?);
+            let class_out = PathBuf::from(take_flag(&mut args, "--out-class29").ok_or("--out-class29 required")?);
+            let pc_out = PathBuf::from(take_flag(&mut args, "--out-params").ok_or("--out-params required")?);
+            let cap = mib(take_flag(&mut args, "--file-limit-mib"), "--file-limit-mib")?;
+            let payload = mib(take_flag(&mut args, "--payload-limit-mib"), "--payload-limit-mib")?;
+            let workspace = mib(take_flag(&mut args, "--tensor-workspace-mib"), "--tensor-workspace-mib")?;
+            if args.len() != 1 || network.is_some() || class_out.exists() || pc_out.exists() || class_out == pc_out {
+                return Err("canonical full25 requires one artifact and fresh distinct output files".into());
+            }
+            let file = std::fs::File::open(source).map_err(|e| e.to_string())?;
+            if file.metadata().map_err(|e| e.to_string())?.len() > 1024 {
+                return Err("canonical source25 fixed declaration cap".into());
+            }
+            let mut bytes = Vec::new();
+            file.take(1025).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            let declared =
+                misaka_palw_sdk::flat_court_v25::CanonicalFullSourceV25::try_from_slice(&bytes).map_err(|e| e.to_string())?;
+            let prepared = misaka_palw_sdk::flat_court_v25::prepare_canonical_full_court_v25(
+                std::path::Path::new(&args[0]),
+                pin,
+                &declared,
+                cap,
+                payload,
+                workspace,
+            )?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&class_out)
+                .map_err(|e| e.to_string())?
+                .write_all(&borsh::to_vec(&prepared.class).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&pc_out)
+                .map_err(|e| e.to_string())?
+                .write_all(&borsh::to_vec(&prepared.parameters).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            println!(
+                "{}",
+                serde_json::json!({"schema":"misaka.palw.canonical-full-court-preparation.v25","class29":hex(&prepared.class.id()),"out_class29":class_out,"out_params":pc_out,"source_binding":hex(&prepared.class.source_binding),"scope25":hex(&prepared.class.maximum_scope25),"resources29":hex(&prepared.class.maximum_resource29),"native_registration_or_source_fidelity":false})
+            );
+            Ok(())
+        }
+        "declare-full-court25" => {
+            let mib = |v: Option<String>, name: &str| -> Result<u64, String> {
+                v.ok_or_else(|| format!("{name} required"))?
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|v| v.checked_mul(1 << 20))
+                    .filter(|v| *v > 0)
+                    .ok_or_else(|| format!("{name}: positive bounded MiB required"))
+            };
+            let input_sha = take_flag(&mut args, "--input-sha256").ok_or("--input-sha256 required")?;
+            if input_sha.len() != 64 || !input_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("--input-sha256: exact SHA256 hex required".into());
+            }
+            let mut pin = [0u8; 32];
+            for (i, byte) in pin.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&input_sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+            }
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out required")?);
+            let source = PathBuf::from(take_flag(&mut args, "--original-source-dir").ok_or("--original-source-dir required")?);
+            let file_cap = mib(take_flag(&mut args, "--file-limit-mib"), "--file-limit-mib")?;
+            let payload = mib(take_flag(&mut args, "--payload-limit-mib"), "--payload-limit-mib")?;
+            let workspace = mib(take_flag(&mut args, "--tensor-workspace-mib"), "--tensor-workspace-mib")?;
+            let transpose = args.iter().any(|a| a == "--transpose-history15");
+            args.retain(|a| a != "--transpose-history15");
+            if args.len() != 1 || network.is_some() {
+                return Err("declare-full-court25 takes one freshly converted artifact and explicit preparation limits".into());
+            }
+            let prepared = misaka_palw_sdk::flat_court_v25::declare_full_court_artifact_v25(
+                std::path::Path::new(&args[0]),
+                pin,
+                &out,
+                &source,
+                file_cap,
+                payload,
+                workspace,
+                transpose,
+            )?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let report = serde_json::json!({"schema":"misaka.palw.full-court-artifact.v25", "artifact":out,
+                "artifact_sha256":hex(&prepared.artifact_sha256),"layout_root":hex(&prepared.layout.root()),
+                "original_context_max":prepared.layout.original_context_max,"lowered_context_max":prepared.layout.lowered_context_max,
+                "program_root":hex(&prepared.layout.program_root),"parameter_root":hex(&prepared.layout.parameter_root),
+                "inventory_root":hex(&prepared.layout.inventory_root),"maximum_scope25":hex(&prepared.layout.maximum_scope_root),
+                "maximum_resource29":hex(&prepared.layout.maximum_resource_root),"source_components":hex(&prepared.source_components),
+                "source_fidelity_or_native_final":false});
+            println!("{report}");
+            Ok(())
+        }
         "declare-layout" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             let out = take_flag(&mut args, "--out").ok_or(USAGE)?;
             let model_id = take_flag(&mut args, "--model-id");
+            let metadata_profile = take_flag(&mut args, "--metadata-profile")
+                .map(|p| {
+                    misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16::parse(&p)
+                        .ok_or_else(|| format!("unknown --metadata-profile {p}"))
+                })
+                .transpose()?;
             let number = |v: Option<String>, name: &str| -> Result<Option<u32>, String> {
                 v.map(|v| v.parse::<u32>().map_err(|e| format!("{name} {v}: {e}"))).transpose()
             };
@@ -575,6 +1000,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 &choice,
                 model_id.as_deref(),
                 parent.as_deref().map(std::path::Path::new),
+                metadata_profile,
             )
         }
         "certify" => {
@@ -1571,8 +1997,9 @@ fn declare_layout(
     choice: &misaka_palw_sdk::tir_layout::TirLayoutChoiceV1,
     model_id: Option<&str>,
     parent: Option<&std::path::Path>,
+    metadata_profile: Option<misaka_palw_tir_artifact::metadata_v16::MetadataParseProfileV16>,
 ) -> Result<(), String> {
-    let d = misaka_palw_sdk::tir_layout::tir_declare_layout_with_parent_v1(
+    let d = misaka_palw_sdk::tir_layout::tir_declare_layout_with_metadata_profile_v16(
         &view.params,
         &view.bundle,
         input,
@@ -1580,6 +2007,7 @@ fn declare_layout(
         choice,
         model_id,
         parent,
+        metadata_profile,
     )?;
     let l = &d.layout;
     println!("wrote {} (file digest {})", output.display(), Hash64::from_bytes(d.file_digest));

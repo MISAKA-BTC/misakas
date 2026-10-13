@@ -451,6 +451,33 @@ impl CheckedQuotaShardV11 {
         }
         self.state.mark_expired_stage_terminal_closed_v14(policy, epoch, binding, class, plan, terminal, paid)
     }
+    pub fn debit_stage_verdict_v14(
+        &mut self, policy: &QuotaPolicyV11, epoch: &TrustedEpochV11,
+        class: &crate::flat_inputs12::source14::CheckedStageClassV14,
+        book: &stage14::StageJobBookV14, plan: &stage14::CheckedStageQuotaV14,
+    ) -> Result<stage14::StageVerdictDebitV14, String> {
+        if self.selected_job != book.id() { return Err("stage verdict selects a different original job".into()); }
+        let new_interval = self.preflight_unreserved_actor(policy, epoch)?;
+        let paid = self.state.debit_stage_verdict_v14(policy, epoch, self.actor, class, book, plan)?;
+        self.account_unreserved_actor(new_interval);
+        Ok(paid)
+    }
+    pub fn debit_stage_protected_verdict_v14(
+        &mut self,policy:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&stage14::CheckedStageQuotaV14,
+        original_paid:&Digest,carrier:&[u8],
+    )->Result<stage14::StageVerdictDebitV14,String>{
+        let key=self.seal_key.ok_or("stage owncourt selected paid seal absent")?;
+        let binding=self.subject_row().ok_or("stage owncourt original subject absent")?.binding.clone();
+        if self.selected_job!=binding.job_id{return Err("stage owncourt changes selected original job".into());}
+        self.state.debit_stage_protected_verdict_v14(policy,epoch,self.actor,&binding,plan,&key,original_paid,carrier)
+    }
+    pub fn mark_stage_verdict_closed_v14(
+        &mut self, policy: &QuotaPolicyV11, epoch: &TrustedEpochV11,
+        terminal: &CheckedQuotaTerminalV11, paid: &stage14::StageVerdictDebitV14,
+    ) -> Result<(), String> {
+        if self.selected_job != terminal.binding.job_id { return Err("stage verdict terminal changes original job".into()); }
+        self.state.mark_stage_verdict_closed_v14(policy, epoch, terminal, paid)
+    }
     pub fn admit_protected_seal(
         &mut self,
         policy: &QuotaPolicyV11,

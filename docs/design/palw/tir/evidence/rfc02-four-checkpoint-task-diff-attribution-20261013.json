@@ -36,8 +36,8 @@
           "first_integer_source_divergence": 1,
           "divergence_phase": "AT_SOURCE_EOS",
           "tokens_equal_through_source_EOS": false,
-          "source_answer": "こんにちは",
-          "integer_answer": "こんにちは！",
+          "source_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "integer_answer": "\u3053\u3093\u306b\u3061\u306f\uff01",
           "source_predeclared_answer_passed": false,
           "integer_predeclared_answer_passed": false,
           "prompt_tokens_byte_identical": true,
@@ -152,8 +152,8 @@
           "first_integer_source_divergence": null,
           "divergence_phase": "NO_DIVERGENCE",
           "tokens_equal_through_source_EOS": true,
-          "source_answer": "こんにちは",
-          "integer_answer": "こんにちは",
+          "source_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "integer_answer": "\u3053\u3093\u306b\u3061\u306f",
           "source_predeclared_answer_passed": false,
           "integer_predeclared_answer_passed": false,
           "prompt_tokens_byte_identical": true,
@@ -210,8 +210,8 @@
           "first_integer_source_divergence": null,
           "divergence_phase": "NO_DIVERGENCE",
           "tokens_equal_through_source_EOS": true,
-          "source_answer": "こんにちは",
-          "integer_answer": "こんにちは",
+          "source_answer": "\u3053\u3093\u306b\u3061\u306f",
+          "integer_answer": "\u3053\u3093\u306b\u3061\u306f",
           "source_predeclared_answer_passed": false,
           "integer_predeclared_answer_passed": false,
           "prompt_tokens_byte_identical": true,
@@ -247,9 +247,26 @@
     "actual_fed_positions": 21,
     "HF_reference_sha256": "572fc10e86fce414967bf26af2a6c542e4330c6e67b028e51da179962cfdf782",
     "integer_diagnostic_sha256": "50bcebc07ded08225c8a04c06556b23c382b248dcd56fb200dbbdcbcbfa7e8d8",
-    "observed_inference": "finite numerical error reverses source EOS/rival ordering; cannot be lowest-id tie or different prompt tokens; quantization vs float lowering/RoPE not yet uniquely isolated",
-    "HL_source_comparison_status": "RUNNING",
-    "fullcontext_sourcefidelity_nativeFinal_or_A6_A8_established": false
+    "observed_inference": "At this same 21-token prefix current generic high-level float lowering agrees with HF on the EOS/rival ordering (errors below 0.000127), while integer lowering reverses it. This isolates integer quantization/approximation at this probe; it is not a model-wide fidelity result.",
+    "HL_source_comparison_status": "COMPLETED",
+    "fullcontext_sourcefidelity_nativeFinal_or_A6_A8_established": false,
+    "HL_observation_sha256": "59dc7020383d24dacc4f0a09d526e45dbef38e40e41a1c99be850eefc707b937",
+    "HL_scores": [
+      {
+        "score": 14.236946105957031,
+        "token_id": 151645
+      },
+      {
+        "score": 14.146061897277832,
+        "token_id": 6313
+      },
+      {
+        "score": 5.2897515296936035,
+        "token_id": 151643
+      }
+    ],
+    "HL_source_EOS_error": -0.00012683868408203125,
+    "HL_source_rival_error": -4.291534423828125e-05
   },
   "fixed_count_after_EOS_failures_are_preserved_not_reclassified_as_PASS": true,
   "no_threshold_or_source_pin_or_advertised_task_change": true,

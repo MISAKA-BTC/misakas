@@ -497,6 +497,12 @@ impl Params {
         if self.palw_task_heads_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_task_heads_v1 = None;
         }
+        if self.palw_stage_execution_v28.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_stage_execution_v28 = None;
+        }
+        if self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_native_final_v27 = None;
+        }
         if self.palw_stage_execution_v14.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_stage_execution_v14 = None;
         }
@@ -1014,6 +1020,8 @@ impl Params {
             palw_probabilistic_constraints_v1,
             palw_funded_execution_v11,
             palw_stage_execution_v14,
+            palw_native_final_v27,
+            palw_stage_execution_v28,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -1314,6 +1322,8 @@ impl Params {
             ("palw_probabilistic_constraints_v1", *palw_probabilistic_constraints_v1),
             ("palw_funded_execution_v11", palw_funded_execution_v11.as_ref().map(|f| f.activation)),
             ("palw_stage_execution_v14", palw_stage_execution_v14.as_ref().map(|f| f.activation)),
+            ("palw_native_final_v27", palw_native_final_v27.as_ref().map(|f| f.activation)),
+            ("palw_stage_execution_v28", palw_stage_execution_v28.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
@@ -1595,6 +1605,16 @@ impl Params {
         }
         if let Some(fence) = &self.palw_stage_execution_v14 {
             h.write(b"palw_stage_execution_v14");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
+        if let Some(fence) = &self.palw_native_final_v27 {
+            h.write(b"palw_native_final_v27");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root());
+        }
+        if let Some(fence) = &self.palw_stage_execution_v28 {
+            h.write(b"palw_stage_execution_v28");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
         }
@@ -2429,6 +2449,8 @@ impl Params {
             palw_probabilistic_constraints_v1,
             palw_funded_execution_v11,
             palw_stage_execution_v14,
+            palw_native_final_v27,
+            palw_stage_execution_v28,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -3219,6 +3241,12 @@ impl Params {
         if let Some(fence) = palw_stage_execution_v14.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_native_final_v27.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_stage_execution_v28.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(fence) = palw_funded_execution_v11.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -3801,6 +3829,8 @@ impl Params {
             palw_probabilistic_constraints_v1,
             palw_funded_execution_v11,
             palw_stage_execution_v14,
+            palw_native_final_v27,
+            palw_stage_execution_v28,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -4644,6 +4674,16 @@ impl Params {
         }
         if let Some(fence) = palw_stage_execution_v14 {
             h.write(b"palw_stage_execution_v14");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policies.root());
+        }
+        if let Some(fence) = palw_native_final_v27 {
+            h.write(b"palw_native_final_v27");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root());
+        }
+        if let Some(fence) = palw_stage_execution_v28 {
+            h.write(b"palw_stage_execution_v28");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policies.root());
         }

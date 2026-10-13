@@ -5248,6 +5248,14 @@ impl VirtualStateProcessor {
         {
             return Err("a funded proof chunk is refused below palw_funded_execution_v11".to_string());
         }
+        if matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::StageProofV14 { .. })
+            && !self.palw_kernel_inner_fence_at(
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14,
+                daa_score,
+            )
+        {
+            return Err("a typed stage proof chunk is refused before its owning stage14 fence".into());
+        }
         let record = state
             .bond(&chunk.opener)
             .ok_or_else(|| "a kernel route chunk is signed by a bond this chain does not have".to_string())?;
@@ -5267,6 +5275,60 @@ impl VirtualStateProcessor {
     }
 
     /// **G14 lane D (tag 110): is this kernel route object signed by the bond it names, and is the kernel willing to decode it?**
+    /// Resolve each native action's original contract before body decoding,
+    /// signature work or generic acceptance budgets. New actions never inherit
+    /// authority merely from an active older action with the same outer tag.
+    pub(super) fn palw_native_action_active_at_v1(
+        &self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, bytes: &[u8], daa: u64,
+    ) -> Option<bool> {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1;
+        let active = |f: ForkActivation| f != ForkActivation::never() && f.is_active(daa);
+        let final27 = || self.palw_native_final_v27.as_ref().is_some_and(|f| active(f.activation))
+            && self.palw_kernel_opv_at(daa);
+        match bytes.get(1).copied()? {
+            misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 => Some(match bytes.get(2).copied() {
+                Some(0..=24) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa),
+                Some(32) => {
+                    if !final27() { return Some(false); }
+                    let frame = misaka_palw_kernel::route::borrowed_native_action_v1(bytes).ok().flatten()?;
+                    let part = kaspa_consensus_core::palw_native_paged_proof_v29::borrowed_native_paged_metadata_v29(frame.body)?;
+                    match state.kernel_route().and_then(|r| r.native_paged_proof_namespace_v29(part.job, part.seal)) {
+                        Some(28) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)),
+                        Some(29) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa),
+                        _ => false,
+                    }
+                }
+                Some(25..=40) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa) && final27(),
+                Some(action @ 41..=44) => {
+                    if !final27() { return Some(false); }
+                    let frame = misaka_palw_kernel::route::borrowed_native_action_v1(bytes).ok().flatten()?;
+                    let namespace = if action==41 {
+                        let raw:[u8;2]=frame.body.get(2..4)?.try_into().ok()?;
+                        Some(u16::from_le_bytes(raw))
+                    } else {
+                        let id = if action==42 {
+                            kaspa_consensus_core::palw_native_initial_v31::borrowed_initial_part_v31(frame.body)?.id
+                        } else { frame.body.try_into().ok()? };
+                        state.kernel_route().and_then(|r|r.native_initial_namespace_v31(id))
+                    };
+                    match namespace {
+                        Some(28)=>self.palw_stage_execution_v28.as_ref().is_some_and(|f|active(f.activation)),
+                        Some(29)=>self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11,daa),
+                        _=>false,
+                    }
+                }
+                _ => false,
+            }),
+            misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => Some(match bytes.get(2).copied() {
+                Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
+                Some(19..=31) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
+                _ => false,
+            }),
+            _ => None,
+        }
+    }
+
     pub(super) fn palw_kernel_route_object_is_signed(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -5283,22 +5345,37 @@ impl VirtualStateProcessor {
         // Consumer-owned opaque namespaces are gated from their fixed tag
         // before signature work or any body allocation. Typed body validation
         // and its expensive work belong to the prepaid native transition.
-        let opaque_fence = match bytes.get(1).copied() {
-            Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11) => {
-                Some(kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11)
-            }
-            Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) => {
-                Some(kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14)
-            }
-            _ => None,
-        };
-        if opaque_fence.is_some_and(|fence| !self.palw_kernel_inner_fence_at(fence, daa_score)) {
+        if self.palw_native_action_active_at_v1(state, bytes, daa_score) == Some(false) {
             return Err("a native execution object is refused before its owning fence".into());
         }
         let native = misaka_palw_kernel::route::borrowed_native_action_v1(bytes).map_err(|why| why.to_string())?;
         if let Some(action) = native
-            && action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11
-            && action.action == 15
+            && action.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && matches!(action.action,42|43) {
+            let (id,index)=if action.action==42 {
+                let p=kaspa_consensus_core::palw_native_initial_v31::borrowed_initial_part_v31(action.body)
+                    .ok_or_else(||"initial31 bounded owner/part metadata absent".to_string())?;
+                (p.id,Some(p.index))
+            } else { (action.body.try_into().map_err(|_|"initial31 exact original object identity".to_string())?,None) };
+            if state.kernel_route().and_then(|r|r.native_initial_owner_v31(id,index,daa_score))!=Some(*signer) {
+                return Err("initial31 original live owner/part differs".into());
+            }
+        }
+        if let Some(action) = native
+            && action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && action.action == 32
+        {
+            let part = kaspa_consensus_core::palw_native_paged_proof_v29::borrowed_native_paged_metadata_v29(action.body)
+                .ok_or_else(|| "a paid29 proof part lacks exact bounded original metadata".to_string())?;
+            if part.owner != kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(signer)
+                || state.kernel_route().and_then(|r| r.native_paged_proof_owner_v29(
+                    part.job, part.seal, part.owner, part.index, part.count, daa_score,
+                )) != Some(*signer)
+            {
+                return Err("a paid29 proof part lacks its original live paid seal owner".into());
+            }
+        }
+        if let Some(action) = native
+            && ((action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && action.action == 15)
+                || (action.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && action.action == 8))
         {
             let pending: [u8; 64] = action
                 .body
@@ -5306,7 +5383,14 @@ impl VirtualStateProcessor {
                 .ok_or_else(|| "a source answer lacks its fixed pending-unit identity".to_string())?
                 .try_into()
                 .expect("fixed pending identity extent");
-            if state.kernel_route().and_then(|route| route.execution_source_answer_owner_v16(&pending, daa_score)) != Some(*signer) {
+            let owner = state.kernel_route().and_then(|route| {
+                if action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 {
+                    route.execution_source_answer_owner_v16(&pending, daa_score)
+                } else {
+                    route.stage_source_answer_owner_v14(&pending, daa_score)
+                }
+            });
+            if owner != Some(*signer) {
                 return Err("a source answer lacks its original live producer-owned pending unit".into());
             }
         }
@@ -6719,16 +6803,41 @@ impl VirtualStateProcessor {
         self.palw_kernel_route_at(daa_score).then(|| {
             let mut ruleset = [0u8; 64];
             ruleset[..32].copy_from_slice(&self.palw_kernel_route_ruleset_id.as_bytes());
+            let native_mass = (self.palw_kernel_inner_fence_at(
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11,
+                daa_score,
+            ) || self.palw_kernel_inner_fence_at(
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14,
+                daa_score,
+            ) || self.palw_stage_execution_v28.as_ref().is_some_and(|f| {
+                f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)
+            }) && self.palw_native_final_v27.as_ref().is_some_and(|f| {
+                f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)
+            }) && self.palw_kernel_opv_at(daa_score))
+            .then(|| self.native_carriage_mass.clone());
+            let native_final = self.palw_native_final_v27.as_ref().filter(|f| {
+                f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                    && f.activation.is_active(daa_score) && self.palw_kernel_opv_at(daa_score)
+            }).cloned();
+            let native_service = native_mass.as_ref().map(|mass| {
+                native_final.as_ref().and_then(|f| {
+                    kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::reserved_scheduler_v30(
+                        mass, &f.policy.queue_policy).ok()
+                }).unwrap_or_else(|| kaspa_consensus_core::palw_flat_execution_capacity_v22::NativeCarriageServiceV22::probe(mass))
+            });
             kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
                 network_domain: self.palw_network_domain_v2(),
-                native_carriage_mass: (self.palw_kernel_inner_fence_at(
-                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11,
-                    daa_score,
-                ) || self.palw_kernel_inner_fence_at(
-                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14,
-                    daa_score,
-                ))
-                .then(|| self.native_carriage_mass.clone()),
+                native_carriage_mass: native_mass,
+                native_carriage_service: native_service,
+                native_final,
+                stage_execution_v28: self.palw_stage_execution_v28.as_ref().filter(|f| {
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                        && f.activation.is_active(daa_score) && self.palw_kernel_opv_at(daa_score)
+                        && self.palw_native_final_v27.as_ref().is_some_and(|n| {
+                            n.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                                && n.activation.is_active(daa_score)
+                        })
+                }).cloned(),
                 stage_execution: self
                     .palw_stage_execution_v14
                     .as_ref()

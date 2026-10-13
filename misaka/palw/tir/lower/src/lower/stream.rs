@@ -176,11 +176,11 @@ pub fn materialise_stream(
                 // narrowing's scales) fill from them while its codes are made by blocks.
                 for &pi in &used[tb] {
                     let d = &lw.program.params[pi as usize];
-                    if let Some(RowParam { hl: hp, kind: RowKind::SplitMain { kx, f_max } }) = lw.row_params.get(&d.name)
+                    if let Some(RowParam { hl: hp, kind: RowKind::SplitMain { kx, f_max, bits } }) = lw.row_params.get(&d.name)
                         && defer.contains(hp)
                     {
-                        let sc = split_meta(hl, loader, calib, policy, opts, resid, (&prefix, layer), *hp, kx, *f_max)?;
-                        ctx.inject_split(*hp, kx, *f_max, sc)?;
+                        let sc = split_meta(hl, loader, calib, policy, opts, resid, (&prefix, layer), *hp, kx, *f_max, *bits)?;
+                        ctx.inject_split_bits(*hp, kx, *f_max, *bits, sc)?;
                     }
                 }
                 for &pi in &used[tb] {
@@ -374,6 +374,7 @@ fn split_meta(
     hp: u32,
     kx: &super::ScaleKey,
     f_max: i32,
+    bits: u8,
 ) -> Result<SplitCodes> {
     let rs = loader.row_source().ok_or_else(|| LowerError::eval("internal: a deferred param without a row source"))?;
     let (rows, cols) =
@@ -385,11 +386,17 @@ fn split_meta(
         let mut bstore = ParamStore::default();
         bstore.insert(hp, None, t, None);
         let bctx = FillCtx::for_scales(hl, &bstore, layer, prefix, calib, resid, policy);
-        let sc = bctx.split_rows(hp, kx, f_max)?;
+        let sc = bctx.split_rows_bits(hp, kx, f_max, bits)?;
         scales.extend_from_slice(&sc.main.scales);
         f.extend_from_slice(&sc.f);
         wo.extend_from_slice(&sc.wo);
         outliers.clone_from(&sc.outliers);
     }
-    Ok(SplitCodes { main: RowCodes { rows, cols, codes: Vec::new(), scales }, outliers, wo, f })
+    Ok(SplitCodes {
+        main: RowCodes { rows, cols, codes: Vec::new(), scales },
+        main16: if bits == 16 { Some(Vec::new()) } else { None },
+        outliers,
+        wo,
+        f,
+    })
 }
