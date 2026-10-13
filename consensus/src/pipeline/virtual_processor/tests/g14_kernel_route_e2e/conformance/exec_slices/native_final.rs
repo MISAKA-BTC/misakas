@@ -161,6 +161,121 @@ async fn native_payment_beat_to(cw: &mut Cw, target: u64, stage: &str) {
     eprintln!("[x8-native-payment] {stage}: reached daa={}, blocks={blocks}, elapsed={:?}", cw.net.daa(), started.elapsed());
 }
 
+/// Actual accepted native terms and ML-DSA provider leases. The surrounding
+/// REAL trace admission seam remains; this proves term authorization, not work.
+#[tokio::test]
+async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_accepts_exact_provider_terms() {
+    use kaspa_consensus_core::palw_bond_budget_v1::{
+        PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1, PalwPaidConsumerLifecycleFenceV1, PalwPaidConsumerLifecyclePolicyV1,
+    };
+    use kaspa_consensus_core::palw_provider_court_v1::{
+        PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1, ProviderSubjectV1,
+        palw_provider_court_message_v1,
+    };
+    let mut cw = active_world_over_with_params(
+        VerificationModeV1::OptimisticPublicVerification,
+        |config| TestConsensus::new(config),
+        |params| {
+            let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+            budget.capital_unit_sompi = 100_000_000;
+            budget.claims_per_unit = 100;
+            budget.block_units_per_unit = 100_000_000;
+            budget.reward_per_unit_sompi = 100_000_000;
+            budget.final_weight_per_unit = 1_000_000_000;
+            params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
+            params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+            params.palw_material_income_v3 = Some(ForkActivation::new(1));
+            params.palw_paid_consumer_lifecycle_v1 = Some(PalwPaidConsumerLifecycleFenceV1 {
+                activation: ForkActivation::new(1),
+                policy: PalwPaidConsumerLifecyclePolicyV1 {
+                    version: 1,
+                    service_span_daa: 1_000,
+                    dispute_tail_daa: 800,
+                    material_tail_daa: 400,
+                },
+            });
+            params.palw_provider_court_v1 = Some(ForkActivation::new(1));
+            params.sync_palw_bond_budget_v1();
+            assert!(params.validate_palw_paid_consumer_lifecycle_v1().is_err());
+        },
+    )
+    .await;
+    let class = cw.v2_class;
+    let real = real_attempt(&mut cw, ROOT_CARD, class, 0xA7E5).await;
+    let terms = cw.net.chain.tip_state().1.paid_consumer_terms_v1(&real.claim).expect("actual native accepted terms");
+    let initial = palw_exec_v2_token_state_root_v1(&[&real.stream()]);
+    let draft = declaration(&cw, &real, Hash64::default(), initial);
+    let prefix = kernel_prefix_claim(&mut cw, &real, &draft).await;
+    let mut declaration = declaration(&cw, &real, Hash64::from_bytes(prefix.claim.id), initial);
+    let policy = cw.net.ledger().policy;
+    let offset = palw_exec_v2_retention_terms_v1(1, 0, cw.net.bundle.state.window_court(), &policy).unwrap().liability_until - 1;
+    let exact_expiry = terms.material_until.checked_sub(offset).expect("predeclared service can fund this root term");
+    assert!(exact_expiry > cw.net.daa());
+    let subject = ProviderSubjectV1::KernelClaim { claim: Hash64::from_bytes(prefix.claim.id) };
+    let reserved = cw.net.ledger().claims[&prefix.claim.id].reserved.div_ceil(2).max(PALW_PROVIDER_LEASE_MIN_RESERVATION_SOMPI_V1);
+    let leases: Vec<_> = [2, 3]
+        .into_iter()
+        .map(|card| {
+            let provider = cw.net.bond(card);
+            let payload = borsh::to_vec(&(subject, reserved, terms.material_until)).unwrap();
+            let message = palw_provider_court_message_v1(cw.net.domain, 150, &provider, &payload);
+            (
+                card,
+                Obj::ProviderLeaseV1 {
+                    subject,
+                    reserved,
+                    serve_until_daa: terms.material_until,
+                    provider,
+                    signature: sign(card, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0x95),
+                },
+            )
+        })
+        .collect();
+    cw.net.send(leases).await;
+    let message = palw_provider_court_message_v1(
+        cw.net.domain,
+        153,
+        &cw.net.bond(ROOT_CARD),
+        &borsh::to_vec(&Hash64::from_bytes(prefix.claim.id)).unwrap(),
+    );
+    cw.net
+        .send(vec![(
+            ROOT_CARD,
+            Obj::DaTransferV1 {
+                claim: Hash64::from_bytes(prefix.claim.id),
+                producer: cw.net.bond(ROOT_CARD),
+                signature: sign(ROOT_CARD, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0x96),
+            },
+        )])
+        .await;
+    let before = cw.net.chain.tip_state().1;
+    let accepted_leases = cw.net.api().unwrap().provider_leases_of_v1(&subject);
+    assert_eq!(accepted_leases.len(), 2, "both actual signed provider carriers were admitted");
+    assert!(accepted_leases.iter().all(|(_, lease)| lease.serve_until_daa == terms.material_until));
+    assert!(cw.net.api().unwrap().provider_subject_v1(&subject).unwrap().transferred_daa.is_some());
+    let money: Vec<_> = (0..cw.net.chain.bonds.len()).map(|card| cw.net.collateral(card)).collect();
+    let ledger = cw.net.ledger().to_rows();
+    declaration.expiry_daa = exact_expiry - 1;
+    assert!(send_root(&mut cw, declaration.clone()).await.is_none());
+    let refused = cw.net.chain.tip_state().1;
+    assert_eq!(refused.claim(&real.claim), before.claim(&real.claim));
+    assert_eq!(cw.net.ledger().to_rows(), ledger, "a refused signed root creates no escrow/hold or fee mutation");
+    assert_eq!((0..cw.net.chain.bonds.len()).map(|card| cw.net.collateral(card)).collect::<Vec<_>>(), money);
+    assert_eq!(cw.net.api().unwrap().provider_leases_of_v1(&subject), accepted_leases);
+    declaration.expiry_daa = exact_expiry;
+    let root = send_root(&mut cw, declaration).await.expect("exact authorized term opens the root");
+    assert_eq!(root.expiry_daa, exact_expiry);
+    assert_eq!(
+        cw.net.chain.tip_state().1.exec_v2_liability_until_v1(&cw.net.bundle.state, &real.claim).unwrap(),
+        Some(terms.material_until)
+    );
+    assert_eq!(
+        cw.net.api().unwrap().provider_leases_of_v1(&subject),
+        accepted_leases,
+        "admission never rewrites providers' signed term"
+    );
+}
+
 #[tokio::test]
 async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_cancels_all_unpaid_funds() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};

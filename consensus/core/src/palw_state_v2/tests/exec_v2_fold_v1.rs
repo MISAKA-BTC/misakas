@@ -3708,6 +3708,71 @@ mod amendment_1 {
     }
 
     #[test]
+    fn exec_paid_material_contract_refuses_short_signed_horizon_before_any_fee_or_provider_write() {
+        use crate::palw_bond_budget_v1::{
+            PalwBondBudgetMirrorV1, PalwBondBudgetPolicyV1, PalwPaidConsumerLifecycleMirrorV1, PalwPaidConsumerLifecyclePolicyV1,
+        };
+        use crate::palw_provider_court_v1::ProviderSubjectV1;
+        let base = xp(Some(0));
+        let policy = palw_kernel_route_policy_v1(h64(0xE7), h64(0xE8));
+        let horizon = super::palw_kernel_route_fold_v1::exec_liability_floor_v1(5_000, base.window_court(), &policy).unwrap();
+        let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        budget.capital_unit_sompi = 100_000_000;
+        budget.claims_per_unit = 100;
+        budget.reward_per_unit_sompi = 100_000_000;
+        budget.final_weight_per_unit = 1_000_000_000;
+        for extra in [1, 0] {
+            let p = base
+                .clone()
+                .with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 100, policy: budget.clone(), allocation: None }))
+                .with_reporter_income_from(Some(100))
+                .with_material_income_from(Some(100))
+                .with_paid_consumer_lifecycle(Some(PalwPaidConsumerLifecycleMirrorV1 {
+                    from_daa: 100,
+                    policy: PalwPaidConsumerLifecyclePolicyV1 {
+                        version: 1,
+                        service_span_daa: 1_000,
+                        dispute_tail_daa: 1_000,
+                        material_tail_daa: horizon - 101 - 2_000 + extra,
+                    },
+                }));
+            let (p, mut s, native) = world_with(p);
+            assert_eq!(s.paid_consumer_terms_v1(&native).unwrap().material_until, horizon + extra);
+            with_route(&mut s, native, Some(PLAN));
+            let pre = Prefix::new(&mut s, native, ClaimStateV1::Final { final_daa: 105 }, false);
+            fund_jobs(&mut s, &pre, &[], 1);
+            // Production lease/transfer objects preserve this exact term. As
+            // elsewhere in this fold module, header signature verification is
+            // a named fixture seam; the lease rows are not a crypto claim.
+            let s = provider_terms(&p, &s, pre.claim_id, bond_key(1), 106, horizon, 30, true);
+            let subject = ProviderSubjectV1::KernelClaim { claim: pre.claim_id };
+            let leases = s.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject);
+            assert!(leases.iter().all(|(_, row)| row.serve_until_daa == horizon));
+            let before = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+            let declaration = pre.decl(native);
+            let result = open(&p, &s, declaration);
+            if extra == 1 {
+                let error = result.expect_err("native material must fit the existing signed EXEC/provider horizon");
+                assert!(matches!(error, PalwStateV2Error::ExecV2Refused(ref reason) if reason.contains("signed EXEC horizon")));
+                assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap(), before);
+                assert!(s.exec_v2_root_v1(&native).is_none(), "refusal cannot reserve a root or consume its fee");
+            } else {
+                let admitted = result.expect("an exact already-authorized material horizon is sufficient");
+                assert_eq!(admitted.kernel_route.as_ref().unwrap().provider_leases_of_v1(&subject), leases);
+                assert_eq!(admitted.exec_v2_root_v1(&native).unwrap().expiry_daa, 5_000);
+                assert_eq!(admitted.exec_v2_liability_until_v1(&p, &native).unwrap(), Some(horizon));
+                // `open`/`step_with` also check exact delta replay, rollback and
+                // carried-state restart. No Final or physical-payment clock moves.
+            }
+        }
+        let (p, s, native) = world(Some(0));
+        assert!(s.paid_consumer_terms_v1(&native).is_none());
+        let before = s.state_root();
+        super::palw_exec_v2_rewards_v1::require_paid_exec_material_window_v1(&s, &p, &native, 0).unwrap();
+        assert_eq!(s.state_root(), before, "no-contract histories keep the old read-only behavior");
+    }
+
+    #[test]
     fn exec_transferred_prefix_requires_the_providers_signed_consumer_horizon() {
         use crate::palw_provider_court_v1::{ProviderSubjectV1, palw_kernel_claim_horizon_bound_v1};
         let (p, mut s, native) = world(Some(0));

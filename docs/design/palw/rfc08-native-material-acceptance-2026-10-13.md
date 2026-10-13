@@ -89,6 +89,23 @@ uses finite heartbeat limits to diagnose missing DAA progress instead of waiting
 only by actual blocks, with no DAA/Final setter or synthetic maturity. These fixture diagnostic limits are not
 production throughput/resource approval.
 
+## Paid material admission mismatch repair
+
+`require_paid_exec_material_window_v1` now checks the native paid contract's already accepted `material_until` against
+the existing signed root-expiry-derived EXEC retention horizon. Declaration admission calls it before kernel fee/R
+transfer and root/work-use writes. Restore/replay applies it to retained non-void roots. The existing provider lease
+check still requires its whole EXEC horizon; a contract cannot ask it to serve through a later unauthenticated term.
+No-contract histories return without new reads/writes, and no wire field, public preset or clock is changed.
+
+The new core `exec_paid_material_contract_refuses_short_signed_horizon_before_any_fee_or_provider_write` obtains native
+contract terms through admission, keeps actual provider lease/transfer fold terms fixed, and checks one-DAA-short
+refusal, exact-bound admission, parent carriage unchanged on refusal and the existing delta/revert/carriage checks on
+success. Its header-signature seam is explicitly retained. The new native
+`x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_accepts_exact_provider_terms` uses actual ML-DSA
+provider leases/DA transfer, signed prefix and root carriers, checks no ledger/money/provider mutation on refusal,
+then re-signs a sufficient expiry and requires admission without rewriting any provider term. Both controls await
+fresh compilation/execution. They do not claim to bound future physical payment or renew a finite provider contract.
+
 ## Remaining acceptance
 
 Signed provider TTL and collectible collateral must cover each admitted whole path. The current finite native

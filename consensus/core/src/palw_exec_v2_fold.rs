@@ -431,6 +431,9 @@ impl PalwChainStateV2 {
             return Ok(());
         }
         for (claim_id, root) in &self.exec_v2.roots {
+            if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. }) {
+                super::palw_exec_v2_rewards_v1::require_paid_exec_material_window_v1(self, params, claim_id, root.expiry_daa)?;
+            }
             if !matches!(root.phase, PalwWorkRootPhaseV2::Voided { .. })
                 && let Some(kernel) = &self.kernel_route
             {
@@ -926,6 +929,12 @@ pub(super) fn apply_root_declared_v2(
             return Err(no(R::ExecutorUnfunded));
         }
     }
+    super::palw_exec_v2_rewards_v1::require_paid_exec_material_window_v1(
+        &builder.state,
+        builder.params,
+        &claim_id,
+        declaration.expiry_daa,
+    )?;
     // ---- writes ----
     if builder.state.kernel_route.is_some() {
         super::palw_kernel_route_fold_v1::bind_exec_reward_v1(

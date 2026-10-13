@@ -1419,3 +1419,30 @@ rejects any excess R and waits for the exact predeclared aggregate to physically
 Exact coinbase cash, all payment+W clocks, material release, DB reopen and replay remain mandatory. It additionally
 logs frozen deadlines and actual heartbeat progress with finite stall guards. The corrected positive-money run is
 pending; [the full failure and evidence boundary](rfc08-native-material-acceptance-2026-10-13.md) are retained.
+
+### 15.11 Paid native material terms cannot exceed signed EXEC retention
+
+A native paid-consumer contract freezes its `material_until` at native claim acceptance. Its service/dispute/material
+spans are not the EXEC declaration's expiry. Previously root admission compared provider leases with the EXEC-derived
+liability floor alone, while native material reads and retirement separately retained the work through the potentially
+longer paid-consumer term. A local GC pin does not authorize workers or providers to serve beyond their signed term.
+
+Root admission now requires `paid.material_until <= H_exec`, where `H_exec` is the existing declaration-expiry-derived
+retention horizon under the fixed native/kernel policy. Refusal occurs before binding kernel fee escrow, transferring
+recipient R or writing the root/work-use rows. The owner can propose and sign a sufficiently long root expiry before
+admission; accepted worker jobs then commit the same existing retention terms through their v2 nonce. Transferred
+provider leases still have to cover that whole horizon in the existing provider check. No lease, contract, Final or
+physical-payment clock is rewritten. Retained non-void roots repeat the same check on restore/replay. Claims without
+a paid native contract take the old read-only path, with no wire or root collection change.
+
+The new fold control obtains its native paid terms from ordinary acceptance and admits production lease/transfer
+objects with unchanged exact provider terms. A paid material horizon one DAA longer than the signed EXEC horizon must
+refuse with no parent carriage/fee/provider mutation; an exact bound must open, preserve provider rows and round-trip
+its delta, rollback and carriage. That fold harness explicitly retains its header-signature seam. A separate native
+control sends ML-DSA-signed provider leases and DA transfer through real carriers, refuses a short signed declaration,
+then re-signs its expiry to the exact accepted native material bound and requires successful admission with the same
+provider terms. Both new controls are pending fresh compile/execution; source presence is not acceptance evidence.
+
+This guard closes a specific admission mismatch. Physical payment plus W can still be unknown or later than a finite
+contract. No maximum physical queue latency, profitable worker offer or provider renewal/funding transition is inferred.
+The full consumer, pruned material and economic acceptance gates remain open and public presets remain dormant.
