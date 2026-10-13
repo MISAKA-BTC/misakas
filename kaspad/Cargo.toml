@@ -18,6 +18,11 @@ name = "misaka-private-paid-work-export"
 path = "src/bin/misaka-private-paid-work-export.rs"
 required-features = ["private-integration-config"]
 
+[[bin]]
+name = "misaka-rfc12-private-node"
+path = "src/bin/misaka-rfc12-private-node.rs"
+required-features = ["private-integration-config"]
+
 [lib]
 name = "kaspad_lib"
 crate-type = ["cdylib", "lib"]

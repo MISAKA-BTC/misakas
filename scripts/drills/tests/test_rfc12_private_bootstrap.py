@@ -18,6 +18,18 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverControls(unittest.TestCase):
+    def test_paid_profile_cannot_reuse_original_bootstrap_control_receipts(self):
+        base = dict(kind='rfc12-private-complete-bootstrap-file-fixture', skipProofOfWork=False, releaseApproval=False)
+        driver.validate_factory_manifest(base, 'complete-v1')
+        with self.assertRaisesRegex(ValueError, 'own authenticated bootstrap'):
+            driver.validate_factory_manifest(base, 'paid-v3')
+        paid = dict(base, schema='misaka.private-paid-bootstrap.v3', baseArtifactsAreControlReceipts=False,
+            paidClaimIncluded=False, nativeFinalObserved=False)
+        driver.validate_factory_manifest(paid, 'paid-v3')
+        for field in ('baseArtifactsAreControlReceipts', 'paidClaimIncluded', 'nativeFinalObserved', 'skipProofOfWork'):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                driver.validate_factory_manifest(dict(paid, **{field: True}), 'paid-v3')
+
     def test_later_complete_refusal_preserves_inclusion_and_actual_prior_fees_without_pass(self):
         class FakeDrill:
             plan = dict(nodes={'A': dict(borsh='owned:1')})

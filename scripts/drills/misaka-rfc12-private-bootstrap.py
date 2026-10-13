@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run an actual signed native registration/binding over three private processes.
 
-This finite probe runs the exact complete-v1 factory, the normal PALW floor
+This finite probe runs an exact named private factory, the normal PALW floor
 producer, the public Borsh CLI carrier path, and ordinary P2P. It never inserts
 state or bypasses PoW, quorum, material windows, or conformance. Passing covers
 registration/binding transport and cold persistence only; useful-work Final,
@@ -36,7 +36,24 @@ class FiniteBootstrapDrill(smoke.ResourceDrill):
         return super().wait(bounded, label)
 
 
-def plan_for(binary, salt, fixture, bootstrap, timeout):
+def validate_factory_manifest(bootstrap, profile):
+    if profile not in ('complete-v1', 'paid-v3'):
+        raise ValueError('unallocated private bootstrap profile')
+    if bootstrap.get('skipProofOfWork') is not False or bootstrap.get('releaseApproval') is not False:
+        raise ValueError('the private factory must retain real PoW and no release approval')
+    if profile == 'paid-v3':
+        if bootstrap.get('schema') != 'misaka.private-paid-bootstrap.v3':
+            raise ValueError('paid-v3 requires its own authenticated bootstrap manifest')
+        if bootstrap.get('baseArtifactsAreControlReceipts') is not False:
+            raise ValueError('old base artifacts cannot supply paid-v3 control receipts')
+        if bootstrap.get('paidClaimIncluded') is not False or bootstrap.get('nativeFinalObserved') is not False:
+            raise ValueError('offline paid-v3 bootstrap cannot assert native claim or Final')
+    elif bootstrap.get('kind') != 'rfc12-private-complete-bootstrap-file-fixture':
+        raise ValueError('complete-v1 requires its exact original bootstrap manifest')
+
+
+def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1'):
+    validate_factory_manifest(bootstrap, profile)
     reservations, endpoints = [], []
     try:
         for _ in range(15):
@@ -48,7 +65,7 @@ def plan_for(binary, salt, fixture, bootstrap, timeout):
         for index, role in enumerate(('A', 'B', 'JOIN')):
             p2p, grpc, wrpc, borsh, eth = endpoints[index * 5:index * 5 + 5]
             seat = bootstrap['seats'][index]
-            argv = [str(binary), '--private-probe-profile=complete-v1', '--private-probe-salt=' + salt,
+            argv = [str(binary), '--private-probe-profile=' + profile, '--private-probe-salt=' + salt,
                 '--testnet', '--netsuffix=12', '--nodnsseed', '--outpeers=0', '--disable-upnp',
                 '--listen=' + p2p, '--rpclisten=' + grpc, '--rpclisten-json=' + wrpc,
                 '--rpclisten-borsh=' + borsh, '--evm-rpc-listen=' + eth,
@@ -61,7 +78,7 @@ def plan_for(binary, salt, fixture, bootstrap, timeout):
             if role == 'A':
                 argv.extend(['--palw-produce', '--palw-producer-class=' + bootstrap['floorClass']])
             nodes[role] = dict(p2p=p2p, grpc=grpc, wrpc=wrpc, borsh=borsh, eth='http://' + eth, argv=argv)
-        return dict(schemaVersion=1, kind='rfc12-private-registration-binding-only', nodes=nodes,
+        return dict(schemaVersion=1, kind='rfc12-private-registration-binding-only', nodes=nodes, privateProfile=profile,
             scenario_timeout_s=timeout, probe_timeout_s=15, command_timeout_s=60,
             fullRfc12SecurityApproval=False, release100kMeasured=False)
     finally:
@@ -244,6 +261,8 @@ def main():
     parser.add_argument('--binary', required=True)
     parser.add_argument('--cli', required=True)
     parser.add_argument('--salt', required=True)
+    parser.add_argument('--private-profile', choices=('complete-v1', 'paid-v3'), default='complete-v1',
+        help='exact private policy; paid-v3 prepares new scope and never promotes old fixture receipts')
     parser.add_argument('--maximum-carrier-fee-sompi', required=True, type=int)
     parser.add_argument('--resource-limits', required=True)
     parser.add_argument('--out', required=True)
@@ -263,25 +282,25 @@ def main():
     drill = None
     result = dict(status='FAIL', artifactDirectory=str(root), resourceLimits=limits, resourceLimitsMet=False,
         maximumCarrierFeeSompi=args.maximum_carrier_fee_sompi, nativeRegistrationBindingMeasured=False,
-        coldReopenMeasured=False,
+        coldReopenMeasured=False, privateProfile=args.private_profile,
         completeCheckRequested=args.complete_check, maximumBindingReservationSompi=args.maximum_binding_reservation_sompi,
         maximumCompleteCheckFeeSompi=args.maximum_complete_check_fee_sompi, totalWorkflowTimeoutSeconds=args.timeout,
         completeCheckMeasured=False, matureUsefulWorkMeasured=False, prunedIbdMeasured=False,
         marketFillsMeasured=False, release100kMeasured=False, fullRfc12SecurityApproval=False)
     try:
         fixture = root / 'signed-public-fixture'
-        factory = [str(binary), '--private-probe-profile=complete-v1', '--private-probe-salt=' + args.salt,
+        factory = [str(binary), '--private-probe-profile=' + args.private_profile, '--private-probe-salt=' + args.salt,
             '--testnet', '--netsuffix=12', '--private-probe-export-bootstrap=' + str(fixture)]
         # Factory creates files only, and needs no consensus process or DB.
         began = time.monotonic()
         bootstrap = command(type('FactoryLog', (), {'root': root})(), sampler, 'MANIFEST', factory, args.factory_timeout)
         result['factorySeconds'] = time.monotonic() - began
-        assert bootstrap['skipProofOfWork'] is False and bootstrap['releaseApproval'] is False
+        validate_factory_manifest(bootstrap, args.private_profile)
         if args.complete_check:
             complete.costs_before_nodes(bootstrap, args.maximum_binding_reservation_sompi, args.maximum_complete_check_fee_sompi)
         elif args.maximum_binding_reservation_sompi is not None or args.maximum_complete_check_fee_sompi is not None:
             raise ValueError('separate complete-check bond caps require --complete-check')
-        plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout)
+        plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout, args.private_profile)
         (root / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
         drill = FiniteBootstrapDrill(plan, root, sampler, {})
         drill.workflow_deadline = time.monotonic() + args.timeout

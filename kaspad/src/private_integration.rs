@@ -1,7 +1,8 @@
 //! Construction boundary for the unpublished integration probe only.
 //!
-//! This has no Args/CLI activation path. Production presets and their startup
-//! refusals remain unchanged; the helper runs an explicitly supplied private
+//! Ordinary kaspad has no Args activation path for this constructor. An explicit
+//! feature-required private binary selects only exact named fixture factories.
+//! Production presets and their startup refusals remain unchanged; the helper runs an explicitly supplied private
 //! Config over loopback services and a separately owned, fingerprinted database.
 
 use crate::{
@@ -31,6 +32,10 @@ mod bootstrap;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
 pub use claim_paid_bootstrap::{PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
+mod paid_claim_factory;
+pub use paid_claim_factory::private_paid_claim_params_v3;
+mod paid_bootstrap;
+pub use paid_bootstrap::export_private_paid_bootstrap_v3;
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 
@@ -154,7 +159,7 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             "legacyEvidenceHorizonDaa": r.legacy_evidence_horizon_daa,
         })
     });
-    serde_json::json!({
+    let mut manifest = serde_json::json!({
         "version": 1,
         "kind": "rfc12-private-integration-probe",
         "network": config.params.net.to_string(),
@@ -176,7 +181,14 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             && config.params.palw_signed_registration_v1.is_some() && config.params.palw_panel_free_v1.is_some(),
         "releaseApproval": false,
         "securitySoundnessMeasured": false,
-    })
+    });
+    // Preserve existing native-v1/population-v1/complete-v1 marker bytes. Only
+    // the independently fingerprinted new profile gains its additional fields.
+    if let Some(fence) = config.params.palw_claim_challenge_v2.filter(|f| f.activation.is_active(0)) {
+        manifest["paidClaimPrivatePolicy"] = serde_json::json!(true);
+        manifest["paidClaimMaximumRounds"] = serde_json::json!(fence.policy.maximum_rounds);
+    }
+    manifest
 }
 
 fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
@@ -228,7 +240,16 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
     let private_complete = config.params.palw_probabilistic_constraints_v1.is_some()
         || config.params.palw_signed_registration_v1.is_some()
         || config.params.palw_panel_free_v1.is_some();
-    if private_complete {
+    if config.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(0)) {
+        if config.private_population.is_some() {
+            return Err("the paid-v3 private probe has no population override".into());
+        }
+        let expected = private_paid_claim_params_v3(salt)?;
+        if config.params.consensus_params_id() != expected.consensus_params_id() {
+            return Err("private paid-claim Config differs from its exact salted factory policy".into());
+        }
+        paid_claim_factory::validate_private_paid_claim_relations_v3(&config.params)?;
+    } else if private_complete {
         if config.private_population.is_some() {
             return Err("the complete-only private bootstrap profile has no population override".into());
         }
@@ -305,6 +326,8 @@ fn pin_owned_probe_directory(args: &Args, config: &Config) -> Result<(), String>
     let mut file = OpenOptions::new().write(true).create_new(true).open(marker).map_err(|error| error.to_string())?;
     file.write_all(&serde_json::to_vec_pretty(&expected).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    fs::File::open(directory).and_then(|directory| directory.sync_all()).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -314,10 +337,16 @@ pub fn create_private_integration_core_with_runtime(
     fd_total_budget: i32,
     config: Config,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    validate_private_probe(args, &config)?;
-    pin_owned_probe_directory(args, &config)?;
+    prepare_private_integration_probe(args, &config)?;
     kaspa_core::warn!("RFC12 PRIVATE INTEGRATION PROBE: injected test policy; release/soundness evidence remains unapproved");
     Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config)))
+}
+
+/// Validate and pin ownership before Runtime opens a log or any node service.
+/// Repeated calls accept only the same exact salted private policy.
+pub fn prepare_private_integration_probe(args: &Args, config: &Config) -> Result<(), String> {
+    validate_private_probe(args, config)?;
+    pin_owned_probe_directory(args, config)
 }
 
 #[cfg(test)]
@@ -418,6 +447,46 @@ mod tests {
         let mut public = config.clone();
         public.palw_drill_genesis_salt = None;
         assert!(validate_private_probe(&args, &public).unwrap_err().contains("salted"));
+    }
+
+    #[test]
+    fn private_prepare_pins_empty_ownership_before_runtime_can_open_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let owned = root.path().join("owned");
+        let salt = PalwDrillSaltV1::from_bytes([0x16; 32]).unwrap();
+        let mut config = Config::new(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt)).unwrap());
+        config.palw_drill_genesis_salt = Some(salt);
+        let args = Args {
+            testnet: true,
+            testnet_suffix: 12,
+            disable_dns_seeding: true,
+            outbound_target: 0,
+            disable_upnp: true,
+            listen: Some("127.0.0.1:53001".parse().unwrap()),
+            rpclisten: Some("127.0.0.1:53002".parse().unwrap()),
+            appdir: Some(owned.display().to_string()),
+            ..Args::default()
+        };
+        prepare_private_integration_probe(&args, &config).unwrap();
+        let marker = owned.join(PRIVATE_PROBE_MARKER_V1);
+        let before = std::fs::read(&marker).unwrap();
+        assert_eq!(std::fs::read_dir(&owned).unwrap().count(), 1, "no logger/database path may precede the ownership pin");
+        prepare_private_integration_probe(&args, &config).unwrap();
+        assert_eq!(std::fs::read(&marker).unwrap(), before);
+        let mut another = config.clone();
+        another.params = private_native_settlement_params_v1(another.params).unwrap();
+        assert!(
+            prepare_private_integration_probe(&args, &another).is_err(),
+            "a valid different private policy cannot reuse the owned DB"
+        );
+        assert_eq!(std::fs::read(&marker).unwrap(), before);
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::write(unrelated.join("existing"), b"another task").unwrap();
+        let unrelated_args = Args { appdir: Some(unrelated.display().to_string()), ..args };
+        assert!(prepare_private_integration_probe(&unrelated_args, &config).is_err());
+        assert_eq!(std::fs::read_dir(&unrelated).unwrap().count(), 1);
+        assert_eq!(std::fs::read(unrelated.join("existing")).unwrap(), b"another task");
     }
 
     #[test]

@@ -1,0 +1,189 @@
+//! Explicit feature-only loopback private construction entry point. Public
+//! kaspad Args/presets never select this constructor. Real PoW and exact salted
+//! monetary genesis remain mandatory; private mechanics are not release approval.
+use kaspa_consensus_core::config::{
+    Config,
+    drill::{PalwDrillSaltV1, palw_chain_params_v1, palw_drill_network_v1},
+    private_population::{PrivatePopulationV1, derive_private_population_v1},
+};
+use kaspad_lib::{
+    args::Args,
+    daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
+    private_integration::{
+        create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3,
+        export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
+        private_native_settlement_params_v1, private_paid_claim_params_v3, private_probe_manifest,
+    },
+};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
+const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
+--private-probe-profile=native-v1|population-v1|complete-v1|paid-v3 --private-probe-salt=HEX --testnet --netsuffix=12
+population-v1 additionally requires --private-probe-bonds=N (actual funded registry only).
+Read-only mode: --print-private-probe-profile
+Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1 or paid-v3 only)
+Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
+Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
+--nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
+The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
+useful-work maturity, source independence, 128-bit security, pruned IBD, market fills or resource acceptance.";
+#[derive(Debug)]
+struct PrivateFlags {
+    values: BTreeMap<String, String>,
+    print: bool,
+    help: bool,
+    ordinary: Vec<String>,
+}
+fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
+    let mut out = PrivateFlags {
+        values: BTreeMap::new(),
+        print: false,
+        help: false,
+        ordinary: vec![args.first().cloned().unwrap_or_else(|| "misaka-rfc12-private-node".into())],
+    };
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--print-private-probe-profile" {
+            if out.print {
+                return Err("duplicate private print option".into());
+            }
+            out.print = true;
+        } else if matches!(arg.as_str(), "--help" | "-h") {
+            out.help = true;
+        } else {
+            let (name, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+            if name.starts_with("--private-probe-") {
+                if !matches!(
+                    name,
+                    "--private-probe-profile"
+                        | "--private-probe-salt"
+                        | "--private-probe-bonds"
+                        | "--private-probe-export-bootstrap"
+                        | "--private-probe-paid-request"
+                        | "--private-probe-export-paid-work"
+                ) {
+                    return Err(format!("unknown private option {name}"));
+                }
+                let value = if let Some(v) = inline {
+                    v.to_owned()
+                } else {
+                    i += 1;
+                    args.get(i).filter(|v| !v.starts_with("--")).ok_or_else(|| format!("{name} needs a value"))?.clone()
+                };
+                if value.is_empty() || out.values.insert(name.to_owned(), value).is_some() {
+                    return Err(format!("empty or duplicate private option {name}"));
+                }
+            } else {
+                out.ordinary.push(arg.clone());
+            }
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+fn run(raw: Vec<String>) -> Result<(), String> {
+    let mut flags = split(raw)?;
+    if flags.help {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let profile = flags.values.remove("--private-probe-profile").ok_or("explicit private profile required")?;
+    let salt = PalwDrillSaltV1::from_hex(&flags.values.remove("--private-probe-salt").ok_or("explicit private salt required")?)
+        .map_err(|e| e.to_string())?;
+    let bonds = flags
+        .values
+        .remove("--private-probe-bonds")
+        .map(|n| n.parse::<u32>().map_err(|_| "private bond size must be u32".to_owned()))
+        .transpose()?;
+    let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
+    let paid_request = flags.values.remove("--private-probe-paid-request");
+    let paid_output = flags.values.remove("--private-probe-export-paid-work");
+    if !flags.values.is_empty() {
+        return Err("unconsumed private option".into());
+    }
+    if usize::from(flags.print) + usize::from(bootstrap.is_some()) + usize::from(paid_output.is_some()) > 1
+        || paid_request.is_some() != paid_output.is_some()
+    {
+        return Err("private manifest/bootstrap/paid-export modes are exclusive; paid export needs its request".into());
+    }
+    let args = match Args::parse(flags.ordinary) {
+        Ok(args) => args,
+        Err(e) if matches!(e.kind(), clap::error::ErrorKind::DisplayVersion | clap::error::ErrorKind::DisplayHelp) => e.exit(),
+        Err(e) => return Err(e.to_string()),
+    };
+    if args.network() != palw_drill_network_v1() || args.palw_drill_genesis_salt.is_some() || args.override_params_file.is_some() {
+        return Err("private entry requires testnet-12 and refuses ordinary genesis/parameter overrides".into());
+    }
+    let population = match (profile.as_str(), bonds) {
+        ("population-v1", Some(n)) => Some(PrivatePopulationV1::new(n)?),
+        ("population-v1", None) => return Err("population-v1 requires an explicit funded size".into()),
+        (_, Some(_)) => return Err("only population-v1 accepts a registry size".into()),
+        _ => None,
+    };
+    let params = match profile.as_str() {
+        "complete-v1" => private_complete_check_params_v1(&salt)?,
+        "paid-v3" => private_paid_claim_params_v3(&salt)?,
+        "native-v1" => private_native_settlement_params_v1(palw_chain_params_v1(palw_drill_network_v1(), Some(&salt))?)?,
+        "population-v1" => {
+            private_native_settlement_params_v1(derive_private_population_v1(&salt, population.expect("size checked"))?.params)?
+        }
+        _ => return Err("unallocated private profile".into()),
+    };
+    if params.skip_proof_of_work {
+        return Err("private fixture must retain real PoW".into());
+    }
+    let mut config = Config::new(params);
+    config.palw_drill_genesis_salt = Some(salt);
+    config.private_population = population;
+    if flags.print {
+        println!("{}", serde_json::to_string_pretty(&private_probe_manifest(&config)).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    if let Some(output) = bootstrap {
+        let exported = match profile.as_str() {
+            "complete-v1" => export_private_complete_bootstrap_v1(&config, Path::new(&output))?,
+            "paid-v3" => export_private_paid_bootstrap_v3(&config, Path::new(&output))?,
+            _ => return Err("bootstrap export requires complete-v1 or paid-v3".into()),
+        };
+        println!("{}", serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    if let (Some(request), Some(output)) = (paid_request, paid_output) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&export_private_paid_program_work_v3(&config, Path::new(&request), Path::new(&output))?)
+                .map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    // Ownership must be pinned before the logger can make a nonempty directory.
+    prepare_private_integration_probe(&args, &config)?;
+    let limit = kaspa_utils::fd_budget::try_set_fd_limit(DESIRED_DAEMON_SOFT_FD_LIMIT).map_err(|e| e.to_string())?;
+    if limit < MINIMUM_DAEMON_SOFT_FD_LIMIT {
+        return Err(format!("private node needs at least {MINIMUM_DAEMON_SOFT_FD_LIMIT} file descriptors"));
+    }
+    let available = i32::try_from(limit).map_err(|_| "private descriptor limit exceeds the node budget type")?;
+    let rpc_clients = i32::try_from(args.rpc_max_clients).map_err(|_| "RPC client count exceeds the node budget type")?;
+    let inbound = i32::try_from(args.inbound_limit).map_err(|_| "inbound count exceeds the node budget type")?;
+    let outbound = i32::try_from(args.outbound_target).map_err(|_| "outbound count exceeds the node budget type")?;
+    let budget = available
+        .checked_sub(rpc_clients)
+        .and_then(|n| n.checked_sub(inbound))
+        .and_then(|n| n.checked_sub(outbound))
+        .filter(|n| *n > 0)
+        .ok_or("private file descriptor budget exhausted")?;
+    let runtime = Runtime::from_args(&args);
+    let (core, rpc) = create_private_integration_core_with_runtime(&runtime, &args, budget, config)?;
+    Arc::new(kaspa_core::signals::Signals::new(&core)).init();
+    // Rpc service does not outlive shutdown's Core reference accounting.
+    drop(rpc);
+    core.run();
+    Ok(())
+}
+fn main() {
+    kaspa_alloc::init_allocator_with_default_settings();
+    if let Err(why) = run(std::env::args().collect()) {
+        eprintln!("private RFC12 node: {why}");
+        std::process::exit(1);
+    }
+}
