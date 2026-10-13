@@ -311,6 +311,14 @@ fn exec_v2_test_admitted_classes_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64>
     classes
 }
 
+/// Rows that must share a UTXO commit. Genesis has no earlier durable PALW tip
+/// to replay from, so its initial materialization must ride the delta and status.
+struct PalwUtxoCommitV2 {
+    root: Hash64,
+    delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
+    genesis: Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -2694,7 +2702,7 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged,
+                            palw_v2_staged.map(|(root, delta)| PalwUtxoCommitV2 { root, delta, genesis: None }),
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -3100,12 +3108,16 @@ impl VirtualStateProcessor {
         // it produced and the delta that produces it — staged in THIS batch so the PALW state and
         // the block's UTXO data can never be half-written relative to each other. `None` on every
         // network whose mode is not `ConsensusV2`, which is every shipped preset.
-        palw_v2_staged: Option<(kaspa_hashes::Hash64, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2)>,
+        palw_v2_staged: Option<PalwUtxoCommitV2>,
     ) {
         let mut batch = WriteBatch::default();
-        if let Some((state_root, delta)) = palw_v2_staged {
+        if let Some(staged) = palw_v2_staged {
             let mut store = self.palw_state_v2_store.write();
-            store.insert_delta_batch(&mut batch, current, state_root, &delta).unwrap();
+            store.insert_delta_batch(&mut batch, current, staged.root, &staged.delta).unwrap();
+            if let Some(genesis) = staged.genesis {
+                assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
+                store.set_tip_batch(&mut batch, current, &genesis).unwrap();
+            }
         }
         if let Some(mut staged) = evm_staged {
             // §12: in a mode that keeps no long-term EVM state history (`head`), drop
@@ -5410,24 +5422,10 @@ impl VirtualStateProcessor {
     /// Initializes UTXO state of genesis and points virtual at genesis.
     /// Note that pruning point-related stores are initialized by `init`
     pub fn process_genesis(self: &Arc<Self>) {
-        // Write the UTXO state of genesis
-        self.commit_utxo_state(
-            self.genesis.hash,
-            UtxoDiff::default(),
-            MuHash::new(),
-            AcceptanceData::default(),
-            ZERO_HASH64,
-            Vec::new(),
-            0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
-            0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
-            None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
-            None, // ADR-0042 Unit C: genesis stages no PALW delta — the tip is installed below.
-        );
-
         // ADR-0042 Decision 5 / Unit C: the V2 state's zero point. Installed beside the genesis
         // UTXO commit so a fresh database has a tip to walk from, and skipped entirely on a
         // network with no V2 bundle (every shipped preset), where the store stays empty.
-        if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+        let palw_genesis = self.palw_state_params_v2.as_ref().map(|state_params| {
             // The genesis block APPLIES the bundle's registration list. A V2 network has no class
             // and no bond until something registers them, and the only block that can is this one:
             // admission refuses an attempt naming a bond the chain does not have, so a genesis
@@ -5459,15 +5457,25 @@ impl VirtualStateProcessor {
                 &self.palw_transition_extras_for(&point),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
-            let mut batch = WriteBatch::default();
-            let mut store = self.palw_state_v2_store.write();
-            // The delta rides too, so the genesis point is walkable like every other chain block
-            // rather than a special case the reorg walk has to know about.
-            store.insert_delta_batch(&mut batch, self.genesis.hash, genesis_state.state_root(), &delta).unwrap();
-            store.set_tip_batch(&mut batch, self.genesis.hash, &genesis_state).unwrap();
-            drop(store);
-            self.db.write(batch).unwrap();
-        }
+            PalwUtxoCommitV2 { root: genesis_state.state_root(), delta, genesis: Some(genesis_state) }
+        });
+
+        // Derive the complete registration transition before any UTXO-valid write.
+        // Unlike later tips, genesis has no older materialization from which a
+        // restart can replay a missing tip. Its delta, tip and UTXO-valid marker
+        // therefore commit in one RocksDB batch, including on a process kill.
+        self.commit_utxo_state(
+            self.genesis.hash,
+            UtxoDiff::default(),
+            MuHash::new(),
+            AcceptanceData::default(),
+            ZERO_HASH64,
+            Vec::new(),
+            0,    // kaspa-pq ADR-0018 "本格版": genesis has no validator quality sub-pool.
+            0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
+            None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
+            palw_genesis,
+        );
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();

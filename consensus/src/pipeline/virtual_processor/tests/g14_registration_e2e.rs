@@ -1934,3 +1934,34 @@ async fn g14_a_dissected_class_registered_past_the_int13_court_window_commits_th
     assert!(dstate.class(&dormant.class_id).is_some());
     assert_eq!(dstate.class_model_court_window_v1(&dormant.class_id), None, "dormant: no window row at any height");
 }
+
+/// Genesis has no earlier PALW materialization to replay from. A rejected
+/// registration must never leave a UTXO-valid genesis with no PALW tip.
+#[test]
+fn g14_genesis_registration_failure_does_not_commit_utxo_valid_state() {
+    use crate::model::stores::{
+        palw_state_v2::DbPalwStateV2Store,
+        statuses::{DbStatusesStore, StatusesStoreReader},
+        utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
+    };
+    use kaspa_database::{
+        create_temp_db,
+        prelude::{CachePolicy, ConnBuilder},
+    };
+    let (mut config, _, _, _) = t12_tir_config(0);
+    let PalwConsensusMode::ConsensusV2(bundle) = &mut config.params.palw_consensus_mode else { unreachable!() };
+    let duplicate = bundle.genesis_objects.iter().find(|o| matches!(o, Obj::BondRegistered { .. })).unwrap().clone();
+    bundle.genesis_objects.push(duplicate);
+    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| TestConsensus::with_db(db.clone(), &config, sender)));
+    assert!(rejected.is_err(), "duplicate genesis bond must reject the transition");
+    // Fresh caches read durable rows, rather than the aborted processor's staged values.
+    let statuses = DbStatusesStore::new(db.clone(), CachePolicy::Count(16));
+    assert_ne!(statuses.get(config.genesis.hash).ok(), Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid));
+    let multisets = DbUtxoMultisetsStore::new(db.clone(), CachePolicy::Count(16));
+    assert!(multisets.get(config.genesis.hash).is_err(), "genesis UTXO data was never committed");
+    let palw = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+    assert!(!palw.has_delta(config.genesis.hash).unwrap());
+    assert!(palw.tip_record().unwrap().is_none());
+}
