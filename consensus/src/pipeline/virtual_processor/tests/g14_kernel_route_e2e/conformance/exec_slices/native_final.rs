@@ -405,6 +405,8 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             policy.max_open_claims_per_bond = 1_000;
             policy.round_rights = PalwRoundRightsPolicyV1::ExecutionCap { rights_per_unit: 1_000 };
             params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy });
+            params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+            params.palw_material_income_v3 = Some(ForkActivation::new(1));
             params.sync_palw_bond_budget_v1();
             // Counterfactual legacy whole-escrow pricing creates positive native
             // legs in the toy class. All parameters precede genesis and work;
@@ -443,6 +445,16 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(receipt.total_sompi_u128() + u128::from(native.producer.amount), u128::from(receipt.allocation_sompi));
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final);
     assert!(native.expiry_daa > receipt.liability_until && native.final_daa == final_daa);
+    let material_subjects: Vec<_> = std::iter::once(first.real.claim)
+        .chain(std::iter::once(&first.prefix).chain(first.slices.iter()).map(|claim| Hash64::from_bytes(claim.claim.id)))
+        .collect();
+    for subject in &material_subjects {
+        assert_eq!(
+            state.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            Some(u64::MAX),
+            "every authenticated root/dependency retains material while positive cash has no physical payment clock"
+        );
+    }
     // Supply the private depth1 with another genuine signed/assembled native
     // Final. No clock/Final setter supplies the maturity condition.
     let mut second = opened_with_lifetime(&mut cw, false, |_| false, |_, _, _| Vec::new(), SECOND_LIFETIME).await;
@@ -517,6 +529,15 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         );
     }
     let counters = paid.vesting_counters();
+    let latest = paid_rows.values().map(|row| row.reuse_not_before).max().unwrap();
+    for subject in &material_subjects {
+        assert_eq!(
+            paid.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            Some(latest),
+            "root and every dependency use the last actual positive fund payment plus W"
+        );
+    }
+    let material_receipts = paid.bond_budget().unwrap().material_income.clone();
     let sink = cw.net.chain.sink();
     let utxos = Net::utxos_of(&cw.net.chain);
     let root = paid.state_root();
@@ -524,11 +545,14 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(cw.net.chain.sink(), sink);
     assert_eq!(cw.net.chain.tip_state().1.state_root(), root);
     assert_eq!(Net::utxos_of(&cw.net.chain), utxos);
+    assert_eq!(cw.net.chain.tip_state().1.bond_budget().unwrap().material_income, material_receipts);
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), counters, "duplicate licence never creates/moves a second fund");
-    let latest = paid_rows.values().map(|row| row.reuse_not_before).max().unwrap();
     cw.net.beat_to(latest - 1).await;
     let state = cw.net.chain.tip_state().1;
+    for subject in &material_subjects {
+        assert_eq!(state.material_income_hold_until_v1(&cw.net.bundle.state, *subject), Some(latest));
+    }
     for (key, row) in &paid_rows {
         if row.reuse_not_before == latest {
             assert!(state.bond_budget_native_queue_income_v1(*key, &row.bond).is_some(), "the final physical W has not ended");
@@ -536,6 +560,13 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     }
     cw.net.beat_to(latest).await;
     let released = cw.net.chain.tip_state().1;
+    for subject in &material_subjects {
+        assert_eq!(
+            released.material_income_hold_until_v1(&cw.net.bundle.state, *subject),
+            None,
+            "other work of the same recipients cannot perpetually retain this root's material"
+        );
+    }
     for (key, row) in &paid_rows {
         assert!(released.bond_budget_native_queue_income_v1(*key, &row.bond).is_none());
     }
