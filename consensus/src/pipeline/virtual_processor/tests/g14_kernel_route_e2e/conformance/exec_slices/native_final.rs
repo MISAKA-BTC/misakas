@@ -190,8 +190,8 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
                 policy: PalwPaidConsumerLifecyclePolicyV1 {
                     version: 1,
                     service_span_daa: 1_000,
-                    dispute_tail_daa: 800,
-                    material_tail_daa: 400,
+                    dispute_tail_daa: 3_000,
+                    material_tail_daa: 2_000,
                 },
             });
             params.palw_provider_court_v1 = Some(ForkActivation::new(1));
