@@ -34,6 +34,8 @@ USAGE:
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
     palw-class kernel-preflight <program.tir> --positions N [--height DAA] [--json]
     palw-class kernel-params <artifact.palwtir> --tensor-workspace-mib N --payload-limit-mib N --out <params.borsh> [--encoder] [--json]
+    palw-class panel-lifetime-v2 authorize|sign|inspect ... (palw-class panel-lifetime-v2 --help)
+    palw-class claim-v2 class|job|commit|fund|lock|verify|sign|inspect|final ... (palw-class claim-v2 --help)
     palw-class flat-v6 post|seal|reveal|expire ... (palw-class flat-v6 --help for offline protected candidate preparation)
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
     palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
@@ -269,6 +271,12 @@ fn take_flag(args: &mut Vec<String>, flag: &str) -> Option<String> {
 fn run(args: &[String]) -> Result<(), String> {
     let mut args = args.to_vec();
     let command = if args.is_empty() { String::new() } else { args.remove(0) };
+    if command == "panel-lifetime-v2" {
+        return misaka_palw_sdk::panel_lifetime_v2::cli::run(&args);
+    }
+    if command == "claim-v2" {
+        return misaka_palw_sdk::claim_paid_v2::cli::run(&args);
+    }
     if command == "flat-v6" {
         return misaka_palw_sdk::flat_candidate_v6::cli::run(&args);
     }

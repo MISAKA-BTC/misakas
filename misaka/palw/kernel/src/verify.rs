@@ -27,7 +27,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_tir::program::{Ref, TirProgramV1};
 use misaka_palw_tir::{DType, Prim, Tensor, TirError};
 
-use crate::challenge::{ChallengeBindingV1, ChallengeLabelV1, ChallengeStreamV1};
+use crate::challenge::{ChallengeBindingV1, ChallengeLabelV1, CheckerRandomness, CheckerRandomnessV2};
 use crate::descriptor::KernelDescriptorV1;
 use crate::evidence::{EvidenceHeaderV1, VerificationEvidenceV1, check_evidence_v1};
 use crate::family::CheckerIdV1;
@@ -548,7 +548,7 @@ fn unraw<F: FieldElemV1>(v: &[u128]) -> Vec<F> {
 /// label (kept in `batch`); any other product draws a fresh vector per instance and batch slice.
 #[allow(clippy::too_many_arguments)]
 fn freivalds_once<F: FieldElemV1>(
-    seed: &Digest,
+    seed: &CheckerRandomness<'_>,
     (p, s, n): (u32, u16, u16),
     scope_label: u32,
     label_rep: u8,
@@ -557,31 +557,35 @@ fn freivalds_once<F: FieldElemV1>(
     y: &Tensor,
     batch: &mut BatchProjections,
     cost: &mut CheckCostV1,
-) -> Option<MissV1> {
+) -> Result<Option<MissV1>, String> {
     let batch_label = ChallengeLabelV1 { kind: 1, position: scope_label, occurrence: s, node: n, repetition: label_rep, slice: 0 };
     match side {
         Some(WeightSide::Right) => {
             let (x, wt) = (&inputs[0], &inputs[1]);
             let (k, nn) = (wt.shape[0], wt.shape[1]);
-            let (r, wr, _) = batch.entry((s, n, label_rep)).or_insert_with(|| {
-                let r: Vec<F> = ChallengeStreamV1::new(*seed, batch_label).vector_in(nn);
+            let key = (s, n, label_rep);
+            if !batch.contains_key(&key) {
+                let r: Vec<F> = seed.vector_in(batch_label, nn)?;
                 let wr = project(wt, 0, k, nn, &r, cost);
-                (raw(&r), raw(&wr), tensor_commitment(wt))
-            });
+                batch.insert(key, (raw(&r), raw(&wr), tensor_commitment(wt)));
+            }
+            let (r, wr, _) = batch.get(&key).expect("projection inserted");
             let (r, wr) = (unraw::<F>(r), unraw::<F>(wr));
             let slices: usize = y.shape[..y.shape.len() - 2].iter().product();
-            (0..slices).find_map(|b| first_bad_row(x, y, b, &wr, &r, cost).map(|i| MissV1::Row(b, i)))
+            Ok((0..slices).find_map(|b| first_bad_row(x, y, b, &wr, &r, cost).map(|i| MissV1::Row(b, i))))
         }
         Some(WeightSide::Left) => {
             let (wt, x) = (&inputs[0], &inputs[1]);
             let m = wt.shape[0];
-            let (r, rw, _) = batch.entry((s, n, label_rep)).or_insert_with(|| {
-                let r: Vec<F> = ChallengeStreamV1::new(*seed, batch_label).vector_in(m);
+            let key = (s, n, label_rep);
+            if !batch.contains_key(&key) {
+                let r: Vec<F> = seed.vector_in(batch_label, m)?;
                 let rw = project_left(wt, &r, cost);
-                (raw(&r), raw(&rw), tensor_commitment(wt))
-            });
+                batch.insert(key, (raw(&r), raw(&rw), tensor_commitment(wt)));
+            }
+            let (r, rw, _) = batch.get(&key).expect("projection inserted");
             let (r, rw) = (unraw::<F>(r), unraw::<F>(rw));
-            first_bad_column(wt, x, y, &rw, &r, cost).map(MissV1::Column)
+            Ok(first_bad_column(wt, x, y, &rw, &r, cost).map(MissV1::Column))
         }
         None => {
             let (x, wt) = (&inputs[0], &inputs[1]);
@@ -590,12 +594,15 @@ fn freivalds_once<F: FieldElemV1>(
             let k = x.shape[x.shape.len() - 1];
             let out_batch = &y.shape[..yr - 2];
             let slices: usize = out_batch.iter().product();
-            (0..slices).find_map(|b| {
+            for b in 0..slices {
                 let label = ChallengeLabelV1 { kind: 0, position: p, occurrence: s, node: n, repetition: label_rep, slice: b as u32 };
-                let r: Vec<F> = ChallengeStreamV1::new(*seed, label).vector_in(nn);
+                let r: Vec<F> = seed.vector_in(label, nn)?;
                 let wr = project(wt, slice_offset(out_batch, &wt.shape, b), k, nn, &r, cost);
-                first_bad_row(x, y, b, &wr, &r, cost).map(|i| MissV1::Row(b, i))
-            })
+                if let Some(i) = first_bad_row(x, y, b, &wr, &r, cost) {
+                    return Ok(Some(MissV1::Row(b, i)));
+                }
+            }
+            Ok(None)
         }
     }
 }
@@ -660,6 +667,26 @@ type BatchProjections = BTreeMap<(u16, u16, u8), (Vec<u128>, Vec<u128>, Digest)>
 
 /// **Verify one scope of a claim.**
 pub fn verify_scope_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1, scope: &ScopeV1) -> ScopeVerdictV1 {
+    verify_scope_randomness(c, material, scope, &CheckerRandomness::Legacy(c.binding.seed()))
+}
+
+/// New checker contract. Its caller must authenticate policy, enrollment and the
+/// future paid beacon. Direct seed use preserves V1 domains and prevents rehashing.
+pub fn verify_scope_seeded_v2(
+    c: &ClaimContextV1<'_>,
+    material: &dyn MaterialV1,
+    scope: &ScopeV1,
+    randomness: &CheckerRandomnessV2,
+) -> ScopeVerdictV1 {
+    let scoped = randomness.for_scope(scope.root(c.evidence));
+    verify_scope_randomness(c, material, scope, &CheckerRandomness::Paid(&scoped))
+}
+fn verify_scope_randomness(
+    c: &ClaimContextV1<'_>,
+    material: &dyn MaterialV1,
+    scope: &ScopeV1,
+    seed: &CheckerRandomness<'_>,
+) -> ScopeVerdictV1 {
     let w = match WiringV1::for_stage(c.program, c.stage) {
         Ok(w) => w,
         Err(e) => return ScopeVerdictV1::EvidenceMalformed { why: format!("the program does not validate: {e}") },
@@ -679,7 +706,6 @@ pub fn verify_scope_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1, scope:
         Err(why) => return ScopeVerdictV1::EvidenceMalformed { why },
     };
     let rels: BTreeMap<(u8, u16), &PlanRelationV1> = c.plan.relations.iter().map(|r| ((r.block, r.node), r)).collect();
-    let seed = c.binding.seed();
     let mut checks = 0u128;
     let mut batch: BatchProjections = BTreeMap::new();
     // The batch label is the scope's own: two scopes of one claim draw different vectors.
@@ -691,7 +717,7 @@ pub fn verify_scope_v1(c: &ClaimContextV1<'_>, material: &dyn MaterialV1, scope:
                 let Some(rel) = rels.get(&(block, n)) else {
                     return ScopeVerdictV1::EvidenceMalformed { why: format!("block {block} node {n} has no relation in the plan") };
                 };
-                if let Err(v) = check_instance(&ctx, material, rel, &seed, (p, s, n), scope_label, &mut batch, &mut checks) {
+                if let Err(v) = check_instance(&ctx, material, rel, seed, (p, s, n), scope_label, &mut batch, &mut checks) {
                     return v;
                 }
             }
@@ -770,7 +796,7 @@ fn check_instance(
     ctx: &Ctx<'_>,
     m: &dyn MaterialV1,
     rel: &PlanRelationV1,
-    seed: &Digest,
+    seed: &CheckerRandomness<'_>,
     (p, s, n): (u32, u16, u16),
     scope_label: u32,
     batch: &mut BatchProjections,
@@ -853,7 +879,8 @@ fn check_instance(
                         127 => freivalds_once::<Fp>(args.0, args.1, args.2, args.3, args.4, &inputs, &output, batch, &mut cost),
                         107 => freivalds_once::<F107>(args.0, args.1, args.2, args.3, args.4, &inputs, &output, batch, &mut cost),
                         _ => freivalds_once::<F89>(args.0, args.1, args.2, args.3, args.4, &inputs, &output, batch, &mut cost),
-                    };
+                    }
+                    .map_err(|what| ScopeVerdictV1::Unavailable { what })?;
                     if miss.is_some() {
                         break 'reps;
                     }

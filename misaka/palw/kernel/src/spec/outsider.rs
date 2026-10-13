@@ -129,9 +129,14 @@ impl SpecOutsiderV1<'_> {
         record: PublicClaimRecordV1,
         header: crate::evidence::EvidenceHeaderV1,
         mat: &KernelMaterial<'_>,
+        randomness: Option<&crate::challenge::CheckerRandomnessV2>,
     ) -> Result<Option<Vec<u8>>, String> {
         let fresh = FreshVerifierV1::from_public_bytes(&record.to_bytes(), &self.ledger.known, header)?;
-        match fresh.check_salted(mat, &ScopeV1::WholeClaim, self.salt) {
+        let verdict = match randomness {
+            None => fresh.check_salted(mat, &ScopeV1::WholeClaim, self.salt),
+            Some(r) => fresh.check_seeded_v2(mat, &ScopeV1::WholeClaim, r),
+        };
+        match verdict {
             ScopeVerdictV1::Pass { .. } => Ok(None),
             ScopeVerdictV1::Fault(p) => Ok(Some(FaultProofWireV1::of(&p).to_bytes())),
             ScopeVerdictV1::Unavailable { what } => Err(format!("unavailable with every value in hand: {what}")),
@@ -171,17 +176,25 @@ impl SpecOutsiderV1<'_> {
     /// **Check the claim.**
     pub fn check(&self) -> Result<OutsiderFindingV1, String> {
         let row = self.ledger.claims.get(&self.claim).ok_or("no such claim")?;
-        self.check_mode(self.ledger.commitment_scope_applies_v1(row), true)
+        self.check_mode(self.ledger.commitment_scope_applies_v1(row), true, None)
     }
 
     /// Check computation, output and state using the acquired registered model and authenticated public pre-state/snapshot.
     /// No producer node value is read. Snapshot/pre-state acquisition can still produce a public DA demand; `check` retains
     /// the separate node-disclosure checks of the historical response protocol.
     pub fn check_computation(&self) -> Result<OutsiderFindingV1, String> {
-        self.check_mode(true, false)
+        self.check_mode(true, false, None)
     }
 
-    fn check_mode(&self, commitments_only: bool, enforce_node_da: bool) -> Result<OutsiderFindingV1, String> {
+    pub fn check_seeded_v2(&self, randomness: &crate::challenge::CheckerRandomnessV2) -> Result<OutsiderFindingV1, String> {
+        self.check_mode(false, true, Some(randomness))
+    }
+    fn check_mode(
+        &self,
+        commitments_only: bool,
+        enforce_node_da: bool,
+        randomness: Option<&crate::challenge::CheckerRandomnessV2>,
+    ) -> Result<OutsiderFindingV1, String> {
         let l = self.ledger;
         let row = l.claims.get(&self.claim).ok_or("no such claim")?;
         let ClaimBodyV1::Spec(body) = &row.body else { return Err("not a typed claim".into()) };
@@ -271,7 +284,12 @@ impl SpecOutsiderV1<'_> {
                         .collect::<Result<BTreeMap<_, _>, _>>()?;
                     let mat = KernelMaterial { o: self, stage: 0, offset: offsets[i], program: 0, commitments: &overlay, slots };
                     let record = step_record_v1(&self.claim, i as u32, rule, st, &overlay, &j.chunks[i]);
-                    if let Some(proof) = self.check_record(record, step_header_v1(rule, &row.class_binding_id, &overlay), &mat)? {
+                    if let Some(proof) = self.check_record(
+                        record,
+                        step_header_v1(rule, &row.class_binding_id, &overlay),
+                        &mat,
+                        randomness.map(|r| r.for_stage(i as u32)).as_ref(),
+                    )? {
                         return Ok(spec(SpecFaultV1::MemoryStep { step: i as u32, proof }));
                     }
                 }
@@ -389,7 +407,12 @@ impl SpecOutsiderV1<'_> {
                             }
                             let record = model_stage_record_v1(&self.claim, s as u8, m, &sub_job, &sub_claim, evidence, commitments);
                             let mat = model_material(self, s as u8, m);
-                            if let Some(proof) = self.check_record(record, m.header(cs.component), &mat)? {
+                            if let Some(proof) = self.check_record(
+                                record,
+                                m.header(cs.component),
+                                &mat,
+                                randomness.map(|r| r.for_stage(s as u32)).as_ref(),
+                            )? {
                                 return Ok(spec(SpecFaultV1::StageKernel { stage: s as u8, proof }));
                             }
                         }

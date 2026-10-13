@@ -120,6 +120,9 @@ pub const TAG_FUND_BEACON_SOURCE_FEE_V1: u8 = 61;
 pub const TAG_OPT_IN_PAID_BEACON_SOURCE_V1: u8 = 62;
 /// Native-owned, signed Panel sponsor permit and atomic funding.
 pub const TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2: u8 = 63;
+pub const TAG_PAID_CLAIM_V2: u8 = 64;
+pub const TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2: u8 = 65;
+pub const TAG_AUTHORIZE_PANEL_LIFETIME_V2: u8 = 66;
 pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
 pub const MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1: usize = 256;
 pub const MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1: usize = 448;
@@ -605,6 +608,9 @@ pub enum KernelRouteObjectV1 {
         epoch: u64,
         terms: crate::beacon_source_fee::BeaconSourceFeeTermsV1,
     } = 63,
+    PaidClaimV2 { object: crate::claim_paid_v2::PaidClaimObjectV2 } = 64,
+    EnrollPanelConsumerLifetimeV2 { terms: crate::panel_lifetime_v2::PanelConsumerLifetimeTermsV2 } = 65,
+    AuthorizePanelLifetimeV2 { authorization:crate::panel_lifetime_v2::PanelLifetimeAuthorizationV2 } = 66,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -751,6 +757,9 @@ impl KernelRouteObjectV1 {
             Self::OptInBeaconSource { .. } => TAG_OPT_IN_BEACON_SOURCE_V1,
             Self::FundBeaconSourceFee { .. } => TAG_FUND_BEACON_SOURCE_FEE_V1,
             Self::FundPanelBeaconSourceFeeV2 { .. } => TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2,
+            Self::PaidClaimV2 { .. } => TAG_PAID_CLAIM_V2,
+            Self::EnrollPanelConsumerLifetimeV2 { .. } => TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2,
+            Self::AuthorizePanelLifetimeV2 { .. } => TAG_AUTHORIZE_PANEL_LIFETIME_V2,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
@@ -1000,6 +1009,9 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_OPT_IN_BEACON_SOURCE_V1 => "OptInBeaconSource",
         TAG_FUND_BEACON_SOURCE_FEE_V1 => "FundBeaconSourceFee",
         TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2 => "FundPanelBeaconSourceFeeV2",
+        TAG_PAID_CLAIM_V2 => "PaidClaimV2",
+        TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2 => "EnrollPanelConsumerLifetimeV2",
+        TAG_AUTHORIZE_PANEL_LIFETIME_V2 => "AuthorizePanelLifetimeV2",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
@@ -1063,6 +1075,9 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_OPT_IN_BEACON_SOURCE_V1 => MAX_OPT_IN_BEACON_SOURCE_BYTES_V1,
         TAG_FUND_BEACON_SOURCE_FEE_V1 => MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1,
         TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2 => MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2,
+        TAG_PAID_CLAIM_V2 => 256 << 20,
+        TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2 => 4096,
+        TAG_AUTHORIZE_PANEL_LIFETIME_V2 => 4096,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
@@ -1191,9 +1206,9 @@ mod tests {
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!((38..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "38/39 are reserved for G14R, not allocated");
-        // 61/62: codex RFC-7 final prepaid source fees (codex used 22/23); 63 is the first unallocated inner kind.
-        assert!(max_encoded_bytes_of_tag(63).is_none(), "63 is not allocated");
-        for tag in (22..=37).chain(40..=62) {
+        // 61–65: prepaid sources, native Panel authority and prospective V2 claim/Panel consent. 67 is unallocated.
+        assert!(max_encoded_bytes_of_tag(67).is_none(), "67 is not allocated");
+        for tag in (22..=37).chain(40..=66) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         assert_eq!(name_of_tag(TAG_FUND_BEACON_SOURCE_FEE_V1), "FundBeaconSourceFee");

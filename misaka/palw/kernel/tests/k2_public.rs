@@ -302,3 +302,28 @@ fn a_checkers_own_randomness_finds_the_lie_and_the_court_convicts_whatever_vecto
     let peer = BytePeer::serving(&c, &c.trace, &[]);
     assert!(matches!(honest.check_salted(&peer, &ScopeV1::WholeClaim, [7; 64]), ScopeVerdictV1::Pass { .. }));
 }
+
+#[test]
+fn paid_v2_seeded_public_checker_preserves_fault_da_and_exhaustion_boundaries() {
+    use misaka_palw_kernel::challenge::CheckerRandomnessV2;
+    let c = Claim::honest();
+    let fresh = FreshVerifierV1::from_public_bytes(&c.publish(&c.trace), &known(), c.header()).unwrap();
+    let honest = BytePeer::serving(&c, &c.trace, &[]);
+    let randomness = CheckerRandomnessV2::new([41; 64], 1_000_000).unwrap();
+    assert!(matches!(fresh.check_seeded_v2(&honest, &ScopeV1::WholeClaim, &randomness), ScopeVerdictV1::Pass { .. }));
+    let exhausted = CheckerRandomnessV2::new([41; 64], 1).unwrap();
+    assert!(matches!(fresh.check_seeded_v2(&honest, &ScopeV1::WholeClaim, &exhausted), ScopeVerdictV1::Unavailable { .. }));
+    let (at, lying) = lie(&c);
+    let bad = FreshVerifierV1::from_public_bytes(&c.publish(&lying), &known(), c.header()).unwrap();
+    let randomness = CheckerRandomnessV2::new([41; 64], 1_000_000).unwrap();
+    let ScopeVerdictV1::Fault(proof) = bad.check_seeded_v2(&BytePeer::serving(&c, &lying, &[]), &ScopeV1::WholeClaim, &randomness)
+    else {
+        panic!("a committed dense lie must produce the exact public court proof");
+    };
+    bad.try_proof(&FaultProofWireV1::of(&proof).to_bytes()).unwrap();
+    let randomness = CheckerRandomnessV2::new([41; 64], 1_000_000).unwrap();
+    assert!(matches!(
+        bad.check_seeded_v2(&BytePeer::serving(&c, &lying, &[at]), &ScopeV1::WholeClaim, &randomness),
+        ScopeVerdictV1::Unavailable { .. }
+    ));
+}

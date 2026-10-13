@@ -392,6 +392,21 @@ impl FreshPipelineVerifierV1 {
     /// [`Self::check`] with the checker's OWN randomness (`salt` replaces the public beacon in every stage's challenge): grinding
     /// the beacon gains a producer nothing against such a checker, and the courts never read the vectors.
     pub fn check_salted(&self, materials: &[&dyn MaterialV1], salt: Digest) -> PipelineFindingV1 {
+        self.check_randomness(materials, salt, None)
+    }
+    pub fn check_seeded_v2(
+        &self,
+        materials: &[&dyn MaterialV1],
+        randomness: &crate::challenge::CheckerRandomnessV2,
+    ) -> PipelineFindingV1 {
+        self.check_randomness(materials, self.record.beacon, Some(randomness))
+    }
+    fn check_randomness(
+        &self,
+        materials: &[&dyn MaterialV1],
+        salt: Digest,
+        randomness: Option<&crate::challenge::CheckerRandomnessV2>,
+    ) -> PipelineFindingV1 {
         if let Err(why) = self.structure() {
             return PipelineFindingV1::Malformed(why);
         }
@@ -412,7 +427,12 @@ impl FreshPipelineVerifierV1 {
                 }
             }
         }
-        match verify_pipeline_v1(&self.ctx_with(salt), materials) {
+        let context = self.ctx_with(salt);
+        let verdict = match randomness {
+            None => verify_pipeline_v1(&context, materials),
+            Some(r) => crate::pipeline::verify_pipeline_seeded_v2(&context, materials, r),
+        };
+        match verdict {
             PipelineVerdictV1::Pass { .. } => PipelineFindingV1::Pass,
             PipelineVerdictV1::StageFault { stage, proof } => {
                 PipelineFindingV1::Fault(PipelineFaultWireV1::Stage { stage, proof: FaultProofWireV1::of(&proof) })

@@ -61,3 +61,5 @@ pub use paid_opt_in::{
 };
 pub use policy::opt_in_source_policy_v4;
 pub use policy::paid_opt_in_source_policy_v5;
+
+pub mod approval_scope;

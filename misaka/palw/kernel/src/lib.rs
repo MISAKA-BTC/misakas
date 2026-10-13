@@ -178,3 +178,5 @@ pub use verify::{
 };
 
 pub mod flat_seal9;
+
+pub mod claim_paid_v2;

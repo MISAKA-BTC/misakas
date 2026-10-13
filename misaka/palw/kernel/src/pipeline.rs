@@ -716,6 +716,22 @@ pub fn pipeline_structure_v1(c: &PipelineContextV1<'_>) -> Result<(), String> {
 
 /// **Verify a pipeline claim**: every stage's edges, then its relations, in stage order. `materials[s]` serves stage `s`.
 pub fn verify_pipeline_v1(c: &PipelineContextV1<'_>, materials: &[&dyn MaterialV1]) -> PipelineVerdictV1 {
+    verify_pipeline_randomness(c, materials, None)
+}
+
+/// Paid V2 checks use a distinct seed domain per stage and one shared finite budget.
+pub fn verify_pipeline_seeded_v2(
+    c: &PipelineContextV1<'_>,
+    materials: &[&dyn MaterialV1],
+    randomness: &crate::challenge::CheckerRandomnessV2,
+) -> PipelineVerdictV1 {
+    verify_pipeline_randomness(c, materials, Some(randomness))
+}
+fn verify_pipeline_randomness(
+    c: &PipelineContextV1<'_>,
+    materials: &[&dyn MaterialV1],
+    randomness: Option<&crate::challenge::CheckerRandomnessV2>,
+) -> PipelineVerdictV1 {
     let facts = match c.check_evidence() {
         Ok(f) => f,
         Err(why) => return PipelineVerdictV1::EvidenceMalformed { why },
@@ -776,7 +792,11 @@ pub fn verify_pipeline_v1(c: &PipelineContextV1<'_>, materials: &[&dyn MaterialV
         }
         // The stage's relations.
         let ctx = c.stage_ctx(si, &v, &tokens);
-        match verify_scope_v1(&ctx, materials[si], &ScopeV1::WholeClaim) {
+        let verdict = match randomness {
+            None => verify_scope_v1(&ctx, materials[si], &ScopeV1::WholeClaim),
+            Some(r) => crate::verify::verify_scope_seeded_v2(&ctx, materials[si], &ScopeV1::WholeClaim, &r.for_stage(si as u32)),
+        };
+        match verdict {
             ScopeVerdictV1::Pass { probabilistic_checks, .. } => checks += probabilistic_checks,
             ScopeVerdictV1::Fault(proof) => return PipelineVerdictV1::StageFault { stage: si as u8, proof },
             ScopeVerdictV1::Unavailable { what } => return PipelineVerdictV1::Unavailable { what: format!("stage {si}: {what}") },

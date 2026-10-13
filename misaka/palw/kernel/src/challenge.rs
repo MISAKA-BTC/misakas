@@ -140,3 +140,108 @@ mod tests {
         assert!(c.iter().all(|f| f.value() < crate::field::F89::MODULUS));
     }
 }
+
+/// V2 mathematical checker randomness. The seed comes directly from the verified
+/// post-commit contract; it is never placed in V1's beacon slot and hashed again.
+/// A single budget is shared by every relation, repetition and pipeline stage.
+pub struct CheckerRandomnessV2 {
+    seed: Digest,
+    remaining_blocks: std::rc::Rc<std::cell::Cell<u64>>,
+}
+impl CheckerRandomnessV2 {
+    pub fn new(seed: Digest, maximum_blocks: u64) -> Result<Self, String> {
+        if maximum_blocks == 0 {
+            return Err("a checker stream needs a finite nonzero block budget".into());
+        }
+        Ok(Self { seed, remaining_blocks: std::rc::Rc::new(std::cell::Cell::new(maximum_blocks)) })
+    }
+    pub fn for_scope(&self, scope: Digest) -> Self {
+        Self {
+            seed: crate::hash::object_id(b"misaka-palw/kernel/checker-scope/v2", &(self.seed, scope)),
+            remaining_blocks: self.remaining_blocks.clone(),
+        }
+    }
+    pub fn for_stage(&self, stage: u32) -> Self {
+        Self {
+            seed: crate::hash::object_id(b"misaka-palw/kernel/checker-stage/v2", &(self.seed, stage)),
+            remaining_blocks: self.remaining_blocks.clone(),
+        }
+    }
+    pub fn remaining_blocks(&self) -> u64 {
+        self.remaining_blocks.get()
+    }
+    pub(crate) fn vector_in<F: FieldElemV1>(&self, label: ChallengeLabelV1, n: usize) -> Result<Vec<F>, String> {
+        let mut out = Vec::with_capacity(n);
+        let mut counter = 0u64;
+        while out.len() < n {
+            let left = self.remaining_blocks.get();
+            if left == 0 {
+                return Err("paid claim checker stream exhausted (no biased fallback)".into());
+            }
+            self.remaining_blocks.set(left - 1);
+            let mut s = keyed(b"misaka-palw/kernel/checker-stream/v2");
+            s.update(&self.seed);
+            s.update(&[label.kind]);
+            s.update(&label.position.to_le_bytes());
+            s.update(&label.occurrence.to_le_bytes());
+            s.update(&label.node.to_le_bytes());
+            s.update(&[label.repetition]);
+            s.update(&label.slice.to_le_bytes());
+            s.update(&counter.to_le_bytes());
+            counter = counter.checked_add(1).ok_or("checker counter overflow")?;
+            for chunk in finish(s).chunks_exact(16) {
+                let mut word = [0u8; 16];
+                word.copy_from_slice(chunk);
+                if let Some(v) = F::of_word(u128::from_le_bytes(word)) {
+                    out.push(v);
+                }
+                if out.len() == n {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+pub(crate) enum CheckerRandomness<'a> {
+    Legacy(Digest),
+    Paid(&'a CheckerRandomnessV2),
+}
+impl CheckerRandomness<'_> {
+    pub(crate) fn vector_in<F: FieldElemV1>(&self, label: ChallengeLabelV1, n: usize) -> Result<Vec<F>, String> {
+        match self {
+            Self::Legacy(seed) => Ok(ChallengeStreamV1::new(*seed, label).vector_in(n)),
+            Self::Paid(r) => r.vector_in(label, n),
+        }
+    }
+}
+
+#[cfg(test)]
+mod paid_checker_stream_tests {
+    use super::*;
+    #[test]
+    fn finite_budget_is_shared_by_stages_and_exhaustion_has_no_fallback() {
+        let r = CheckerRandomnessV2::new([9; 64], 1).unwrap();
+        let label = ChallengeLabelV1 { kind: 0, position: 0, occurrence: 0, node: 0, repetition: 0, slice: 0 };
+        assert!(r.for_stage(0).vector_in::<Fp>(label, 5).is_err());
+        assert_eq!(r.remaining_blocks(), 0);
+        assert!(r.for_stage(1).vector_in::<Fp>(label, 1).is_err());
+        assert!(CheckerRandomnessV2::new([9; 64], 0).is_err());
+    }
+    #[test]
+    fn direct_paid_seed_is_deterministic_and_scope_stage_separated() {
+        let label = ChallengeLabelV1 { kind: 0, position: 1, occurrence: 2, node: 3, repetition: 0, slice: 0 };
+        let draw = |stage, scope| {
+            CheckerRandomnessV2::new([7; 64], 20)
+                .unwrap()
+                .for_stage(stage)
+                .for_scope(scope)
+                .vector_in::<crate::field::F89>(label, 8)
+                .unwrap()
+        };
+        assert_eq!(draw(0, [1; 64]), draw(0, [1; 64]));
+        assert_ne!(draw(0, [1; 64]), draw(1, [1; 64]));
+        assert_ne!(draw(0, [1; 64]), draw(0, [2; 64]));
+    }
+}

@@ -155,6 +155,17 @@ impl FreshVerifierV1 {
         verify_scope_v1(&self.ctx(), served, scope)
     }
 
+    /// V2 enrollment consumer. The authenticated adapter owns the seed and total
+    /// stream budget; no V1 beacon-slot compatibility transform is used.
+    pub fn check_seeded_v2(
+        &self,
+        served: &dyn MaterialV1,
+        scope: &ScopeV1,
+        randomness: &crate::challenge::CheckerRandomnessV2,
+    ) -> ScopeVerdictV1 {
+        crate::verify::verify_scope_seeded_v2(&self.ctx(), served, scope, randomness)
+    }
+
     /// **Check with the checker's OWN randomness**: the challenge vectors drawn from `salt` (a value only the checker knows)
     /// instead of the claim's public beacon. A producer that predicted or ground the beacon gains nothing against a checker that
     /// does this, and every fault found is convictable: the courts never read the vectors (a scalar or an instance is
