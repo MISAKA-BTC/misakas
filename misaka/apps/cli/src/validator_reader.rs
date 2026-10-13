@@ -177,7 +177,14 @@ async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> Cli
         None => None,
     };
     let dns_read = client.get_dns_confirmation().await;
-    let retirement = client.get_palw_settlement(0).await.ok().and_then(|r| r.dns_retired_at);
+    let settlement_read = client.get_palw_settlement(0).await;
+    let retirement = settlement_read.as_ref().ok().and_then(|r| r.dns_retired_at);
+    let finality_unavailable = settlement_read.is_err() && !matches!(&dns_read, Ok(d) if d.available);
+    let finality_json = json!({
+        "authority": if retirement.is_some() { "native" } else if matches!(&dns_read, Ok(d) if d.available) { "dns" } else { "unknown" },
+        "dnsRetiredAt": retirement,
+        "error": settlement_read.as_ref().err().map(ToString::to_string),
+    });
     let attesting = args.stake_bond.as_deref().and_then(attesting_here);
     // The chain's own liveness gauge: the ready epochs still waiting for this bond's attestation.
     let owed = match &args.stake_bond {
@@ -194,6 +201,9 @@ async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> Cli
     };
     let group = crate::operator::status::group;
     let (headline, next): (String, Option<String>) = match (&args.stake_bond, &bond_read) {
+        _ if finality_unavailable => {
+            (paint::dim("Finality authority is unavailable on this node"), Some("Check the node's sync and import status".into()))
+        }
         _ if retirement.is_some() => (
             paint::dim(&format!("DNS validator role retired at DAA {}; PALW remains active", retirement.unwrap())),
             args.stake_bond.as_ref().map(|_| "Use validator bonds / unbond for historical bond exits".into()),
@@ -333,6 +343,7 @@ async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> Cli
                 },
                 "bond": bond_json,
                 "dns": dns_json,
+                "finality": finality_json,
                 "attesting": attesting.map(|(pid, what)| json!({ "pid": pid, "process": what })),
                 "epochsNotYetAttested": owed,
                 "next": next,

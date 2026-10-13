@@ -29,6 +29,8 @@ use std::{
 
 mod bootstrap;
 pub use bootstrap::export_private_complete_bootstrap_v1;
+mod claim_paid_bootstrap;
+pub use claim_paid_bootstrap::{PrivatePaidProgramRequestV3, export_private_paid_program_work_v3};
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 

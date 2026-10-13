@@ -600,6 +600,19 @@ async fn walk(
                 .current(why),
         )
     })?;
+    if let Some(status) = &node.node_status {
+        crate::wallet::node_import_verdict(&params, status).map_err(|e| {
+            Halt::Blocked(
+                Finding::error("E-NODE-IMPORT", exit::COMPONENT_DOWN, "The node has not completed its pruning import").current(e.msg),
+            )
+        })?;
+    } else if crate::wallet::native_import_status_required(&params) {
+        return Err(Halt::Blocked(Finding::error(
+            "E-NODE-IMPORT",
+            exit::COMPONENT_DOWN,
+            "The node did not report the import status required for native settlement",
+        )));
+    }
     let terms_resp = node.client().get_palw_registration_terms().await.map_err(|e| {
         Halt::Blocked(
             Finding::error("E-NODE-TOO-OLD", exit::COMPONENT_DOWN, "The node does not serve the registration terms")

@@ -349,6 +349,9 @@ pub(crate) async fn read_facts_many(
             if let Err(e) = crate::wallet::node_genesis_verdict(params, salt.as_ref(), status) {
                 return Err(blocked("E-NODE-GENESIS", format!("{} runs another genesis than this CLI signs for", node.url), e.msg));
             }
+            if let Err(e) = crate::wallet::node_import_verdict(params, status) {
+                return Err(blocked("E-NODE-IMPORT", format!("{} has not completed its pruning import", node.url), e.msg));
+            }
             if !status.consensus_params_id.is_empty() && status.consensus_params_id != ours {
                 return Err(blocked(
                     "E-NODE-RULESET",
@@ -356,6 +359,12 @@ pub(crate) async fn read_facts_many(
                     format!("node {} · this build {}", status.consensus_params_id, ours),
                 ));
             }
+        } else if crate::wallet::native_import_status_required(params) {
+            return Err(blocked(
+                "E-NODE-IMPORT",
+                format!("{} did not report its native import status", node.url),
+                "native settlement requires a completed durable import",
+            ));
         }
         let (facts, fund) = read_facts(node, params, bundle, owner_pubkey, payer, bond, bond_op, unsigned, probe, sponsor).await?;
         match &chosen {
