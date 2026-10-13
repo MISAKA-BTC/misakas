@@ -191,6 +191,8 @@ mod palw_bond_budget_fold_v1;
 mod palw_adapter_class_fold_v1;
 // RFC-0010: the permissionless Panel's (V3) production fold — a child module, so it reads the builder and writes the tables only
 // through their one writers.
+#[path = "palw_panel_source_fee_fold_v2.rs"]
+mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
 mod palw_panel_v3_fold_v1;
 pub use palw_panel_v3_fold_v1::{

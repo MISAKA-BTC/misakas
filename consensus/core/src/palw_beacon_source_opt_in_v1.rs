@@ -142,7 +142,23 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             if target.terms.context != id {
                 return Err("source target key mismatch".into());
             }
-            if daa < target.terms.seal_start || daa >= target.terms.seal_end {
+            // Panel's sponsor must fund before the entropy window opens. The
+            // common source admission still requires an ordinary seal at S.
+            if daa >= target.terms.seal_end
+                || (daa < target.terms.seal_start
+                    && target.context.subject_kind != misaka_palw_challenge::SubjectKindV1::PanelAssignment)
+            {
+                continue;
+            }
+            if target.context.subject_kind == misaka_palw_challenge::SubjectKindV1::PanelAssignment {
+                let authority = self.panel_source_fee_authority_v2(&id)?;
+                if authority.source_policy != fence.policy
+                    || authority.authorized_daa > daa
+                    || target.context.commitment_position < fence.activation.daa_score()
+                {
+                    return Err("Panel source terms differ from their authenticated network authority".into());
+                }
+                inputs.targets.insert(id, target);
                 continue;
             }
             let misaka_palw_challenge::RootV1::Present(class) = target.context.candidate_profile_id else {

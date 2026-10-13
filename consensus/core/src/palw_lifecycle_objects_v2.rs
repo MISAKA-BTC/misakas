@@ -1778,7 +1778,9 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
         K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
         K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
-        K::FundBeaconSourceFee { .. } | K::OptInPaidBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1),
+        K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
+            Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
+        }
     }
 }
 
@@ -1845,6 +1847,7 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     // codex RFC-7 final (R6781-F merge): codex numbered these 22 / 23 — RFC-02's on the integration line — so they follow 41–60.
     (61, "FundBeaconSourceFee", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
     (62, "OptInPaidBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
+    (63, "FundPanelBeaconSourceFeeV2", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2130,9 +2133,9 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::KernelInner { lo: 53, hi: 60 }, "palw_panel_free_v1", "RFC-0002 ordinary-point mixed candidate v9", true),
     // codex RFC-7 final (lane R6781-F): prepaid source fees under their own dormant monetary fence (codex used 22 / 23; renumbered).
     a2_row(
-        PalwA2SlotV1::KernelInner { lo: 61, hi: 62 },
+        PalwA2SlotV1::KernelInner { lo: 61, hi: 63 },
         "palw_beacon_source_fee_v1",
-        "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource (prepaid source fees)",
+        "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource / FundPanelBeaconSourceFeeV2",
         true,
     ),
     // codex RFC-6/7/8/12 final (lane R6781-F): the state its kinds write, each only past its own dormant fence (below it no row
@@ -2153,6 +2156,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         },
         "palw_beacon_source_fee_v1",
         "RFC-7 prepaid source fees (codex final; R6781-F)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux table 112 native signed Panel sponsor authority v2" },
+        "palw_beacon_source_fee_v1",
+        "RFC-7 Panel prepaid sponsor authority v2",
         true,
     ),
     a2_row(

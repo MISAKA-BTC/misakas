@@ -83,6 +83,7 @@ pub mod kernel_rows;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
+pub mod panel_source_fee_v2;
 pub mod onboarding_snapshot;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;

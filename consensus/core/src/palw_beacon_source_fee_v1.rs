@@ -133,6 +133,23 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             if target.context.commitment_position < fence.activation.daa_score() {
                 continue;
             }
+            if target.context.subject_kind == misaka_palw_challenge::SubjectKindV1::PanelAssignment {
+                let authority = self.panel_source_fee_authority_v2(context)?;
+                let expected = self.beacon_source_fee_target_v5(context)?;
+                let derived = BeaconSourceFeeTargetV1 {
+                    target: target.clone(),
+                    sponsor: crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&authority.sponsor),
+                    minimum_fee: fence.policy.minimum_fee_for(target)?,
+                    max_sources: fence.policy.max_funded_sources.min(target.terms.max_total),
+                };
+                if expected != derived
+                    || self.beacon_source_cost_bounds_v5(context)? != fence.policy.cost_bounds.ok_or("Panel source costs missing")?
+                {
+                    return Err("Panel source sponsor/floor/cap/cost authority substituted".into());
+                }
+                inputs.targets.insert(*context, derived);
+                continue;
+            }
             let misaka_palw_challenge::RootV1::Present(class) = target.context.candidate_profile_id else {
                 return Err("fee candidate missing".into());
             };
@@ -213,6 +230,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     pub fn paid_beacon_material_v5(&self, context: &misaka_palw_kernel::hash::Digest) -> Result<Option<PaidBeaconMaterialV5>, String> {
         use misaka_palw_challenge::{OptInContractV4, PaidOptInContractV5, PaidSourcePromiseV5};
         let expected = self.beacon_source_fee_target_v5(context)?;
+        if expected.target.context.subject_kind == misaka_palw_challenge::SubjectKindV1::PanelAssignment {
+            self.panel_source_fee_authority_v2(context)?;
+        }
         let ledger = self.ledger()?;
         let sources = self.beacon_opt_in_sources_v4(context)?;
         let promises: Vec<_> = ledger

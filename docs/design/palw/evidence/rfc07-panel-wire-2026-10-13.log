@@ -1,0 +1,31 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/kernel)
+    Finished `test` profile [unoptimized] target(s) in 9.67s
+     Running tests/beacon_source_fee.rs (/tmp/misaka-rfc67812-workspace-target/debug/deps/beacon_source_fee-c38988dc8249d4a7)
+
+running 9 tests
+test prepaid_source_income_survives_later_loss_of_the_sponsors_remaining_balance ... ok
+test panel_sponsor_wire_is_versioned_and_bare_ledger_cannot_authorize_a_target ... ok
+test even_a_consumer_authenticated_future_target_cannot_debit_the_sponsor_early ... ok
+test wire_ceiling_and_rooted_money_inventory_refuse_corruption ... ok
+test fee_and_source_consent_are_bound_to_prepaid_terms_and_not_retroactive ... ok
+test only_a_standing_timely_final_vests_at_the_full_signed_horizon_once ... ok
+test funding_requires_both_fences_signature_exact_target_and_real_free_collateral ... ok
+test source_fee_books_ride_table_27_kinds_5_and_6_and_both_roots_agree ... ok
+test withhold_and_reseal_return_fee_principal_once_and_burn_the_independent_deposit ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/beacon_source_opt_in.rs (/tmp/misaka-rfc67812-workspace-target/debug/deps/beacon_source_opt_in-901484c99af1b2e7)
+
+running 8 tests
+test source_terms_reject_clock_overflow_incompatible_reveals_and_corrupt_rows ... ok
+test every_target_costs_a_fresh_deposit_and_failure_keeps_the_slot_until_its_horizon ... ok
+test same_position_reseals_cannot_erase_the_target_opt_in_or_avoid_its_forfeit ... ok
+test a_reveal_keeps_source_collateral_and_claim_liability_through_the_signed_horizon ... ok
+test opt_in_is_signed_target_bound_and_closed_without_its_own_fence ... ok
+test abandonment_after_reveal_burns_the_source_deposit_as_well_as_the_claim_default ... ok
+test source_final_has_its_own_finite_deadline_and_free_collateral_cannot_be_reused ... ok
+test a_public_conviction_after_source_final_collects_both_independent_reservations_once ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+

@@ -359,3 +359,21 @@ fn source_fee_books_ride_table_27_kinds_5_and_6_and_both_roots_agree() {
     bad.insert((TABLE_VERIFIER_PAY_V1, borsh::to_vec(&(0u8, [7u8; 64])).unwrap()), borsh::to_vec(&row).unwrap());
     assert!(KernelLedgerV1::from_rows(&w.l, w.l.scalars(), &bad).is_err());
 }
+
+#[test]
+fn panel_sponsor_wire_is_versioned_and_bare_ledger_cannot_authorize_a_target() {
+    let (mut w, _, terms, _, _) = fixture();
+    let object = O::FundPanelBeaconSourceFeeV2 { epoch: 123, terms };
+    let bytes = object.encode();
+    assert_eq!(bytes[0], 1);
+    assert_eq!(bytes[1], 63);
+    assert_eq!(O::decode(&bytes).unwrap(), object);
+    assert!(bytes.len() <= object.max_encoded_bytes());
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(O::decode(&trailing).is_err());
+    refuse(&mut w, OUTSIDER, object.clone());
+    refuse(&mut w, PRODUCER, object);
+    assert!(w.l.beacon_source_fees.is_empty());
+    assert_eq!(O::FundBeaconSourceFee { terms }.encode()[1], 61);
+}

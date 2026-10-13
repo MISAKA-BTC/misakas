@@ -952,6 +952,9 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
+            return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);
+        }
         KernelRouteObjectV1::SealModelRefutationV4 { slot, seal } => {
             return super::palw_model_refutation_seal_fold_v4::seal(builder, ctx, signer, *slot, seal);
         }

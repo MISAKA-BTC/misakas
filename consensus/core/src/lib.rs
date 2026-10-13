@@ -197,6 +197,7 @@ pub mod palw_base0_profile;
 /// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
 pub mod palw_batch_licence_v1;
 pub mod palw_beacon_source_fee_v1;
+pub mod palw_panel_source_fee_v2;
 pub mod palw_beacon_source_opt_in_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic

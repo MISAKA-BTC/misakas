@@ -1368,6 +1368,9 @@ impl KernelLedgerV1 {
                 self.opt_in_beacon_source(*producer, *job, *seal, *context, *terms, &mut out)
                     .map_err(|why| KernelRefusalV1::rule(name, why))?;
             }
+            KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { .. } => {
+                return Err(KernelRefusalV1::rule(name, "Panel sponsor authority must be derived by the native consumer"));
+            }
             KernelRouteObjectV1::FundBeaconSourceFee { terms } => {
                 self.fund_beacon_source_fee(*terms, &mut out).map_err(|why| KernelRefusalV1::rule(name, why))?;
             }
@@ -1497,7 +1500,7 @@ impl KernelLedgerV1 {
             O::SealClaim { producer, .. } | O::OptInBeaconSource { producer, .. } | O::OptInPaidBeaconSource { producer, .. } => {
                 Some((*producer, "producer"))
             }
-            O::FundBeaconSourceFee { terms } => Some((terms.sponsor, "sponsor")),
+            O::FundBeaconSourceFee { terms } | O::FundPanelBeaconSourceFeeV2 { terms, .. } => Some((terms.sponsor, "sponsor")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
             O::Spec { object } => object.named_actor(),
             _ => None,
