@@ -781,6 +781,8 @@ pub struct Args {
     #[serde(default)]
     pub palw_native_resource_admission_v1: bool,
     #[serde(default)]
+    pub palw_native_logical_admission_v1: bool,
+    #[serde(default)]
     pub palw_native_memory_budget: Option<u64>,
     #[serde(default)]
     pub palw_native_database_budget: Option<u64>,
@@ -1046,6 +1048,7 @@ impl Default for Args {
             palw_host_memory_budget: None,
             palw_resource_admission_v2: false,
             palw_native_resource_admission_v1: false,
+            palw_native_logical_admission_v1: false,
             palw_native_memory_budget: None,
             palw_native_database_budget: None,
             palw_host_node_count: 1,
@@ -3329,6 +3332,9 @@ Setting to 0 prevents the preallocation and sets the maximum to {}, leading to 0
 a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance especially for syncing peers faster"),
         )
         .arg(
+            Arg::new("palw-native-logical-admission-v1")
+                .long("palw-native-logical-admission-v1").action(ArgAction::SetTrue)
+                .help("Local native typed allocation-request capacity. Requires a trusted persisted point inventory; does not approve physical allocator RSS or database compaction."),
             Arg::new("palw-native-resource-admission-v1")
                 .long("palw-native-resource-admission-v1").action(ArgAction::SetTrue)
                 .help("Explicit local native snapshot capacity: refuse before materialization unless trusted whole RAM/DB structural bounds are available. Current unknown bounds are refused; this does not approve the 100k fixture."),
@@ -3898,6 +3904,11 @@ impl Args {
             disable_dns_seeding: arg_match_unwrap_or::<bool>(&m, "nodnsseed", defaults.disable_dns_seeding),
             disable_grpc: arg_match_unwrap_or::<bool>(&m, "nogrpc", defaults.disable_grpc),
             ram_scale: arg_match_unwrap_or::<f64>(&m, "ram-scale", defaults.ram_scale),
+            palw_native_logical_admission_v1: arg_match_unwrap_or::<bool>(
+                &m,
+                "palw-native-logical-admission-v1",
+                defaults.palw_native_logical_admission_v1,
+            ),
             palw_native_resource_admission_v1: arg_match_unwrap_or::<bool>(
                 &m,
                 "palw-native-resource-admission-v1",

@@ -24714,3 +24714,7 @@ mod staged_court_state_tests_v1 {
         assert!(borsh::from_slice::<PalwStateCarriageV2>(&empty_tail).is_err());
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_state_v2.rs"]
+mod native_resource_inventory_v1;

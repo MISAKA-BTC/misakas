@@ -532,6 +532,14 @@ pub(crate) fn create_core_with_runtime_inner(
             database_bytes: args.palw_native_database_budget.unwrap_or(0),
         },
     ));
+    kaspa_consensus_core::palw_native_resource_v1::arm_native_logical_limits_v1(
+        (args.palw_native_logical_admission_v1 || args.palw_native_resource_admission_v1).then_some(
+            kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 {
+                memory_bytes: args.palw_native_memory_budget.unwrap_or(0),
+                database_bytes: args.palw_native_database_budget.unwrap_or(0),
+            },
+        ),
+    );
     crate::palw_resource_admission_v2::arm(args.palw_resource_admission_v2);
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
     // int-10.2 D1: and, where the operator named one, the host ledger every node on this host shares —

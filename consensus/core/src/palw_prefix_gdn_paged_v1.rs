@@ -422,3 +422,7 @@ mod tests {
         assert!(PalwGdnPagedStateV1::new(Hash64::default(), 1, (1 << 17) + 1, 1, wire).is_err());
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_prefix_gdn_paged_v1.rs"]
+mod native_resource_inventory_v1;

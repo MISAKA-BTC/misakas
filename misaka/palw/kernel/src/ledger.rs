@@ -3794,3 +3794,6 @@ mod tests {
         assert!(carrier_fit_v1(&b, roomy, roomy, 5000).is_err(), "commitments that cannot be carried: no claim can be committed");
     }
 }
+
+#[path="native_inventory_ledger_v1.rs"]
+mod native_resource_inventory_v1;

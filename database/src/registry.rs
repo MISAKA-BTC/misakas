@@ -61,6 +61,9 @@ pub enum DatabaseStorePrefixes {
     // ---- Pruning metadata ----
     PruningUtxosetSyncFlag = 60,
     BodyMissingAnticone = 61,
+    /// Compact point/root-bound native allocation inventory, atomically staged
+    /// with its pruning snapshot. Never a consensus/rooted field.
+    PalwNativeSnapshotInventoryV1 = 62,
 
     // ---- Metadata ----
     MultiConsensusMetadata = 124,

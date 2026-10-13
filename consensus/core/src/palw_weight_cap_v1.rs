@@ -527,3 +527,7 @@ mod tests {
         assert!(PALW_CAPACITY_SHALLOW_REORG_WALK_V1 as u64 >= 8 * (PALW_CAPACITY_SHALLOW_REORG_DAA_V1 + 1));
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_weight_cap_v1.rs"]
+mod native_resource_inventory_v1;

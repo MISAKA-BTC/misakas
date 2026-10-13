@@ -491,3 +491,7 @@ pub(crate) mod tests {
         }
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_tokenizer_owned_court_v1.rs"]
+mod native_resource_inventory_v1;

@@ -2815,19 +2815,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !palw_active {
             return Ok(None);
         }
-        let capacity = self
-            .ctx
-            .consensus()
-            .unguarded_session()
-            .spawn_blocking(move |c| {
-                kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(
-                    pruning_point,
-                    c.palw_native_snapshot_resource_bound_v1(pruning_point),
-                )
-            })
-            .await;
-        if let Err(why) = capacity {
-            warn!("[palw-sidecar] native snapshot capacity refused before receive: {why}");
+        if let Err(why) = kaspa_consensus_core::palw_native_resource_v1::admit_native_receive_v1(pruning_point) {
+            warn!("[palw-sidecar] native snapshot capacity refused before receive: {why:?}");
             return Err(ProtocolError::PruningSidecarUnavailable("PALW native RAM/DB capacity", pruning_point.to_string()));
         }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {

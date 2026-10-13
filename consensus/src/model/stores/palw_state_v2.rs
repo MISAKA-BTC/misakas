@@ -42,6 +42,7 @@
 
 use std::sync::Arc;
 
+use bincode::Options;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
@@ -54,6 +55,7 @@ use kaspa_database::prelude::StoreError;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, CachedDbItem, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
+use kaspa_hashes::HasherBase;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
@@ -84,6 +86,23 @@ pub struct PalwStateTipRecordV2 {
     pub state_root: Hash64,
     /// `PalwStateCarriageV2`, Borsh bytes verbatim.
     pub carriage_borsh: Vec<u8>,
+}
+
+/// Compact accepted-point resource inventory. Integrity protects accidental
+/// corruption; it does not authenticate a peer-supplied estimate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PalwNativeSnapshotInventoryRecordV1 {
+    inventory: kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+    integrity: Hash64,
+}
+fn native_inventory_integrity_v1(
+    inventory: &kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+) -> StoreResult<Hash64> {
+    let bytes = bincode::serialize(inventory)?;
+    let mut hash = kaspa_hashes::MerkleBranchHash64::new();
+    hash.write(b"palw-native-inventory/v1");
+    hash.write(&bytes);
+    Ok(hash.finalize())
 }
 
 /// PALW V2 chain state rows: per-chain-block deltas + the materialized tip snapshot.
@@ -411,8 +430,43 @@ impl DbPalwStateV2Store {
     ) -> StoreResult<()> {
         let carriage = PalwStateCarriageV2::from_state(state);
         let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
+        let inventory = kaspa_consensus_core::palw_native_resource_v1::inventory_accepted_state_v1(
+            state,
+            block,
+            carriage_borsh.len() as u64,
+            kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotOperationV1::Serve,
+        );
+        let record = PalwNativeSnapshotInventoryRecordV1 { integrity: native_inventory_integrity_v1(&inventory)?, inventory };
+        // Raw batch staging deliberately publishes no optimistic positive cache.
+        // A new store/clone cannot observe metadata until the DB batch commits.
+        let metadata = bincode::serialize(&record)?;
+        if metadata.len() > 2 << 20 {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata exceeds 2 MiB".into()));
+        }
+        batch.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], metadata);
         self.pruning_snapshot
             .write(BatchDbWriter::new(batch), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+    }
+
+    /// Read only the compact accepted-point inventory. No native carriage decode
+    /// or giant snapshot-record clone is needed for a capacity refusal.
+    pub fn native_snapshot_inventory_v1(
+        &self,
+        point: BlockHash,
+    ) -> StoreResult<Option<kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1>> {
+        let Some(bytes) = self.db.get([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)])? else { return Ok(None) };
+        if bytes.len() > 2 << 20 {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata exceeds2MiB".into()));
+        }
+        let record: PalwNativeSnapshotInventoryRecordV1 =
+            bincode::DefaultOptions::new().with_fixint_encoding().with_limit(2 << 20).reject_trailing_bytes().deserialize(&bytes)?;
+        if record.inventory.version != 1 || native_inventory_integrity_v1(&record.inventory)? != record.integrity {
+            return Err(StoreError::DataInconsistency("native allocation inventory metadata version/integrity mismatch".into()));
+        }
+        if record.inventory.point != point {
+            return Ok(None);
+        }
+        Ok(Some(record.inventory))
     }
 
     /// The raw snapshot row, or `None` when this node has not captured one yet — which is the
@@ -905,5 +959,37 @@ mod tests {
         db.write(batch).unwrap();
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
         assert_eq!(fresh.load_tip(&p).unwrap().expect("the tip loads").1, child, "this build's own version loads");
+    }
+}
+
+#[cfg(test)]
+mod native_inventory_tests_v1 {
+    use super::*;
+    use kaspa_database::prelude::*;
+    #[test]
+    fn inventory_metadata_is_atomic_fresh_point_bound_and_integrity_checked() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        let point = BlockHash::from_u64_word(123);
+        let state = PalwChainStateV2::genesis();
+        let mut abandoned = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut abandoned, point, &state).unwrap();
+        let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        assert!(fresh.native_snapshot_inventory_v1(point).unwrap().is_none());
+        drop(abandoned);
+        assert!(fresh.native_snapshot_inventory_v1(point).unwrap().is_none());
+        let mut committed = WriteBatch::default();
+        store.set_pruning_snapshot_batch(&mut committed, point, &state).unwrap();
+        db.write(committed).unwrap();
+        let inventory = fresh.native_snapshot_inventory_v1(point).unwrap().unwrap();
+        assert_eq!(inventory.state_root, state.state_root());
+        assert!(fresh.native_snapshot_inventory_v1(BlockHash::from_u64_word(124)).unwrap().is_none());
+        let mut corruption = WriteBatch::default();
+        let mut record =
+            PalwNativeSnapshotInventoryRecordV1 { integrity: native_inventory_integrity_v1(&inventory).unwrap(), inventory };
+        record.inventory.canonical_bytes += 1;
+        corruption.put([u8::from(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1)], bincode::serialize(&record).unwrap());
+        db.write(corruption).unwrap();
+        assert!(fresh.native_snapshot_inventory_v1(point).is_err());
     }
 }

@@ -2838,6 +2838,23 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
     }
 
+    fn palw_native_snapshot_inventory_v1(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        self.virtual_processor.palw_native_snapshot_inventory_v1_impl(point)
+    }
+
+    fn palw_native_snapshot_resource_bound_v1(
+        &self,
+        point: BlockHash,
+    ) -> Option<kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceBoundV1> {
+        self.virtual_processor.palw_native_snapshot_inventory_v1_impl(point).ok()?.physical_bound_v1().ok()
+    }
+
     fn pruning_point_palw_state_shared_v1(
         &self,
         point: BlockHash,

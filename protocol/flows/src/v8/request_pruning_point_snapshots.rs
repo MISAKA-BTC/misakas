@@ -202,7 +202,7 @@ impl RequestPruningPointPalwStateFlow {
             }
             // Legacy peers share the same node-wide materialization/session backstop.
             // The empty lease file is removed as soon as this one response is queued.
-            let Ok(_snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
+            let Ok(mut snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
                 continue;
             };
@@ -217,15 +217,19 @@ impl RequestPruningPointPalwStateFlow {
             // used to be collected unconditionally and then thrown away in the `None` arm below,
             // so a peer naming a hash this node never captured bought a SECOND full tip
             // materialization for a field that was never populated.
+            let resource_lease = session.clone().spawn_blocking(move |c| c.palw_reserve_native_snapshot_v1(pp)).await;
+            match resource_lease {
+                Ok(lease) => snapshot_lease.hold_native_resource_lease(lease),
+                Err(why) => {
+                    kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why:?}");
+                    self.router
+                        .enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default()))
+                        .await?;
+                    continue;
+                }
+            }
             let (carriage, class_carriages) = session
                 .spawn_blocking(move |c| {
-                    if let Err(why) = kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(
-                        pp,
-                        c.palw_native_snapshot_resource_bound_v1(pp),
-                    ) {
-                        kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why}");
-                        return (None, Vec::new());
-                    }
                     match c.pruning_point_palw_state_shared_v1(pp) {
                         Some(state) => {
                             let declarations = match c.palw_class_carriages_for_snapshot_v1(&state, false) {
@@ -336,19 +340,19 @@ impl RequestPruningPointPalwStateFlow {
                 return Ok(());
             }
             // Acquire the node-wide lease BEFORE the consensus snapshot clone or serialization.
-            let Ok(spill) = SnapshotSpill::new() else {
+            let Ok(mut spill) = SnapshotSpill::new() else {
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
                 return Ok(());
             };
             let session = self.ctx.consensus().unguarded_session();
             let sender = session
                 .spawn_blocking(move |c| {
-                    if let Err(why) = kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(
-                        pp,
-                        c.palw_native_snapshot_resource_bound_v1(pp),
-                    ) {
-                        kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why}");
-                        return None;
+                    match c.palw_reserve_native_snapshot_v1(pp) {
+                        Ok(lease) => spill.hold_native_resource_lease(lease),
+                        Err(why) => {
+                            kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why:?}");
+                            return None;
+                        }
                     }
                     c.pruning_point_palw_state_shared_v1(pp).map(|carriage| {
                         let declarations =

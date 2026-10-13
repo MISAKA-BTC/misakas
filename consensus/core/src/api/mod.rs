@@ -1642,6 +1642,32 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// Acquire the global local-capacity ticket only when the operator selected
+    /// a native admission capability. Disabled mode performs no inventory I/O.
+    fn palw_reserve_native_snapshot_v1(
+        &self,
+        point: crate::BlockHash,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::*;
+        if !native_resource_admission_enabled_v1() && !native_logical_admission_enabled_v1() {
+            return Ok(None);
+        }
+        reserve_native_snapshot_v1(point, self.palw_native_snapshot_inventory_v1(point))
+    }
+
+    /// Public accepted-point typed allocation/allocator/DB coverage diagnostics.
+    /// A cold or unsupported point returns a concrete reason without decoding a
+    /// large native carriage or accepting a peer's resource advertisement.
+    fn palw_native_snapshot_inventory_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Result<crate::palw_native_resource_v1::NativeSnapshotInventoryV1, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Err(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+            "accepted-point inventory",
+            "this consensus has no persisted trusted typed native snapshot inventory",
+        ))
+    }
+
     /// A trusted implementation may supply a whole native restore/DB bound.
     /// Unknown remains unknown; encoded byte caps and measured fixtures do not
     /// qualify a bound. The explicit local capability refuses `None`.

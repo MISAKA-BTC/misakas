@@ -1,0 +1,17 @@
+# RFC06 typed native inventory — source checkpoint (2026-10-14)
+
+This checkpoint has **not** been compiled, tested, benchmarked or exercised on a node. The user ordered all remaining code before consolidated validation. Existing native 100k and old codec timeout evidence predates this change and is not validation of it.
+
+The accepted pruning capture now stages a compact point/root-bound inventory in the same RocksDB batch as the canonical snapshot. No optimistic metadata cache is published before commit. A fresh store reads compact metadata rather than decoding a giant native state merely to reject a local capacity request. The metadata has a bounded local encoding and integrity checksum; neither that checksum nor peer-provided metadata is a remote resource proof.
+
+The generated visitors exhaustively destructure native fields and enum variants. They cover primary carriage rows, private restoration due/reverse indexes, nested vector capacity, retained Arc payloads (aliases counted conservatively), Panel engine COW candidates, both lifetime authorization families, and the retained kernel ledger with its private derived indexes. Source additions require regeneration. BTree allocation-request envelopes are pinned to the repository Rust 1.93 / 64-bit layout; other target layouts refuse nonempty trees. Logical requested bytes are distinct from allocator RSS.
+
+The optional `--palw-native-logical-admission-v1` reserves aggregate typed demand with an RAII lease through snapshot transfer. Simultaneous source/carriage/restore/cache copies, known encoded Vec lifetimes, fixed chunk/deflate buffers and root scratch are separate terms. An actual accepted state provides installation inventory via `reserve_native_install_v1`; serving metadata cannot authorize installation. Unsupported and arithmetic overflow remain structured diagnostics. Defaults preserve historical behavior.
+
+Physical memory approval requires observed Linux cgroup-v2 membership, finite `memory.max`, current usage, a verified kernel mount, confined path and a membership recheck. This does not install a quota or treat configured bytes as enforcement. Other targets lack a implemented hard-memory-quota evidence provider. Quota evidence is refreshed, rather than accepted from a peer or persisted metadata. External changes to quotas/membership are not a perpetual quota guarantee.
+
+Installation still explicitly refuses whole-DB physical coverage: per-block retained delta/history, archival rows, concurrent WAL/log retention and compaction/live SST copies lack an enforced finite DB quota provider. Point-only encoded payload sizes and measured fixture disk/RSS are not substituted for these unknowns.
+
+Remaining code: audited predecode structural Borsh walker and restoration-index shape bounds for untrusted receive; enforced filesystem DB quota backend/evidence on supported targets; RPC publication if required beyond the public Core consensus diagnostic API. Strict native capabilities refuse receive while its wire shape is unknown, even if a local inventory names the same point. This checkpoint does not close whole native physical RAM/DB or pruned P2P acceptance.
+
+Consolidated validation must check all schema visitors against actual accepted rows, cache alias accounting, Vec capacity, overflow, concurrent lease saturation/release, snapshot batch failure/abandon, fresh-store metadata publication, point/root integrity, quota negative cases and all manual Borsh codecs. Tests are included as source only.

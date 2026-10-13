@@ -814,3 +814,7 @@ pub fn palw_tir_choice_message_v1(choice: &PalwTirDissectChoiceV1) -> Vec<u8> {
     m.extend(borsh::to_vec(choice).expect("borsh"));
     m
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_tir_dissect_v1.rs"]
+mod native_resource_inventory_v1;

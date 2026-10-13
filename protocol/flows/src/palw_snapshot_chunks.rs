@@ -122,10 +122,17 @@ pub(crate) struct SnapshotSpill {
     path: PathBuf,
     _permit: OwnedSemaphorePermit,
     created: Instant,
+    native_resource_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 impl SnapshotSpill {
     pub(crate) fn new() -> io::Result<Self> {
         Self::with_budget(session_budget())
+    }
+    pub(crate) fn hold_native_resource_lease(
+        &mut self,
+        lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    ) {
+        self.native_resource_lease = lease;
     }
     fn with_budget(budget: Arc<Semaphore>) -> io::Result<Self> {
         let permit = budget
@@ -148,7 +155,7 @@ impl SnapshotSpill {
         let file = options.open(&path)?;
         #[cfg(unix)]
         std::fs::remove_file(&path)?; // Keep only the FD: process death cannot orphan a 384 MiB spill.
-        Ok(Self { file, path, _permit: permit, created: Instant::now() })
+        Ok(Self { file, path, _permit: permit, created: Instant::now(), native_resource_lease: None })
     }
     pub(crate) fn expired(&self) -> bool {
         self.created.elapsed() >= SESSION_TTL

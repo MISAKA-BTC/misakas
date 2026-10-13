@@ -144,3 +144,7 @@ mod tests {
         assert!(row.push(Hash64::default(), 0, &[0]).is_err());
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_eog_stream_v1.rs"]
+mod native_resource_inventory_v1;

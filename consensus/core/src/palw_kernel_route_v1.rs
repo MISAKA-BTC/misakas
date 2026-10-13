@@ -369,6 +369,11 @@ pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std:
 pub struct KernelLedgerCacheV1(Option<std::sync::Arc<KernelLedgerV1>>, bool);
 
 impl KernelLedgerCacheV1 {
+    /// Borrow every retained ledger, including native projections, without cloning.
+    pub(crate) fn native_ledger_ref_v1(&self) -> Option<&KernelLedgerV1> {
+        self.0.as_deref()
+    }
+
     pub fn get(&self) -> Option<KernelLedgerV1> {
         if self.1 { None } else { self.0.as_ref().map(|l| (**l).clone()) }
     }

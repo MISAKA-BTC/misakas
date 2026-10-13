@@ -191,3 +191,7 @@ impl PalwQwen36PrefixCacheDigestV1 {
         Ok(crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&self.plan.class_id, self.plan.prefix_tokens, &self.hash.finish()))
     }
 }
+
+// Read-only native allocation inventory; no state/root/codec field is added.
+#[path = "palw_native_resource_v1/private/palw_prefix_family_state_v1.rs"]
+mod native_resource_inventory_v1;

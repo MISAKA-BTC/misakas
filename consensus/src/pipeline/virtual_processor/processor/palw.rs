@@ -2012,6 +2012,26 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    pub fn palw_native_snapshot_inventory_v1_impl(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotInventoryV1,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        self.palw_state_v2_store
+            .read()
+            .native_snapshot_inventory_v1(point)
+            .map_err(|why| NativeCoverageV1::unsupported::<Self>("accepted-point inventory store", &why.to_string()))?
+            .ok_or_else(|| {
+                NativeCoverageV1::unsupported::<Self>(
+                    "accepted-point inventory",
+                    "requested point has no atomically persisted typed inventory; pre-upgrade snapshots require trusted recapture",
+                )
+            })
+    }
+
     pub fn pruning_point_palw_state_shared_v1_impl(
         &self,
         point: BlockHash,

@@ -2,6 +2,20 @@
 //! Encoded bytes and a sampled RSS are not native restore/DB upper bounds.
 use crate::BlockHash;
 use std::sync::OnceLock;
+mod typed;
+pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
+pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
+mod demand;
+mod generated;
+mod inventory;
+mod kernel_ledger;
+pub use demand::{
+    NativeDemandCheckerV1, NativeDemandLeaseV1, admit_native_receive_v1, arm_native_logical_limits_v1,
+    native_logical_admission_enabled_v1, reserve_native_install_v1, reserve_native_snapshot_v1,
+};
+mod quota;
+pub use inventory::{NativeSnapshotInventoryV1, NativeSnapshotOperationV1, inventory_accepted_state_v1};
+pub use quota::{NativeHardMemoryQuotaV1, actual_hard_memory_quota_v1};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeSnapshotResourceLimitsV1 {
@@ -34,7 +48,7 @@ pub fn admit_native_snapshot_with_limits_v1(
 ) -> Result<(), String> {
     let Some(limits) = limits else { return Ok(()) };
     let bound = bound.ok_or("native RAM/DB structural bound unavailable for explicit local capability")?;
-    if bound.version != 1 || bound.point != point || bound.memory_upper_bytes == 0 || bound.database_upper_bytes == 0 {
+    if bound.version != 1 || bound.point != point || bound.memory_upper_bytes == 0 {
         return Err("native RAM/DB bound version, point or coverage is invalid".into());
     }
     if bound.memory_upper_bytes == u64::MAX || bound.database_upper_bytes == u64::MAX {
