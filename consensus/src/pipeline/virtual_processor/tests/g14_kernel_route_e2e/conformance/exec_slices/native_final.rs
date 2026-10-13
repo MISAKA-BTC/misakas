@@ -136,6 +136,31 @@ async fn finalize_native_root(cw: &mut Cw, s: &Session) -> (u64, Obj) {
     (final_daa, licence)
 }
 
+/// Advance only by actual heartbeat blocks. Bound missing DAA progress so a
+/// financial assertion cannot wait forever behind a stalled fixture clock.
+async fn native_payment_beat_to(cw: &mut Cw, target: u64, stage: &str) {
+    let start = cw.net.daa();
+    let started = std::time::Instant::now();
+    let block_limit = target.saturating_sub(start).saturating_mul(16).saturating_add(1_024);
+    let mut blocks = 0;
+    let mut unchanged = 0;
+    eprintln!("[x8-native-payment] {stage}: begin daa={start}, target={target}, maximum-heartbeats={block_limit}");
+    while cw.net.daa() < target {
+        assert!(blocks < block_limit, "{stage}: actual DAA failed to reach {target} after {blocks} heartbeat blocks");
+        let previous = cw.net.daa();
+        cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+        blocks += 1;
+        let now = cw.net.daa();
+        assert!(now >= previous, "{stage}: linear heartbeat chain unexpectedly regressed DAA {previous} -> {now}");
+        unchanged = if now == previous { unchanged + 1 } else { 0 };
+        assert!(unchanged < 1_024, "{stage}: 1024 actual heartbeat blocks made no DAA progress at {now}");
+        if blocks % 64 == 0 {
+            eprintln!("[x8-native-payment] {stage}: blocks={blocks}, daa={now}/{target}, elapsed={:?}", started.elapsed());
+        }
+    }
+    eprintln!("[x8-native-payment] {stage}: reached daa={}, blocks={blocks}, elapsed={:?}", cw.net.daa(), started.elapsed());
+}
+
 #[tokio::test]
 async fn x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_cancels_all_unpaid_funds() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
@@ -436,6 +461,12 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let state = cw.net.chain.tip_state().1;
     let native = state.vesting_row(&first.real.claim).unwrap().clone();
     let receipt = state.exec_v2_reward_vesting_v1(&first.real.claim).unwrap().clone();
+    eprintln!(
+        "[x8-native-payment] first Final: daa={final_daa}, expiry={}, liability={}, funds={}",
+        native.expiry_daa,
+        receipt.liability_until,
+        receipt.legs.len()
+    );
     assert!(native.producer.amount > 0 && native.seats.iter().any(|(_, leg)| leg.amount > 0));
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::NativeSlice && leg.amount > 0));
     assert!(receipt.legs.iter().any(|((_, fund), leg)| *fund == PalwExecV2RewardFundV1::KernelFee && leg.amount > 0));
@@ -467,6 +498,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(state.settled_attempt_finals(), native.settled_at_final + 1);
     assert!(cw.net.daa() < native.expiry_daa);
     let second_native = state.vesting_row(&second.real.claim).unwrap().clone();
+    eprintln!("[x8-native-payment] second Final: daa={}, expiry={}", cw.net.daa(), second_native.expiry_daa);
     assert!(
         second_native.expiry_daa > native.expiry_daa + W,
         "the predeclared second signed lifetime isolates the first root's physical-payment W window"
@@ -490,7 +522,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
         };
         add(key, *bond, leg.amount);
     }
-    cw.net.beat_to(native.expiry_daa - 1).await;
+    native_payment_beat_to(&mut cw, native.expiry_daa - 1, "before first physical payment").await;
     let before = cw.net.chain.tip_state().1;
     assert!(before.vesting_row(&first.real.claim).is_some());
     assert!(before.exec_v2_reward_vesting_v1(&first.real.claim).is_some());
@@ -503,19 +535,43 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let prior_cash: std::collections::BTreeMap<_, _> =
         expected.keys().map(|card| (*card, minted_and_owed(&cw.net, &cw.net.chain, *card).0)).collect();
     let mut paid_rows = std::collections::BTreeMap::new();
+    let mut observed = std::collections::BTreeMap::new();
+    let mut payment_blocks = 0;
     while paid_rows.len() < queues.len() {
         assert!(cw.net.daa() < native.expiry_daa + 32, "all actual first-root funds must settle without a synthetic clock");
+        assert!(payment_blocks < 1_024, "actual positive funds failed to drain after 1024 heartbeat blocks");
         cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+        payment_blocks += 1;
         let state = cw.net.chain.tip_state().1;
         for (key, (bond, amount)) in &queues {
             if let Some(row) = state.bond_budget_native_queue_income_v1(*key, bond) {
-                assert_eq!(row.consumed.reward_sompi, *amount, "each actual positive leg consumes R once");
-                if !row.live && !paid_rows.contains_key(key) {
+                // Panel and EXEC slice legs of this recipient share a queue
+                // key, but are released in different ticks. Intermediate rows
+                // carry only the funds released so far, including earlier cash.
+                assert!(row.consumed.reward_sompi <= *amount, "a shared physical queue must never consume excess R");
+                if observed.insert(*key, (row.consumed.reward_sompi, row.live)) != Some((row.consumed.reward_sompi, row.live)) {
+                    eprintln!(
+                        "[x8-native-payment] queue {key}: daa={}, consumed={}/{amount}, pending={}",
+                        cw.net.daa(),
+                        row.consumed.reward_sompi,
+                        row.live
+                    );
+                }
+                if !row.live && row.consumed.reward_sompi == *amount && !paid_rows.contains_key(key) {
+                    assert_eq!(row.consumed.reward_sompi, *amount, "all positive funds consume their aggregate R exactly once");
                     assert!(state.pending_payout(key).is_none(), "R payment clock follows actual physical drain");
                     assert_eq!(row.reuse_not_before, cw.net.daa() + W, "actual sparse/zero-DAA payment plus W");
                     paid_rows.entry(*key).or_insert(*row);
                 }
             }
+        }
+        if payment_blocks % 16 == 0 {
+            eprintln!(
+                "[x8-native-payment] physical drain: blocks={payment_blocks}, daa={}, paid={}/{}",
+                cw.net.daa(),
+                paid_rows.len(),
+                queues.len()
+            );
         }
     }
     let paid = cw.net.chain.tip_state().1;
@@ -553,7 +609,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     }
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), counters, "duplicate licence never creates/moves a second fund");
-    cw.net.beat_to(latest - 1).await;
+    native_payment_beat_to(&mut cw, latest - 1, "before last physical payment plus W").await;
     let state = cw.net.chain.tip_state().1;
     for subject in &material_subjects {
         assert_eq!(state.material_income_hold_until_v1(&cw.net.bundle.state, *subject), Some(latest));
@@ -564,7 +620,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             assert!(state.bond_budget_native_queue_income_v1(*key, &row.bond).is_some(), "the final physical W has not ended");
         }
     }
-    cw.net.beat_to(latest).await;
+    native_payment_beat_to(&mut cw, latest, "last physical payment plus W").await;
     let released = cw.net.chain.tip_state().1;
     for subject in &material_subjects {
         assert_eq!(

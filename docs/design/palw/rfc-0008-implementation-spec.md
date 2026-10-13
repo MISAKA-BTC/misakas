@@ -1410,3 +1410,12 @@ dormant profiles remain unchanged. Janitor and foreign-copy GC use this same ora
 tests pass and both fail under the former `.ok().flatten()` decision; the native control's actual API, DB-reopen and
 release-boundary assertions are pending integration execution. This prevents a read failure from authorizing deletion,
 but does not extend provider consent or establish a finite funded storage contract.
+
+The first fresh EVM/private-integration native selection on 2026-10-13 compiled successfully and terminated with
+two passing funded-Final/recovery controls and one failing positive-fund control after 2495.04 seconds. That control
+incorrectly required the full shared Panel/EXEC-slice queue aggregate on its first intermediate row. Native vesting
+and EXEC release occur in separate ticks; a partially consumed queue is not a completed total. The corrected test
+rejects any excess R and waits for the exact predeclared aggregate to physically drain before assigning completion.
+Exact coinbase cash, all payment+W clocks, material release, DB reopen and replay remain mandatory. It additionally
+logs frozen deadlines and actual heartbeat progress with finite stall guards. The corrected positive-money run is
+pending; [the full failure and evidence boundary](rfc08-native-material-acceptance-2026-10-13.md) are retained.

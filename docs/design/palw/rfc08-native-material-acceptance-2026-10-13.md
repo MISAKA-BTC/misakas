@@ -66,6 +66,29 @@ node crash or a full Consensus build. The native positive-fund control additiona
 at unknown payment, payment plus W, physical DB reopen, pre-release and release boundaries. That integration compile
 and run remains pending. Formatting and diff checks passed.
 
+## First native run: two passed, positive-money control failed
+
+The EVM/private-integration consensus build succeeded in 16m23s. The three-case native selection then terminated
+after 2495.04 seconds: the funded-Final/DB-reopen/public-conviction control and the actual reorg/reapplication control
+passed; the positive-fund control failed. [The complete failed command log](evidence/rfc08-native-final-2026-10-13-failed.log)
+is preserved. No full positive settlement or post-payment material PASS is assigned to this run.
+
+The positive case reached its two native Finals and passed the new unknown-payment material/Consensus API checks.
+It later expected 55,965,885,913 sompi on a shared queue while the first observed row contained 12,803,386,003.
+The test had compared the full Panel-plus-EXEC-slice aggregate with the first intermediate queue row. Production
+`release_plan` waits for the native vesting row to leave before releasing EXEC legs, so these two funds can enter and
+physically drain from the same payload key in separate ticks. The corrected control allows an intermediate consumed
+amount below the predeclared aggregate, rejects excess consumption, and records completion only when all expected
+funds have entered that receipt and physically drained. Final exact aggregate R, exact actual coinbase cash, deadline
+plus W, all material/DB-reopen and replay assertions remain required. The correction's fresh run is pending.
+
+A five-second sample of the still-running test showed `Net::beat_to`/heartbeat block templates and background
+overlay-window/PALW folding, not the new material oracle. The long silent period was actual clock advancement.
+The corrected native control prints its frozen expiry targets and progress every 64 actual heartbeat blocks, and
+uses finite heartbeat limits to diagnose missing DAA progress instead of waiting indefinitely. It still advances
+only by actual blocks, with no DAA/Final setter or synthetic maturity. These fixture diagnostic limits are not
+production throughput/resource approval.
+
 ## Remaining acceptance
 
 Signed provider TTL and collectible collateral must cover each admitted whole path. The current finite native
