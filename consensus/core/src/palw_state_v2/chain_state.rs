@@ -3000,6 +3000,7 @@ impl PalwChainStateV2 {
         // RFC-0010: the permissionless Panel's engine is internally consistent and agrees with the claims, panels and duty rows.
         self.assert_panel_v3_consistency_v1(params)?;
         self.assert_panel_lifetime_consistency_v2(params)?;
+        self.assert_paid_claim_consistency_v3(params)?;
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
         if let Some(budget) = &self.bond_budget {

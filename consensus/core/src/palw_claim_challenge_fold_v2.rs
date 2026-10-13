@@ -357,10 +357,20 @@ fn apply_inner(
                 return Err(refused("review is not authenticated by the release scope/authority"));
             }
             let r = b.state.kernel_route.as_ref().unwrap();
-            if !r.aux.contains_key(&(PAID_CLAIM_EVIDENCE_V2, key(&p.source_independence_evidence)))
-                || !r.aux.contains_key(&(PAID_CLAIM_EVIDENCE_V2, key(&p.economic_evidence)))
+            let independent: PalwPaidClaimEvidenceV3 = r
+                .aux_row(PAID_CLAIM_EVIDENCE_V2, &key(&p.source_independence_evidence))
+                .ok_or_else(|| refused("review independence evidence not admitted"))?;
+            let economic: PalwPaidClaimEvidenceV3 = r
+                .aux_row(PAID_CLAIM_EVIDENCE_V2, &key(&p.economic_evidence))
+                .ok_or_else(|| refused("review economic evidence not admitted"))?;
+            independent.validate().map_err(refused)?;
+            economic.validate().map_err(refused)?;
+            if !matches!(independent, PalwPaidClaimEvidenceV3::Independence { .. })
+                || independent.id() != p.source_independence_evidence
+                || !matches!(economic, PalwPaidClaimEvidenceV3::Economic { .. })
+                || economic.id() != p.economic_evidence
             {
-                return Err(refused("review references unadmitted independence/economic evidence"));
+                return Err(refused("review substitutes evidence envelope kind/identity"));
             }
             if r.aux.contains_key(&(PAID_CLAIM_REVIEW_SCOPES_V2, key(&scope.id()))) {
                 return Err(refused("immutable review scope cannot be replaced/reset"));
@@ -376,7 +386,12 @@ fn apply_inner(
             {
                 return Err(refused("independence evidence lacks the trusted observed release scope"));
             }
-            put(b, PAID_CLAIM_EVIDENCE_V2, &observation.id(), observation);
+            put(
+                b,
+                PAID_CLAIM_EVIDENCE_V2,
+                &observation.id(),
+                &PalwPaidClaimEvidenceV3::Independence { version: 3, observation: observation.clone() },
+            );
         }
         PaidClaimObjectV2::EconomicEvidence { observation, payment } => {
             observation.net_receipt().map_err(refused)?;
@@ -405,7 +420,12 @@ fn apply_inner(
             if r.aux.contains_key(&(PAID_CLAIM_EVIDENCE_V2, key(&observation.id()))) {
                 return Err(refused("economic evidence is immutable and cannot be replayed"));
             }
-            put(b, PAID_CLAIM_EVIDENCE_V2, &observation.id(), observation);
+            put(
+                b,
+                PAID_CLAIM_EVIDENCE_V2,
+                &observation.id(),
+                &PalwPaidClaimEvidenceV3::Economic { version: 3, observation: observation.clone() },
+            );
         }
         PaidClaimObjectV2::StageMessage { enrollment, round, prior_transcript, message_root } => {
             round_message(b, ctx, signer, &p, enrollment, *round, *prior_transcript, *message_root)?

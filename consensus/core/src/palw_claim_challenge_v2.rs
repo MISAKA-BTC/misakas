@@ -18,6 +18,29 @@ pub const PAID_CLAIM_REVIEW_SCOPES_V2: u8 = 122;
 pub const PAID_CLAIM_ROUNDS_V2: u8 = 123;
 pub const PAID_CLAIM_FINALS_V2: u8 = 124;
 
+/// Explicit aux119 envelope for typed native resource preflight and restore.
+/// These unshipped rows never reinterpret an older wire or observed receipt.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPaidClaimEvidenceV3 {
+    Economic { version: u16, observation: misaka_palw_challenge::approval_scope::SourceEconomicObservationV3 },
+    Independence { version: u16, observation: misaka_palw_challenge::approval_scope::SourceIndependenceObservationV3 },
+}
+impl PalwPaidClaimEvidenceV3 {
+    pub fn id(&self) -> Digest {
+        match self {
+            Self::Economic { observation, .. } => observation.id(),
+            Self::Independence { observation, .. } => observation.id(),
+        }
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Economic { version: 3, observation } => observation.validate(),
+            Self::Independence { version: 3, observation } => observation.validate(),
+            _ => Err("unknown paid source evidence envelope version".into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwClaimChallengePolicyV2 {
     pub version: u16,
@@ -401,4 +424,261 @@ pub fn paid_claim_actual_algebraic_bound_v2(
             cumulative_failure_bits_v1(&terms).map_err(|e| e.to_string())
         }
     }
+}
+
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Semantic restore fence for the new prospective namespace. Typed resource
+    /// preflight happens before decoding; this verifies the meaning of the rows.
+    /// It never recollects an expired historical beacon or erases terminal cash.
+    pub fn assert_paid_claim_consistency_v3(
+        &self,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+    ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error;
+        let refuse = |s: String| PalwStateV2Error::CarriageInconsistent(format!("paid claim: {s}"));
+        let Some(route) = self.kernel_route() else { return Ok(()) };
+        let owned = |t: u8| matches!(t,113..=119|122..=124);
+        if !route.aux.keys().any(|(t, _)| owned(*t)) {
+            return Ok(());
+        }
+        let fence = params.palw_claim_challenge_v2.ok_or_else(|| refuse("new paid namespace without compiled capability".into()))?;
+        fence.policy.validate().map_err(&refuse)?;
+        let now = self.last_point().map_or(0, |p| p.daa_score);
+        if !fence.activation.is_active(now) {
+            return Err(refuse("paid rows precede their compiled activation".into()));
+        }
+        let l = route.ledger().map_err(&refuse)?;
+        let p = fence.policy;
+        let count = |table: u8| route.aux.keys().filter(|(t, _)| *t == table).count();
+        if count(PAID_CLAIM_CLASSES_V2) > p.maximum_classes as usize || count(PAID_CLAIM_JOBS_V2) > p.maximum_jobs as usize {
+            return Err(refuse("retained class/job capacity exceeded".into()));
+        }
+        let mut live = 0u32;
+        for ((table, key), bytes) in &route.aux {
+            if !owned(*table) {
+                continue;
+            }
+            let id: Digest = borsh::from_slice(key).map_err(|e| refuse(format!("aux key: {e}")))?;
+            match *table {
+                PAID_CLAIM_CLASSES_V2 => {
+                    let c: PaidClaimClassV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    c.validate().map_err(&refuse)?;
+                    let target = if let Some(base) = l.classes.get(&c.base_class) {
+                        if crate::palw_claim_challenge_v2::is_segmented_descriptor_v3(&base.descriptor.digest()) {
+                            PaidClaimTargetV2::Segmented
+                        } else {
+                            PaidClaimTargetV2::Program
+                        }
+                    } else if l.pipeline_classes.contains_key(&c.base_class) {
+                        PaidClaimTargetV2::Pipeline
+                    } else if l.typed.classes.contains_key(&c.base_class) {
+                        PaidClaimTargetV2::TypedSpec
+                    } else {
+                        return Err(refuse("paid class lost its mathematical base".into()));
+                    };
+                    if id != c.id()
+                        || c.registrant == [0; 64]
+                        || c.target != target
+                        || c.checker_contract != p.checker_contract
+                        || c.check_window_daa < l.policy.check_window_daa
+                        || c.challenge_window_daa
+                            < if l.mode_of_class(&c.base_class).is_optimistic() {
+                                l.opv.policy.map_or(l.policy.challenge_window_daa, |p| p.window_daa())
+                            } else {
+                                l.policy.challenge_window_daa
+                            }
+                        || l.policy
+                            .court_deadline_daa
+                            .checked_add(l.policy.proof_grace_daa)
+                            .is_none_or(|tail| c.court_and_grace_daa < tail)
+                        || c.liability_daa < l.classes.get(&c.base_class).map_or(l.policy.liability_daa, |base| base.liability_daa)
+                        || c.maximum_rounds > p.maximum_rounds
+                        || c.maximum_stream_blocks > p.maximum_stream_blocks
+                        || c.review_scope != (p.lifetime_review_scope != [0; 64]).then_some(p.lifetime_review_scope)
+                        || l.mode_of_class(&c.base_class).is_optimistic() != matches!(c.checking, PaidClaimCheckingV2::ProspectiveOpv)
+                    {
+                        return Err(refuse("class key/policy/target/prospective mode substituted".into()));
+                    }
+                }
+                PAID_CLAIM_JOBS_V2 => {
+                    let j: PaidClaimJobV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    let c: PaidClaimClassV2 = route
+                        .aux_row(PAID_CLAIM_CLASSES_V2, &borsh::to_vec(&j.class).unwrap())
+                        .ok_or_else(|| refuse("job class absent".into()))?;
+                    let class = l
+                        .jobs
+                        .get(&j.base_job)
+                        .map(|j| j.class_binding_id)
+                        .or_else(|| l.pipeline_jobs.get(&j.base_job).map(|j| j.class_binding_id))
+                        .or_else(|| l.tiled_jobs.get(&j.base_job).map(|j| j.job.class_binding_id))
+                        .or_else(|| l.typed.jobs.get(&j.base_job).map(|j| j.class()));
+                    if id != j.id()
+                        || j.version != 2
+                        || class != Some(c.base_class)
+                        || l.job_poster(&j.base_job) != Some(j.payer)
+                        || j.maximum_consumers == 0
+                        || j.maximum_consumers > p.maximum_enrollments_per_job
+                    {
+                        return Err(refuse("job key/payer/mathematical class/capacity substituted".into()));
+                    }
+                    let mut admitted = 0u32;
+                    for ((t, _), v) in &route.aux {
+                        if *t == PAID_CLAIM_ENROLLMENTS_V2 {
+                            let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(v).map_err(|e| refuse(e.to_string()))?;
+                            if a.job.id() == j.id() {
+                                admitted = admitted.checked_add(1).ok_or_else(|| refuse("job admission overflow".into()))?;
+                            }
+                        }
+                    }
+                    if admitted > j.maximum_consumers {
+                        return Err(refuse("job lifetime admission budget exceeded".into()));
+                    }
+                }
+                PAID_CLAIM_ENROLLMENTS_V2 => {
+                    let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    a.validate(&l).map_err(&refuse)?;
+                    let c: PaidClaimClassV2 = route
+                        .aux_row(PAID_CLAIM_CLASSES_V2, &borsh::to_vec(&a.class.id()).unwrap())
+                        .ok_or_else(|| refuse("enrollment class absent".into()))?;
+                    let j: PaidClaimJobV2 = route
+                        .aux_row(PAID_CLAIM_JOBS_V2, &borsh::to_vec(&a.job.id()).unwrap())
+                        .ok_or_else(|| refuse("enrollment job absent".into()))?;
+                    if id != a.context.id()
+                        || a.class != c
+                        || a.job != j
+                        || !fence.activation.is_active(a.authorized_daa)
+                        || a.authorized_daa > now
+                        || a.enrollment.round != 0
+                        || a.enrollment.prior_transcript != [0; 64]
+                        || a.authorized_daa > j.last_commit_daa
+                    {
+                        return Err(refuse("enrollment copied policy/job/activation/signed interval substituted".into()));
+                    }
+                    if now <= a.enrollment.lifetime.liability_until {
+                        live = live.checked_add(1).ok_or_else(|| refuse("live admission overflow".into()))?;
+                    }
+                }
+                PAID_CLAIM_LOCKS_V2 => {
+                    let lock: PalwPaidClaimLockV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    let a = route.paid_claim_enrollment_v3(&lock.enrollment).map_err(&refuse)?;
+                    if id != a.enrollment.id()
+                        || lock.context != a.context.id()
+                        || lock.locked_daa > now
+                        || !a.enrollment.lifetime.receipt_open(lock.locked_daa)
+                        || lock.locked_daa < a.authorized_daa
+                        || lock.quorum == 0
+                        || lock.seats.len() < lock.quorum as usize
+                        || lock.seats.len() > crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1
+                        || a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon
+                    {
+                        return Err(refuse("initial lock replaces enrollment/context/clock/committee".into()));
+                    }
+                }
+                PAID_CLAIM_RECEIPTS_V2 => {
+                    let receipt: PaidClaimReceiptV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    let a = route.paid_claim_enrollment_v3(&receipt.enrollment).map_err(&refuse)?;
+                    if id != object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(receipt.enrollment, receipt.signer))
+                        || a.class.interactive_plan.is_some()
+                        || receipt.signed_daa > now
+                    {
+                        return Err(refuse("receipt key/time/interactive routing substituted".into()));
+                    }
+                    // Full assignment/seed/statement/unique signer projection was
+                    // repeated by route.ledger() above, including cold restore.
+                }
+                PAID_CLAIM_EVIDENCE_V2 => {
+                    let e: PalwPaidClaimEvidenceV3 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    e.validate().map_err(&refuse)?;
+                    if id != e.id() {
+                        return Err(refuse("evidence key/kind/version identity mismatch".into()));
+                    }
+                }
+                PAID_CLAIM_REVIEW_SCOPES_V2 => {
+                    let scope: misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3 =
+                        borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    scope.validate().map_err(&refuse)?;
+                    if id != scope.id()
+                        || id != p.lifetime_review_scope
+                        || scope.chain != route.header.policy.network_domain
+                        || scope.ruleset != route.header.policy.ruleset_digest
+                        || scope.source_independence_root != p.source_independence_evidence
+                        || scope.economic_evidence_root != p.economic_evidence
+                    {
+                        return Err(refuse("review scope replaces compiled chain/evidence authority".into()));
+                    }
+                }
+                PAID_CLAIM_REVIEW_COUNTERS_V2 => {
+                    let counter: misaka_palw_challenge::approval_scope::LifetimeCounterV3 =
+                        borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    if id != object_id(b"MISAKA/PALW/REVIEW-LIFETIME-COUNTER/V3", &route.header.policy.network_domain)
+                        || counter.admissions != counter.admitted_events.len() as u128
+                    {
+                        return Err(refuse("lifetime counter key/admission history substituted".into()));
+                    }
+                }
+                PAID_CLAIM_ROUNDS_V2 => {
+                    let row: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 =
+                        borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
+                    row.validate(&a, &l).map_err(&refuse)?;
+                    if id != row.id()
+                        || row.accepted_daa > now
+                        || row.lock.as_ref().is_some_and(|lock| lock.locked_daa > now)
+                        || row.receipts.iter().any(|r| r.signed_daa > now)
+                    {
+                        return Err(refuse("round key/native timeline mismatch".into()));
+                    }
+                }
+                PAID_CLAIM_FINALS_V2 => {
+                    let row: PalwPaidClaimFinalV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                    let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
+                    let claim = l.claims.get(&a.enrollment.base_claim).ok_or_else(|| refuse("Final base claim missing".into()))?;
+                    if id != row.enrollment
+                        || row.base_claim != a.enrollment.base_claim
+                        || row.verification_class != a.class.id()
+                        || row.signed_lifetime != a.enrollment.lifetime
+                        || row.logical_final_daa > now
+                        || row.logical_final_daa > a.enrollment.lifetime.liability_until
+                        || row.logical_final_daa != a.enrollment.lifetime.dispute_until.max(claim.life.final_hold_until)
+                        || !matches!(claim.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
+                    {
+                        return Err(refuse("Final canonical payment/statement/clock mismatch".into()));
+                    }
+                    let (lock, rounds, transcript) = if let Some(plan) = &a.class.interactive_plan {
+                        if !route.paid_claim_interactive_complete_v3(&a, &l).map_err(&refuse)? {
+                            return Err(refuse("Final has incomplete interactive plan".into()));
+                        }
+                        let last = route.paid_claim_round_v3(&a.enrollment.id(), plan.rounds - 1).map_err(&refuse)?;
+                        (last.lock.ok_or_else(|| refuse("Final round lock absent".into()))?, plan.rounds, last.transcript_root)
+                    } else {
+                        (
+                            route
+                                .aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
+                                .ok_or_else(|| refuse("Final initial lock absent".into()))?,
+                            1,
+                            [0; 64],
+                        )
+                    };
+                    if row.completed_rounds != rounds
+                        || row.transcript_root != transcript
+                        || row.sample_seed != lock.seed
+                        || row.source_context != lock.context
+                        || row.complete_receipts != lock.quorum
+                        || !lock.source_valid
+                    {
+                        return Err(refuse("Final seed/transcript/full-plan coverage mismatch".into()));
+                    }
+                }
+                _ => unreachable!("owned namespace match"),
+            }
+        }
+        if live > p.maximum_live_claims {
+            return Err(refuse("live paid capacity exceeded".into()));
+        }
+        Ok(())
+    }
+}
+fn is_segmented_descriptor_v3(id: &Digest) -> bool {
+    *id == misaka_palw_kernel::descriptor::k2_tir_v4_descriptor().digest()
+        || *id == misaka_palw_kernel::descriptor::k2_tir_v5_descriptor().digest()
 }
