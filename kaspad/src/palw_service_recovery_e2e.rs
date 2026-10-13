@@ -70,7 +70,7 @@ pub(super) struct RecoveryRun {
     network: Option<network::NetworkRun>,
 }
 
-async fn launch(
+pub(super) async fn launch(
     config: PalwPanelConfig,
     manager: Arc<ConsensusManager>,
     flow: Arc<FlowContext>,
@@ -118,6 +118,12 @@ async fn launch_on_flow(
 }
 
 impl RecoveryRun {
+    pub(super) async fn shutdown_network(&mut self) {
+        if let Some(network) = self.network.take() {
+            network.shutdown().await;
+        }
+    }
+
     pub(super) async fn start(
         chain: &mut Chain,
         case: PublicCase,

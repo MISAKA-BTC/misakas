@@ -77,6 +77,8 @@ pub enum KaspadMessagePayloadType {
     // kaspa-pq: chain-candidate summaries (protocol >= 103).
     RequestIbdCandidateSummary,
     IbdCandidateSummary,
+    PalwPrefixHistoryRequest,
+    PalwPrefixHistoryRecord,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -156,6 +158,8 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::EvmDepositClaimNotFound(_) => KaspadMessagePayloadType::EvmDepositClaimNotFound,
             KaspadMessagePayload::RequestIbdCandidateSummary(_) => KaspadMessagePayloadType::RequestIbdCandidateSummary,
             KaspadMessagePayload::IbdCandidateSummary(_) => KaspadMessagePayloadType::IbdCandidateSummary,
+            KaspadMessagePayload::PalwPrefixHistoryRequest(_) => KaspadMessagePayloadType::PalwPrefixHistoryRequest,
+            KaspadMessagePayload::PalwPrefixHistoryRecord(_) => KaspadMessagePayloadType::PalwPrefixHistoryRecord,
         }
     }
 }
@@ -165,6 +169,32 @@ mod tests {
     use super::*;
     use crate::pb::{KaspadMessage, PalwIntervalOpeningMessage, PalwIntervalOpeningRequestMessage, PalwMaterialRequestMessage};
     use prost::Message;
+
+    #[test]
+    fn public_prefix_history_messages_round_trip_without_using_private_material_payloads() {
+        let request = KaspadMessage {
+            payload: Some(KaspadMessagePayload::PalwPrefixHistoryRequest(crate::pb::PalwPrefixHistoryRequestMessage {
+                request: vec![3; 312],
+            })),
+            ..Default::default()
+        };
+        let response = KaspadMessage {
+            payload: Some(KaspadMessagePayload::PalwPrefixHistoryRecord(crate::pb::PalwPrefixHistoryRecordMessage {
+                context_id: Some(crate::pb::Hash { bytes: vec![4; 64] }),
+                record: vec![5; 90_224],
+            })),
+            ..Default::default()
+        };
+        for (message, expected) in [
+            (request, KaspadMessagePayloadType::PalwPrefixHistoryRequest),
+            (response, KaspadMessagePayloadType::PalwPrefixHistoryRecord),
+        ] {
+            let decoded = KaspadMessage::decode(message.encode_to_vec().as_slice()).unwrap();
+            assert_eq!(decoded, message);
+            assert_eq!(KaspadMessagePayloadType::from(decoded.payload.as_ref().unwrap()), expected);
+            assert_ne!(expected, KaspadMessagePayloadType::PalwTraceMaterialBroadcast);
+        }
+    }
 
     /// **The interval lane's two messages survive the wire and route to their own types**
     /// (ADR-0077 Decision 8). A oneof number that decodes into the wrong arm, or a payload type

@@ -3609,10 +3609,20 @@ impl VirtualStateProcessor {
                     let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     seed.check(court.max_close_bytes())?;
                     let owner = state.bond(&seed.reserver).ok_or("staged owner has no registered bond")?;
-                    let reservation = state
-                        .legacy_dispute_reservation_v1(&seed.claim, &seed.reserver)
-                        .ok_or("staged owner has no live reservation")?;
-                    if reservation.reserved_daa != seed.reserved_daa
+                    let bundle = match state.staged_owned_row_v1(seed.claim, seed.reserver) {
+                        Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(bundle)) => Some(bundle),
+                        _ => None,
+                    };
+                    let authorized = match bundle {
+                        Some(bundle) => bundle.reserved_daa == seed.reserved_daa
+                            && bundle.opened.len() < bundle.plan.stages.len()
+                            && bundle.opened.len() == bundle.active.map_or(0, |n| n as usize + 1)
+                            && point.daa_score >= bundle.plan.terms.accepted_daa
+                            && point.daa_score < bundle.plan.stages[bundle.opened.len()].terms.open_until_daa,
+                        None => state.legacy_dispute_reservation_v1(&seed.claim, &seed.reserver)
+                            .is_some_and(|reservation| reservation.reserved_daa == seed.reserved_daa),
+                    };
+                    if !authorized
                         || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
                     {
                         return Err("staged move changes live reservation identity or owner is inactive".into());
@@ -3635,12 +3645,24 @@ impl VirtualStateProcessor {
                     let _court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     leaf.check()?;
                     let owner = state.bond(&leaf.reserver).ok_or("staged owner has no registered bond")?;
-                    let reservation = state
-                        .legacy_dispute_reservation_v1(&leaf.claim, &leaf.reserver)
-                        .ok_or("staged owner has no live reservation")?;
-                    if reservation.reserved_daa != leaf.reserved_daa
-                        || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
-                    {
+                    let paid = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(
+                        &state,
+                        (leaf.claim, leaf.reserver),
+                    )?;
+                    let authorized = match paid {
+                        Some(paid) => {
+                            paid.reserved_daa == leaf.reserved_daa
+                                && paid.seed_id == leaf.seed_id
+                                && point.daa_score >= paid.terms.accepted_daa
+                                && point.daa_score < paid.terms.stream_until_daa
+                                && point.daa_score < paid.terms.material_until_daa
+                        }
+                        // A seed earlier in the same block is checked by the ordered fold.
+                        None => state
+                            .legacy_dispute_reservation_v1(&leaf.claim, &leaf.reserver)
+                            .is_some_and(|r| r.reserved_daa == leaf.reserved_daa),
+                    };
+                    if !authorized || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
                         return Err("staged move changes live reservation identity or owner is inactive".into());
                     }
                     if !Self::verify_mldsa87_with_context_bool(
@@ -3661,12 +3683,35 @@ impl VirtualStateProcessor {
                     let _court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
                     movement.check()?;
                     let owner = state.bond(&movement.reserver).ok_or("staged owner has no registered bond")?;
-                    let reservation = state
-                        .legacy_dispute_reservation_v1(&movement.claim, &movement.reserver)
-                        .ok_or("staged owner has no live reservation")?;
-                    if reservation.reserved_daa != movement.reserved_daa
-                        || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
-                    {
+                    let paid = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(
+                        &state,
+                        (movement.claim, movement.reserver),
+                    )?;
+                    let authorized = match paid {
+                        Some(paid) => {
+                            let control_terms = match (&movement.action, state.staged_owned_row_v1(movement.claim, movement.reserver)) {
+                                (stage::PalwConstraintStreamActionV1::ActivateStage { .. }
+                                    | stage::PalwConstraintStreamActionV1::InventoryPart { .. }
+                                    | stage::PalwConstraintStreamActionV1::InventoryFinish,
+                                    Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(bundle))) => bundle.plan.terms,
+                                _ => paid.terms,
+                            };
+                            let until = if matches!(movement.action, stage::PalwConstraintStreamActionV1::PrefixPublicCollect { .. }) {
+                                paid.terms.collect_until_daa
+                            } else {
+                                control_terms.stream_until_daa
+                            };
+                            paid.reserved_daa == movement.reserved_daa
+                                && paid.seed_id == movement.seed_id
+                                && point.daa_score >= paid.terms.accepted_daa
+                                && point.daa_score < until
+                                && point.daa_score < paid.terms.material_until_daa
+                        }
+                        None => state
+                            .legacy_dispute_reservation_v1(&movement.claim, &movement.reserver)
+                            .is_some_and(|r| r.reserved_daa == movement.reserved_daa),
+                    };
+                    if !authorized || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
                         return Err("staged move changes live reservation identity or owner is inactive".into());
                     }
                     // Only a typed public-prefix Answer has distinct signature authority.

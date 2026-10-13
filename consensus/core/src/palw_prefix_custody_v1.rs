@@ -37,6 +37,8 @@ mod tests {
             PalwPrefixCustodyContractV1::new(Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3), &terms);
         custody.expected_panel = (1..=5).map(bond).collect();
         assert!(!custody.qualified());
+        assert!(custody.current_signed_v1().public_qualified_v1());
+        assert!(custody.current_signed_v1().expected_panel.is_empty());
         let before = custody.clone();
         let mut invalid = receipt(claim, 1);
         invalid.signed_daa = 99;
@@ -52,6 +54,10 @@ mod tests {
         for n in 1..=5 {
             assert!(custody.qualify(claim, &receipt(claim, n), 101));
             assert_eq!(custody.qualified(), n == 5);
+            let signed = custody.current_signed_v1();
+            assert!(signed.qualified());
+            assert_eq!(signed.expected_panel, (1..=n).map(bond).collect());
+            signed.check(&custody.expected_panel).unwrap();
         }
         let original = custody.clone();
         assert!(!custody.qualify(claim, &receipt(claim, 1), 102));
@@ -129,6 +135,19 @@ impl PalwPrefixCustodyContractV1 {
     }
     pub fn qualified(&self) -> bool {
         !self.expected_panel.is_empty() && self.expected_panel.iter().all(|seat| self.credited.contains_key(seat))
+    }
+    /// The producer's accepted signature owes its original material even if no
+    /// Panel member has yet opted in with Valid. This never qualifies unsigned seats.
+    pub fn public_qualified_v1(&self) -> bool {
+        self.expected_panel.iter().all(|seat| self.credited.contains_key(seat))
+    }
+    /// Freeze only actual current Valid signers for an independent owner's source court.
+    /// Unsigned/abstaining seats cannot veto producer acquisition or acquire liability.
+    pub fn current_signed_v1(&self) -> Self {
+        let mut result = self.clone();
+        result.expected_panel.retain(|seat| result.credited.contains_key(seat));
+        result.credited.retain(|seat, _| result.expected_panel.contains(seat));
+        result
     }
     pub fn check(&self, held_panel: &BTreeSet<PalwBondKeyV2>) -> Result<(), String> {
         if !self.expected_panel.is_subset(held_panel)

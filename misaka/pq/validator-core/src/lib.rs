@@ -321,6 +321,79 @@ pub fn build_fp_commitment_tx_with(
     funding: &UtxoEntry,
     fee: u64,
 ) -> Result<Transaction, String> {
+    build_fp_commitment_tx_with_qualified(
+        signer,
+        network_domain,
+        prompt_ids_form,
+        commitment,
+        prompt_token_ids,
+        price,
+        funding_outpoint,
+        funding,
+        fee,
+        None,
+    )
+}
+
+/// Prefix-aware builder qualified against the caller's current public chain rules and DAA.
+/// Original job bytes and their claim signature are preserved; the V4 view is shape-only.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fp_commitment_tx_with_under_params_v1(
+    signer: &dyn MessageSigner,
+    params: &kaspa_consensus_core::config::params::Params,
+    current_daa: u64,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+) -> Result<Transaction, String> {
+    if commitment.job.is_prefix_state() {
+        params.validate_palw_fp_prefix_state_v1().map_err(|e| format!("free-prompt prefix rules are invalid: {e}"))?;
+        params.validate_palw_fp_prefix_inherit_v1().map_err(|e| format!("free-prompt prefix rules are invalid: {e}"))?;
+        let words = borsh::to_vec(&(PALW_FP_V3_VERSION, commitment.job.version)).map_err(|e| e.to_string())?;
+        if let Some(why) = kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_refusal_at_v1(
+            &words,
+            params.palw_fp_prefix_state_active_at(current_daa),
+            params.palw_fp_decode_rules_active_at(current_daa),
+            params.palw_fp_prefix_inherit_active_at(current_daa),
+        ) {
+            return Err(format!("free-prompt prefix is not active at DAA {current_daa}: {why:?}"));
+        }
+        kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&commitment.job)
+            .map_err(|e| format!("free-prompt prefix shape is not admissible: {e}"))?;
+    }
+    let prefix_privacy = commitment.job.is_prefix_state().then(|| params.palw_panel_da_admissible());
+    build_fp_commitment_tx_with_qualified(
+        signer,
+        network_domain,
+        prompt_ids_form,
+        commitment,
+        prompt_token_ids,
+        price,
+        funding_outpoint,
+        funding,
+        fee,
+        prefix_privacy,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_fp_commitment_tx_with_qualified(
+    signer: &dyn MessageSigner,
+    network_domain: Hash64,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    commitment: PalwFreePromptCommitmentV3,
+    prompt_token_ids: Vec<u32>,
+    price: FpCommitmentPriceV1<'_>,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    fee: u64,
+    prefix_privacy: Option<bool>,
+) -> Result<Transaction, String> {
     // Sign the identity first so the payload carries a signature over exactly the bytes the
     // stateless check will re-derive.
     let signature = signer
@@ -351,6 +424,15 @@ pub fn build_fp_commitment_tx_with(
             None,
             prompt_ids_form,
             kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Dormant,
+        )
+    } else if let Some(panel_da_armed) = prefix_privacy {
+        kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_stand_in_v1(&payload).validate_stateless_under_ruleset_v4(
+            network_domain,
+            panel_da_armed,
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            None,
+            prompt_ids_form,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active,
         )
     } else {
         payload.validate_stateless_under_ruleset_v4(
@@ -1044,6 +1126,35 @@ impl ValidatorKey {
     ) -> Result<Transaction, String> {
         build_fp_commitment_tx_with(
             self,
+            network_domain,
+            prompt_ids_form,
+            commitment,
+            prompt_token_ids,
+            price,
+            funding_outpoint,
+            funding,
+            fee,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_commitment_tx_under_params_v1(
+        &self,
+        params: &kaspa_consensus_core::config::params::Params,
+        current_daa: u64,
+        network_domain: Hash64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        commitment: PalwFreePromptCommitmentV3,
+        prompt_token_ids: Vec<u32>,
+        price: FpCommitmentPriceV1<'_>,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        build_fp_commitment_tx_with_under_params_v1(
+            self,
+            params,
+            current_daa,
             network_domain,
             prompt_ids_form,
             commitment,
@@ -2583,6 +2694,231 @@ mod tests {
                 "a commitment signature must not replay in a foreign context"
             );
         }
+    }
+
+    fn fp_prefix_builder_fixture(network: Hash64, key: &ValidatorKey, version: u16) -> (Params, PalwFreePromptCommitmentV3, Vec<u32>) {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpJobTailV1, PalwFpPrefixStateV1};
+        let mut params = DEVNET_PARAMS.clone();
+        params.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(fp_bundle());
+        params.palw_fp_derived_work = Some(ForkActivation::new(0));
+        params.palw_fp_decode_rules = Some(ForkActivation::new(100));
+        params.palw_fp_prefix_state = Some(ForkActivation::new(100));
+        params.palw_fp_prefix_inherit = Some(ForkActivation::new(120));
+        params.palw_panel_da = None;
+        let (mut commitment, ids) = fp_commitment_fixture(network, key);
+        commitment.job.version = version;
+        commitment.job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        commitment.job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 {
+            class_id: commitment.job.class_id,
+            prefix_tokens: 1,
+            state_root: Hash64::from_u64_word(0x51),
+        }));
+        (params, commitment, ids)
+    }
+
+    #[test]
+    fn prefix_fp_builder_qualifies_height_and_signs_the_literal_job_not_its_shape_view() {
+        use kaspa_consensus_core::palw_fp_prefix_v1::*;
+        let key = compute_key();
+        let network = Hash64::from_u64_word(0xC015);
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let funding = fentry(u64::MAX / 2, 0, false);
+        for version in [PALW_FP_PREFIX_VERSION, PALW_FP_PREFIX_INHERIT_VERSION] {
+            let (params, commitment, ids) = fp_prefix_builder_fixture(network, &key, version);
+            let tx = key
+                .build_fp_commitment_tx_under_params_v1(
+                    &params,
+                    120,
+                    network,
+                    form,
+                    commitment.clone(),
+                    ids.clone(),
+                    FpCommitmentPriceV1::Chain { quanta: 16, pwu: 80 },
+                    fop(9, 0),
+                    &funding,
+                    SF_FEE,
+                )
+                .unwrap();
+            let payload: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).unwrap();
+            assert_eq!(payload.commitment, commitment);
+            assert_eq!(payload.prompt_token_ids, ids);
+            payload
+                .validate_signature_v3(|pk, message, signature, context| {
+                    verify_mldsa87_with_context(pk, message, signature, context).unwrap_or(false)
+                })
+                .unwrap();
+            let view = palw_fp_prefix_stand_in_v1(&payload);
+            assert_ne!(view.claim_id(), payload.claim_id());
+            assert!(!key.verify_with_context(
+                view.claim_id().as_byte_slice(),
+                &payload.signature,
+                PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT
+            ));
+            validate_palw_fp_prefix_commitment_tx_v1(
+                &tx.payload,
+                false,
+                form,
+                kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active,
+            )
+            .unwrap();
+            assert!(
+                key.build_fp_commitment_tx(
+                    network,
+                    form,
+                    commitment,
+                    ids,
+                    FpCommitmentPriceV1::Chain { quanta: 16, pwu: 80 },
+                    fop(9, 0),
+                    &funding,
+                    SF_FEE
+                )
+                .is_err(),
+                "the height-free legacy builder retains its old refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_fp_builder_refuses_wrong_domain_input_shape_and_unarmed_privacy() {
+        use kaspa_consensus_core::palw_fp_prefix_v1::PALW_FP_PREFIX_VERSION;
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PalwFpJobTailV1};
+        let key = compute_key();
+        let network = Hash64::from_u64_word(0xC015);
+        let (params, commitment, ids) = fp_prefix_builder_fixture(network, &key, PALW_FP_PREFIX_VERSION);
+        let build = |job, prompt| {
+            key.build_fp_commitment_tx_under_params_v1(
+                &params,
+                120,
+                network,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                job,
+                prompt,
+                FpCommitmentPriceV1::Chain { quanta: 16, pwu: 80 },
+                fop(9, 0),
+                &fentry(u64::MAX / 2, 0, false),
+                SF_FEE,
+            )
+        };
+        let mut wrong = commitment.clone();
+        wrong.job.network_domain = Hash64::default();
+        assert!(build(wrong, ids.clone()).is_err());
+        let mut wrong_ids = ids.clone();
+        wrong_ids[0] ^= 1;
+        assert!(build(commitment.clone(), wrong_ids).is_err());
+        for violation in 0..4 {
+            let mut wrong = commitment.clone();
+            let Some(PalwFpJobTailV1::Prefix(state)) = &mut wrong.job.tail else { unreachable!() };
+            match violation {
+                0 => state.class_id = Hash64::default(),
+                1 => state.state_root = Hash64::default(),
+                2 => state.prefix_tokens = wrong.job.prompt_tokens,
+                _ => wrong.job.decode = None,
+            }
+            assert!(build(wrong, ids.clone()).is_err());
+        }
+        let mut private = commitment;
+        private.job.privacy_mode = PALW_FP_PRIVACY_PANEL_DA;
+        assert!(build(private, ids).is_err(), "a prefix cannot enable a privacy rule absent from Params");
+    }
+
+    #[test]
+    fn prefix_fp_builder_checks_public_fences_before_asking_the_signer() {
+        use kaspa_consensus_core::palw_fp_prefix_v1::{PALW_FP_PREFIX_INHERIT_VERSION, PALW_FP_PREFIX_VERSION};
+        struct NoSigning(Vec<u8>);
+        impl MessageSigner for NoSigning {
+            fn public_key(&self) -> &[u8] {
+                &self.0
+            }
+            fn sign_message(&self, _: &[u8], _: &[u8]) -> Result<Vec<u8>, String> {
+                panic!("inactive prefix must not request a signature")
+            }
+        }
+        let key = compute_key();
+        let network = Hash64::from_u64_word(0xC015);
+        let signer = NoSigning(key.public_key().to_vec());
+        for version in [PALW_FP_PREFIX_VERSION, PALW_FP_PREFIX_INHERIT_VERSION] {
+            let (params, commitment, ids) = fp_prefix_builder_fixture(network, &key, version);
+            for violation in 0..4 {
+                let mut rules = params.clone();
+                let daa = match violation {
+                    0 => 99,
+                    1 => {
+                        rules.palw_fp_decode_rules = None;
+                        120
+                    }
+                    2 => {
+                        rules.palw_fp_prefix_state = None;
+                        120
+                    }
+                    _ => {
+                        rules.palw_fp_prefix_inherit = None;
+                        119
+                    }
+                };
+                if violation == 3 && version == PALW_FP_PREFIX_VERSION {
+                    continue;
+                }
+                assert!(
+                    build_fp_commitment_tx_with_under_params_v1(
+                        &signer,
+                        &rules,
+                        daa,
+                        network,
+                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                        commitment.clone(),
+                        ids.clone(),
+                        FpCommitmentPriceV1::Chain { quanta: 16, pwu: 80 },
+                        fop(9, 0),
+                        &fentry(u64::MAX / 2, 0, false),
+                        SF_FEE
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn params_qualified_builder_preserves_legacy_carrier_bytes() {
+        let key = compute_key();
+        let signer = LengthOnlySigner { public_key: key.public_key().to_vec() };
+        let network = Hash64::from_u64_word(0xC015);
+        let (commitment, ids) = fp_commitment_fixture(network, &key);
+        let build = |qualified| {
+            let price = FpCommitmentPriceV1::Chain { quanta: 16, pwu: 80 };
+            let funding = fentry(u64::MAX / 2, 0, false);
+            if qualified {
+                build_fp_commitment_tx_with_under_params_v1(
+                    &signer,
+                    &DEVNET_PARAMS,
+                    0,
+                    network,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    commitment.clone(),
+                    ids.clone(),
+                    price,
+                    fop(9, 0),
+                    &funding,
+                    SF_FEE,
+                )
+            } else {
+                build_fp_commitment_tx_with(
+                    &signer,
+                    network,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    commitment.clone(),
+                    ids.clone(),
+                    price,
+                    fop(9, 0),
+                    &funding,
+                    SF_FEE,
+                )
+            }
+            .unwrap()
+        };
+        assert_eq!(borsh::to_vec(&build(true)).unwrap(), borsh::to_vec(&build(false)).unwrap());
     }
 
     /// The builder refuses, before spending a fee, exactly what a peer would refuse after: a

@@ -147,6 +147,7 @@ impl PalwChainStateV2 {
             staged_holds: BTreeSet::new(),
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
+            staged_prefix_responders: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -3554,6 +3555,12 @@ impl PalwChainStateV2 {
         self.assert_terminal_evidence_v1()?;
         for (key, row) in &self.staged_courts {
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        let responders: BTreeSet<_> = self.staged_courts.values().flat_map(palw_staged_court_fold_v1::response_index_rows).collect();
+        if responders != self.staged_prefix_responders {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "public prefix responder index differs from literal live obligations".into(),
+            ));
         }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;

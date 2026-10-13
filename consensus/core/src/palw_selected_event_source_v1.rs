@@ -1,0 +1,469 @@
+//! Prospective selected tiled-event acquisition. Coordinates are full-width and each
+//! answer authenticates the original logits root, never a reinterpreted flat scheme.
+use crate::{
+    Hash64,
+    palw_state_v2::PalwBondKeyV2,
+    palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1},
+    palw_step_refute::{PalwTraceEventDisclosureV1, tiled_row_authenticate_v1, tiled_tile_authenticate_v1},
+};
+use borsh::{BorshDeserialize, BorshSerialize};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub const PALW_SELECTED_EVENT_MAX_REQUESTS_V1: usize = 2;
+pub const PALW_SELECTED_EVENT_MAX_BYTES_V1: usize = 65_536;
+pub const PALW_SELECTED_EVENT_CARRIER_MAX_V1: usize = 90_000;
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventBindingV1 {
+    pub binding: Box<PalwStepBindingV2>,
+    pub profile: crate::palw_constraint_stream_carriage_v1::PalwRetainedCourtProfileV1,
+}
+impl PalwSelectedEventBindingV1 {
+    pub fn from_binding_v1(binding: &PalwStepBindingV2) -> Result<Self, String> {
+        crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| e.to_string())?;
+        let class_id = binding.shape_profile.shape_profile_id();
+        let original_bytes = borsh::object_length(&binding.shape_profile).map_err(|e| e.to_string())? as u64;
+        let mut small = binding.clone();
+        small.shape_profile = crate::palw_constraint_stream_carriage_v1::palw_retained_profile_skeleton_v1(&binding.shape_profile);
+        Ok(Self {
+            binding: Box::new(small),
+            profile: crate::palw_constraint_stream_carriage_v1::PalwRetainedCourtProfileV1 { class_id, original_bytes },
+        })
+    }
+    pub fn resolve_v1(
+        &self,
+        actual_class: Hash64,
+        profile: &crate::palw_step::PalwShapeProfileV3,
+    ) -> Result<PalwStepBindingV2, String> {
+        if self.profile.class_id != actual_class
+            || self.binding.job_context.shape_profile_id != actual_class
+            || profile.shape_profile_id() != actual_class
+            || borsh::object_length(profile).map_err(|e| e.to_string())? as u64 != self.profile.original_bytes
+            || self.binding.shape_profile != crate::palw_constraint_stream_carriage_v1::palw_retained_profile_skeleton_v1(profile)
+        {
+            return Err("selected source changes original retained class/profile".into());
+        }
+        let mut binding = *self.binding.clone();
+        binding.shape_profile = profile.clone();
+        crate::palw_step_leg::verify_binding_v1(&binding).map_err(|e| e.to_string())?;
+        Ok(binding)
+    }
+}
+
+/// The caller sums this quote into the immutable required-family bundle before admission.
+pub fn selected_event_resource_plan_v1(
+    vocab: u32,
+    decode: u32,
+    profile_bytes: u64,
+    maximum_custodians: u32,
+    config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1,
+) -> Result<crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1, String> {
+    if vocab == 0
+        || u64::from(vocab) >= crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_LEAVES_V1
+        || decode == 0
+        || decode as usize > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
+        || maximum_custodians == 0
+    {
+        return Err("selected source quote has no bounded original vocabulary/decode/custody".into());
+    }
+    let n = |x: u128| u64::try_from(x).map_err(|_| "selected source resource quote overflow".to_string());
+    let moves = 2u64.checked_mul(u64::from(maximum_custodians) + 2).ok_or("selected source move quote overflow")?;
+    let bytes = n(u128::from(moves) * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128)?;
+    let work = n(u128::from(moves) * (u128::from(decode) * u128::from(vocab) * 16 + 64 * 256))?;
+    let row =
+        n(2 * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128 + u128::from(profile_bytes) + u128::from(maximum_custodians) * 768 + 8192)?;
+    Ok(crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1 {
+        prefix_tokens: 0,
+        vocab,
+        maximum_stream_bytes: bytes,
+        maximum_stream_leaves: 2,
+        maximum_eog_bytes: 0,
+        maximum_moves: moves,
+        maximum_parser_steps: work,
+        maximum_blake_blocks: n(u128::from(work).div_ceil(64))?,
+        inclusion_daa: n(u128::from(moves) * u128::from(config.prices.inclusion_margin_daa))?,
+        rent_sompi: n(u128::from(bytes) * u128::from(config.prices.rent_per_stream_byte)
+            + u128::from(work) * u128::from(config.prices.rent_per_parser_step)
+            + u128::from(row) * u128::from(config.prices.rent_per_row_byte))?,
+        deposit_sompi: n(u128::from(moves) * u128::from(config.prices.deposit_per_move))?,
+        row_bytes: row,
+        resident_ram_bytes: n(u128::from(row) * 4 + 65_536)?,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventCoordinateV1 {
+    pub row: u32,
+    pub tile: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct PalwSelectedTiledEventV1 {
+    pub generated_token_ids: Vec<u32>,
+    pub row_root: Hash64,
+    pub row_opening: PalwStepOpeningV1,
+    pub tile_lanes: Vec<i32>,
+    pub tile_opening: PalwStepOpeningV1,
+}
+impl BorshDeserialize for PalwSelectedTiledEventV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        fn bounded<T: BorshDeserialize, R: std::io::Read>(reader: &mut R, max: usize) -> std::io::Result<Vec<T>> {
+            let length = u32::deserialize_reader(reader)? as usize;
+            if length > max {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "selected event vector exceeds bounded source"));
+            }
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(length)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "selected event allocation refused"))?;
+            for _ in 0..length {
+                values.push(T::deserialize_reader(reader)?);
+            }
+            Ok(values)
+        }
+        fn opening<R: std::io::Read>(reader: &mut R) -> std::io::Result<PalwStepOpeningV1> {
+            Ok(PalwStepOpeningV1 {
+                leaf_index: u64::deserialize_reader(reader)?,
+                leaf_hash: Hash64::deserialize_reader(reader)?,
+                siblings: bounded(reader, 64)?,
+            })
+        }
+        Ok(Self {
+            generated_token_ids: bounded(reader, crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS)?,
+            row_root: Hash64::deserialize_reader(reader)?,
+            row_opening: opening(reader)?,
+            tile_lanes: bounded(reader, crate::palw_step_refute::PALW_LOGITS_TILE_LANES)?,
+            tile_opening: opening(reader)?,
+        })
+    }
+}
+impl PalwSelectedTiledEventV1 {
+    /// Producer/custodian-side helper only. The verifier consumes the bounded authenticated
+    /// result and never receives the capture used to produce these original openings.
+    pub fn of_public_rows_v1(
+        binding: &PalwStepBindingV2,
+        rows: &[Vec<i32>],
+        generated: &[u32],
+        coordinate: PalwSelectedEventCoordinateV1,
+        maximum_leaves: u64,
+    ) -> Result<Self, String> {
+        let vocab = binding.shape_profile.vocab_size as usize;
+        if binding.shape_profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+            || rows.len() != binding.job_context.exact_decode_tokens as usize
+            || generated.len() != rows.len()
+            || rows.iter().any(|row| row.len() != vocab)
+            || coordinate.row as usize >= rows.len()
+        {
+            return Err("selected source capture is not the original tiled shape".into());
+        }
+        let context = binding.job_context.context_hash();
+        let row_leaf = |r: u64| {
+            crate::palw_step_refute::tiled_logits_row_root_v1(&context, r as u32, &rows[r as usize])
+                .expect("nonempty checked vocabulary")
+        };
+        let row_opening = crate::palw_step_leg::step_opening_from_leaf_source_capped_v1(
+            rows.len() as u64,
+            u64::from(coordinate.row),
+            maximum_leaves,
+            row_leaf,
+        )
+        .map_err(|e| e.to_string())?;
+        let row_root = row_opening.leaf_hash;
+        let row = &rows[coordinate.row as usize];
+        let tiles = vocab.div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES) as u64;
+        let tile_leaf = |t: u64| {
+            let start = t as usize * crate::palw_step_refute::PALW_LOGITS_TILE_LANES;
+            crate::palw_step_refute::tiled_logits_tile_leaf_v1(
+                &context,
+                coordinate.row,
+                t as u32,
+                &row[start..(start + crate::palw_step_refute::PALW_LOGITS_TILE_LANES).min(row.len())],
+            )
+        };
+        let tile_opening = crate::palw_step_leg::step_opening_from_leaf_source_capped_v1(
+            tiles,
+            u64::from(coordinate.tile),
+            maximum_leaves,
+            tile_leaf,
+        )
+        .map_err(|e| e.to_string())?;
+        let start = coordinate.tile as usize * crate::palw_step_refute::PALW_LOGITS_TILE_LANES;
+        let lanes = row
+            .get(start..(start + crate::palw_step_refute::PALW_LOGITS_TILE_LANES).min(row.len()))
+            .ok_or("selected source tile is outside original vocabulary")?;
+        let selected =
+            Self { generated_token_ids: generated.to_vec(), row_root, row_opening, tile_lanes: lanes.to_vec(), tile_opening };
+        selected.authenticate_v1(binding, coordinate, maximum_leaves)?;
+        Ok(selected)
+    }
+    pub fn check_shape_v1(&self) -> Result<(), String> {
+        if self.generated_token_ids.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
+            || self.tile_lanes.len() > crate::palw_step_refute::PALW_LOGITS_TILE_LANES
+            || self.row_opening.siblings.len() > 64
+            || self.tile_opening.siblings.len() > 64
+            || borsh::object_length(self).map_err(|e| e.to_string())? > PALW_SELECTED_EVENT_MAX_BYTES_V1
+        {
+            return Err("selected public event exceeds its bounded source shape".into());
+        }
+        Ok(())
+    }
+
+    pub fn authenticate_v1(
+        &self,
+        binding: &PalwStepBindingV2,
+        coordinate: PalwSelectedEventCoordinateV1,
+        maximum_leaves: u64,
+    ) -> Result<(), String> {
+        self.check_shape_v1()?;
+        crate::palw_step_leg::verify_binding_v1(binding).map_err(|e| e.to_string())?;
+        let (context, vocab, tiles) = tiled_row_authenticate_v1(
+            binding,
+            &self.generated_token_ids,
+            coordinate.row,
+            &self.row_root,
+            &self.row_opening,
+            maximum_leaves,
+        )
+        .map_err(|e| e.to_string())?;
+        tiled_tile_authenticate_v1(
+            &context,
+            coordinate.row,
+            vocab,
+            tiles,
+            &self.row_root,
+            u64::from(coordinate.tile),
+            &self.tile_lanes,
+            &self.tile_opening,
+            maximum_leaves,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn from_disclosure_v1(event: &PalwTraceEventDisclosureV1) -> Result<Self, String> {
+        let PalwTraceEventDisclosureV1::Tiled { generated_token_ids, row_root, row_opening, tile_lanes, tile_opening, .. } = event
+        else {
+            return Err("selected tiled source cannot convert a flat or out-of-range disclosure".into());
+        };
+        let selected = Self {
+            generated_token_ids: generated_token_ids.clone(),
+            row_root: *row_root,
+            row_opening: row_opening.clone(),
+            tile_lanes: tile_lanes.clone(),
+            tile_opening: tile_opening.clone(),
+        };
+        selected.check_shape_v1()?;
+        Ok(selected)
+    }
+
+    pub fn into_disclosure_v1(self, binding: PalwStepBindingV2) -> PalwTraceEventDisclosureV1 {
+        PalwTraceEventDisclosureV1::Tiled {
+            binding: Box::new(binding),
+            generated_token_ids: self.generated_token_ids,
+            row_root: self.row_root,
+            row_opening: self.row_opening,
+            tile_lanes: self.tile_lanes,
+            tile_opening: self.tile_opening,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventDemandV1 {
+    pub coordinate: PalwSelectedEventCoordinateV1,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventAnswerV1 {
+    pub answerer: PalwBondKeyV2,
+    pub demand_id: Hash64,
+    pub coordinate: PalwSelectedEventCoordinateV1,
+    pub binding: PalwSelectedEventBindingV1,
+    pub event: PalwSelectedTiledEventV1,
+}
+impl PalwSelectedEventAnswerV1 {
+    pub fn check_v1(&self) -> Result<(), String> {
+        self.event.check_shape_v1()?;
+        if borsh::object_length(self).map_err(|e| e.to_string())? > PALW_SELECTED_EVENT_CARRIER_MAX_V1 - 5632 {
+            return Err("selected retained-profile source exceeds paid signed carrier".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventRequestV1 {
+    pub coordinate: PalwSelectedEventCoordinateV1,
+    pub demand_id: Hash64,
+    pub answered: BTreeSet<PalwBondKeyV2>,
+    pub event: Option<PalwSelectedTiledEventV1>,
+    pub collected: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedEventSessionV1 {
+    pub claim: Hash64,
+    pub owner: PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub bundle_id: Hash64,
+    pub respond_until_daa: u64,
+    pub collect_until_daa: u64,
+    pub custodians: BTreeSet<PalwBondKeyV2>,
+    pub requests: BTreeMap<PalwSelectedEventCoordinateV1, PalwSelectedEventRequestV1>,
+}
+impl PalwSelectedEventSessionV1 {
+    pub fn new_v1(
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        bundle_id: Hash64,
+        respond_until_daa: u64,
+        collect_until_daa: u64,
+        custodians: BTreeSet<PalwBondKeyV2>,
+    ) -> Result<Self, String> {
+        if custodians.is_empty()
+            || custodians.contains(&owner)
+            || reserved_daa >= respond_until_daa
+            || respond_until_daa > collect_until_daa
+        {
+            return Err("selected source needs literal outside owner, signed custody and original clock".into());
+        }
+        Ok(Self { claim, owner, reserved_daa, bundle_id, respond_until_daa, collect_until_daa, custodians, requests: BTreeMap::new() })
+    }
+    pub fn demand_v1(&mut self, now: u64, binding: &PalwStepBindingV2, demand: &PalwSelectedEventDemandV1) -> Result<(), String> {
+        let c = demand.coordinate;
+        let tiles = u64::from(binding.shape_profile.vocab_size).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+        if now < self.reserved_daa
+            || now >= self.respond_until_daa
+            || c.row >= binding.job_context.exact_decode_tokens
+            || u64::from(c.tile) >= tiles
+            || binding.shape_profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+            || self.requests.contains_key(&c)
+            || self.requests.len() >= PALW_SELECTED_EVENT_MAX_REQUESTS_V1
+        {
+            return Err("selected demand changes original scheme, bounded coordinates or paid acquisition clock".into());
+        }
+        let bytes = borsh::to_vec(&(
+            self.claim,
+            self.owner,
+            self.reserved_daa,
+            self.bundle_id,
+            c,
+            self.respond_until_daa,
+            self.collect_until_daa,
+            &self.custodians,
+        ))
+        .map_err(|e| e.to_string())?;
+        let id = Hash64::from_bytes(
+            blake2b_simd::Params::new()
+                .hash_length(64)
+                .key(b"misaka-palw/selected-event-demand/v1")
+                .hash(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("64"),
+        );
+        self.requests.insert(
+            c,
+            PalwSelectedEventRequestV1 { coordinate: c, demand_id: id, answered: BTreeSet::new(), event: None, collected: false },
+        );
+        Ok(())
+    }
+    pub fn answer_v1(
+        &mut self,
+        now: u64,
+        binding: &PalwStepBindingV2,
+        answer: &PalwSelectedEventAnswerV1,
+        maximum_leaves: u64,
+    ) -> Result<(), String> {
+        if now < self.reserved_daa || now >= self.respond_until_daa || !self.custodians.contains(&answer.answerer) {
+            return Err("selected answer has no literal custody or original response clock".into());
+        }
+        let request = self.requests.get(&answer.coordinate).ok_or("selected answer has no accepted exact-coordinate demand")?;
+        if request.demand_id != answer.demand_id || request.collected || request.answered.contains(&answer.answerer) {
+            return Err("selected answer substitutes demand or repeats a paid response".into());
+        }
+        answer.check_v1()?;
+        if answer.binding.resolve_v1(binding.shape_profile.shape_profile_id(), &binding.shape_profile)? != *binding {
+            return Err("selected answer substitutes original binding".into());
+        }
+        answer.event.authenticate_v1(binding, answer.coordinate, maximum_leaves)?;
+        if request.event.as_ref().is_some_and(|old| old != &answer.event) {
+            return Err("selected answer conflicts with the authenticated original source".into());
+        }
+        let request = self.requests.get_mut(&answer.coordinate).expect("checked");
+        request.answered.insert(answer.answerer);
+        if request.event.is_none() {
+            request.event = Some(answer.event.clone());
+        }
+        Ok(())
+    }
+    /// Returned identities are obligations to collect, not a local assertion of guilt.
+    /// The caller must apply the native sanction/collection fold atomically.
+    pub fn collect_v1(
+        &mut self,
+        now: u64,
+        coordinate: PalwSelectedEventCoordinateV1,
+        demand_id: Hash64,
+    ) -> Result<BTreeSet<PalwBondKeyV2>, String> {
+        if now < self.respond_until_daa || now >= self.collect_until_daa {
+            return Err("selected collection is outside original paid clock".into());
+        }
+        let request = self.requests.get_mut(&coordinate).ok_or("selected collection has no accepted demand")?;
+        if request.collected || request.demand_id != demand_id {
+            return Err("selected collection changes or repeats demand".into());
+        }
+        request.collected = true;
+        Ok(self.custodians.difference(&request.answered).copied().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn selected_source_decoder_rejects_unpaid_vector_before_allocation() {
+        assert!(borsh::from_slice::<PalwSelectedTiledEventV1>(&u32::MAX.to_le_bytes()).is_err());
+        let config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+        let small = selected_event_resource_plan_v1(4_194_303, 4096, 1_000_000, 5, config).unwrap();
+        let full = selected_event_resource_plan_v1(4_194_303, 4096, 1_000_000, 65_536, config).unwrap();
+        assert!(full.maximum_moves > small.maximum_moves);
+        assert!(full.row_bytes > small.row_bytes);
+        assert!(selected_event_resource_plan_v1(4_194_304, 4096, 1, 5, config).is_err());
+        assert!(selected_event_resource_plan_v1(3, 4097, 1, 5, config).is_err());
+        assert!(selected_event_resource_plan_v1(3, 1, u64::MAX, 5, config).is_err());
+    }
+    #[test]
+    fn full_width_coordinates_are_literal_and_cannot_alias_legacy_event() {
+        let wide = PalwSelectedEventCoordinateV1 { row: 17, tile: 1023 };
+        let roundtrip: PalwSelectedEventCoordinateV1 = borsh::from_slice(&borsh::to_vec(&wide).unwrap()).unwrap();
+        assert_eq!(wide, roundtrip);
+        assert_ne!(wide, PalwSelectedEventCoordinateV1 { row: 17, tile: 255 });
+    }
+    #[test]
+    fn selected_collection_keeps_original_deadline_and_literal_signed_custody() {
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        let custodians = BTreeSet::from([key(2), key(3)]);
+        let mut session = PalwSelectedEventSessionV1::new_v1(
+            Hash64::from_u64_word(1),
+            key(9),
+            5,
+            Hash64::from_u64_word(8),
+            10,
+            20,
+            custodians.clone(),
+        )
+        .unwrap();
+        let c = PalwSelectedEventCoordinateV1 { row: 1, tile: 1023 };
+        let demand_id = Hash64::from_u64_word(4);
+        session.requests.insert(
+            c,
+            PalwSelectedEventRequestV1 { coordinate: c, demand_id, answered: BTreeSet::from([key(2)]), event: None, collected: false },
+        );
+        assert!(session.collect_v1(9, c, demand_id).is_err());
+        assert!(session.collect_v1(10, c, Hash64::from_u64_word(6)).is_err());
+        assert_eq!(session.collect_v1(10, c, demand_id).unwrap(), BTreeSet::from([key(3)]));
+        assert!(session.collect_v1(11, c, demand_id).is_err());
+        assert!(
+            PalwSelectedEventSessionV1::new_v1(Hash64::from_u64_word(1), key(2), 5, Hash64::from_u64_word(8), 10, 20, custodians)
+                .is_err()
+        );
+    }
+}

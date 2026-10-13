@@ -86,7 +86,7 @@ use uuid::Uuid;
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 106;
+const PROTOCOL_VERSION: u32 = 107;
 
 /// ADR-0115: how often the P2P service ticks the EVM relay ([`FlowContext::evm_relay_tick`]).
 pub const EVM_RELAY_TICK: Duration = Duration::from_secs(15);
@@ -116,6 +116,7 @@ pub(crate) const PROTOCOL_VERSION_PRE_PALW_PULL: u32 = 103;
 pub(crate) const PROTOCOL_VERSION_PALW_INTERVAL: u32 = 105;
 /// Bounded authenticated spill-file PALW snapshot chunks; neither direction is sent below it.
 pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS: u32 = 106;
+pub(crate) const PROTOCOL_VERSION_PALW_PREFIX_HISTORY: u32 = 107;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -683,6 +684,7 @@ pub struct FlowContextInner {
     /// Present on every node (the state is a few KB); active only where the flow feeds it, and the
     /// flow refuses everything on a network with no ConsensusV2 ruleset.
     palw_gossip: crate::palw_gossip::PalwGossipCenter,
+    palw_prefix_history: crate::palw_prefix_history::PalwPrefixHistoryBrokerV1,
 
     /// ADR-0125 §7.3: round blocks by permit — one relayed a permit, and the evidence of two.
     palw_round_relay: crate::palw_round_relay::PalwRoundRelayV1,
@@ -960,6 +962,7 @@ impl FlowContext {
                 node_id: Uuid::new_v4().into(),
                 consensus_manager,
                 palw_gossip: crate::palw_gossip::PalwGossipCenter::default(),
+                palw_prefix_history: crate::palw_prefix_history::PalwPrefixHistoryBrokerV1::default(),
                 palw_round_relay: Default::default(),
                 palw_exec_v2_relay: Default::default(),
                 palw_heartbeat_relay: Default::default(),
@@ -1054,6 +1057,10 @@ impl FlowContext {
 
     pub fn palw_gossip(&self) -> &crate::palw_gossip::PalwGossipCenter {
         &self.palw_gossip
+    }
+
+    pub fn palw_prefix_history(&self) -> &crate::palw_prefix_history::PalwPrefixHistoryBrokerV1 {
+        &self.palw_prefix_history
     }
 
     /// ADR-0125 §7.3: the round lane's relay memory and its equivocation evidence.
@@ -2517,6 +2524,10 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS => (
+                v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS),
+                PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS,
+            ),
             PROTOCOL_VERSION_PALW_INTERVAL => {
                 (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_INTERVAL), PROTOCOL_VERSION_PALW_INTERVAL)
             }

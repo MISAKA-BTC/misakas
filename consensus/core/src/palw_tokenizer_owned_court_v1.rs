@@ -179,6 +179,9 @@ impl PalwOwnedTokenizerCourtV1 {
     pub fn seed_id(&self) -> Hash64 {
         self.seed_id
     }
+    pub fn execution_root_v1(&self) -> Hash64 {
+        self.execution_root
+    }
     pub fn court(&self) -> &PalwTokenizerTableStreamV1 {
         &self.court
     }

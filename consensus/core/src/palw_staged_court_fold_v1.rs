@@ -12,18 +12,124 @@ impl PalwChainStateV2 {
     pub fn staged_claim_contract_v1(&self, claim: &Hash64) -> Option<&PalwStagedClaimContractV1> {
         match self.staged_courts.get(&PalwStagedCourtKeyV1::Claim(*claim)) {
             Some(PalwStagedCourtRowV1::Claim(c)) => Some(c),
+            Some(PalwStagedCourtRowV1::ClaimBundle(c)) => Some(&c.claim),
             _ => None,
         }
     }
     pub fn staged_owned_row_v1(&self, claim: Hash64, owner: PalwBondKeyV2) -> Option<&PalwStagedCourtRowV1> {
         self.staged_courts.get(&PalwStagedCourtKeyV1::Owner(claim, owner))
     }
+    pub fn staged_owned_row_for_seed_v1(&self, claim: Hash64, owner: PalwBondKeyV2, seed: Hash64) -> Option<&PalwStagedCourtRowV1> {
+        match self.staged_owned_row_v1(claim, owner)? {
+            PalwStagedCourtRowV1::OwnerBundle(bundle) => bundle.seed_row_v1(seed),
+            row => row.active_row_v1().filter(|row| row.public_cache_leases_v1().iter().any(|lease| lease.seed_id == seed)),
+        }
+    }
+    /// A quote is not an admission credential: BundleOpen repeats this exact native derivation.
+    pub fn staged_bundle_plan_v1(
+        &self,
+        claim: Hash64,
+        actual_raw_cap: Option<u64>,
+    ) -> Result<Option<crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        use crate::palw_staged_bundle_v1::*;
+        let Some(PalwStagedCourtRowV1::ClaimBundle(contract)) = self.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)) else {
+            return Ok(None);
+        };
+        let target =
+            crate::palw_offence_attribution_v1::palw_offence_target_v1(self, &claim).ok_or("bundle quote has no accepted target")?;
+        let mut families: Vec<_> = contract.plan.stages.iter().map(|s| (s.family, s.terms.plan, s.acquisition)).collect();
+        let tokenizer = families.iter_mut().find(|(family, _, _)| *family == PalwStagedFamilyV1::Tokenizer);
+        let inventory = match (tokenizer, actual_raw_cap) {
+            (Some((_, plan, acquisition)), Some(cap)) => {
+                let semantics = target.registered_semantics.as_ref().ok_or("bundle quote has no immutable tokenizer statement")?;
+                let bound = semantics.tokenizer_key_events.ok_or("bundle quote has no signed key event bound")?;
+                *plan = crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+                    cap,
+                    bound,
+                    contract.config.prices,
+                )?
+                .court_envelope(plan.vocab, contract.config.prices)?;
+                let profile = self.fp_work_profiles.get(&target.class_id).ok_or("bundle quote has no authenticated profile")?;
+                *acquisition = Some(staged_context_resource_plan_v1(
+                    borsh::object_length(profile.as_ref()).map_err(|e| e.to_string())? as u64,
+                    *plan,
+                    contract.config,
+                )?);
+                Some(PalwTokenizerInventoryPlanV1::derive_v1(cap, contract.config)?)
+            }
+            (Some(_), None) => {
+                return Err("tokenizer bundle requires verifier's actual own-file cap, not producer declared length".into());
+            }
+            (None, None) => None,
+            (None, Some(_)) => return Err("bundle substitutes an unrequired raw inventory".into()),
+        };
+        PalwStagedBundlePlanV1::derive_with_acquisitions_v1(contract.plan.terms.accepted_daa, families, inventory, contract.config)
+            .map(Some)
+    }
+    pub fn staged_public_prefix_rows_v1(
+        &self,
+    ) -> impl Iterator<Item = &crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1> {
+        self.staged_courts.values().filter_map(|row| match row {
+            row => match row.active_row_v1() {
+                Some(PalwStagedCourtRowV1::PublicPrefix(row)) => Some(row.as_ref()),
+                _ => None,
+            },
+        })
+    }
+    pub fn staged_public_prefix_duties_after_v1(
+        &self,
+        signer: PalwBondKeyV2,
+        now: u64,
+        after: Option<(u64, Hash64, PalwBondKeyV2)>,
+        limit: usize,
+    ) -> Result<(Vec<&crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1>, Option<(u64, Hash64, PalwBondKeyV2)>), String>
+    {
+        use std::ops::Bound;
+        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
+            return Err("public response page changes accepted clock or has no bounded rows".into());
+        }
+        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
+        let lower = match after {
+            Some((at, claim, owner)) if at >= first_live => Bound::Excluded((signer, at, claim, owner)),
+            _ => Bound::Included((signer, first_live, ZERO_HASH64, PALW_BOND_KEY_V2_MIN)),
+        };
+        let limit = limit.min(64);
+        let mut page = Vec::new();
+        let mut cursor = None;
+        for (_, deadline, claim, owner) in self
+            .staged_prefix_responders
+            .range((lower, Bound::Unbounded))
+            .take_while(|(bond, _, _, _)| *bond == signer)
+            .take(limit + 1)
+        {
+            if page.len() == limit {
+                return Ok((page, cursor));
+            }
+            let Some(PalwStagedCourtRowV1::PublicPrefix(row)) =
+                self.staged_owned_row_v1(*claim, *owner).and_then(PalwStagedCourtRowV1::active_row_v1)
+            else {
+                return Err("public response index has no literal owned row".into());
+            };
+            if row.pending_response_deadline_v1() != Some(*deadline)
+                || !row.pending_progress_v1().is_some_and(|p| {
+                    p.signers
+                        .get(&signer)
+                        .is_some_and(|s| *s != crate::palw_prefix_public_source_v1::PalwPrefixPublicSignerCursorV1::Invalid)
+                })
+            {
+                return Err("public response index differs from saved live signer obligation".into());
+            }
+            page.push(row.as_ref());
+            cursor = Some((*deadline, *claim, *owner));
+        }
+        Ok((page, None))
+    }
     pub fn staged_owned_constraint_v1(
         &self,
         claim: Hash64,
         owner: PalwBondKeyV2,
     ) -> Option<&crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1> {
-        match self.staged_courts.get(&PalwStagedCourtKeyV1::Owner(claim, owner)) {
+        match self.staged_courts.get(&PalwStagedCourtKeyV1::Owner(claim, owner)).and_then(PalwStagedCourtRowV1::active_row_v1) {
             Some(PalwStagedCourtRowV1::Constraint(c)) => Some(c),
             _ => None,
         }
@@ -38,18 +144,39 @@ impl PalwChainStateV2 {
     }
 }
 impl TransitionBuilder<'_> {
+    fn maximum_prefix_custodian_slots_v1(&self, claim: &PalwClaimStateV2) -> Result<usize, PalwStateV2Error> {
+        let flat = if self.params.panel_v3_rule_at(claim.accepted_daa) {
+            u64::from(self.params.panel_v3().ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
+        } else {
+            // The old fold does not otherwise carry its Panel bundle. Without a
+            // resolved registry mirror, use the full native u16 seat format.
+            u64::from(self.extras.model_registry.as_ref().map_or(u16::MAX, |r| r.globals.seat_count))
+        };
+        let mut maximum = flat;
+        if self.extras.shard_licensing.is_some() {
+            maximum = maximum.max(
+                flat.checked_mul(u64::from(crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_MAX_SHARDS_V1))
+                    .ok_or(PalwStateV2Error::Overflow("prospective prefix shard custodians"))?,
+            );
+        }
+        if self.params.tir_shard_active_at(claim.accepted_daa) && self.state.tir_classes.contains_key(&claim.class_id) {
+            maximum = maximum.max(u64::from(misaka_palw_panel::MAX_STRATIFIED_SEATS_V1));
+        }
+        usize::try_from(maximum.checked_add(2).ok_or(PalwStateV2Error::Overflow("prospective prefix custodians"))?)
+            .map_err(|_| PalwStateV2Error::Overflow("prospective prefix platform slots"))
+    }
     /// Pure preflight: checked clocks are established before even an attempt's first write.
     pub(super) fn prepare_staged_claim_v1(
         &self,
         claim: &mut PalwClaimStateV2,
-    ) -> Result<Option<PalwStagedClaimContractV1>, PalwStateV2Error> {
+    ) -> Result<Option<PalwStagedCourtRowV1>, PalwStateV2Error> {
         self.prepare_staged_claim_with_job_v1(claim, None)
     }
     pub(super) fn prepare_staged_claim_with_job_v1(
         &self,
         claim: &mut PalwClaimStateV2,
         public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
-    ) -> Result<Option<PalwStagedClaimContractV1>, PalwStateV2Error> {
+    ) -> Result<Option<PalwStagedCourtRowV1>, PalwStateV2Error> {
         let Some(config) = self.extras.staged_public_court else {
             return Ok(None);
         };
@@ -57,6 +184,11 @@ impl TransitionBuilder<'_> {
         // The authenticated class profile narrows vocabulary. The existing generated-position
         // format caps every other claim independently of a producer's asserted prompt/rendering size.
         let mut terms = config.claim_terms(claim.accepted_daa, 4095, vocab).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        use crate::palw_staged_bundle_v1::PalwStagedFamilyV1 as Family;
+        let mut families = Vec::new();
+        if public_job.is_some_and(|j| j.job.is_constraint()) {
+            families.push((Family::Constraint, terms.plan));
+        }
         if let Some(registered) = self.state.class_semantics.get(&claim.class_id)
             && let (Some(raw), Some(bound)) = (registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
         {
@@ -64,6 +196,9 @@ impl TransitionBuilder<'_> {
                 crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
                     .and_then(|p| p.court_envelope(vocab, config.prices))
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if public_job.is_some() {
+                families.push((Family::Tokenizer, tokenizer));
+            }
             terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
                 claim.accepted_daa,
                 terms.plan.cover(tokenizer),
@@ -106,9 +241,17 @@ impl TransitionBuilder<'_> {
                     config.prices,
                 )
                 .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let complete = crate::palw_prefix_public_source_v1::PalwPrefixPublicAcquisitionPlanV1::derive(
+                    prefix,
+                    self.maximum_prefix_custodian_slots_v1(claim)?,
+                    config.prices,
+                    borsh::object_length(profile.as_ref()).map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))? as u64,
+                )
+                .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                families.push((Family::PublicPrefix, complete.envelope));
                 terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
                     claim.accepted_daa,
-                    terms.plan.cover(prefix.envelope),
+                    terms.plan.cover(complete.envelope),
                     config.acquisition_daa,
                     config.collection_daa,
                     config.reorg_retention_daa,
@@ -116,6 +259,61 @@ impl TransitionBuilder<'_> {
                 .map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
+        families.sort_by_key(|(family, _)| *family);
+        let bundle = if !families.is_empty() {
+            let profile = self
+                .state
+                .fp_work_profiles
+                .get(&claim.class_id)
+                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("bundle has no authenticated class profile".into()))?;
+            let profile_bytes =
+                borsh::object_length(profile.as_ref()).map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))? as u64;
+            let mut acquisitions = Vec::new();
+            for (family, plan) in families {
+                let mut acquisition = crate::palw_staged_bundle_v1::staged_context_resource_plan_v1(profile_bytes, plan, config)
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                if family == Family::Constraint && profile.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1() {
+                    let selected = crate::palw_selected_event_source_v1::selected_event_resource_plan_v1(
+                        vocab,
+                        public_job.expect("required constraint has public job").decode_tokens_executed,
+                        profile_bytes,
+                        u32::try_from(self.maximum_prefix_custodian_slots_v1(claim)? - 1)
+                            .map_err(|_| PalwStateV2Error::Overflow("selected source custodian count"))?,
+                        config,
+                    )
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                    acquisition = acquisition.checked_sum_v1(selected).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                } else if family == Family::Constraint {
+                    let flat = crate::palw_flat_constraint_stream_v1::flat_constraint_resource_plan_v1(
+                        public_job.expect("required constraint has public job").decode_tokens_executed,
+                        vocab,
+                        config.prices,
+                    )
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+                    acquisition = acquisition.checked_sum_v1(flat).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+                acquisitions.push((family, plan, Some(acquisition)));
+            }
+            Some(
+                crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1::derive_with_acquisitions_v1(
+                    claim.accepted_daa,
+                    acquisitions,
+                    None,
+                    config,
+                )
+                .map_err(PalwStateV2Error::CarriageInconsistent)?,
+            )
+        } else {
+            None
+        };
+        if let Some(bundle) = &bundle {
+            terms = bundle.terms;
+        }
+        terms
+            .plan
+            .rent_sompi
+            .checked_add(terms.plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("prospective complete court funding"))?;
         claim.trace_retention_daa = claim.trace_retention_daa.max(terms.material_until_daa);
         let prefix_custody = public_job.filter(|c| c.job.is_prefix_state()).and_then(|commit| {
             self.state.class_semantics.get(&claim.class_id).filter(|s| s.prefix_state_relation.is_some()).map(|registered| {
@@ -127,7 +325,15 @@ impl TransitionBuilder<'_> {
                 )
             })
         });
-        Ok(Some(PalwStagedClaimContractV1 { terms, producer: claim.bond, panel: BTreeSet::new(), prefix_custody }))
+        let contract = PalwStagedClaimContractV1 { terms, producer: claim.bond, panel: BTreeSet::new(), prefix_custody };
+        Ok(Some(match bundle {
+            Some(plan) => PalwStagedCourtRowV1::ClaimBundle(Box::new(crate::palw_staged_bundle_v1::PalwStagedBundleContractV1 {
+                claim: contract,
+                plan,
+                config,
+            })),
+            None => PalwStagedCourtRowV1::Claim(contract),
+        }))
     }
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) {
         let old = match &new {
@@ -139,10 +345,21 @@ impl TransitionBuilder<'_> {
             self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
         }
     }
-    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedClaimContractV1>) {
+    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) {
         if let Some(c) = contract {
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::Claim(c)));
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c));
         }
+    }
+    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) {
+        let row = match self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)) {
+            Some(PalwStagedCourtRowV1::ClaimBundle(bundle)) => {
+                let mut bundle = bundle.clone();
+                bundle.claim = contract;
+                PalwStagedCourtRowV1::ClaimBundle(bundle)
+            }
+            _ => PalwStagedCourtRowV1::Claim(contract),
+        };
+        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row));
     }
     pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) {
         if let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() {
@@ -150,7 +367,7 @@ impl TransitionBuilder<'_> {
             if let Some(custody) = &mut contract.prefix_custody {
                 custody.expected_panel = panel.seats.iter().map(|seat| seat.bond).collect();
             }
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::Claim(contract)));
+            self.replace_staged_contract_v1(claim, contract);
         }
     }
     /// Called only on actual signed Valid credit edges; ordinary membership/Sampled pay is
@@ -179,7 +396,7 @@ impl TransitionBuilder<'_> {
             changed |= custody.qualify(claim, receipt, now);
         }
         if changed {
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::Claim(contract)));
+            self.replace_staged_contract_v1(claim, contract);
         }
     }
 }
@@ -194,13 +411,34 @@ fn gate<'a>(
     reserved: u64,
     now: u64,
 ) -> Result<&'a PalwStagedClaimContractV1, PalwStateV2Error> {
+    gate_clock(b, claim, owner, reserved, now, false)
+}
+fn gate_clock<'a>(
+    b: &'a TransitionBuilder<'_>,
+    claim: &Hash64,
+    owner: PalwBondKeyV2,
+    reserved: u64,
+    now: u64,
+    collecting: bool,
+) -> Result<&'a PalwStagedClaimContractV1, PalwStateV2Error> {
     if b.extras.staged_public_court.is_none() {
         return Err(PalwStateV2Error::ObjectiveOffenceDormant);
     }
     let c =
         b.state.staged_claim_contract_v1(claim).ok_or_else(|| stage_refused(*claim, "claim has no prospective staged contract"))?;
-    if b.state.legacy_dispute_reservation_v1(claim, &owner).is_none_or(|r| r.reserved_daa != reserved)
-        || now >= c.terms.stream_until_daa
+    let (literal_reserved, terms) = match b.state.legacy_dispute_reservation_v1(claim, &owner) {
+        Some(reservation) => (reservation.reserved_daa, c.terms),
+        None => {
+            let paid = crate::palw_staged_court_state_v1::palw_staged_paid_authority_v1(&b.state, (*claim, owner))
+                .map_err(|e| stage_refused(*claim, e))?
+                .ok_or_else(|| stage_refused(*claim, "staged owner has neither literal reserve nor paid continuation"))?;
+            (paid.reserved_daa, paid.terms)
+        }
+    };
+    if literal_reserved != reserved
+        || now < terms.accepted_daa
+        || now >= if collecting { terms.collect_until_daa } else { terms.stream_until_daa }
+        || now >= terms.material_until_daa
     {
         return Err(stage_refused(*claim, "staged owner is not the literal live reservation or its admitted clock ended"));
     }
@@ -211,23 +449,61 @@ pub(super) fn open(
     ctx: &PalwBlockContextV2,
     seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1,
 ) -> Result<(), PalwStateV2Error> {
-    let contract = gate(b, &seed.claim, seed.reserver, seed.reserved_daa, ctx.daa_score)?.clone();
+    use crate::palw_staged_bundle_v1::PalwStagedFamilyV1 as Family;
+    let key = PalwStagedCourtKeyV1::Owner(seed.claim, seed.reserver);
+    let bundle = match b.state.staged_courts.get(&key) {
+        Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => Some(bundle.clone()),
+        _ => None,
+    };
+    if bundle.is_none()
+        && b.state.legacy_dispute_reservation_v1(&seed.claim, &seed.reserver).is_none_or(|r| r.reserved_daa != seed.reserved_daa)
+    {
+        return Err(stage_refused(seed.claim, "new staged seed requires its literal live reservation"));
+    }
+    let mut contract = gate(b, &seed.claim, seed.reserver, seed.reserved_daa, ctx.daa_score)?.clone();
+    if let Some(bundle) = &bundle {
+        bundle.check_v1().map_err(|e| stage_refused(seed.claim, e))?;
+        if bundle.reserved_daa != seed.reserved_daa
+            || bundle.opened.len() >= bundle.plan.stages.len()
+            || bundle.opened.len() != bundle.active.map_or(0, |n| n as usize + 1)
+            || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
+            || bundle.inventory.as_ref().is_some_and(|intake| !intake.sealed || intake.length_fault_v1())
+        {
+            return Err(stage_refused(seed.claim, "child seed requires an honest completed predecessor and authenticated intake"));
+        }
+        let family = match &seed.auxiliary {
+            Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::PublicPrefix { .. }) => {
+                Family::PublicPrefix
+            }
+            Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Tokenizer { .. }) => Family::Tokenizer,
+            None => Family::Constraint,
+            _ => return Err(stage_refused(seed.claim, "bundle requires the exact public required family")),
+        };
+        let next = &bundle.plan.stages[bundle.opened.len()];
+        if next.family != family {
+            return Err(stage_refused(seed.claim, "child seed substitutes required family"));
+        }
+        contract.terms = next.terms;
+    } else if matches!(b.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(seed.claim)), Some(PalwStagedCourtRowV1::ClaimBundle(_)))
+    {
+        return Err(stage_refused(seed.claim, "required family claim needs prepaid BundleOpen before a child seed"));
+    }
     if ctx.daa_score >= contract.terms.open_until_daa {
         return Err(stage_refused(seed.claim, "seed is after immutable prospective opening deadline"));
     }
-    let key = PalwStagedCourtKeyV1::Owner(seed.claim, seed.reserver);
-    if b.state.staged_courts.contains_key(&key) {
+    if bundle.is_none() && b.state.staged_courts.contains_key(&key) {
         return Err(stage_refused(seed.claim, "owned staged seed is immutable"));
     }
     let allowance = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.maximum_owned_rows_per_reserver;
     // Only this reserver's paid rows consume its allowance. No claim-wide first-writer cap.
-    if b.state
-        .staged_by_owner
-        .range((seed.reserver, ZERO_HASH64)..)
-        .take_while(|(owner, _)| *owner == seed.reserver)
-        .take(allowance as usize)
-        .count()
-        >= allowance as usize
+    if bundle.is_none()
+        && b.state
+            .staged_by_owner
+            .range((seed.reserver, ZERO_HASH64)..)
+            .take_while(|(owner, _)| *owner == seed.reserver)
+            .take(allowance as usize)
+            .count()
+            >= allowance as usize
     {
         return Err(stage_refused(seed.claim, "reserver's own staged work allowance is occupied"));
     }
@@ -255,12 +531,17 @@ pub(super) fn open(
     if contract.panel.is_empty() {
         return Err(stage_refused(seed.claim, "staged contract has no actual bound Panel"));
     }
-    if let Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::Prefix {
-        maximum_leaves,
-        prefix_tokens,
-        relation,
-    }) = &seed.auxiliary
-    {
+    use crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1 as Auxiliary;
+    let prefix = match &seed.auxiliary {
+        Some(Auxiliary::Prefix { maximum_leaves, prefix_tokens, relation }) => {
+            Some((*maximum_leaves, *prefix_tokens, *relation, None))
+        }
+        Some(Auxiliary::PublicPrefix { maximum_leaves, prefix_tokens, relation, slots }) => {
+            Some((*maximum_leaves, *prefix_tokens, *relation, Some(*slots)))
+        }
+        _ => None,
+    };
+    if let Some((maximum_leaves, prefix_tokens, relation, public_slots)) = prefix {
         let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
         let ladder = b.state.class_step_ladder_v1(
             &target.class_id,
@@ -268,23 +549,59 @@ pub(super) fn open(
         );
         let named =
             crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
-        if *maximum_leaves != ladder
-            || *prefix_tokens != named.prefix_tokens
-            || target.registered_semantics.as_ref().and_then(|s| s.prefix_state_relation) != Some(*relation)
+        if maximum_leaves != ladder
+            || prefix_tokens != named.prefix_tokens
+            || target.registered_semantics.as_ref().and_then(|s| s.prefix_state_relation) != Some(relation)
         {
             return Err(stage_refused(seed.claim, "prefix fee metadata changes actual job, immutable relation or rule ladder"));
         }
-        let plan = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
+        let base = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
             &binding.shape_profile,
-            *relation,
-            *prefix_tokens,
+            relation,
+            prefix_tokens,
             binding.step_leaf_count,
             90_000,
             config.prices,
         )
-        .map_err(|e| stage_refused(seed.claim, e))?
-        .envelope;
-        let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
+        .map_err(|e| stage_refused(seed.claim, e))?;
+        let public_custody = public_slots
+            .map(|_| {
+                contract
+                    .prefix_custody
+                    .as_ref()
+                    .map(|c| c.current_signed_v1())
+                    .ok_or_else(|| stage_refused(seed.claim, "no signed prefix custody"))
+            })
+            .transpose()?;
+        let acquisition = if let Some(slots) = public_slots {
+            let custody = public_custody.as_ref().expect("public seed selected above");
+            custody.check(&contract.panel).map_err(|e| stage_refused(seed.claim, e))?;
+            let actual_slots =
+                custody.expected_panel.iter().copied().chain([contract.producer, seed.reserver]).collect::<BTreeSet<_>>().len();
+            if !custody.public_qualified_v1()
+                || slots as usize != actual_slots
+                || contract.panel.contains(&seed.reserver)
+                || contract.producer == seed.reserver
+                || custody.job_identity != target.job_identity
+                || custody.cu_ruleset_id != binding.job_context.cu_ruleset_id
+            {
+                return Err(stage_refused(seed.claim, "public prefix requires exact qualified custody and an independent owner"));
+            }
+            Some(
+                crate::palw_prefix_public_source_v1::PalwPrefixPublicAcquisitionPlanV1::derive(
+                    base,
+                    actual_slots,
+                    config.prices,
+                    borsh::object_length(&binding.shape_profile).map_err(|e| stage_refused(seed.claim, e.to_string()))? as u64,
+                )
+                .map_err(|e| stage_refused(seed.claim, e))?,
+            )
+        } else {
+            None
+        };
+        let plan = acquisition.as_ref().map_or(base.envelope, |p| p.envelope);
+        let extended_terms = frozen_or_extended_terms_v1(&contract.terms, plan, ctx.daa_score, bundle.is_some())
+            .map_err(|e| stage_refused(seed.claim, e))?;
         let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
         let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
@@ -296,7 +613,9 @@ pub(super) fn open(
             .ok_or(PalwStateV2Error::Overflow("paid prefix DA extension"))?
             .max(extended_terms.bond_exit_after_daa);
         super::palw_exec_v2_rewards_v1::require_native_session_window(&b.state, b.params, &seed.claim, until)?;
-        b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
+        if bundle.is_none() {
+            b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged prefix court", ctx.daa_score)?;
+        }
         let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged prefix funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let encoded = borsh::to_vec(seed).map_err(|e| stage_refused(seed.claim, e.to_string()))?;
@@ -322,7 +641,27 @@ pub(super) fn open(
             &exits,
         )
         .map_err(|e| stage_refused(seed.claim, e))?;
-        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Prefix(Box::new(row))));
+        let row = if let Some(acquisition) = acquisition {
+            let custody = public_custody.expect("checked above");
+            PalwStagedCourtRowV1::PublicPrefix(
+                Box::new(
+                    crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1::admit(
+                        row,
+                        contract.producer,
+                        custody,
+                        acquisition,
+                        extended_terms,
+                        ladder,
+                        funded,
+                    )
+                    .map_err(|e| stage_refused(seed.claim, e))?,
+                )
+                .into(),
+            )
+        } else {
+            PalwStagedCourtRowV1::Prefix(Box::new(row).into())
+        };
+        write_admitted_family_v1(b, key, row, bundle, seed, &binding, &original.job)?;
         if extended_terms != contract.terms {
             b.write_staged_row_v1(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
@@ -373,7 +712,8 @@ pub(super) fn open(
         )
         .and_then(|p| p.court_envelope(binding.shape_profile.vocab_size, config.prices))
         .map_err(|e| stage_refused(seed.claim, e))?;
-        let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
+        let extended_terms = frozen_or_extended_terms_v1(&contract.terms, plan, ctx.daa_score, bundle.is_some())
+            .map_err(|e| stage_refused(seed.claim, e))?;
         let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
         let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
@@ -387,7 +727,9 @@ pub(super) fn open(
         // EXECv2 retains its independently frozen horizon. A prospective stage cannot silently
         // reinterpret that historical contract to buy a later native reward/DA window.
         super::palw_exec_v2_rewards_v1::require_native_session_window(&b.state, b.params, &seed.claim, until)?;
-        b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
+        if bundle.is_none() {
+            b.check_accuser_room(seed.reserver, u128::from(plan.deposit_sompi), "staged tokenizer court", ctx.daa_score)?;
+        }
         let funded = plan.rent_sompi.checked_add(plan.deposit_sompi).ok_or(PalwStateV2Error::Overflow("staged tokenizer funding"))?;
         let exits = vec![extended_terms.bond_exit_after_daa; contract.panel.len()];
         let row = crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1::admit_with_resolved_binding_v1(
@@ -408,7 +750,15 @@ pub(super) fn open(
         // Fee validation already burned the full declared carrier rent; the paid row reserves
         // the ordinary owner deposit before accused/material clocks are enlarged. Every
         // fallible identity/funding/overflow check is above these journaled writes.
-        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Tokenizer(Box::new(row))));
+        write_admitted_family_v1(
+            b,
+            key,
+            PalwStagedCourtRowV1::Tokenizer(Box::new(row).into()),
+            bundle,
+            seed,
+            &binding,
+            &original.job,
+        )?;
         if extended_terms != contract.terms {
             b.write_staged_row_v1(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
@@ -443,13 +793,20 @@ pub(super) fn open(
     // Claim-wide clocks/holds remain the immutable conservative envelope stamped at acceptance.
     let mut terms = contract.terms;
     let config = b.extras.staged_public_court.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
-    terms.plan =
+    let actual =
         crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1::derive(4095, binding.shape_profile.vocab_size, config.prices)
             .map_err(|e| stage_refused(seed.claim, e))?;
+    if bundle.is_none() {
+        terms.plan = actual;
+    } else {
+        frozen_or_extended_terms_v1(&terms, actual, ctx.daa_score, true).map_err(|e| stage_refused(seed.claim, e))?;
+    }
     if terms.plan.maximum_moves > contract.terms.plan.maximum_moves || terms.plan.inclusion_daa > contract.terms.plan.inclusion_daa {
         return Err(stage_refused(seed.claim, "authenticated seed exceeds immutable claim resource envelope"));
     }
-    b.check_accuser_room(seed.reserver, u128::from(terms.plan.deposit_sompi), "staged public court", ctx.daa_score)?;
+    if bundle.is_none() {
+        b.check_accuser_room(seed.reserver, u128::from(terms.plan.deposit_sompi), "staged public court", ctx.daa_score)?;
+    }
     // Rent is burned by this object's normative minimum carrier fee; only the deposit occupies
     // bond capital. The acceptance walk validates that fee before invoking this fold.
     let funded = contract
@@ -477,7 +834,48 @@ pub(super) fn open(
         &binding,
     )
     .map_err(|e| stage_refused(seed.claim, e))?;
-    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::Constraint(Box::new(row))));
+    write_admitted_family_v1(b, key, PalwStagedCourtRowV1::Constraint(Box::new(row).into()), bundle, seed, &binding, &original.job)?;
+    Ok(())
+}
+fn frozen_or_extended_terms_v1(
+    terms: &crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1,
+    actual: crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1,
+    now: u64,
+    frozen: bool,
+) -> Result<crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1, String> {
+    if !frozen {
+        return terms.extend_paid_work_v1(now, actual);
+    }
+    if terms.plan.cover(actual) != terms.plan {
+        return Err("child resource plan exceeds frozen family allocation".into());
+    }
+    Ok(*terms)
+}
+fn write_admitted_family_v1(
+    b: &mut TransitionBuilder<'_>,
+    key: PalwStagedCourtKeyV1,
+    row: PalwStagedCourtRowV1,
+    bundle: Option<PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1>>,
+    seed: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<(), PalwStateV2Error> {
+    let row = if let Some(mut bundle) = bundle {
+        let context = crate::palw_staged_bundle_v1::PalwStagedSeedContextV1 {
+            seed: Box::new(seed.clone()),
+            binding: Box::new(binding.clone()),
+            job: Box::new(job.clone()),
+        };
+        bundle.opened.push(crate::palw_staged_bundle_v1::PalwStagedOpenedFamilyV1 {
+            row: crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1(row),
+            context: Box::new(context).into(),
+        });
+        bundle.check_v1().map_err(|e| stage_refused(seed.claim, e))?;
+        PalwStagedCourtRowV1::OwnerBundle(bundle)
+    } else {
+        row
+    };
+    b.write_staged_row_v1(key, Some(row));
     Ok(())
 }
 pub(super) fn leaf(
@@ -487,22 +885,21 @@ pub(super) fn leaf(
 ) -> Result<(), PalwStateV2Error> {
     gate(b, &leaf.claim, leaf.reserver, leaf.reserved_daa, ctx.daa_score)?;
     let key = (leaf.claim, leaf.reserver);
-    let row = b.state.staged_owned_constraint_v1(key.0, key.1).ok_or_else(|| stage_refused(key.0, "staged leaf lacks owned seed"))?;
-    let old = row.checkpoint_v1();
-    let row = match b.state.staged_courts.get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1)) {
-        Some(PalwStagedCourtRowV1::Constraint(row)) => row,
-        _ => return Err(stage_refused(key.0, "owned staged seed disappeared")),
+    let row = b
+        .state
+        .staged_courts
+        .get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1))
+        .ok_or_else(|| stage_refused(key.0, "owned staged seed disappeared"))?;
+    let old = row.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
+    let Some(PalwStagedCourtRowV1::Constraint(child)) = row.active_row_mut_v1() else {
+        return Err(stage_refused(key.0, "staged leaf lacks active constraint seed"));
     };
-    if let Err(error) = row.leaf(ctx.daa_score, leaf) {
+    if let Err(error) = child.leaf(ctx.daa_score, leaf) {
         row.restore_checkpoint_v1(&old).map_err(|e| stage_refused(key.0, e))?;
         return Err(stage_refused(key.0, error));
     }
-    let new = row.checkpoint_v1();
-    b.entries.push(PalwDeltaEntryV2::StagedCourtMove {
-        key,
-        old: PalwStagedCheckpointV1::Constraint(old),
-        new: PalwStagedCheckpointV1::Constraint(new),
-    });
+    let new = row.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
+    b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
     Ok(())
 }
 pub(super) fn movement(
@@ -510,18 +907,84 @@ pub(super) fn movement(
     ctx: &PalwBlockContextV2,
     movement: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
 ) -> Result<(), PalwStateV2Error> {
-    gate(b, &movement.claim, movement.reserver, movement.reserved_daa, ctx.daa_score)?;
+    use crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1 as Action;
+    if matches!(
+        movement.action,
+        Action::BundleOpen { .. } | Action::ActivateStage { .. } | Action::InventoryPart { .. } | Action::InventoryFinish
+    ) {
+        return bundle_control_v1(b, ctx, movement);
+    }
+    let collecting = matches!(movement.action, Action::PrefixPublicCollect { .. });
+    gate_clock(b, &movement.claim, movement.reserver, movement.reserved_daa, ctx.daa_score, collecting)?;
     let key = (movement.claim, movement.reserver);
+    if let Action::PrefixPublicCollect { cursor_id, demand_id } = movement.action {
+        movement.check().map_err(|e| stage_refused(key.0, e))?;
+        let lookup = PalwStagedCourtKeyV1::Owner(key.0, key.1);
+        let savedrow = b.state.staged_courts.get(&lookup).ok_or_else(|| stage_refused(key.0, "public collection lacks owner"))?;
+        let Some(PalwStagedCourtRowV1::PublicPrefix(saved)) = savedrow.active_row_v1() else {
+            return Err(stage_refused(key.0, "public collection lacks literal owned prefix seed"));
+        };
+        let old_due = index_rows(lookup, savedrow).0;
+        let old_responses = public_response_index_rows(saved);
+        let old = savedrow.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
+        let mut updatedrow = savedrow.clone();
+        let Some(PalwStagedCourtRowV1::PublicPrefix(updated)) = updatedrow.active_row_mut_v1() else { unreachable!() };
+        let bytes = borsh::object_length(movement).map_err(|e| stage_refused(key.0, e.to_string()))? as u64;
+        let default = updated
+            .collection_v1(ctx.daa_score, key.0, key.1, movement.reserved_daa, movement.seed_id, cursor_id, demand_id, bytes)
+            .map_err(|e| stage_refused(key.0, e))?;
+        let (sequence, previous) = updated.history_cursor_v1();
+        let record = crate::palw_prefix_history_v1::PalwPrefixHistoryRecordV1::new(
+            previous,
+            sequence.checked_add(1).ok_or(PalwStateV2Error::Overflow("public prefix history sequence"))?,
+            ctx.block,
+            ctx.daa_score,
+            updated.terms.material_until_daa,
+            movement.clone(),
+        )
+        .map_err(|e| stage_refused(key.0, e))?;
+        updated.append_history_v1(&record).map_err(|e| stage_refused(key.0, e))?;
+        collect_prefix_default(b, ctx, &default)?;
+        let new_due = index_rows(lookup, &updatedrow).0;
+        let new = updatedrow.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
+        b.state.staged_courts.insert(lookup, updatedrow);
+        b.state.staged_due.remove(&(old_due, lookup));
+        b.state.staged_due.insert((new_due, lookup));
+        update_response_indices(&mut b.state, old_responses, Vec::new());
+        b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
+        return Ok(());
+    }
+    let independently_closed =
+        b.state.claim(&key.0).is_some_and(|claim| claim.phase.is_terminal() && !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }));
     let row = b
         .state
         .staged_courts
         .get_mut(&PalwStagedCourtKeyV1::Owner(key.0, key.1))
         .ok_or_else(|| stage_refused(key.0, "staged move lacks immutable owned seed"))?;
+    let lookup = PalwStagedCourtKeyV1::Owner(key.0, key.1);
+    let old_due = index_rows(lookup, row).0;
+    let old_responses = response_index_rows(row);
     let old = row.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
-    let result = match row {
-        PalwStagedCourtRowV1::Constraint(c) => c.movement(ctx.daa_score, movement),
-        PalwStagedCourtRowV1::Tokenizer(c) => c.movement(ctx.daa_score, movement),
-        PalwStagedCourtRowV1::Prefix(c) => {
+    let history = if let Some(PalwStagedCourtRowV1::PublicPrefix(c)) = row.active_row_v1() {
+        let (sequence, previous) = c.history_cursor_v1();
+        Some(
+            crate::palw_prefix_history_v1::PalwPrefixHistoryRecordV1::new(
+                previous,
+                sequence.checked_add(1).ok_or(PalwStateV2Error::Overflow("public prefix history sequence"))?,
+                ctx.block,
+                ctx.daa_score,
+                c.terms.material_until_daa,
+                movement.clone(),
+            )
+            .map_err(|e| stage_refused(key.0, e))?,
+        )
+    } else {
+        None
+    };
+    let result = match row.active_row_mut_v1() {
+        Some(PalwStagedCourtRowV1::Constraint(c)) => c.movement(ctx.daa_score, movement),
+        Some(PalwStagedCourtRowV1::Tokenizer(c)) => c.movement(ctx.daa_score, movement),
+        Some(PalwStagedCourtRowV1::Prefix(c)) => {
             if movement.phase != crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt {
                 return Err(stage_refused(movement.claim, "prefix movement changes typed phase"));
             }
@@ -549,19 +1012,263 @@ pub(super) fn movement(
                 _ => Err("prefix movement changes owned court action".into()),
             }
         }
+        Some(PalwStagedCourtRowV1::PublicPrefix(c)) => {
+            use crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1 as Action;
+            movement.check().map_err(|e| stage_refused(movement.claim, e))?;
+            if movement.phase != crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt {
+                return Err(stage_refused(movement.claim, "public prefix changes typed phase"));
+            }
+            let bytes = borsh::object_length(movement).map_err(|e| stage_refused(movement.claim, e.to_string()))? as u64;
+            match &movement.action {
+                Action::PrefixPublicDemand(demand) => {
+                    let id = Hash64::from_bytes(
+                        movement
+                            .signing_message()
+                            .try_into()
+                            .map_err(|_| stage_refused(movement.claim, "public demand digest length"))?,
+                    );
+                    c.demand_v1(ctx.daa_score, key.0, key.1, movement.reserved_daa, movement.seed_id, id, demand, bytes)
+                }
+                Action::PrefixPublicAnswer(answer) => {
+                    c.answer_v1(ctx.daa_score, key.0, key.1, movement.reserved_daa, movement.seed_id, answer, bytes)
+                }
+                Action::Prefix(action) => c.owner_batch_v1(
+                    ctx.daa_score,
+                    key.0,
+                    key.1,
+                    movement.reserved_daa,
+                    movement.seed_id,
+                    std::slice::from_ref(action),
+                    bytes,
+                ),
+                Action::PrefixBatch(actions) => {
+                    c.owner_batch_v1(ctx.daa_score, key.0, key.1, movement.reserved_daa, movement.seed_id, actions, bytes)
+                }
+                _ => Err("public prefix changes owned action".into()),
+            }
+        }
         _ => Err("claim contract alone cannot accept an owned move".into()),
     };
+    let result = result.and_then(|_| {
+        if let (Some(PalwStagedCourtRowV1::PublicPrefix(c)), Some(record)) = (row.active_row_mut_v1(), &history) {
+            if independently_closed {
+                c.mark_claim_closed_v1()?;
+            }
+            c.append_history_v1(record)?;
+        }
+        Ok(())
+    });
     if let Err(error) = result {
         row.restore_checkpoint_v1(&old).map_err(|e| stage_refused(key.0, e))?;
         return Err(stage_refused(key.0, error));
     }
     let new = row.checkpoint_v1().map_err(|e| stage_refused(key.0, e))?;
+    let new_due = index_rows(lookup, row).0;
+    let new_responses = response_index_rows(row);
+    b.state.staged_due.remove(&(old_due, lookup));
+    b.state.staged_due.insert((new_due, lookup));
+    update_response_indices(&mut b.state, old_responses, new_responses);
     b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key, old, new });
     Ok(())
 }
 
+fn bundle_control_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    movement: &crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1 as Action;
+    use crate::palw_staged_bundle_v1::*;
+    movement.check().map_err(|e| stage_refused(movement.claim, e))?;
+    let key = PalwStagedCourtKeyV1::Owner(movement.claim, movement.reserver);
+    let Some(PalwStagedCourtRowV1::ClaimBundle(contract)) =
+        b.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(movement.claim)).cloned()
+    else {
+        return Err(stage_refused(movement.claim, "bundle control has no accepted required-family contract"));
+    };
+    if let Action::BundleOpen { plan } = &movement.action {
+        let reservation = b
+            .state
+            .legacy_dispute_reservation_v1(&movement.claim, &movement.reserver)
+            .ok_or_else(|| stage_refused(movement.claim, "new bundle needs ordinary live reserve"))?;
+        if reservation.reserved_daa != movement.reserved_daa
+            || b.state.staged_courts.contains_key(&key)
+            || ctx.daa_score < contract.plan.terms.accepted_daa
+            || ctx.daa_score >= contract.plan.terms.open_until_daa
+            || contract.claim.producer == movement.reserver
+            || contract.claim.panel.contains(&movement.reserver)
+            || movement.seed_id != plan.id_v1(movement.claim)
+        {
+            return Err(stage_refused(movement.claim, "bundle changes original owner, initial clock or immutable plan identity"));
+        }
+        let exact = b
+            .state
+            .staged_bundle_plan_v1(movement.claim, plan.inventory.as_ref().map(|i| i.maximum_bytes))
+            .map_err(|e| stage_refused(movement.claim, e))?
+            .ok_or_else(|| stage_refused(movement.claim, "bundle has no native quote"))?;
+        if *plan != exact {
+            return Err(stage_refused(movement.claim, "bundle plan changes native SUM or frozen allocation"));
+        }
+        let allowance = contract.config.maximum_owned_rows_per_reserver as usize;
+        if b.state
+            .staged_by_owner
+            .range((movement.reserver, ZERO_HASH64)..)
+            .take_while(|(owner, _)| *owner == movement.reserver)
+            .take(allowance)
+            .count()
+            >= allowance
+        {
+            return Err(stage_refused(movement.claim, "reserver's own bundle allowance is occupied"));
+        }
+        b.check_accuser_room(movement.reserver, u128::from(plan.terms.plan.deposit_sompi), "required family bundle", ctx.daa_score)?;
+        let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &movement.claim)
+            .ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+        let inventory = match &plan.inventory {
+            Some(inventory) => {
+                let semantics = target
+                    .registered_semantics
+                    .as_ref()
+                    .ok_or_else(|| stage_refused(movement.claim, "raw inventory has no immutable statement"))?;
+                Some(PalwTokenizerInventoryV1::new_v1(
+                    inventory,
+                    semantics.tokenizer_id,
+                    semantics
+                        .raw_tokenizer_bytes
+                        .ok_or_else(|| stage_refused(movement.claim, "raw inventory has no signed length"))?,
+                    plan.stages[0]
+                        .terms
+                        .open_until_daa
+                        .checked_sub(contract.config.acquisition_daa)
+                        .ok_or(PalwStateV2Error::Overflow("bundle inventory clock"))?,
+                ))
+            }
+            None => None,
+        };
+        let mut claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
+        claim.trace_retention_daa = claim.trace_retention_daa.max(plan.terms.material_until_daa);
+        let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(&claim, palw_da_disclose_window_daa_v1(b.params));
+        let until = hard
+            .checked_add(b.params.window_challenge_at(ctx.daa_score))
+            .ok_or(PalwStateV2Error::Overflow("bundle native material window"))?
+            .max(plan.terms.bond_exit_after_daa);
+        super::palw_exec_v2_rewards_v1::require_native_session_window(&b.state, b.params, &movement.claim, until)?;
+        // All checks precede writes. Only this original opening may extend the parent hold;
+        // individual child seeds/activations never move any paid absolute door.
+        let mut extended = contract.clone();
+        extended.claim.terms.plan = extended.claim.terms.plan.cover(plan.terms.plan);
+        extended.claim.terms.stream_until_daa = extended.claim.terms.stream_until_daa.max(plan.terms.stream_until_daa);
+        extended.claim.terms.collect_until_daa = extended.claim.terms.collect_until_daa.max(plan.terms.collect_until_daa);
+        extended.claim.terms.material_until_daa = extended.claim.terms.material_until_daa.max(plan.terms.material_until_daa);
+        extended.claim.terms.bond_exit_after_daa = extended.claim.terms.bond_exit_after_daa.max(plan.terms.bond_exit_after_daa);
+        let bundle = PalwOwnedStagedBundleV1 {
+            claim: movement.claim,
+            owner: movement.reserver,
+            reserved_daa: movement.reserved_daa,
+            execution_root: target.execution_root,
+            plan: plan.clone(),
+            inventory,
+            active: None,
+            opened: Vec::new(),
+        };
+        bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())));
+        b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)));
+        b.write_claim(movement.claim, Some(claim));
+        if let Some(mut dispute) = b.state.legacy_disputes.get(&movement.claim).cloned() {
+            dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
+            b.write_legacy_dispute(movement.claim, Some(dispute));
+        }
+        b.da_rekey_v1(movement.claim, until, ctx.daa_score)?;
+        if let Some(mut liability) = b.state.panel_liabilities.get(&movement.claim).cloned()
+            && liability.voided_daa.is_none()
+            && liability.void_reason.is_none()
+            && liability.expiry_daa < until
+        {
+            liability.expiry_daa = until;
+            b.write_panel_liability(movement.claim, Some(liability));
+        }
+        for (lock_key, mut lock) in b.claim_locks_v1(&movement.claim) {
+            if lock.expiry_daa < until {
+                lock.expiry_daa = until;
+                b.write_slashable_lock(lock_key, Some(lock));
+            }
+        }
+        return Ok(());
+    }
+    let Some(PalwStagedCourtRowV1::OwnerBundle(mut bundle)) = b.state.staged_courts.get(&key).cloned() else {
+        return Err(stage_refused(movement.claim, "bundle control has no paid owner frame"));
+    };
+    let previous = bundle
+        .active_seed_v1()
+        .map(|seed| Hash64::from_bytes(seed.signing_message().try_into().expect("64")))
+        .unwrap_or_else(|| bundle.plan.id_v1(bundle.claim));
+    if movement.reserved_daa != bundle.reserved_daa
+        || movement.seed_id != previous
+        || ctx.daa_score < bundle.plan.terms.accepted_daa
+        || ctx.daa_score >= bundle.plan.terms.stream_until_daa
+    {
+        return Err(stage_refused(movement.claim, "bundle control changes paid owner, seed or original clock"));
+    }
+    let old = PalwStagedCourtRowV1::OwnerBundle(bundle.clone()).checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    match &movement.action {
+        Action::ActivateStage { previous_seed, next_seed } => {
+            let next = bundle.active.map_or(0, |n| n as usize + 1);
+            let stage =
+                bundle.opened.get(next).ok_or_else(|| stage_refused(movement.claim, "activation has no signed pending child"))?;
+            if *previous_seed != previous
+                || stage.context.seed.signing_message().as_slice() != next_seed.as_byte_slice()
+                || bundle.active.is_some_and(|n| !bundle.opened[n as usize].row.honest_complete_v1().unwrap_or(false))
+                || ctx.daa_score >= bundle.plan.stages[next].terms.open_until_daa
+            {
+                return Err(stage_refused(
+                    movement.claim,
+                    "activation changes strict honest predecessor, pending seed or fixed opening door",
+                ));
+            }
+            bundle.active = Some(next as u8);
+            bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)));
+            return Ok(());
+        }
+        Action::InventoryPart { offset, bytes } => {
+            if !bundle.opened.is_empty() {
+                return Err(stage_refused(movement.claim, "inventory cannot change after first child seed"));
+            }
+            let plan = bundle.plan.inventory.clone().ok_or_else(|| stage_refused(movement.claim, "unrequired raw inventory"))?;
+            bundle
+                .inventory
+                .as_mut()
+                .ok_or_else(|| stage_refused(movement.claim, "raw inventory disappeared"))?
+                .part_v1(ctx.daa_score, *offset, bytes, &plan)
+                .map_err(|e| stage_refused(movement.claim, e))?;
+        }
+        Action::InventoryFinish => {
+            if !bundle.opened.is_empty() {
+                return Err(stage_refused(movement.claim, "inventory cannot change after first child seed"));
+            }
+            let plan = bundle.plan.inventory.clone().ok_or_else(|| stage_refused(movement.claim, "unrequired raw inventory"))?;
+            bundle
+                .inventory
+                .as_mut()
+                .ok_or_else(|| stage_refused(movement.claim, "raw inventory disappeared"))?
+                .finish_v1(ctx.daa_score, &plan)
+                .map_err(|e| stage_refused(movement.claim, e))?;
+        }
+        _ => return Err(stage_refused(movement.claim, "not a bundle control")),
+    }
+    bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let newrow = PalwStagedCourtRowV1::OwnerBundle(bundle);
+    let new = newrow.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    b.state.staged_courts.insert(key, newrow);
+    b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: (movement.claim, movement.reserver), old, new });
+    Ok(())
+}
+
 /// Pure derived indexes; no additional rooted copy of a signer list or clock.
-fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Vec<(PalwBondKeyV2, u64, PalwStagedCourtKeyV1)>) {
+pub(super) fn index_rows(
+    key: PalwStagedCourtKeyV1,
+    row: &PalwStagedCourtRowV1,
+) -> (u64, Vec<(PalwBondKeyV2, u64, PalwStagedCourtKeyV1)>) {
     match row {
         PalwStagedCourtRowV1::Claim(c) => {
             let PalwStagedCourtKeyV1::Claim(_) = key else {
@@ -576,6 +1283,19 @@ fn index_rows(key: PalwStagedCourtKeyV1, row: &PalwStagedCourtRowV1) -> (u64, Ve
         PalwStagedCourtRowV1::Constraint(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::Tokenizer(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::Prefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+        PalwStagedCourtRowV1::PublicPrefix(c) => {
+            (c.pending_deadline_v1().unwrap_or(c.terms.material_until_daa), vec![(c.reserver, c.terms.material_until_daa, key)])
+        }
+        PalwStagedCourtRowV1::ClaimBundle(c) => index_rows(key, &PalwStagedCourtRowV1::Claim(c.claim.clone())),
+        PalwStagedCourtRowV1::OwnerBundle(c) => {
+            let due = match c.active_v1() {
+                Some(PalwStagedCourtRowV1::PublicPrefix(prefix)) => {
+                    prefix.pending_deadline_v1().unwrap_or(c.plan.terms.material_until_daa)
+                }
+                _ => c.plan.terms.material_until_daa,
+            };
+            (due, vec![(c.owner, c.plan.terms.material_until_daa, key)])
+        }
     }
 }
 pub(super) fn update_indices(
@@ -585,6 +1305,9 @@ pub(super) fn update_indices(
     new: Option<&PalwStagedCourtRowV1>,
 ) {
     if let Some(row) = old {
+        for entry in response_index_rows(row) {
+            state.staged_prefix_responders.remove(&entry);
+        }
         let (due, holds) = index_rows(key, row);
         state.staged_due.remove(&(due, key));
         if let Some((claim, owner, _, _)) = row.owner_accounting_v1() {
@@ -595,6 +1318,7 @@ pub(super) fn update_indices(
         }
     }
     if let Some(row) = new {
+        state.staged_prefix_responders.extend(response_index_rows(row));
         let (due, holds) = index_rows(key, row);
         state.staged_due.insert((due, key));
         if let Some((claim, owner, _, _)) = row.owner_accounting_v1() {
@@ -607,8 +1331,10 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_holds.clear();
     state.staged_due.clear();
     state.staged_by_owner.clear();
+    state.staged_prefix_responders.clear();
     for (key, row) in &state.staged_courts {
         let (due, holds) = index_rows(*key, row);
+        state.staged_prefix_responders.extend(response_index_rows(row));
         state.staged_due.insert((due, *key));
         if let Some((claim, owner, _, _)) = row.owner_accounting_v1() {
             state.staged_by_owner.insert((owner, claim));
@@ -616,10 +1342,88 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
         state.staged_holds.extend(holds);
     }
 }
-pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
+pub(super) fn response_index_rows(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
+    let Some(PalwStagedCourtRowV1::PublicPrefix(row)) = row.active_row_v1() else { return Vec::new() };
+    public_response_index_rows(row)
+}
+fn public_response_index_rows(
+    row: &crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1,
+) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
+    let Some(deadline) = row.pending_response_deadline_v1() else { return Vec::new() };
+    let Some(pending) = row.pending_progress_v1() else { return Vec::new() };
+    pending
+        .signers
+        .into_iter()
+        .filter(|(_, cursor)| *cursor != crate::palw_prefix_public_source_v1::PalwPrefixPublicSignerCursorV1::Invalid)
+        .map(|(signer, _)| (signer, deadline, row.claim, row.reserver))
+        .collect()
+}
+pub(super) fn update_response_indices(
+    state: &mut PalwChainStateV2,
+    old: Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+    new: Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+) {
+    for row in old {
+        state.staged_prefix_responders.remove(&row);
+    }
+    state.staged_prefix_responders.extend(new);
+}
+pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
     let due: Vec<_> = b.state.staged_due.iter().take_while(|(at, _)| *at <= ctx.daa_score).take(64).map(|(_, key)| *key).collect();
     for key in due {
-        b.write_staged_row_v1(key, None);
+        let Some(mut saved) = b.state.staged_courts.get(&key).cloned() else { continue };
+        let material = saved.owner_accounting_v1().map(|(_, _, _, until)| until);
+        if material.is_none_or(|until| ctx.daa_score >= until) {
+            b.write_staged_row_v1(key, None);
+            continue;
+        }
+        let old = saved.checkpoint_v1().map_err(|e| stage_refused(ZERO_HASH64, e))?;
+        let old_due = index_rows(key, &saved).0;
+        let old_responses = response_index_rows(&saved);
+        let Some(PalwStagedCourtRowV1::PublicPrefix(row)) = saved.active_row_mut_v1() else { continue };
+        let row_key = (row.claim, row.reserver);
+        let closed =
+            b.state.claim(&row.claim).is_some_and(|c| c.phase.is_terminal() && !matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
+        let default = if closed { None } else { row.joint_default_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))? };
+        if closed {
+            row.mark_claim_closed_v1().map_err(|e| stage_refused(row.claim, e))?;
+        } else if let Some(default) = &default {
+            row.mark_default_collected_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
+            collect_prefix_default(b, ctx, default)?;
+        } else {
+            row.mark_collection_expired_v1(ctx.daa_score).map_err(|e| stage_refused(row.claim, e))?;
+        }
+        let new = saved.checkpoint_v1().map_err(|e| stage_refused(row_key.0, e))?;
+        let new_due = index_rows(key, &saved).0;
+        let new_responses = response_index_rows(&saved);
+        b.state.staged_courts.insert(key, saved);
+        b.state.staged_due.remove(&(old_due, key));
+        b.state.staged_due.insert((new_due, key));
+        b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: row_key, old, new });
+        update_response_indices(&mut b.state, old_responses, new_responses);
     }
+    Ok(())
+}
+fn collect_prefix_default(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    default: &crate::palw_prefix_public_owned_v1::PalwPrefixJointDefaultV1,
+) -> Result<(), PalwStateV2Error> {
+    let claim = b.state.claim(&default.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(default.claim))?;
+    let stage = match claim.phase {
+        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Live,
+        PalwClaimPhaseV2::ReceiptLicensed { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::Licensed,
+        PalwClaimPhaseV2::Final { .. } => crate::palw_da_rcore_v1::PalwDaStageV1::FinalRow,
+        _ => return Err(stage_refused(default.claim, "public collection has no live economic claim")),
+    };
+    let charge = PalwDaDefaultChargeV1 {
+        claim_id: default.claim,
+        producer: default.producer,
+        stage,
+        g: b.claim_g_v1(&default.claim).map(|g| g.g()).unwrap_or(0),
+        covering: default.panel.iter().copied().collect(),
+        winner: default.owner,
+    };
+    b.da_default_charge_v1(ctx, &claim, &charge)
 }

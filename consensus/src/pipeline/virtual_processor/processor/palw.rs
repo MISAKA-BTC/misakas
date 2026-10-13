@@ -985,6 +985,74 @@ impl VirtualStateProcessor {
         state.palw_legacy_dispute_view_v1(state_params, &claim)
     }
 
+    pub fn palw_staged_paid_authority_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("staged snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        Ok(kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(&state, key)?
+            .filter(|p| now < p.terms.material_until_daa))
+    }
+
+    pub fn palw_staged_owned_context_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("staged snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_context_v1(&state, key)
+    }
+
+    pub fn palw_staged_bundle_plan_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        actual_raw_cap: Option<u64>,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("bundle quote has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        state.staged_bundle_plan_v1(claim, actual_raw_cap)
+    }
+
+    pub fn palw_staged_owned_seed_v1_impl(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("staged snapshot has no accepted clock")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Ok(None);
+        }
+        let authority = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_paid_authority_v1(&state, key)?;
+        if !authority.is_some_and(|authority| now < authority.terms.material_until_daa) {
+            return Ok(None);
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_seed_v1(&state, key)
+    }
+
     pub fn palw_staged_owned_progress_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
@@ -999,6 +1067,108 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_progress_v1(&state, key)
+    }
+
+    pub fn palw_prefix_response_duties_v1_impl(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwPrefixResponsePageV1, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("accepted snapshot unavailable")?;
+        let now = state.last_point().ok_or("accepted clock unavailable")?.daa_score;
+        if !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(now)) {
+            return Err("public prefix response route not active".into());
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_prefix_response_duties_v1(&state, signer, after)
+    }
+
+    pub fn palw_prefix_page_write_v1_impl(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed_id: kaspa_consensus_core::Hash64,
+        opening: kaspa_consensus_core::palw_prefix_gdn_paged_v1::PalwGdnOwnedPageOpeningV1,
+    ) -> Result<Vec<i32>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("accepted snapshot unavailable")?;
+        let point = state.last_point().ok_or("accepted clock unavailable")?;
+        if point.block != snapshot || !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(point.daa_score)) {
+            return Err("prefix page preview snapshot changed branch or clock".into());
+        }
+        let progress = kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_owned_progress_v1(&state, key)?
+            .ok_or("prefix page preview lacks reservation")?;
+        if progress.seed_id != Some(seed_id) || progress.now_daa >= progress.terms.stream_until_daa {
+            return Err("prefix page preview seed or streaming clock changed".into());
+        }
+        let Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedCursorV1::PublicPrefix {
+            cursor: kaspa_consensus_core::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1::HeadPage { write: true, .. },
+            pending: None,
+            completed: None,
+            ..
+        }) = progress.cursor
+        else {
+            return Err("prefix page preview is not accepted owned write cursor".into());
+        };
+        let Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicPrefix(row)) =
+            state.staged_owned_row_v1(key.0, key.1)
+        else {
+            return Err("public prefix owned row absent".into());
+        };
+        row.preview_page_write_v1(&opening)
+    }
+
+    pub fn palw_prefix_history_record_v1_impl(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.palw_prefix_history_record_at_v1(Some(snapshot), request)
+    }
+    pub fn palw_prefix_history_record_current_v1_impl(
+        &self,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.palw_prefix_history_record_at_v1(None, request)
+    }
+    pub fn palw_staged_cache_gc_page_v1_impl(
+        &self,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheGcPageV1, String> {
+        let pruning_block = self.pruning_point_store.read().pruning_point().map_err(|e| e.to_string())?;
+        let irreversible_daa = self.headers_store.get_daa_score(pruning_block).map_err(|e| e.to_string())?;
+        let (leases, next) = self
+            .palw_state_v2_store
+            .read()
+            .staged_cache_gc_candidates_v1(irreversible_daa, after, limit)
+            .map_err(|e| e.to_string())?;
+        Ok(kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheGcPageV1 { pruning_block, irreversible_daa, leases, next })
+    }
+    pub fn palw_staged_cache_gc_ack_v1_impl(
+        &self,
+        lease: kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheLeaseV1,
+    ) -> Result<bool, String> {
+        let pruning_block = self.pruning_point_store.read().pruning_point().map_err(|e| e.to_string())?;
+        let irreversible_daa = self.headers_store.get_daa_score(pruning_block).map_err(|e| e.to_string())?;
+        self.palw_state_v2_store.write().acknowledge_staged_cache_gc_v1(lease, irreversible_daa).map_err(|e| e.to_string())
+    }
+    fn palw_prefix_history_record_at_v1(
+        &self,
+        snapshot: Option<kaspa_consensus_core::BlockHash>,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        request.check_v1()?;
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let (_, state) = self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("accepted snapshot unavailable")?;
+        let point = state.last_point().ok_or("accepted clock unavailable")?;
+        if snapshot.is_some_and(|expected| expected != point.block)
+            || !self.palw_staged_public_court_v1.is_some_and(|f| f.is_active(point.daa_score))
+        {
+            return Err("public history export snapshot changed branch or activation".into());
+        }
+        kaspa_consensus_core::palw_staged_court_state_v1::palw_prefix_history_request_check_v1(&state, snapshot, &request)?;
+        self.palw_state_v2_store.read().prefix_history_record_v1(&request).map_err(|e| e.to_string())
     }
 
     pub fn palw_terminal_progress_v1_impl(

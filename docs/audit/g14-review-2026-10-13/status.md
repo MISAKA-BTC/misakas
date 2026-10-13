@@ -1,0 +1,408 @@
+# Public conviction implementation, 2026-10-13
+
+Base: `origin/pre` = `64699e960bc2782efba2550e247efdfdf5f325a2`.
+Workspace branch: `codex/g14-public-conviction`. The original checkout's existing
+changes are preserved in its original branch. Full G14 is **not complete**.
+The status estimate is about 50% of end-to-end acceptance and about 70% of code
+implementation. These are informal weighted estimates, not a measured acceptance
+score. Source-only work, failed runs and nonterminal trials do not count as done.
+
+## Source-First Workflow
+
+On 2026-10-14 JST the user requested periodic push again. A thread heartbeat
+named `G14 workspace checkpoint push` is ACTIVE at an hourly interval, targeting
+only `origin/codex/g14-public-conviction`. WIP commits preserve source work, not
+proof of compilation or end-to-end completion. Before each checkpoint, shared
+editing is coordinated; raw evidence logs, target binaries, captures and secrets
+are excluded. No force push, direct `pre` push or history rewrite is authorized.
+The first source checkpoint still has incomplete common history, authenticated
+preclaim inventory, selected-event native routing and Flat semantic/service
+connections. Functional verification remains deferred until source integration
+is complete, as requested.
+
+The latest user instruction is to complete the remaining source implementation
+and integration first, then run the verification suite together. All agents are
+following that order. Adding test sources and inspecting code are allowed in
+this phase; no new builds or tests are being run. The owned integration retry
+(session 83605) was deliberately interrupted after that instruction, exit 130.
+It is not a PASS or a new functional failure. The preceding build (51720) failed
+on the new false-valid test's certificate import; that source import is repaired
+but the repair has not been compiled. No current verification process is owned
+and left running.
+
+New source-only work includes bounded seed-shared record caches and replay
+namespaces, bounded filesystem recovery/retirement, native accepted cache-lease
+metadata and irreversible-pruning-point GC grants, keyless service retirement,
+global public-history DB read permits, and explicit TickService shutdown in
+network fixtures. These changes do not qualify an earlier socket failure.
+
+The required-family Bundle, retained original seed/context queries, checked SUM
+resource terms, tokenizer owner intake inventory, and Tiled Constraint scheduler
+are under integration. Native archives now project Bundle's active prefix
+checkpoint rather than silently ignoring Bundle movements.
+
+The new history custody module defines a prospective producer-signed pledge,
+a separately signed literal Valid-seat grant, backwards rooted recovery with
+protected multipart answer slots, and an exact DA-only default. The quote
+includes all native admitted custody slots, an independent owner answer slot,
+mutable native journals and archive storage. It is not hard-coded to five seats.
+The explicit `HFP1` outer envelope keeps original FP bytes intact. Native
+ordinary/evaluation/tensor extraction now uses transient original-payload views,
+then verifies the transaction-local pledge against the exact extracted claim,
+producer, execution root and job pin. Isolation/header doors are configured by
+the dormant stage fence; real fee, mass and transaction identity remain outer
+transaction facts. The companion survives per-object rehearsal and the final
+candidate fold through explicit extras. Expected ruleset, authenticated inventory,
+resource commitment and absolute horizon still need the common admission check.
+The prospective default helper avoids re-running a sibling's producer charge
+and does not invent a live claim phase after terminal conviction. Native
+carriage/admission, Bundle dispatch, node recovery and automatic collection still
+need connection. Existing semantic-source receipts are not retroactive history
+grants. Unit test sources for recovery and lease storage have been added, not run.
+
+Additional all-format gaps are now explicit: original Flat Constraint needs a
+bounded stream court rather than conversion to Tiled, and maximum vocabulary
+requires original u32 tile acquisition without an u8 cast. Both are implementation
+work, not permission to exclude supported profiles. Native fork-union archive
+retention is not yet proven within its quoted storage envelope.
+
+Raw tokenizer format currently has no authenticated actual-file-size cap before
+EOF. A false declared length cannot justify finite claim-wide acquisition terms.
+Owner intake EOF inventory is useful but does not by itself prove original
+claim-acceptance-wide deadlines/capital. The requested policy decision about
+pre-admission public EOF inventory remains unanswered; it is not implicit
+approval of a new arbitrary raw-file cap. No shipping fence is armed and no
+maximum, deadline, fee or mass gate is weakened to manufacture completion.
+
+The 50% whole / 70% code figures above remain the last informal baseline, not a
+new measurement of this source-only phase. Full G14 remains unqualified until
+all source connections and the subsequent terminal verification are complete.
+
+## Implementation
+
+The public filer does not evict a retained mismatched capture merely to re-probe
+an already missing FP job. Binding/job DA remains reachable without a replica;
+acquiring the authenticated descriptor permits fair rotation again. Replaying an
+already pursued deferred capture preserves the current paginated history walk.
+Only newly pursued cases require replay-triggered backfill; unit selection and
+acceptance/branch changes retain their own invalidation rules.
+
+Once a constrained job and binding are known, generic arithmetic DA cannot
+preempt the selector's required public rows. A complete authenticated Flat
+selection check, or a successful independent tiled replay with no nominee,
+permits arithmetic fallback. Missing replay/table/material is still pending,
+not evidence of honesty or an objective conviction.
+
+A prospective `PublicPrefix` seed appends to the dormant staged-court seed
+selection. It authenticates the accepted job, registered family relation, rule
+ladder, independent reserver and literal signed custody. Its fee metadata quotes
+the full original-source acquisition budget, including hostile custodian slots,
+and must equal the actual saved participant count. Only current credited Valid
+signers join the owned custody snapshot. Unsigned seats cannot veto acquisition
+or become liable by membership alone.
+
+The fold retains the public prefix court, signed demand, tentative protected
+answer slots and exact original-leaf authentication. An authenticated complete
+answer advances the paid semantic continuation. A pending demand is indexed at
+its exclusive response deadline; an answer at that deadline is refused. Its due default enters the
+existing producer/S4/DA reporter collection funnel once. Owned mutable journals,
+apply/revert and rebuilt indices retain or remove that pending deadline exactly.
+The original direct-prefix row remains available separately. These are dormant
+consensus additions; no shipping activation guard or active profile is changed.
+
+The tokenizer test descriptor now includes the required prospective parser key
+event bound and explicitly rejects a descriptor missing that qualification.
+The socket fixture retries TCP ConnectionRefused only while its asynchronously
+started real P2P listener binds, within the original 15-second total deadline.
+Protocol/handshake failures are still terminal errors.
+The clocked fixture waits for the immutable block's ordinary wall-clock lead
+cap instead of trying to advance elapsed network slots faster than real time.
+The incorrect preimage is a small direct object; the correct large descriptor
+uses ordinary multipart carriers. Neither receives a mass-limit bypass.
+
+## Evidence In Progress
+
+Build environment: Rust 1.93, default EVM features, locked dependencies,
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3 CARGO_PROFILE_DEV_DEBUG=0
+CARGO_PROFILE_TEST_DEBUG=0`. Actual-service futures require
+`RUST_MIN_STACK=67108864` on this host. The initial default-stack attempts
+aborted and are retained; they are not PASS evidence.
+
+The first node binary was `kaspad_lib-5c485cb7922bbe61`. Its filer filter first
+matched zero tests (excluded), then the correct filter ran 47 tests: 45 PASS,
+2 tokenizer fixture FAIL. Descriptor-only constrained recovery ran 1 PASS.
+The source has subsequently changed; these results do not verify later edits.
+
+The first registered tiled service run completed: **0 PASS / 4 FAIL**, 2591.99s.
+All four acquired public material but failed the service deadline; capture
+rotation kept restarting the shared public-history walk. No registered tiled
+terminal has been counted as PASS. The first sole socket-receiver run completed:
+**0 PASS / 2 FAIL**, 2122.90s, both TCP ConnectionRefused before handshake.
+These are failures before the subsequent walker and listener repairs.
+
+The first public-prefix fold regression compiled and failed because its synthetic
+claim named a different producer than the pre-admitted public row. The fixture
+now uses the row's actual producer and funds the claim reservation. A subsequent
+compile caught the incorrect test field `committed`, repaired to the existing
+`reserved_exposure` map. The repaired core binary ran **2 PASS**, 2.62s: demand
+and response deadline indexing, complete original-leaf EOF before advancing,
+literal producer/all five qualified signer collection, no owner debit, once-only
+collection, and each mutable delta's apply/revert state root and index.
+
+The same core binary also ran **20 prefix + 7 staged-state + 1 staged-isolation
++ 4 post-launch arming PASS**. Together with the two new fold tests these are
+34 unique core PASS. The arming regression's expected caught panics are retained
+in its raw log; the test process exits successfully. These checks do not constitute
+a genuine registered public-prefix service.
+
+The ordinary final node filer run passed **48/48** and descriptor-only recovery
+passed **1/1**. After selector ordering changes the optimized node filer again
+passed **48/48** (4.25s); these duplicates are not counted as additional cases.
+The optimized command only changes `misaka-palw-base0` and `misaka-palw-sdk`
+local compiler optimization to level 2, never native deadlines or gates.
+
+The read-only shipping harvest passed: **361 pins unchanged**, 29 history checks,
+3 labels and both held-forfeit gates. `t12_repin.py` was using the pre-reorganization
+source path for those two gates; it now locates the existing tests in `tests.rs`.
+The script's separate decision-rule selftest is **17/22 PASS**, with five stale
+expectation/alias scenarios failing. No pin has been rewritten to suppress this.
+The selftest's explicit expected copy lists were subsequently updated to include
+the already registered cap/floor2/resilience and release/document aliases.
+Its repaired run is **22/22 PASS**; the mutation and decision rules are unchanged.
+
+The first optimized registered rerun was terminated after two terminal failures
+and while two further cases were still preparing (exit 143). It exposed a generic
+arithmetic DA session blocking the selected public row, repaired afterward.
+The optimized socket rerun reached a real handshake but aborted on
+`ClockLeadTooFarAhead` and panic cleanup (exit 134). The large terminal rerun
+failed ordinary admission at transient mass 518320 / 480000 (1 FAIL, 1066.92s).
+These three runs are **not PASS**. Their raw logs remain unchanged. Latest
+registered/terminal and network reruns are pending and cannot yet be qualified.
+In `registered-terminal-final.log`, the first three cases failed; bootstrap's
+parallel input request still combined `PromptIds` with arithmetic `StepNode`s.
+The remaining two cases were still preparing. In `network-verifier-final.log`
+both real handshakes and remote reservation/demand transaction relay succeeded,
+but neither endpoint completed. The old fixture binary could wait for a future
+native slot beyond the test's wall deadline; its owned process was terminated
+(exit 143), not counted as a completed run. The fixture now checks the original
+wall deadline during lead-cap waits as well. It does not weaken the native
+120-second recovery cadence or authorize future timestamps.
+
+The adjacent core court/resource/32-part transport filter passed **24/24** and
+the node accepted-progress answer planner passed **2/2**. These are independent
+unit/codec/resource checks, not maximum-model service qualification.
+
+At the user's explicit request, three implementation agents now work in the same
+workspace on the remaining replay/reset/bootstrap ordering, the public-prefix
+node requester/responder and owner-targeted default collection/admission tests.
+Their new source must be integrated, compiled and reverified; prior binaries do
+not qualify these changes.
+
+Core binary SHA-256:
+`017058f4be5cd291cc75c671d2abaf33c93724ab156b3b373af781f85d199b30`.
+Latest optimized node test binary SHA-256:
+`ee35111b02486cdde8d6257e558f3ac5858142deefe5f0f08c4efda5dc0685f8`.
+
+An intermediate ordinary node `cargo check` passed. Final core/node builds,
+regressions, source hashes and service reruns must be recorded before qualification.
+Raw output, including failures, is retained under [evidence](evidence/).
+
+## Parallel Implementation Status
+
+The node integration build completed successfully in 7m 10s. Its test binary is
+`kaspad_lib-0e97fa9f0b66b49b`, SHA-256
+`db23a21e9dea48cd639af29bc12ae99d9361a1824ac1e792902251c8a5454717`.
+The filer filter passed **51/51** and the new public-prefix focused filter passed
+**3/3**. Raw output is in `parallel-node-filer-status.log` and
+`parallel-node-prefix-status.log`. These are not native service terminals.
+The build began before the final core COW/resource edits and does not qualify
+the complete latest source tree.
+
+The parallel source connects signed public-prefix seed/Demand/Collect/certificate,
+automatic original-leaf replies, Q36 owned pages, accepted-history cache recovery,
+bounded signer duty reads and deadline-prioritized submission. The core adds
+owner-targeted collection, closed/expired journals, prospective original-job
+retention, full acquisition acceptance bounds, derived responder indices and
+transparent owned-row Arc/COW sharing. The latest RAM bound is eight times
+base plus eight times pending plus carrier scratch. These latest core edits
+remain source-only: the current 11 fold tests and one maximum-prefix resource
+test have not been rebuilt or run. The intermediate snapshot passed 6/7 fold
+tests; its failing collateral fixture was corrected afterward, not counted PASS.
+
+The old registered/large-terminal final run completed **0 PASS / 5 FAIL** in
+2530.64s. Subsequent source repairs do not retroactively qualify that run.
+The socket material-reader trial reached acquisition, authenticated public replay
+and reservation release but aborted during RPC shutdown (exit 134). Its channel
+closure repair is not yet reverified, so the trial remains FAIL. The other two
+network cases were terminated (exit 143), not terminal PASS. Two new native
+initial/inherited public-prefix service tests exist but have not been executed.
+
+## Continuation Evidence
+
+The next integration build completed in 11m 35s, before the archive/API/SDK phase.
+Its node binary SHA-256 was
+`d07ade03d5619137931beb469111efa9fd4fb381e87d7a36377606335184a65c`,
+now preserved at `target/g14-registered-qualified-tests`. Its filer filter passed
+**52/52**, including the branch-rollback semantic completion regression
+(`filer-reorg-regressions.log`). This does not qualify later tokenizer eligibility,
+archive, P2P or SDK edits.
+
+The same phase core binary SHA-256 was
+`82ec507e9c2d5ba2391e3ed65cc0927242ca948f9bd91518e046915b16f145c6`.
+Its 11 public-prefix fold tests completed **7 PASS / 4 FAIL**
+(`parallel-core-eleven-before-history.log`). The fixtures incorrectly included the
+producer among their five Panel custodians; assertions expecting seven distinct
+attempt slots and seed qualification exposed the error. Fixtures now use five
+distinct nonproducer custodians. Production qualification was not relaxed.
+Those corrections and the subsequent 13-test archive snapshot remain unverified.
+
+The actual service run `native-prefix-registered-first.log` completed in
+1416.27s: **1 PASS / 2 FAIL**, overall exit 101. The registered tiled
+forbidden-token case reached exact objective conviction, producer collateral
+collection, all five literal Valid signer sanctions and reporter reveals,
+reservation closure, and normal service exit. This is one registered-model
+service terminal, not all-family or maximum-profile completion.
+The two native public-prefix cases failed before commitment admission because
+the public wallet builder rejected literal job versions 11 and 12.
+
+The socket reader rerun `socket-reader-shutdown-repair.log` acquired the
+authenticated multipart job, independently replayed it, released the reservation,
+verified actual socket RPC evidence and joined the notification services. It
+still aborted during DB teardown with four remaining strong references (exit
+134). Explicit async adaptor/flow/address-manager teardown is now implemented
+but not reverified; that rerun is still FAIL.
+
+Latest source adds a court-rooted rolling hash/count for full signed accepted
+public-prefix movements, a content-addressed DB archive independent of body/delta
+pruning, bounded expiry GC using the irreversible pruning-point DAA, targeted
+snapshot/current native reads that remain available until the paid material clock,
+and authenticated cache recovery through a dedicated protocol-107 public pull
+lane (oneof 80/81). The broker holds at most 16 outstanding records, globally
+paces requests, rejects unsolicited/forged/oversized replies, and never treats
+peer nonresponse as a conviction. Raw reads are capped at 90,224 bytes.
+Original acceptance clocks and seed identities are not reset.
+
+Latest source also qualifies registered tokenizer statements independently of
+the FP job version, preserves the constraint job's extra selected-root check,
+and supplies a Params/DAA-qualified public prefix builder for both local and
+external signers. The producer and actual-service fixture use the new API;
+the old builder's legacy behavior remains covered by a new regression.
+These source additions need current build/runtime evidence.
+
+An intermediate `cargo check -p kaspad --lib --locked` succeeded in 1m 19s.
+The first archive no-run build used stale in-flight core metadata after API
+edits and failed with missing current-reader/helper symbols. The fresh no-run
+attempt then stopped on **No space left on device** (exit 101;
+`public-archive-integrated-build.log`). Only this worktree's generated core/node
+artifacts were cleaned (176 files, 1.7 GiB); sources, raw logs and the qualified
+registered-service binary were preserved. The repaired build is in progress in
+`public-archive-integrated-build-disk-repair.log`, not PASS yet.
+
+Full G14 remains unproven. The same owner cannot yet perform every required
+semantic court sequentially: required-family bundles, checked SUM budgets and
+fixed per-stage acquisition/stream/inclusion clocks are only designed, not
+implemented. The generic Constraint node actor is still absent. Local page
+recovery duplicates records per cursor, retains uncollected CAS branches and
+performs whole-history replay in one blocking pass; worst-case host disk,
+fairness and deadlines are not bounded or measured. Public records missing from
+all peers still leave recovery pending. No maximum-profile or activation claim
+follows from the one registered forbidden-token service terminal.
+
+## Latest Verification And Paid Continuation Audit
+
+The six-package no-run build completed successfully in 8m 41s after repairing
+the missing test-only execution-backend trait import. Raw output:
+`public-archive-integrated-build-import-repair.log`. This is a build result, not
+a terminal service result; later node fixture repairs and continuation edits
+require another build.
+
+Focused results from that snapshot:
+
+- SDK public builder: **4/4 PASS**, `prefix-builder-qualified-regressions.log`.
+- Native archive store: **1/1 PASS**, `public-archive-store-regression.log`.
+- P2P broker: **2/2 PASS**, `public-history-broker-regressions.log`.
+- P2P wire/router: **2/2 PASS**, `public-history-wire-regressions.log`.
+- Prefix source/resource quote: **5/5 PASS**, including the maximum active
+  positions quote, `public-prefix-resource-before-continuation.log`. A checked
+  quote is not a measured maximum-profile service completion.
+- Accepted-history codec: **1/1 PASS**, `public-prefix-history-codec.log`.
+- Existing staged state: **7/7 PASS**, `staged-seven-before-continuation.log`.
+- Public-prefix fold: **2 PASS / 11 FAIL**,
+  `public-prefix-thirteen-before-continuation.log`. Its actual producer is bond3;
+  the revised synthetic Panel2..6 still included it. A shared fixture assertion
+  exposed this before the failing cases reached their folds. Fixture repair is
+  in progress; production qualification is not relaxed.
+
+A P0 continuation gap is confirmed in source: `da_release_all_v1` closes every
+legacy reservation on a claim, while staged movement/progress and native
+prevalidation require that live reservation. PublicPrefix additionally closes
+its semantic answer/batch lane with `claim_closed`. A sibling or self-inflicted
+DA default therefore blocks an incomplete, already paid semantic prosecution
+even though its material remains held. Existing completed certificates are a
+different case and do not prove this continuation requirement.
+
+The next implementation phase separates exact already-open paid court authority
+from ordinary new-seed reservation admission. Original owner, seed, reservation
+DAA, stream/collection/material clocks and collateral holds must remain binding;
+there is no extra collection, clock extension or admission bypass. Node candidate
+tracking and reorg/restart recovery must use the same authenticated authority.
+Until these changes and sibling-default terminal regressions pass, the no-erasure
+requirement remains open.
+
+The same node snapshot's filer filter passed **54/54**,
+`filer-qualified-before-paid-continuation.log`, and its public-prefix filter
+passed **4/4**, `node-prefix-qualified-before-paid-continuation.log`, including
+the capture-retention guard's expected caught negative panics. These do not
+qualify the new paid-continuation or cache implementation. Baseline binary
+hashes are core `bc583194549ac56ecf038e7207485e71d118a15d17deb671eb92eae4a1ab8338`
+and node `3723120912dc1fcafa79ecd6d3b4885957e76451627896d13ec05478786f2866`;
+the node binary is preserved at `target/g14-before-paid-continuation-tests`.
+
+The socket reader's async-release rerun terminated **FAIL, exit 134** in
+`socket-reader-async-release-current.log`. It completed public multipart
+acquisition, independent honest replay/release at DAA 1244 and actual socket RPC
+authentication, but the 10-second owner-drain wait expired with four DB
+references. `SendPingsFlow` retains its context during the normal 120-second
+TickService wait. The fixture now owns and shuts down both source/receiver tick
+services after panel services stop and before strict DB destruction. No ping
+interval, native clock or strict lifetime check is relaxed. This repair still
+requires an actual rerun.
+
+Source now implements exact retained paid authority, all four typed core
+continuations and native Leaf/Move prevalidation after legacy release, plus a
+four-family partial-A/sibling-default/completion/once-only-consumption fold
+regression. Node discovery and its dedicated typed-only path use the same
+authority; missing Tokenizer/Constraint restart context remains Pending.
+The source does not authorize a fresh seed or ordinary legacy demand after
+release, and does not extend the original terms.
+
+Cache source uses a seed-shared signed-record CAS, one bounded authenticated
+Merkle sequence index per current recovery branch, and process-local replay in
+at most 64 links or semantic records per poll. Every index reference is verified
+before semantic use; no disk parser checkpoint is authoritative. Raw CAS keeps
+atomic durable writes; the disposable index no longer fsyncs every tree node.
+Pages are seed-scoped and have a checked plan-derived cap. Expiry GC helpers need
+authenticated original terms and irreversible DAA; service-wide GC is not wired.
+Repeated reorg page-cap exhaustion and restart deadline qualification remain
+open. The P2P flow also has a node-wide two-read budget with cancellation-safe
+permits owned by the actual blocking DB work. These latest changes are being
+built in `paid-continuation-integrated-build.log`, not yet verified.
+
+## Remaining Acceptance (Current)
+
+The automatic public-source requester/responder now exists in source and has
+focused unit coverage, but genuine registered seed/class admission through the
+service terminal remains unqualified. The 64-row indexed duty bound does not
+establish a maximum-population inclusion guarantee. Missing/pruned historical
+accepted carriers leave cache recovery pending; no DA reacquisition route is
+qualified. Full population state clones, many signed moves per block and total
+queue RAM still need quantitative bounds. Sequential court-family use by the
+same owner also needs an end-to-end audit. Complete capital, custody retention,
+collection and processing capacity must be shown together.
+
+Finish registered tiled terminals, largest terminal evidence and all covered
+family/job/input/output/state/DA endpoints; verify the public prefix route from
+normal admission through outside-verifier service and collection; close native
+and socket restart/reorg/pruned-IBD paths; measure maximum-profile time, RAM,
+capital and collusion load; rerun shipping isolation/pins and the final G14 audit.
+Do not label source-only, failed, running or zero-test results complete.

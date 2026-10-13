@@ -161,6 +161,12 @@ impl ConsensusSessionOwned {
         Self { _session_guard: None, consensus }
     }
 
+    /// Access the same guarded session from a caller already running in a blocking worker.
+    /// This avoids spawning a nested task for bounded native accepted-history reads.
+    pub fn with_consensus_api_v1<R>(&self, visit: impl FnOnce(&dyn ConsensusApi) -> R) -> R {
+        visit(self.consensus.as_ref())
+    }
+
     /// Uses [`tokio::task::spawn_blocking`] to run the provided consensus closure on a thread where blocking is acceptable.
     /// Note that this function is only available on the *owned* session, and requires cloning the session. In fact this
     /// function is the main motivation for a separate session type.
@@ -257,11 +263,94 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disclosure_duties_v1(mine)
     }
 
+    pub fn palw_staged_paid_authority_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1>, String> {
+        self.consensus.palw_staged_paid_authority_v1(key)
+    }
+
+    pub fn palw_staged_owned_context_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        self.consensus.palw_staged_owned_context_v1(key)
+    }
+
     pub fn palw_staged_owned_progress_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
     ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         self.consensus.palw_staged_owned_progress_v1(key)
+    }
+
+    pub fn palw_staged_owned_seed_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>, String> {
+        self.consensus.palw_staged_owned_seed_v1(key)
+    }
+
+    pub fn palw_staged_bundle_plan_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        actual_raw_cap: Option<u64>,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        self.consensus.palw_staged_bundle_plan_v1(claim, actual_raw_cap)
+    }
+
+    pub fn palw_prefix_response_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwPrefixResponsePageV1, String> {
+        self.consensus.palw_prefix_response_duties_v1(signer, after)
+    }
+
+    pub fn palw_prefix_page_write_v1(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed_id: kaspa_consensus_core::Hash64,
+        opening: kaspa_consensus_core::palw_prefix_gdn_paged_v1::PalwGdnOwnedPageOpeningV1,
+    ) -> Result<Vec<i32>, String> {
+        self.consensus.palw_prefix_page_write_v1(snapshot, key, seed_id, opening)
+    }
+
+    pub fn palw_prefix_history_record_v1(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.consensus.palw_prefix_history_record_v1(snapshot, request)
+    }
+
+    pub fn palw_prefix_history_record_current_v1(
+        &self,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.consensus.palw_prefix_history_record_current_v1(request)
+    }
+
+    pub fn palw_staged_cache_gc_page_v1(
+        &self,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheGcPageV1, String> {
+        self.consensus.palw_staged_cache_gc_page_v1(after, limit)
+    }
+
+    pub fn palw_staged_cache_gc_ack_v1(
+        &self,
+        lease: kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheLeaseV1,
+    ) -> Result<bool, String> {
+        self.consensus.palw_staged_cache_gc_ack_v1(lease)
     }
 
     /// Read accepted terminal progress under the same owned consensus session as filer work.

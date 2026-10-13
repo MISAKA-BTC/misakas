@@ -122,22 +122,48 @@ pub(super) struct TiledPlanV1 {
 }
 
 impl TiledPlanV1 {
-    pub fn units(self) -> Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> {
-        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
-        use kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES;
-        let tile = self.beat_lane.map_or(0, |_| self.committed as usize / PALW_LOGITS_TILE_LANES) as u8;
-        let mut units = vec![PalwDaUnitV1::Event { row: self.position, tile }];
+    pub fn selected_tiles_v1(self) -> Vec<(u32, u32)> {
+        let tile =
+            self.beat_lane.map_or(0, |_| self.committed as usize / kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES)
+                as u32;
+        let mut tiles = vec![(self.position, tile)];
         if let Some(beat) = self.beat_lane {
-            let other = PalwDaUnitV1::Event { row: self.position, tile: (beat as usize / PALW_LOGITS_TILE_LANES) as u8 };
-            if !units.contains(&other) {
-                units.push(other);
+            let other = (self.position, beat / kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES as u32);
+            if !tiles.contains(&other) {
+                tiles.push(other);
             }
         }
-        units
+        tiles
+    }
+
+    pub fn legacy_units_v1(self) -> Option<Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1>> {
+        self.selected_tiles_v1()
+            .into_iter()
+            .map(|(row, tile)| {
+                Some(kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row, tile: u8::try_from(tile).ok()? })
+            })
+            .collect()
+    }
+
+    pub fn units(self) -> Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> {
+        self.legacy_units_v1().unwrap_or_default()
     }
 }
 
 pub(super) fn tiled_plan_v1(
+    target: &PalwOffenceTargetV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    initial: &kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
+    own_ids: &[u32],
+    table: Arc<PalwTokenTableV1>,
+) -> Result<Option<TiledPlanV1>, String> {
+    if initial.binding().shape_profile.vocab_size as usize > 256 * kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES {
+        return Err("the vocabulary requires prospective u32 selected tile acquisition".into());
+    }
+    tiled_plan_maximum_v1(target, job, initial, own_ids, table)
+}
+
+pub(super) fn tiled_plan_maximum_v1(
     target: &PalwOffenceTargetV1,
     job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
     initial: &kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
@@ -152,9 +178,6 @@ pub(super) fn tiled_plan_v1(
         .map_err(|e| e.to_string())?;
     if table.vocab() != binding.shape_profile.vocab_size {
         return Err("the held token table has another vocabulary width".into());
-    }
-    if table.vocab() as usize > 256 * PALW_LOGITS_TILE_LANES {
-        return Err("the vocabulary exceeds the public event tile index space".into());
     }
     let mask = PalwConstraintMaskV1::for_job(job, table)?;
     let mut state = mask.state_after(&[]).ok_or("the constraint has no initial state")?;
@@ -304,6 +327,19 @@ pub(super) fn tiled_contradiction_with_budget_v2(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prospective_wide_selected_tiles_never_wrap_into_legacy_units() {
+        let plan = super::TiledPlanV1 { position: 7, committed: 1_048_576, witness: None, beat_lane: Some(4_194_302) };
+        assert_eq!(plan.selected_tiles_v1(), vec![(7, 256), (7, 1023)]);
+        assert!(plan.legacy_units_v1().is_none());
+        assert!(plan.units().is_empty());
+        let last = super::TiledPlanV1 { committed: 1_048_575, beat_lane: Some(1_048_574), ..plan };
+        assert_eq!(
+            last.legacy_units_v1().unwrap(),
+            vec![kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Event { row: 7, tile: 255 }]
+        );
+    }
+
     use super::*;
     use kaspa_consensus_core::Hash64;
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;

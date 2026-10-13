@@ -372,6 +372,9 @@ impl Router {
             debug!("P2P, Route to flow got empty payload, peer: {}", self);
             return Err(ProtocolError::Other("received kaspad p2p message with empty payload"));
         }
+        if !prefix_history_message_bounded_v1(msg.payload.as_ref().expect("payload was just verified")) {
+            return Err(ProtocolError::Other("public prefix history message exceeds its bounded wire envelope"));
+        }
         let msg_type: KaspadMessagePayloadType = msg.payload.as_ref().expect("payload was just verified").into();
         // Handle the special case of a reject message ending the connection
         if msg_type == KaspadMessagePayloadType::Reject {
@@ -402,6 +405,11 @@ impl Router {
         } else {
             Err(ProtocolError::NoRouteForMessageType(msg_type))
         }
+    }
+
+    /// Allows bounded sidecar flows to avoid filling the generic transport queue.
+    pub fn queued_outgoing_messages_v1(&self) -> usize {
+        self.outgoing_route.max_capacity().saturating_sub(self.outgoing_route.capacity())
     }
 
     /// Enqueues a locally-originated message to be sent to the network peer
@@ -453,6 +461,38 @@ impl Router {
         self.hub_sender.send(HubEvent::PeerClosing(self.clone())).await.expect("hub receiver should never drop before senders");
 
         true
+    }
+}
+
+fn prefix_history_message_bounded_v1(payload: &KaspadMessagePayload) -> bool {
+    match payload {
+        KaspadMessagePayload::PalwPrefixHistoryRequest(request) => request.request.len() <= 512,
+        KaspadMessagePayload::PalwPrefixHistoryRecord(record) => {
+            record.record.len() <= 90_224 && record.context_id.as_ref().is_none_or(|id| id.bytes.len() == 64)
+        }
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod prefix_history_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_public_history_fields_are_refused_before_entering_a_flow_queue() {
+        let mut record = crate::pb::PalwPrefixHistoryRecordMessage {
+            context_id: Some(crate::pb::Hash { bytes: vec![1; 64] }),
+            record: vec![2; 90_224],
+        };
+        assert!(prefix_history_message_bounded_v1(&KaspadMessagePayload::PalwPrefixHistoryRecord(record.clone())));
+        record.context_id.as_mut().unwrap().bytes.push(1);
+        assert!(!prefix_history_message_bounded_v1(&KaspadMessagePayload::PalwPrefixHistoryRecord(record.clone())));
+        record.context_id.as_mut().unwrap().bytes.pop();
+        record.record.push(2);
+        assert!(!prefix_history_message_bounded_v1(&KaspadMessagePayload::PalwPrefixHistoryRecord(record)));
+        assert!(!prefix_history_message_bounded_v1(&KaspadMessagePayload::PalwPrefixHistoryRequest(
+            crate::pb::PalwPrefixHistoryRequestMessage { request: vec![0; 513] }
+        )));
     }
 }
 

@@ -1154,11 +1154,85 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// Bounded read-only progress from one accepted staged court/reservation snapshot.
+    fn palw_staged_paid_authority_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1>, String> {
+        Err("staged paid authority reader unavailable".into())
+    }
+
+    fn palw_staged_owned_context_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3)>, String> {
+        Err("staged owned context reader unavailable".into())
+    }
+
+    fn palw_staged_owned_seed_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>, String> {
+        Err("staged original seed reader unavailable".into())
+    }
+
+    fn palw_staged_bundle_plan_v1(
+        &self,
+        _claim: crate::Hash64,
+        _actual_raw_cap: Option<u64>,
+    ) -> Result<Option<crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        Err("staged immutable bundle quote reader unavailable".into())
+    }
+
     fn palw_staged_owned_progress_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
     ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         Err("staged owned progress reader unavailable".into())
+    }
+
+    fn palw_prefix_response_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<crate::palw_staged_court_state_v1::PalwPrefixResponsePageV1, String> {
+        Err("public prefix response reader unavailable".into())
+    }
+
+    fn palw_prefix_history_record_v1(
+        &self,
+        _snapshot: crate::BlockHash,
+        _request: crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<crate::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        Err("public prefix accepted history archive reader unavailable".into())
+    }
+
+    fn palw_prefix_history_record_current_v1(
+        &self,
+        _request: crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<crate::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        Err("public prefix accepted history current archive reader unavailable".into())
+    }
+
+    fn palw_staged_cache_gc_page_v1(
+        &self,
+        _after: Option<(u64, crate::Hash64)>,
+        _limit: usize,
+    ) -> Result<crate::palw_prefix_history_v1::PalwStagedCacheGcPageV1, String> {
+        Err("native accepted cache lease reader unavailable".into())
+    }
+
+    fn palw_staged_cache_gc_ack_v1(&self, _lease: crate::palw_prefix_history_v1::PalwStagedCacheLeaseV1) -> Result<bool, String> {
+        Err("native accepted cache lease acknowledgement unavailable".into())
+    }
+
+    fn palw_prefix_page_write_v1(
+        &self,
+        _snapshot: crate::BlockHash,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _seed_id: crate::Hash64,
+        _opening: crate::palw_prefix_gdn_paged_v1::PalwGdnOwnedPageOpeningV1,
+    ) -> Result<Vec<i32>, String> {
+        Err("public prefix page continuation reader unavailable".into())
     }
 
     /// Terminal evidence progress of this verifier's own live reservation at the accepted tip.

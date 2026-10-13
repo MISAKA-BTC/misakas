@@ -38,8 +38,20 @@ impl TransactionValidator {
         check_transaction_output_value_ranges(tx)?;
         check_duplicate_transaction_inputs(tx)?;
         check_gas(tx)?;
+        let history_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
+        {
+            if self.palw_staged_public_court_fence.is_none() {
+                return Err(TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable));
+            }
+            let envelope = kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload)
+                .map_err(|_| TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable))?;
+            let mut inner = tx.clone();
+            inner.payload = envelope.original_payload;
+            Some(inner)
+        } else { None };
         check_transaction_subnetwork(
-            tx,
+            history_inner.as_ref().unwrap_or(tx),
             self.palw_panel_da_admissible,
             self.palw_prompt_ids_form,
             self.palw_lifecycle_undecodable_tolerated,

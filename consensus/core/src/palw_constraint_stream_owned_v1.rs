@@ -251,7 +251,9 @@ pub(crate) mod tests {
     fn seed() -> PalwConstraintStreamSeedV1 {
         seed_for(true).0
     }
-    fn seed_for(fault: bool) -> (PalwConstraintStreamSeedV1, crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1) {
+    pub(crate) fn seed_for(
+        fault: bool,
+    ) -> (PalwConstraintStreamSeedV1, crate::palw_fp_constraint_job_v1::PalwConstrainedDecodeAccusationV1) {
         let (binding, a) = public_constrained_case_for_tests_v1(fault);
         let copy = a.clone();
         (
@@ -273,7 +275,7 @@ pub(crate) mod tests {
             copy,
         )
     }
-    fn terms(seed: &PalwConstraintStreamSeedV1) -> PalwRenderingClaimTermsV1 {
+    pub(crate) fn terms(seed: &PalwConstraintStreamSeedV1) -> PalwRenderingClaimTermsV1 {
         let p = PalwRenderingResourcePlanV1::derive(
             seed.pin.position,
             seed.binding.shape_profile.vocab_size,

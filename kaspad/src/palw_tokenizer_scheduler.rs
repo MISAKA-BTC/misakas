@@ -10,7 +10,7 @@ use kaspa_consensus_core::{
     palw_constraint_stream_carriage_v1::{PalwAuxiliaryPublicCourtSeedV1, PalwConstraintStreamActionV1, PalwConstraintStreamSeedV1},
     palw_fp_constraint_job_v1::{PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableV1, table_eog_leaf_hash_v1, table_leaf_hash_v1},
     palw_freeprompt_v3::PalwFreePromptJobV3,
-    palw_offence_attribution_v1::{PalwOffenceTargetV1, palw_constrained_job_target_v1},
+    palw_offence_attribution_v1::PalwOffenceTargetV1,
     palw_staged_court_state_v1::{PalwStagedCertificateRefV1, PalwStagedOwnedCursorV1, PalwStagedOwnedProgressV1},
     palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1, step_opening_from_leaf_source_capped_v1, step_opening_root_capped_v1},
     palw_step_refute::PalwTiledDecodePinV1,
@@ -129,6 +129,24 @@ struct Candidate {
     seed: PalwConstraintStreamSeedV1,
     _reservation: Arc<PalwMemoryReservationV1>,
 }
+
+/// Resolve only the claim-stamped statement, never a default table or tokenizer alias.
+/// Constraint jobs additionally bind the selected table through the core qualification gate.
+pub(super) fn registered_table_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &PalwStepBindingV2,
+    job: &PalwFreePromptJobV3,
+) -> Result<Arc<PalwTokenTableV1>, String> {
+    let row = kaspa_consensus_core::palw_tokenizer_table_stream_v1::palw_tokenizer_statement_v1(target, binding, job)?;
+    let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1()
+        .for_root_and_tokenizer(&row.token_table_root.ok_or("missing qualified registered table root")?, &row.tokenizer_id)
+        .ok_or("outside verifier does not hold the exact immutable registered table")?;
+    if table.tokenizer_id != row.tokenizer_id || table.vocab() != binding.shape_profile.vocab_size {
+        return Err("held registered table has another tokenizer or vocabulary".into());
+    }
+    Ok(table)
+}
+
 impl Candidate {
     fn select(
         path: &Path,
@@ -138,15 +156,15 @@ impl Candidate {
         table: Arc<PalwTokenTableV1>,
         progress: &PalwStagedOwnedProgressV1,
         ledger: &Arc<PalwMemoryLedgerV1>,
+        original: Option<&PalwConstraintStreamSeedV1>,
     ) -> Result<Self, String> {
-        palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
+        let row = kaspa_consensus_core::palw_tokenizer_table_stream_v1::palw_tokenizer_statement_v1(target, binding, job)?;
         if progress.claim != target.claim_id
             || progress.now_daa < progress.terms.accepted_daa
             || progress.reserved_daa > progress.now_daa
         {
             return Err("staged snapshot does not identify the admitted public claim/reservation".into());
         }
-        let row = target.registered_semantics.as_ref().ok_or("missing immutable rendering semantics")?;
         let raw = row.raw_tokenizer_bytes.ok_or("historical tokenizer lacks signed length")?;
         let bound = row.tokenizer_key_events.ok_or("historical tokenizer lacks signed work")?;
         let root = row.token_table_root.ok_or("missing immutable table root")?;
@@ -160,7 +178,26 @@ impl Candidate {
         }
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let actual_length = file.metadata().map_err(|e| e.to_string())?.len();
-        let id = nominate_v1(path, row.tokenizer_id, actual_length, bound, &table, target.class_id, target.claim_id, ledger)?;
+        let id = match original {
+            Some(seed) => {
+                seed.check(90_000)?;
+                if (seed.claim, seed.reserver, seed.reserved_daa) != (progress.claim, progress.reserver, progress.reserved_daa)
+                    || seed.resolved_binding_v1(target.class_id, Some(&binding.shape_profile))? != *binding
+                    || seed.job.as_deref().is_some_and(|literal| literal != job)
+                {
+                    return Err("retained tokenizer seed changes accepted immutable context".into());
+                }
+                let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer { id, operand_tokenizer_bytes, .. }) = seed.auxiliary.as_ref()
+                else {
+                    return Err("retained tokenizer seed has another family".into());
+                };
+                if *operand_tokenizer_bytes != actual_length || *id as usize >= table.entries.len() {
+                    return Err("retained tokenizer operand or nominee differs from held original material".into());
+                }
+                *id
+            }
+            None => nominate_v1(path, row.tokenizer_id, actual_length, bound, &table, target.class_id, target.claim_id, ledger)?,
+        };
         let count = table.entries.len() as u64 + 1;
         let leaf = |j: u64| {
             if j == table.entries.len() as u64 {
@@ -236,6 +273,17 @@ impl Candidate {
         if signed_bytes > 90000 {
             seed.use_retained_profile_v1()?;
         }
+        if let Some(original) = original {
+            if seed.auxiliary != original.auxiliary
+                || seed.eog_count != original.eog_count
+                || seed.eog_opening != original.eog_opening
+                || seed.pin != original.pin
+                || seed.witness != original.witness
+            {
+                return Err("retained tokenizer seed changes authenticated table proof or auxiliary statement".into());
+            }
+            seed = original.clone();
+        }
         Ok(Self { path: path.to_owned(), table, id, actual_length, seed, _reservation: retained })
     }
 }
@@ -270,7 +318,24 @@ impl TokenizerSchedulerV1 {
         progress: &PalwStagedOwnedProgressV1,
         ledger: &Arc<PalwMemoryLedgerV1>,
     ) -> Result<Self, String> {
-        let candidate = Candidate::select(path, target, binding, job, table, progress, ledger)?;
+        Self::open_with_original_v1(path, target, binding, job, table, progress, ledger, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_with_original_v1(
+        path: &Path,
+        target: &PalwOffenceTargetV1,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        table: Arc<PalwTokenTableV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+        original: Option<&PalwConstraintStreamSeedV1>,
+    ) -> Result<Self, String> {
+        if progress.cursor.as_ref().is_some_and(|cursor| !matches!(cursor, PalwStagedOwnedCursorV1::Tokenizer { .. })) {
+            return Err("this reservation owns another typed public court; no replacement is permitted".into());
+        }
+        let candidate = Candidate::select(path, target, binding, job, table, progress, ledger, original)?;
         let context = Hash64::from_bytes(candidate.seed.signing_message().try_into().map_err(|_| "seed digest width")?);
         if progress.seed_id.is_some_and(|id| id != context) {
             return Err("accepted owner court has another immutable seed; no replacement is permitted".into());
@@ -470,6 +535,7 @@ mod tests {
     use super::*;
     use crate::palw_memory_ledger::PalwMemoryPoolV1;
     use kaspa_consensus_core::{
+        palw_backend::PalwExecutionBackendV1,
         palw_constraint_stream_carriage_v1::PalwConstraintStreamMoveV1,
         palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
         palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwStagedPublicCourtConfigV1, PalwTokenizerResourcePlanV1},
@@ -491,9 +557,68 @@ mod tests {
             }),
             reserved_daa: 100,
             terms: PalwRenderingClaimTermsV1::derive(100, plan, 100, 100, 10).unwrap(),
+            prefix_custodians: None,
+            prefix_page_root: None,
+            bundle: None,
             seed_id: None,
             cursor: None,
         }
+    }
+
+    #[test]
+    fn immutable_registered_table_qualifies_normal_fp_and_rejects_constraint_root_or_alias_substitution() {
+        let (mut target, mut binding, mut job, table) = prospective_table(false);
+        let registry = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1();
+        registry.register(table.clone());
+        assert_eq!(registered_table_v1(&target, &binding, &job).unwrap().tokenizer_id, table.tokenizer_id);
+        let mut wrong = table.clone();
+        wrong.tokenizer_id = Hash64::from_u64_word(0xBAD018);
+        registry.register(wrong);
+        assert_eq!(
+            registered_table_v1(&target, &binding, &job).unwrap().tokenizer_id,
+            table.tokenizer_id,
+            "another label cannot replace the exact immutable table"
+        );
+        target.registered_semantics.as_mut().unwrap().token_table_root = Some(Hash64::from_u64_word(0xBAD019));
+        assert!(registered_table_v1(&target, &binding, &job).is_err(), "constraint selected root must equal registered root");
+        target.registered_semantics.as_mut().unwrap().token_table_root = Some(table.root());
+
+        // The qualification fixture models a publicly committed normal FP binding. The
+        // immutable table comes from the registered statement, not an absent constraint tail.
+        job.version = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION;
+        job.tail = None;
+        job.decode = Some(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        let backend = crate::palw_panel::seat_s_tests::floor_backend();
+        binding.job_context = backend.fp_job_context_for_executed_v1(&job, binding.job_context.exact_decode_tokens).unwrap();
+        binding.activation_leg_root =
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&binding.job_context);
+        binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
+        target.execution_root = binding.committed_execution_root;
+        target.job_identity = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&binding.job_context);
+        assert!(!job.is_constraint() && !job.is_prefix_state());
+        assert!(
+            registered_table_v1(&target, &binding, &job).is_ok(),
+            "normal FP inherits only the authenticated registered table statement"
+        );
+        target.registered_semantics.as_mut().unwrap().tokenizer_key_events = None;
+        assert!(registered_table_v1(&target, &binding, &job).is_err(), "unqualified historical metadata remains refused");
+    }
+
+    #[test]
+    fn another_typed_owner_court_is_refused_before_tokenizer_file_or_nomination_work() {
+        let (target, binding, job, table) = prospective_table(false);
+        let mut snapshot = progress(&target, 100);
+        snapshot.seed_id = Some(Hash64::from_u64_word(0xBAD020));
+        snapshot.cursor = Some(PalwStagedOwnedCursorV1::Prefix {
+            moves_used: 1,
+            cursor: kaspa_consensus_core::palw_prefix_family_court_v1::PalwPrefixFamilyCursorV1::Complete,
+            completed: Some(false),
+        });
+        let ledger = PalwMemoryLedgerV1::new(crate::palw_memory_ledger::PalwMemoryPoolV1::Host, Some(4096), || None);
+        let missing = Path::new("/nonexistent-g14-tokenizer-file");
+        let why = TokenizerSchedulerV1::open(missing, &target, &binding, &job, Arc::new(table), &snapshot, &ledger).err().unwrap();
+        assert!(why.contains("another typed public court"));
+        assert_eq!(ledger.reserved_bytes(), 0, "an immutable slot collision never triggers whole-file work");
     }
     #[test]
     fn guarded_tokenizer_scheduler_restarts_retries_and_closes_only_the_real_core_court() {

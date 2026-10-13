@@ -869,9 +869,14 @@ pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_prefix_custody_v1;
 pub mod palw_prefix_public_owned_v1;
+pub mod palw_prefix_history_v1;
+pub mod palw_history_custody_v1;
 pub mod palw_prefix_public_source_v1;
 pub mod palw_reward_vesting_read_v2;
 pub mod palw_staged_court_state_v1;
+pub mod palw_staged_bundle_v1;
+pub mod palw_flat_constraint_stream_v1;
+pub mod palw_selected_event_source_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
 

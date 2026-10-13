@@ -34,6 +34,13 @@ pub enum PalwAuxiliaryPublicCourtSeedV1 {
         prefix_tokens: u32,
         relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1,
     },
+    PublicPrefix {
+        maximum_leaves: u64,
+        prefix_tokens: u32,
+        relation: crate::palw_class_semantics_v1::PalwPrefixStateRelationV1,
+        /// Exact producer, qualified current Panel and independent owner slot count.
+        slots: u32,
+    },
 }
 /// Content-addressed profile already retained by the claim's class certification. The byte
 /// quote prices hydration; it cannot substitute a different graph for that historic class.
@@ -110,6 +117,15 @@ pub enum PalwConstraintStreamActionV1 {
     /// Flat normal actions only. The inner family enum has no Batch variant, so arbitrary
     /// nested recursive deserialization is impossible. Work remains charged per action.
     PrefixBatch(Vec<crate::palw_prefix_family_court_v1::PalwPrefixCourtActionV1>),
+    /// Owner-selected collection cannot be starved by the bounded maintenance sweep.
+    PrefixPublicCollect {
+        cursor_id: Hash64,
+        demand_id: Hash64,
+    },
+    BundleOpen { plan: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1 },
+    ActivateStage { previous_seed: Hash64, next_seed: Hash64 },
+    InventoryPart { offset: u64, bytes: Vec<u8> },
+    InventoryFinish,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -333,6 +349,19 @@ impl PalwConstraintStreamMoveV1 {
     }
     pub fn check(&self) -> Result<(), String> {
         check_signature_shape(self.version, &self.signature)?;
+        if matches!(&self.action, PalwConstraintStreamActionV1::BundleOpen { .. }
+            | PalwConstraintStreamActionV1::ActivateStage { .. } | PalwConstraintStreamActionV1::InventoryPart { .. }
+            | PalwConstraintStreamActionV1::InventoryFinish) {
+            if self.phase != PalwConstraintStreamPhaseV1::PrefixCourt {
+                return Err("bundle control changes its fixed carrier phase".into());
+            }
+            bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
+            if let PalwConstraintStreamActionV1::BundleOpen { plan } = &self.action { plan.check_v1()?; }
+            if let PalwConstraintStreamActionV1::InventoryPart { bytes, .. } = &self.action
+                && (bytes.is_empty() || bytes.len() > 65_536) {
+                return Err("inventory packet exceeds fixed raw-hash chunk".into());
+            }
+        }
         if let PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) = &self.action {
             answer.check()?;
             bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
@@ -342,6 +371,7 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::PrefixPublicDemand(_)
                 | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
                 | PalwConstraintStreamActionV1::PrefixBatch(_)
+                | PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
         ) && self.phase != PalwConstraintStreamPhaseV1::PrefixCourt
         {
             return Err("public prefix acquisition changes typed prefix phase".into());
@@ -396,11 +426,16 @@ impl PalwConstraintStreamMoveV1 {
             | PalwConstraintStreamActionV1::PrefixPublicDemand(_)
             | PalwConstraintStreamActionV1::PrefixPublicAnswer(_)
             | PalwConstraintStreamActionV1::PrefixBatch(_)
+            | PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
             | PalwConstraintStreamActionV1::TokenizerPacket(_)
             | PalwConstraintStreamActionV1::TokenizerSeal
             | PalwConstraintStreamActionV1::TokenizerRenderingPart { .. } => {
                 Err("typed auxiliary move is not a constrained court action".into())
             }
+            PalwConstraintStreamActionV1::BundleOpen { .. }
+            | PalwConstraintStreamActionV1::ActivateStage { .. }
+            | PalwConstraintStreamActionV1::InventoryPart { .. }
+            | PalwConstraintStreamActionV1::InventoryFinish => Err("bundle control is not a semantic court action".into()),
         }
     }
 }

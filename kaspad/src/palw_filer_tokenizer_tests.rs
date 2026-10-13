@@ -61,6 +61,8 @@ pub(in crate::palw_panel) fn prospective_table(
     semantics.token_table_root = Some(table.root());
     semantics.rendering_rule = Some(PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1);
     semantics.raw_tokenizer_bytes = Some(RAW.len() as u64);
+    semantics.tokenizer_key_events =
+        Some(kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_key_events_v1(RAW).unwrap());
     let target = PalwOffenceTargetV1 {
         claim_id: Hash64::from_u64_word(0xC018),
         class_id: job.class_id,
@@ -122,6 +124,12 @@ fn missing_wrong_or_over_budget_own_material_is_pending_but_false_registered_len
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tokenizer.json");
     let (mut target, binding, job, table) = prospective_table(false);
+    assert!(target.registered_semantics.as_ref().unwrap().well_formed_for(&target.class_id, &target.artifact_root));
+    let mut historic = target.clone();
+    historic.registered_semantics.as_mut().unwrap().tokenizer_key_events = None;
+    std::fs::write(&path, RAW).unwrap();
+    assert!(check_held_tokenizer_v1(&path, &historic, &binding, &job, &table, 100_000).is_err());
+    std::fs::remove_file(&path).unwrap();
     assert!(check_held_tokenizer_v1(&path, &target, &binding, &job, &table, 100_000).is_err());
     std::fs::write(&path, b"wrong local bytes").unwrap();
     assert!(check_held_tokenizer_v1(&path, &target, &binding, &job, &table, 100_000).is_err());

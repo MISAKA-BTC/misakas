@@ -13,6 +13,30 @@ use crate::palw_tokenizer_json_stream_v1::{
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
+/// Every prospective FP job answers its immutable registered tokenizer/table
+/// statement. Only constrained jobs additionally name that table in their job tail.
+pub fn palw_tokenizer_statement_v1<'a>(
+    target: &'a crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+) -> Result<&'a crate::palw_class_semantics_v1::PalwClassSemanticsV1, String> {
+    crate::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
+    let registered = target
+        .registered_semantics
+        .as_ref()
+        .filter(|r| r.matches_context(&binding.job_context))
+        .ok_or("tokenizer stream has no matching immutable claim semantics")?;
+    let (Some(root), Some(_), Some(_), Some(_)) =
+        (registered.token_table_root, registered.rendering_rule, registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
+    else {
+        return Err("historical unqualified tokenizer cannot enter prospective stream court".into());
+    };
+    if job.is_constraint() && crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job) != Some(root) {
+        return Err("tokenizer stream table is not the immutable registered root".into());
+    }
+    Ok(registered)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwAuthenticatedRenderingDigestStreamV1 {
     context: Hash64,
@@ -146,12 +170,7 @@ impl PalwTokenizerTableStreamV1 {
         opening: &PalwStepOpeningV1,
         operand_raw_length: u64,
     ) -> Result<Self, String> {
-        crate::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
-        let registered = target
-            .registered_semantics
-            .as_ref()
-            .filter(|r| r.matches_context(&binding.job_context))
-            .ok_or("tokenizer stream has no matching immutable claim semantics")?;
+        let registered = palw_tokenizer_statement_v1(target, binding, job)?;
         let (Some(root), Some(rule), Some(raw_length), Some(bound)) =
             (registered.token_table_root, registered.rendering_rule, registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
         else {
@@ -159,9 +178,6 @@ impl PalwTokenizerTableStreamV1 {
         };
         match rule {
             crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => (),
-        }
-        if crate::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job) != Some(root) {
-            return Err("tokenizer stream table is not the immutable registered root".into());
         }
         Ok(Self {
             context,

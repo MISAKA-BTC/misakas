@@ -521,6 +521,75 @@ pub fn palw_fp_public_ids_exceed_one_transaction_v1(payload: &PalwFpCommitmentTx
     (payload.prompt_token_ids.len() as u64).saturating_mul(4) > crate::palw_mode_v2::PALW_STANDARD_TX_BYTES
 }
 
+/// Prospective envelope extraction. Each pledge belongs to the very transaction
+/// which carries the original claim, not another object's or block's pledge.
+/// The legacy entry above remains byte-for-byte strict about its old payload.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_objects_from_accepted_txs_by_class_and_history_v1<'a, V, C>(
+    txs: &[Transaction],
+    network_domain: Hash64,
+    freeprompt: &PalwFreePromptParamsV3,
+    accepted_block: BlockHash,
+    panel_da_armed: bool,
+    class_caps: C,
+    ruleset_caps_armed: bool,
+    held_armed: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    decode_rules: crate::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+    history_armed: bool,
+    verify_mldsa87: V,
+) -> (PalwFpExtractionV3, std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>)
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    C: Fn(&Hash64) -> PalwFpClassCapsV1<'a>,
+{
+    if !history_armed {
+        return (palw_fp_objects_from_accepted_txs_by_class_v1(
+            txs, network_domain, freeprompt, accepted_block, panel_da_armed, class_caps,
+            ruleset_caps_armed, held_armed, prompt_ids_form, decode_rules, verify_mldsa87,
+        ), std::collections::BTreeMap::new());
+    }
+    let mut out = PalwFpExtractionV3::default();
+    let mut pledges = std::collections::BTreeMap::<Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>::new();
+    for tx in txs.iter().filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_PALW_FP_COMMITMENT) {
+        let id = tx.id();
+        let Ok(envelope) = crate::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload) else {
+            out.skipped.push((id, "prospective original history pledge envelope is absent or malformed"));
+            continue;
+        };
+        let Ok(payload) = envelope.original_fp_v1() else {
+            out.skipped.push((id, "history pledge does not bind the original FP commitment"));
+            continue;
+        };
+        if envelope.pledge.validate_signature_v1(&payload.commitment.job.executor_pubkey, &verify_mldsa87).is_err() {
+            out.skipped.push((id, "original producer history custody signature does not verify"));
+            continue;
+        }
+        // This transient transaction only feeds the existing inner decoder. All
+        // attribution and native fee/mass/admission use the actual outer carrier.
+        let mut inner = tx.clone();
+        inner.payload = envelope.original_payload;
+        let mut extracted = palw_fp_objects_from_accepted_txs_by_class_v1(
+            std::slice::from_ref(&inner), network_domain, freeprompt, accepted_block, panel_da_armed,
+            &class_caps, ruleset_caps_armed, held_armed, prompt_ids_form, decode_rules, &verify_mldsa87,
+        );
+        if !extracted.objects.is_empty() {
+            // A second carrier cannot substitute a different pledge for an already
+            // selected same-claim companion, even before referential admission.
+            if pledges.get(&payload.claim_id()).is_some_and(|old| old.pledge_id_v1() != envelope.pledge.pledge_id_v1()) {
+                out.skipped.push((id, "same claim has competing original history pledges"));
+                continue;
+            }
+            pledges.entry(payload.claim_id()).or_insert(envelope.pledge);
+        }
+        for carrier in &mut extracted.objects { carrier.carrier = id; }
+        for skipped in &mut extracted.skipped { skipped.0 = id; }
+        out.objects.extend(extracted.objects);
+        out.skipped.extend(extracted.skipped);
+    }
+    (out, pledges)
+}
+
 pub fn validate_palw_fp_commitment_tx_under_v3(
     payload: &[u8],
     panel_da_admissible: bool,

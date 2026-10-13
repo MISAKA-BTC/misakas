@@ -2401,6 +2401,72 @@ impl<'a> TransitionBuilder<'a> {
         claim: &PalwClaimStateV2,
         charge: &PalwDaDefaultChargeV1,
     ) -> Result<(), PalwStateV2Error> {
+        self.da_default_charge_with_producer_leg_v1(ctx, claim, charge, true)
+    }
+
+    /// Only the prospective rooted history fold may invoke this with the accepted
+    /// pledge and exact expired demand. Existing claims do not gain history custody.
+    pub(super) fn staged_history_default_charge_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim: &PalwClaimStateV2,
+        contract: &crate::palw_history_custody_v1::PalwHistoryCustodyContractV1,
+        default: &crate::palw_history_custody_v1::PalwHistoryRecoveryDefaultV1,
+        winner: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
+        let request = &default.request;
+        if contract.pledge.check_v1().is_err()
+            || request.check_v1().is_err()
+            || contract.pledge.claim != request.claim
+            || request.owner != winner
+            || contract.producer != claim.bond
+            || contract.pledge.execution_root != claim.execution_root
+            || contract.custody.accepted_daa != claim.accepted_daa
+            || request.sequence > contract.maximum_records
+            || request.material_until_daa > contract.pledge.material_until_daa
+            || default.opened_daa < request.reserved_daa
+            || default.opened_daa >= default.answer_until_daa
+            || default.collected_daa != ctx.daa_score
+            || ctx.daa_score < default.answer_until_daa
+            || ctx.daa_score >= request.material_until_daa
+            || !default.custodians.contains(&contract.producer)
+            || default.custodians.contains(&winner)
+            || default.custodians.iter().any(|bond| {
+                *bond != contract.producer && !contract.custody.credited.get(bond)
+                    .is_some_and(|receipt| receipt.credited_daa <= default.opened_daa)
+            })
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("history default differs from the accepted pledge and literal expired custody grant".into()));
+        }
+        let offence = palw_da_offence_id_v1(&contract.producer.0, &request.claim);
+        let producer_already_charged = self.state.consumed_offences.contains_key(&offence);
+        // A sibling default may already have voided the claim and paid the reporter.
+        // Retained family custody must not rerun that economic leg or reset its phase.
+        let (stage, live_producer_leg) = match claim.phase {
+            PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => (PalwDaStageV1::Live, true),
+            PalwClaimPhaseV2::ReceiptLicensed { .. } => (PalwDaStageV1::Licensed, true),
+            PalwClaimPhaseV2::Final { .. } => (PalwDaStageV1::FinalRow, true),
+            _ => (PalwDaStageV1::Live, false),
+        };
+        let charge = PalwDaDefaultChargeV1 {
+            claim_id: request.claim,
+            producer: contract.producer,
+            stage,
+            g: self.claim_g_v1(&request.claim).map(|g| g.g()).unwrap_or(0),
+            covering: default.custodians.iter().copied().filter(|bond| *bond != contract.producer).collect(),
+            winner,
+        };
+        self.da_default_charge_with_producer_leg_v1(ctx, claim, &charge, live_producer_leg && !producer_already_charged)
+    }
+
+    fn da_default_charge_with_producer_leg_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim: &PalwClaimStateV2,
+        charge: &PalwDaDefaultChargeV1,
+        run_producer_leg: bool,
+    ) -> Result<(), PalwStateV2Error> {
         use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
         use crate::palw_offence_v1::PalwOffenceKindV1;
         let now = ctx.daa_score;
@@ -2433,7 +2499,7 @@ impl<'a> TransitionBuilder<'a> {
             )?;
         }
         // 2. The producer, by stage.
-        let nominal = match charge.stage {
+        let nominal = if !run_producer_leg { 0 } else { match charge.stage {
             PalwDaStageV1::Live | PalwDaStageV1::Licensed => {
                 self.void_and_slash_at(claim_id, claim, now, PalwVoidReasonV2::ProducerWithholding, Some(&conv))?
             }
@@ -2456,7 +2522,7 @@ impl<'a> TransitionBuilder<'a> {
                     fp_first,
                 )?
             }
-        };
+        } };
         // 3. The record, once per claim; forfeiture by claim; the reward to the earliest defaulted accuser.
         if !self.state.consumed_offences.contains_key(&offence_id) {
             self.close_conviction_v1(

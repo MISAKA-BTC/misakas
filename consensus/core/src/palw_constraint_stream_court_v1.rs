@@ -204,6 +204,128 @@ impl PalwConstraintStreamCourtV1 {
                 committed as usize,
             );
         }
+        Self::from_authenticated_selection_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            &pin.generated_token_ids,
+            pin.position,
+            witness,
+            beat,
+            beats,
+            eog_count,
+            eog_opening,
+            signed_context,
+            &borsh::to_vec(pin).map_err(|e| e.to_string())?,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_flat_pin_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+    ) -> Result<Self, String> {
+        Self::new_from_flat_pin_with_seed_context_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_from_flat_pin_with_seed_context_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        signed_context: Option<Hash64>,
+    ) -> Result<Self, String> {
+        if !pin.matches_binding_v1(binding) {
+            return Err("flat semantic pin does not preserve the original claim/job/scheme".into());
+        }
+        let committed = pin.committed_id_v1().ok_or("flat terminal stop needs its separate authenticated predicate")?;
+        let value = pin.committed_value_v1().ok_or("out-of-vocabulary flat token needs the output-validity predicate")?;
+        let beat = pin.beat_v1();
+        let sampling = job.sampling_v2();
+        let beats = beat.is_some_and(|(id, b)| {
+            crate::palw_decode_select_v2::decode_lane_beats_v2(
+                sampling.lane_key(b, pin.position_v1(), id as usize),
+                id as usize,
+                sampling.lane_key(value, pin.position_v1(), committed as usize),
+                committed as usize,
+            )
+        });
+        Self::from_authenticated_selection_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            pin.generated_ids_v1(),
+            pin.position_v1(),
+            witness,
+            beat.map(|b| b.0),
+            beats,
+            eog_count,
+            eog_opening,
+            signed_context,
+            &borsh::to_vec(pin).map_err(|e| e.to_string())?,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn from_authenticated_selection_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        generated: &[u32],
+        position: u32,
+        witness: Option<u32>,
+        beat: Option<u32>,
+        beats: bool,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        signed_context: Option<Hash64>,
+        canonical_pin: &[u8],
+    ) -> Result<Self, String> {
+        verify_binding_v1(binding).map_err(|e| e.to_string())?;
+        if binding.committed_execution_root != expected_root
+            || !job.is_constraint()
+            || fp_job_id_v3(job) != binding.job_context.job_id
+            || generated.len() != binding.job_context.exact_decode_tokens as usize
+            || generated.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
+            || generated.get(position as usize).is_none_or(|id| *id >= binding.shape_profile.vocab_size)
+            || witness.is_some_and(|id| id >= binding.shape_profile.vocab_size)
+            || beat.is_some_and(|id| id >= binding.shape_profile.vocab_size)
+        {
+            return Err("authenticated semantic selection changes original claim/job/position/vocabulary".into());
+        }
         let constraint = palw_fp_constraint_shape_v1(job).map_err(|e| e.to_string())?;
         let table_root = palw_fp_constraint_table_root_v1(job).ok_or("stream job names no legacy table root")?;
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/constraint-stream/seed/v1").to_state();
@@ -213,16 +335,17 @@ impl PalwConstraintStreamCourtV1 {
         h.update(&borsh::to_vec(&owner).map_err(|e| e.to_string())?);
         h.update(&reserved_daa.to_le_bytes());
         // Canonical seed identity retains the actual pin, job and binding, not a caller-reencoded fault.
-        for bytes in [borsh::to_vec(binding), borsh::to_vec(job), borsh::to_vec(pin), borsh::to_vec(&witness)] {
-            h.update(&bytes.map_err(|e| e.to_string())?);
-        }
+        h.update(&borsh::to_vec(binding).map_err(|e| e.to_string())?);
+        h.update(&borsh::to_vec(job).map_err(|e| e.to_string())?);
+        h.update(canonical_pin);
+        h.update(&borsh::to_vec(&witness).map_err(|e| e.to_string())?);
         h.update(&eog_count.to_le_bytes());
         h.update(&borsh::to_vec(eog_opening).map_err(|e| e.to_string())?);
         let context = signed_context.unwrap_or_else(|| Hash64::from_bytes(h.finalize().as_bytes().try_into().unwrap()));
-        let mut relevant = pin.generated_token_ids.clone();
+        let mut relevant = generated.to_vec();
         relevant.extend(witness);
         relevant.extend(beat);
-        let eog = PalwEogStreamV1::new(context, table_root, vocab as u32, eog_count, &relevant, eog_opening)?;
+        let eog = PalwEogStreamV1::new(context, table_root, binding.shape_profile.vocab_size, eog_count, &relevant, eog_opening)?;
         let prefix_state = constraint_start_state_v1(&constraint);
         Ok(Self {
             claim_id,
@@ -232,10 +355,10 @@ impl PalwConstraintStreamCourtV1 {
             job_id: binding.job_context.job_id,
             context,
             table_root,
-            vocab: vocab as u32,
+            vocab: binding.shape_profile.vocab_size,
             constraint,
-            generated: pin.generated_token_ids.clone(),
-            position: pin.position,
+            generated: generated.to_vec(),
+            position,
             witness,
             beat,
             beats,
@@ -251,8 +374,17 @@ impl PalwConstraintStreamCourtV1 {
     pub fn seed_id(&self) -> Hash64 {
         self.context
     }
+    pub fn execution_root_v1(&self) -> Hash64 {
+        self.root
+    }
     pub fn phase(&self) -> PalwConstraintStreamPhaseV1 {
         self.phase
+    }
+    pub fn eog_offset_v1(&self) -> Option<u32> {
+        self.eog.as_ref().map(|e| e.offset())
+    }
+    pub fn rendering_cursor_v1(&self) -> Option<(u32, bool, u32, u32)> {
+        self.rendering.as_ref().map(|r| r.cursor_v1())
     }
     pub fn push_eog(&mut self, seed_id: Hash64, offset: u32, ids: &[u32]) -> Result<(), String> {
         if self.phase != PalwConstraintStreamPhaseV1::Eog {

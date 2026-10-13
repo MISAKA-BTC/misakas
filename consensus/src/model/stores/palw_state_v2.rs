@@ -227,6 +227,7 @@ impl DbPalwStateV2Store {
         }
         self.deltas.delete_all(DirectDbWriter::new(&self.db))?;
         self.clear_legacy_answer_history(&mut DirectDbWriter::new(&self.db), None)?;
+        self.clear_prefix_history_v1(&mut DirectDbWriter::new(&self.db))?;
         match self.tip.remove(DirectDbWriter::new(&self.db)) {
             Ok(()) | Err(StoreError::KeyNotFound(_)) => {}
             Err(e) => return Err(e),
@@ -568,6 +569,8 @@ impl DbPalwStateV2Store {
 
 #[path = "palw_legacy_answer_history_v2.rs"]
 mod legacy_answer_history_v2;
+#[path = "palw_prefix_history_v1.rs"]
+mod prefix_history_v1;
 
 #[cfg(test)]
 mod tests {

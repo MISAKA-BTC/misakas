@@ -298,6 +298,9 @@ impl PalwPrefixFamilyCourtV1 {
             && self.maximum_leaves == other.maximum_leaves
             && self.maximum_working_set_bytes == other.maximum_working_set_bytes
     }
+    pub fn admitted_context_v1(&self) -> (&PalwStepBindingV2, &PalwFreePromptJobV3) {
+        (&self.binding, &self.job)
+    }
     pub fn cursor_v1(&self) -> Result<PalwPrefixFamilyCursorV1, String> {
         self.check()?;
         let tile = |ordinal, length, offset| {
@@ -614,6 +617,11 @@ impl PalwPrefixFamilyCourtV1 {
     }
     pub fn execution_root(&self) -> Hash64 {
         self.binding.committed_execution_root
+    }
+    pub fn page_root_v1(&self) -> Option<(Hash64, u64, u8)> {
+        let FamilyV1::Q36 { head: Some(head), .. } = &self.family else { return None };
+        let Q36HeadV1::Paged { state, .. } = head.as_ref() else { return None };
+        Some((state.root(), state.page_count(), state.depth()))
     }
     pub fn check(&self) -> Result<(), String> {
         match &self.family {

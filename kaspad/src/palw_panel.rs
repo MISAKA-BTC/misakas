@@ -53,7 +53,7 @@ use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_core::{info, trace, warn};
+use kaspa_core::{debug, info, trace, warn};
 use kaspa_hashes::Hash64;
 use kaspa_mining::MAXIMUM_STANDARD_TRANSACTION_MASS;
 use kaspa_mining::mempool::tx::Orphan;
@@ -95,6 +95,8 @@ mod palw_operator_da;
 /// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
 #[path = "palw_fraud_filer.rs"]
 mod palw_fraud_filer;
+#[path = "palw_public_prefix.rs"]
+mod public_prefix;
 
 /// Lane G14-K: the kernel route's public verifier — any funded bond holding a registered kernel model re-executes the route's claims
 /// and pursues a refuted one (seal, file, demand) through `misaka_palw_remote::pursuit` and the court lane (node policy; a clean no-op
@@ -4164,6 +4166,7 @@ enum CaptureSamplesV1 {
 }
 
 pub struct PalwPanelService {
+    worker_running: std::sync::atomic::AtomicBool,
     /// Read-only test observation of real completed replay verdicts; never drives the service.
     #[cfg(test)]
     fraud_filer_honest_replays: std::sync::Mutex<HashSet<Hash64>>,
@@ -4598,6 +4601,7 @@ impl PalwPanelService {
             None
         };
         Self {
+            worker_running: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             fraud_filer_honest_replays: std::sync::Mutex::new(HashSet::new()),
             config,
@@ -7797,7 +7801,9 @@ impl PalwPanelService {
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
         let build = |fee: u64| {
-            key.build_fp_commitment_tx(
+            key.build_fp_commitment_tx_under_params_v1(
+                &self.consensus_config.params,
+                current_daa,
                 network_domain,
                 // The carrier's stateless check is the chain's, which holds no class and reads the
                 // network's genesis form (ADR-0118 Decision 5); a canonical payload carries no ids,
@@ -8147,20 +8153,46 @@ impl PalwPanelService {
         }
     }
 
-    /// Whether the seat identity loaded (the key file and the bond outpoint) — [`Self::worker`] declines
-    /// otherwise, and the daemon says so in one `PALW duties NOT as planned` line (`crate::palw_duties`).
+    /// Whether the signing seat identity loaded. Keyless local cache retirement is not a seat duty.
     pub fn seat_identity_loaded(&self) -> bool {
         self.bond.is_some() && self.keypair.is_some()
     }
 
+    async fn public_cache_retirement_worker_v1(&self) {
+        if self.consensus_config.params.palw_staged_public_court_v1.is_none() {
+            return;
+        }
+        let mut gc = public_prefix::PrefixCacheGcV1::default();
+        while self.tick(std::time::Duration::from_secs(2)).await {
+            let session = self.consensus_manager.consensus().unguarded_session();
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(session.get_virtual_daa_score())
+                && let Err(why) = gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await
+            {
+                debug!("[{PALW_PANEL}] keyless public cache retirement remains pending: {why}");
+            }
+        }
+    }
+
     pub async fn worker(self: &Arc<Self>) {
+        if self.worker_running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        struct WorkerClaim<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for WorkerClaim<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _worker_claim = WorkerClaim(&self.worker_running);
         let (Some(bond), true) = (self.bond, self.keypair.is_some()) else {
-            info!("[{PALW_PANEL}] not running (see the startup warning above)");
+            info!("[{PALW_PANEL}] signing duties disabled; only local public cache retirement may run");
+            self.public_cache_retirement_worker_v1().await;
             return;
         };
         let bond_key = PalwBondKeyV2(bond);
         let Some(mut inbox) = self.flow_context.palw_gossip().take_inbox() else {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
+            self.public_cache_retirement_worker_v1().await;
             return;
         };
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -8407,6 +8439,8 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        let mut public_prefix_response_cursor = None;
+        let mut public_prefix_cache_gc = public_prefix::PrefixCacheGcV1::default();
         // The DAA each queued item is due by, where one is computable — what the priority lane orders
         // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
         // carried after every dated item, by age. The reporter filer's items are dated by the filer
@@ -8568,6 +8602,12 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
+                && let Err(why) =
+                    public_prefix_cache_gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await
+            {
+                debug!("[{PALW_PANEL}] bounded public cache retirement remains pending: {why}");
+            }
             // **RFC-0007: the verification vertex's fence, if it is in force at this tip** — the only thing that makes this node's seat
             // speak in vertices; `None` on every chain that has not armed it, and then every line below the fence is the code that always ran.
             let vertex_fence = self
@@ -10771,6 +10811,19 @@ impl PalwPanelService {
                 }
             }
 
+            if let Err(why) = self
+                .public_prefix_answer_tick_v1(
+                    &session,
+                    bond_key,
+                    &mut public_prefix_response_cursor,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] public prefix response remains pending: {why}");
+            }
             tick_guard.phase("court+da");
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);

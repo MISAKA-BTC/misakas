@@ -2426,11 +2426,94 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_staged_paid_authority_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1>, String> {
+        self.virtual_processor.palw_staged_paid_authority_v1_impl(key)
+    }
+
+    fn palw_staged_owned_context_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        self.virtual_processor.palw_staged_owned_context_v1_impl(key)
+    }
+
     fn palw_staged_owned_progress_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
     ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
         self.virtual_processor.palw_staged_owned_progress_v1_impl(key)
+    }
+
+    fn palw_staged_owned_seed_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>, String> {
+        self.virtual_processor.palw_staged_owned_seed_v1_impl(key)
+    }
+
+    fn palw_staged_bundle_plan_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        actual_raw_cap: Option<u64>,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        self.virtual_processor.palw_staged_bundle_plan_v1_impl(claim, actual_raw_cap)
+    }
+
+    fn palw_prefix_response_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwPrefixResponsePageV1, String> {
+        self.virtual_processor.palw_prefix_response_duties_v1_impl(signer, after)
+    }
+
+    fn palw_prefix_page_write_v1(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed_id: kaspa_consensus_core::Hash64,
+        opening: kaspa_consensus_core::palw_prefix_gdn_paged_v1::PalwGdnOwnedPageOpeningV1,
+    ) -> Result<Vec<i32>, String> {
+        self.virtual_processor.palw_prefix_page_write_v1_impl(snapshot, key, seed_id, opening)
+    }
+
+    fn palw_prefix_history_record_v1(
+        &self,
+        snapshot: kaspa_consensus_core::BlockHash,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.virtual_processor.palw_prefix_history_record_v1_impl(snapshot, request)
+    }
+
+    fn palw_prefix_history_record_current_v1(
+        &self,
+        request: kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        self.virtual_processor.palw_prefix_history_record_current_v1_impl(request)
+    }
+
+    fn palw_staged_cache_gc_page_v1(
+        &self,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheGcPageV1, String> {
+        self.virtual_processor.palw_staged_cache_gc_page_v1_impl(after, limit)
+    }
+
+    fn palw_staged_cache_gc_ack_v1(
+        &self,
+        lease: kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheLeaseV1,
+    ) -> Result<bool, String> {
+        self.virtual_processor.palw_staged_cache_gc_ack_v1_impl(lease)
     }
 
     fn palw_terminal_progress_v1(

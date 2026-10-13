@@ -358,9 +358,9 @@ EXPECTED_BY_MERGE = {
 # before the A-held merge; with --shipping, absent is a CHECK too.
 GATES = [
     ("palw_state_v2::tests::held_forfeits_v1::the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool",
-     STATE, "feat/t12-aheld-node"),
+     STATE_TESTS, "feat/t12-aheld-node"),
     ("palw_state_v2::tests::held_forfeits_v1::the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused",
-     STATE, "feat/t12-aheld-node"),
+     STATE_TESTS, "feat/t12-aheld-node"),
 ]
 
 # The one phrase that says whose values a document's copy block holds, in either form. `--apply` rewrites
@@ -1172,7 +1172,7 @@ def run_tests(rows: list[Row], extra: set[str], log_dir: str) -> tuple[int, str]
         if r.pin.file.startswith("consensus/core/tests/") and r.pin.file.endswith(".rs"):
             targets.add(os.path.splitext(os.path.basename(r.pin.file))[0])
     lib_filters.add(LIB_GOLDEN_TEST)
-    state = os.path.join(REPO, STATE)
+    state = os.path.join(REPO, STATE_TESTS)
     if "mod held_forfeits_v1" in open(state, encoding="utf-8").read():
         lib_filters.add("palw_state_v2::tests::held_forfeits_v1")
     targets = sorted(t for t in targets if os.path.exists(os.path.join(REPO, "consensus/core/tests", t + ".rs")))
@@ -1337,24 +1337,33 @@ def selftest(log_dir: str) -> int:
                                     "attribution.BEFORE_THE_ATTRIBUTION.testnet-11.params_id",
                                     "deadline.BEFORE_THE_DEADLINE.testnet-11.params_id", "release.T11_CONSENSUS_PARAMS_ID",
                                     "params.shipped_presets.testnet-11", "pool.BEFORE_THE_POOL.testnet-11.params_id",
-                                    "horizon.BEFORE_THE_HORIZON.testnet-11.params_id", "maturity.UNMOVED.testnet-11.params_id"]}),
+                                    "horizon.BEFORE_THE_HORIZON.testnet-11.params_id", "maturity.UNMOVED.testnet-11.params_id",
+                                    "cap.BEFORE_THE_CAP.testnet-11.params_id", "floor2.OTHERS_AT_THE_RELEASE.testnet-11.params_id",
+                                    "resilience.OTHERS_AT_THE_RELEASE.testnet-11.params_id"]}),
         ("devnet's identity moved", change((rep_line("shipped.devnet.identity_id"),)), {},
          {k: "refuse" for k in ["rcore.AT_V22.devnet.identity_id", "floor.BEFORE_THE_FLOOR.devnet.identity_id",
                                 "attribution.BEFORE_THE_ATTRIBUTION.devnet.identity_id", "deadline.BEFORE_THE_DEADLINE.devnet.identity_id",
                                 "pool.BEFORE_THE_POOL.devnet.identity_id", "horizon.BEFORE_THE_HORIZON.devnet.identity_id",
-                                "maturity.UNMOVED.devnet.identity_id"]}),
+                                "maturity.UNMOVED.devnet.identity_id", "cap.BEFORE_THE_CAP.devnet.identity_id",
+                                "floor2.OTHERS_AT_THE_RELEASE.devnet.identity_id", "resilience.OTHERS_AT_THE_RELEASE.devnet.identity_id"]}),
         ("mainnet's ruleset moved", change((rep_line("shipped.mainnet.params_id"),), (rep_line("const.mainnet.params_id"),),
                                            (rep_line("preset_net.mainnet.params_id"),)), {},
          {k: "move" for k in ["rcore.AT_V22.mainnet.params_id", "rcore.AT_V21.mainnet.params_id", "floor.BEFORE_THE_FLOOR.mainnet.params_id",
                               "attribution.BEFORE_THE_ATTRIBUTION.mainnet.params_id", "deadline.BEFORE_THE_DEADLINE.mainnet.params_id",
                               "release.MAINNET_CONSENSUS_PARAMS_ID", "params.shipped_presets.mainnet",
                               "pool.BEFORE_THE_POOL.mainnet.params_id", "horizon.BEFORE_THE_HORIZON.mainnet.params_id",
-                              "maturity.UNMOVED.mainnet.params_id"]}),
+                              "maturity.UNMOVED.mainnet.params_id", "cap.BEFORE_THE_CAP.mainnet.params_id",
+                              "floor2.OTHERS_AT_THE_RELEASE.mainnet.params_id", "resilience.OTHERS_AT_THE_RELEASE.mainnet.params_id"]}),
         ("testnet-12's fingerprint and a twin moved", change((rep_line("from.testnet-12.params_id"),),
                                                              (r"testnet-12 without the fence: params ",)), {},
-         {k: "move" for k in ["checklist.EXPECT_FP", "plan.EXPECT_FP", "scan_deploy.fp", "attribution.T12_BEFORE_THE_ATTRIBUTION.params_id"]}),
+         {k: "move" for k in ["checklist.EXPECT_FP", "plan.EXPECT_FP", "scan_deploy.fp", "attribution.T12_BEFORE_THE_ATTRIBUTION.params_id",
+                              "join_doc.fp", "monitor.T12_FP", "monitor_doc.fp", "monitor_doc.sample_fp", "readme.fp", "scan_index.fp"]}),
         ("testnet-12's shipped params moved (the horizon's full-ids pin)", change((rep_line("shipped.testnet-12.params_id"),)), {},
-         {"horizon.T12_WITH_THE_HORIZON.params_id": "move", "maturity.T12_WITH_THE_MATURITY.params_id": "move"}),
+         {k: "move" for k in ["horizon.T12_WITH_THE_HORIZON.params_id", "maturity.T12_WITH_THE_MATURITY.params_id",
+                              "binder.T12_RELEASE.params_id", "cap.T12_WITH_THE_CAP.params_id", "hbsc.T12_RELEASED.params_id",
+                              "laneorder.T12_RELEASE.params_id", "opanchor.T12_RELEASE.params_id", "ppstrict.T12_RELEASE.params_id",
+                              "reorg.T12_RELEASE.params_id", "resilience.T12_RELEASE.params_id", "seatmat.T12_RELEASE.params_id",
+                              "seed.T12_RELEASE.params_id", "sink.T12_RELEASE.params_id", "v02.T12_RELEASE.params_id", "v02life.T12_RELEASE.params_id"]}),
         ("the horizon's twin moved", change((r'/ without \("',)), {}, {"horizon.T12_BEFORE_THE_HORIZON.params_id": "move"}),
         ("the maturity's twin moved", change((r'/ without the maturity \("',)), {},
          {"maturity.T12_WITHOUT_THE_MATURITY.params_id": "move"}),
