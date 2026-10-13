@@ -4,6 +4,7 @@
 
 mod public_filer_targeting_v1;
 mod terminal_carriage_v1;
+mod reward_gate_genesis;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;

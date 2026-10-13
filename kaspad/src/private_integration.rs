@@ -32,6 +32,50 @@ pub use bootstrap::export_private_complete_bootstrap_v1;
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 
+/// Exact private native-settlement dependency bundle. The factory retains real
+/// Rule E and its header commitment; only release-arming refusals are excepted.
+pub fn private_native_settlement_params_v1(
+    mut params: kaspa_consensus_core::config::params::Params,
+) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    use kaspa_consensus_core::{
+        config::params::ForkActivation,
+        palw_native_settlement_v1::{PalwDnsRetirementV1, PalwSettlementPolicyV1},
+    };
+    params.palw_fork_choice_rule_e_v1 = Some(ForkActivation::new(1));
+    params.palw_fork_choice_commitment_v1 = Some(ForkActivation::new(1));
+    params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
+        activation: ForkActivation::new(1),
+        settlement: PalwSettlementPolicyV1 {
+            settled_anchor_depth: 1,
+            unique_mature_work: 1,
+            max_operator_permille: 1000,
+            max_class_permille: 1000,
+        },
+        legacy_evidence_horizon_daa: 5,
+    });
+    validate_private_native_relations(&params)?;
+    Ok(params)
+}
+
+fn validate_private_native_relations(params: &kaspa_consensus_core::config::params::Params) -> Result<(), String> {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    params.validate_palw_fork_choice_rule_e_order_v1().map_err(|e| e.to_string())?;
+    if params.palw_fork_choice_rule_e_v1 != Some(ForkActivation::new(1))
+        || params.palw_fork_choice_commitment_v1 != Some(ForkActivation::new(1))
+        || params.palw_dns_retirement.is_none_or(|r| r.activation != ForkActivation::new(1))
+    {
+        return Err("private retirement requires its exact Rule E/commitment/retirement heights".into());
+    }
+    let mut checked = params.clone();
+    checked.palw_probabilistic_constraints_v1 = None;
+    checked.palw_signed_registration_v1 = None;
+    checked.palw_panel_free_v1 = None;
+    // The private entry point retains the armed commitment/Rule E/retirement
+    // while running every production value and dependency validator.
+    checked.validate_palw_v1().map_err(|e| e.to_string())?;
+    checked.validate_palw_v2_private_rule_e_v1().map_err(|e| e.to_string())
+}
+
 /// Exact complete-only private policy for a public registration/bootstrap probe.
 /// The test constructor alone can run this policy; ordinary startup continues
 /// to refuse the three unreleased activation fences. No class, capability,
@@ -40,10 +84,7 @@ pub fn private_complete_check_params_v1(
     salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1,
 ) -> Result<kaspa_consensus_core::config::params::Params, String> {
     use kaspa_consensus_core::{
-        config::params::ForkActivation,
-        palw_native_settlement_v1::{PalwDnsRetirementV1, PalwSettlementPolicyV1},
-        palw_panel_free_v1::PalwPanelFreeFenceV1,
-        palw_tir_v1::PalwTirFenceV1,
+        config::params::ForkActivation, palw_panel_free_v1::PalwPanelFreeFenceV1, palw_tir_v1::PalwTirFenceV1,
     };
     let mut params = kaspa_consensus_core::config::drill::palw_chain_params_v1(palw_drill_network_v1(), Some(salt))?;
     // T12 already arms the canonical economic bundle from genesis. The IR's
@@ -64,18 +105,7 @@ pub fn private_complete_check_params_v1(
         return Err("the complete-only private policy must retain the complete reward gate and full effective target".into());
     }
     params.palw_panel_free_v1 = Some(panel_free);
-    // These are the construction profile's explicit test-policy terms, never
-    // an economic, security or D/W approval. All real material windows remain.
-    params.palw_dns_retirement = Some(PalwDnsRetirementV1 {
-        activation: ForkActivation::new(1),
-        settlement: PalwSettlementPolicyV1 {
-            settled_anchor_depth: 1,
-            unique_mature_work: 1,
-            max_operator_permille: 1000,
-            max_class_permille: 1000,
-        },
-        legacy_evidence_horizon_daa: 5,
-    });
+    params = private_native_settlement_params_v1(params)?;
     validate_private_complete_relations(&params)?;
     Ok(params)
 }
@@ -85,12 +115,7 @@ fn validate_private_complete_relations(params: &kaspa_consensus_core::config::pa
     // invariant, including the TIR mirror, economics, lifecycle fence audit and
     // the fixed Panel-free value, is checked by its production implementation.
     params.palw_panel_free_v1.as_ref().ok_or("missing private Panel-free policy")?.validate_value()?;
-    let mut checked = params.clone();
-    checked.palw_probabilistic_constraints_v1 = None;
-    checked.palw_signed_registration_v1 = None;
-    checked.palw_panel_free_v1 = None;
-    checked.validate_palw_v1().map_err(|e| e.to_string())?;
-    checked.validate_palw_v2().map_err(|e| e.to_string())
+    validate_private_native_relations(params)
 }
 
 /// Test-policy identity, not a release result or economic/security approval.
@@ -141,6 +166,8 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
             "capabilitiesAdded": false, "participantIndependenceProven": false,
         })),
         "retirement": retirement,
+        "forkChoiceRuleEDaa": config.params.palw_fork_choice_rule_e_v1.map(|at| at.daa_score()),
+        "forkChoiceCommitmentDaa": config.params.palw_fork_choice_commitment_v1.map(|at| at.daa_score()),
         "skipProofOfWork": config.params.skip_proof_of_work,
         "canonicalWorkDaa": config.params.palw_canonical_work_daa(),
         "completeOnlyPrivatePolicy": config.params.palw_probabilistic_constraints_v1.is_some()
@@ -209,8 +236,12 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
         }
         validate_private_complete_relations(&config.params)?;
     } else {
-        config.params.validate_palw_v1().map_err(|error| error.to_string())?;
-        config.params.validate_palw_v2().map_err(|error| error.to_string())?;
+        if config.params.palw_dns_retirement.is_some() {
+            validate_private_native_relations(&config.params)?;
+        } else {
+            config.params.validate_palw_v1().map_err(|error| error.to_string())?;
+            config.params.validate_palw_v2().map_err(|error| error.to_string())?;
+        }
     }
     let mut applied = config.clone();
     args.apply_to_config(&mut applied);
@@ -301,12 +332,29 @@ mod tests {
         assert_eq!(params.genesis.bits, baseline.genesis.bits);
         assert!(!params.skip_proof_of_work);
         assert_eq!(params.palw_canonical_work_daa(), Some(0));
+        assert!(params.palw_fork_choice_rule_e_active_at(1));
+        assert_eq!(params.palw_fork_choice_commitment_v1, Some(kaspa_consensus_core::config::params::ForkActivation::new(1)));
+        params.validate_palw_fork_choice_rule_e_order_v1().unwrap();
         assert!(params.validate_palw_v2().is_err(), "ordinary startup keeps its release refusal");
         let opv = params.palw_panel_free_v1.as_ref().unwrap();
         assert!(!opv.sampled_conformance_gates_reward);
         assert_eq!(opv.min_effective_bits, 128);
         opv.validate_value().unwrap();
         validate_private_complete_relations(&params).unwrap();
+        for field in 0..5 {
+            let mut changed = params.clone();
+            match field {
+                0 => changed.palw_fork_choice_rule_e_v1 = None,
+                1 => changed.palw_fork_choice_commitment_v1 = None,
+                2 => changed.palw_dns_retirement.as_mut().unwrap().settlement.unique_mature_work = 0,
+                3 => changed.dns_params.as_mut().unwrap().full_reward_split_daa_score = 2,
+                _ => changed.blockrate.target_time_per_block += 1,
+            }
+            assert!(
+                validate_private_complete_relations(&changed).is_err(),
+                "private release exception cannot hide invalid dependency/value {field}"
+            );
+        }
         let mut config = Config::new(params);
         config.palw_drill_genesis_salt = Some(salt);
         let args = Args {

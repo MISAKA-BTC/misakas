@@ -17818,9 +17818,11 @@ fn apply_class_registration_v1(
             u16::try_from(committed).expect("committed is bounded by 1000 above"),
         )?;
     }
-    // **G14-for-rewards**: past the OPV fence no class is written Active (and granted share) at its registration — it activates in
-    // `activate_due_classes`, through the reward gate (`palw_opv_bootstrap_v1::palw_reward_gate_v1`).
-    let reward_gated = builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
+    // **G14-for-rewards**: useful-computation classes activate through the reward
+    // gate. Its BASE_FLOOR exemption also applies at registration: withholding
+    // the first floor's share leaves genesis unable to register its next class.
+    let reward_gated = *class_id != builder.params.base_class_id
+        && builder.extras.kernel_route.as_ref().and_then(|e| e.opv.as_ref()).is_some_and(|o| o.reward_gate.is_some());
     let weightless = *activation_daa > ctx.daa_score || reward_gated;
     if !weightless {
         // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
