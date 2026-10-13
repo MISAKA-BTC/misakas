@@ -34,6 +34,7 @@ kaspa-evm = { workspace = true, optional = true }
 
 async-trait.workspace = true
 borsh.workspace = true
+flate2.workspace = true
 futures = { workspace = true, features = ["alloc"] }
 indexmap.workspace = true
 itertools.workspace = true

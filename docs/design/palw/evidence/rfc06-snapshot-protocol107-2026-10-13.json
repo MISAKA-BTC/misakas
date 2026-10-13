@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-pruning-snapshot-protocol107",
+  "baseHead": "c2d3cb865855be58598eea1c848a6a7306920245",
+  "protocolVersion": 107,
+  "codec": "single zlib stream codec1",
+  "wireCapBytes": 402653184,
+  "canonicalEncodedCapBytes": 536870912,
+  "lowerBoundOneCapability100kFourPopulationsBytes": 424900000,
+  "nativeOrFleetResourceApproval": false,
+  "moduleTestsPassed": 16,
+  "moduleTestsFailed": 0,
+  "moduleTestsIgnored": 0,
+  "moduleTestSeconds": 2.46,
+  "testExecutableSha256": "56165df5498c392c716e9b9f2cd5db5fb2a05e56463001817391dc807ab1d196",
+  "harnessSha256": "7975dff045449a3436eca7d327545ed53461065cadbabdbc9d030d8cb556ae6f",
+  "sourceSha256": {
+    "Cargo.lock": "480f390a510fa1cbdd597ccf4ce0da67f03b37de7ec7696a3399e8c4ed927160",
+    "protocol/flows/Cargo.toml": "515e8ade8b17ce57cd52f0016524c913a6b4b9238ee145b48a8edd5775d87895",
+    "protocol/p2p/proto/p2p.proto": "2e484e95dae6827d80061c423c96cf040635717a912d36c04ce7798f2aef1b6a",
+    "protocol/flows/src/flow_context.rs": "003fd01583aabd231d8d9cc2c379037fab6f0ca3fe1e040fd3ec41d5c779d48f",
+    "protocol/flows/src/palw_snapshot_chunks.rs": "b821cdea4ba670ea3858cc208c9a67a0fec5ed8cae410b9b3b24e42630bbf78c",
+    "protocol/flows/src/ibd/palw_snapshot_chunks.rs": "78f1254ead001c6a459888d3961c1154cac4d206bed3ed5eadb0324ef002b9f6",
+    "protocol/flows/src/ibd/flow.rs": "4fdde60cc2d73a0db6dcace51653bd3ca03600eed3cc3d4195a5a6ea69931ec8",
+    "protocol/flows/src/v8/request_pruning_point_snapshots.rs": "10053ea53c915c4bda7efbae2d79585bf49c31e91b298760eeeba57f2207021f",
+    "scripts/drills/rfc06_snapshot_wire_probe.rs": "549a3691ad3007c1067638d37563bf70d41802bbd0d60a7bcb1f7e0afdc292c3"
+  },
+  "linkedLibrariesSha256": {
+    "libkaspa_consensus_core-5acd77f3190a1ae4.rlib": "2a87100710db42c8dc4360594364eacb73cde12996452439e8e63fcfa99865d4",
+    "libkaspa_hashes-94469b6cb5a4ddba.rlib": "6d64685c953a06bffbd9178391cf4c16cec01ce63d250dd32157bfd332eeceff",
+    "libborsh-c57124d88bb5020f.rlib": "5532aa752af250630dc85869e908413d1ecf7975ad76a0d28e15fd50f6bf8fd7",
+    "libtokio-98db03da579bfa28.rlib": "f6bad0361f865abeb2af6e6df267bbb3cf6dcbb9c6a550543397ad450261643a",
+    "libuuid-0bdf4fe8a9a7b280.rlib": "6b172fc807858d3cd686f3c5f58af1363fb2d0d33d3e07b16589af12195a0585",
+    "libflate2-54c5a52fe316cd04.rlib": "4c13d4286ef1d3637837e75a97b7772e30a7a6b00fa2eed59d50d5ad05f4d778"
+  },
+  "integratedFlowCompilation": "pending matching node graph",
+  "native100kCompressedWireMeasurement": "pending optimized-profile high-entropy native dump",
+  "realMultiprocessPrunedAcceptance": false
+}

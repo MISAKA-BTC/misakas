@@ -86,7 +86,7 @@ use uuid::Uuid;
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 106;
+const PROTOCOL_VERSION: u32 = 107;
 
 /// ADR-0115: how often the P2P service ticks the EVM relay ([`FlowContext::evm_relay_tick`]).
 pub const EVM_RELAY_TICK: Duration = Duration::from_secs(15);
@@ -116,6 +116,8 @@ pub(crate) const PROTOCOL_VERSION_PRE_PALW_PULL: u32 = 103;
 pub(crate) const PROTOCOL_VERSION_PALW_INTERVAL: u32 = 105;
 /// Bounded authenticated spill-file PALW snapshot chunks; neither direction is sent below it.
 pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS: u32 = 106;
+/// Bounded zlib snapshots with separate wire/canonical caps and nonce/profile binding.
+pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED: u32 = 107;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -2517,6 +2519,10 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS => (
+                v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS),
+                PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS,
+            ),
             PROTOCOL_VERSION_PALW_INTERVAL => {
                 (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_INTERVAL), PROTOCOL_VERSION_PALW_INTERVAL)
             }

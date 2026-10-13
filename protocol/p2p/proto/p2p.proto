@@ -471,6 +471,9 @@ message RequestPruningPointPalwStateMessage{
   bool chunked = 2;
   bytes snapshotRoot = 3;
   uint32 chunkIndex = 4;
+  // Protocol >=107 only: codec 1 is one zlib stream; nonce is requester-chosen 32 bytes.
+  uint32 snapshotCodec = 5;
+  bytes snapshotNonce = 6;
 }
 
 message PruningPointPalwStateMessage{
@@ -495,6 +498,9 @@ message PruningPointPalwStateMessage{
   uint32 chunkCount = 8;
   uint64 totalBytes = 9;
   bytes chunkHash = 10;
+  uint32 snapshotCodec = 11;
+  uint64 decodedBytes = 12;
+  bytes snapshotNonce = 13;
 }
 
 // One class's declaration, as the accept path would have indexed it.

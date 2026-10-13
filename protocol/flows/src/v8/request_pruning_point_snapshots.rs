@@ -181,7 +181,7 @@ impl RequestPruningPointPalwStateFlow {
                 self.serve_chunked(msg).await?;
                 continue;
             }
-            if !msg.snapshot_root.is_empty() || msg.chunk_index != 0 {
+            if !msg.snapshot_root.is_empty() || msg.chunk_index != 0 || msg.snapshot_codec != 0 || !msg.snapshot_nonce.is_empty() {
                 return Err(ProtocolError::Other("legacy PALW snapshot request carries chunk fields"));
             }
             let pp = req_pruning_point(msg.pruning_point_hash)?;
@@ -289,11 +289,17 @@ impl RequestPruningPointPalwStateFlow {
         }
     }
     async fn serve_chunked(&mut self, msg: RequestPruningPointPalwStateMessage) -> Result<(), ProtocolError> {
-        use crate::palw_snapshot_chunks::{SnapshotSender, SnapshotSpill, chunk_hash};
+        use crate::palw_snapshot_chunks::{SNAPSHOT_CODEC_ZLIB_V1, SnapshotSender, SnapshotSpill, chunk_hash_profile};
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return Err(ProtocolError::Other("PALW snapshot chunks require negotiated protocol 106"));
         }
         let pp = req_pruning_point(msg.pruning_point_hash)?;
+        let nonce = crate::palw_snapshot_chunks::compression_request_nonce(
+            self.router.properties().protocol_version,
+            msg.snapshot_codec,
+            &msg.snapshot_nonce,
+        )
+        .map_err(|_| ProtocolError::Other("PALW snapshot compression/nonce was not negotiated"))?;
         let root = if msg.snapshot_root.is_empty() {
             None
         } else {
@@ -324,7 +330,10 @@ impl RequestPruningPointPalwStateFlow {
                 .spawn_blocking(move |c| {
                     c.pruning_point_palw_state(pp).map(|carriage| {
                         let declarations = c.palw_class_carriages_for_sync_v1();
-                        SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations)
+                        match nonce {
+                            Some(nonce) => SnapshotSender::encode_snapshot_compressed(spill, pp, &carriage, &declarations, nonce),
+                            None => SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations),
+                        }
                     })
                 })
                 .await;
@@ -334,7 +343,10 @@ impl RequestPruningPointPalwStateFlow {
             };
             // Reserve/charge this ONE traversal exactly like the old whole-message response.
             // Continuations may spend that traversal, but cannot rewind or duplicate a chunk.
-            self.ctx.palw_gossip().charge_sidecar_serve(peer, sender.total);
+            // Compression must not make a large reconstruction cheap to repeat.
+            // Charge the larger canonical traversal/wire size before continuation.
+            let traversed = sender.total.max(sender.profile.map_or(0, |p| p.decoded));
+            self.ctx.palw_gossip().charge_sidecar_serve(peer, traversed);
             if let Some(root) = root
                 && sender.resume(pp, root, msg.chunk_index).is_err()
             {
@@ -344,6 +356,9 @@ impl RequestPruningPointPalwStateFlow {
             self.chunks = Some(sender);
         }
         let sender = self.chunks.as_mut().unwrap();
+        if sender.profile.map(|p| p.nonce) != nonce {
+            return Err(ProtocolError::Other("PALW snapshot nonce/codec changed during stream"));
+        }
         let bytes = sender
             .chunk(pp, root, msg.chunk_index)
             .map_err(|_| ProtocolError::Other("invalid PALW snapshot point/root/order/expiry"))?;
@@ -355,8 +370,13 @@ impl RequestPruningPointPalwStateFlow {
             chunk_index: msg.chunk_index,
             chunk_count: sender.count,
             total_bytes: sender.total,
-            chunk_hash: chunk_hash(pp, sender.root, sender.total, sender.count, msg.chunk_index, &bytes).as_byte_slice().to_vec(),
+            chunk_hash: chunk_hash_profile(pp, sender.root, sender.total, sender.count, msg.chunk_index, &bytes, sender.profile)
+                .as_byte_slice()
+                .to_vec(),
             palw_state: bytes,
+            snapshot_codec: sender.profile.map_or(0, |_| SNAPSHOT_CODEC_ZLIB_V1),
+            decoded_bytes: sender.profile.map_or(0, |p| p.decoded),
+            snapshot_nonce: sender.profile.map_or_else(Vec::new, |p| p.nonce.to_vec()),
             ..Default::default()
         };
         if sender.next_index() == sender.count {

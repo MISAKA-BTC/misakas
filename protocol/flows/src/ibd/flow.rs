@@ -2837,6 +2837,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             || msg.chunk_index != 0
             || !msg.chunk_hash.is_empty()
             || msg.pruning_point_hash.is_some()
+            || msg.snapshot_codec != 0
+            || msg.decoded_bytes != 0
+            || !msg.snapshot_nonce.is_empty()
         {
             return Err(ProtocolError::Other("legacy PALW snapshot reply carries unnegotiated chunk metadata"));
         }

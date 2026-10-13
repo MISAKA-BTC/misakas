@@ -1,7 +1,10 @@
 //! Protocol-106 requester. Builds a bounded private spill before any local consensus
 //! mutation; native import verifies the completed carriage under the pruning header.
 use super::IbdFlow;
-use crate::palw_snapshot_chunks::{Snapshot, SnapshotReceiver, SnapshotSpill, park_interrupted_snapshot, take_interrupted_snapshot};
+use crate::palw_snapshot_chunks::{
+    SNAPSHOT_CODEC_ZLIB_V1, Snapshot, SnapshotCompressionV1, SnapshotReceiver, SnapshotSpill, park_interrupted_snapshot,
+    take_interrupted_snapshot,
+};
 use kaspa_consensus_core::{BlockHash, Hash64};
 use kaspa_p2p_lib::{
     common::ProtocolError,
@@ -20,6 +23,17 @@ impl IbdFlow {
             return Err(ProtocolError::Other("PALW snapshot chunks were not negotiated"));
         }
         let mut receiver = take_interrupted_snapshot(point);
+        let compressed = self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED;
+        // Negotiated peer changes may require a fresh transfer. A parked stream's
+        // raw/compressed identity is never reinterpreted under another version.
+        if receiver.as_ref().is_some_and(|state| state.profile().is_some() != compressed) {
+            receiver = None;
+        }
+        let nonce = if compressed {
+            receiver.as_ref().and_then(SnapshotReceiver::profile).map_or_else(|| rand::random::<[u8; 32]>(), |p| p.nonce).to_vec()
+        } else {
+            Vec::new()
+        };
         // A parked receiver already owns its permit. Otherwise reserve before wire
         // work; cancellation and malformed replies immediately release this local lease.
         let mut spill = if receiver.is_none() {
@@ -30,7 +44,7 @@ impl IbdFlow {
         } else {
             None
         };
-        let result = self.receive_pruning_point_palw_chunks(point, &mut receiver, &mut spill).await;
+        let result = self.receive_pruning_point_palw_chunks(point, &mut receiver, &mut spill, &nonce).await;
         if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed))
             && let Some(receiver) = receiver.take()
         {
@@ -44,6 +58,7 @@ impl IbdFlow {
         point: BlockHash,
         receiver: &mut Option<SnapshotReceiver>,
         spill: &mut Option<SnapshotSpill>,
+        nonce: &[u8],
     ) -> Result<Option<Snapshot>, ProtocolError> {
         let mut root = receiver.as_ref().map(SnapshotReceiver::root);
         let start_index = receiver.as_ref().map_or(0, SnapshotReceiver::next_index);
@@ -57,6 +72,8 @@ impl IbdFlow {
                         chunked: true,
                         snapshot_root: root.map(|h: Hash64| h.as_byte_slice().to_vec()).unwrap_or_default(),
                         chunk_index: index,
+                        snapshot_codec: if nonce.is_empty() { 0 } else { SNAPSHOT_CODEC_ZLIB_V1 },
+                        snapshot_nonce: nonce.to_vec(),
                     }
                 ))
                 .await?;
@@ -78,13 +95,32 @@ impl IbdFlow {
             }
             let reply_root = hash(&msg.snapshot_root)?;
             let chunk_hash = hash(&msg.chunk_hash)?;
+            let profile = SnapshotCompressionV1::from_wire(msg.snapshot_codec, &msg.snapshot_nonce, msg.decoded_bytes)
+                .map_err(|_| ProtocolError::Other("invalid PALW snapshot compression profile"))?;
+            let expects_compression = !nonce.is_empty();
+            if profile.is_some() != expects_compression || profile.is_some_and(|p| p.nonce.as_slice() != nonce) {
+                return Err(ProtocolError::Other("PALW snapshot mode/nonce changed from negotiated request"));
+            }
             if root.is_none() {
-                let state = SnapshotReceiver::new(spill.take().unwrap(), point, reply_root, msg.total_bytes, msg.chunk_count)
-                    .map_err(|_| ProtocolError::Other("PALW snapshot total/count exceeds existing policy"))?;
+                let state = match profile {
+                    Some(profile) => SnapshotReceiver::new_compressed(
+                        spill.take().unwrap(),
+                        point,
+                        reply_root,
+                        msg.total_bytes,
+                        msg.chunk_count,
+                        profile,
+                    ),
+                    None => SnapshotReceiver::new(spill.take().unwrap(), point, reply_root, msg.total_bytes, msg.chunk_count),
+                }
+                .map_err(|_| ProtocolError::Other("PALW snapshot total/count exceeds existing policy"))?;
                 *receiver = Some(state);
                 root = Some(reply_root);
             }
             let state = receiver.as_mut().unwrap();
+            if state.profile() != profile {
+                return Err(ProtocolError::Other("PALW snapshot compression profile changed during stream"));
+            }
             state
                 .accept(point, reply_root, msg.total_bytes, msg.chunk_count, index, chunk_hash, &msg.palw_state)
                 .map_err(|_| ProtocolError::Other("PALW snapshot chunk identity/order/size/hash failed"))?;

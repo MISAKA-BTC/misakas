@@ -1,8 +1,9 @@
 # Pruned-IBD PALW state transport: chunked, back-pressured (audit 2026-10-04, B-F2)
 
-Status: the original lane-PA design history is retained below. Protocol 106 now implements bounded spill/reassembly,
+Status: the original lane-PA design history is retained below. Protocol 106 implements bounded spill/reassembly,
 stream identity, sequential backpressure and cross-peer resume. Genuine multiprocess pruning/IBD and native 100k
-resource acceptance remain unproven. Node/p2p only: no consensus rule, no params id.
+resource acceptance remain unproven. The experimental protocol107 profile separates compressed-wire and canonical
+byte caps; its module tests pass, with full node/100k evidence still required. Node/p2p only: no consensus rule, no params id.
 
 ## Problem
 
@@ -65,3 +66,29 @@ The engine's 256 MiB import bound is not a whole-carriage budget: native registr
 declarations must fit beside every retained population. The actual funded 100k/four-seal native test must
 measure that carriage and the genuine network transfer. Neither an accounting correction nor successful
 small codec tests certify the 100k/pruned-P2P acceptance condition.
+
+## Experimental protocol107 compressed profile
+
+The [native capacity analysis](rfc06-native-snapshot-capacity-2026-10-13.md) proves that 100k one-capability bonds
+and four 100k retained candidate populations need at least 424,900,000 canonical bytes, already over 384 MiB.
+Protocol107 carries exactly the same canonical format-1 envelope through one zlib stream (codec1). It retains
+the 384 MiB wire cap and sets a separate experimental 512 MiB canonical encoded cap, 111,970,912 bytes above that
+lower bound. This is a profile for testing that shape; arbitrary native state, all registered model/decl shapes,
+decoded native RSS and production operating costs still require their own limits and measured acceptance.
+
+The requester chooses a nonzero 32-byte nonce. New stream/chunk hash domains bind the point, nonce, codec and
+canonical byte count, plus the previous wire root/size/count/index fields. A new peer may resume only an
+identically reconstructed stream under the same nonce/profile; a negotiated 106/107 mode change starts afresh.
+Protocol106 and legacy peers retain their raw payloads, hash domains and total cap. There is no timeout-driven
+downgrade. Unknown/changed codec metadata is refused before acquisition/continuation.
+
+Sender serialization streams into the compressor and its private spill. The receiver streams from that
+spill through a bounded inflater into the existing framed Borsh reader; no whole expanded Vec or second spill
+is created. The existing two-session semaphore and original 600-second lifetime cover both versions. The
+inflater enforces the declared byte count, requires exact EOF/CRC and rejects trailing compressed bytes or a
+second zlib stream. Native adoption still validates the unchanged consensus root. Serving charges the larger
+canonical traversal/wire total, so compressed data cannot make a large reconstruction cheap to repeat.
+
+The [protocol107 record](rfc06-snapshot-protocol107-2026-10-13.md) retains scoped tests and hashes. The
+actual high-entropy native 100k carriage must be captured and measured by `scripts/drills/rfc06_snapshot_wire_probe.rs`
+with its declarations. A fixture whose public keys/outpoints repeat cannot approve this wire cap.
