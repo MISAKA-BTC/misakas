@@ -30,9 +30,7 @@
 //! what says where a tile belongs, so a capture cannot disagree with the profile about that.
 
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
-use kaspa_consensus_core::palw_step_leg::{
-    PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1, step_tile_leaf_hash_ctx_v1,
-};
+use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1};
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 
@@ -196,8 +194,7 @@ impl Base0StepCaptureV1 {
         position: u32,
         rows: &[Base0CapturedRowV1],
     ) -> Result<(), LegError> {
-        let _ctx_hash = ctx.context_hash();
-        let profile_hash = profile.shape_profile_id();
+        let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
         for row in rows {
             let global_slot = profile
                 .global_node_slot(row.table, row.layer, row.index)
@@ -237,7 +234,7 @@ impl Base0StepCaptureV1 {
                 if self.leaves[index as usize] == Hash64::default() {
                     self.filled += 1;
                 }
-                self.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf);
+                self.leaves[index as usize] = hasher.hash(&leaf);
                 // The tile object (8 + 2 + 16 + 4 + 24, padded) and its values' own allocation.
                 self.tile_bytes = self.tile_bytes.saturating_add(56 + leaf.values_le.capacity() as u64);
                 self.tiles.push((index, leaf));
@@ -435,8 +432,7 @@ pub fn base0_step_tiles_v1(
     if leaf_count == 0 {
         return Err(LegError::EmptySpace);
     }
-    let _ctx_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
     let mut out = Base0StepTilesV1 { leaves: vec![Hash64::default(); leaf_count as usize], tiles: Vec::new() };
 
     for (layer, slot, row) in steps {
@@ -483,7 +479,7 @@ pub fn base0_step_tiles_v1(
                 // `int32` lane is.
                 values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
             };
-            out.leaves[index as usize] = step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, &leaf);
+            out.leaves[index as usize] = hasher.hash(&leaf);
             out.tiles.push((index, leaf));
         }
     }
@@ -2055,9 +2051,8 @@ pub fn base0_refutation_from_opening_capped_v1(
     if target_index < first || target_index >= end {
         return Err(LegError::CloseFromOpening("the disputed leaf is outside the served interval"));
     }
-    let _ctx_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
-    let hash_of = |leaf: &PalwStepTileLeafV1| step_tile_leaf_hash_ctx_v1(ctx, &profile_hash, leaf);
+    let hasher = crate::step_tile_hasher::StepTileHasherV1::new(ctx, profile.shape_profile_id());
+    let hash_of = |leaf: &PalwStepTileLeafV1| hasher.hash(leaf);
     // The served range holding `index`, if any: the accused's committed hash and the opening to
     // derive paths from.
     let holder = |index: u64| {

@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-canonical-step-context-reuse",
+  "baseHead": "e28c68204f2d5f11aceb49d04e375b90b1ad6d8a",
+  "validation": "helper directly linked to existing compiled core; integrated consumers await same-feature node build",
+  "host": "macOS-26.7-arm64-arm-64bit",
+  "cacheBytes": 200,
+  "ordinaryTestsPassed": 2,
+  "measuredTestsPassed": 3,
+  "sourceSha256": {
+    "misaka/palw/base0/src/backend.rs": "cd9d7c43fc43d43b287ee1aef00571ed2619ac05221bf4c2c388e8a9be28090a",
+    "misaka/palw/base0/src/fp_capture.rs": "a43f90ba0d028ee9324a041fc902e361df47df40ce5e50ab35ef290861e683cd",
+    "misaka/palw/base0/src/fp_interval.rs": "5dc21916e7dc2bc03bc2a5d65e2039743a7554683a2b3c452f0ccbf567749543",
+    "misaka/palw/base0/src/legs.rs": "68f84342ea5c32fed891f66abd07b039fcff5baa9b2cdbd35e0cdc85285642a1",
+    "misaka/palw/base0/src/lib.rs": "bc6993f2e0e07ef4038b384a9e38d0cc21ed545f143d680aa5e570a06396942e",
+    "misaka/palw/base0/src/produce.rs": "562d7f0427a0e07910324e21d34ab06fd44926af87e4c2fc757c5bceeda9c4f0",
+    "misaka/palw/base0/src/qwen25_a16_backend.rs": "c71b55f6bcab34640afab950e168880eed5af9c46668f99b6b03200cb64aca65",
+    "misaka/palw/base0/src/qwen36_backend.rs": "0dd648811f58b0eab795f48c90763d93489e4b2d15ca9c81a64bcc0627c91427",
+    "misaka/palw/base0/src/step_tile_hasher.rs": "8e5ded630d16c564f9c1aa017fd49f00064b87e345f0a631506091bfdb4e1894"
+  },
+  "canonicalSourceSha256": {
+    "consensus/core/src/palw_v2.rs": "9a027ac8764844ce18a6298d93c25f338d64769d06c0b9480f6d3f6c8f2cbc48",
+    "consensus/core/src/palw_step_leg.rs": "ae84500953a5a898938ad662aa1181dc51f8a3bd8543e7ab27ae38e3fe5b1885"
+  },
+  "testExecutableSha256": "bee76410767b75049485f3fc3bb1ea1d61c38eb605c2ae29521d46d7c0c23617",
+  "linkedLibraries": [
+    {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-5acd77f3190a1ae4.rlib",
+      "sha256": "c6092d1bf13de410aa126a49f53d29010a8be5816b550aed82f0884466c3f838"
+    },
+    {
+      "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-94469b6cb5a4ddba.rlib",
+      "sha256": "6d64685c953a06bffbd9178391cf4c16cec01ce63d250dd32157bfd332eeceff"
+    }
+  ],
+  "runs": [
+    {
+      "log": "rfc06-context-hash-reuse-2026-10-13-run-1.log",
+      "measurements": [
+        {
+          "contextVersion": 2,
+          "leaves": 100000,
+          "canonicalUs": 164781,
+          "cachedUs": 48196
+        },
+        {
+          "contextVersion": 3,
+          "leaves": 100000,
+          "canonicalUs": 171498,
+          "cachedUs": 53133
+        }
+      ]
+    },
+    {
+      "log": "rfc06-context-hash-reuse-2026-10-13-run-2.log",
+      "measurements": [
+        {
+          "contextVersion": 2,
+          "leaves": 100000,
+          "canonicalUs": 241170,
+          "cachedUs": 59219
+        },
+        {
+          "contextVersion": 3,
+          "leaves": 100000,
+          "canonicalUs": 197763,
+          "cachedUs": 63737
+        }
+      ]
+    },
+    {
+      "log": "rfc06-context-hash-reuse-2026-10-13-run-3.log",
+      "measurements": [
+        {
+          "contextVersion": 2,
+          "leaves": 100000,
+          "canonicalUs": 179173,
+          "cachedUs": 50680
+        },
+        {
+          "contextVersion": 3,
+          "leaves": 100000,
+          "canonicalUs": 157876,
+          "cachedUs": 49118
+        }
+      ]
+    }
+  ],
+  "wholeModelCostApproved": false,
+  "native100kAccepted": false,
+  "prunedP2pAccepted": false
+}

@@ -90,6 +90,7 @@ pub mod rope;
 pub mod segment_opening;
 /// RFC-0001 §2.9: the artifact sidecar v2 (tokenizer.json, chat template spec, generation defaults), read side.
 pub mod sidecar;
+mod step_tile_hasher;
 /// RFC-0002 Phase F: the A16 engine as a PALW-TIR program, and A16 → TIR artifact conversion.
 pub mod tir_a16;
 pub mod tokenizer;
