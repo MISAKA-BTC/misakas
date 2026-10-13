@@ -3187,7 +3187,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwStateProofResponse> {
         // Everything the caller sent is parsed before a byte of chain state is read: a malformed request is free, and an error.
         let collection = request.collection.trim().to_ascii_lowercase();
-        if !matches!(collection.as_str(), "bonds" | "classes" | "claims") {
+        if !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32") {
             return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));
         }
         let named = match request.block_hash.trim() {
