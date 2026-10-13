@@ -256,7 +256,22 @@ async fn x8_g14_native_paid_material_rejects_one_daa_beyond_signed_exec_and_acce
     let money: Vec<_> = (0..cw.net.chain.bonds.len()).map(|card| cw.net.collateral(card)).collect();
     let ledger = cw.net.ledger().to_rows();
     declaration.expiry_daa = exact_expiry - 1;
-    assert!(send_root(&mut cw, declaration.clone()).await.is_none());
+    declaration.signature =
+        sign(ROOT_CARD, declaration.signing_message(cw.net.domain).as_byte_slice(), PALW_EXEC_V2_ROOT_MLDSA87_CONTEXT, 0x71);
+    let object = Obj::ExecWorkRootOpenedV2 { declaration: Box::new(declaration.clone()) };
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: cw.net.chain.sink(),
+        daa_score: cw.net.daa() + 1,
+        blue_score: before.last_point().unwrap().blue_score + 1,
+        subsidy: 0,
+    };
+    let why = cw.net.chain.vp().palw_h1_carrier_refusal_on(&before, &cw.net.bundle.state, &point, &object).unwrap();
+    assert!(why.contains("signed EXEC horizon"), "refusal must name the material contract mismatch: {why}");
+    let carrier = cw.net.carrier(ROOT_CARD, &object);
+    let carrying = cw.net.chain.heartbeat(cw.net.ttpb(), vec![carrier.clone()]).await;
+    assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "the signed short-term root was actually carried");
+    cw.net.chain.heartbeat(cw.net.ttpb(), Vec::new()).await;
+    assert!(cw.net.chain.tip_state().1.exec_v2_root_v1(&real.claim).is_none());
     let refused = cw.net.chain.tip_state().1;
     assert_eq!(refused.claim(&real.claim), before.claim(&real.claim));
     assert_eq!(cw.net.ledger().to_rows(), ledger, "a refused signed root creates no escrow/hold or fee mutation");
