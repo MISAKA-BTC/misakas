@@ -12,6 +12,8 @@ pub struct NativeWireShapeV1 {
     pub heap: u64,
     pub collection_entries: u64,
     pub outer_entries: u64,
+    /// Actual byte-vector elements within this parsed codec, distinct from frame bytes.
+    pub byte_entries: u64,
 }
 impl NativeWireShapeV1 {
     pub fn merge(self, rhs: Self) -> io::Result<Self> {
@@ -19,6 +21,7 @@ impl NativeWireShapeV1 {
             heap: self.heap.checked_add(rhs.heap).ok_or_else(overflow)?,
             collection_entries: self.collection_entries.checked_add(rhs.collection_entries).ok_or_else(overflow)?,
             outer_entries: self.outer_entries.max(rhs.outer_entries),
+            byte_entries: self.byte_entries.checked_add(rhs.byte_entries).ok_or_else(overflow)?,
         })
     }
     pub fn allocation(mut self, count: u64, unit: usize) -> io::Result<Self> {
@@ -159,7 +162,7 @@ impl<T: NativeWireScanV1> NativeWireScanV1 for Vec<T> {
         let count = reader.word()? as u64;
         if std::any::type_name::<T>() == "u8" {
             reader.skip(count)?;
-            return NativeWireShapeV1 { outer_entries: count, ..Default::default() }
+            return NativeWireShapeV1 { outer_entries: count, byte_entries: count, ..Default::default() }
                 .allocation(count.checked_mul(2).ok_or_else(overflow)?, 1);
         }
         if size_of::<T>() == 0 && count != 0 {

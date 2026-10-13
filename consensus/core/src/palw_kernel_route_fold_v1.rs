@@ -210,7 +210,7 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
 
 /// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
 /// resolved), the ledger rebuilt from the rows, the block begun.
-pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<KernelLedgerV1, PalwStateV2Error> {
+pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
     load_ledger_with_projection_v9(builder, ctx, None, true)
 }
 
@@ -241,7 +241,7 @@ fn load_ledger_with_projection_v9(
     ctx: &PalwBlockContextV2,
     paid: Option<NativeProjectionPrepaidV9>,
     may_spend_reserve: bool,
-) -> Result<KernelLedgerV1, PalwStateV2Error> {
+) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
     ensure_route_header(builder, ctx)?;
     let scope_table = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1;
     let stored_scope = builder
@@ -522,7 +522,13 @@ pub(super) fn flush(builder: &mut TransitionBuilder<'_>, ledger: &KernelLedgerV1
         builder.write_kernel_header(PalwKernelRouteHeaderV1 { scalars, ..header });
     }
     let kernel = builder.state.kernel_route.as_mut().expect("a route that flushes exists");
-    let cached = ledger.clone().as_rebuilt_from_v1(&kernel.rows);
+    // Cache refill is optional. Reserve its separate deep payload before cloning;
+    // failure evicts the cache and leaves the committed rows authoritative.
+    let Ok(cached) = crate::palw_native_resource_v1::ledger_cache_clone_v1(ledger) else {
+        kernel.ledger_cache.clear();
+        return;
+    };
+    let cached = cached.as_rebuilt_from_v1(&kernel.rows);
     if kernel.rows.keys().any(|(t, _)| *t == TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
         kernel.ledger_cache.set_native_projection(cached);
     } else {

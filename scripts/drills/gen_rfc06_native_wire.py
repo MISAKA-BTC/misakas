@@ -9,7 +9,7 @@ G=runpy.run_path(str(Path(__file__).with_name('gen_rfc06_native_inventory.py')))
 ROOT,CORE,defs,aliases,byname,alias_byname=(G[k] for k in ['ROOT','CORE','defs','aliases','byname','alias_byname'])
 split,stripattrs,brace=(G[k] for k in ['split','stripattrs','brace'])
 OUT=CORE/'palw_native_resource_v1/wire_generated.rs'
-manual={'crate::palw_state_v2::PalwStateCarriageV2','crate::palw_bond_budget_v1::PalwBondBudgetStateV1','crate::palw_model_market_v1::PalwModelMarketV1','misaka_palw_panel::PanelCandidatesV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_kernel_route_v1::PalwKernelRouteStateV1'}
+manual={'misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateRecordV7','misaka_palw_kernel::flat_candidate9::FlatCandidateRecordV9','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_bond_budget_v1::PalwBondBudgetStateV1','crate::palw_model_market_v1::PalwModelMarketV1','misaka_palw_panel::PanelCandidatesV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_kernel_route_v1::PalwKernelRouteStateV1'}
 
 def qualify(t,item):
     def token(m):
@@ -189,4 +189,32 @@ aux={
 code='//! Exact native aux codecs; no opaque row size stands for nested decoded demand.\nuse super::*;\nuse std::{io::Read,mem::size_of,collections::BTreeMap};\nimpl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {\n fn scan_native_wire_v1<R:Read>(reader:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1> {\n  let mut sum=crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1::scan_native_wire_v1(reader)?;\n  // The persisted ledger rows are native byte Vecs. State root/restore hashes\n  // them directly; later full ledger class/program expansion is a separate\n  // consumer operation, never inferred from their encoded row length here.\n  sum=sum.merge(BTreeMap::<(u8,Vec<u8>),Vec<u8>>::scan_native_wire_v1(reader)?)?;\n  let count=reader.word()? as u64;\n  for _ in 0..count {\n   let table=reader.byte()?;let key_bytes=reader.word()? as u64;\n   if key_bytes>reader.remaining() {return Err(wire::wire_bad("native aux key exceeds frame"));}\n   let prefix=if key_bytes!=0 {let p=reader.byte()?;reader.skip(key_bytes-1)?;p}else{0};\n   sum=sum.allocation(key_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux key allocation overflow"))?,1)?;\n   let row_bytes=reader.word()? as u64;\n   if row_bytes>reader.remaining() {return Err(wire::wire_bad("native aux row exceeds frame"));}\n   let mut frame=NativeWireReaderV1::new((&mut *reader).take(row_bytes),row_bytes);\n   let shape=match table {\n'
 code+=''.join(str(table)+(' if key_bytes==64' if table in (115,123) else '')+' => <'+typ+' as NativeWireScanV1>::scan_native_wire_v1(&mut frame)?,\n' for table,typ in aux.items())
 code+='115 if key_bytes==65 && matches!(prefix,0x49|0x42)=>crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3::scan_native_wire_v1(&mut frame)?,\n123 if key_bytes==65 && prefix==0x49=>crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3::scan_native_wire_v1(&mut frame)?,\n121 => match (key_bytes,prefix) {\n (65,0x41)=>crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(&mut frame)?,\n (65,0x42)=>crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(&mut frame)?,\n (64,_)=>crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2::scan_native_wire_v1(&mut frame)?,\n _=>return Err(wire::wire_bad("unallocated Panel lifetime row namespace")),},\n _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>(&format!("native aux table {table}"),"nested row codec is not in the explicit supported shape inventory"))),};\n   if frame.remaining()!=0 {return Err(wire::wire_bad("native aux row codec has trailing/mismatched bytes"));}\n   sum=sum.merge(shape.allocation(row_bytes.checked_mul(2).ok_or_else(||wire::wire_bad("native aux byte allocation overflow"))?,1)?)?;\n  }\n  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux Vec overflow"))?,size_of::<((u8,Vec<u8>),Vec<u8>)>())?;\n  sum=sum.allocation(count,size_of::<typed::BTreeNodeEnvelopeV1<(u8,Vec<u8>),Vec<u8>>>())?;\n  // Restore consistency builds per-job and per-producer counters from the\n  // actual aux rows. The total row count bounds both fixed-key scratch maps.\n  sum=sum.allocation(count.checked_mul(2).ok_or_else(||wire::wire_bad("native aux scratch count overflow"))?,size_of::<typed::BTreeNodeEnvelopeV1<[u8;64],u32>>())?;\n  sum.outer_entries=count;sum.collection_entries=sum.collection_entries.checked_add(count).ok_or_else(||wire::wire_bad("native aux count overflow"))?;\n  Ok(sum)\n }\n}\n'
+a=code.index('let shape=match table {');b=code.index('\n   if frame.remaining()',a)
+body=code[a:b].removeprefix('let shape=').removesuffix(';').replace('&mut frame','frame')
+code=code[:a]+'let shape=scan_native_aux_row_v1(table,key_bytes,prefix,&mut frame)?;'+code[b:]
+code+='\npub(crate) fn scan_native_aux_row_v1<R:Read>(table:u8,key_bytes:u64,prefix:u8,frame:&mut NativeWireReaderV1<R>)->std::io::Result<NativeWireShapeV1>{'+body+'}\n'
 (OUT.parent/'wire_kernel_aux.rs').write_text(code)
+
+# Concrete native ledger row codecs; reflected from the same KernelLedger
+# collection field types from_rows populates. Special class records expand their
+# nested byte codecs through owner-audited adapters in ledger_expansion.rs.
+ledger=defs['misaka_palw_kernel::ledger::KernelLedgerV1']
+lf={name:typ for name,typ,_ in G['fields'](ledger)}
+opv=defs['misaka_palw_kernel::opv::OpvStateV1'];of={name:typ for name,typ,_ in G['fields'](opv)}
+typedstate=defs['misaka_palw_kernel::spec::TypedStateV1'];tf={name:typ for name,typ,_ in G['fields'](typedstate)}
+tables={0:('flat_conformance_classes_v7',None),1:('bonds',None),2:('classes','misaka_palw_kernel::state::ClassRecordV1'),3:('pipeline_classes','misaka_palw_kernel::state::PipelineClassRecordV1'),4:('jobs',None),5:('pipeline_jobs',None),6:('claims',None),7:('demands',None),8:('served',None),9:('attested_artifacts',None),10:('job_claims',None),11:('seals',None),12:('admitted','opv'),13:('classes','opv'),14:('claims','opv'),15:('proof_seals',None),16:('job_escrows',None),17:('served_demands',None),18:('job_posters',None),19:('flat_conformance_classes_v9',None),20:('tiled_jobs',None),21:('seg_progress',None),22:('classes','spec'),23:('jobs','typed'),24:('lines','typed'),25:('claim_beacon_salts',None),26:('forfeited_claim_seals',None),27:('verifier_pay','pay'),28:('court_scope',None),29:('conformance_classes','candidate'),30:('beacon_sources',None),31:('exec_reward_holds',None)}
+lines=[]
+for tag,(field,special) in tables.items():
+    owner=opv if special=='opv' else typedstate if special in {'typed','spec'} else ledger
+    fieldtype=qualify((of if special=='opv' else tf if special in {'typed','spec'} else lf)[field],owner)
+    match=re.match(r'(?:std::collections::)?(BTreeMap|BTreeSet)<(.*)>$',fieldtype,re.S)
+    if special=='pay':key='(u8,[u8;64])';value='misaka_palw_kernel::verifier_pay::VerifierPayRowV1'
+    elif match:
+        args=split(match[2]);key=args[0];value=args[1] if match[1]=='BTreeMap' else '()'
+    else:raise ValueError(('ledger collection alias needs audit',tag,fieldtype))
+    wirevalue=value
+    if special and special.startswith('misaka_'):wirevalue=special
+    elif special=='candidate':wirevalue='([u8;64],misaka_palw_kernel::state::ClassRecordV1)'
+    elif special=='spec':wirevalue='misaka_palw_kernel::spec::ComputationSpecV1'
+    lines.append(str(tag)+' => <'+wirevalue+' as NativeWireScanV1>::scan_native_wire_v1(r)?.allocation(1, size_of::<typed::BTreeNodeEnvelopeV1<'+key+','+value+'>>>()),')
+(CORE/'palw_native_resource_v1/ledger_rows_generated.rs').write_text('// Generated actual ledger-table row dispatch.\nfn scan_ledger_row_v1<R:Read>(table:u8,r:&mut NativeWireReaderV1<R>)->io::Result<NativeWireShapeV1>{match table{'+''.join(lines)+'_=>Err(wire::wire_bad("unknown persisted ledger table")),}}\n')

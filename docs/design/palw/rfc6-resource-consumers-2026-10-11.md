@@ -680,3 +680,36 @@ The mirror session's tree guard releases on return/error; the new multi-chunk re
 64-expert parent control expects exactly one inventory admission/hash pass and unchanged
 all-row assembly. Proof bytes and off-chain acquisition/consensus eligibility are unchanged.
 This follow-up awaits central testing after the active compilation batch.
+
+### Source checkpoint: persisted kernel expansion and lease ownership (2026-10-14)
+
+The native capacity consumer now scans the actual persisted ledger row codecs
+before a cold `from_rows` allocation. Class, pipeline and flat records explicitly
+scan their nested TIR1/TIR2/pipeline/scope/replay byte frames; each frame requires
+exact consumption and a bounded codec length. Raw row byte residency does not
+approve the decoded program. The generated table dispatch follows the concrete
+collections populated by `KernelLedgerV1::from_rows`.
+
+`ReservedKernelLedgerV1` retains the demand ticket for the caller's lifetime.
+Cache Arc copies retain the ticket with their shared payload; a deep clone first
+obtains a separate ticket. Cache refill is optional and skips its clone when a
+reservation is refused. Rebuilt indexes and authenticated aux consumer
+projections have separate typed requests, retained through their use. Neither
+tickets nor the cache enter state Borsh, roots or delta rows.
+
+The source inventory covers ordinary TIR/pipeline construction using the actual
+parsed collection and byte-vector element counts, normal-form schedule limits,
+conservative typed cone/closure/interval/mask/index requests, record copies and
+binary-owned template construction. Flat candidate complete metadata derivation
+and typed spec/composite expansion remain explicit `Unsupported` in the strict
+local capability pending their full owner audit. Arbitrary consumer mutation
+through the ledger facade, generic remote dry-run clones, and all actual new-model
+execution/prosecution demands still require the next reservation audit; this
+checkpoint is not full RFC06 closure. Post-genesis legacy declarations without
+retained authenticated semantic identity also remain a separate migration gap.
+
+Source tests were added for cache-ticket lifetime and root/codec exclusion,
+truncated nested frames, count bombs and unknown ledger tables. **No build,
+test, benchmark or actual node validation was executed for this checkpoint**:
+validation is deferred until all requested code is finished. Prior native100k or
+codec measurements do not validate these changed sources.

@@ -280,7 +280,7 @@ impl NativeHeapV1 for crate::palw_kernel_route_v1::KernelLedgerCacheV1 {
         self.native_ledger_ref_v1().map_or_else(NativeCoverageV1::zero, |ledger| {
             ledger.native_heap_v1(path).add::<Self>(
                 NativeCoverageV1::Bounded {
-                    bytes: (size_of::<misaka_palw_kernel::ledger::KernelLedgerV1>() + size_of::<[usize; 3]>()) as u64,
+                    bytes: (size_of::<crate::palw_native_resource_v1::ReservedKernelLedgerV1>() + size_of::<[usize; 3]>()) as u64,
                 },
                 path,
             )

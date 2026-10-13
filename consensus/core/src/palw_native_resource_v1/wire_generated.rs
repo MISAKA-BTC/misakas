@@ -2835,9 +2835,39 @@ impl NativeWireScanV1 for misaka_palw_kernel::family::CourtIdV1 {
     }
 }
 wire_struct!(misaka_palw_kernel::flat_candidate7::FlatCandidatePlanV7; u16, [u8;64], [u8;64], [u8;64], [u8;64], u32, Option<(u16, u32)>, [u8;64], [u8;64]);
-wire_struct!(misaka_palw_kernel::flat_candidate7::FlatCandidateRecordV7; [u8;64], misaka_palw_kernel::flat_candidate7::FlatCandidatePlanV7, Vec<u8>, misaka_palw_kernel::trace::ParamCommitmentsV1);
+wire_struct!(misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7; misaka_palw_kernel::flat_candidate7::FlatCandidatePlanV7, misaka_palw_tir::program::TirProgramV1, Option<misaka_palw_kernel::seg_encoder::EncoderBindingV1>, misaka_palw_kernel::flat_scope7::FlatResourceScopeV7, misaka_palw_kernel::flat_replay7::FlatReplayEnvelopeV7);
 wire_struct!(misaka_palw_kernel::flat_candidate9::FlatCandidatePlanV9; u16, [u8;64], [u8;64], [u8;64], [u8;64], u32, Option<(u16, u32)>, [u8;64], [u8;64], [u8;64], u64, u32, u64);
-wire_struct!(misaka_palw_kernel::flat_candidate9::FlatCandidateRecordV9; [u8;64], misaka_palw_kernel::flat_candidate9::FlatCandidatePlanV9, Vec<u8>, misaka_palw_kernel::trace::ParamCommitmentsV1, Vec<u8>, Vec<u8>);
+wire_struct!(misaka_palw_kernel::flat_candidate9::FlatCandidateViewV9; misaka_palw_kernel::flat_candidate9::FlatCandidatePlanV9, misaka_palw_tir::program::TirProgramV1, Option<misaka_palw_kernel::seg_encoder::EncoderBindingV1>, misaka_palw_kernel::flat_scope9::FlatResourceScopeV9, misaka_palw_kernel::flat_replay9::FlatReplayEnvelopeV9, misaka_palw_kernel::flat_resources10::FlatResourceVectorV10);
+wire_struct!(misaka_palw_kernel::flat_replay6::FlatReplayEnvelopeV6; u16, [u8;64], u32, u128, u128, u128, u128, u128, u128, u128, u128);
+wire_struct!(misaka_palw_kernel::flat_replay7::FlatReplayEnvelopeV7; u16, [u8;64], misaka_palw_kernel::flat_replay6::FlatReplayEnvelopeV6, u128, u128, u128, u128);
+wire_struct!(misaka_palw_kernel::flat_replay9::FlatReplayEnvelopeV9; u16, [u8;64], misaka_palw_kernel::flat_replay6::FlatReplayEnvelopeV6, u128, u128, u128, u128, u128, u128);
+wire_struct!(misaka_palw_kernel::flat_resources10::FlatResourceVectorV10; u16, [u8;64], [u8;64], [u8;64], u32, Option<(u16, u32)>, Vec<misaka_palw_kernel::flat_resources10::PrimitiveResourcesV10>, misaka_palw_kernel::flat_resources10::ResourceQuantitiesV10);
+wire_struct!(misaka_palw_kernel::flat_resources10::PrimitiveResourcesV10; u16, u16, u8, u128, u128, u128, u128, u128, u128, u128);
+wire_struct!(misaka_palw_kernel::flat_resources10::ResourceQuantitiesV10; [u128; RESOURCE_DIMENSIONS_V10]);
+impl NativeWireScanV1 for misaka_palw_kernel::flat_scope7::FlatRelationCourtV7 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(misaka_palw_kernel::flat_scope7::FlatRelationScopeV7; u8, u16, u32, misaka_palw_kernel::flat_scope7::FlatRelationCourtV7, u64, u64, u64, Vec<u64>, u128, u128, u128);
+wire_struct!(misaka_palw_kernel::flat_scope7::FlatResourceScopeV7; u16, [u8;64], [u8;64], [u8;64], u32, Option<(u16, u32)>, Vec<misaka_palw_kernel::flat_scope7::FlatRelationScopeV7>, u64, u128, u64, u64, u64, u64, u128, u128, u128, u128, u128, u128, u128, u128, u128, u128);
+wire_struct!(misaka_palw_kernel::flat_scope9::FlatOccurrenceScopeV9; u16, u8, u16, bool, u64, u64, u64, Vec<u64>);
+wire_struct!(misaka_palw_kernel::flat_scope9::FlatResourceScopeV9; u16, [u8;64], [u8;64], [u8;64], u32, Option<(u16, u32)>, Vec<misaka_palw_kernel::flat_scope9::FlatOccurrenceScopeV9>, u128, u128, u64, u64, u64, u128, u128, u128, u128);
 wire_struct!(misaka_palw_kernel::gate::ProsecutionBoundsV1; u128, u64, u64, u128, u128, u32, u64, u128, u128, u32, u64);
 wire_struct!(misaka_palw_kernel::gate::ProsecutionPolicyV1; u64, u32, u128, u128, u128);
 impl NativeWireScanV1 for misaka_palw_kernel::job::DecodeRuleV1 {
@@ -3043,6 +3073,7 @@ wire_struct!(misaka_palw_kernel::seg::SegmentedEvidenceV2; u16, misaka_palw_kern
 wire_struct!(misaka_palw_kernel::seg::TiledJobRowV1; misaka_palw_kernel::seg::TiledJobV1, Vec<u8>);
 wire_struct!(misaka_palw_kernel::seg::TiledJobV1; [u8;64], u32, [u8;64], u32, misaka_palw_kernel::job::DecodeRuleV1, [u8;64]);
 wire_struct!(misaka_palw_kernel::seg_da::SegProgressV1; u32, Vec<u8>, Option<u64>, Vec<([u8;64], u64)>, u64);
+wire_struct!(misaka_palw_kernel::seg_encoder::EncoderBindingV1; u16, u32);
 wire_struct!(misaka_palw_kernel::seg_scope::SegScopeReportV1; u64, u64, u64, u64, u64, Option<(u16, u16, u64, u64)>, u64);
 wire_struct!(misaka_palw_kernel::spec::ComputationSpecV1; u16, misaka_palw_kernel::mode::VerificationModeV1, Vec<misaka_palw_kernel::spec::TypedRootV1>);
 wire_struct!(misaka_palw_kernel::spec::SpecClaimBodyV1; misaka_palw_kernel::spec::SpecClaimV1, Vec<Vec<[u8;64]>>, Option<[u8;64]>);

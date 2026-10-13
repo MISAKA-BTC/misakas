@@ -243,3 +243,15 @@ pub fn reserve_native_wire_v1(
     }
     LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.reserve_requests_v1(memory, 0)).transpose()
 }
+
+/// Logical request reservation for owner-audited native consumers. The caller
+/// must derive requests from actual typed objects or an actual codec preflight.
+pub(crate) fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
+        return Ok(None);
+    }
+    let checker = LOGICAL.get().and_then(Option::as_ref).ok_or_else(|| {
+        NativeCoverageV1::unsupported::<NativeDemandCheckerV1>("native consumer reservation", "capacity checker is not armed")
+    })?;
+    checker.reserve_requests_v1(memory, 0).map(Some)
+}
