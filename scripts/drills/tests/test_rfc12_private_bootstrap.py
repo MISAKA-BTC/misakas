@@ -18,6 +18,15 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverControls(unittest.TestCase):
+    def test_registration_window_refuses_actual_daa_zero_before_carrier_spend(self):
+        original = dict(envelopeValidFromDaa=1, envelopeValidUntilDaa=32)
+        with self.assertRaisesRegex(driver.transport.Blocked, 'excludes actual DAA 0'):
+            driver.registration_window(original, 0)
+        corrected = dict(envelopeValidFromDaa=0, envelopeValidUntilDaa=0)
+        self.assertEqual(driver.registration_window(corrected, 0)['observedDaa'], 0)
+        with self.assertRaisesRegex(driver.transport.Blocked, 'excludes actual DAA 1'):
+            driver.registration_window(corrected, 1)
+
     def test_complete_cost_cap_and_moving_private_pins_refuse_before_submission(self):
         bootstrap = dict(bindingReservationSompi='100', completeCheckFeeSompi='1',
             commitment='fixture.borsh', statementRoot='root', commitmentScope='scope.json')

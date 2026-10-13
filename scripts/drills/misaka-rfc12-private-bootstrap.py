@@ -143,6 +143,13 @@ def command(drill, sampler, label, argv, timeout):
             child.communicate(timeout=5)
 
 
+def registration_window(bootstrap, daa):
+    start, end = bootstrap['envelopeValidFromDaa'], bootstrap['envelopeValidUntilDaa']
+    if not start <= daa <= end:
+        raise transport.Blocked('no carrier submitted: registration envelope DAA window %d..%d excludes actual DAA %d' % (start, end, daa))
+    return dict(validFromDaa=start, validUntilDaa=end, observedDaa=daa)
+
+
 def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_check=False,
         maximum_binding=None, maximum_check=None):
     for role in ('A', 'B', 'JOIN'):
@@ -155,10 +162,12 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
         '--key-file=' + str(fixture / bootstrap['fundingKeyFile']),
         '--maximum-total-fee-sompi=' + str(maximum_fee), '--object',
         str(fixture / bootstrap['signedRegistration']), str(fixture / bootstrap['artifactBinding'])]
+    window = registration_window(bootstrap, rpc_read(drill, 'A', 'getBlockDagInfo')['virtualDaaScore'])
     preview = command(drill, sampler, 'CARRIER_PREVIEW', argv, 60)
     assert preview['dry_run'] is True and preview['total_fee_sompi'] <= maximum_fee
     # Queue the factory-priced registration before enabling the producer's
     # first peer, so no earlier floor production can retarget the live price.
+    registration_window(bootstrap, rpc_read(drill, 'A', 'getBlockDagInfo')['virtualDaaScore'])
     sent = command(drill, sampler, 'CARRIER_SUBMIT', argv + ['--yes'], 60)
     assert sent['ok'] is True and sent['submitted'] is True and len(sent['carriers']) == 2
     budget = dict(maximum=maximum_fee, spent=0)
@@ -189,7 +198,7 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
                 [tuple(row[k] for k in columns) for row in after[field]], 'cold persistence changed binding terms'
         else:
             assert before[field] == after[field], 'cold persistence changed ' + field
-    return dict(preview=preview, submission=sent, included=included, reopened=reopened,
+    return dict(registrationWindow=window, preview=preview, submission=sent, included=included, reopened=reopened,
         cumulativeCarrierFeeSompi=budget['spent'], completeCheck=complete_evidence)
 
 

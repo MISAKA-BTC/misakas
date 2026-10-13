@@ -149,7 +149,15 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
     .map_err(|e| format!("native registration refused: {e}"))?;
     // The shipped native admission gate must accept the actual program and
     // layout before any key is loaded or signature is produced.
-    tir_registration_preflight_v1(&expected, bundle, &registration, 1, &[])?;
+    let valid_from_daa = expected.genesis.daa_score;
+    let valid_until_daa = expected
+        .fence_schedule_v1()
+        .into_iter()
+        .find(|height| *height > valid_from_daa)
+        .map(|height| height - 1)
+        .unwrap_or(u64::MAX)
+        .min(valid_from_daa.saturating_add(32));
+    tir_registration_preflight_v1(&expected, bundle, &registration, valid_from_daa, &[])?;
     let artifact = CompleteBootstrapArtifactV1::from_registration_file(
         &registration,
         &artifact_path,
@@ -176,9 +184,12 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
     }
     let PalwConsensusObjectV2::ClassRegisteredTirV1 { admission, .. } = &mut registration else { unreachable!() };
     admission.signature = signature;
-    // The DAA-1 retirement fork is part of this factory's actual fired digest.
-    // This finite envelope is deliberately not a permanent permission slip.
-    let request = SignedRegistrationRequestV1::for_network(registration.clone(), bond, 1, 32, &expected).map_err(|e| e.to_string())?;
+    // Initial production is at the real genesis DAA, before the private DAA-1
+    // retirement dependency. A DAA-1 envelope was actually mined and dropped
+    // as not yet valid. Bind this finite window to the initial fired digest,
+    // ending before the next fence rather than spanning an incompatible fork.
+    let request = SignedRegistrationRequestV1::for_network(registration.clone(), bond, valid_from_daa, valid_until_daa, &expected)
+        .map_err(|e| e.to_string())?;
     let envelope = request.sign(&signer).map_err(|e| e.to_string())?;
     let binding = artifact.signed_artifact_binding(domain, bond, &signer).map_err(|e| e.to_string())?;
     let statement = statement::for_code_fixture(&expected, &artifact, file_digest);
@@ -229,7 +240,7 @@ pub fn export_private_complete_bootstrap_v1(config: &Config, output: &Path) -> R
         "seats": seats,
         "floorClass": bundle.base_class_id.to_string(), "pricingScope": "exact factory genesis; no live retarget claim",
         "initialTarget": initial_target.to_string(), "slashValuePerPwu": slash_value_per_pwu.to_string(),
-        "envelopeValidFromDaa": 1, "envelopeValidUntilDaa": 32,
+        "envelopeValidFromDaa": valid_from_daa, "envelopeValidUntilDaa": valid_until_daa,
         "bindingReservationSompi": PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1.to_string(),
         "completeCheckFeeSompi": PALW_COMPLETE_CHECK_FEE_SOMPI_V1.to_string(),
         "skipProofOfWork": false, "nativeRegistrationIncluded": false, "artifactBindingIncluded": false,
@@ -270,6 +281,15 @@ mod tests {
         assert_eq!(scope["independentImplementationClaim"], false);
         assert_eq!(scope["trainedModelVerified"], false);
         let envelope: PalwConsensusObjectV2 = borsh::from_slice(&fs::read(output.join("signed-registration.borsh")).unwrap()).unwrap();
+        let PalwConsensusObjectV2::SignedRegistrationV1 { valid_from_daa, valid_until_daa, fork_digest, .. } = &envelope else {
+            panic!("signed envelope")
+        };
+        assert_eq!(*valid_from_daa, config.genesis.daa_score, "valid at initial inclusion, not an unobserved future DAA");
+        assert_eq!(*valid_until_daa, 0, "the exact private next fence fires at DAA 1");
+        assert_eq!(manifest["envelopeValidFromDaa"], *valid_from_daa);
+        assert_eq!(manifest["envelopeValidUntilDaa"], *valid_until_daa);
+        assert_eq!(*fork_digest, misaka_palw_sdk::onboarding_chain::envelope_fork_digest_v1(&config.params, *valid_from_daa));
+        assert_ne!(*fork_digest, misaka_palw_sdk::onboarding_chain::envelope_fork_digest_v1(&config.params, 1));
         let card = palw_t12_drill_cards_v1(config.palw_drill_genesis_salt.as_ref().unwrap()).remove(0);
         misaka_palw_sdk::onboarding_chain::verify_signed_registration_v1(
             &envelope,
