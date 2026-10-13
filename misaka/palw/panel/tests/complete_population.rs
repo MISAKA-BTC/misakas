@@ -70,9 +70,55 @@ fn snapshot(mut rows: Vec<SeatCandidateV1>) -> PanelSnapshotV1 {
         excluded_bond: claim().producer,
         excluded_operator: claim().producer_operator,
         excluded_key: claim().producer_key,
-        candidates: rows,
+        candidates: rows.into(),
         strata_members: Vec::new(),
     }
+}
+
+#[test]
+fn frozen_population_clones_share_storage_detach_on_fork_and_keep_both_old_codecs() {
+    let original = snapshot((1..=96).map(seat).collect());
+    let mut fork = original.clone();
+    assert_eq!(original.candidates.as_ptr(), fork.candidates.as_ptr(), "a state copy must not copy every frozen candidate");
+    let historical = (
+        original.root,
+        original.checkpoint,
+        original.checkpoint_daa,
+        original.checkpoint_height,
+        original.policy_id,
+        original.class_id,
+        original.excluded_bond,
+        original.excluded_operator,
+        original.excluded_key,
+        original.candidates.as_slice(),
+        original.strata_members.as_slice(),
+    );
+    let bytes = borsh::to_vec(&original).unwrap();
+    assert_eq!(bytes, borsh::to_vec(&historical).unwrap(), "the previous snapshot field sequence and Vec wire must be identical");
+    let restored: PanelSnapshotV1 = borsh::from_slice(&bytes).unwrap();
+    assert_eq!(restored, original);
+    assert_eq!(restored.computed_root(), original.computed_root());
+    let domain = b"misaka-palw/panel-v3/snapshot";
+    let mut old_hasher = blake2b_simd::Params::new().hash_length(64).to_state();
+    old_hasher.update(&(domain.len() as u32).to_le_bytes());
+    old_hasher.update(domain);
+    old_hasher.update(&bytes);
+    assert_eq!(
+        original.computed_root(),
+        Hash64::from_bytes(*old_hasher.finalize().as_array()),
+        "streaming field writes must produce the historical framed Borsh digest"
+    );
+    let json = serde_json::to_value(&original).unwrap();
+    assert_eq!(json["candidates"], serde_json::to_value(original.candidates.as_slice()).unwrap());
+    assert_eq!(serde_json::from_value::<PanelSnapshotV1>(json).unwrap(), original);
+    fork.candidates[0].collateral += 1;
+    assert_ne!(original.candidates.as_ptr(), fork.candidates.as_ptr());
+    assert_eq!(original.candidates[0], seat(1), "a child fork may not rewrite retained parent/journal material");
+    assert_ne!(fork.computed_root(), original.computed_root());
+    assert_eq!(borsh::to_vec(&original).unwrap(), bytes);
+    let retained = original.candidates.clone();
+    drop(original);
+    assert_eq!(retained.len(), 96, "a retained journal reader owns the population after its state is released");
 }
 
 fn prefix_from_full(s: &PanelSnapshotV1, seed: Hash64, retry: u16, role: u8, used: &[Hash64], needed: usize) -> Vec<BondIdV1> {
@@ -112,8 +158,8 @@ fn streaming_is_exactly_the_full_operator_race_with_headroom_retries_and_used_op
 fn streaming_refuses_truncation_unordered_duplicate_rows_and_operator_weight_overflow() {
     let s = snapshot((1..=9).map(seat).collect());
     let run = |rows: Vec<SeatCandidateV1>, cap| seat_prefix_streaming_v1(rows, h(1), 0, CLASS_ROLE_V1, &[], 3, cap, |_| true);
-    assert_eq!(run(s.candidates.clone(), 8), Err(PanelErrorV1::ResourceLimit));
-    let mut unordered = s.candidates.clone();
+    assert_eq!(run(s.candidates.to_vec(), 8), Err(PanelErrorV1::ResourceLimit));
+    let mut unordered = s.candidates.to_vec();
     unordered.reverse();
     assert_eq!(run(unordered, 100), Err(PanelErrorV1::InvalidSnapshot));
     assert_eq!(run(vec![s.candidates[0].clone(), s.candidates[0].clone()], 100), Err(PanelErrorV1::InvalidSnapshot));
@@ -376,7 +422,7 @@ fn retired_population_is_version_four_only_and_active_limit_is_atomic() {
     for n in 0..8 {
         let c = distinct_claim(n);
         s = retirement_advance(&s, n + 1, &v);
-        s = s.admit(&[c.clone()]).unwrap().0;
+        s = s.admit(std::slice::from_ref(&c)).unwrap().0;
         v.terminal.insert(c.claim_id);
         s = retirement_advance(&s, n + 1, &v);
     }
@@ -417,7 +463,7 @@ fn retired_population_permanent_archive_capacity_refuses_before_writing_identity
     s.check_consistency().unwrap();
     let before = s.root();
     let next = distinct_claim(MAX_RETIRED_ARCHIVE_CLAIMS_V1 as u64);
-    let (same, refused) = s.admit(&[next.clone()]).unwrap();
+    let (same, refused) = s.admit(std::slice::from_ref(&next)).unwrap();
     assert_eq!(refused[0].1, PanelErrorV1::ResourceLimit);
     assert_eq!(same.root(), before);
     assert_eq!(same.cursor(), s.cursor());
@@ -436,7 +482,7 @@ fn retired_population_four_100k_seals_refuse_the_fifth_and_native_retirement_reu
     for n in 0..5 {
         let c = distinct_claim(n);
         let daa = s.daa() + 1;
-        s = retirement_advance(&s, daa, &v).admit(&[c.clone()]).unwrap().0;
+        s = retirement_advance(&s, daa, &v).admit(std::slice::from_ref(&c)).unwrap().0;
         s = retirement_advance(&s, s.daa() + 1, &v);
         s = retirement_advance(&s, s.daa() + 1, &v);
         let r = s.claim(&c.claim_id).unwrap();
@@ -463,7 +509,7 @@ fn retired_population_four_100k_seals_refuse_the_fifth_and_native_retirement_reu
     assert_eq!(count(&s), 300_000);
     assert!(s.work_id_rows().contains(&distinct_claim(0).work_id));
     let c = distinct_claim(5);
-    s = retirement_advance(&s, s.daa() + 1, &v).admit(&[c.clone()]).unwrap().0;
+    s = retirement_advance(&s, s.daa() + 1, &v).admit(std::slice::from_ref(&c)).unwrap().0;
     s = retirement_advance(&s, s.daa() + 1, &v);
     s = retirement_advance(&s, s.daa() + 1, &v);
     assert_eq!(s.claim(&c.claim_id).unwrap().snapshot.as_ref().unwrap().candidates.len(), 100_000);

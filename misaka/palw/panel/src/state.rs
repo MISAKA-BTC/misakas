@@ -534,7 +534,7 @@ impl PermissionlessPanelStateV1 {
                 excluded_bond: record.claim.producer,
                 excluded_operator: record.claim.producer_operator,
                 excluded_key: record.claim.producer_key,
-                candidates,
+                candidates: candidates.into(),
                 strata_members,
             };
             if complete {
@@ -1066,7 +1066,7 @@ impl PermissionlessPanelStateV1 {
                 excluded_operator: r.claim.producer_operator,
                 excluded_key: r.claim.producer_key,
                 policy_id: self.policy.id(),
-                candidates: Vec::new(),
+                candidates: Vec::new().into(),
                 strata_members: Vec::new(),
             };
             if seal.id != claim_seal_id(self.network, self.ruleset, r, &snapshot, seal.anchor_slot, seal.beacon_epoch) {
