@@ -48,6 +48,7 @@ impl PalwClaimChallengePolicyV2 {
             || self.maximum_enrollments_per_job == 0
             || self.maximum_stream_blocks == 0
             || self.maximum_rounds == 0
+            || self.maximum_rounds > 64
             || self.maximum_classes > 65_536
             || self.maximum_jobs > 65_536
             || self.maximum_live_claims > 65_536
@@ -224,6 +225,8 @@ pub struct PalwPaidClaimFinalV2 {
     pub signed_lifetime: PaidClaimLifetimeV2,
     pub complete_receipts: u32,
     pub logical_final_daa: u64,
+    pub completed_rounds: u32,
+    pub transcript_root: Digest,
 }
 impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     pub fn paid_claim_authority_v2(&self, context: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
@@ -291,7 +294,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             {
                 return Err("paid claim proof grace exceeded its signed absolute lifetime".into());
             }
-            let complete = if let Some(lock) =
+            let complete = if a.class.interactive_plan.is_some() {
+                self.paid_claim_interactive_complete_v3(&a, ledger)?
+            } else if let Some(lock) =
                 self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
             {
                 let mut signers = std::collections::BTreeSet::new();
@@ -305,6 +310,8 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                     if *key != borsh::to_vec(&expected).unwrap()
                         || receipt.version != 2
                         || !receipt.complete
+                        || receipt.round != 0
+                        || receipt.message_root != [0; 64]
                         || receipt.assignment != lock.assignment
                         || receipt.sample_seed != lock.seed
                         || receipt.source_context != lock.context

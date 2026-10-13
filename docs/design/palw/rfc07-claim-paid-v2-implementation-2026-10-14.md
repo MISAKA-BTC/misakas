@@ -41,3 +41,90 @@ EconomicEvidence requires the exact precompiled release observation identity and
 The SDK exposes rooted all-target class/job/derived-commit/fund builders, native role-checked ML-DSA signing, future source readers, portable public material, all-target verification and private-success receipt generation, and a Final reader usable after the checking interval. `palw-class claim-v2 class|job|commit|fund|lock|verify|sign|inspect|final` uses these typed paths. Drafts/signatures are offline; the existing native submit-object carrier performs actual inclusion. Roots/anchors must be authenticated against the client's selected chain. Root's complete-bootstrap generator must invoke these SDK paths for real signed new claims; that actual CLI/node acceptance is not established by merely adding builders.
 
 Consolidated verification must cover V1 fixed vectors/codec/default identity; all four target forms and typed subkinds; OPV prospective rights; delayed inclusion/sparse DAA; source failure/replay/cold restart/reorg; native UTXO debit/refund and same R; source/economic proof substitution and missing provenance; stream exhaustion/CRT/scope/stage separation; full historical review counter exhaustion/no reset; signed CLI through actual node receipt/Final/material history; and resource/cost/100k/P2P acceptance. External full128 review, source independence/censorship measurements and actual profitable source participation remain evidence gates. No code checkpoint or old test executable can substitute for these.
+
+## Interactive full-material opening contract (source checkpoint, not acceptance)
+
+The new unshipped `PaidClaimClassV2` carries an optional, producer-visible
+`CompiledClaimProofPlanV3`. The implemented compiler is explicitly **full-material
+opening**, for Program, Pipeline, Segmented, and TypedSpec, including prospective
+OPV classes. It checks each complete immutable statement using the actual seeded
+math checker (or exact segmented replay). It does not represent a compact sumcheck
+compiler, trained-model provenance, random-oracle proof, or independent review.
+The compiled plan commits target, interactive mode, finite rounds (1–64), stream
+budget and complete opening byte cap (at most 64 MiB). Plan identity, rather than
+only the underlying math checker identity, is required in lifetime review scope.
+
+Each `StageMessage` is signed by the original enrolled producer. It fixes the
+canonical material root, round index and prior completed transcript. The signed
+absolute lifetime remains unchanged. Round zero has no prior transcript; later
+rounds require complete previous quorum. Staged mode derives a new source context
+from this exact message at its native acceptance DAA, opens its seal window
+strictly later, and requires a new sponsor-owned native fee reserve through the
+same strict inner61 funding path. Source terms, native collateral reserve, source
+fees, common ticks/refunds, material holds and journal/reorg use existing V5 source
+machinery; there is no second offchain budget. The before-S input filter now
+includes authenticated ClaimVerification targets, so a mandatory before-S sponsor
+fund can reach that native adapter.
+
+Fiat–Shamir mode requires the initial paid source lock. Every round recomputes the
+existing `FiatShamirTranscriptV1` transform from the plan-bound statement, source
+anchor/output and **all** earlier messages and challenges; the initial source seed
+is not independently reused as every later challenge. Source and query admission
+counts are separately charged to the persistent lifetime counter. Neither mode
+can reset signed H, choose a new checker snapshot after learning entropy, or retry
+by re-enrolling an existing base claim.
+
+Aux123 holds authenticated round rows, lock, transcript and distinct-seat receipt
+vector bounded by the existing committee capacity. SDK root readers rederive the
+actual paid beacon and round challenge. `bind_opening_v3` authenticates canonical
+material against the producer message before any all-target actual verifier can
+produce its private complete-result capability. Native `RoundReceipt` validates
+assignment, signer, seed, context, entire statement, message, transcript, round
+and fixed deadline; partial coverage cannot close a round. Native cold/cache
+ledger projection requires **all** signed rounds complete before tally/Final.
+Pending round locks lose eligibility if source standing Final fails. Already
+terminal monetary rights are not erased. The new Final projection additionally
+binds completed round count and last transcript root.
+
+CLI commands include MESSAGE, ROUND-FUND, ROUND-LOCK and ROUND-VERIFY; the latter
+executes actual math and opens the exact committed public material. Original V1
+wire/codecs remain unchanged; the new, unshipped inner64 sub-enum and class/receipt
+formats are versioned integration work. Public presets and approval registries
+remain disabled. Compact proof compiler families beyond full-material opening
+require separate explicit contracts, implementations and review before they can
+be claimed or admitted.
+
+## Private signed Program work generator
+
+`claim_paid_v2/private_bootstrap.rs` starts from caller-pinned native class/job
+rows after conformance, authenticates every parameter tensor against registered
+commitments, performs real Greedy TIR execution for each generated token and
+exports the final trace/evidence/material and salted commit. Its signed enrollment
+and fresh-reader receipt builders call the same actual SDK path as user consumers.
+The independent kaspad `private_integration/claim_paid_bootstrap.rs` accepts a
+bounded request with separately pinned LR/AR and an explicit private producer
+card, writes fresh 0600 files, and leaves immutable complete-v1 artifacts intact.
+It does not invent inclusion, a paid source lock, quorum, native Final or payment.
+The dedicated feature-gated private fixture binary is integrated by the RFC12
+owner. Actual inclusion, assigned receipts, new Final and source payment acceptance
+remain consolidated verification work after all source changes finish.
+
+No new compiler, SDK or native tests were run for this source checkpoint, following
+the requested implementation-first order. Required acceptance coverage includes
+both modes over all four target forms and prospective OPV; before-S strict native
+funding; zero/late/duplicate/wrong-actor/partial-message refusal; source/fee/material
+substitution; all-round rather than first-round closure; missing/altered openings;
+source failure; absolute-expiry handling; cold restart; and journal/reorg replay.
+
+The private producer preflight uses `producer_resources.rs`, an exhaustive table
+of all 25 current `Prim` variants, before artifact decode or TIR execution. It
+counts retained whole-trace i128 buffers, explicitly cloned operands and Hist
+prior rows, each primitive's broadcast/index/TopK/matmul/concat scratch, sequential
+row/column Merkle levels and copied leaves, commitments, retained encoded artifact,
+opening material and simultaneous serialized buffer capacity. `trace_stage_v1`
+restores Fixed/Hist from already retained node values, with no hidden producer
+state cache. A new primitive forces the exhaustive allocation match to be updated.
+Private workspace/material/execution work hard caps are 256 MiB/32 MiB/100M, and
+actual job positions are used to rederive execution bounds before repeated Greedy
+work. Source-bound numbers are exported as private preflight bounds, never measured
+host consumption, network resource approval or source profitability.

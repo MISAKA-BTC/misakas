@@ -121,6 +121,9 @@ impl PalwKernelRouteStateV1 {
         let row: PalwPaidClaimRoundV3 = self
             .aux_row(PAID_CLAIM_ROUNDS_V2, &borsh::to_vec(&round_id_v3(*enrollment, round)).unwrap())
             .ok_or("paid round missing")?;
+        if row.enrollment != *enrollment || row.round != round {
+            return Err("paid round key/identity mismatch".into());
+        }
         let a = self.paid_claim_enrollment_v3(enrollment)?;
         row.validate(&a, &self.ledger()?)?;
         Ok(row)
@@ -193,12 +196,12 @@ impl PalwKernelRouteStateV1 {
         else {
             return Err("round paid source not locked".into());
         };
-        let mut prior_rounds=Vec::new();
-        if a.class.source_policy.interactive_mode==misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir {
+        let mut prior_rounds = Vec::new();
+        if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir {
             for previous in 0..round {
-                let p=self.paid_claim_round_v3(enrollment,previous)?;
-                let lock=p.lock.ok_or("previous FS challenge missing")?;
-                prior_rounds.push((p.message_root,lock.seed));
+                let p = self.paid_claim_round_v3(enrollment, previous)?;
+                let lock = p.lock.ok_or("previous FS challenge missing")?;
+                prior_rounds.push((p.message_root, lock.seed));
             }
         }
         PaidClaimCheckAuthorityV2::for_interactive_round_v3(
@@ -231,6 +234,9 @@ impl PalwKernelRouteStateV1 {
             ) else {
                 return Ok(false);
             };
+            if row.enrollment != a.enrollment.id() || row.round != round {
+                return Err("paid round projection key/identity mismatch".into());
+            }
             row.validate(a, l)?;
             if row.prior_transcript != prior || !row.complete() {
                 return Ok(false);

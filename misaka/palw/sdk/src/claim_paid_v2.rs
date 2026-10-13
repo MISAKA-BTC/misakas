@@ -16,6 +16,7 @@ pub struct VerifiedPaidClaimSourcesV2 {
     authority: PalwPaidClaimAuthorityV2,
     check: PaidClaimCheckAuthorityV2,
     lock: PalwPaidClaimLockV2,
+    round: Option<kaspa_consensus_core::palw_claim_interactive_v3::PalwPaidClaimRoundV3>,
 }
 impl VerifiedPaidClaimSourcesV2 {
     pub fn authority(&self) -> &PalwPaidClaimAuthorityV2 {
@@ -93,7 +94,18 @@ impl VerifiedPaidClaimSourcesV2 {
         {
             return Err(Refusal::new("CLAIM_RECEIPT_AUTHORITY", "local result belongs to another enrollment/lock"));
         }
-        Ok(KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::Receipt { receipt } })
+        let object = if let Some(round) = &self.round {
+            if receipt.round != round.round
+                || receipt.message_root != round.message_root
+                || receipt.transcript_root != round.transcript_root
+            {
+                return Err(Refusal::new("CLAIM_ROUND_RECEIPT_AUTHORITY", "local result replaces the signed proof round"));
+            }
+            PaidClaimObjectV2::RoundReceipt { receipt }
+        } else {
+            PaidClaimObjectV2::Receipt { receipt }
+        };
+        Ok(KernelRouteObjectV1::PaidClaimV2 { object })
     }
 }
 pub fn paid_claim_sources_from_kernel_rows_v2(
@@ -114,7 +126,7 @@ pub fn paid_claim_sources_from_kernel_rows_v2(
     if !lock.source_valid || lock.context != *context || lock.seed != check.seed() || lock.enrollment != authority.enrollment.id() {
         return Err(Refusal::new("CLAIM_LOCK_INVALID", "native lock differs from re-derived future seed"));
     }
-    Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock })
+    Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock, round: None })
 }
 
 /// Producer explicitly signs the whole V2 enrollment and its unmodified base
@@ -270,6 +282,7 @@ pub fn paid_claim_class_object_v2(
         maximum_rounds: 1,
         maximum_commit_delay_daa: l.policy.check_window_daa,
         review_scope: (policy.lifetime_review_scope != [0; 64]).then_some(policy.lifetime_review_scope),
+        interactive_plan: None,
     };
     class.validate().map_err(|e| Refusal::new("CLAIM_CLASS_INVALID", e))?;
     Ok(KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::RegisterClass { class } })
@@ -360,9 +373,11 @@ pub fn sign_paid_claim_object_v2(
             Some(enrollment.producer)
         }
         PaidClaimObjectV2::Fund { terms, .. } => Some(terms.sponsor),
-        PaidClaimObjectV2::Receipt { receipt } => Some(receipt.signer),
+        PaidClaimObjectV2::Receipt { receipt } | PaidClaimObjectV2::RoundReceipt { receipt } => Some(receipt.signer),
+        PaidClaimObjectV2::FundRound { terms, .. } => Some(terms.sponsor),
+        PaidClaimObjectV2::LockRound { .. } => None,
         PaidClaimObjectV2::Lock { .. } => None,
-        PaidClaimObjectV2::StageMessage { .. } => return Err("interactive proof checker is not registered".into()),
+        PaidClaimObjectV2::StageMessage { .. } => None, // Native admission checks the enrolled producer.
         PaidClaimObjectV2::ReviewScope { .. }
         | PaidClaimObjectV2::EconomicEvidence { .. }
         | PaidClaimObjectV2::IndependenceEvidence { .. } => None,
@@ -386,6 +401,8 @@ pub fn sign_paid_claim_object_v2(
 }
 
 pub mod cli;
+pub mod private_bootstrap;
+pub mod producer_resources;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.
@@ -427,11 +444,28 @@ impl misaka_palw_kernel::spec::outsider::SnapshotSourceV1 for PaidClaimMaterialW
 }
 impl VerifiedPaidClaimSourcesV2 {
     pub fn verify_material(&self, material: &PaidClaimMaterialWireV2) -> Result<PaidClaimVerificationResultV2, Refusal> {
-        match self.authority.class.target {
-            PaidClaimTargetV2::Program | PaidClaimTargetV2::Pipeline => self.verify_program_or_pipeline(material, material),
-            PaidClaimTargetV2::Segmented => self.verify_segmented(material, material, material, &material.tokens),
-            PaidClaimTargetV2::TypedSpec => self.verify_typed(material, material, material),
-        }
+        let check = self.check.bind_opening_v3(material).map_err(|e| Refusal::new("CLAIM_PROOF_OPENING", e))?;
+        let ledger = self.route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER_INVALID", e))?;
+        let outsider = misaka_palw_kernel::ledger::OutsiderV1 {
+            ledger: &ledger,
+            claim: self.authority.enrollment.base_claim,
+            material,
+            artifact: material,
+            salt: [0; 64],
+        };
+        let finding = match self.authority.class.target {
+            PaidClaimTargetV2::Program | PaidClaimTargetV2::Pipeline => check.verify_program_or_pipeline(&outsider),
+            PaidClaimTargetV2::Segmented => check.verify_segmented(&outsider, material, &material.tokens),
+            PaidClaimTargetV2::TypedSpec => check.verify_typed(&misaka_palw_kernel::spec::outsider::SpecOutsiderV1 {
+                ledger: &ledger,
+                claim: self.authority.enrollment.base_claim,
+                material,
+                artifact: material,
+                snapshots: material,
+                salt: [0; 64],
+            }),
+        };
+        finding.map_err(|e| Refusal::new("CLAIM_PROOF_CHECK", e))
     }
 }
 
@@ -470,9 +504,21 @@ pub fn paid_claim_final_from_kernel_rows_v2(
         .claims
         .get(&authority.enrollment.base_claim)
         .ok_or_else(|| Refusal::new("CLAIM_BASE_MISSING", "canonical payment claim absent"))?;
-    let lock: PalwPaidClaimLockV2 = route
-        .aux_row(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&enrollment).unwrap())
-        .ok_or_else(|| Refusal::new("CLAIM_LOCK_MISSING", "Final has no rooted future lock"))?;
+    let (lock, completed_rounds, transcript_root) = if let Some(plan) = &authority.class.interactive_plan {
+        if !route.paid_claim_interactive_complete_v3(&authority, &l).map_err(|e| Refusal::new("CLAIM_ROUNDS", e))? {
+            return Err(Refusal::new("CLAIM_FINAL_INCOMPLETE", "all signed proof rounds must pass"));
+        }
+        let last = route.paid_claim_round_v3(&enrollment, plan.rounds - 1).map_err(|e| Refusal::new("CLAIM_ROUNDS", e))?;
+        (last.lock.ok_or_else(|| Refusal::new("CLAIM_ROUND_LOCK", "last round lock missing"))?, plan.rounds, last.transcript_root)
+    } else {
+        (
+            route
+                .aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&enrollment).unwrap())
+                .ok_or_else(|| Refusal::new("CLAIM_LOCK_MISSING", "Final has no rooted future lock"))?,
+            1,
+            [0; 64],
+        )
+    };
     if !matches!(claim.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
         || !lock.source_valid
         || final_row.enrollment != enrollment
@@ -483,10 +529,128 @@ pub fn paid_claim_final_from_kernel_rows_v2(
         || final_row.signed_lifetime != authority.enrollment.lifetime
         || final_row.logical_final_daa != authority.enrollment.lifetime.dispute_until.max(claim.life.final_hold_until)
         || final_row.logical_final_daa > authority.enrollment.lifetime.liability_until
+        || final_row.completed_rounds != completed_rounds
+        || final_row.transcript_root != transcript_root
         || final_row.complete_receipts < lock.quorum
         || lock.quorum == 0
     {
         return Err(Refusal::new("CLAIM_FINAL_INVALID", "Final does not bind its complete versioned receipt/seed/clock authority"));
     }
     Ok(final_row)
+}
+
+/// Select finite signed interactive semantics before class enrollment. Original
+/// V1 class/claim codecs remain unchanged; the new unshipped V2 class carries the plan.
+pub fn paid_claim_interactive_class_object_v3(
+    route: &PalwKernelRouteStateV1,
+    policy: &kaspa_consensus_core::palw_claim_challenge_v2::PalwClaimChallengePolicyV2,
+    registrant: Digest,
+    base_class: Digest,
+    mut challenge: misaka_palw_challenge::PostCommitChallengePolicyV1,
+    source: &kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourcePolicyV1,
+    rounds: u32,
+    maximum_material_bytes: u64,
+) -> Result<KernelRouteObjectV1, Refusal> {
+    let mode = challenge.interactive_mode;
+    // Build clock floors through the original builder without advertising an
+    // uncompiled interactive enum. Restore the explicit mode before signing.
+    let transform = challenge.transcript_transform_id;
+    challenge.interactive_mode = misaka_palw_challenge::InteractiveModeV1::NonInteractive;
+    challenge.transcript_transform_id = misaka_palw_challenge::ImplementedV1::transcript_none();
+    let mut object = paid_claim_class_object_v2(route, policy, registrant, base_class, challenge.clone(), source)?;
+    let KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::RegisterClass { class } } = &mut object else { unreachable!() };
+    challenge.interactive_mode = mode;
+    challenge.transcript_transform_id = transform;
+    class.source_policy = challenge;
+    class.maximum_rounds = rounds;
+    if rounds > policy.maximum_rounds {
+        return Err(Refusal::new("CLAIM_ROUND_LIMIT", "plan exceeds network finite round capacity"));
+    }
+    class.check_window_daa = class
+        .check_window_daa
+        .checked_mul(u64::from(rounds))
+        .ok_or_else(|| Refusal::new("CLAIM_LIFETIME_OVERFLOW", "round budget overflow"))?;
+    class.interactive_plan = Some(
+        misaka_palw_kernel::claim_interactive_v3::CompiledClaimProofPlanV3::compile(
+            class.target,
+            mode,
+            rounds,
+            maximum_material_bytes,
+            class.maximum_stream_blocks,
+        )
+        .map_err(|e| Refusal::new("CLAIM_PROOF_PLAN", e))?,
+    );
+    class.validate().map_err(|e| Refusal::new("CLAIM_PROOF_PLAN", e))?;
+    Ok(object)
+}
+pub fn paid_claim_round_message_object_v3(
+    route: &PalwKernelRouteStateV1,
+    enrollment: Digest,
+    round: u32,
+    material: &PaidClaimMaterialWireV2,
+) -> Result<KernelRouteObjectV1, Refusal> {
+    let a = route.paid_claim_enrollment_v3(&enrollment).map_err(|e| Refusal::new("CLAIM_ENROLLMENT", e))?;
+    let plan = a.class.interactive_plan.as_ref().ok_or_else(|| Refusal::new("CLAIM_PROOF_PLAN", "signed plan missing"))?;
+    let prior = if round == 0 {
+        [0; 64]
+    } else {
+        let previous = route.paid_claim_round_v3(&enrollment, round - 1).map_err(|e| Refusal::new("CLAIM_PREVIOUS_ROUND", e))?;
+        if !previous.complete() {
+            return Err(Refusal::new("CLAIM_PREVIOUS_ROUND", "previous opening has not passed full quorum"));
+        }
+        previous.transcript_root
+    };
+    let message_root = plan.material_root(material).map_err(|e| Refusal::new("CLAIM_PROOF_OPENING", e))?;
+    Ok(KernelRouteObjectV1::PaidClaimV2 {
+        object: PaidClaimObjectV2::StageMessage { enrollment, round, prior_transcript: prior, message_root },
+    })
+}
+pub fn paid_claim_round_funding_object_v3(
+    route: &PalwKernelRouteStateV1,
+    enrollment: Digest,
+    round: u32,
+    sponsor: Digest,
+    fee_per_source: u64,
+    max_sources: u32,
+    policy: &kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeePolicyV1,
+) -> Result<KernelRouteObjectV1, Refusal> {
+    let row = route.paid_claim_round_v3(&enrollment, round).map_err(|e| Refusal::new("CLAIM_ROUND", e))?;
+    let a = route.paid_claim_enrollment_v3(&enrollment).map_err(|e| Refusal::new("CLAIM_ENROLLMENT", e))?;
+    if a.class.source_policy.interactive_mode != misaka_palw_challenge::InteractiveModeV1::StagedBeacon
+        || row.sponsor.is_some()
+        || route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER", e))?.daa >= row.target.terms.seal_start
+        || fee_per_source < policy.minimum_fee_for(&row.target).map_err(|e| Refusal::new("CLAIM_FEE", e))?
+        || max_sources < a.class.source_policy.work_count_k
+        || max_sources > policy.max_funded_sources.min(row.target.terms.max_total)
+    {
+        return Err(Refusal::new("CLAIM_ROUND_FUNDING", "late/replayed/unsupported/underfunded round"));
+    }
+    let terms = misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1 {
+        source: row.target.terms,
+        sponsor,
+        fee_per_source,
+        max_sources,
+    };
+    Ok(KernelRouteObjectV1::PaidClaimV2 { object: PaidClaimObjectV2::FundRound { enrollment, round, terms } })
+}
+pub fn paid_claim_round_sources_from_kernel_rows_v3(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    enrollment: Digest,
+    round: u32,
+) -> Result<VerifiedPaidClaimSourcesV2, Refusal> {
+    let route = PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
+        .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    let authority = route.paid_claim_enrollment_v3(&enrollment).map_err(|e| Refusal::new("CLAIM_ENROLLMENT", e))?;
+    let row = route.paid_claim_round_v3(&enrollment, round).map_err(|e| Refusal::new("CLAIM_ROUND", e))?;
+    let check = route
+        .paid_claim_round_check_authority_v3(&enrollment, round, route.ledger().map_err(|e| Refusal::new("CLAIM_LEDGER", e))?.daa)
+        .map_err(|e| Refusal::new("CLAIM_ROUND_SOURCE", e))?;
+    let lock = row.lock.clone().ok_or_else(|| Refusal::new("CLAIM_ROUND_LOCK", "native future lock missing"))?;
+    if !lock.source_valid || lock.seed != check.seed() {
+        return Err(Refusal::new("CLAIM_ROUND_SOURCE", "rooted lock differs from verified future source"));
+    }
+    Ok(VerifiedPaidClaimSourcesV2 { route, authority, check, lock, round: Some(row) })
 }

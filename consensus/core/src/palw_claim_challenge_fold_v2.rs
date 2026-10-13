@@ -150,12 +150,6 @@ fn apply_inner(
             if b.state.kernel_route.as_ref().unwrap().aux.contains_key(&(PAID_CLAIM_CLASSES_V2, key(&class.id()))) {
                 return Err(refused("paid class already enrolled"));
             }
-            // Current mathematical contracts are noninteractive. Staged/FS proof
-            // contracts must supply their separately versioned checker semantics,
-            // and cannot be advertised by choosing a source policy enum alone.
-            if class.source_policy.interactive_mode != misaka_palw_challenge::InteractiveModeV1::NonInteractive {
-                return Err(refused("interactive proof needs a registered versioned proof checker contract"));
-            }
             put(b, PAID_CLAIM_CLASSES_V2, &class.id(), class);
         }
         PaidClaimObjectV2::EnrollJob { job } => {
@@ -293,10 +287,20 @@ fn apply_inner(
             b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None);
             b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None);
             route_fold::flush(b, &l, &before);
-            admit_review(b, ctx, &p, &a, e.id(), 1)?;
+            admit_review(
+                b,
+                ctx,
+                &p,
+                &a,
+                e.id(),
+                u32::from(a.class.source_policy.interactive_mode != misaka_palw_challenge::InteractiveModeV1::StagedBeacon),
+            )?;
         }
         PaidClaimObjectV2::Fund { enrollment, terms } => {
             let mut a = authority(b, enrollment)?;
+            if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+                return Err(refused("staged funding requires a signed round message/future target"));
+            }
             let (sf, ff) = source_fences(b, ctx.daa_score)?;
             let cap = ff.policy.max_funded_sources.min(a.source_target.terms.max_total);
             let minimum = ff.policy.minimum_fee_for(&a.source_target).map_err(refused)?;
@@ -403,9 +407,12 @@ fn apply_inner(
             }
             put(b, PAID_CLAIM_EVIDENCE_V2, &observation.id(), observation);
         }
-        PaidClaimObjectV2::StageMessage { .. } => {
-            return Err(refused("staged/Fiat-Shamir proof semantics require a distinct registered interactive checker contract"));
+        PaidClaimObjectV2::StageMessage { enrollment, round, prior_transcript, message_root } => {
+            round_message(b, ctx, signer, &p, enrollment, *round, *prior_transcript, *message_root)?
         }
+        PaidClaimObjectV2::FundRound { enrollment, round, terms } => round_fund(b, ctx, signer, enrollment, *round, terms)?,
+        PaidClaimObjectV2::LockRound { enrollment, round } => round_lock(b, ctx, enrollment, *round)?,
+        PaidClaimObjectV2::RoundReceipt { receipt } => round_receipt(b, ctx, signer, receipt)?,
     }
     b.note_kernel_bond(signer);
     Ok(())
@@ -439,7 +446,7 @@ fn admit_review(
     let tuple = scope
         .registry
         .iter()
-        .find(|t| t.algebraic.checker_suite_id == a.class.checker_contract && t.policy == a.class.source_policy)
+        .find(|t| t.algebraic.checker_suite_id == a.class.verification_contract_v3() && t.policy == a.class.source_policy)
         .ok_or_else(|| refused("review does not cover this actual checker contract"))?;
     let mut arithmetic = tuple.algebraic.effective_input(&tuple.policy);
     arithmetic.retry_limit = 0;
@@ -461,7 +468,7 @@ fn admit_review(
             a.context.chain_genesis,
             a.context.ruleset_id,
             ctx.daa_score,
-            a.class.checker_contract,
+            a.class.verification_contract_v3(),
             &a.class.source_policy,
             event,
             beacons,
@@ -472,6 +479,9 @@ fn admit_review(
 }
 fn lock(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, enrollment: &Digest) -> Result<(), PalwStateV2Error> {
     let a = authority(b, enrollment)?;
+    if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+        return Err(refused("staged lock requires a fresh round source"));
+    }
     let r = b.state.kernel_route.as_ref().unwrap();
     if r.aux.contains_key(&(PAID_CLAIM_LOCKS_V2, key(enrollment))) {
         return Err(refused("paid claim lock already consumed"));
@@ -527,6 +537,9 @@ fn receipt_fold(
     receipt: &PaidClaimReceiptV2,
 ) -> Result<(), PalwStateV2Error> {
     let a = authority(b, &receipt.enrollment)?;
+    if a.class.interactive_plan.is_some() || receipt.round != 0 || receipt.message_root != [0; 64] {
+        return Err(refused("interactive receipt needs its round consumer"));
+    }
     let r = b.state.kernel_route.as_ref().unwrap();
     let lock: PalwPaidClaimLockV2 =
         r.aux_row(PAID_CLAIM_LOCKS_V2, &key(&receipt.enrollment)).ok_or_else(|| refused("paid receipt future lock missing"))?;
@@ -591,8 +604,20 @@ pub(super) fn tick_paid_claim_final_projection_v2(
         if matches!(row.life.state, misaka_palw_kernel::lifecycle::ClaimStateV1::Final { .. })
             && !r.aux.contains_key(&(PAID_CLAIM_FINALS_V2, key(&a.enrollment.id())))
         {
-            let lock: PalwPaidClaimLockV2 =
-                r.aux_row(PAID_CLAIM_LOCKS_V2, &key(&a.enrollment.id())).ok_or_else(|| refused("paid Final has no locked seed"))?;
+            let (lock, completed_rounds, transcript_root) = if let Some(plan) = &a.class.interactive_plan {
+                if !r.paid_claim_interactive_complete_v3(&a, &l).map_err(refused)? {
+                    return Err(refused("interactive Final lacks complete full-material rounds"));
+                }
+                let last = r.paid_claim_round_v3(&a.enrollment.id(), plan.rounds - 1).map_err(refused)?;
+                (last.lock.ok_or_else(|| refused("last round lock missing"))?, plan.rounds, last.transcript_root)
+            } else {
+                (
+                    r.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &key(&a.enrollment.id()))
+                        .ok_or_else(|| refused("paid Final has no locked seed"))?,
+                    1,
+                    [0; 64],
+                )
+            };
             projections.push(PalwPaidClaimFinalV2 {
                 enrollment: a.enrollment.id(),
                 base_claim: a.enrollment.base_claim,
@@ -602,6 +627,8 @@ pub(super) fn tick_paid_claim_final_projection_v2(
                 signed_lifetime: a.enrollment.lifetime,
                 complete_receipts: lock.quorum,
                 logical_final_daa: a.enrollment.lifetime.dispute_until.max(row.life.final_hold_until),
+                completed_rounds,
+                transcript_root,
             });
         }
     }
@@ -761,8 +788,264 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
             invalid.push((key.clone(), lock));
         }
     }
+    let mut invalid_rounds = Vec::new();
+    for ((_, key), bytes) in r.aux.range((PAID_CLAIM_ROUNDS_V2, Vec::new())..(PAID_CLAIM_ROUNDS_V2 + 1, Vec::new())) {
+        let mut row: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 =
+            borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
+        let Some(lock) = row.lock.as_mut() else {
+            continue;
+        };
+        if !lock.source_valid {
+            continue;
+        }
+        let a = r.paid_claim_enrollment_v3(&row.enrollment).map_err(refused)?;
+        if l.claims.get(&a.enrollment.base_claim).is_none_or(|c| c.life.state.is_terminal()) {
+            continue;
+        }
+        let Some((contract, sources, promises)) = r.paid_beacon_material_v5(&row.context.id()).map_err(refused)? else {
+            return Err(refused("pending round lost paid source contract"));
+        };
+        let valid = matches!(misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&row.context,&contract,&sources,&promises,ctx.daa_score)
+            .map_err(|e|refused(e.to_string()))?,misaka_palw_challenge::SealedBeaconStateV3::Locked(ref beacon) if beacon.challenge_anchor==lock.anchor);
+        if !valid {
+            lock.source_valid = false;
+            invalid_rounds.push((key.clone(), row));
+        }
+    }
+    for (key, row) in invalid_rounds {
+        b.write_kernel_row(PAID_CLAIM_ROUNDS_V2, key, Some(borsh::to_vec(&row).unwrap()));
+    }
     for (key, row) in invalid {
         b.write_kernel_row(PAID_CLAIM_LOCKS_V2, key, Some(borsh::to_vec(&row).unwrap()));
     }
+    Ok(())
+}
+
+fn round_message(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    policy: &PalwClaimChallengePolicyV2,
+    enrollment: &Digest,
+    round: u32,
+    prior: Digest,
+    message: Digest,
+) -> Result<(), PalwStateV2Error> {
+    use misaka_palw_kernel::claim_interactive_v3::*;
+    let a = authority(b, enrollment)?;
+    let plan = a.class.interactive_plan.as_ref().ok_or_else(|| refused("signed compiled interactive plan missing"))?;
+    let r = b.state.kernel_route.as_ref().unwrap();
+    if *signer != a.producer
+        || round >= plan.rounds
+        || message == [0; 64]
+        || !a.enrollment.lifetime.receipt_open(ctx.daa_score)
+        || r.aux.contains_key(&(PAID_CLAIM_ROUNDS_V2, key(&round_id_v3(*enrollment, round))))
+    {
+        return Err(refused("interactive message signer/round/lifetime/replay mismatch"));
+    }
+    if round == 0 {
+        if prior != [0; 64] {
+            return Err(refused("initial round has no previous transcript"));
+        }
+    } else {
+        let previous = r.paid_claim_round_v3(enrollment, round - 1).map_err(refused)?;
+        if !previous.complete() || previous.transcript_root != prior {
+            return Err(refused("previous full-material round is incomplete/substituted"));
+        }
+    }
+    let (subject, context, target, sponsor) = if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+        let subject = round_subject_v3(&a.subject, plan, *enrollment, round, prior, message);
+        let mut context = a.context.clone();
+        context.commitment_root = subject.commitment_root;
+        context.commitment_position = ctx.daa_score;
+        context.challenge_epoch = u64::from(round);
+        let target =
+            claim_source_target_v2(a.source_policy, context.clone(), a.enrollment.lifetime, &r.ledger().map_err(refused)?.policy)
+                .map_err(refused)?;
+        if target.terms.seal_start <= ctx.daa_score {
+            return Err(refused("staged challenge window must open after its signed message"));
+        }
+        (subject, context, target, None)
+    } else {
+        let locked: PalwPaidClaimLockV2 = r
+            .aux_row(PAID_CLAIM_LOCKS_V2, &key(enrollment))
+            .ok_or_else(|| refused("FS needs the initial independently locked paid beacon"))?;
+        if !locked.source_valid || locked.locked_daa > ctx.daa_score {
+            return Err(refused("FS initial source invalid"));
+        }
+        // Revalidate initial source before accepting another adaptive query.
+        r.paid_claim_check_authority_v2(&a.context.id(), ctx.daa_score).map_err(refused)?;
+        (a.subject.clone(), a.context.clone(), a.source_target.clone(), a.sponsor)
+    };
+    let row = crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 {
+        enrollment: *enrollment,
+        round,
+        prior_transcript: prior,
+        message_root: message,
+        accepted_daa: ctx.daa_score,
+        subject,
+        context,
+        target,
+        sponsor,
+        lock: None,
+        transcript_root: [0; 64],
+        receipts: vec![],
+    };
+    row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
+    admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    Ok(())
+}
+fn round_fund(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    enrollment: &Digest,
+    round: u32,
+    terms: &misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1,
+) -> Result<(), PalwStateV2Error> {
+    let a = authority(b, enrollment)?;
+    if a.class.source_policy.interactive_mode != misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+        return Err(refused("FS uses its initial funding; no duplicate round debit"));
+    }
+    let mut row = b.state.kernel_route.as_ref().unwrap().paid_claim_round_v3(enrollment, round).map_err(refused)?;
+    let (sf, ff) = source_fences(b, ctx.daa_score)?;
+    let cap = ff.policy.max_funded_sources.min(row.target.terms.max_total);
+    let minimum = ff.policy.minimum_fee_for(&row.target).map_err(refused)?;
+    let sponsor = palw_kernel_bond_id_v1(signer);
+    if row.sponsor.is_some()
+        || row.lock.is_some()
+        || ctx.daa_score >= row.target.terms.seal_start
+        || sf.policy != a.source_policy
+        || terms.sponsor != sponsor
+        || terms.source != row.target.terms
+        || terms.fee_per_source < minimum
+        || terms.max_sources < a.class.source_policy.work_count_k
+        || terms.max_sources > cap
+    {
+        return Err(refused("round funding is late/replayed/substituted/insufficient"));
+    }
+    row.sponsor = Some(*signer);
+    let id = row.context.id();
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    put(b, crate::palw_beacon_source_opt_in_v1::PALW_BEACON_SOURCE_TABLE_TARGETS_V4, &id, &row.target);
+    put(
+        b,
+        crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_FEE_TARGETS_V5,
+        &id,
+        &misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTargetV1 {
+            target: row.target.clone(),
+            sponsor,
+            minimum_fee: minimum,
+            max_sources: cap,
+        },
+    );
+    put(
+        b,
+        crate::palw_beacon_source_fee_v1::PALW_BEACON_SOURCE_TABLE_COST_BOUNDS_V5,
+        &id,
+        &ff.policy.cost_bounds.ok_or_else(|| refused("round cost scope missing"))?,
+    );
+    route_fold::apply_kernel_route_object_v1(b, ctx, &KernelRouteObjectV1::FundBeaconSourceFee { terms: *terms }.encode(), signer)?;
+    let l = b.state.kernel_route.as_ref().unwrap().ledger().map_err(refused)?;
+    if !l.beacon_source_fees.get(&id).is_some_and(|f| f.terms == *terms) {
+        return Err(refused("strict same-R native round debit failed"));
+    }
+    Ok(())
+}
+fn round_lock(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    enrollment: &Digest,
+    round: u32,
+) -> Result<(), PalwStateV2Error> {
+    let a = authority(b, enrollment)?;
+    let r = b.state.kernel_route.as_ref().unwrap();
+    let mut row = r.paid_claim_round_v3(enrollment, round).map_err(refused)?;
+    if row.lock.is_some() {
+        return Err(refused("round lock already consumed"));
+    }
+    let check = r.paid_claim_round_check_authority_v3(enrollment, round, ctx.daa_score).map_err(refused)?;
+    let (contract, sources, promises) =
+        r.paid_beacon_material_v5(&row.context.id()).map_err(refused)?.ok_or_else(|| refused("round funding missing"))?;
+    let misaka_palw_challenge::SealedBeaconStateV3::Locked(beacon) =
+        misaka_palw_challenge::collect_paid_opt_in_work_beacon_v5(&row.context, &contract, &sources, &promises, ctx.daa_score)
+            .map_err(|e| refused(e.to_string()))?
+    else {
+        return Err(refused("round future source unavailable"));
+    };
+    let mut operators = std::collections::BTreeMap::new();
+    for c in &a.checker_candidates {
+        let rank = crate::palw_kernel_route_v1::palw_kernel_interim_key_v1(
+            &Hash64::from_bytes(check.seed()),
+            &c.operator,
+            u128::from(c.weight),
+        );
+        let best = operators.entry(c.operator).or_insert((rank, c.bond));
+        if (rank, c.bond) < *best {
+            *best = (rank, c.bond);
+        }
+    }
+    let mut ranked: Vec<_> = operators.into_values().collect();
+    ranked.sort();
+    let seats: Vec<_> =
+        ranked.into_iter().take(crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1).map(|(_, b)| b).collect();
+    let quorum = u32::from(crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1);
+    if seats.len() < quorum as usize {
+        return Err(refused("round committee has too few independent native operators"));
+    }
+    let assignment = object_id(b"MISAKA/PALW/CLAIM-PROOF-ROUND-ASSIGNMENT/V3", &(row.id(), check.seed(), &seats, quorum));
+    row.transcript_root = misaka_palw_kernel::claim_interactive_v3::transcript_root_v3(
+        a.class.interactive_plan.as_ref().unwrap(),
+        *enrollment,
+        round,
+        row.prior_transcript,
+        row.message_root,
+        row.context.id(),
+        check.seed(),
+    );
+    row.lock = Some(PalwPaidClaimLockV2 {
+        enrollment: *enrollment,
+        context: row.context.id(),
+        anchor: beacon.challenge_anchor,
+        seed: check.seed(),
+        locked_daa: ctx.daa_score,
+        assignment,
+        seats,
+        quorum,
+        source_valid: true,
+    });
+    row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    Ok(())
+}
+fn round_receipt(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    receipt: &PaidClaimReceiptV2,
+) -> Result<(), PalwStateV2Error> {
+    let a = authority(b, &receipt.enrollment)?;
+    let r = b.state.kernel_route.as_ref().unwrap();
+    let mut row = r.paid_claim_round_v3(&receipt.enrollment, receipt.round).map_err(refused)?;
+    let check = r.paid_claim_round_check_authority_v3(&receipt.enrollment, receipt.round, ctx.daa_score).map_err(refused)?;
+    let locked = row.lock.as_ref().ok_or_else(|| refused("round future lock missing"))?;
+    if !locked.source_valid
+        || locked.seed != check.seed()
+        || receipt.signer != palw_kernel_bond_id_v1(signer)
+        || receipt.signed_daa > ctx.daa_score
+        || !a.enrollment.lifetime.receipt_open(ctx.daa_score)
+    {
+        return Err(refused("round receipt signer/source/lifetime mismatch"));
+    }
+    row.receipts.push(receipt.clone());
+    row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
+    put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    let mut l = route_fold::load_ledger(b, ctx)?;
+    let before = l.to_rows();
+    if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
+        l.apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
+    }
+    route_fold::flush(b, &l, &before);
     Ok(())
 }

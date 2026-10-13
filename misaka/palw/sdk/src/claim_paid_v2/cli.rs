@@ -4,14 +4,18 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|SIGN|INSPECT|FINAL
+const USAGE: &str = "palw-class claim-v2 CLASS|JOB|COMMIT|FUND|LOCK|VERIFY|MESSAGE|ROUND-FUND|ROUND-LOCK|ROUND-VERIFY|SIGN|INSPECT|FINAL
 All commands: --snapshot FILE --ledger-root HEX --aux-root HEX --out FILE
-CLASS: --claim-policy POLICY_BORSH --source-policy SOURCE_BORSH --beacon-policy CHALLENGE_BORSH --base-class HEX --actor BOND_HEX
+CLASS: --claim-policy POLICY_BORSH --source-policy SOURCE_BORSH --beacon-policy CHALLENGE_BORSH --base-class HEX --actor BOND_HEX [--rounds N --max-material-bytes N]
 JOB: --class HEX --base-job HEX --actor BOND_HEX --nonce HEX --last-commit DAA --max-consumers N
 COMMIT: --class HEX --job HEX --commit SALTED_COMMIT_BORSH --salt HEX --material-consent HEX --height DAA
 FUND: --enrollment HEX --actor BOND_HEX --fee-policy POLICY_BORSH --fee SOMPI --max-sources N
 LOCK: --enrollment HEX
 VERIFY: --context HEX --material MATERIAL_BORSH --actor BOND_HEX --height DAA
+MESSAGE: --enrollment HEX --round N --material MATERIAL_BORSH
+ROUND-FUND: --enrollment HEX --round N --actor HEX --fee-policy POLICY_BORSH --fee SOMPI --max-sources N
+ROUND-LOCK: --enrollment HEX --round N
+ROUND-VERIFY: --enrollment HEX --round N --material MATERIAL_BORSH --actor HEX --height DAA
 SIGN: --draft KERNEL_OBJECT --network ID [--drill-salt HEX] --bond TXID:INDEX --key-file SEED
 INSPECT: --context HEX
 FINAL: --enrollment HEX
@@ -64,8 +68,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let p = typed(&take(&mut f, "--claim-policy")?, 64 << 10)?;
             let s = typed(&take(&mut f, "--source-policy")?, 64 << 10)?;
             let beacon = typed(&take(&mut f, "--beacon-policy")?, 64 << 10)?;
-            paid_claim_class_object_v2(&route, &p, hash(&mut f, "--actor")?, hash(&mut f, "--base-class")?, beacon, &s)
+            let actor = hash(&mut f, "--actor")?;
+            let base = hash(&mut f, "--base-class")?;
+            if let Some(rounds) = f.remove("--rounds") {
+                paid_claim_interactive_class_object_v3(
+                    &route,
+                    &p,
+                    actor,
+                    base,
+                    beacon,
+                    &s,
+                    rounds.parse().map_err(|_| "invalid round count")?,
+                    number(&mut f, "--max-material-bytes")?,
+                )
                 .map_err(|e| e.to_string())?
+            } else {
+                paid_claim_class_object_v2(&route, &p, actor, base, beacon, &s).map_err(|e| e.to_string())?
+            }
         }
         "JOB" => paid_claim_job_object_v2(
             &route,
@@ -111,6 +130,36 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let checked = verified.verify_material(&material).map_err(|e| e.to_string())?;
             let complete =
                 checked.complete.ok_or_else(|| format!("claim did not pass complete verification: {:?}", checked.finding))?;
+            verified.receipt(&complete, hash(&mut f, "--actor")?, number(&mut f, "--height")?).map_err(|e| e.to_string())?
+        }
+        "MESSAGE" => paid_claim_round_message_object_v3(
+            &route,
+            hash(&mut f, "--enrollment")?,
+            number(&mut f, "--round")?,
+            &typed::<PaidClaimMaterialWireV2>(&take(&mut f, "--material")?, 64 << 20)?,
+        )
+        .map_err(|e| e.to_string())?,
+        "ROUND-FUND" => paid_claim_round_funding_object_v3(
+            &route,
+            hash(&mut f, "--enrollment")?,
+            number(&mut f, "--round")?,
+            hash(&mut f, "--actor")?,
+            number(&mut f, "--fee")?,
+            number(&mut f, "--max-sources")?,
+            &typed(&take(&mut f, "--fee-policy")?, 64 << 10)?,
+        )
+        .map_err(|e| e.to_string())?,
+        "ROUND-LOCK" => KernelRouteObjectV1::PaidClaimV2 {
+            object: PaidClaimObjectV2::LockRound { enrollment: hash(&mut f, "--enrollment")?, round: number(&mut f, "--round")? },
+        },
+        "ROUND-VERIFY" => {
+            let enrollment = hash(&mut f, "--enrollment")?;
+            let round = number(&mut f, "--round")?;
+            let material: PaidClaimMaterialWireV2 = typed(&take(&mut f, "--material")?, 64 << 20)?;
+            let verified = paid_claim_round_sources_from_kernel_rows_v3(&header, rows.clone(), &lr, &ar, enrollment, round)
+                .map_err(|e| e.to_string())?;
+            let checked = verified.verify_material(&material).map_err(|e| e.to_string())?;
+            let complete = checked.complete.ok_or_else(|| format!("full proof opening did not pass: {:?}", checked.finding))?;
             verified.receipt(&complete, hash(&mut f, "--actor")?, number(&mut f, "--height")?).map_err(|e| e.to_string())?
         }
         "SIGN" => {

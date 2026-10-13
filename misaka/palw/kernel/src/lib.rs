@@ -180,4 +180,5 @@ pub use verify::{
 pub mod flat_seal9;
 
 pub mod claim_paid_v2;
+pub mod claim_interactive_v3;
 pub mod panel_lifetime_v2;

@@ -41,8 +41,13 @@ pub struct PaidClaimClassV2 {
     /// fixed; late inclusion consumes this allowance instead of extending H.
     pub maximum_commit_delay_daa: u64,
     pub review_scope: Option<Digest>,
+    /// Signed, separately versioned interactive proof semantics.
+    pub interactive_plan: Option<crate::claim_interactive_v3::CompiledClaimProofPlanV3>,
 }
 impl PaidClaimClassV2 {
+    pub fn verification_contract_v3(&self) -> Digest {
+        self.interactive_plan.as_ref().map_or(self.checker_contract, |p| p.id())
+    }
     pub fn id(&self) -> Digest {
         object_id(b"misaka-palw/kernel/paid-class/v2", self)
     }
@@ -64,6 +69,13 @@ impl PaidClaimClassV2 {
         if self.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::NonInteractive && self.maximum_rounds != 1
         {
             return Err("noninteractive checking has exactly one committed statement".into());
+        }
+        match (&self.interactive_plan, self.source_policy.interactive_mode) {
+            (None, misaka_palw_challenge::InteractiveModeV1::NonInteractive) => {}
+            (Some(plan), mode) if mode != misaka_palw_challenge::InteractiveModeV1::NonInteractive => {
+                plan.validate(self.target, mode, self.maximum_rounds, self.maximum_stream_blocks)?;
+            }
+            _ => return Err("interactive mode requires its exact signed compiled proof plan".into()),
         }
         Ok(())
     }
@@ -167,6 +179,18 @@ pub enum PaidClaimObjectV2 {
         prior_transcript: Digest,
         message_root: Digest,
     },
+    FundRound {
+        enrollment: Digest,
+        round: u32,
+        terms: crate::beacon_source_fee::BeaconSourceFeeTermsV1,
+    },
+    LockRound {
+        enrollment: Digest,
+        round: u32,
+    },
+    RoundReceipt {
+        receipt: PaidClaimReceiptV2,
+    },
     ReviewScope {
         scope: misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3,
     },
@@ -192,6 +216,8 @@ pub struct PaidClaimReceiptV2 {
     pub signer: Digest,
     pub signed_daa: u64,
     pub complete: bool,
+    pub round: u32,
+    pub message_root: Digest,
 }
 
 pub fn paid_subject_v2(
@@ -259,6 +285,7 @@ pub fn paid_context_v2(
 }
 /// Only a verified paid beacon can construct a usable local check authority.
 /// A receipt asserting success is not a locally verified result.
+#[derive(Clone)]
 pub struct PaidClaimCheckAuthorityV2 {
     enrollment: Digest,
     base_claim: Digest,
@@ -268,6 +295,10 @@ pub struct PaidClaimCheckAuthorityV2 {
     source_context: Digest,
     sample_seed: Digest,
     maximum_stream_blocks: u64,
+    round: u32,
+    message_root: Digest,
+    opening_bound: bool,
+    interactive_plan: Option<crate::claim_interactive_v3::CompiledClaimProofPlanV3>,
 }
 impl PaidClaimCheckAuthorityV2 {
     pub fn verify(
@@ -300,6 +331,85 @@ impl PaidClaimCheckAuthorityV2 {
             source_context: context.id(),
             sample_seed: seed,
             maximum_stream_blocks: class.maximum_stream_blocks,
+            round: 0,
+            message_root: [0; 64],
+            opening_bound: class.interactive_plan.is_none(),
+            interactive_plan: class.interactive_plan.clone(),
+        })
+    }
+    /// Caller must supply the independently verified source beacon; the transcript
+    /// validator binds every producer message and challenge before this constructor.
+    pub fn for_interactive_round_v3(
+        class: &PaidClaimClassV2,
+        enrollment: &PaidClaimEnrollmentV2,
+        context: &BeaconContextV1,
+        source_subject: &ChallengeSubjectV1,
+        beacon: &VerifiedWorkBeaconV1,
+        round: u32,
+        message_root: Digest,
+        prior_transcript: Digest,
+        message_daa: u64,
+        now: u64,
+        prior_rounds: &[(Digest, Digest)],
+    ) -> Result<Self, String> {
+        class.validate()?;
+        let plan = class.interactive_plan.as_ref().ok_or("interactive proof plan missing")?;
+        if enrollment.version != 2
+            || enrollment.class != class.id()
+            || round >= plan.rounds
+            || message_root == [0; 64]
+            || !enrollment.lifetime.receipt_open(now)
+            || context.policy != class.source_policy
+        {
+            return Err("interactive round is outside its signed plan/lifetime".into());
+        }
+        let base_seed = misaka_palw_challenge::challenge_seed_v1(context, source_subject, beacon).map_err(|e| e.to_string())?;
+        let sample_seed = match plan.mode {
+            misaka_palw_challenge::InteractiveModeV1::StagedBeacon => misaka_palw_challenge::staged_round_challenge_v1(
+                plan.mode,
+                &base_seed,
+                round,
+                &message_root,
+                message_daa,
+                beacon,
+                context.commitment_position.checked_add(context.policy.anchor_delay_slots).ok_or("round source overflow")?,
+            )
+            .map_err(|e| e.to_string())?,
+            misaka_palw_challenge::InteractiveModeV1::TranscriptBoundFiatShamir => crate::claim_interactive_v3::fs_round_seed_v3(
+                plan,
+                enrollment.commit_root,
+                class.source_policy.id(),
+                beacon,
+                round,
+                prior_transcript,
+                message_root,
+                prior_rounds,
+            )?,
+            _ => return Err("interactive checker cannot use a noninteractive transcript".into()),
+        };
+        let source_context = context.id();
+        let transcript_root = crate::claim_interactive_v3::transcript_root_v3(
+            plan,
+            enrollment.id(),
+            round,
+            prior_transcript,
+            message_root,
+            source_context,
+            sample_seed,
+        );
+        Ok(Self {
+            enrollment: enrollment.id(),
+            base_claim: enrollment.base_claim,
+            verification_class: class.id(),
+            evidence_root: enrollment.commit_root,
+            transcript_root,
+            source_context,
+            sample_seed,
+            maximum_stream_blocks: class.maximum_stream_blocks,
+            round,
+            message_root,
+            opening_bound: false,
+            interactive_plan: Some(plan.clone()),
         })
     }
     pub fn enrollment(&self) -> Digest {
@@ -311,7 +421,20 @@ impl PaidClaimCheckAuthorityV2 {
     pub fn seed(&self) -> Digest {
         self.sample_seed
     }
+    pub fn bind_opening_v3<T: BorshSerialize>(&self, material: &T) -> Result<Self, String> {
+        let mut bound = self.clone();
+        if let Some(plan) = &self.interactive_plan {
+            if plan.material_root(material)? != self.message_root {
+                return Err("full-material opening differs from the signed round message".into());
+            }
+            bound.opening_bound = true;
+        }
+        Ok(bound)
+    }
     pub fn randomness(&self) -> Result<crate::challenge::CheckerRandomnessV2, String> {
+        if !self.opening_bound {
+            return Err("interactive full-material message has not been authenticated".into());
+        }
         crate::challenge::CheckerRandomnessV2::new(self.sample_seed, self.maximum_stream_blocks)
     }
     pub fn check_program_or_pipeline(
@@ -341,8 +464,8 @@ impl PaidClaimCheckAuthorityV2 {
         positions: &dyn crate::element::SegMaterialV1,
         tokens: &[u32],
     ) -> Result<crate::ledger::OutsiderFindingV1, String> {
-        if outsider.claim != self.base_claim {
-            return Err("paid checker belongs to another segmented claim".into());
+        if !self.opening_bound || outsider.claim != self.base_claim {
+            return Err("paid segmented checker has another claim or unauthenticated opening".into());
         }
         outsider.check_segmented_computation(positions, tokens)
     }
@@ -354,6 +477,8 @@ impl PaidClaimCheckAuthorityV2 {
             sample_seed: self.sample_seed,
             evidence_root: self.evidence_root,
             transcript_root: self.transcript_root,
+            round: self.round,
+            message_root: self.message_root,
         });
         PaidClaimVerificationResultV2 { finding, complete }
     }
@@ -392,6 +517,8 @@ pub struct VerifiedPaidClaimCheckV2 {
     sample_seed: Digest,
     evidence_root: Digest,
     transcript_root: Digest,
+    round: u32,
+    message_root: Digest,
 }
 pub struct PaidClaimVerificationResultV2 {
     pub finding: crate::ledger::OutsiderFindingV1,
@@ -411,6 +538,8 @@ impl VerifiedPaidClaimCheckV2 {
             signer,
             signed_daa,
             complete: true,
+            round: self.round,
+            message_root: self.message_root,
         }
     }
 }
