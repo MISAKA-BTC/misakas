@@ -454,6 +454,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             Some(u64::MAX),
             "every authenticated root/dependency retains material while positive cash has no physical payment clock"
         );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(u64::MAX));
     }
     // Supply the private depth1 with another genuine signed/assembled native
     // Final. No clock/Final setter supplies the maturity condition.
@@ -536,6 +537,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             Some(latest),
             "root and every dependency use the last actual positive fund payment plus W"
         );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
     }
     let material_receipts = paid.bond_budget().unwrap().material_income.clone();
     let sink = cw.net.chain.sink();
@@ -546,12 +548,16 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     assert_eq!(cw.net.chain.tip_state().1.state_root(), root);
     assert_eq!(Net::utxos_of(&cw.net.chain), utxos);
     assert_eq!(cw.net.chain.tip_state().1.bond_budget().unwrap().material_income, material_receipts);
+    for subject in &material_subjects {
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
+    }
     cw.net.send(vec![(REGISTRANT, licence)]).await;
     assert_eq!(cw.net.chain.tip_state().1.vesting_counters(), counters, "duplicate licence never creates/moves a second fund");
     cw.net.beat_to(latest - 1).await;
     let state = cw.net.chain.tip_state().1;
     for subject in &material_subjects {
         assert_eq!(state.material_income_hold_until_v1(&cw.net.bundle.state, *subject), Some(latest));
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), Some(latest));
     }
     for (key, row) in &paid_rows {
         if row.reuse_not_before == latest {
@@ -566,6 +572,7 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
             None,
             "other work of the same recipients cannot perpetually retain this root's material"
         );
+        assert_eq!(cw.net.chain.ctx.consensus.palw_material_income_hold_until_v1(*subject), None);
     }
     for (key, row) in &paid_rows {
         assert!(released.bond_budget_native_queue_income_v1(*key, &row.bond).is_none());

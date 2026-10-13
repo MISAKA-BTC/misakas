@@ -5,6 +5,7 @@ pub mod services;
 pub mod storage;
 pub mod test_consensus;
 
+mod palw_material_hold;
 mod utxo_set_override;
 
 use crate::{
@@ -1382,8 +1383,32 @@ impl ConsensusApi for Consensus {
         else {
             return None;
         };
-        let (_, state) = self.virtual_processor.palw_v2_reader_state(&bundle.state).ok().flatten()?;
-        state.material_income_hold_until_v1(&bundle.state, claim)
+        let before = self.lkg_virtual_state.load();
+        let active = self.config.params.palw_material_income_active_at(before.daa_score);
+        if !active {
+            return None;
+        }
+        let complete = || {
+            self.virtual_processor
+                .pruning_import_status()
+                .ok()
+                .and_then(|(session, stable)| (stable && session.active.is_none()).then_some(session.epoch))
+        };
+        let import_before = complete();
+        let snapshot = self.virtual_processor.palw_v2_reader_state(&bundle.state);
+        let after = self.lkg_virtual_state.load();
+        // The general reader may return its old tip when reconstruction fails.
+        // That fallback, an import, or a changing generation cannot authorize
+        // irreversible file deletion. Preserve a healthy snapshot's real None.
+        palw_material_hold::material_hold_from_snapshot_v1(
+            active,
+            import_before.is_some()
+                && import_before == complete()
+                && before.ghostdag_data.selected_parent == after.ghostdag_data.selected_parent,
+            after.ghostdag_data.selected_parent,
+            snapshot,
+            |state| state.material_income_hold_until_v1(&bundle.state, claim),
+        )
     }
 
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is

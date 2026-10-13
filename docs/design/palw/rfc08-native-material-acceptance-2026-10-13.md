@@ -44,6 +44,28 @@ The budget cases include sparse physical payment clocks, partial-fund cancellati
 carriage/rebuild, capped draw rollback and no double R charge. These leaf/fold results do not replace native-process
 acceptance. The edited native test passed `rustfmt --edition 2024 --check` and `git diff --check`; execution is pending.
 
+## GC read failure repair
+
+The retention janitor and foreign-copy pruning both read `palw_material_income_hold_until_v1` afresh before deletion.
+They already pin unknown physical-payment clocks and holds beyond the original trace/provider term. However, the
+Consensus API previously converted a reader error or missing snapshot into `None` using `.ok().flatten()?`.
+That result means no material obligation to the GC consumer. The general reader may also return a readable old tip
+when walking to the committed sink fails; deleting from that other branch's absence is unsafe.
+
+The repaired API pins with `Some(u64::MAX)` when the active material profile cannot supply the committed generation,
+the sink changes during the read, or pruning import is active, unstable, unreadable or changes epoch during the read.
+A healthy complete snapshot still returns its exact deadline or genuine absence. Dormant profiles keep returning
+`None`. No signed provider term is changed by this conservative local file-deletion rule.
+
+The production decision helper was compiled directly with `rustc --test` through a module wrapper, without a new
+Cargo target. Two controls passed. Replacing only the helper's decision with the previous `.ok().flatten()` behavior
+in a temporary copy made both controls fail: unavailable state discharged the hold and an unstable import executed
+its otherwise readable release decision. Logs: `/tmp/misaka-rfc67812-material-hold-before.log` and
+`/tmp/misaka-rfc67812-material-hold-after.log`. This reproduces the decision defect; it is not a simulated physical
+node crash or a full Consensus build. The native positive-fund control additionally checks the actual Consensus API
+at unknown payment, payment plus W, physical DB reopen, pre-release and release boundaries. That integration compile
+and run remains pending. Formatting and diff checks passed.
+
 ## Remaining acceptance
 
 Signed provider TTL and collectible collateral must cover each admitted whole path. The current finite native

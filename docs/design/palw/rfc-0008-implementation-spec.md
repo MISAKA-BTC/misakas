@@ -1402,3 +1402,11 @@ Root-exact payment provenance does not supply signed provider consent beyond a f
 price, worst-population resources or pruned public-material availability. The shortest-dependency native-session guard
 continues to refuse an overlong path; it does not authorize a new retention extension. Full WINDOW/ECON/RECOVERY gates
 remain open until their complete acceptance evidence exists. No activation height or public parameter is changed.
+
+The material GC API must not treat unavailable state as an absent obligation. The 2026-10-13 repair pins with MAX
+on read failure/missing state, readable old-tip fallback, a changing committed sink or an incomplete/changing pruning
+import generation. Complete matching snapshots retain their actual absence or physical payment plus W deadline;
+dormant profiles remain unchanged. Janitor and foreign-copy GC use this same oracle. Two direct production-helper
+tests pass and both fail under the former `.ok().flatten()` decision; the native control's actual API, DB-reopen and
+release-boundary assertions are pending integration execution. This prevents a read failure from authorizing deletion,
+but does not extend provider consent or establish a finite funded storage contract.
