@@ -23,7 +23,9 @@ use std::{
     collections::BTreeSet,
     io::{self, Cursor},
 };
-pub const TYPED_VALUE_MAX_BYTES_V25: u64 = 16 << 10;
+// One original legacy3 leaf may carry 4096 i128 values (64KiB),
+// plus authenticated node/path/coordinate framing. New25 only; old9/7 unchanged.
+pub const TYPED_VALUE_MAX_BYTES_V25: u64 = 80 << 10;
 pub const TYPED_HEADER_MAX_BYTES_V25: u64 = 512;
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct FlatValueV25 {

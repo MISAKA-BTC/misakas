@@ -3187,7 +3187,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwStateProofResponse> {
         // Everything the caller sent is parsed before a byte of chain state is read: a malformed request is free, and an error.
         let collection = request.collection.trim().to_ascii_lowercase();
-        if !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32") {
+        let redemption = collection.starts_with("native-redemption-v33:");
+        let audit_job = collection
+            .strip_prefix("native-audit-v27:")
+            .or_else(|| collection.strip_prefix("native-redemption-v33:"))
+            .map(|id| parse_hash64(id, "nativeAuditJob"))
+            .transpose()?;
+        if audit_job.is_none()
+            && !matches!(collection.as_str(), "bonds" | "classes" | "claims" | "kernel-aux-v32" | "pending-payouts-v32")
+        {
             return Err(RpcError::General(format!("collection '{}' is not one of bonds, classes, claims", request.collection)));
         }
         let named = match request.block_hash.trim() {
@@ -3203,17 +3211,43 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             Some(block) => block,
             None => session.async_get_sink().await,
         };
-        let wanted = collection.clone().into_bytes();
-        match session.spawn_blocking(move |c| c.palw_state_proof_v1(block, &wanted)).await {
+        let wanted = if audit_job.is_some() { "kernel-aux-v32".as_bytes().to_vec() } else { collection.clone().into_bytes() };
+        let result = session
+            .spawn_blocking(move |c| {
+                let (header, proof) = c.palw_state_proof_v1(block, &wanted)?;
+                let audit = if let Some(job) = audit_job {
+                    let (actual, view) = c.palw_native_execution_audit_v32(block, job.as_bytes())?;
+                    if actual.hash != header.hash || view.record().state_root != proof.state.root().as_bytes() {
+                        return Err("native audit32 exported record differs from the same immutable proof anchor".into());
+                    }
+                    Some(borsh::to_vec(view.record()).map_err(|e| format!("native audit32 readonly record serialization: {e}"))?)
+                } else {
+                    None
+                };
+                let coinbase = if redemption {
+                    let (actual, inclusion) = c.palw_native_coinbase_proof_v33(block)?;
+                    if actual.hash != header.hash {
+                        return Err("native redemption33 coinbase exporter differs from immutable audit header".into());
+                    }
+                    Some(borsh::to_vec(&inclusion).map_err(|e| format!("native redemption33 bounded coinbase serialization: {e}"))?)
+                } else {
+                    None
+                };
+                Ok((header, proof, audit, coinbase))
+            })
+            .await;
+        match result {
             Err(reason) => Ok(unavailable(reason)),
-            Ok((header, proof)) => Ok(GetPalwStateProofResponse {
+            Ok((header, proof, audit, coinbase)) => Ok(GetPalwStateProofResponse {
                 available: true,
                 reason: String::new(),
                 block_hash: block.to_string(),
                 header: Some(RpcHeader::from(&header)),
                 state_preimage: proof.state.preimage,
-                collection,
+                collection: if audit.is_some() { "kernel-aux-v32".into() } else { collection },
                 rows: proof.collection.rows.into_iter().map(|(key, value)| RpcPalwProofRow { key, value }).collect(),
+                native_audit_record: audit,
+                native_coinbase_proof: coinbase,
             }),
         }
     }

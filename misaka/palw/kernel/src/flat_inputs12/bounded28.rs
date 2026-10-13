@@ -2,7 +2,7 @@
 //! neither relaxed nor re-used. Maximum and actual programs are independent.
 use super::*;
 use crate::{
-    flat_inputs12::{bounded14::FlatStageJobV14, source14::CheckedStageSourceV14},
+    flat_inputs12::{bounded14::FlatStageJobV14, source28::CheckedStageSourceV28},
     flat_resources29::{FlatResourceVectorV29, derive_flat_resources_v29},
     flat_scope25::{CheckedResourceScopeV25, derive_checked_flat_resource_scope_v25},
 };
@@ -58,7 +58,7 @@ pub struct FlatStageClassWireV28 {
 }
 pub struct CheckedStageClassV28 {
     wire: FlatStageClassWireV28,
-    source: CheckedStageSourceV14,
+    source: CheckedStageSourceV28,
     template: FlatInputTemplateV12,
     maximum_scope: CheckedResourceScopeV25,
     maximum_resources: FlatResourceVectorV29,
@@ -72,7 +72,7 @@ impl CheckedStageClassV28 {
     pub fn wire(&self) -> &FlatStageClassWireV28 {
         &self.wire
     }
-    pub fn source(&self) -> &CheckedStageSourceV14 {
+    pub fn source(&self) -> &CheckedStageSourceV28 {
         &self.source
     }
     pub fn template(&self) -> &FlatInputTemplateV12 {
@@ -123,7 +123,7 @@ impl FlatStageClassWireV28 {
         crate::flat_lengths7::FlatLengthTemplateV7::from_bytes(&raw[70..70 + n])?;
         borsh::from_slice(raw).map_err(|_| "stage28 class bounded framing".into())
     }
-    pub fn check(&self, source: &CheckedStageSourceV14) -> Result<CheckedStageClassV28, String> {
+    pub fn check(&self, source: &CheckedStageSourceV28) -> Result<CheckedStageClassV28, String> {
         if self.version != 28 || self.source != source.id() || self.policy == [0; 64] || self.component_manifest==[0;64] || self.complete_source==[0;64] {
             return Err("stage28 class changes original source/policy".into());
         }
@@ -166,8 +166,8 @@ impl FlatStageClassWireV28 {
         );
         Ok(CheckedStageClassV28 {
             wire: self.clone(),
-            source: super::source14::FlatStageSourceWireV14 {
-                version: 14,
+            source: super::source28::FlatStageSourceWireV28 {
+                version: 28,
                 program_bytes: source.program().encode(),
                 inventory_root: source.inventory_root(),
                 source_parameters: source.parameters().clone(),
@@ -189,12 +189,12 @@ impl CheckedStageBundleV28 {
 }
 /// Immutable all-component source identity and exact canonical carrier extent,
 /// derived from checked original V2/real-PC sources, never raw quota digests.
-pub fn check_stage_bundle_v28(manifest:&crate::flat_component_source28::CompleteComponentManifestV28,sources:&[CheckedStageSourceV14])->Result<CheckedStageBundleV28,String>{
+pub fn check_stage_bundle_v28(manifest:&crate::flat_component_source28::CompleteComponentManifestV28,sources:&[CheckedStageSourceV28])->Result<CheckedStageBundleV28,String>{
     let programs=sources.iter().map(|s|s.program().clone()).collect::<Vec<_>>();let inventories=sources.iter().map(|s|s.inventory_root()).collect::<Vec<_>>();let contexts=manifest.stages.iter().map(|s|s.original_context_max).collect::<Vec<_>>();
     let checked=crate::flat_component_source28::check_component_manifest_v28(manifest,&programs,&inventories,&contexts,&manifest.original_required_components,manifest.original_task_metadata,&manifest.inputs).map_err(|e|format!("{e:?}"))?;
     let ids=sources.iter().map(|s|s.id()).collect::<Vec<_>>();let root=object_id(b"misaka-palw/kernel/stage-complete-real-source-bundle/v28",&(28u16,checked.root(),&ids));
     let mut bytes=2u64+4+borsh::to_vec(manifest).map_err(|e|e.to_string())?.len() as u64+4;
-    for source in sources {let wire=super::source14::FlatStageSourceWireV14{version:14,program_bytes:source.program().encode(),inventory_root:source.inventory_root(),source_parameters:source.parameters().clone()};bytes=bytes.checked_add(4+borsh::to_vec(&wire).map_err(|e|e.to_string())?.len() as u64).ok_or("stage28 original source extent overflow")?;}
+    for source in sources {let wire=super::source28::FlatStageSourceWireV28{version:28,program_bytes:source.program().encode(),inventory_root:source.inventory_root(),source_parameters:source.parameters().clone()};bytes=bytes.checked_add(4+borsh::to_vec(&wire).map_err(|e|e.to_string())?.len() as u64).ok_or("stage28 original source extent overflow")?;}
     if bytes>16<<20{return Err("stage28 full original bundle exceeds bounded carrier".into());}
     Ok(CheckedStageBundleV28{manifest:checked,sources:ids,root,bytes})
 }
@@ -263,7 +263,7 @@ pub struct StageTraceGeometryV28 {pub dtype:misaka_palw_tir::DType,pub shape:Vec
 pub fn decode_stage_node_opening_v28(raw:&[u8])->Result<crate::seg::NodeOpeningV1,String>{
     if raw.len()>16384{return Err("stage28 original node opening cap".into());}let mut r=std::io::Cursor::new(raw);let o=crate::flat_court4::read_node(&mut r).map_err(|e|e.to_string())?;if r.position() as usize!=raw.len(){return Err("stage28 node opening surplus bytes".into());}Ok(o)
 }
-pub fn stage_template_root_v28(template: &FlatInputTemplateV12, source: &CheckedStageSourceV14) -> Result<Digest, String> {
+pub fn stage_template_root_v28(template: &FlatInputTemplateV12, source: &CheckedStageSourceV28) -> Result<Digest, String> {
     if template.program != *source.program() || template.source_parameters != source.parameters().root() {
         return Err("stage28 template substitutes original source/weights".into());
     }
@@ -273,16 +273,12 @@ pub fn stage_template_root_v28(template: &FlatInputTemplateV12, source: &Checked
         &(28u16, source.id(), &template.program, &template.lengths, template.max_positions, template.source_parameters),
     ))
 }
-fn specialize(template: &FlatInputTemplateV12, lengths: FlatJobLengthsV7, positions: u32) -> Result<TirProgramV2, String> {
+pub(super) fn specialize(template: &FlatInputTemplateV12, lengths: FlatJobLengthsV7, positions: u32) -> Result<TirProgramV2, String> {
     misaka_palw_tir::validate_v2::validate_v2(&template.program).map_err(|e| e.to_string())?;
     if template.max_positions == 0
         || positions == 0
         || positions > template.max_positions
         || template.max_positions > template.program.history_bound
-        || !matches!(template.program.output, OutputDecl::Rows { .. } | OutputDecl::Final { .. })
-        || !template.program.post_writes().is_empty()
-        || template.program.inputs.iter().any(|d| !matches!(d.source, InputSource::External { .. }))
-        || template.program.blocks.iter().flat_map(|b| &b.nodes).flat_map(|n| &n.inputs).any(|r| *r == misaka_palw_tir::Ref::Input(0))
     {
         return Err("stage28 extent/output/random/post-state/token semantics unsupported".into());
     }
@@ -313,7 +309,7 @@ fn specialize(template: &FlatInputTemplateV12, lengths: FlatJobLengthsV7, positi
             return Err("stage28 declared modality lacks independent actual/max axis".into());
         }
     }
-    shape_payload(&template.program)?;
+    shape_payload_v28(&template.program)?;
     misaka_palw_tir::interval_v2::analyze_ranges_v2(&template.program).map_err(|e| e.to_string())?;
     let view = template.lengths.program(lengths)?;
     let mut p = template.program.clone();
@@ -336,14 +332,13 @@ fn specialize(template: &FlatInputTemplateV12, lengths: FlatJobLengthsV7, positi
 }
 pub fn derive_stage_job_v28(
     template: &FlatInputTemplateV12,
-    source: &CheckedStageSourceV14,
+    source: &CheckedStageSourceV28,
     job: &FlatStageJobV14,
 ) -> Result<CheckedStageJobV28, String> {
     let template_root = stage_template_root_v28(template, source)?;
     if job.version != 14
         || job.template != template_root
         || job.input_roots.len() != template.program.inputs.len()
-        || job.input_roots.is_empty()
         || job.input_roots.len() > INPUT_COUNT_MAX_V12
     {
         return Err("stage28 bounded job input count/template/version differs".into());
@@ -368,7 +363,7 @@ pub fn derive_stage_job_v28(
     if max_resource.court != *max_scope.scope() || resource.court != *scope.scope() {
         return Err("stage28 independent maximum/actual resource checker scopes differ".into());
     }
-    let (raw, reference) = shape_payload(&actual)?;
+    let (raw, reference) = shape_payload_v28(&actual)?;
     let admission = FlatStageAdmissionV28 {
         version: 28,
         source: source.id(),
@@ -401,4 +396,11 @@ pub fn derive_stage_job_v28(
         input_raw_bytes: raw,
         input_reference_bytes: reference,
     })
+}
+
+/// New28 geometry includes zero-input causal terminal stages. Source/runtime
+/// authority for token, random and post-state semantics belongs to invocation32.
+fn shape_payload_v28(p:&TirProgramV2)->Result<(u128,u128),String>{
+    if p.inputs.len()>INPUT_COUNT_MAX_V12{return Err("stage28 input count exceeds cap".into());}
+    let(mut raw,mut expanded)=(0u128,0u128);for d in &p.inputs{let cells=d.shape.iter().try_fold(1u128,|a,n|a.checked_mul(*n as u128)).ok_or("stage28 input shape overflow")?;raw=raw.checked_add(cells.checked_mul(d.dtype.width() as u128).ok_or("stage28 input bytes overflow")?).ok_or("stage28 input sum overflow")?;expanded=expanded.checked_add(cells.checked_mul(16).ok_or("stage28 input expansion overflow")?).ok_or("stage28 input sum overflow")?;}if raw>INPUT_RAW_BYTES_MAX_V12||expanded>INPUT_REFERENCE_BYTES_MAX_V12{return Err("stage28 declared input extent exceeds original bounded geometry".into());}Ok((raw,expanded))
 }

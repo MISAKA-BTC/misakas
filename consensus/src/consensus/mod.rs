@@ -2565,9 +2565,7 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_readiness_urgency_v1_impl(carriers)
     }
 
-    fn native_carriage_snapshot_v22(
-        &self,
-    ) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+    fn native_carriage_snapshot_v22(&self) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
         self.virtual_processor.native_carriage_snapshot_v22()
     }
 
@@ -2938,6 +2936,25 @@ impl ConsensusApi for Consensus {
         collection: &[u8],
     ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_state_proof_v1::PalwFactProofV1), String> {
         self.virtual_processor.palw_state_proof_v1_impl(block, collection)
+    }
+
+    fn palw_native_execution_audit_v32(
+        &self,
+        block: BlockHash,
+        job: [u8; 64],
+    ) -> Result<
+        (kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27),
+        String,
+    > {
+        self.virtual_processor.palw_native_execution_audit_v32(block, job)
+    }
+
+    fn palw_native_coinbase_proof_v33(
+        &self,
+        block: BlockHash,
+    ) -> Result<(kaspa_consensus_core::header::Header, kaspa_consensus_core::palw_native_redemption_v33::NativeCoinbaseProofV33), String>
+    {
+        self.virtual_processor.palw_native_coinbase_proof_v33(block)
     }
 
     fn palw_fork_choice_openings_v1(

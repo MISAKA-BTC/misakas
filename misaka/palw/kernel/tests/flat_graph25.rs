@@ -637,3 +637,34 @@ fn public_header_authentication_binds_all_dtypes_both_grammars_and_malformed_met
         FlatHeaderValueV25 { version: 25, scope: [0; 64], header: FlatHeaderV5::Flat { dtype: 255, shape: vec![64], root: [7; 64] } };
     assert!(!invalid_dtype.authenticates(&[0; 64]));
 }
+
+#[test]
+fn new_typed_reply_carries_one_original_full_width_legacy_leaf_without_subtiling() {
+    let tensor = Tensor::new(DType::I128, vec![4096], vec![1; 4096]).unwrap();
+    let opening = LeafOpeningV3::of(&tensor, 0, 0, 0).unwrap();
+    let commitment = misaka_palw_kernel::merkle3::tensor_commitment_v3(&tensor);
+    assert!(opening.authenticates(&commitment));
+    let value = FlatValueV25 {
+        version: 25,
+        scope: [9; 64],
+        value: FlatOperandV5 {
+            node: Some(NodeOpeningV1 {
+                position: 0,
+                occurrence: 0,
+                node: 0,
+                commitment,
+                node_siblings: vec![],
+                position_root: [3; 64],
+                position_siblings: vec![],
+            }),
+            flat: vec![],
+            legacy: vec![opening],
+        },
+    };
+    let bytes = value.to_bytes().unwrap();
+    assert!(bytes.len() > 64 << 10);
+    assert!(bytes.len() <= TYPED_VALUE_MAX_BYTES_V25 as usize);
+    assert_eq!(FlatValueV25::from_bytes(&bytes).unwrap(), value);
+    assert_eq!(value.value.legacy[0].values.len(), 4096, "original source leaf cannot become a 64-element subtotal");
+    assert!(FlatValueV25::from_bytes(&vec![0; (TYPED_VALUE_MAX_BYTES_V25 + 1) as usize]).is_err());
+}

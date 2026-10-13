@@ -57,6 +57,35 @@ def relative_file(root: Path, name: str) -> Path:
     return full
 
 
+def resolve_original_member(member: dict, entry: dict, plan_root: Path) -> tuple[dict, dict | None]:
+    """Resolve context/task/components from the SAME frozen source revision.
+
+    A frozen inaccessible/null revision cannot be replaced by today's source.
+    The resolution is a predeclared hashed publisher metadata artifact, retained
+    verbatim in the run. Its source files are checked before any command runs.
+    """
+    if member.get("source_declared_context_max"):
+        return member, None
+    evidence = entry.get("original_source_resolution")
+    if not isinstance(evidence, dict) or not member.get("revision") or not ac.evidence_ok(evidence, plan_root):
+        return member, None
+    path = relative_file(plan_root, evidence["path"])
+    resolution = read_json(path)
+    if (resolution.get("schema") != "misaka.rfc02.original-source-resolution.v1"
+            or resolution.get("repository") != member["repository"] or resolution.get("revision") != member["revision"]
+            or not resolution.get("advertised_task")
+            or member.get("advertised_task") is not None and resolution["advertised_task"] != member["advertised_task"]
+            or type(resolution.get("source_declared_context_max")) is not int or resolution["source_declared_context_max"] <= 0
+            or not isinstance(resolution.get("required_task_components"), list) or not resolution["required_task_components"]
+            or not resolution.get("publisher_metadata_files")
+            or not all(ac.evidence_ok(e, plan_root) for e in resolution["publisher_metadata_files"])):
+        raise ValueError("source resolution changes frozen revision or lacks original publisher metadata")
+    for e in resolution["publisher_metadata_files"]:
+        relative_file(plan_root, e["path"])
+    fields = ("advertised_task", "source_declared_context_max", "required_task_components", "source_directory", "source_files")
+    return {**member, **{k: resolution[k] for k in fields}}, {"path":str(path), "sha256":evidence["sha256"]}
+
+
 def source_pins_ok(member: dict) -> bool:
     source = member.get("source_directory")
     pins = member.get("source_files")
@@ -93,6 +122,16 @@ def validate_plan(cohort: dict, plan: dict, cohort_sha: str) -> None:
     # its hash; the caller supplies the committed hash rather than a mutable flag.
     if plan.get("execution_policy") != "full-original-context-and-all-advertised-components;no-substitution;missing-fails":
         raise ValueError("explicit full-scope execution policy required")
+    if plan.get("receipt_window_command") is not None:
+        spec = plan["receipt_window_command"]
+        validate_auditors(spec.get("independent_audits"), plan)
+        contract = plan.get("receipt_window_contract", {})
+        if (contract.get("cohort_sha256") != cohort_sha or type(contract.get("receipt_window_daa")) is not int
+                or contract["receipt_window_daa"] <= 0 or contract.get("minimum_independent_operators", 0) < 2
+                or not isinstance(contract.get("original_model_roots"), dict) or not contract["original_model_roots"]
+                or set(contract["original_model_roots"]) - {m["id"] for m in cohort["members"]}
+                or any(not isinstance(v, str) or len(v) != 128 for v in contract["original_model_roots"].values())):
+            raise ValueError("two-window original cohort/model R/clock/operator contract must be fixed before measurement")
     for entry in members:
         stages = entry.get("stages", {})
         if set(stages) - set(ac.STAGES):
@@ -150,10 +189,13 @@ def inspect_audit_pair(path: Path, root: Path, scope: dict, stage: str, run_sha:
             relative_file(root, evidence["path"])
         anchor = audit.get("validated_anchor")
         if (not isinstance(anchor, dict) or set(anchor) != set(ANCHOR_FIELDS)
-                or any(anchor.get(k) in (None, "", False) for k in ANCHOR_FIELDS[:13])
+                or any(anchor.get(k) in (None, "", False) for k in ("network", "genesis", "anchor_block", "active_kernel", "class", "source", "maximum_scope", "resource_contract"))
+                or type(anchor.get("anchor_daa")) is not int or anchor["anchor_daa"] < 0
                 or anchor["genesis"] != entry["genesis"] or anchor["network"] != entry["network"]
                 or audit.get("anchor_from_validated_consensus_database") is not True):
             return False, "MISSING_VALIDATED_DATABASE_ANCHOR"
+        if stage in {"seat", "final", "redemption"} and not all(anchor[k] for k in ("job", "original_funding", "initial_consent")):
+            return False, "ORIGINAL_FUNDING_CONSENT_OR_JOB_MISSING"
         if stage in {"final", "redemption"} and (audit.get("final_authenticated") is not True
                 or audit.get("court_window_closed") is not True or not anchor["final"]):
             return False, "INDEPENDENT_FINAL_NOT_AUTHENTICATED"
@@ -188,6 +230,31 @@ def execute_audit_pair(specs: list, context: dict, folder: Path, stage: str, out
     return pair, elapsed
 
 
+def command_inputs_ok(spec: dict, argv: list[str]) -> bool:
+    pins = spec.get("command_artifact_pins", [])
+    if not isinstance(pins, list) or len(pins) > 1024:
+        return False
+    expected = {}
+    for pin in pins:
+        if not isinstance(pin, dict) or not isinstance(pin.get("path"), str) or not Path(pin["path"]).is_absolute():
+            return False
+        path = Path(pin["path"]).resolve()
+        if (path in expected or not path.is_file() or type(pin.get("bytes")) is not int
+                or path.stat().st_size != pin["bytes"] or ac.digest(path) != pin.get("sha256")):
+            return False
+        expected[path] = pin
+    # Pin scripts/configs handed to a generic interpreter or binary. Hashing
+    # /usr/bin/python alone does not bind the verification implementation.
+    original = spec["argv"]
+    for literal, argument in zip(original[1:], argv[1:]):
+        if literal.startswith("{") and literal.endswith("}"):
+            continue  # Fresh internally pinned scope/results are dynamic inputs.
+        path = Path(argument)
+        if path.is_file() and path.resolve() not in expected:
+            return False
+    return True
+
+
 def run_command(spec: dict, context: dict[str, str], log: Path) -> tuple[int, float, str | None]:
     argv = []
     for value in spec["argv"]:
@@ -201,6 +268,8 @@ def run_command(spec: dict, context: dict[str, str], log: Path) -> tuple[int, fl
     exe = Path(argv[0])
     if not exe.is_absolute() or not exe.is_file() or ac.digest(exe) != spec["executable_sha256"]:
         raise ValueError("executable differs from predeclared implementation")
+    if not command_inputs_ok(spec, argv):
+        raise ValueError("command script/config/dependency differs from predeclared pins")
     start = time.monotonic()
     reason = None
     with log.open("xb") as out:
@@ -246,8 +315,8 @@ def run_command(spec: dict, context: dict[str, str], log: Path) -> tuple[int, fl
                 time.sleep(.1)
         p.stdout.close()
         p.wait()
-    if ac.digest(exe) != spec["executable_sha256"]:
-        reason = "EXECUTABLE_MUTATED_DURING_RUN"
+    if ac.digest(exe) != spec["executable_sha256"] or not command_inputs_ok(spec, argv):
+        reason = "EXECUTABLE_OR_DEPENDENCY_MUTATED_DURING_RUN"
     return p.returncode, time.monotonic() - start, reason
 
 
@@ -303,6 +372,11 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
     rows = []
     for index, member in enumerate(cohort["members"]):
         entry = entries[member["id"]]
+        resolution_error = None
+        try:
+            member, source_resolution = resolve_original_member(member, entry, plan_path.parent)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            source_resolution, resolution_error = None, f"ORIGINAL_SOURCE_RESOLUTION_FAILED:{type(e).__name__}"
         scope = entry.get("scope", {})
         row = {"id": member["id"], "cohort_sha256": cohort_sha, "run_plan_sha256": run_sha,
                "scope": scope, "source_declared_context_max": member.get("source_declared_context_max"),
@@ -316,8 +390,14 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
         folder = out / f"member-{index:05d}"
         folder.mkdir()
         ac.write(folder / "member.json", member)
+        if source_resolution is not None:
+            resolution = folder / "original-source-resolution.json"
+            resolution.write_bytes(Path(source_resolution["path"]).read_bytes())
+            if ac.digest(resolution) != source_resolution["sha256"]:
+                resolution_error = "ORIGINAL_SOURCE_RESOLUTION_MUTATED"
+            row["pinned_source_task_resolution_evidence"] = {"path": str(resolution.relative_to(out)), "sha256": ac.digest(resolution)}
         ac.write(folder / "scope.json", scope)
-        pins = valid_scope and source_pins_ok(member)
+        pins = valid_scope and resolution_error is None and source_pins_ok(member)
         blocked = not pins
         for stage in ac.STAGES:
             result = folder / f"{stage}.json"
@@ -326,7 +406,7 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
             if not valid_scope:
                 record["blocking"] = "FULL_SCOPE_PLAN_UNRESOLVED"
             elif not pins:
-                record["blocking"] = "MISSING_OR_MISMATCHED_ORIGINAL_SOURCE"
+                record["blocking"] = resolution_error or "MISSING_OR_MISMATCHED_ORIGINAL_SOURCE"
             elif not spec:
                 record["blocking"] = "NO_IMPLEMENTED_STAGE_COMMAND"
                 blocked = True
@@ -369,7 +449,13 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
             ctx = {"evidence_root": str(out.resolve()), "result": str(candidate.resolve()),
                    "run_plan_sha256": run_sha, "cohort": str(cohort_path.resolve())}
             code, _, error = run_command(spec, ctx, out / "receipt-windows.log")
-            if code or error or not ac.panel_ok(read_json(candidate), out):
+            contract = plan["receipt_window_contract"]
+            window_result = read_json(candidate) if candidate.is_file() else {}
+            if (code or error or not ac.panel_ok(window_result, out)
+                    or window_result.get("cohort_sha256") != cohort_sha
+                    or window_result.get("original_model_roots") != contract["original_model_roots"]
+                    or window_result.get("receipt_window_daa") != contract["receipt_window_daa"]
+                    or window_result.get("minimum_independent_operators") != contract["minimum_independent_operators"]):
                 raise ValueError(error or "original two-window intended receipt conditions failed")
             pair, _ = execute_audit_pair(spec["independent_audits"],
                 {**ctx, "stage_result": str(candidate.resolve())}, out, "receipt-windows", out)

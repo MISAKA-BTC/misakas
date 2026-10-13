@@ -74,19 +74,22 @@ pub mod flat_candidate_v7;
 pub mod flat_candidate_v9;
 /// Explicit bounded full-court25 preparation; original artifact context is preserved.
 pub mod flat_court_v25;
-/// Same native derivation for full25 / first-EOS29 maximum contracts.
-pub mod native_text_v29;
-pub mod native_payload_v29;
-/// Complete component manifest/Stage28 pipeline artifacts.
-pub mod full_component_v28;
 pub mod flat_snapshot_v7;
 pub mod flat_vector_v7;
+/// Complete component manifest/Stage28 pipeline artifacts.
+pub mod full_component_v28;
 /// Stream the node's native values into the existing segmented commitment grammar.
 pub mod kernel_execution;
 /// Generic bounded preparation of segmented-kernel parameter commitments.
 pub mod kernel_params;
 /// Bounded, ordered collection of the public kernel-route inventory.
 pub mod kernel_rows;
+pub mod native_audit_io_v32;
+pub mod native_audit_v32;
+pub mod native_payload_v29;
+pub mod native_redemption_v33;
+/// Same native derivation for full25 / first-EOS29 maximum contracts.
+pub mod native_text_v29;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;

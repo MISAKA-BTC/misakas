@@ -53,6 +53,9 @@ USAGE:
                          --original-source-dir <dir> --tokenizer <128hex> --out <fresh.palwtir2> --file-limit-mib N
     palw-class declare-complete-pipeline28 <fresh.palwtir2> --source-bundle <borsh> --class-wire <borsh> [--class-wire ...]
                          --input-sha256 <hex> --original-source-dir <dir> --out <new.palwtir2> --file-limit-mib N
+    palw-class audit-native-final32 --network <own-ruleset> --child-header-json <file> --selected-parent-header-json <file>
+                         --pinned-child <128hex> --pinned-selected-parent <128hex> --job <128hex>
+                         --aux-proof32 <file> --payout-proof32 <file> --out <fresh.json> [--raw-record-borsh <file>] [--fork-opening-borsh <file>]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
@@ -608,7 +611,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 &source_directory,
                 &pipeline,
                 &programs,
-                *tokenizer.as_bytes(),
+                tokenizer.as_bytes(),
                 serde_json::json!({"canonical_pipeline_input":"explicit-source28;all-components-and-original-contexts"}),
                 bundle.manifest(),
                 &sources,
@@ -705,6 +708,74 @@ fn run(args: &[String]) -> Result<(), String> {
                 "{}",
                 serde_json::json!({"schema":"misaka.palw.complete-pipeline-artifact.v28","artifact":out,"artifact_sha256":hex(&sha),"layout_root":hex(&layout.root()),"component_manifest":hex(&layout.component_manifest),"complete_source":hex(&layout.complete_source),"original_source_restore_bytes":layout.source_restore_bytes,"stage_classes":layout.stage_classes.iter().map(|v|hex(v)).collect::<Vec<_>>(),"source_fidelity_or_native_final":false})
             );
+            Ok(())
+        }
+        "audit-native-final32" => {
+            let view = network_view(network.as_deref().ok_or("--network own ruleset required")?)?;
+            let child_path = take_flag(&mut args, "--child-header-json").ok_or("--child-header-json required")?;
+            let parent_path = take_flag(&mut args, "--selected-parent-header-json").ok_or("--selected-parent-header-json required")?;
+            let pin = |v: Option<String>, name: &str| -> Result<kaspa_hashes::Hash64, String> {
+                v.ok_or_else(|| format!("{name} independent pin required"))?.parse().map_err(|e| format!("{name}: {e}"))
+            };
+            let child_pin = pin(take_flag(&mut args, "--pinned-child"), "--pinned-child")?;
+            let parent_pin = pin(take_flag(&mut args, "--pinned-selected-parent"), "--pinned-selected-parent")?;
+            let job = pin(take_flag(&mut args, "--job"), "--job")?;
+            let aux_path = take_flag(&mut args, "--aux-proof32").ok_or("--aux-proof32 required")?;
+            let payout_path = take_flag(&mut args, "--payout-proof32").ok_or("--payout-proof32 required")?;
+            let raw_record = take_flag(&mut args, "--raw-record-borsh")
+                .map(|p| misaka_palw_sdk::native_audit_io_v32::read_native_record_v32(std::path::Path::new(&p)))
+                .transpose()?;
+            let fork = take_flag(&mut args, "--fork-opening-borsh")
+                .map(|p| {
+                    let raw = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(std::path::Path::new(&p), 4096)?;
+                    borsh::from_slice::<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1>(&raw)
+                        .map_err(|e| e.to_string())
+                })
+                .transpose()?;
+            let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh diagnostic report required")?);
+            if !args.is_empty() || output.exists() {
+                return Err("audit32 exact options/fresh report required".into());
+            }
+            let child = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&child_path))?;
+            let parent = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&parent_path))?;
+            let aux = misaka_palw_sdk::native_audit_io_v32::read_native_fact_proof_v32(std::path::Path::new(&aux_path))?;
+            let payouts = misaka_palw_sdk::native_audit_io_v32::read_native_fact_proof_v32(std::path::Path::new(&payout_path))?;
+            let checked = misaka_palw_sdk::native_audit_v32::derive_native_execution_audit_v32(
+                &child,
+                child_pin,
+                &parent,
+                parent_pin,
+                &view.params,
+                fork.as_ref(),
+                &aux,
+                &payouts,
+                job.as_bytes(),
+                raw_record.as_ref(),
+            )?;
+            let record = checked.native().record();
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let report = serde_json::json!({"schema":"misaka.palw.pinned-native-final-audit.v32", "network":view.network_id.to_string(),
+                "genesis":hex(&view.params.genesis.hash.as_bytes()),"child":hex(&child_pin.as_bytes()),
+                "independently_pinned_selected_parent":hex(&parent_pin.as_bytes()),"inner_state":hex(&checked.inner_state().as_bytes()),
+                "audit_root":hex(&checked.root()),"native_rows_root":hex(&checked.native().root()),"namespace":record.namespace,
+                "class":hex(&record.class),"source":hex(&record.source),"job":hex(&record.job),"inventory":hex(&record.inventory),
+                "original_funding":hex(&record.funding),"initial_consent":hex(&record.original_consent),
+                "original_maximum_scope":hex(&record.maximum_scope),"actual_scope":hex(&record.actual_scope),
+                "original_maximum_resource":hex(&record.maximum_resource),"actual_resource":hex(&record.actual_resource),
+                "claim":hex(&record.claim),"final_book":hex(&record.terminal_book),"single_credit":hex(&record.credit),
+                "producer_credit":record.producer_credit,"observed_queue_amount":record.observed_queue_amount,
+                "requester_operator":hex(&record.requester_operator),"producer_operator":hex(&record.producer_operator),
+                "pinned_headers_and_original_rows_verified":true,"chain_selection_and_validation":"external-independent-pins-required",
+                "utxo_redemption_verified":false,"A6_or_A8_credit":false});
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output)
+                .map_err(|e| e.to_string())?
+                .write_all(serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?.as_bytes())
+                .map_err(|e| e.to_string())?;
+            println!("{report}");
             Ok(())
         }
         "native-payload" => {

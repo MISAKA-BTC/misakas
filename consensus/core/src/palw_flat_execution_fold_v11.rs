@@ -618,7 +618,20 @@ fn fund(
         return Err(refused("Fund delivery income cap/rates differ from explicitly signed original contract"));
     }
     let capacity = if complete_pursuit23 {
-        Some(capacity::plan_fund(builder, p, &request, &class, &prepared.quota_plan, job_id, consent_root, contract_root)?)
+        Some(capacity::plan_fund(
+            builder,
+            p,
+            &request,
+            &class,
+            &prepared.quota_plan,
+            job_id,
+            consent_root,
+            contract_root,
+            final_authority27,
+            job.root(),
+            job.deadline_daa,
+            ctx.daa_score,
+        )?)
     } else {
         None
     };
@@ -915,9 +928,33 @@ fn credit(
     builder.cancel_native_recipient_v1(original, row.header.producer, 19);
     builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::funded_execution_budget_id_v13(&row.header.job_id), ctx.daa_score);
     if s.producer_credit > 0 {
-        let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&row.header.producer_payout);
+        let unique27 = s.terminal == ExecutionTerminalV11::Final
+            && builder
+                .state
+                .kernel_route
+                .as_ref()
+                .unwrap()
+                .aux
+                .contains_key(&(EXECUTION_POLICY_TABLE_V11, key(&(27u8, row.header.job_id))));
+        let queue = if unique27 {
+            crate::palw_native_audit_v27::native_final_credit_queue_v27(
+                row.header.job_id,
+                row.header.funded_job_root,
+                s.root(),
+                row.header.producer_payout,
+            )
+        } else {
+            crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&row.header.producer_payout)
+        };
+        if unique27 && builder.state.pending_payouts.contains_key(&queue) {
+            return Err(PalwStateV2Error::BondBudgetRefused("native original unique Final27 queue already exists".into()));
+        }
         builder.pay_native_recipient_v1(original, row.header.producer, 11, ctx.daa_score, s.producer_credit, queue, true)?;
-        builder.add_kernel_payout(row.header.producer_payout, s.producer_credit)?;
+        if unique27 {
+            builder.write_payout(queue, Some(PalwPayoutV2 { payload: row.header.producer_payout, amount: s.producer_credit }));
+        } else {
+            builder.add_kernel_payout(row.header.producer_payout, s.producer_credit)?;
+        }
     } else {
         builder.cancel_native_recipient_v1(original, row.header.producer, 11);
     }

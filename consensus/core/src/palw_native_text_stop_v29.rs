@@ -92,6 +92,10 @@ pub struct NativeTextMaximumV29 {
     pub physical_lease_plan: Digest,
     pub original_shared_quota_plan: Digest,
     pub original_fee_plan: Digest,
+    pub paged_proof_plan: Digest,
+    pub source_caller_plan: Digest,
+    pub queue_policy: Digest,
+    pub queue_plan: Digest,
     pub challenge_window: u64,
     pub retention_tail: u64,
     pub commit_window: u64,
@@ -171,6 +175,10 @@ impl CheckedNativeTextMaximumV29 {
                 record.physical_lease_plan,
                 record.original_shared_quota_plan,
                 record.original_fee_plan,
+                record.paged_proof_plan,
+                record.source_caller_plan,
+                record.queue_policy,
+                record.queue_plan,
             ]
             .contains(&[0; 64])
         {
@@ -386,6 +394,29 @@ impl NativeTextBookV29 {
         {
             return Err("text29 rooted original funding/book/conservation differs".into());
         }
+        if let Some(s) = &b.settlement {
+            if s.job != b.funded.id()
+                || s.original_funding != b.funded.root()
+                || s.terminal != b.terminal
+                || s.claim != b.claim.as_ref().map(NativeTextClaimV29::root)
+                || s.escrow_debit != b.funded.request.reward
+                || s.producer.checked_add(s.requester) != Some(s.escrow_debit)
+                || s.finder_credit.checked_add(s.burned) != Some(s.actual_collected_slash)
+                || s.actual_collected_slash > b.funded.maximum.producer_reserve
+                || (b.terminal == NativeTextTerminalV29::Final
+                    && (s.producer != s.escrow_debit || s.requester != 0 || s.actual_collected_slash != 0))
+                || (b.terminal == NativeTextTerminalV29::Refunded
+                    && (s.requester != s.escrow_debit || s.producer != 0 || s.actual_collected_slash != 0))
+                || (b.terminal == NativeTextTerminalV29::Convicted
+                    && (s.requester != s.escrow_debit
+                        || s.producer != 0
+                        || s.actual_collected_slash != b.funded.maximum.producer_reserve
+                        || s.finder_credit != b.funded.maximum.finder_award
+                        || s.proof == [0; 64]))
+            {
+                return Err("text29 restored terminal original principal and collected collateral differ".into());
+            }
+        }
         Ok(b)
     }
     pub(crate) fn commit(
@@ -456,7 +487,7 @@ impl NativeTextBookV29 {
         Ok(s)
     }
     pub(crate) fn cancel(&mut self, now: u64) -> Result<NativeTextSettlementV29, String> {
-        if self.terminal != NativeTextTerminalV29::Funded || now <= self.funded.commit_deadline {
+        if self.terminal != NativeTextTerminalV29::Funded || now <= self.funded.deadline {
             return Err("text29 cannot cancel committed/immature job".into());
         }
         self.settle(NativeTextSettlementV29 {
@@ -472,6 +503,43 @@ impl NativeTextBookV29 {
             finder_credit: 0,
             burned: 0,
             proof: [0; 64],
+        })
+    }
+    /// Native independently verifies the exact original paid proof/default,
+    /// current finder operator and ACTUAL collectible producer collateral first.
+    pub(crate) fn convict(
+        &mut self,
+        proof: Digest,
+        finder: Digest,
+        finder_operator: Digest,
+        actual_collected: u64,
+        now: u64,
+    ) -> Result<NativeTextSettlementV29, String> {
+        let c = self.claim.as_ref().ok_or("text29 conviction has no original claim")?;
+        if self.terminal != NativeTextTerminalV29::Challengeable
+            || now < c.committed_daa
+            || now >= self.funded.deadline
+            || proof == [0; 64]
+            || finder == self.funded.request.producer
+            || finder_operator == self.funded.request.producer_operator
+            || actual_collected != self.funded.maximum.producer_reserve
+            || self.funded.maximum.finder_award > actual_collected
+        {
+            return Err("text29 original independent court/default and actual collateral differ".into());
+        }
+        self.settle(NativeTextSettlementV29 {
+            job: self.funded.id(),
+            original_funding: self.funded.root(),
+            claim: Some(c.root()),
+            terminal: NativeTextTerminalV29::Convicted,
+            escrow_debit: self.escrow,
+            producer: 0,
+            requester: self.escrow,
+            actual_collected_slash: actual_collected,
+            finder,
+            finder_credit: self.funded.maximum.finder_award,
+            burned: actual_collected - self.funded.maximum.finder_award,
+            proof,
         })
     }
     pub(crate) fn finalize(
@@ -505,7 +573,7 @@ impl NativeTextBookV29 {
             finder: [0; 64],
             finder_credit: 0,
             burned: 0,
-            proof: [0; 64],
+            proof: object_id(b"misaka-palw/native/text-original-final-conditions-receipt/v29", &(conditions.policy_root(),conditions.basis_root())),
         })
     }
 }
@@ -767,4 +835,10 @@ pub struct NativeTextOwnV29 {
     pub seal_root: Digest,
     pub filing_bytes: u32,
     pub discovery: bool,
+}
+
+/// Standalone causal text source namespace; mixed decoder components use the
+/// distinct typed Source28 pipeline adapter and never substitute input PC here.
+pub fn native_text_source_components_v29(binding: Digest, program: Digest, real_pc: Digest, inventory: Digest) -> Digest {
+    object_id(b"misaka-palw/native/complete-causal-text-source-components/v29", &(29u16, binding, program, real_pc, inventory))
 }

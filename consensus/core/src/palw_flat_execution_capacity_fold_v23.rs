@@ -114,6 +114,7 @@ pub(super) struct NativeCapacityAdmissionV23 {
     plan: NativeCarriagePlanV22,
     pursuit: NativePublicPursuitV19,
     consent: NativeExecutionConsentV23,
+    queue: Option<(crate::palw_native_queue_v30::NativeQueueGlobalV30, crate::palw_native_queue_v30::NativeQueueLeaseV30)>,
 }
 pub(super) fn plan_fund(
     builder: &TransitionBuilder<'_>,
@@ -124,6 +125,10 @@ pub(super) fn plan_fund(
     job_id: Digest,
     root13: Digest,
     root18: Digest,
+    final27: bool,
+    funding_root: Digest,
+    deadline: u64,
+    now: u64,
 ) -> Result<NativeCapacityAdmissionV23, PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
     let raw = r
@@ -165,10 +170,46 @@ pub(super) fn plan_fund(
             g
         }
     };
-    let lease = global.admit(&plan, &service, &mass, job_id, root).map_err(refused)?;
-    Ok(NativeCapacityAdmissionV23 { global, lease, plan, pursuit, consent: c })
+    let (lease, queue) = if final27 {
+        use crate::palw_native_queue_v30::*;
+        let qp = &builder
+            .extras
+            .kernel_route
+            .as_ref()
+            .unwrap()
+            .native_final
+            .as_ref()
+            .ok_or_else(|| refused("native Final27 trusted queue policy absent"))?
+            .policy
+            .queue_policy;
+        let checked = CheckedNativeQueuePlanV30::derive_fixed(qp, class, job, &pursuit, &service, &mass).map_err(refused)?;
+        let mut qglobal = match r.aux.get(&(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)))) {
+            None => NativeQueueGlobalV30::empty(qp, &service).map_err(refused)?,
+            Some(raw) => {
+                if raw.len() > NATIVE_QUEUE_ROW_LIMIT_V30 {
+                    return Err(refused("native queue30 fixed global cap"));
+                }
+                let (r, g): (Digest, NativeQueueGlobalV30) =
+                    borsh::from_slice(raw).map_err(|_| refused("native queue30 global grammar"))?;
+                if g.root() != r {
+                    return Err(refused("native queue30 global root differs"));
+                }
+                g
+            }
+        };
+        let (queue, lease) =
+            qglobal.admit(&mut global, qp, &service, &mass, &checked, job_id, funding_root, root, now, deadline).map_err(refused)?;
+        (lease, Some((qglobal, queue)))
+    } else {
+        (global.admit(&plan, &service, &mass, job_id, root).map_err(refused)?, None)
+    };
+    Ok(NativeCapacityAdmissionV23 { global, lease, plan, pursuit, consent: c, queue })
 }
 pub(super) fn write(builder: &mut TransitionBuilder<'_>, admission: NativeCapacityAdmissionV23, job: Digest) {
+    if let Some((global, lease)) = admission.queue {
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))));
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), Some(key(&(lease.root(), lease))));
+    }
     let slots = NativePhysicalSlotsV22::empty(job, admission.consent.root());
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, global_key(), Some(key(&(admission.global.root(), admission.global))));

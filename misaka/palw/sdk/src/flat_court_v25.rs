@@ -263,7 +263,12 @@ impl DeclaredFullCourtArtifactV25 {
             original_program: self.layout.program_root,
             real_parameter: self.layout.parameter_root,
             inventory: self.layout.inventory_root,
-            original_source_components: self.source_components,
+            original_source_components: kaspa_consensus_core::palw_native_text_stop_v29::native_text_source_components_v29(
+                source_binding,
+                self.layout.program_root,
+                self.layout.parameter_root,
+                self.layout.inventory_root,
+            ),
             maximum_positions: self.layout.original_context_max,
             court_profile25: self.layout.court_set,
             maximum_scope25: self.layout.maximum_scope_root,
@@ -359,6 +364,15 @@ pub fn prepare_canonical_full_court_v25(
         declaration.original_context_max,
         None,
     )?;
+    let canonical_components = kaspa_consensus_core::palw_native_text_stop_v29::native_text_source_components_v29(
+        declaration.source_binding,
+        declaration.original_program,
+        declaration.real_parameter,
+        declaration.inventory,
+    );
+    if declaration.original_source_components != canonical_components {
+        return Err("canonical text29 source components differ from exact standalone causal-source binding; pipeline components require Source28".into());
+    }
     let class = kaspa_consensus_core::palw_native_text_stop_v29::NativeTextClassV29 {
         version: 29,
         source_binding: declaration.source_binding,

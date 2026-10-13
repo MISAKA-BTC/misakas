@@ -250,3 +250,32 @@ pub fn derive_flat_resources_v29(
     };
     Ok(FlatResourcePlanV29 { vector, court })
 }
+
+/// Readonly original node coordinates for native demand authentication. This
+/// grants no court/Fund authority and never exposes mutable prepared wiring.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlatNodeGeometryV29 {
+    pub node_index: u64,
+    pub node_count: u64,
+    pub dtype: DType,
+    pub shape: Vec<usize>,
+}
+pub fn flat_node_geometry_v29(
+    program: &TirProgramV1,
+    position: u32,
+    occurrence: u16,
+    node: u16,
+) -> Result<FlatNodeGeometryV29, String> {
+    if position >= program.history_bound {
+        return Err("native29 original node position exceeds context".into());
+    }
+    let p = PreparedV1::without_scope(program, None)?;
+    let (block, _) = *p.w.occurrences.get(occurrence as usize).ok_or("native29 node occurrence absent")?;
+    let n = program.blocks[block as usize].nodes.get(node as usize).ok_or("native29 node absent")?;
+    Ok(FlatNodeGeometryV29 {
+        node_index: p.index(occurrence, node),
+        node_count: p.node_count,
+        dtype: n.out.dtype,
+        shape: n.out.resolve(p.w.h(occurrence, position)),
+    })
+}

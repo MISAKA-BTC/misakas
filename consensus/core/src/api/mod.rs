@@ -1727,6 +1727,28 @@ pub trait ConsensusApi: Send + Sync {
         Err("this consensus serves no PALW state proof".to_string())
     }
 
+    /// Readonly original Final view from an immutable, fully validated block
+    /// and its exact selected-parent state. The returned private Core view
+    /// proves row agreement, not a client-trusted chain or a redeemed UTXO.
+    fn palw_native_execution_audit_v32(
+        &self,
+        block: BlockHash,
+        job: [u8; 64],
+    ) -> Result<(crate::header::Header, crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27), String> {
+        let _ = (block, job);
+        Err("this consensus serves no native Final audit anchor".into())
+    }
+
+    /// Actual coinbase inclusion proof from an immutable UTXO-validated block.
+    /// Clients still authenticate their own chain/selected-parent and queue openings.
+    fn palw_native_coinbase_proof_v33(
+        &self,
+        block: BlockHash,
+    ) -> Result<(crate::header::Header, crate::palw_native_redemption_v33::NativeCoinbaseProofV33), String> {
+        let _ = block;
+        Err("this consensus serves no native coinbase inclusion proof".into())
+    }
+
     /// **RFC-0009 L2: the fork-choice openings of `blocks`' post-states** (op 203), with this node's sink and DAG tips. Empty `blocks`: the
     /// sink and every tip. At most [`crate::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1`] blocks; each
     /// entry is the opening or the reason this node cannot weigh that block (no V2 ruleset, a block it never held as a chain block, a

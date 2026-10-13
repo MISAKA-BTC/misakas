@@ -12,6 +12,8 @@ pub(super) struct NativeFinalConsentV27 {
     pub policy: Digest,
     pub basis: NativeFinalClassBasisV27,
     pub original_pursuit: Digest,
+    pub queue_policy: Digest,
+    pub queue_plan: Digest,
 }
 impl NativeFinalConsentV27 {
     fn root(&self) -> Digest {
@@ -164,6 +166,11 @@ pub(super) fn accept(
     if c.root() != root {
         return Err(refused("native Final27 original23 root differs"));
     }
+    let (_, _, service, mass) = capacity::quote(builder, &class, &job, p)?;
+    let queue_policy = policy(builder, ctx.daa_score)?.queue_policy;
+    let queue =
+        crate::palw_native_queue_v30::CheckedNativeQueuePlanV30::derive_fixed(&queue_policy, &class, &job, &pursuit, &service, &mass)
+            .map_err(refused)?;
     let c = NativeFinalConsentV27 {
         version: 27,
         preparation: id,
@@ -171,6 +178,8 @@ pub(super) fn accept(
         policy: conditions.policy_root(),
         basis,
         original_pursuit: pursuit.root(),
+        queue_policy: queue_policy.root(),
+        queue_plan: queue.record().root(),
     };
     builder.write_kernel_row(EXECUTION_PREPARATION_TABLE_V11, key(&(27u8, id)), Some(key(&(c.root(), c))));
     Ok(())
@@ -195,6 +204,10 @@ pub(super) fn plan_fund(
     let (root, c): (Digest, NativeFinalConsentV27) =
         borsh::from_slice(raw).map_err(|_| refused("native Final27 initial consent grammar"))?;
     let (b, conditions, pursuit) = basis(builder, class, job, p)?;
+    let (_, _, service, mass) = capacity::quote(builder, class, job, p)?;
+    let qp = policy(builder, ctx.daa_score)?.queue_policy;
+    let queue = crate::palw_native_queue_v30::CheckedNativeQueuePlanV30::derive_fixed(&qp, class, job, &pursuit, &service, &mass)
+        .map_err(refused)?;
     let (root23, c23): (Digest, crate::palw_flat_execution_capacity_v22::NativeExecutionConsentV23) = r
         .aux_row(EXECUTION_PREPARATION_TABLE_V11, &key(&(23u8, request.preparation)))
         .ok_or_else(|| refused("native Final27 original paid23 consent absent"))?;
@@ -206,6 +219,8 @@ pub(super) fn plan_fund(
         || c.policy != conditions.policy_root()
         || c.basis != b
         || c.original_pursuit != pursuit.root()
+        || c.queue_policy != qp.root()
+        || c.queue_plan != queue.record().root()
     {
         return Err(refused("Fund26 changes initial Final27 original basis"));
     }
@@ -259,6 +274,20 @@ pub(super) fn close(
     {
         return Err(refused("native Final27 original class/policy/pursuit/service rebound"));
     }
+    let (qr, q): (Digest, crate::palw_native_queue_v30::NativeQueueLeaseV30) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(30u8, id, 1u8)))
+        .ok_or_else(|| refused("native Final27 original queue30 lease absent"))?;
+    if q.root() != qr
+        || q.retired
+        || q.job != id
+        || q.original_funding != book.job().root()
+        || q.original_policy != c.queue_policy
+        || q.original_plan != c.queue_plan
+        || c.queue_policy != policy.queue_policy.root()
+        || q.not_before < book.job().deadline_daa
+    {
+        return Err(refused("native Final27 original burst residency contract differs"));
+    }
     policy.check_class(p.execution.network_domain, &c.basis, pursuit.complete_path, true, service.implemented).map_err(refused)?;
     let original_source = source(r, class.record().binding_id)?;
     if original_source.refuted {
@@ -307,37 +336,102 @@ impl PalwChainStateV2 {
         &self,
         id: Digest,
     ) -> Result<crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27, String> {
-        use crate::palw_native_audit_v27::*;
         let r = self.kernel_route().ok_or("native audit route absent")?;
-        let row = r.execution_job_row_v11(&id)?;
-        let class = r.execution_class_header_v11(&row.header.class_id).ok_or("native audit original class absent")?;
+        Self::native_execution_audit_from_authenticated_rows_v27(
+            &r.aux,
+            r.header.policy.network_domain,
+            self.last_point().map(|p| p.daa_score).unwrap_or(r.header.scalars.daa),
+            self.state_root().as_bytes(),
+            r.ledger_root().as_bytes(),
+            r.aux_root().as_bytes(),
+            &self.pending_payouts,
+            id,
+        )
+    }
+    /// Only Core's private proof32 verifier/context may call this stateless
+    /// constructor. Public callers provide verified proof tokens, never row
+    /// DTOs, roots or claimed payout booleans.
+    pub(crate) fn native_execution_audit_from_authenticated_rows_v27(
+        rows: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+        network_domain: Digest,
+        daa: u64,
+        state_root: Digest,
+        ledger_root: Digest,
+        aux_root: Digest,
+        payouts: &std::collections::BTreeMap<Hash64, PalwPayoutV2>,
+        id: Digest,
+    ) -> Result<crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27, String> {
+        use crate::palw_native_audit_v27::*;
+        let raw = rows.get(&(EXECUTION_JOB_TABLE_V11, key(&id))).ok_or("native audit original job absent")?;
+        let row = decode_native_execution_job_v11(raw)?;
+        if row.header.job_id != id {
+            return Err("native audit original job namespace differs".into());
+        }
+        let raw = rows.get(&(EXECUTION_CLASS_TABLE_V11, key(&row.header.class_id))).ok_or("native audit original class absent")?;
+        let (class, _) = native_execution_class_header_v11(raw)?;
+        if class.record.id() != row.header.class_id {
+            return Err("native audit original class namespace differs".into());
+        }
         let checked = class.checked_fixed_header()?;
         let book = row.restore_book(&checked)?;
         let j = book.job();
         let claim = book.claim().ok_or("native audit Final lacks claim")?;
         let s = book.settlement().ok_or("native audit Final lacks settlement")?;
         s.check()?;
-        let credit: NativeExecutionCreditV11 = r.aux_row(EXECUTION_CREDIT_TABLE_V11, &key(&id)).ok_or("native audit single credit absent")?;
-        let raw = r.aux.get(&(EXECUTION_POLICY_TABLE_V11, key(&(27u8, id)))).ok_or("native audit original Final27 consent absent")?;
-        if raw.len() > 4096 { return Err("native audit original consent fixed cap".into()); }
+        let credit: NativeExecutionCreditV11 = rows
+            .get(&(EXECUTION_CREDIT_TABLE_V11, key(&id)))
+            .and_then(|raw| (raw.len() <= 1024).then(|| borsh::from_slice(raw).ok()).flatten())
+            .ok_or("native audit single credit absent")?;
+        let raw = rows.get(&(EXECUTION_POLICY_TABLE_V11, key(&(27u8, id)))).ok_or("native audit original Final27 consent absent")?;
+        if raw.len() > 4096 {
+            return Err("native audit original consent fixed cap".into());
+        }
         let (consent_root, c): (Digest, NativeFinalConsentV27) = borsh::from_slice(raw).map_err(|_| "native audit consent grammar")?;
-        let nonce = r.execution_nonce_counter_v11(&row.header.requester_operator)?;
+        let raw = rows
+            .get(&(EXECUTION_REQUEST_INDEX_TABLE_V11, key(&row.header.requester_operator)))
+            .ok_or("native audit permanent operator nonce row absent")?;
+        if raw.len() != 72 {
+            return Err("native audit fixed nonce row cap".into());
+        }
+        let nonce: NativeRequesterNonceRowV11 = borsh::from_slice(raw).map_err(|_| "native audit nonce grammar")?;
+        if nonce.operator != row.header.requester_operator {
+            return Err("native audit nonce operator differs".into());
+        }
         let consumed_nonce = canonical_nonce_v11(&j.nonce)?;
-        if book.terminal() != ExecutionTerminalV11::Final || book.escrow_remaining() != 0
-            || claim.terminal != ExecutionTerminalV11::Final || !claim.credit_paid
-            || s.terminal != ExecutionTerminalV11::Final || s.claim_id != Some(claim.id())
-            || s.escrow_debit != j.escrow_original_debit || s.producer_credit != j.reward
-            || s.requester_refund != 0 || s.collected_original_slash != 0 || s.finder_credit != 0 || s.burned != 0
-            || credit.job_id != id || credit.original_funded_job_root != j.root()
-            || credit.terminal_book_root != book.root() || credit.settlement_root != s.root()
-            || credit.producer_credit != s.producer_credit || credit.requester_refund != 0
-            || credit.collected_original_slash != 0 || credit.finder_credit != 0 || credit.burned != 0
-            || credit.established_daa < claim.challenge_end || c.version != 27 || c.root() != consent_root
-            || c.basis.class != class.record.id() || c.basis.program != class.record.program_root
-            || c.basis.inventory != class.record.inventory_root || c.basis.real_parameter != class.record.parameter_root
-            || c.policy == [0; 64] || nonce.next_nonce <= consumed_nonce
-        { return Err("native audit Final/nonce/original debit/single credit agreement differs".into()); }
-        let mut rows = Vec::new();
+        if book.terminal() != ExecutionTerminalV11::Final
+            || book.escrow_remaining() != 0
+            || claim.terminal != ExecutionTerminalV11::Final
+            || !claim.credit_paid
+            || s.terminal != ExecutionTerminalV11::Final
+            || s.claim_id != Some(claim.id())
+            || s.escrow_debit != j.escrow_original_debit
+            || s.producer_credit != j.reward
+            || s.requester_refund != 0
+            || s.collected_original_slash != 0
+            || s.finder_credit != 0
+            || s.burned != 0
+            || credit.job_id != id
+            || credit.original_funded_job_root != j.root()
+            || credit.terminal_book_root != book.root()
+            || credit.settlement_root != s.root()
+            || credit.producer_credit != s.producer_credit
+            || credit.requester_refund != 0
+            || credit.collected_original_slash != 0
+            || credit.finder_credit != 0
+            || credit.burned != 0
+            || credit.established_daa < claim.challenge_end
+            || c.version != 27
+            || c.root() != consent_root
+            || c.basis.class != class.record.id()
+            || c.basis.program != class.record.program_root
+            || c.basis.inventory != class.record.inventory_root
+            || c.basis.real_parameter != class.record.parameter_root
+            || c.policy == [0; 64]
+            || nonce.next_nonce <= consumed_nonce
+        {
+            return Err("native audit Final/nonce/original debit/single credit agreement differs".into());
+        }
+        let mut audit_rows = Vec::new();
         for (table, k) in [
             (EXECUTION_CLASS_TABLE_V11, key(&row.header.class_id)),
             (EXECUTION_JOB_TABLE_V11, key(&id)),
@@ -346,25 +440,52 @@ impl PalwChainStateV2 {
             (EXECUTION_REQUEST_INDEX_TABLE_V11, key(&row.header.requester_operator)),
             (EXECUTION_POLICY_TABLE_V11, key(&(19u8, id))),
         ] {
-            let bytes = r.aux.get(&(table, k.clone())).ok_or("native audit original row missing")?;
-            rows.push(NativeAuditRowV27 { table, key: k, bytes: bytes.clone() });
+            let bytes = rows.get(&(table, k.clone())).ok_or("native audit original row missing")?;
+            audit_rows.push(NativeAuditRowV27 { table, key: k, bytes: bytes.clone() });
         }
-        let payout_queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&row.header.producer_payout);
+        let payout_queue =
+            crate::palw_native_audit_v27::native_final_credit_queue_v27(id, j.root(), s.root(), row.header.producer_payout);
         CheckedNativeExecutionAuditViewV27::from_native_rows(NativeExecutionAuditRecordV27 {
-            version: 27, namespace: 11, network_domain: r.header.policy.network_domain, daa: r.header.scalars.daa,
-            state_root: self.state_root().as_bytes(), ledger_root: r.ledger_root().as_bytes(), aux_root: r.aux_root().as_bytes(),
-            class: row.header.class_id, source: class.record.binding_id, program: class.record.program_root,
-            real_parameter: class.record.parameter_root, inventory: class.record.inventory_root, job: id, funding: j.root(),
-            original_escrow_debit: j.escrow_original_debit, original_escrow_receipt: j.escrow_debit_receipt,
-            original_consent: consent_root, original_final_policy: c.policy, original_final_basis: c.basis.root(),
-            maximum_scope: class.record.class_scope9_root, maximum_resource: class.record.resource10_root,
-            actual_scope: j.actual_scope9_root, actual_resource: j.actual_resource10_root,
-            claim: claim.id(), vector: claim.vector, trace: claim.trace_root, output: claim.output_root,
-            terminal_book: book.root(), settlement: s.root(), credit: object_id(b"misaka-palw/native/audit-single-credit/v27", &credit),
-            producer_credit: credit.producer_credit, requester_operator: row.header.requester_operator,
-            producer_operator: row.header.producer_operator, consumed_nonce: j.nonce, next_nonce: nonce.next_nonce,
-            established_daa: credit.established_daa, payout_payload: row.header.producer_payout.as_bytes(),
-            payout_queue: payout_queue.as_bytes(), observed_queue_amount: self.pending_payout(&payout_queue).map(|p| p.amount), rows,
+            version: 27,
+            namespace: 11,
+            network_domain,
+            daa,
+            state_root,
+            ledger_root,
+            aux_root,
+            class: row.header.class_id,
+            source: class.record.binding_id,
+            program: class.record.program_root,
+            real_parameter: class.record.parameter_root,
+            inventory: class.record.inventory_root,
+            job: id,
+            funding: j.root(),
+            original_escrow_debit: j.escrow_original_debit,
+            original_escrow_receipt: j.escrow_debit_receipt,
+            original_consent: consent_root,
+            original_final_policy: c.policy,
+            original_final_basis: c.basis.root(),
+            maximum_scope: class.record.class_scope9_root,
+            maximum_resource: class.record.resource10_root,
+            actual_scope: j.actual_scope9_root,
+            actual_resource: j.actual_resource10_root,
+            claim: claim.id(),
+            vector: claim.vector,
+            trace: claim.trace_root,
+            output: claim.output_root,
+            terminal_book: book.root(),
+            settlement: s.root(),
+            credit: object_id(b"misaka-palw/native/audit-single-credit/v27", &credit),
+            producer_credit: credit.producer_credit,
+            requester_operator: row.header.requester_operator,
+            producer_operator: row.header.producer_operator,
+            consumed_nonce: j.nonce,
+            next_nonce: nonce.next_nonce,
+            established_daa: credit.established_daa,
+            payout_payload: row.header.producer_payout.as_bytes(),
+            payout_queue: payout_queue.as_bytes(),
+            observed_queue_amount: payouts.get(&payout_queue).filter(|p| p.payload == row.header.producer_payout).map(|p| p.amount),
+            rows: audit_rows,
         })
     }
 }

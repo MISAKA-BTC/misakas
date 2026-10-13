@@ -355,11 +355,25 @@ impl StageSourceCallerShardV26 {
     /// original pending unit settled before releasing its owner slot; unused
     /// capacity becomes consumed, and neither nonce nor interval is recreated.
     pub fn expire_owner(&mut self,quota:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&CheckedStageSourcePlanV26,owner:Digest,original_paid:Digest)->Result<(),String>{
-        self.context(quota,epoch,plan)?;let r=self.row.as_ref().ok_or("caller26 original owner absent")?;
+        epoch.check(quota)?;
+        if epoch.network_interval==self.subject.binding.admitted_interval{self.context(quota,epoch,plan)?;}else if epoch.network_interval<self.subject.binding.admitted_interval||epoch.network_interval!=self.global.epoch.network_interval||plan.record.quota_policy!=quota.root()||epoch.block_daa<self.global.epoch.block_daa{return Err("caller26 expired collection rewinds original epoch".into());}
+        let r=self.row.as_ref().ok_or("caller26 original owner absent")?;
         if r.retired||r.owner!=owner||r.original_paid!=original_paid||epoch.block_daa<=r.horizon||r.horizon>self.subject.binding.deadline_daa{return Err("caller26 original paid owner has not genuinely expired".into());}
-        let remaining=r.remaining.clone();let block=self.block(epoch).spend(&remaining,&quota.block)?;let network=self.global.network.spend(&remaining,&quota.network)?;let actor=self.actor.interval.spend(&remaining,&quota.actor)?;
-        let r=self.row.as_mut().unwrap();r.retired=true;r.consumed=r.committed.clone();r.remaining=QuotaQuantitiesV11::default();self.global.block=block;self.global.network=network;self.global.epoch=epoch.clone();self.actor.interval=actor;Ok(())
+        let remaining=r.remaining.clone();
+        if epoch.network_interval==r.interval{
+            let block=self.block(epoch).spend(&remaining,&quota.block)?;let network=self.global.network.spend(&remaining,&quota.network)?;let actor=self.actor.interval.spend(&remaining,&quota.actor)?;
+            self.global.block=block;self.global.network=network;self.actor.interval=actor;
+        }
+        let r=self.row.as_mut().unwrap();r.retired=true;r.consumed=r.committed.clone();r.remaining=QuotaQuantitiesV11::default();self.global.epoch=epoch.clone();Ok(())
     }
+    /// A discovery conversion transfers its already paid caller reserve and
+    /// lifetime count; it cannot reset attempts, extend the horizon or admit a
+    /// fifth producer obligation. Native authenticates both original page rows.
+    pub fn transfer_owner(&mut self,quota:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&CheckedStageSourcePlanV26,old:Digest,new:Digest,original_paid:Digest)->Result<(),String>{
+        self.context(quota,epoch,plan)?;let r=self.row.as_mut().ok_or("caller26 original discovery owner absent")?;
+        if r.retired||r.owner!=old||old==new||new==[0;64]||r.original_paid!=original_paid||epoch.block_daa>=r.horizon{return Err("caller26 discovery conversion changes original paid liability".into());}r.owner=new;Ok(())
+    }
+
     /// Genuine original terminal, all pending units settled and horizon elapsed
     /// are checked by native membership before this private-root anchored call.
     pub fn retire(&mut self,quota:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&CheckedStageSourcePlanV26,original_paid:Digest,terminal:&CheckedQuotaTerminalV11)->Result<(),String>{
@@ -368,4 +382,44 @@ impl StageSourceCallerShardV26 {
         let extra=r.remaining.clone();let block=self.block(epoch).spend(&extra,&quota.block)?;let network=self.global.network.spend(&extra,&quota.network)?;let actor=self.actor.interval.spend(&extra,&quota.actor)?;
         let r=self.row.as_mut().unwrap();r.retired=true;r.consumed=r.committed.clone();r.remaining=QuotaQuantitiesV11::default();self.global.block=block;self.global.network=network;self.global.epoch=epoch.clone();self.actor.interval=actor;Ok(())
     }
+}
+
+/// Separate original Text29 caller plan. The producer's answer pool is never
+/// used to pay the requesting actor's full cold restoration or retained cache.
+pub fn derive_text_source_caller_plan_v29(
+    program:&misaka_palw_tir::program::TirProgramV1,pc:&ParamCommitmentsV1,
+    text:&super::super::text29::CheckedTextQuotaV29,quota:&QuotaPolicyV11,
+    execution:&ExecutionPolicyV11,discovery:&discovery13::DiscoveryPolicyV13,
+)->Result<CheckedStageSourcePlanV26,String>{
+    execution.check(quota)?;discovery.check(quota)?;
+    let source=text.source_plan(program,pc,quota,discovery)?;
+    let requests=text.requests_per_owner();if requests==0||requests>1<<18{return Err("text29 caller request bound exceeds original cap".into());}
+    let attempts=requests.checked_mul(2).ok_or("text29 caller attempts overflow")?;
+    let required_horizon=(requests as u64).checked_mul(execution.horizons.da_answer).and_then(|n|n.checked_add(execution.horizons.proof_grace)).ok_or("text29 caller acquisition horizon overflow")?;
+    let bytes=text.restore_bytes().checked_add(32768).ok_or("text29 caller restore extent overflow")?;
+    let work=bytes.checked_mul(bytes).and_then(|n|n.checked_mul(64)).and_then(|n|n.checked_add(bytes.checked_mul(1024)?)).ok_or("text29 caller restore work overflow")?;
+    let mut request=action_envelope(work as u128,bytes,None)?;include_source_court_io_v11(&mut request,pc)?;include_native_post_io_v11(&mut request,text.plan().native_post_carrier_cap())?;
+    let cache=source16::SOURCE_ANSWER_MAX_BYTES_V16+4096;
+    for axis in [ResourceAxisV10::StoredEvidenceBytes,ResourceAxisV10::OwnedPeakBytes,ResourceAxisV10::ContainerAllocatorAllowance]{request.set(axis,request.get(axis).checked_add(cache as u128).ok_or("text29 caller cache overflow")?);}
+    let guarantee=request.checked_mul(attempts)?;let admission_cost=action_envelope(work as u128,bytes,None)?;admission_cost.checked_add(&guarantee)?.within(&quota.plan)?;
+    Ok(CheckedStageSourcePlanV26{record:StageSourcePlanRecordV26{version:26,class:text.class(),source:text.source(),real_parameters:pc.root(),inventory:text.source(),admission:text.plan().record().root(),stage_quota:text.root(),producer_source:source.root(),trace_restore:object_id(b"misaka-palw/kernel/text29-caller-original-restore/v26",&(text.root(),bytes,work)),quota_policy:quota.root(),execution_policy:execution.root(),requests,attempts,required_horizon,request,admission_cost,guarantee}})
+}
+/// Authenticated current new29 paid-owner metadata. No wire decoder or raw
+/// quota vector constructor exists for the corresponding private grant.
+pub struct TextNativeSourceOwnerV29 {
+    pub job:Digest,pub funding:Digest,pub consent:Digest,pub claim:Digest,pub original_claim:Digest,
+    pub seal:Digest,pub actor:Digest,pub actor_operator:Digest,pub producer_operator:Digest,
+    pub original_paid:Digest,pub original_plan:Digest,pub original_caller_plan:Digest,
+    pub horizon:u64,pub paid_at:u64,pub actual_debit:u64,pub actual_receipt:Digest,
+}
+pub fn check_text_source_owner_v29(
+    program:&misaka_palw_tir::program::TirProgramV1,pc:&ParamCommitmentsV1,text:&super::super::text29::CheckedTextQuotaV29,
+    anchor:&super::super::text29::TextNativeFundingAnchorV29,nonce:&NativeRequesterNonceWitnessV11,
+    quota:&QuotaPolicyV11,execution:&ExecutionPolicyV11,discovery:&discovery13::DiscoveryPolicyV13,
+    epoch:&TrustedEpochV11,plan:&CheckedStageSourcePlanV26,n:&TextNativeSourceOwnerV29,
+)->Result<CheckedStageSourceOwnerV26,String>{
+    let binding=super::super::text29::source_owner_binding_v29(text,anchor,quota,nonce,epoch)?;
+    let own=derive_text_source_caller_plan_v29(program,pc,text,quota,execution,discovery)?;
+    if own.root()!=plan.root()||n.original_caller_plan!=plan.root()||n.original_plan!=text.root()||n.job!=anchor.job||n.funding!=anchor.funding||n.consent!=anchor.consent||n.claim==[0;64]||n.claim!=n.original_claim||n.actor==anchor.producer||n.actor_operator==n.producer_operator||n.actor_operator==[0;64]||n.producer_operator!=anchor.producer_operator||n.original_paid==[0;64]||n.seal==[0;64]||n.actual_debit==0||n.actual_receipt==[0;64]||n.paid_at!=epoch.block_daa||n.horizon>anchor.deadline||n.paid_at.checked_add(plan.required_horizon()).is_none_or(|x|x>n.horizon){return Err("text29 caller lacks exact original funding/source/claim/independent paid operator/epoch/full horizon".into());}
+    Ok(CheckedStageSourceOwnerV26{binding,seal:n.seal,actor:n.actor,operator:n.actor_operator,original:n.original_paid,quote:plan.root(),epoch:epoch.clone(),horizon:n.horizon})
 }

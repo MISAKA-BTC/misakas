@@ -17,6 +17,8 @@ pub const MAX_SCOPE_RELATION_VISITS_V25: u128 = 1 << 20;
 pub fn flat_court_set_id_v25() -> Digest {
     let mut h = crate::hash::keyed(b"misaka-palw/kernel/flat-court-set/v25");
     h.update(&flat_trace_profile_id_v5()).update(&ordinary_point_court_id_v25()).update(&crate::flat_topk7::topk_court_id_v7());
+    h.update(&crate::flat_detect25::TYPED_VALUE_MAX_BYTES_V25.to_le_bytes())
+        .update(&crate::flat_detect25::TYPED_HEADER_MAX_BYTES_V25.to_le_bytes());
     h.update(b"all-ordinary-scalar-v25;committed-TopK-v7;initial-TopK-v5;decode/malformed-v5;ordinary-v25-explicit-caps;special-frozen-v5-v7;all-occurrences/sub64/maxH;metadata-visits<=2^20");
     crate::hash::finish(h)
 }

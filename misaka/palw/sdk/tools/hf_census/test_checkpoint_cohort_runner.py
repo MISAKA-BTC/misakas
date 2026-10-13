@@ -86,6 +86,40 @@ class FullScopeGuards(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.validate_plan(cohort, plan, "c" * 64)
 
+    def test_original_source_resolution_cannot_replace_unknown_or_changed_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = root / "config.json"
+            metadata.write_text('{"max_position_embeddings":32768}')
+            resolution = root / "resolution.json"
+            member = {"id":"m", "repository":"publisher/model", "revision":"a"*40, "advertised_task":"text-generation"}
+            document = {"schema":"misaka.rfc02.original-source-resolution.v1", "repository":member["repository"],
+                        "revision":member["revision"], "advertised_task":"text-generation", "source_declared_context_max":32768,
+                        "required_task_components":["text"], "source_directory":tmp,
+                        "source_files":[{"path":"config.json","bytes":metadata.stat().st_size,"sha256":ac.digest(metadata)}],
+                        "publisher_metadata_files":[{"path":"config.json","sha256":ac.digest(metadata)}]}
+            resolution.write_text(json.dumps(document))
+            entry = {"original_source_resolution":{"path":"resolution.json","sha256":ac.digest(resolution)}}
+            actual, _ = runner.resolve_original_member(member,entry,root)
+            self.assertEqual(actual["source_declared_context_max"],32768)
+            unknown, evidence = runner.resolve_original_member({**member,"revision":None},entry,root)
+            self.assertNotIn("source_declared_context_max",unknown)
+            self.assertIsNone(evidence)
+            with self.assertRaises(ValueError):
+                runner.resolve_original_member({**member,"revision":"b"*40},entry,root)
+
+    def test_audit_pair_requires_two_exporters_and_exact_native_utxo_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pair = root / "pair.json"
+            pair.write_text(json.dumps({"schema":runner.AUDIT_PAIR_SCHEMA,"exports":[]}))
+            good, reason = runner.inspect_audit_pair(pair,root,{},"redemption","a"*64)
+            self.assertFalse(good)
+            self.assertEqual(reason,"TWO_INDEPENDENT_EXPORTS_REQUIRED")
+            auditors = [{"operator_id":"same", "node_database":"same"}] * 2
+            with self.assertRaises(ValueError):
+                runner.validate_auditors(auditors,{"network":"devnet","genesis":"b"*128})
+
 
 if __name__ == "__main__":
     unittest.main()

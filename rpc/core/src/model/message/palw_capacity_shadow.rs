@@ -678,11 +678,25 @@ pub struct GetPalwStateProofResponse {
     pub collection: String,
     /// Every row of the collection, in key order.
     pub rows: Vec<RpcPalwProofRow>,
+    /// New native-audit query only: bounded original Core readonly record.
+    /// Clients rederive it from the anchored proof; these bytes are not truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_audit_record: Option<Vec<u8>>,
+    /// Optional v33 bounded coinbase/path transport, never a redemption flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_coinbase_proof: Option<Vec<u8>>,
 }
 
 impl Serializer for GetPalwStateProofResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        let version = if self.native_coinbase_proof.is_some() {
+            3u16
+        } else if self.native_audit_record.is_some() {
+            2u16
+        } else {
+            1u16
+        };
+        store!(u16, &version, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.reason, writer)?;
         store!(String, &self.block_hash, writer)?;
@@ -690,13 +704,22 @@ impl Serializer for GetPalwStateProofResponse {
         store!(Vec<u8>, &self.state_preimage, writer)?;
         store!(String, &self.collection, writer)?;
         serialize!(Vec<RpcPalwProofRow>, &self.rows, writer)?;
+        if version >= 2 {
+            store!(Option<Vec<u8>>, &self.native_audit_record, writer)?;
+        }
+        if version == 3 {
+            store!(Option<Vec<u8>>, &self.native_coinbase_proof, writer)?;
+        }
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwStateProofResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
+        if !matches!(version, 1 | 2 | 3) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown readonly proof response version"));
+        }
         Ok(Self {
             available: load!(bool, reader)?,
             reason: load!(String, reader)?,
@@ -705,6 +728,8 @@ impl Deserializer for GetPalwStateProofResponse {
             state_preimage: load!(Vec<u8>, reader)?,
             collection: load!(String, reader)?,
             rows: deserialize!(Vec<RpcPalwProofRow>, reader)?,
+            native_audit_record: if version >= 2 { load!(Option<Vec<u8>>, reader)? } else { None },
+            native_coinbase_proof: if version == 3 { load!(Option<Vec<u8>>, reader)? } else { None },
         })
     }
 }

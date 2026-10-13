@@ -33,6 +33,7 @@ mod protected_tests;
 /// they cannot enter the legacy text admission constructors.
 pub mod stage14;
 pub mod initial31;
+pub mod text29;
 
 pub const QUOTA_AXES_V11: usize = 21;
 pub const FUTURE_ACTION_KINDS_V11: usize = 6;

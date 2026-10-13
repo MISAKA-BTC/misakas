@@ -248,7 +248,12 @@ impl NativePagedQuotaProjectionV29 {
         let actor = admit(&current_actor, &p.admission, &p.guarantee, &quota.actor)?;
         let slot = self.status.paid_owners.iter().position(|k| *k == [0; 64]).ok_or("paged29 original job owners exhausted")?;
         self.status.paid_owners[slot] = token.seal.id();
-        self.status.owners_admitted = self.status.owners_admitted.checked_add(1).filter(|n| *n <= 4).ok_or("paged29 original producer lifetime owner guarantee exhausted")?;
+        self.status.owners_admitted = self
+            .status
+            .owners_admitted
+            .checked_add(1)
+            .filter(|n| *n <= 4)
+            .ok_or("paged29 original producer lifetime owner guarantee exhausted")?;
         self.status.latest_paid_horizon = self.status.latest_paid_horizon.max(token.seal.horizon);
         if self.actor.network_interval != epoch.network_interval || !self.actor.active {
             self.global.actor_count += 1;

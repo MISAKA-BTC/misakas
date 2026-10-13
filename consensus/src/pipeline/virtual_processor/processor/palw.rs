@@ -5322,7 +5322,7 @@ impl VirtualStateProcessor {
             }),
             misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 => Some(match bytes.get(2).copied() {
                 Some(0..=18) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::StageExecutionV14, daa),
-                Some(19..=31) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
+                Some(19..=32) => self.palw_stage_execution_v28.as_ref().is_some_and(|f| active(f.activation)) && final27(),
                 _ => false,
             }),
             _ => None,
@@ -5349,6 +5349,15 @@ impl VirtualStateProcessor {
             return Err("a native execution object is refused before its owning fence".into());
         }
         let native = misaka_palw_kernel::route::borrowed_native_action_v1(bytes).map_err(|why| why.to_string())?;
+        if let Some(a)=native && ((a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && a.action==37)
+            ||(a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && a.action==32)) {
+            let p=kaspa_consensus_core::palw_native_reply_parts_v29::borrowed_native_reply_metadata_v29(a.body)
+                .ok_or_else(||"native reply29 bounded original unit/part metadata absent".to_string())?;
+            let owner=state.kernel_route().and_then(|r|if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 {
+                r.stage_reply_owner_v28(p.pending,p.group,p.index,p.count,p.total,daa_score)
+            } else {r.native_text_reply_owner_v29(p.pending,p.index,p.count,p.total,p.group,daa_score)});
+            if owner!=Some(*signer){return Err("native reply29 original producer/attempt/page differs".into());}
+        }
         if let Some(action) = native
             && action.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && matches!(action.action,42|43) {
             let (id,index)=if action.action==42 {
@@ -5375,7 +5384,8 @@ impl VirtualStateProcessor {
         }
         if let Some(action) = native
             && ((action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && action.action == 15)
-                || (action.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && action.action == 8))
+                || (action.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && action.action == 8)
+                || (action.tag == misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && action.action == 26))
         {
             let pending: [u8; 64] = action
                 .body
@@ -5386,6 +5396,8 @@ impl VirtualStateProcessor {
             let owner = state.kernel_route().and_then(|route| {
                 if action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 {
                     route.execution_source_answer_owner_v16(&pending, daa_score)
+                } else if action.action==26 {
+                    route.stage_source_answer_owner_v28(&pending,daa_score)
                 } else {
                     route.stage_source_answer_owner_v14(&pending, daa_score)
                 }

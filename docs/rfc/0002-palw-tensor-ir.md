@@ -4413,3 +4413,25 @@ registration checks. The transport cannot dispatch Fund, Commit or Final and
 offers no protected delivery guarantee before Fund. Expired paid collection
 deletes exact bounded fragments while retaining the permanent sequence.
 Frozen object/proof chunk counts and canonical TIR program limits are unchanged.
+
+### II.14.57 Independent original credit delivery — audit32/redemption33
+
+Native Final evidence must open original consensus rows under an independently
+pinned header, selected parent and owning ruleset. A producer's serialized audit
+record is a projection to compare against rederived rows, never an authority to
+mint a checked Final. Explicit auxiliary/payout proof labels authenticate their
+exact original commitment positions. New envelope semantics require their own
+opening verifier and cannot use an old-version or raw-root fallback.
+
+New Final27 credits have a unique payment identity binding original job,
+funding, settlement and payee. A pooled queue for another job cannot stand in
+for a previously consumed original credit. Redemption33 checks the actual
+coinbase at transaction index0 against the pinned block's transaction Merkle
+root, including the owning Crescendo mass-commitment fence and exact missing
+subtree grammar. Complete authenticated before/after payout tables prove the
+same canonical drain prefix that the transition clears. Its contiguous outputs
+must preserve original order, amounts and payee scripts, and the exact original
+credit queue must disappear. The resulting evidence names a real outpoint and
+the original credit; it does not infer maturity, current unspentness or a later
+successful spend. Independent node validation and those UTXO lifecycle checks
+remain part of the completion and A6/A8 evidence.

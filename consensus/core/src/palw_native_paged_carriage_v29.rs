@@ -26,6 +26,8 @@ pub struct NativePagedCarriageRecordV29 {
     pub answer_envelope: NativeCarrierEnvelopeV22,
     pub proof_envelope: NativeCarrierEnvelopeV22,
     pub answer_packets: u32,
+    pub original_answer_bytes: u32,
+    pub answer_parts: u16,
     pub proof_packets: u32,
     pub answer_window: u64,
     pub proof_window: u64,
@@ -129,12 +131,25 @@ impl CheckedNativePagedCarriagePlanV29 {
                 );
             }
         }
-        let answer_envelope = envelope(source_bytes.max(16 << 10).checked_add(75).ok_or("paged29 answer wrapper overflow")?)?;
+        // All original v3 row/column cells (up to4096*16 bytes), typed
+        // trace nodes/headers and their original Merkle paths fit this bounded
+        // response. New29 transports it using ORIGINAL prepaid reply pages;
+        // no raw prefix is relabeled as an independently committed tile.
+        let answer_bytes = source_bytes
+            .max(80 << 10)
+            .checked_add(1024)
+            .filter(|n| *n <= 128 << 10)
+            .ok_or("paged29 original full source/trace response cap")?;
+        let answer_parts = u16::try_from(answer_bytes.div_ceil(32 << 10)).map_err(|_| "paged29 answer parts overflow")?;
+        let answer_envelope = envelope((32 << 10) + 143 + 7)?;
         let proof_envelope = envelope((32 << 10) + 202 + 7)?;
         if mass.packet_mass(&answer_envelope)? > service.slot_mass || mass.packet_mass(&proof_envelope)? > service.slot_mass {
-            return Err("paged29 original complete leaf requires an unconnected source-part lane".into());
+            return Err("paged29 original paid reply/proof page exceeds actual physical packet mass".into());
         }
-        let answer_packets = 11 * 2;
+        let answer_packets = 11u32
+            .checked_mul(2)
+            .and_then(|n| n.checked_mul(answer_parts as u32))
+            .ok_or("paged29 complete response page burst overflow")?;
         let proof_packets = 4u32
             .checked_mul(paid.record().maximum_parts as u32)
             .and_then(|n| n.checked_mul(2))
@@ -154,6 +169,8 @@ impl CheckedNativePagedCarriagePlanV29 {
                 answer_envelope,
                 proof_envelope,
                 answer_packets,
+                original_answer_bytes: answer_bytes as u32,
+                answer_parts,
                 proof_packets,
                 answer_window,
                 proof_window,

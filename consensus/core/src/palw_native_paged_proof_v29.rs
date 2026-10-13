@@ -511,12 +511,24 @@ impl PalwKernelRouteStateV1 {
             return None;
         }
         let qraw = self.aux.get(&(EXECUTION_QUOTA_TABLE_V11, borsh::to_vec(&(30u8, job, 1u8)).ok()?))?;
-        if qraw.len() > 1024 { return None; }
+        if qraw.len() > 1024 {
+            return None;
+        }
         let (qroot, q): (Digest, crate::palw_native_queue_v30::NativeQueueLeaseV30) = borsh::from_slice(qraw).ok()?;
-        if q.root() != qroot || q.version != 30 || q.retired || q.job != job
-            || q.original_funding != s.original_funding || q.original_physical_lease != j.lease_root
-            || q.original_plan == [0; 64] || q.original_policy == [0; 64] || q.not_before < s.horizon
-            || q.packets == 0 || q.owned_bytes == 0 { return None; }
+        if q.root() != qroot
+            || q.version != 30
+            || q.retired
+            || q.job != job
+            || q.original_funding != s.original_funding
+            || q.original_physical_lease != j.lease_root
+            || q.original_plan == [0; 64]
+            || q.original_policy == [0; 64]
+            || q.not_before < s.horizon
+            || q.packets == 0
+            || q.owned_bytes == 0
+        {
+            return None;
+        }
         Some(NativePaidCarrierEligibilityV22 {
             original_job: job,
             unit: id,

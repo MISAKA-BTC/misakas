@@ -3381,3 +3381,33 @@ positions, preserving the underlying state hash. Genuine fixed11 Final27
 extraction is on disk; Text29's actual fold, full V2 component execution/composed
 Final, node audit export and some Stage28 transitions remain under implementation.
 This snapshot is a backup for review, not a compile/test pass or RFC02 completion.
+
+### Code-first integration: immutable audit32 and credit delivery33
+
+The actual node now has readonly audit32 extraction from an immutable
+UTXO-validated block and its exact independently validated selected-parent
+state. RPC202 returns the authenticated auxiliary opening with a bounded raw
+audit record; clients reconstruct every field from the opening. Serialized
+records and server flags cannot mint a checked Final. New proof labels identify
+the original auxiliary/payout commitment positions without changing their
+frozen state hashes. A future rule-E V2 envelope requires its own opening
+verifier; the current auditor refuses it rather than falling back to a raw root.
+
+New Final27 producer credits use a unique queue key binding original job,
+funding, settlement and payout payload. The old11 route keeps its original
+pooled payout meaning. Delivery33 derives a real coinbase inclusion proof from
+the original validated block body using the owning Crescendo mass fence and
+Hash64 transaction Merkle domain. The independent verifier checks pinned
+pre/post state openings, the exact original credit, the whole canonical payout
+drain prefix, output order/value/script and consumption of those queue rows.
+It returns the original credit's real transaction outpoint, not a receipt flag.
+RPC202's new redemption query exports the coinbase proof alongside the same
+immutable audit anchor; ordinary proof responses preserve version1 bytes.
+
+Coinbase delivery alone does not establish maturity, current unspentness,
+successful spending, independent node replay or A6/A8 coverage. SDK bounded
+decoding, actual UTXO/spend drivers, trusted isolated calibration configuration,
+Text29 whole native transition/audit and full-component composed Final remain
+under implementation. Latest additions and written Merkle/RPC controls remain
+**UNVERIFIED**: no fresh build/test/node/measurement run has occurred during the
+requested code-first phase. D_all remains0/128 end-to-end measured.

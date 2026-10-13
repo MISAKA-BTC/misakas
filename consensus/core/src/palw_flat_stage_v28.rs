@@ -9,7 +9,7 @@ pub struct PalwStageExecutionFenceV28 {
     pub policies:NativeStagePoliciesV28,
 }
 pub const STAGE_ACTION_FIRST_V28: u8 = 19;
-pub const STAGE_ACTION_LAST_V28: u8 = 31;
+pub const STAGE_ACTION_LAST_V28: u8 = 32;
 pub const STAGE_COURT_MAX_BYTES_V28: u64 = 16 << 20;
 pub const STAGE_PROOF_PART_MAX_V28: u64 = 32 << 10;
 pub const STAGE_PROOF_PARTS_MAX_V28: u16 = 512;
@@ -307,7 +307,7 @@ impl CheckedNativeStageMaximumV28 {
     }
 }
 
-use misaka_palw_kernel::{flat_inputs12::{bounded28::{CheckedStageBundleV28,check_stage_bundle_v28},source14::{CheckedStageSourceV14,FlatStageSourceWireV14,STAGE_SOURCE_MAX_BYTES_V14}},flat_component_source28::CompleteComponentManifestV28};
+use misaka_palw_kernel::{flat_inputs12::{bounded28::{CheckedStageBundleV28,check_stage_bundle_v28},source28::{CheckedStageSourceV28,FlatStageSourceWireV28,STAGE_SOURCE_MAX_BYTES_V28}},flat_component_source28::CompleteComponentManifestV28};
 use std::io::{Cursor,Read};
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
 pub struct NativeStageSourceBundleV28 {pub version:u16,pub manifest:Vec<u8>,pub sources:Vec<Vec<u8>>}
@@ -316,11 +316,11 @@ impl NativeStageSourceBundleV28 {
         if raw.len()>16<<20||raw.len()<10||raw[..2]!=28u16.to_le_bytes(){return Err("stage28 source bundle bound/version".into());}
         let mut r=Cursor::new(raw);let version=u16::deserialize_reader(&mut r).map_err(|e|e.to_string())?;
         fn blob(r:&mut Cursor<&[u8]>,cap:usize)->Result<Vec<u8>,String>{let n=u32::deserialize_reader(r).map_err(|e|e.to_string())? as usize;if n>cap||n>r.get_ref().len().saturating_sub(r.position() as usize){return Err("stage28 source bundle bounded nested count".into());}let mut b=vec![0;n];r.read_exact(&mut b).map_err(|e|e.to_string())?;Ok(b)}
-        let manifest=blob(&mut r,4<<20)?;let n=u32::deserialize_reader(&mut r).map_err(|e|e.to_string())? as usize;if n==0||n>64{return Err("stage28 source stage count".into());}let mut sources=Vec::with_capacity(n);for _ in 0..n{sources.push(blob(&mut r,STAGE_SOURCE_MAX_BYTES_V14)?);}if r.position() as usize!=raw.len(){return Err("stage28 source bundle surplus bytes".into());}Ok(Self{version,manifest,sources})
+        let manifest=blob(&mut r,4<<20)?;let n=u32::deserialize_reader(&mut r).map_err(|e|e.to_string())? as usize;if n==0||n>64{return Err("stage28 source stage count".into());}let mut sources=Vec::with_capacity(n);for _ in 0..n{sources.push(blob(&mut r,STAGE_SOURCE_MAX_BYTES_V28)?);}if r.position() as usize!=raw.len(){return Err("stage28 source bundle surplus bytes".into());}Ok(Self{version,manifest,sources})
     }
-    pub fn check(&self)->Result<(CheckedStageBundleV28,Vec<CheckedStageSourceV14>),String>{
+    pub fn check(&self)->Result<(CheckedStageBundleV28,Vec<CheckedStageSourceV28>),String>{
         let manifest=CompleteComponentManifestV28::from_bytes(&self.manifest).map_err(|e|format!("{e:?}"))?;
-        let sources=self.sources.iter().map(|raw|FlatStageSourceWireV14::from_bytes(raw)?.check()).collect::<Result<Vec<_>,String>>()?;
+        let sources=self.sources.iter().map(|raw|FlatStageSourceWireV28::from_bytes(raw)?.check()).collect::<Result<Vec<_>,String>>()?;
         let checked=check_stage_bundle_v28(&manifest,&sources)?;
         if checked.bytes()!=borsh::to_vec(self).map_err(|e|e.to_string())?.len() as u64{return Err("stage28 original full-source canonical extent changed".into());}
         Ok((checked,sources))

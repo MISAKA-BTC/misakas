@@ -20,6 +20,9 @@ use std::collections::BTreeMap;
 pub mod bounded14;
 pub mod bounded28;
 pub mod source14;
+pub mod source28;
+pub mod composition32;
+pub mod court32;
 
 pub const INPUT_COUNT_MAX_V12: usize = 16;
 pub const INPUT_RAW_BYTES_MAX_V12: u128 = 16 << 20;

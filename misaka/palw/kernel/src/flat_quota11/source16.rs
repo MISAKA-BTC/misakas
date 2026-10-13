@@ -51,6 +51,15 @@ pub(super) fn derive_source_plan_from_stage_v28(class:&crate::flat_inputs12::bou
     admission.checked_add(&guarantee)?.within(&quota.plan)?;
     Ok(SourcePlanV16{class:class.root(),parameter:class.source().parameters().root(),inventory:class.source().inventory_root(),quota:quota.root(),job_plan:r.root(),requests,admission,answer,guarantee})
 }
+pub(super) fn derive_source_plan_from_text_v29(plan:&text29::CheckedTextQuotaV29,pc:&ParamCommitmentsV1,quota:&QuotaPolicyV11,requests:u32)->Result<SourcePlanV16,String>{
+    quota.check()?;let r=plan.plan().record();if requests==0||requests>1<<20||pc.root()!=r.parameter_root{return Err("text29 source quote original real-PC/count differs".into());}
+    let admission=action_envelope(SOURCE_JOURNAL_BYTES_V16 as u128*64,SOURCE_JOURNAL_BYTES_V16,None)?;
+    let bytes=plan.restore_bytes().checked_add(SOURCE_ANSWER_MAX_BYTES_V16).and_then(|n|n.checked_add(SOURCE_JOURNAL_BYTES_V16)).ok_or("text29 original source restore extent overflow")?;
+    let mut answer=action_envelope(native_action_metadata_v11(r.native_restore_work,r.native_post_carrier_cap,SOURCE_ANSWER_MAX_BYTES_V16,false)?,bytes,None)?.checked_add(&admission)?;include_native_post_io_v11(&mut answer,r.native_post_carrier_cap)?;include_source_court_io_v11(&mut answer,pc)?;
+    let guarantee=answer.checked_mul(requests.checked_mul(2).ok_or("text29 original source attempt overflow")?)?;admission.checked_add(&guarantee)?.within(&quota.plan)?;
+    Ok(SourcePlanV16{class:plan.class(),parameter:pc.root(),inventory:plan.source(),quota:quota.root(),job_plan:r.root(),requests,admission,answer,guarantee})
+}
+pub(super) fn from_checked_text_admission_v29(checked:text29::CheckedTextSourceAdmissionV29,plan:&SourcePlanV16)->Result<CheckedSourceAdmissionV16,String>{let(binding,consent,source,operator,epoch)=checked.into_parts();if source!=plan.root()||binding.class_id!=plan.class||binding.quota_plan_root!=plan.job_plan||binding.policy_root!=plan.quota||consent==[0;64]||operator==[0;64]||epoch.network_interval!=binding.admitted_interval{return Err("text29 source bridge lacks original private source/consent/operator/epoch".into());}Ok(CheckedSourceAdmissionV16{binding,consent,producer_operator:operator,epoch})}
 /// Raw fixed documentary record. It grants no capacity; its expected root must
 /// come from original native consent18/obligation membership, never a carrier.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

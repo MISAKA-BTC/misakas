@@ -224,8 +224,51 @@ fn job_step(
         {
             return Err(refused("native GC physical owner/cooldown/original consent remains or differs"));
         }
-        global.retire(&mut lease, lease_root).map_err(refused)?;
-        Some(global)
+        let queue = if r.aux.contains_key(&(EXECUTION_POLICY_TABLE_V11, key(&(27u8, job)))) {
+            use crate::palw_native_queue_v30::*;
+            let qp = &builder
+                .extras
+                .kernel_route
+                .as_ref()
+                .and_then(|e| e.native_final.as_ref())
+                .ok_or_else(|| refused("native queue30 trusted original policy absent"))?
+                .policy
+                .queue_policy;
+            let qraw = r
+                .aux
+                .get(&(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8))))
+                .ok_or_else(|| refused("native GC original queue30 global absent"))?;
+            if qraw.len() > NATIVE_QUEUE_ROW_LIMIT_V30 {
+                return Err(refused("native GC queue30 global cap"));
+            }
+            let (qr, mut q): (Digest, NativeQueueGlobalV30) =
+                borsh::from_slice(qraw).map_err(|_| refused("native GC queue30 global grammar"))?;
+            let (lr, mut l): (Digest, NativeQueueLeaseV30) = r
+                .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(30u8, job, 1u8)))
+                .ok_or_else(|| refused("native GC original queue30 lease absent"))?;
+            if q.root() != qr || l.root() != lr {
+                return Err(refused("native GC original queue30 roots differ"));
+            }
+            let closed = CheckedNativeQueueClosureV30::from_current_native(
+                job,
+                h.funded_job_root,
+                lr,
+                lease_root,
+                book.root(),
+                ctx.daa_score,
+                false,
+            )
+            .map_err(refused)?;
+            q.retire(&mut global, qp, &mut l, &mut lease, &closed).map_err(refused)?;
+            Some(q)
+        } else {
+            if r.aux.contains_key(&(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)))) {
+                return Err(refused("native GC old23 cannot consume unowned queue30 lease"));
+            }
+            global.retire(&mut lease, lease_root).map_err(refused)?;
+            None
+        };
+        Some((global, queue))
     } else {
         None
     };
@@ -265,7 +308,11 @@ fn job_step(
         collected_daa: ctx.daa_score,
     };
     write_shard(builder, &shard, job);
-    if let Some(global) = capacity_release {
+    if let Some((global, queue)) = capacity_release {
+        if let Some(q) = queue {
+            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(q.root(), q))));
+            builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, job, 1u8)), None);
+        }
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(global.root(), global))));
         for k in [key(&(22u8, job)), key(&(22u8, job, 1u8)), key(&(22u8, job, 2u8))] {
             builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, k, None);

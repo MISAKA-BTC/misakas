@@ -88,11 +88,15 @@ pub fn prove_native_payouts_v32(state: &PalwChainStateV2) -> Result<PalwFactProo
 /// Nonwire, private mint. It proves original native rows at a pinned inner
 /// state root; it does not prove PoW/fork choice, a Final or coin redemption.
 pub struct VerifiedNativeAuxRowsV32<'a> {
+    state: Hash64,
     root: Hash64,
     ledger: Hash64,
     rows: &'a [(Vec<u8>, Vec<u8>)],
 }
 impl<'a> VerifiedNativeAuxRowsV32<'a> {
+    pub fn state_root(&self) -> Hash64 {
+        self.state
+    }
     pub fn root(&self) -> Hash64 {
         self.root
     }
@@ -130,6 +134,7 @@ pub fn verify_native_aux_v32<'a>(
         return Err("native audit32 aux rows do not open the original kernel aux position".into());
     }
     Ok(VerifiedNativeAuxRowsV32 {
+        state: pinned_inner_state,
         root,
         ledger: Hash64::from_bytes(commitment[..64].try_into().unwrap()),
         rows: &proof.collection.rows,
@@ -178,4 +183,81 @@ pub fn verify_native_payouts_v32<'a>(
         return Err("native audit32 duplicate or reordered payout key".into());
     }
     Ok(&proof.collection.rows)
+}
+
+/// Authenticated readonly payout table. An observation is not a redeemed
+/// transaction or an unspent-output proof.
+pub struct VerifiedNativePayoutRowsV32<'a> {
+    state: Hash64,
+    rows: &'a [(Vec<u8>, Vec<u8>)],
+}
+impl<'a> VerifiedNativePayoutRowsV32<'a> {
+    pub fn state_root(&self) -> Hash64 {
+        self.state
+    }
+    pub fn rows(&self) -> &'a [(Vec<u8>, Vec<u8>)] {
+        self.rows
+    }
+}
+pub fn verify_native_payout_rows_v32<'a>(
+    proof: &'a PalwFactProofV1,
+    pinned_inner_state: Hash64,
+) -> Result<VerifiedNativePayoutRowsV32<'a>, String> {
+    Ok(VerifiedNativePayoutRowsV32 { state: pinned_inner_state, rows: verify_native_payouts_v32(proof, pinned_inner_state)? })
+}
+/// Re-derive every audit field from proven original rows. No serialized audit
+/// DTO, producer truth flag, or caller-made private view is a minting input.
+/// The caller pins its own chain/header/selected-parent and ruleset first;
+/// SDK's anchored wrapper authenticates this DAA against that parent header.
+pub fn derive_native_execution_audit_from_proofs_v32(
+    auxiliary: &VerifiedNativeAuxRowsV32<'_>,
+    payouts: &VerifiedNativePayoutRowsV32<'_>,
+    parameters: &crate::config::params::Params,
+    daa: u64,
+    job: [u8; 64],
+) -> Result<crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27, String> {
+    if auxiliary.state != payouts.state
+        || !parameters.palw_native_final_active_at_v27(daa)
+        || !parameters.palw_funded_execution_active_at_v11(daa)
+    {
+        return Err("native audit32 original proof state or independent owning fences differ".into());
+    }
+    let mut rows = std::collections::BTreeMap::new();
+    for (k, v) in auxiliary.rows {
+        // Keys were bounded and authenticated BEFORE any native row decode.
+        let (table, key): (u8, Vec<u8>) = borsh::from_slice(k).map_err(|_| "native audit32 exact original auxiliary key")?;
+        if rows.insert((table, key), v.clone()).is_some() {
+            return Err("native audit32 duplicate original row".into());
+        }
+    }
+    let mut queue = std::collections::BTreeMap::new();
+    for (k, v) in payouts.rows {
+        if k.len() != 64 || v.len() != 72 {
+            return Err("native audit32 fixed payout row extent".into());
+        }
+        let id: Hash64 = borsh::from_slice(k).map_err(|_| "native audit32 payout key grammar")?;
+        let p: crate::palw_state_v2::PalwPayoutV2 = borsh::from_slice(v).map_err(|_| "native audit32 payout value grammar")?;
+        if queue.insert(id, p).is_some() {
+            return Err("native audit32 duplicate original payout".into());
+        }
+    }
+    let domain =
+        crate::palw_attempt_v2::palw_network_domain_v2_for(parameters.net.to_string().as_bytes(), Some(parameters.genesis.hash))
+            .as_bytes();
+    let view = PalwChainStateV2::native_execution_audit_from_authenticated_rows_v27(
+        &rows,
+        domain,
+        daa,
+        auxiliary.state.as_bytes(),
+        auxiliary.ledger.as_bytes(),
+        auxiliary.root.as_bytes(),
+        &queue,
+        job,
+    )?;
+    if view.record().original_final_policy
+        != parameters.palw_native_final_v27.as_ref().ok_or("native audit32 original trusted Final policy absent")?.policy.root()
+    {
+        return Err("native audit32 original Final consent differs from independently pinned Params".into());
+    }
+    Ok(view)
 }

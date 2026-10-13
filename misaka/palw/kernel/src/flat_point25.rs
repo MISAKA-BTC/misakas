@@ -454,12 +454,18 @@ fn authenticate<'a>(
     Ok(Input::Proof(o, dtype, shape.to_vec(), k))
 }
 pub fn verify_flat_point_fault_v25(c: &PointContextV25<'_>, f: &FlatPointFaultV25) -> Result<(), DismissalV1> {
-    f.structure().map_err(|_| bad("malformed point filing"))?;
-    if c.court_id != ordinary_point_court_id_v25() {
-        return Err(bad("wrong opt-in ordinary point court"));
-    }
-    let wire = common::size_with_limit(f, POINT_FAULT_MAX_BYTES_V25).map_err(|_| bad("point filing byte cap"))?;
-    let pr = common::prepare(&c.base)?;
+    f.structure().map_err(|_|bad("malformed point filing"))?;
+    if c.court_id != ordinary_point_court_id_v25() {return Err(bad("wrong opt-in ordinary point court"));}
+    common::size_with_limit(f,POINT_FAULT_MAX_BYTES_V25).map_err(|_|bad("point filing byte cap"))?;
+    let pr=common::prepare(&c.base)?;
+    verify_point_prepared_v25(c,f,&pr)
+}
+/// Private evaluator bridge for canonical V2 state wiring32. Its new external
+/// contract/court/resource root is checked by that typed wrapper before entry.
+/// The public v25 path above constructs exactly its original frozen wiring.
+pub(crate) fn verify_point_prepared_v25(c:&PointContextV25<'_>,f:&FlatPointFaultV25,pr:&PreparedV1<'_>)->Result<(),DismissalV1>{
+    f.structure().map_err(|_|bad("malformed point filing"))?;
+    let wire=common::size_with_limit(f,POINT_FAULT_MAX_BYTES_V25).map_err(|_|bad("point filing byte cap"))?;
     let output = f.output.node.as_ref().unwrap();
     let (p, s, n) = (output.position, output.occurrence, output.node);
     let scope = relation_priced_v25(

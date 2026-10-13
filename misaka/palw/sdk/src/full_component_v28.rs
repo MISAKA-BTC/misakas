@@ -104,8 +104,8 @@ pub fn write_complete_pipeline_v28(
     let sources = classes
         .iter()
         .map(|c| {
-            misaka_palw_kernel::flat_inputs12::source14::FlatStageSourceWireV14 {
-                version: 14,
+            misaka_palw_kernel::flat_inputs12::source28::FlatStageSourceWireV28 {
+                version: 28,
                 program_bytes: c.source().program().encode(),
                 inventory_root: c.source().inventory_root(),
                 source_parameters: c.source().parameters().clone(),
@@ -229,7 +229,7 @@ pub fn produce_fresh_complete_pipeline_v28(
     tokenizer: Digest,
     mut metadata: serde_json::Value,
     manifest: &CheckedComponentManifestV28,
-    sources: &[misaka_palw_kernel::flat_inputs12::source14::CheckedStageSourceV14],
+    sources: &[misaka_palw_kernel::flat_inputs12::source28::CheckedStageSourceV28],
     maximum_file_bytes: u64,
     tensor: &mut dyn FnMut(u16, u16, Option<u16>, &mut dyn std::io::Write) -> Result<(), String>,
 ) -> Result<[u8; 32], String> {

@@ -55,6 +55,8 @@ def make_plan(cohort: Path, commands: Path, out: Path, network: str, genesis: st
     members or change their source revision/context/task/components. An absent
     mapping becomes an explicit all-stage NOT_RUN, rather than substitution.
     """
+    if out.parent.resolve() != commands.parent.resolve():
+        raise ValueError("freeze-plan output must retain command/source-resolution base directory")
     doc, mappings = runner.read_json(cohort), runner.read_json(commands)
     ac.valid_design(doc)
     by_id = mappings.get("members", {})
@@ -63,20 +65,23 @@ def make_plan(cohort: Path, commands: Path, out: Path, network: str, genesis: st
     entries = []
     for member in doc["members"]:
         command = by_id.get(member["id"], {})
+        resolved, _ = runner.resolve_original_member(member, command, commands.parent)
         scope = command.get("scope", {})
         if scope and (scope.get("repository") != member["repository"] or scope.get("revision") != member.get("revision")
-                or scope.get("context_max") != member.get("source_declared_context_max")
-                or scope.get("complete_task") != member.get("advertised_task")):
+                or scope.get("context_max") != resolved.get("source_declared_context_max")
+                or scope.get("complete_task") != resolved.get("advertised_task")):
             raise ValueError("command scope changes original frozen member")
         entries.append({"id": member["id"], "scope": scope,
-                        "task_components": member.get("required_task_components", []),
-                        "stages": command.get("stages", {})})
+                        "task_components": resolved.get("required_task_components", []),
+                        "stages": command.get("stages", {}),
+                        **({"original_source_resolution": command["original_source_resolution"]} if command.get("original_source_resolution") else {})})
     plan = {"schema": runner.SCHEMA, "cohort_sha256": ac.digest(cohort), "target_share": .90,
             "required_stages": list(ac.STAGES), "fidelity_thresholds": runner.FIDELITY_THRESHOLDS,
             "execution_policy": "full-original-context-and-all-advertised-components;no-substitution;missing-fails",
             "network": network, "genesis": genesis, "members": entries}
     if mappings.get("receipt_window_command") is not None:
         plan["receipt_window_command"] = mappings["receipt_window_command"]
+        plan["receipt_window_contract"] = mappings.get("receipt_window_contract", {})
     runner.validate_plan(doc, plan, ac.digest(cohort))
     ac.write(out, plan)
     return {"schema": "misaka.rfc02.frozen-run-plan-preparation.v1", "plan_sha256": ac.digest(out),

@@ -51,27 +51,15 @@ pub fn derive_stage_quota_v28(class:&CheckedStageClassV28,job:&CheckedStageJobV2
     let work=maximum.worst_court_work.max(source_bound.work);
     let scratch=maximum.worst_court_scratch_bytes.max(source_bound.scratch_bytes);
     if filing>16<<20 || work>1<<34 || scratch>256<<20 {return Err("stage28 full original court25 exceeds independent capacities".into());}
-    let mut leaves=1u64;
-    for d in &source.program().params {
-        let shape:Vec<usize>=d.shape.iter().map(|x|*x as usize).collect();
-        let layout=crate::merkle3::LayoutV3::try_of(&shape).ok_or("stage28 real source geometry")?;
-        leaves=leaves.max(layout.leaves(crate::merkle::AXIS_ROW)).max(layout.leaves(crate::merkle::AXIS_COL));
-    }
-    let depth=if leaves<=1{0}else{64-(leaves-1).leading_zeros()};
-    let operands=maximum.relations.iter().try_fold(0u64,|n,r|r.operand_leaves.iter().try_fold(0u64,|a,b|a.checked_add(*b).ok_or("stage28 operand count overflow")).map(|s|n.max(s)))?;
-    // Public localization authenticates both original-PC geometry and the
-    // committed segmented node/flat-value tree. Independent maximum depth
-    // dominates every later actual position and every unrolled occurrence.
-    let nodes=maximum.node_commitments_bytes_per_claim.div_ceil(64).max(1);
-    let trace_depth=if nodes<=1{0}else{128-(nodes-1).leading_zeros() as u64};
-    let requests_per_owner=u32::try_from(operands.checked_add(depth as u64).and_then(|n|n.checked_add(trace_depth)).and_then(|n|n.checked_add(64+4)).ok_or("stage28 source/trace localization sequence overflow")?).map_err(|_|"stage28 source sequence overflow")?;
+    let maximum_program=class.template().lengths.program(class.template().lengths.maxima)?;
+    let requests_per_owner=super::super::text29::complete_public_callback_bound_v29(&maximum_program,class.maximum_scope(),job.combined_parameters())?;
     let source_wire=class.source_restore_bytes();
     let class_wire=borsh::to_vec(class.wire()).map_err(|e|e.to_string())?.len() as u64;
     let restore_bytes=source_wire.checked_add(class_wire).and_then(|n|n.checked_add(u64::try_from(job.input_raw_bytes()).ok()?)).and_then(|n|n.checked_add(16384)).ok_or("stage28 original restore extent overflow")?;
     let restore_work=restore_bytes.checked_mul(restore_bytes).and_then(|n|n.checked_mul(64)).and_then(|n|n.checked_add(restore_bytes.checked_mul(1024)?)).ok_or("stage28 original restore work overflow")?;
     let program=job.program().v1_view();
     let prepared=crate::element::PreparedV1::without_scope(&program,None)?;
-    let outputs=match job.program().output {misaka_palw_tir::program_v2::OutputDecl::Rows{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
+    let outputs=match job.program().output {misaka_palw_tir::program_v2::OutputDecl::Rows{..}|misaka_palw_tir::program_v2::OutputDecl::Logits{..}=>job.job().positions as u64,misaka_palw_tir::program_v2::OutputDecl::Final{..}=>1,_=>return Err("stage28 output semantics".into())};
     let post=outputs.checked_mul(crate::element::node_opening_bytes_v1(prepared.node_count)).and_then(|n|n.checked_add(crate::seg::segment_count_v1(job.job().positions) as u64*64+4096)).ok_or("stage28 original Commit carrier overflow")?;
     let full=filing.checked_add(restore_bytes).ok_or("stage28 full restore filing overflow")?;
     let mut actions=[
@@ -179,7 +167,7 @@ impl StageJobBookV28 {
     /// source/trace/own owner rows, genuine pending closure and exact coin queue
     /// before calling. A route contains only a job key, never these authorities.
     pub fn finalize(&mut self,n:&NativeStageFinalV28)->Result<StageSettlementV28,String>{
-        if self.terminal!=StageTerminalV28::Challengeable||self.settlement.is_some()||n.job!=self.id()||n.original!=self.original_root()||Some(n.claim)!=self.claim||n.consent!=self.consent||n.contract!=self.contract||n.final_policy!=self.final_policy||n.final_basis!=self.final_basis||n.physical!=self.physical||n.producer_operator!=self.producer_operator||self.final_after.is_none_or(|at|n.established<=at)||n.established>self.deadline||n.pending_units!=0||n.retained_owners!=0||n.source_original!=self.source_plan||!n.original_source_closed||!n.original_source_equivalent||!n.original_trace_closed||n.actual_escrow!=self.reward||n.actual_producer_credit!=self.reward||n.producer_queue==[0;64]||n.original_native_conditions==[0;64]{return Err("stage28 Final lacks exact original measured/economic/source/delivery/closure/actual income authority".into());}
+        if self.terminal!=StageTerminalV28::Challengeable||self.settlement.is_some()||n.job!=self.id()||n.original!=self.original_root()||Some(n.claim)!=self.claim||n.consent!=self.consent||n.contract!=self.contract||n.final_policy!=self.final_policy||n.final_basis!=self.final_basis||n.physical!=self.physical||n.producer_operator!=self.producer_operator||self.final_after.is_none_or(|at|n.established<=at)||n.pending_units!=0||n.retained_owners!=0||n.source_original!=self.source_plan||!n.original_source_closed||!n.original_source_equivalent||!n.original_trace_closed||n.actual_escrow!=self.reward||n.actual_producer_credit!=self.reward||n.producer_queue==[0;64]||n.original_native_conditions==[0;64]{return Err("stage28 Final lacks exact original measured/economic/source/delivery/closure/actual income authority".into());}
         let s=StageSettlementV28{original:self.original_root(),terminal:StageTerminalV28::Final,claim:self.claim,proof:n.original_native_conditions,established:n.established,escrow_debit:self.reward,producer_credit:self.reward,requester_credit:0,actual_slash:0,finder_credit:0,burned:0};self.escrow=0;self.terminal=StageTerminalV28::Final;self.settlement=Some(s.clone());Ok(s)
     }
     pub fn refund_unclaimed(&mut self,daa:u64)->Result<StageSettlementV28,String>{

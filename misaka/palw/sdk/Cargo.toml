@@ -12,9 +12,14 @@ repository.workspace = true
 [features]
 # The fused unit-row kernels on the GPU (macOS), behind the node's `--palw-tir-metal`.
 metal = ["misaka-palw-tir-exec/metal"]
+# Read-only independent native audit collection; default SDK stays offline.
+native-rpc = ["dep:kaspa-wrpc-client", "dep:kaspa-rpc-core", "dep:tokio"]
 
 [dependencies]
 kaspa-consensus-core.workspace = true
+kaspa-wrpc-client = { workspace = true, optional = true }
+kaspa-rpc-core = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"], optional = true }
 kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
 # RFC-0002 Phase F: IR artifacts (the PALWTIR1 container) and their manifest.
@@ -78,3 +83,8 @@ misaka-palw-tir-sketch = { path = "../tir/sketch" }
 libcrux-ml-dsa.workspace = true
 # The streamed-root test converts on pools of one and of seven threads.
 rayon.workspace = true
+
+[[bin]]
+name = "palw-native-audit-fetch"
+path = "src/bin/palw-native-audit-fetch.rs"
+required-features = ["native-rpc"]

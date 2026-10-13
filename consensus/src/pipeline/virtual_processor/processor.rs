@@ -719,6 +719,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_native_final_v27: Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
     pub(super) palw_stage_execution_v28: Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     pub(super) native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+    /// Immutable owning ruleset for independent native proof exporters.
+    pub(super) native_redemption_params_v33: Arc<Params>,
     /// `Params::palw_fork_choice_commitment_v1` (RFC-0009 L2): past it a header commits its selected parent's post-state as
     /// `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`. Every site that produces or checks a header root goes through
     /// [`Self::palw_committed_root_v1`]; `None` everywhere, where that is `state.state_root()` byte for byte.
@@ -1416,6 +1418,7 @@ impl VirtualStateProcessor {
             palw_stage_execution_v14: params.palw_stage_execution_v14.clone(),
             palw_native_final_v27: params.palw_native_final_v27.clone(),
             palw_stage_execution_v28: params.palw_stage_execution_v28.clone(),
+            native_redemption_params_v33: Arc::new(params.clone()),
             native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22::from_consensus_params(
                 params,
             ),
