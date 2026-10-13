@@ -366,9 +366,10 @@ pub fn palw_recurrence_layers_v1(profile: &PalwShapeProfileV3) -> u64 {
 
 /// **Bytes of the recurrence state a hybrid holds, for the whole job** — flat in the context: one
 /// `k × v` state per head per recurrence layer and the convolution's `kernel` most recent rows
-/// over the concatenated q/k/v channels, `i32` each. The channel width is priced at `3 × heads ×
-/// k` (the q and k projections at the v-head count, an over-statement where the k heads are fewer
-/// — the safe direction, and a few hundred KB a layer either way). Zero for a dense graph.
+/// over the concatenated q/k/v channels, `i32` each. The channel width is priced at `2 × heads ×
+/// k + heads × v` (q and k at the v-head count, conservative where k heads are
+/// fewer). The v width is independent of k; assuming three k widths undercounts
+/// a legal graph with wider value heads. Zero for a dense graph.
 pub fn palw_gdn_state_bytes_v1(profile: &PalwShapeProfileV3) -> u64 {
     let layers = palw_recurrence_layers_v1(profile);
     if layers == 0 {
@@ -377,7 +378,8 @@ pub fn palw_gdn_state_bytes_v1(profile: &PalwShapeProfileV3) -> u64 {
     let heads = u64::from(profile.gdn_heads);
     let (k, v) = (u64::from(profile.gdn_head_k_dim), u64::from(profile.gdn_head_v_dim));
     let state = heads.saturating_mul(k).saturating_mul(v);
-    let conv = u64::from(profile.gdn_conv_kernel).saturating_mul(3).saturating_mul(heads).saturating_mul(k);
+    let channels = heads.saturating_mul(k.saturating_mul(2).saturating_add(v));
+    let conv = u64::from(profile.gdn_conv_kernel).saturating_mul(channels);
     layers.saturating_mul(state.saturating_add(conv)).saturating_mul(4)
 }
 
@@ -517,6 +519,9 @@ pub fn palw_resource_profile_v1(
     limits: PalwRuntimeLimitsV1,
     capture: PalwCaptureRetentionV1,
 ) -> Option<PalwResourceProfileV1> {
+    if matches!(capture, PalwCaptureRetentionV1::Fold { retain_level } if retain_level > 40) {
+        return None; // no clamped level may masquerade as an actual capture bound
+    }
     let attention_layers = palw_attention_layers_v1(profile);
     let kv_dim = u64::from(profile.attn_kv_heads).saturating_mul(u64::from(profile.attn_head_dim));
     let heads = u64::from(profile.attn_heads);
@@ -908,6 +913,31 @@ mod tests {
         assert_eq!(p.end_rows, 15);
         assert_eq!(p.kv_resident_bytes, 15 * 28 * 2 * 256 * 4);
         assert!(p.kv_resident_bytes < 1 << 20);
+    }
+
+    #[test]
+    fn recurrence_convolution_prices_independent_value_width_and_invalid_fold_is_unknown() {
+        use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v7};
+        let mut profile = qwen36_profile_v7(QWEN36_35B_A3B).unwrap();
+        profile.gdn_head_k_dim = 64;
+        profile.gdn_head_v_dim = 192;
+        let heads = u64::from(profile.gdn_heads);
+        let layers = palw_recurrence_layers_v1(&profile);
+        let wanted = layers * (heads * 64 * 192 + u64::from(profile.gdn_conv_kernel) * heads * (2 * 64 + 192)) * 4;
+        assert_eq!(palw_gdn_state_bytes_v1(&profile), wanted);
+        let context = job(&profile, 1, 1);
+        assert!(
+            palw_resource_profile_v1(
+                &profile,
+                &context,
+                1,
+                PalwRuntimeProfileV1::Q36KvI32,
+                PalwResourceRoleV1::Producer,
+                LIMITS,
+                PalwCaptureRetentionV1::Fold { retain_level: 41 }
+            )
+            .is_none()
+        );
     }
 
     /// **The held hybrid row, priced** — the dense tier's twin, found on ibm 2026-09-23 08:07Z:
