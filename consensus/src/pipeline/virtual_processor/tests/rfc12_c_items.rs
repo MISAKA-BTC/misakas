@@ -351,7 +351,24 @@ async fn rfc12_c2_a_pruned_join_with_evm_state_installs_the_sidecars_and_follows
 
     // ---- the sidecars, as the wire carries them ---------------------------------------------------------------------------
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire_palw).expect("the wire bytes decode");
-    joiner.vp().import_pruning_point_palw_state(pp, carriage).expect("the carriage installs against P's child's committed root");
+    let before_tip = joiner.vp().palw_state_v2_store.read().tip_key().unwrap();
+    let unknown_class = Hash64::from_u64_word(0x12_c2ffff);
+    assert!(!carriage.classes.contains_key(&unknown_class));
+    assert!(
+        joiner.vp().import_pruning_point_palw_snapshot(pp, carriage.clone(), Some((vec![(unknown_class, vec![0])], true)),).is_err(),
+        "a valid state root does not authorize an unrelated declaration"
+    );
+    assert_eq!(
+        joiner.vp().palw_state_v2_store.read().tip_key().unwrap(),
+        before_tip,
+        "declaration refusal precedes publishing any state generation"
+    );
+    assert!(joiner.vp().palw_class_carriage_store.read().get(unknown_class).is_none());
+    let declarations = source.api().palw_class_carriages_for_snapshot_v1(&carriage, false).unwrap();
+    joiner
+        .vp()
+        .import_pruning_point_palw_snapshot(pp, carriage, Some((declarations, false)))
+        .expect("state and execution declarations install in the same recovery batch");
     let (at, imported) = joiner.chain.tip_state();
     assert_eq!(at, pp);
     assert_eq!(imported.state_root(), root_at(&source, pp), "the imported PALW state is P's, root for root");

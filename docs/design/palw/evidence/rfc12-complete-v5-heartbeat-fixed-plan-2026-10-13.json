@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc12-actual-complete-check-with-normal-recovery-miner",
+  "salt": "7575757575757575757575757575757575757575757575757575757575757575",
+  "workflowTimeoutSeconds": 9000,
+  "factoryTimeoutSeconds": 60,
+  "maximumCarrierFeeSompi": 100000000,
+  "maximumBindingReservationSompi": 10000000000,
+  "maximumCompleteCheckFeeSompi": 100000000,
+  "resourceLimits": {
+    "schemaVersion": 1,
+    "kind": "rfc12-construction-resource-bounds",
+    "maximumOwnedProcessRssKiB": 2097152,
+    "maximumOwnedDatabaseLogicalBytes": 2147483648,
+    "maximumProbeMs": 2000,
+    "maximumFactorySeconds": 180,
+    "samplePeriodMs": 250
+  },
+  "executableHashes": {
+    "/tmp/misaka-rfc67812-runtime/rfc12-private-node-v5": "82b1d0716f34734a7a9a3961dd3eb25dacdc828ee92f9ce7a3970cc578b248f4",
+    "/tmp/misaka-rfc67812-runtime/misaka-cli-v5": "5d312670fd2b063c7026e64bee622192b664e7ef046880ef36d9e5d1a079f6e6"
+  },
+  "driverSha256": "600691bc84b2275e57443ed5699f5a06da31abce269a33f2eaa3ca51407a9dac",
+  "scope": "actual signed registration, observer recovery mining, binding maturity, exhaustive code-fixture complete-check, cold reopen across three independent private v5 processes; no mature useful-work/fork/pruned/market/security inference",
+  "consensusClockInjected": false,
+  "recoveryClock": "ordinary B heartbeat miner enabled only after signed DAA-0 registration inclusion; shipped cadence and windows unchanged"
+}

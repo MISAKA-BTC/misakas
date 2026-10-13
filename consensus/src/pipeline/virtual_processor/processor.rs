@@ -121,7 +121,7 @@ use rayon::{
     ThreadPool,
     prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator},
 };
-use rocksdb::WriteBatch;
+use rocksdb::{WriteBatch, WriteOptions};
 use std::{
     cmp::min,
     collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque},
@@ -3432,8 +3432,14 @@ impl VirtualStateProcessor {
         // single header read on every current network.
         self.update_epoch_accumulator(&mut batch, dns_sink);
 
-        // Flush the batch changes
-        self.db.write(batch).unwrap();
+        // Served native publication history must survive loss of the page cache
+        // together with its selected-chain/UTXO generation. Below retirement
+        // preserve the historical asynchronous write policy.
+        if self.headers_store.get_daa_score(dns_sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
+            self.write_pruning_import_barrier(batch);
+        } else {
+            self.db.write(batch).unwrap();
+        }
 
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(virtual_write);
@@ -5547,6 +5553,18 @@ impl VirtualStateProcessor {
         );
     }
 
+    /// Import recovery barriers must survive loss of the process and its page
+    /// cache. In particular, an asynchronous incomplete marker is insufficient
+    /// before clearing a previously stable UTXO set. The closing barrier also
+    /// flushes preceding sidecar/copy writes to this DB's WAL before publishing
+    /// the stable generation. A failed barrier is fatal: staged store caches
+    /// cannot be served after an unsuccessful durable commit.
+    pub(crate) fn write_pruning_import_barrier(&self, batch: WriteBatch) {
+        let mut options = WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
+    }
+
     pub fn pruning_import_session(&self) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
         self.pruning_meta_stores.read().import_session().map_err(|e| {
             PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
@@ -5593,7 +5611,7 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         meta.set_import_session(&mut batch, &state).map_err(unavailable)?;
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(unavailable)?;
-        self.db.write(batch).expect("writing pruning import authority cannot fail");
+        self.write_pruning_import_barrier(batch);
         Ok(token)
     }
 
@@ -5644,7 +5662,7 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         meta.set_import_session(&mut batch, state)
             .map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, format!("import phase: {e}")))?;
-        self.db.write(batch).expect("writing pruning import phase cannot fail");
+        self.write_pruning_import_barrier(batch);
         Ok(())
     }
 
@@ -5701,7 +5719,7 @@ impl VirtualStateProcessor {
             meta.set_import_session(&mut batch, state).expect("staging the UTXO import phase cannot fail");
         }
         meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
-        self.db.write(batch).expect("writing an incomplete UTXO import cannot fail");
+        self.write_pruning_import_barrier(batch);
         meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
         Ok(())
     }
@@ -5741,7 +5759,7 @@ impl VirtualStateProcessor {
             let mut pruning_meta_write = self.pruning_meta_stores.write();
             pruning_meta_write.set_utxoset_position(&mut batch, new_pruning_point).unwrap();
             pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-            self.db.write(batch).unwrap();
+            self.write_pruning_import_barrier(batch);
         }
 
         // Preserve the existing metadata -> virtual copy lock order. Never wait for a
@@ -5816,7 +5834,7 @@ impl VirtualStateProcessor {
             self.utxo_multisets_store.set_batch(&mut batch, new_pruning_point, imported_utxo_multiset.clone()).unwrap();
 
             let statuses_write = self.statuses_store.set_batch(&mut batch, new_pruning_point, StatusUTXOValid).unwrap();
-            self.db.write(batch).unwrap();
+            self.write_pruning_import_barrier(batch);
             drop(statuses_write);
         }
 
@@ -5915,7 +5933,7 @@ impl VirtualStateProcessor {
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
-        self.db.write(batch).expect("writing the verified import completion cannot fail");
+        self.write_pruning_import_barrier(batch);
         Ok(())
     }
 
@@ -6064,7 +6082,7 @@ impl VirtualStateProcessor {
         // crash here must make IBD retry all sidecars, never reuse old stable UTXOs.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
+        self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         *readiness_memo = None;
         drop(pruning_point_read);
@@ -6182,8 +6200,36 @@ impl VirtualStateProcessor {
         pruning_point: BlockHash,
         carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
     ) -> PruningImportResult<()> {
+        self.import_pruning_point_palw_snapshot(pruning_point, carriage, None)
+    }
+
+    /// Install state and its execution declarations as one recovery generation.
+    /// Validation of the complete offered set precedes every store mutation.
+    pub(crate) fn import_pruning_point_palw_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: Option<(Vec<(kaspa_hashes::Hash64, Vec<u8>)>, bool)>,
+    ) -> PruningImportResult<()> {
+        kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(pruning_point, None)
+            .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
+        };
+        let declaration_rows = if let Some((offered, complete)) = declarations {
+            self.palw_validate_snapshot_declarations_v1_impl(&carriage, &offered, complete).map_err(|why| {
+                PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("snapshot declarations: {why}"))
+            })?;
+            offered.into_iter().map(|(id, bytes)| {
+                let class = &carriage.classes[&id]; // membership was checked above
+                (id, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                    registered_daa: class.registered_daa,
+                    artifact_root: class.artifact_root,
+                    carriage: bytes,
+                })
+            }).collect::<Vec<_>>()
+        } else {
+            Vec::new()
         };
         let context_error = |e: StoreError| {
             PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {e}"))
@@ -6286,8 +6332,14 @@ impl VirtualStateProcessor {
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
         let mut batch = WriteBatch::default();
+        // Match ordinary block commit's PALW -> class-index lock order, and
+        // retain both guards until the complete generation is durable.
+        let mut store = self.palw_state_v2_store.write();
+        let mut class_store = self.palw_class_carriage_store.write();
+        for (id, row) in declaration_rows {
+            class_store.insert_batch(&mut batch, id, row).expect("staging a verified snapshot declaration cannot fail");
+        }
         {
-            let mut store = self.palw_state_v2_store.write();
             store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
             // The same state, also as this node's servable snapshot. Without it a node that just
             // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
@@ -6301,7 +6353,7 @@ impl VirtualStateProcessor {
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
+        self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         Ok(())
     }
@@ -6539,7 +6591,7 @@ impl VirtualStateProcessor {
         // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
-        self.db.write(batch).unwrap();
+        self.write_pruning_import_barrier(batch);
         overlay_commit.committed();
         drop(pruning_meta_write);
         Ok(())
