@@ -714,6 +714,8 @@ pub struct VirtualStateProcessor {
     /// Resolved in ONE place, [`Self::palw_kernel_route_at`]. Never armable by a real network (its validation refuses every
     /// height); a test builds the config without that validation.
     pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_funded_execution_v11: Option<kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
+    pub(super) palw_stage_execution_v14: Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
     /// `Params::palw_fork_choice_commitment_v1` (RFC-0009 L2): past it a header commits its selected parent's post-state as
     /// `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`. Every site that produces or checks a header root goes through
     /// [`Self::palw_committed_root_v1`]; `None` everywhere, where that is `state.state_root()` byte for byte.
@@ -1407,6 +1409,8 @@ impl VirtualStateProcessor {
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
             palw_probabilistic_constraints_v1: params.palw_probabilistic_constraints_v1,
+            palw_funded_execution_v11: params.palw_funded_execution_v11.clone(),
+            palw_stage_execution_v14: params.palw_stage_execution_v14.clone(),
             palw_fork_choice_commitment_v1: params.palw_fork_choice_commitment_v1,
             palw_panel_free_v1: params.palw_panel_free_v1.clone(),
             palw_typed_roots_v1: params.palw_typed_roots_v1,

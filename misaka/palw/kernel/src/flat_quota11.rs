@@ -27,6 +27,9 @@ pub use sharded::*;
 pub mod discovery13;
 #[cfg(test)]
 mod protected_tests;
+/// Explicit typed-stage bindings reuse the frozen 21-axis accounting engine;
+/// they cannot enter the legacy text admission constructors.
+pub mod stage14;
 
 pub const QUOTA_AXES_V11: usize = 21;
 pub const FUTURE_ACTION_KINDS_V11: usize = 6;

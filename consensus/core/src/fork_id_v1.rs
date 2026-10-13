@@ -813,6 +813,14 @@ mod tests {
                 })
             }
             // codex RFC-7 final's prepaid source fees (inner 61/62): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_stage_execution_v14" => {
+                params.palw_stage_execution_v14 =
+                    Some(crate::palw_flat_stage_v14::PalwStageExecutionFenceV14::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_funded_execution_v11" => {
+                params.palw_funded_execution_v11 =
+                    Some(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]));
+            }
             "palw_beacon_source_fee_v1" => {
                 params.palw_beacon_source_fee_v1 =
                     Some(crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1::unapproved_probe_at(at))

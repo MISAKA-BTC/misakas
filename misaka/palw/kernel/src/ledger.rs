@@ -1097,6 +1097,8 @@ impl KernelLedgerV1 {
             | KernelRouteObjectV1::RevealFlatModelProofV9 { .. }
             | KernelRouteObjectV1::ExpireFlatModelSealV9 { .. }
             | KernelRouteObjectV1::DemandFlatModelUnitV9 { .. }
+            | KernelRouteObjectV1::FundedExecutionV11 { .. }
+            | KernelRouteObjectV1::StageExecutionV14 { .. }
             | KernelRouteObjectV1::AnswerFlatModelUnitV9 { .. }
             | KernelRouteObjectV1::SettleFlatModelDemandV9 { .. }
             | KernelRouteObjectV1::PostFlatModelVectorV7 { .. }

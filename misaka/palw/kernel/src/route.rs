@@ -120,6 +120,11 @@ pub const TAG_FUND_BEACON_SOURCE_FEE_V1: u8 = 61;
 pub const TAG_OPT_IN_PAID_BEACON_SOURCE_V1: u8 = 62;
 pub const MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1: usize = 256;
 pub const MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1: usize = 448;
+/// Explicit funded execution grammar, separately fenced by the native consumer.
+pub const TAG_FUNDED_EXECUTION_V11: u8 = 63;
+pub const MAX_FUNDED_EXECUTION_BYTES_V11: usize = (1 << 20) + (16 << 10);
+pub const TAG_STAGE_EXECUTION_V14: u8 = 64;
+pub const MAX_STAGE_EXECUTION_BYTES_V14: usize = 2 << 20;
 
 /// Per-variant ceilings on the encoded object (version byte included), in bytes. A consumer's mass limit is tighter; these only
 /// bound what the kernel will ever parse.
@@ -596,6 +601,18 @@ pub enum KernelRouteObjectV1 {
         source_terms: Digest,
         fee_terms: Digest,
     } = 62,
+    /// Native-owned nonce, original escrow, quotas, courts and terminal credits.
+    /// A bare ledger cannot apply these actions or trust a caller's settlement.
+    FundedExecutionV11 {
+        action: u8,
+        body: Vec<u8>,
+    } = 63,
+    /// Explicit typed external-stage namespace. Source/class/funded actions
+    /// require their independent native14 policy and never use text11 grants.
+    StageExecutionV14 {
+        action: u8,
+        body: Vec<u8>,
+    } = 64,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -742,6 +759,8 @@ impl KernelRouteObjectV1 {
             Self::OptInBeaconSource { .. } => TAG_OPT_IN_BEACON_SOURCE_V1,
             Self::FundBeaconSourceFee { .. } => TAG_FUND_BEACON_SOURCE_FEE_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
+            Self::FundedExecutionV11 { .. } => TAG_FUNDED_EXECUTION_V11,
+            Self::StageExecutionV14 { .. } => TAG_STAGE_EXECUTION_V14,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
             Self::PostPromptTile { .. } => TAG_POST_PROMPT_TILE_V1,
@@ -800,6 +819,22 @@ impl KernelRouteObjectV1 {
                 RefusalKindV1::Oversized,
                 format!("{} bytes past the {limit}-byte ceiling", bytes.len()),
             ));
+        }
+        if tag == TAG_FUNDED_EXECUTION_V11 {
+            let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated funded action frame".into()))?;
+            if rest.get(1).is_none_or(|a| *a > 12)
+                || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
+            {
+                return Err(bad(RefusalKindV1::Malformed, "funded action/count differs from exact bounded carrier".into()));
+            }
+        }
+        if tag == TAG_STAGE_EXECUTION_V14 {
+            let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
+            if rest.get(1).is_none_or(|a| *a > 12)
+                || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
+            {
+                return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
+            }
         }
         if tag == TAG_REGISTER_FLAT_MODEL_CANDIDATE_V7 {
             bounded_flat_candidate_v7(rest).map_err(|e| bad(RefusalKindV1::Malformed, e))?;
@@ -990,6 +1025,8 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_OPT_IN_BEACON_SOURCE_V1 => "OptInBeaconSource",
         TAG_FUND_BEACON_SOURCE_FEE_V1 => "FundBeaconSourceFee",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
+        TAG_FUNDED_EXECUTION_V11 => "FundedExecutionV11",
+        TAG_STAGE_EXECUTION_V14 => "StageExecutionV14",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
         TAG_POST_PROMPT_TILE_V1 => "PostPromptTile",
@@ -1052,6 +1089,8 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_OPT_IN_BEACON_SOURCE_V1 => MAX_OPT_IN_BEACON_SOURCE_BYTES_V1,
         TAG_FUND_BEACON_SOURCE_FEE_V1 => MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1,
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
+        TAG_FUNDED_EXECUTION_V11 => MAX_FUNDED_EXECUTION_BYTES_V11,
+        TAG_STAGE_EXECUTION_V14 => MAX_STAGE_EXECUTION_BYTES_V14,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
         TAG_POST_PROMPT_TILE_V1 => MAX_POST_PROMPT_TILE_BYTES_V1,
@@ -1179,9 +1218,9 @@ mod tests {
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
         assert!((38..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "38/39 are reserved for G14R, not allocated");
-        // 61/62: codex RFC-7 final prepaid source fees (codex used 22/23); 63 is the first unallocated inner kind.
-        assert!(max_encoded_bytes_of_tag(63).is_none(), "63 is not allocated");
-        for tag in (22..=37).chain(40..=62) {
+        // 61/62 retain prepaid source fees; 63 is explicit funded execution11.
+        assert!(max_encoded_bytes_of_tag(65).is_none(), "65 is not allocated");
+        for tag in (22..=37).chain(40..=64) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
         }
         assert_eq!(name_of_tag(TAG_FUND_BEACON_SOURCE_FEE_V1), "FundBeaconSourceFee");

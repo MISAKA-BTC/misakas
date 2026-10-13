@@ -5238,6 +5238,16 @@ impl VirtualStateProcessor {
                 "a kernel route chunk is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string()
             );
         }
+        // Target 6 belongs to the independently scheduled funded execution
+        // namespace. Check it before even reading the opener or verifying bytes.
+        if matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. })
+            && !self.palw_kernel_inner_fence_at(
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11,
+                daa_score,
+            )
+        {
+            return Err("a funded proof chunk is refused below palw_funded_execution_v11".to_string());
+        }
         let record = state
             .bond(&chunk.opener)
             .ok_or_else(|| "a kernel route chunk is signed by a bond this chain does not have".to_string())?;
@@ -5313,6 +5323,12 @@ impl VirtualStateProcessor {
                     "a salted typed-root claim is refused: palw_panel_free_v1 and palw_typed_roots_v1 are not both in force at this block"
                         .to_string()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14 => {
+                    "a typed stage is refused: palw_stage_execution_v14 is not in force at this block".to_string()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11 => {
+                    "a funded execution is refused: palw_funded_execution_v11 is not in force at this block".to_string()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelRefutationSealV1 => {
                     "a sealed candidate refutation is refused: palw_panel_free_v1 and palw_model_refutation_seal_v1 are not both in force \
                      at this block (RFC-0002 P0)"
@@ -5330,6 +5346,16 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> bool {
         match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14 => {
+                self.palw_stage_execution_v14.as_ref().is_some_and(|f| {
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)
+                }) && self.palw_kernel_opv_at(daa_score)
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11 => {
+                self.palw_funded_execution_v11.as_ref().is_some_and(|f| {
+                    f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)
+                }) && self.palw_kernel_opv_at(daa_score)
+            }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {
                     f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)
@@ -6659,6 +6685,24 @@ impl VirtualStateProcessor {
             ruleset[..32].copy_from_slice(&self.palw_kernel_route_ruleset_id.as_bytes());
             kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
                 network_domain: self.palw_network_domain_v2(),
+                stage_execution: self
+                    .palw_stage_execution_v14
+                    .as_ref()
+                    .filter(|f| {
+                        f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                            && f.activation.is_active(daa_score)
+                            && self.palw_kernel_opv_at(daa_score)
+                    })
+                    .cloned(),
+                funded_execution: self
+                    .palw_funded_execution_v11
+                    .as_ref()
+                    .filter(|f| {
+                        f.activation != kaspa_consensus_core::config::params::ForkActivation::never()
+                            && f.activation.is_active(daa_score)
+                            && self.palw_kernel_opv_at(daa_score)
+                    })
+                    .cloned(),
                 ruleset_digest: kaspa_hashes::Hash64::from_bytes(ruleset),
                 chain_genesis: self.genesis.hash,
                 #[cfg(test)]

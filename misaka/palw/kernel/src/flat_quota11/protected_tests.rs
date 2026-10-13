@@ -1050,3 +1050,117 @@ fn source_parameter_hash_payload_tree_axes_and_native_answer_capacity_are_indepe
     policy.check_native_protected_capacity(56).unwrap();
     assert!(policy.check_native_protected_capacity(u32::MAX).is_err());
 }
+
+#[test]
+fn selected_expired_gc_preserves_full_aggregates_and_all_retained_counter_guards() {
+    let mut f = fixture();
+    let key = admit(&mut f);
+    let binding = f.4.job().quota_subject(f.0.record()).unwrap();
+    let late = TrustedEpochV11::from_chain(&f.2, [232; 64], f.4.job().deadline_daa + 1).unwrap();
+    let payer = [233; 64];
+    let paid = f.6.debit_expired_terminal(&f.2, &late, payer, &binding, &f.1).unwrap();
+    let retention = f.4.claim().unwrap().retention_until;
+    let close = ex::NativeCloseSnapshotV11 {
+        current_daa: late.block_daa,
+        pending_own_proofs: 0,
+        open_da: 0,
+        latest_answer_proof_until: retention,
+        required_retained_until: retention,
+    };
+    f.4.finalize(f.0.record(), &close).unwrap();
+    f.6.mark_expired_terminal_closed(&f.2, &late, &binding, &f.0, &f.4, &paid).unwrap();
+    let terminal = check_native_quota_terminal_v11(&f.0, &f.4, &super::tests::native_terminal(&f.4)).unwrap();
+    // This projection intentionally does not include any seal. The per-job
+    // original counter still proves that a seal elsewhere prevents collection.
+    let mut hidden = load_selected(&f.6, &f.2, payer, binding.job_id, None);
+    let next = TrustedEpochV11::from_chain(&f.2, [234; 64], 1100).unwrap();
+    let before = hidden.global_row();
+    assert!(hidden.collect_closed_expired(&f.2, &next, &terminal).is_err());
+    assert_eq!(hidden.global_row(), before);
+    let mut owner = load_selected(&f.6, &f.2, f.5.seal_actor, binding.job_id, Some(key));
+    let before = owner.global_row();
+    assert!(owner.collect_expired_protected_seal(&f.2, &late, &terminal).is_err());
+    assert_eq!(owner.global_row(), before);
+    let receipt = owner.collect_expired_protected_seal(&f.2, &next, &terminal).unwrap();
+    let full = f.6.collect_expired_protected_seal(&f.2, &next, f.5.seal_actor, &key, &terminal).unwrap();
+    assert_eq!(receipt, full);
+    assert_eq!(owner.global_row(), f.6.global_row());
+    assert_eq!(owner.actor_row(), f.6.actor_row(&f.5.seal_actor).unwrap());
+    assert_eq!(owner.subject_row(), f.6.subject(&binding.job_id));
+    assert!(owner.seal_row().is_none());
+    assert!(owner.collect_expired_protected_seal(&f.2, &next, &terminal).is_err());
+    let mut collector = load_selected(&f.6, &f.2, payer, binding.job_id, None);
+    assert_eq!(
+        collector.collect_closed_expired(&f.2, &next, &terminal).unwrap(),
+        f.6.collect_closed_expired(&f.2, &next, payer, &terminal).unwrap()
+    );
+    assert_eq!(collector.global_row(), f.6.global_row());
+    assert_eq!(collector.actor_row(), f.6.actor_row(&payer).unwrap());
+    assert!(collector.subject_row().is_none());
+    assert!(collector.collect_closed_expired(&f.2, &next, &terminal).is_err());
+}
+
+#[test]
+fn public_selected_gc_charges_distinct_payer_preserves_owner_allowance_and_authenticates_fifth_row() {
+    let mut f = fixture();
+    let key = admit(&mut f);
+    let binding = f.4.job().quota_subject(f.0.record()).unwrap();
+    let late = TrustedEpochV11::from_chain(&f.2, [232; 64], f.4.job().deadline_daa + 1).unwrap();
+    let payer = [233; 64];
+    let paid = f.6.debit_expired_terminal(&f.2, &late, payer, &binding, &f.1).unwrap();
+    let retention = f.4.claim().unwrap().retention_until;
+    let close = ex::NativeCloseSnapshotV11 {
+        current_daa: late.block_daa,
+        pending_own_proofs: 0,
+        open_da: 0,
+        latest_answer_proof_until: retention,
+        required_retained_until: retention,
+    };
+    f.4.finalize(f.0.record(), &close).unwrap();
+    f.6.mark_expired_terminal_closed(&f.2, &late, &binding, &f.0, &f.4, &paid).unwrap();
+    let terminal = check_native_quota_terminal_v11(&f.0, &f.4, &super::tests::native_terminal(&f.4)).unwrap();
+    let seal = f.6.protected_seal(&key).unwrap().clone();
+    let owner = f.6.actor_row(&f.5.seal_actor).unwrap();
+    let next = TrustedEpochV11::from_chain(&f.2, [234; 64], 1100).unwrap();
+    let mut shard = load_selected(&f.6, &f.2, payer, binding.job_id, None);
+    let before = shard.global_row();
+    for fault in 0..4 {
+        let mut bad_owner = owner.clone();
+        let mut bad_seal = seal.clone();
+        let mut owner_root = owner.root();
+        let mut seal_root = seal.row_root();
+        match fault {
+            0 => owner_root[0] ^= 1,
+            1 => seal_root[0] ^= 1,
+            2 => {
+                bad_owner.retained_protected_seals = 0;
+                owner_root = bad_owner.root();
+            }
+            _ => {
+                bad_seal.key.seal_actor = payer;
+                seal_root = bad_seal.row_root();
+            }
+        }
+        assert!(
+            shard.collect_expired_protected_seal_for(&f.2, &next, &terminal, &bad_seal, &seal_root, &bad_owner, &owner_root).is_err()
+        );
+        assert_eq!(shard.global_row(), before);
+    }
+    assert!(shard.collect_expired_protected_seal_for(&f.2, &late, &terminal, &seal, &seal.row_root(), &owner, &owner.root()).is_err());
+    assert_eq!(shard.global_row(), before);
+    let (receipt, remaining_owner) =
+        shard.collect_expired_protected_seal_for(&f.2, &next, &terminal, &seal, &seal.row_root(), &owner, &owner.root()).unwrap();
+    assert_eq!(remaining_owner.actor, owner.actor);
+    assert_eq!(remaining_owner.interval, owner.interval);
+    assert_eq!(remaining_owner.network_interval, owner.network_interval);
+    assert_eq!(remaining_owner.active, owner.active);
+    assert_eq!(remaining_owner.retained_protected_seals + 1, owner.retained_protected_seals);
+    assert_eq!(shard.actor_row().interval.consumed, receipt.consumed);
+    assert_eq!(shard.global_row().network.consumed, receipt.consumed);
+    assert_eq!(shard.global_row().network.reserved, QuotaQuantitiesV11::default());
+    assert_eq!(shard.global_row().protected_seal_count, before.protected_seal_count - 1);
+    assert_eq!(shard.subject_row().unwrap().retained_protected_seals, 0);
+    let after = shard.global_row();
+    assert!(shard.collect_expired_protected_seal_for(&f.2, &next, &terminal, &seal, &seal.row_root(), &owner, &owner.root()).is_err());
+    assert_eq!(shard.global_row(), after);
+}

@@ -3128,3 +3128,68 @@ snapshot, and authorized parallel implementation. Native funded execution,
 versioned typed stage lengths/checker/court and predeclared checkpoint/cohort
 work are now proceeding on this same branch. These later changes require their
 own coherent validation and do not inherit completion from this increment.
+
+
+## Native integration snapshot — 2026-10-13
+
+The workspace branch is `codex/workspace-rfc02`, retaining `64699e960` and its
+ancestor `96813336a`. The current continuation implements prospective native
+namespaces over the existing complete-scope v7/v9 checker. This snapshot is
+**not RFC02 completion** and is not an activation or model-coverage certificate.
+
+Two independent Params fields, `palw_funded_execution_v11` and
+`palw_stage_execution_v14`, bind their complete policy roots and activation in
+raw Params/schedule identity. The existing peer-identity normalization still
+collapses an entire `Some(never)` option and normalizes prospective non-genesis
+schedules as before. A policy at genesis changes peer identity. All shipped
+presets retain `None`, and validation refuses arming while the public discovery,
+court/DA, monetary and checkpoint acceptance conditions remain open. Three
+selected fence/identity tests pass; their complete output is
+[evidence/rfc02-native-policy-fence-tests-20261013.log](evidence/rfc02-native-policy-fence-tests-20261013.log).
+
+Native inner 63 implements an original funded job: exact prepared request,
+requester collateral debit, the shared operator nonce counter, fixed selected
+quota rows, exact original Commit and producer reserve, own-seal maturity,
+computation/source courts, typed DA and paid discovery conversion. Native inner
+64 is a separate version-14 typed input/source contract: declared T/P/A maxima,
+job actual dimensions, immutable real weights/state, checked public inputs and
+original source inventory, funded job and Commit. The typed source inventory
+excludes virtual job inputs; frozen text/source/length meanings are preserved.
+The implementation is still under integration testing. Inspection found that a
+requester naming a producer must not reserve that producer's resources/recipient
+income or job slots before the producer signs exact preparation consent; this
+pre-Fund consent is pending in this snapshot and blocks release. In particular, complete
+monetary B/R/F and material-retention provenance, stage source court/DA,
+public-discovery worst bounds and honest Final/redemption are not certified by
+these partial connections.
+
+Funded proof chunks append target 6 under the funded namespace's own fence.
+Only that target uses its original paid seal's protected 32-KiB fragments and
+bounded 64-part assembly, outside the ordinary eight-group pool. Acceptance
+checks the exact outer signed fragment and its own fence; the fold must debit
+whole assembly before reconstructing/hash/decode and bind the reconstructed
+signer, action, seal and actor to the original opener/target. Old targets retain
+their bounds and independent inner-signature checks. Invalid attempts must retain
+the paid attempt; this is a node-test requirement, not inferred from codec tests.
+
+Selected quota collection now refuses closed-job deletion while the rooted
+retained count includes any unseen seal or discovery ticket. Owner collection
+uses the selected original counter. Public third-party collection additionally
+authenticates the distinct seal-owner row and charges the current caller's
+ordinary allowance for the full fixed restore/journal and collection. Native
+must atomically persist both actor rows, aggregates, subject and seal deletion.
+It cannot charge the owner's allowance, refund an earlier reservation or revive
+expired proof/discovery guarantees. Public collection tests are pending in this
+snapshot; the earlier selected owner/hidden-row test passed independently.
+
+The checkpoint panel and D_all SRS were committed before measurement. Six
+safetensors source file/hash/shape inventories pass; the GGUF panel member fails
+because required auxiliary files are absent. The fixed independent Qwen0.5
+three-task reference run records two successes and a translation failure. The
+full original context and downstream native verification/Final stages do not
+inherit those successes. The current D_all end-to-end report remains 0/128 with
+missing stages retained. These failures and NOT_RUN stages remain in the
+committed observations. The root locator uses authenticated logarithmic
+segment/position/node bisection; header/operand acquisition and terminal proof
+costs remain separate. No fixture, header-only census or reduced-context pilot
+is credited as A6/A8 full-task success.

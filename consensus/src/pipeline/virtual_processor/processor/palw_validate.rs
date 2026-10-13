@@ -3435,6 +3435,18 @@ impl VirtualStateProcessor {
                 // chunk, and the group's deposit is forfeited at its TTL). The group's rows, target and deposit are the fold's.
                 Obj::KernelRouteChunkV1 { chunk, signature } => {
                     self.palw_kernel_chunk_is_signed(state, point.daa_score, chunk, signature)?;
+                    // Native target 6 debits the original protected assembly
+                    // allowance inside the fold before reconstructing or decoding
+                    // the body. Every part already authenticates its exact bytes,
+                    // group, target and opener. The fold binds the reconstructed
+                    // inner signer/action/seal to that opener and target; repeating
+                    // assembly here would bypass the paid failed-attempt charge.
+                    if matches!(
+                        chunk.target,
+                        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. }
+                    ) {
+                        continue;
+                    }
                     match state.kernel_route().and_then(|k| k.chunk_completion_v1(chunk)) {
                         Some(Obj::KernelRouteV1 { bytes, signer, signature }) => {
                             self.palw_kernel_route_object_is_signed(state, point.daa_score, &bytes, &signer, &signature)?;

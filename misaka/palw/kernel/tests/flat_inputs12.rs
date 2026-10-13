@@ -1,3 +1,4 @@
+use misaka_palw_kernel::flat_inputs12::bounded14::*;
 use misaka_palw_kernel::{flat_inputs12::*, flat_lengths7::*, merkle3::tensor_commitment_v3, trace::ParamCommitmentsV1};
 use misaka_palw_tir::{
     DType, MapParams, ParamSource, Ref, Tensor, TensorType,
@@ -86,6 +87,490 @@ fn declaration(a: &FlatInputAdmissionV12) -> FlatInputCommitmentsV12 {
 }
 fn full_budget() -> FlatInputBudgetV12 {
     FlatInputBudgetV12 { raw_bytes: 1000, reference_bytes: 1000, attempts: 2 }
+}
+
+fn stage_job(template: &FlatInputTemplateV12) -> FlatStageJobV14 {
+    let actual = FlatJobLengthsV7 { token: 0, patch: 3, audio: 5 };
+    let a = template.specialize(actual, 3).unwrap();
+    FlatStageJobV14 {
+        version: 14,
+        template: template.root().unwrap(),
+        requester: [1; 64],
+        producer: [2; 64],
+        nonce: [3; 64],
+        actual,
+        positions: 3,
+        input_roots: declaration(&a.admission).input_roots,
+    }
+}
+
+#[test]
+fn bounded_stage14_binds_maximum_and_actual_resources_to_nonce_inputs_and_source() {
+    use misaka_palw_kernel::flat_resources10::ResourceAxisV10;
+    let (template, source, pc) = fixture();
+    let job = stage_job(&template);
+    let checked = derive_stage_job_v14(&template, &job, &pc).unwrap();
+    let a = checked.admission();
+    assert_ne!(a.max_stage_program, a.actual_stage_program);
+    assert_ne!(a.max_scope, a.actual_scope);
+    assert_ne!(a.max_resources, a.actual_resources);
+    assert_eq!(a.actual_scope, checked.scope().root());
+    assert_eq!(a.actual_resources, checked.resources().root());
+    assert_eq!(a.actual_replay, checked.replay().root());
+    assert!(
+        checked.resources().quantities.get(ResourceAxisV10::RawParameterStorage)
+            < checked.maximum_resources().quantities.get(ResourceAxisV10::RawParameterStorage)
+    );
+    let inputs = checked.acquire(&template, &pc, &Inputs::new(), &mut full_budget()).unwrap();
+    let out = InterpreterV2::new(checked.program()).unwrap().run_positions(&source, &inputs, job.positions).unwrap();
+    assert_eq!(out.iter().map(|s| s.output.data[0]).collect::<Vec<_>>(), vec![16, 32, 48]);
+    check_stage_job_v14(&template, &job, &pc, a).unwrap();
+    // Every identity and independently derived maximum/actual bound is checked.
+    for field in 0..17 {
+        let mut bad = a.clone();
+        match field {
+            0 => bad.version += 1,
+            1 => bad.template[0] ^= 1,
+            2 => bad.job[0] ^= 1,
+            3 => bad.source_parameters[0] ^= 1,
+            4 => bad.maxima.patch += 1,
+            5 => bad.max_positions += 1,
+            6 => bad.max_stage_program[0] ^= 1,
+            7 => bad.max_scope[0] ^= 1,
+            8 => bad.max_replay[0] ^= 1,
+            9 => bad.max_resources[0] ^= 1,
+            10 => bad.actual_input_admission[0] ^= 1,
+            11 => bad.actual_stage_program[0] ^= 1,
+            12 => bad.actual_scope[0] ^= 1,
+            13 => bad.actual_replay[0] ^= 1,
+            14 => bad.actual_resources[0] ^= 1,
+            15 => bad.combined_parameters[0] ^= 1,
+            _ => bad.maxima.audio += 1,
+        }
+        assert!(check_stage_job_v14(&template, &job, &pc, &bad).is_err(), "rebound admission field {field}");
+    }
+    for field in 0..8 {
+        let mut bad = job.clone();
+        match field {
+            0 => bad.requester[0] ^= 1,
+            1 => bad.producer[0] ^= 1,
+            2 => bad.nonce[0] ^= 1,
+            3 => bad.input_roots[0][0] ^= 1,
+            4 => bad.actual.patch = 4,
+            5 => bad.positions = 2,
+            6 => bad.actual.audio = 7,
+            _ => bad.positions = 4,
+        }
+        assert!(check_stage_job_v14(&template, &bad, &pc, a).is_err(), "rebound job field {field}");
+    }
+    let mut bad_pc = pc.clone();
+    let root = bad_pc.by_instance.remove(&(0, None)).unwrap();
+    bad_pc.by_instance.insert((0, Some(0)), root);
+    assert!(derive_stage_job_v14(&template, &job, &bad_pc).is_err());
+}
+
+#[test]
+fn bounded_stage14_wire_checks_input_count_before_allocation_and_preserves_v12() {
+    let (template, _, _) = fixture();
+    let job = stage_job(&template);
+    let wire = borsh::to_vec(&job).unwrap();
+    assert_eq!(FlatStageJobV14::from_bytes(&wire).unwrap(), job);
+    for end in 0..wire.len() {
+        assert!(FlatStageJobV14::from_bytes(&wire[..end]).is_err());
+    }
+    let mut bad = wire.clone();
+    bad[274..278].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(FlatStageJobV14::from_bytes(&bad).is_err());
+    let mut bad = wire.clone();
+    bad[..2].copy_from_slice(&12u16.to_le_bytes());
+    assert!(FlatStageJobV14::from_bytes(&bad).is_err());
+    let mut bad = wire;
+    bad.push(0);
+    assert!(FlatStageJobV14::from_bytes(&bad).is_err());
+    // V14 leaves the existing component root domain and admission version intact.
+    let v12 = template.specialize(job.actual, job.positions).unwrap();
+    assert_eq!(v12.admission.version, 12);
+    assert_eq!(v12.admission.root(), template.check(&v12.admission).unwrap().admission.root());
+}
+
+#[test]
+fn stage14_source_class_wires_exclude_virtual_inputs_and_bind_native_policy() {
+    use misaka_palw_kernel::flat_inputs12::source14::*;
+    let (template, _, pc) = fixture();
+    let wire = FlatStageSourceWireV14 {
+        version: 14,
+        program_bytes: template.program.encode(),
+        inventory_root: [7; 64],
+        source_parameters: pc,
+    };
+    let source = wire.check().unwrap();
+    source.check_template(&template).unwrap();
+    let encoded = borsh::to_vec(&wire).unwrap();
+    assert_eq!(FlatStageSourceWireV14::from_bytes(&encoded).unwrap(), wire);
+    for end in 0..encoded.len() {
+        assert!(FlatStageSourceWireV14::from_bytes(&encoded[..end]).is_err());
+    }
+    let mut huge = encoded.clone();
+    huge[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(FlatStageSourceWireV14::from_bytes(&huge).is_err());
+    let mut bad = wire.clone();
+    bad.source_parameters.by_instance.insert((1, None), [8; 64]);
+    assert!(bad.check().is_err(), "an external input can never become an original source weight");
+    let mut other_inventory = wire.clone();
+    other_inventory.inventory_root[0] ^= 1;
+    assert_ne!(source.id(), other_inventory.check().unwrap().id());
+    let class_wire = FlatStageClassWireV14 {
+        version: 14,
+        source_binding: source.id(),
+        length_template_bytes: template.lengths.to_bytes().unwrap(),
+        max_positions: 3,
+        policy_root: [9; 64],
+    };
+    let class = class_wire.check(&wire).unwrap();
+    class.check_job(&stage_job(&template)).unwrap();
+    let encoded_class = borsh::to_vec(&class_wire).unwrap();
+    assert_eq!(FlatStageClassWireV14::from_bytes(&encoded_class).unwrap(), class_wire);
+    let mut huge = encoded_class.clone();
+    huge[66..70].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(FlatStageClassWireV14::from_bytes(&huge).is_err());
+    for end in 0..encoded_class.len() {
+        assert!(FlatStageClassWireV14::from_bytes(&encoded_class[..end]).is_err());
+    }
+    let mut other_policy = class_wire.clone();
+    other_policy.policy_root[0] ^= 1;
+    assert_ne!(class.root(), other_policy.check(&wire).unwrap().root());
+    let mut absent_policy = class_wire.clone();
+    absent_policy.policy_root = [0; 64];
+    assert!(absent_policy.check(&wire).is_err());
+    let mut rebind = class_wire;
+    rebind.source_binding[0] ^= 1;
+    assert!(rebind.check(&wire).is_err());
+}
+
+#[test]
+fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_cannot_rebind() {
+    use misaka_palw_kernel::{
+        flat_court5::flat_profile_commitment_v5,
+        flat_execution11::{native_requester_nonce_counter_root_v11, *},
+        flat_inputs12::source14::*,
+        flat_quota11::{stage14::*, *},
+        flat_resources10::ResourceAxisV10,
+        seg::SegmentedCommitmentsV1,
+        trace::trace_v1,
+    };
+    let (template, source, pc) = fixture();
+    let source_wire = FlatStageSourceWireV14 {
+        version: 14,
+        program_bytes: template.program.encode(),
+        inventory_root: [7; 64],
+        source_parameters: pc.clone(),
+    };
+    let class_wire = FlatStageClassWireV14 {
+        version: 14,
+        source_binding: source_wire.check().unwrap().id(),
+        length_template_bytes: template.lengths.to_bytes().unwrap(),
+        max_positions: 3,
+        policy_root: [9; 64],
+    };
+    let class = class_wire.check(&source_wire).unwrap();
+    let cap = QuotaQuantitiesV11([1 << 56; 21]);
+    let policy = QuotaPolicyV11 {
+        version: 11,
+        enabled: true,
+        network_domain: [4; 64],
+        ruleset_digest: quota_ruleset_id_v11(),
+        interval_daa: 1000,
+        plan: cap.clone(),
+        block: cap.clone(),
+        actor: cap.clone(),
+        network: cap,
+        max_subjects: 16,
+        max_actors: 16,
+        future_attempts: [2, 2, 16, 2, 2, 1],
+    };
+    let execution = ExecutionPolicyV11 {
+        version: 11,
+        enabled: true,
+        network_domain: policy.network_domain,
+        quota_policy_root: policy.root(),
+        horizons: ExecutionHorizonsV11 {
+            commit_window: 10,
+            challenge_window: 10,
+            seal_maturity: 3,
+            seal_ttl: 100,
+            da_answer: 10,
+            proof_grace: 10,
+            retention: 10,
+        },
+        reward_cap: 100,
+        external_gain_cap: 10,
+        default_obligation: 20,
+        required_producer_reserve: 130,
+        finder_permille: 500,
+    };
+    let mut job = stage_job(&template);
+    job.nonce = nonce_bytes_v11(0);
+    let actual = class.check_job(&job).unwrap();
+    let plan = derive_stage_quota_v14(&class, &actual).unwrap();
+    assert_eq!(plan.plan().record().source_court_bound, native_source_court_bound_v11(source_wire.program_bytes.len(), &pc).unwrap());
+    assert_eq!(plan.plan().record().class_scope_root, class.maximum_scope().root());
+    assert_eq!(plan.plan().record().actual_scope_root, actual.scope().root());
+    let native = NativeStageFundingV14 {
+        class: class.root(),
+        source: class.source().id(),
+        policy: class.policy_root(),
+        source_matures_daa: 5,
+        source_refuted: false,
+        requester: job.requester,
+        requester_operator: [11; 64],
+        producer: job.producer,
+        producer_operator: [12; 64],
+        block: [8; 64],
+        daa: 10,
+        reward: 20,
+        original_debit: 20,
+        next_nonce: 0,
+        nonce_counter_root: native_requester_nonce_counter_root_v11(&[11; 64], 0),
+    };
+    let book = StageJobBookV14::fund(&class, &actual, &plan, &execution, &policy, &native).unwrap();
+    let raw = borsh::to_vec(&book).unwrap();
+    StageJobBookV14::from_rooted_bytes(&raw, book.root()).unwrap().check_restored(&class, &plan).unwrap();
+    let mut inflated = raw.clone();
+    inflated[468..472].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(StageJobBookV14::from_rooted_bytes(&inflated, book.root()).is_err());
+    let mut native = native;
+    native.next_nonce = 1;
+    native.nonce_counter_root = native_requester_nonce_counter_root_v11(&native.requester_operator, 1);
+    assert!(
+        StageJobBookV14::fund(&class, &actual, &plan, &execution, &policy, &native).is_err(),
+        "text11 or earlier stage nonce cannot re-enter another domain"
+    );
+    native.next_nonce = 0;
+    native.nonce_counter_root = native_requester_nonce_counter_root_v11(&native.requester_operator, 0);
+    native.original_debit = 19;
+    assert!(StageJobBookV14::fund(&class, &actual, &plan, &execution, &policy, &native).is_err());
+    let anchor = NativeStageQuotaAnchorV14 {
+        class: class.root(),
+        source: class.source().id(),
+        policy: class.policy_root(),
+        funded_book_root: book.root(),
+        job_id: book.id(),
+        original_debit_receipt: book.debit_receipt(),
+        original_debit: 20,
+        nonce: NativeRequesterNonceWitnessV11 {
+            requester: job.requester,
+            requester_operator_id: [11; 64],
+            next_nonce: 1,
+            counter_root: native_requester_nonce_counter_root_v11(&[11; 64], 1),
+        },
+        block: [8; 64],
+        daa: 10,
+        source_refuted: false,
+        source_matures_daa: 5,
+    };
+    let grant = check_stage_quota_admission_v14(&class, &book, &plan, &policy, &anchor).unwrap();
+    let epoch = TrustedEpochV11::from_chain(&policy, [8; 64], 10).unwrap();
+    let mut state = QuotaStateV11::new(&policy, epoch.clone()).unwrap();
+    state.admit_baseline(&policy, &epoch, job.producer, &grant, plan.plan()).unwrap();
+    assert!(state.admit_baseline(&policy, &epoch, job.producer, &grant, plan.plan()).is_err());
+    assert!(plan.plan().record().action_envelopes[3].get(ResourceAxisV10::CourtWork) > 0);
+    let inputs = actual.acquire(&template, &pc, &Inputs::new(), &mut full_budget()).unwrap();
+    struct Combined<'a>(&'a MapParams, &'a AuthenticatedInputsV12);
+    impl ParamSource for Combined<'_> {
+        fn param(&self, j: u16, l: Option<u16>) -> Option<Tensor> {
+            if j == 0 { self.0.param(j, l) } else { self.1.view_input(j, l) }
+        }
+    }
+    let program = actual.program().v1_view();
+    let trace = trace_v1(&program, &Combined(&source, &inputs), &[0; 3]).unwrap();
+    let commitments = SegmentedCommitmentsV1::new(
+        trace
+            .values
+            .iter()
+            .map(|p| p.iter().map(|s| s.iter().map(|t| flat_profile_commitment_v5(t).unwrap()).collect()).collect())
+            .collect(),
+    );
+    let post = (program.occurrences().len() - 1) as u16;
+    let claim = StageTraceV14 {
+        version: 14,
+        class: class.root(),
+        job_id: book.id(),
+        job_input: job.root(),
+        admission: actual.admission().root(),
+        quota: plan.root(),
+        segment_roots: commitments.segment_roots(),
+        output_openings: (0..3).map(|p| commitments.node_opening(p, post, program.logits).unwrap()).collect(),
+    };
+    assert_eq!(StageTraceV14::from_bytes(&borsh::to_vec(&claim).unwrap(), 3).unwrap(), claim);
+    let mut wrong = claim.clone();
+    wrong.output_openings[2].commitment[0] ^= 1;
+    assert!(book.clone().commit(&class, &plan, &execution, job.producer, 130, &wrong, 11).is_err());
+    assert!(book.clone().commit(&class, &plan, &execution, job.requester, 130, &claim, 11).is_err());
+    assert!(book.clone().commit(&class, &plan, &execution, job.producer, 129, &claim, 11).is_err());
+    let mut claimed = book.clone();
+    assert_eq!(claimed.commit(&class, &plan, &execution, job.producer, 130, &claim, 11).unwrap(), 130);
+    assert!(check_stage_quota_admission_v14(&class, &claimed, &plan, &policy, &anchor).is_err());
+    assert!(claimed.refund_unclaimed(book.deadline_daa() + 1).is_err());
+    let mut unclaimed = book;
+    assert_eq!(unclaimed.refund_unclaimed(unclaimed.deadline_daa() + 1).unwrap(), 20);
+    assert!(unclaimed.refund_unclaimed(unclaimed.deadline_daa() + 1).is_err());
+}
+
+#[test]
+fn stage14_full_graph_replay_localizes_media_state_fault_without_decoding_tensor_output() {
+    use misaka_palw_kernel::{
+        element::SegClaimContextV1,
+        flat_court5::{FlatHeaderV5, FlatOperandV5, FlatSegContextV5, flat_profile_commitment_v5, flat_trace_profile_id_v5},
+        flat_court9::FlatContextV9,
+        flat_detect5::{FlatPublicReadsV5, FlatReadV5},
+        flat_detect9::{FlatFindingV9, FlatHeaderReadV9, FlatHeaderValueV9, FlatPublicReadsV9, FlatValueReadV9, FlatValueV9},
+        flat_replay6::FlatReplayLimitsV6,
+        flat_replay9::{FlatReplayLimitsV9, FlatReplayResultV9, FlatReplaySessionV9},
+        job::DecodeRuleV1,
+        merkle::AXIS_ROW,
+        merkle3::{LeafOpeningV3, TreesV3},
+        merkle5::FlatLeafHashV5,
+        seg::{NodeOpeningV1, SegmentedCommitmentsV1, prompt_root_of_ids_v1},
+        trace::{TraceV1, trace_v1},
+    };
+    struct Public<'a> {
+        trace: &'a TraceV1,
+        c: &'a SegmentedCommitmentsV1,
+        calls: Cell<u32>,
+        missing: bool,
+    }
+    impl FlatPublicReadsV5 for Public<'_> {
+        fn node(&self, u: FlatReadV5) -> Option<NodeOpeningV1> {
+            self.calls.set(self.calls.get() + 1);
+            if self.missing {
+                return None;
+            }
+            self.c.node_opening(u.position, u.occurrence, u.node)
+        }
+        fn hash(&self, _: FlatReadV5) -> Option<FlatLeafHashV5> {
+            None
+        }
+    }
+    impl FlatPublicReadsV9 for Public<'_> {
+        fn header(&self, r: FlatHeaderReadV9) -> Option<Vec<u8>> {
+            let u = r.node;
+            let t = &self.trace.values[u.position as usize][u.occurrence as usize][u.node as usize];
+            let trees = TreesV3::of(t);
+            FlatHeaderValueV9 {
+                version: 9,
+                scope: r.scope,
+                header: FlatHeaderV5::Legacy {
+                    dtype: t.dtype.tag(),
+                    shape: t.shape.iter().map(|d| *d as u64).collect(),
+                    row_root: trees.row_root(),
+                    col_root: trees.col_root(),
+                },
+            }
+            .to_bytes()
+            .ok()
+        }
+        fn value(&self, r: FlatValueReadV9) -> Option<Vec<u8>> {
+            let u = r.node;
+            let t = &self.trace.values[u.position as usize][u.occurrence as usize][u.node as usize];
+            FlatValueV9 {
+                version: 9,
+                scope: r.scope,
+                value: FlatOperandV5 {
+                    node: self.c.node_opening(u.position, u.occurrence, u.node),
+                    flat: vec![],
+                    legacy: vec![LeafOpeningV3::of_trees(t, &TreesV3::of(t), AXIS_ROW, 0, 0)?],
+                },
+            }
+            .to_bytes()
+            .ok()
+        }
+    }
+    let (template, source, pc) = fixture();
+    let checked = derive_stage_job_v14(&template, &stage_job(&template), &pc).unwrap();
+    let inputs = checked.acquire(&template, &pc, &Inputs::new(), &mut full_budget()).unwrap();
+    let artifact = |j, layer| {
+        if j == 0 { source.param(j, layer) } else { inputs.view_input(j, layer) }
+    };
+    struct Source<'a>(&'a dyn Fn(u16, Option<u16>) -> Option<Tensor>);
+    impl ParamSource for Source<'_> {
+        fn param(&self, j: u16, l: Option<u16>) -> Option<Tensor> {
+            (self.0)(j, l)
+        }
+    }
+    let program = checked.program().v1_view();
+    let prompt = [0; 3];
+    let honest = trace_v1(&program, &Source(&artifact), &prompt).unwrap();
+    let e = checked.replay();
+    let r = &e.reference;
+    let limits = FlatReplayLimitsV9 {
+        reference: FlatReplayLimitsV6 {
+            position_tensor_bytes: r.position_tensor_bytes,
+            operand_tensor_bytes: r.largest_operand_tensor_bytes,
+            history_tensor_bytes: r.history_rows_tensor_bytes,
+            parameter_hash_bytes: r.parameter_hash_bytes_per_attempt,
+            trace_hash_bytes: r.trace_hash_bytes_per_attempt,
+            node_reads: r.node_reads_per_attempt,
+            hash_reads: r.hash_reads_per_attempt,
+            reply_bytes: r.reply_bytes_per_attempt,
+            attempts: 1,
+        },
+        topk_scan_work: e.topk_scan_work_per_attempt,
+        topk_auxiliary_bytes: e.topk_auxiliary_bytes,
+        selected_value_reads: e.selected_value_reads_per_attempt,
+        header_reads: e.header_reads_per_attempt,
+        scope_checker_work: e.scope_checker_work_per_attempt,
+    };
+    for mode in 0..4 {
+        let mut trace = honest.clone();
+        if mode == 1 {
+            trace.values[2][0][4].data[0] += 1;
+        }
+        let commitments = SegmentedCommitmentsV1::new(
+            trace
+                .values
+                .iter()
+                .map(|p| p.iter().map(|s| s.iter().map(|t| flat_profile_commitment_v5(t).unwrap()).collect()).collect())
+                .collect(),
+        );
+        let roots = commitments.segment_roots();
+        let mut context = FlatContextV9 {
+            scope: checked.scope(),
+            base: FlatSegContextV5 {
+                profile: flat_trace_profile_id_v5(),
+                claim: SegClaimContextV1 {
+                    program: &program,
+                    params: inputs.combined_pc(),
+                    segment_roots: &roots,
+                    positions: 3,
+                    prompt_len: 3,
+                    prompt_root: prompt_root_of_ids_v1(&prompt),
+                    inline_prompt: Some(&prompt),
+                    generated: &[0],
+                    decode: DecodeRuleV1::Greedy,
+                    encoder: None,
+                },
+            },
+        };
+        if mode == 3 {
+            context.base.claim.positions += 1;
+        }
+        let public = Public { trace: &trace, c: &commitments, calls: Cell::new(0), missing: mode == 2 };
+        let mut session = FlatReplaySessionV9::new(limits.clone());
+        let finding = checked.check_replay(&context, &mut session, &public, &artifact);
+        match mode {
+            0 => assert_eq!(finding, FlatReplayResultV9::Finding(FlatFindingV9::Clean)),
+            1 => {
+                let FlatReplayResultV9::Finding(FlatFindingV9::Fault(f)) = finding else { panic!("{finding:?}") };
+                checked.verify_fault(&context, &f).unwrap();
+            }
+            2 => assert!(matches!(finding, FlatReplayResultV9::Finding(FlatFindingV9::Demand(_)))),
+            _ => {
+                assert!(matches!(finding, FlatReplayResultV9::Inconsistent(_)));
+                assert_eq!(public.calls.get(), 0);
+                assert_eq!(session.attempts, 0);
+            }
+        }
+    }
 }
 
 #[test]
@@ -204,6 +689,8 @@ fn typed_media_input_and_prior_state_openings_bind_complete_court() {
         verify::DismissalV1,
     };
     let (template, source, pc) = fixture();
+    let job14 = stage_job(&template);
+    let checked14 = derive_stage_job_v14(&template, &job14, &pc).unwrap();
     let specialized = template.specialize(FlatJobLengthsV7 { token: 0, patch: 3, audio: 5 }, 3).unwrap();
     let declared = declaration(&specialized.admission);
     let inputs = acquire_authenticated_inputs_v12(
@@ -305,6 +792,10 @@ fn typed_media_input_and_prior_state_openings_bind_complete_court() {
             });
             let proof = FlatFaultV9::from_bytes(&proof.to_bytes().unwrap()).unwrap();
             assert_eq!(verify_flat_fault_v9(&context, &proof).map(|_| ()), if lie { Ok(()) } else { Err(DismissalV1::NoFault) });
+            assert_eq!(checked14.verify_fault(&context, &proof).map(|_| ()), if lie { Ok(()) } else { Err(DismissalV1::NoFault) });
+            let mut enlarged = FlatContextV9 { scope: context.scope, base: base() };
+            enlarged.base.claim.positions += 1;
+            assert!(matches!(checked14.verify_fault(&enlarged, &proof), Err(DismissalV1::NotAuthentic(_))));
             // Another tensor of the same declared shape cannot substitute the
             // exact job input or its authenticated predecessor state value.
             let mut borrowed = proof;

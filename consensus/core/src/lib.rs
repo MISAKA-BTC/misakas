@@ -878,4 +878,7 @@ pub mod palw_tokenizer_table_stream_v1;
 pub mod palw_flat_execution_v11;
 pub mod palw_flat_model_vector_da_v9;
 pub mod palw_flat_model_vector_v9;
+pub mod palw_flat_stage_v14;
+pub mod palw_funded_execution_v11;
+pub mod palw_stage_execution_v14;
 pub mod palw_tokenizer_owned_court_v1;

@@ -4242,3 +4242,29 @@ acceptance. A header-only report with zero measured active-kernel full-task
 Finals always has `meets_target=false` and `acceptance_status=NOT_RUN`, even
 when its shape-ready lower confidence bound exceeds 90%. Historical shape
 measurements are retained; they are not Final evidence.
+
+
+### 14.53 Prospective native funded and typed-stage namespaces
+
+Inner 63 (`FundedExecutionV11`) and inner 64 (`StageExecutionV14`) are separately
+fenced native integrations of the complete-scope checker, original requester
+escrow, principal nonce, derived shared quota and typed source/input contracts.
+Their policy identities and prospective state extensions do not change frozen
+v1/v7/v9 meanings. Funded proof chunk target 6 belongs to inner 63's owning
+fence and original protected seal, including failed fragment/assembly charges;
+it does not acquire ordinary chunk-pool priority. Typed stage14 source inventory
+covers real original weights/state and never synthetic job-input slots.
+
+Collection of an expired protected seal by a third party requires authenticated
+rows for both current payer and original seal owner, plus the complete original
+subject/global counters and terminal anchor. Price the full fixed restore and
+journal to the payer's current ordinary allowance, decrement exactly the original
+owner/subject/global retained counters, and delete once. Collection must never
+refund old guarantees or recreate a proof attempt. Empty selected maps do not
+prove absence of other retained seals or discovery tickets.
+
+These are prospective implementation contracts. The native monetary, discovery,
+court/DA and independent Final gates, real full-context/checkpoint conditions
+and A6/A8 population criteria in II.14 remain required. Shipping presets keep the
+new fields absent and arming validation remains closed. Current code and actual
+measurement status are recorded in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).

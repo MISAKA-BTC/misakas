@@ -167,6 +167,10 @@ pub struct PalwKernelRouteExtrasV1 {
     pub beacon_source: Option<crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
     /// Independent monetary fence for prepaid source contracts.
     pub beacon_source_fee: Option<crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
+    /// Independently fenced funded execution with immutable network terms.
+    pub funded_execution: Option<crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
+    /// Independent V2 external stage semantics and native policy.
+    pub stage_execution: Option<crate::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,
@@ -928,6 +932,11 @@ pub enum PalwKernelChunkTargetV1 {
         vector: Hash64,
         actor: Digest,
     } = 5,
+    /// An original mature paid native11 proof, with one private group per seal.
+    FundedProofV11 {
+        seal: Digest,
+        actor: Digest,
+    } = 6,
 }
 
 /// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
@@ -1032,12 +1041,16 @@ pub fn palw_kernel_chunks_v1(
     cap: usize,
 ) -> Result<Vec<PalwKernelChunkV1>, String> {
     use crate::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, palw_object_chunk_group_id_v1};
-    if cap == 0 || cap > PALW_OBJECT_CHUNK_MAX_BYTES {
+    let native = matches!(target, PalwKernelChunkTargetV1::FundedProofV11 { .. });
+    let count_cap = if native { 64usize } else { PALW_OBJECT_CHUNK_MAX_COUNT as usize };
+    let byte_cap =
+        if native { misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize } else { PALW_OBJECT_CHUNK_MAX_BYTES };
+    if cap == 0 || cap > byte_cap {
         return Err(format!("a chunk holds 1..={PALW_OBJECT_CHUNK_MAX_BYTES} bytes"));
     }
     let bytes = borsh::to_vec(object).map_err(|e| e.to_string())?;
     let count = bytes.len().div_ceil(cap).max(1);
-    if count > PALW_OBJECT_CHUNK_MAX_COUNT as usize {
+    if count > count_cap {
         return Err(format!("{} bytes need {count} chunks of {cap}, past {PALW_OBJECT_CHUNK_MAX_COUNT}", bytes.len()));
     }
     let group = palw_object_chunk_group_id_v1(&bytes);
@@ -1073,6 +1086,10 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
         (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV7 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV7 { vector: id, .. }) if id == vector.as_bytes())
+        }
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FundedProofV11 { seal, actor }) => {
+            palw_kernel_bond_id_v1(signer) == *actor
+                && matches!(K::decode(bytes),Ok(K::FundedExecutionV11 {action:6,body}) if body.get(..64)==Some(seal.as_slice()))
         }
         (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV9 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
@@ -1228,6 +1245,16 @@ impl PalwKernelRouteStateV1 {
                     && daa < header.liability_until)
                     .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
             }
+            PalwKernelChunkTargetV1::FundedProofV11 { seal, actor } => {
+                let original = self.execution_seal_v11(seal)?;
+                let job = self.execution_job_header_v11(&original.job_id)?;
+                (original.actor == *actor
+                    && !original.spent
+                    && job.terminal == misaka_palw_kernel::flat_execution11::ExecutionTerminalV11::Challengeable
+                    && daa >= original.mature_daa
+                    && daa < original.reveal_until)
+                    .then(|| original.reveal_until.saturating_sub(1))
+            }
             PalwKernelChunkTargetV1::FlatProofV9 { vector, actor } => {
                 let header = self.flat_model_vector_header_v3(vector)?;
                 let seal = self.flat_model_seal_v9(vector, actor)?.seal;
@@ -1247,6 +1274,9 @@ impl PalwKernelRouteStateV1 {
     /// the stored group, the assembled bytes hashing to the group id and decoding to one object. `None` otherwise — the fold refuses
     /// what this cannot assemble. (The acceptance layer checks the assembled object's own signature at this chunk.)
     pub fn chunk_completion_v1(&self, chunk: &PalwKernelChunkV1) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        if matches!(chunk.target, PalwKernelChunkTargetV1::FundedProofV11 { .. }) {
+            return self.funded_proof_chunk_completion_v11(chunk);
+        }
         if chunk.count == 0 || chunk.index >= chunk.count || chunk.bytes.is_empty() {
             return None;
         }

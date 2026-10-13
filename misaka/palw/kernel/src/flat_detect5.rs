@@ -194,6 +194,25 @@ pub(crate) fn check_flat_claim_engine<E: From<FlatFindingV5>>(
     public: &dyn FlatPublicReadsV5,
     artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
     tokens: &[u32],
+    inspect: impl FnMut(
+        &PreparedV1<'_>,
+        FlatReadV5,
+        &Tensor,
+        &dyn Fn() -> Result<Vec<Tensor>, String>,
+        &dyn Fn() -> Option<PromptTileOpeningV1>,
+    ) -> Result<(), E>,
+) -> Result<(), E> {
+    check_flat_claim_engine_mode(c, public, artifact, tokens, true, inspect)
+}
+
+/// V14's explicit external stage mode uses the same authenticated full graph
+/// replay but does not assign decoder semantics to a Rows/Final output.
+pub(crate) fn check_flat_claim_engine_mode<E: From<FlatFindingV5>>(
+    c: &FlatSegContextV5<'_>,
+    public: &dyn FlatPublicReadsV5,
+    artifact: &dyn Fn(u16, Option<u16>) -> Option<Tensor>,
+    tokens: &[u32],
+    check_decode: bool,
     mut inspect: impl FnMut(
         &PreparedV1<'_>,
         FlatReadV5,
@@ -262,12 +281,14 @@ pub(crate) fn check_flat_claim_engine<E: From<FlatFindingV5>>(
                 }
             }
         }
-        if c.claim.encoder.is_none() && p + 1 >= c.claim.prompt_len {
+        if check_decode && c.claim.encoder.is_none() && p + 1 >= c.claim.prompt_len {
             let index = p + 1 - c.claim.prompt_len;
             let s = (values.len() - 1) as u16;
             let n = c.claim.program.logits;
             let t = &values[s as usize][n as usize];
-            let delivered = c.claim.generated[index as usize];
+            let Some(&delivered) = c.claim.generated.get(index as usize) else {
+                return Err(TirError::new(TirErrorKind::Operand, "decoder claim lacks its delivered token"));
+            };
             if c.claim.decode.select(t) != Some(delivered) {
                 let finding = (|| {
                     let node = read_node(c, &pr, public, FlatReadV5::node(p, s, n))?;

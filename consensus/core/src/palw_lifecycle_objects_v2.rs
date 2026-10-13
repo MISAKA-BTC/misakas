@@ -1683,17 +1683,23 @@ pub enum PalwKernelInnerFenceV1 {
     BeaconSourceOptInV1,
     /// Signed prepaid source escrow; needs this monetary fence plus source opt-in and OPV.
     BeaconSourceFeeV1,
+    /// Explicit funded execution, independently bound network policy.
+    FundedExecutionV11,
+    /// Independent typed source and Rows/Final execution contract, inner64.
+    StageExecutionV14,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
         Self::ModelRefutationSealV1,
         Self::BeaconSourceOptInV1,
         Self::BeaconSourceFeeV1,
+        Self::FundedExecutionV11,
+        Self::StageExecutionV14,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1704,6 +1710,8 @@ impl PalwKernelInnerFenceV1 {
             Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
             Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
             Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
+            Self::FundedExecutionV11 => "palw_funded_execution_v11",
+            Self::StageExecutionV14 => "palw_stage_execution_v14",
         }
     }
 }
@@ -1779,6 +1787,8 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
         K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
         K::FundBeaconSourceFee { .. } | K::OptInPaidBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1),
+        K::FundedExecutionV11 { .. } => Some(PalwKernelInnerFenceV1::FundedExecutionV11),
+        K::StageExecutionV14 { .. } => Some(PalwKernelInnerFenceV1::StageExecutionV14),
     }
 }
 
@@ -1845,6 +1855,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     // codex RFC-7 final (R6781-F merge): codex numbered these 22 / 23 — RFC-02's on the integration line — so they follow 41–60.
     (61, "FundBeaconSourceFee", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
     (62, "OptInPaidBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
+    (63, "FundedExecutionV11", Some(PalwKernelInnerFenceV1::FundedExecutionV11)),
+    (64, "StageExecutionV14", Some(PalwKernelInnerFenceV1::StageExecutionV14)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2133,6 +2145,16 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         PalwA2SlotV1::KernelInner { lo: 61, hi: 62 },
         "palw_beacon_source_fee_v1",
         "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource (prepaid source fees)",
+        true,
+    ),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 63, hi: 63 }, "palw_funded_execution_v11", "RFC-0002 native funded execution11", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 64, hi: 64 }, "palw_stage_execution_v14", "RFC-0002 typed external stage14", true),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux table 112 stage14 source/class/funded job catalogs, immutable policy and source liabilities; shared text11/stage14 requester operator nonce counter",
+        },
+        "palw_stage_execution_v14",
+        "RFC-0002 typed source namespace and bounded T/P/A stage admission",
         true,
     ),
     // codex RFC-6/7/8/12 final (lane R6781-F): the state its kinds write, each only past its own dormant fence (below it no row

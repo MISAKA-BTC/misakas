@@ -597,6 +597,8 @@ mod tests {
 }
 
 pub mod flat_checkpoint_fixture9;
+pub mod flat_root_locator_v9;
 pub mod flat_snapshot_v9;
 pub mod flat_streamed_locator_v9;
 pub mod flat_vector_v9;
+pub mod real_checkpoint_fixture11;

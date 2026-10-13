@@ -150,7 +150,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
-    fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
+    pub(super) fn note_kernel_bond(&mut self, bond: &PalwBondKeyV2) -> misaka_palw_kernel::hash::Digest {
         let kid = palw_kernel_bond_id_v1(bond);
         self.write_kernel_row(
             PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
@@ -952,6 +952,12 @@ pub(super) fn apply_kernel_route_object_v1(
     }
     // Inner 22/23 are consensus-owned state/collateral courts, never bare-ledger moves.
     match &object {
+        KernelRouteObjectV1::FundedExecutionV11 { action, body } => {
+            return super::palw_flat_execution_fold_v11::apply(builder, ctx, signer, *action, body);
+        }
+        KernelRouteObjectV1::StageExecutionV14 { action, body } => {
+            return super::palw_flat_stage_fold_v14::apply(builder, ctx, signer, *action, body);
+        }
         KernelRouteObjectV1::SealModelRefutationV4 { slot, seal } => {
             return super::palw_model_refutation_seal_fold_v4::seal(builder, ctx, signer, *slot, seal);
         }
@@ -1607,6 +1613,9 @@ pub(super) fn apply_kernel_route_chunk_v1(
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
+    if matches!(chunk.target, PalwKernelChunkTargetV1::FundedProofV11 { .. }) {
+        return super::palw_flat_execution_fold_v11::apply_chunk(builder, ctx, chunk);
+    }
     if chunk.count == 0 || chunk.count > PALW_OBJECT_CHUNK_MAX_COUNT {
         return Err(PalwStateV2Error::ChunkCountOutOfRange { count: chunk.count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
     }
@@ -1842,6 +1851,9 @@ fn candidate_withdraw_held_v9(
     ledger: &KernelLedgerV1,
     owner: &misaka_palw_kernel::hash::Digest,
 ) -> Result<bool, PalwStateV2Error> {
+    if super::palw_flat_execution_fold_v11::candidate_withdraw_held(builder, ctx, ledger, owner)? {
+        return Ok(true);
+    }
     use crate::palw_flat_model_vector_v3::{FLAT_MODEL_VECTOR_TABLE_V3, FlatModelVectorHeaderV3};
     use borsh::BorshDeserialize;
     let policy = route_policies(builder)?.0;

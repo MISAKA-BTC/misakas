@@ -247,6 +247,20 @@ pub struct PalwTirModelInventoryV2<'p> {
 }
 
 impl<'p> PalwTirModelInventoryV2<'p> {
+    /// Stage14 explicitly names the V2 real/source namespace. Its v1 court
+    /// view appends virtual external inputs, which must never become inventory
+    /// leaves or R/PC mismatch subjects. This does not extend v4/v5's constructor.
+    pub fn new_stage14(program: &'p TirProgramV1, stage: &misaka_palw_tir::program_v2::TirProgramV2) -> Result<Self, String> {
+        misaka_palw_tir::validate_v2::validate_v2(stage).map_err(|e| e.to_string())?;
+        if stage.v1_view() != *program {
+            return Err("stage14 inventory requires the exact canonical maximum V2 view".into());
+        }
+        let model_params = stage.params.len();
+        let leaves = inventory_leaf_count_prefix(program, model_params).map_err(|e| e.to_string())?;
+        let descriptor = misaka_palw_kernel::hash::object_id(b"misaka-palw/kernel/stage-source-inventory/v14", &(14u16, stage));
+        Ok(Self { program, descriptor, model_params, leaves })
+    }
+
     /// Only exact implemented v4/v5 descriptors are accepted. Unknown or modified semantics
     /// cannot borrow v5's input exclusion merely by copying its memory-model number.
     pub fn new(descriptor: &misaka_palw_kernel::descriptor::KernelDescriptorV1, program: &'p TirProgramV1) -> Result<Self, String> {

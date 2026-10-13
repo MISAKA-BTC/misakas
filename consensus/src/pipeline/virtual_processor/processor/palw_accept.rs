@@ -694,6 +694,18 @@ impl VirtualStateProcessor {
                 );
                 continue;
             }
+            // Older builds cannot decode target 6. Below its own fence it
+            // consumes neither ordinary chunk slots nor a funded reservation.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::KernelRouteChunkV1 { chunk, .. } = &object
+                && matches!(chunk.target, kaspa_consensus_core::palw_kernel_route_v1::PalwKernelChunkTargetV1::FundedProofV11 { .. })
+                && !self.palw_kernel_inner_fence_at(
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11,
+                    point.daa_score,
+                )
+            {
+                info!("Block {block}: a funded proof chunk was dropped below palw_funded_execution_v11, and the block stands");
+                continue;
+            }
             // **Lane BUDGET: below `palw_model_bond_allocation_v1` a capital assignment (tag 140) is dropped by name**, first and charged
             // nothing (an older build cannot decode it and skips it, A-2).
             if kaspa_consensus_core::palw_state_v2::palw_object_is_bond_budget_v1(&object)
