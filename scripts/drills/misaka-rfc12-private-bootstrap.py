@@ -150,6 +150,28 @@ def registration_window(bootstrap, daa):
     return dict(validFromDaa=start, validUntilDaa=end, observedDaa=daa)
 
 
+def activate_complete_clock(drill, bootstrap):
+    # The shipped salted policy's attempt lane does not advance DAA at genesis.
+    # Enable the ordinary bondless recovery miner only AFTER the DAA-0 signed
+    # registration is included. Starting it earlier can expire that envelope.
+    # Restart an observer, preserving A's live producer fee-outpoint rollover.
+    role = 'B'
+    address = bootstrap['seats'][1]['payAddress']
+    if not isinstance(address, str) or not address:
+        raise ValueError('the exact factory must supply the owned heartbeat pay address')
+    flag = '--palw-heartbeat-miner-address=' + address
+    if any(argument.startswith('--palw-heartbeat-miner-address')
+            for node in drill.plan['nodes'].values() for argument in node['argv']):
+        raise AssertionError('the registration phase must not have a recovery miner enabled')
+    drill.kill(role)
+    drill.plan['nodes'][role]['argv'].append(flag)
+    drill.start(role)
+    drill.wait(lambda: ready(drill, role, bootstrap), 'cold observer with ordinary heartbeat miner and exact private identity')
+    drill.join_link(role, 'A')
+    rows = drill.wait(lambda: agreement(drill, bootstrap), 'native registration/binding retained after enabling recovery mining')
+    return dict(role=role, minerAddress=address, consensusClockInjected=False, agreement=rows)
+
+
 def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_check=False,
         maximum_binding=None, maximum_check=None, progress=None):
     for role in ('A', 'B', 'JOIN'):
@@ -184,6 +206,7 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
         progress(evidence, False)
     complete_evidence = None
     if complete_check:
+        evidence['recoveryClock'] = activate_complete_clock(drill, bootstrap)
         complete_evidence = complete.run(drill, sampler, cli, salt, fixture, bootstrap, budget,
             maximum_binding, maximum_check, agreement, rpc_read, command)
         evidence['completeCheck'] = complete_evidence

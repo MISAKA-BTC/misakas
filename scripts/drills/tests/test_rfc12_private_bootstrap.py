@@ -47,6 +47,7 @@ class DriverControls(unittest.TestCase):
                 patch.object(driver, 'rpc_read', return_value=dict(virtualDaaScore=0)), \
                 patch.object(driver, 'command', side_effect=[preview, sent]), \
                 patch.object(driver, 'agreement', return_value=included), \
+                patch.object(driver, 'activate_complete_clock', return_value=dict(consensusClockInjected=False)), \
                 patch.object(driver.complete, 'run', side_effect=later_refusal):
             with self.assertRaisesRegex(driver.transport.Blocked, 'complete verdict refused'):
                 driver.run(FakeDrill(), None, Path('/owned/cli'), '74' * 32, Path('/owned/fixture'),
@@ -59,6 +60,40 @@ class DriverControls(unittest.TestCase):
         self.assertEqual(result['evidence']['included'], included)
         self.assertEqual(result['evidence']['carrierBudget']['spent'], 25)
         self.assertIsNone(result['evidence']['completeCheck'])
+
+    def test_complete_clock_restarts_observer_and_preserves_producer_fee_rollover(self):
+        events = []
+
+        class FakeDrill:
+            plan = dict(nodes={role: dict(argv=['--owned=' + role] + (['--palw-produce'] if role == 'A' else []))
+                for role in ('A', 'B', 'JOIN')})
+
+            def kill(self, role):
+                events.append(('kill', role))
+
+            def start(self, role):
+                events.append(('start', role))
+
+            def join_link(self, role, target):
+                events.append(('link', role, target))
+
+            def wait(self, predicate, label):
+                return predicate()
+
+        drill = FakeDrill()
+        before = list(drill.plan['nodes']['A']['argv'])
+        observed = {role: dict(sink='known-owned', virtualDaaScore=0) for role in ('A', 'B', 'JOIN')}
+        bootstrap = dict(seats=[dict(payAddress='unused'), dict(payAddress='owned-heartbeat-pay')])
+        with patch.object(driver, 'ready', return_value=True), patch.object(driver, 'agreement', return_value=observed):
+            result = driver.activate_complete_clock(drill, bootstrap)
+        self.assertEqual(events, [('kill', 'B'), ('start', 'B'), ('link', 'B', 'A')])
+        self.assertEqual(drill.plan['nodes']['A']['argv'], before)
+        self.assertEqual(drill.plan['nodes']['B']['argv'][-1], '--palw-heartbeat-miner-address=owned-heartbeat-pay')
+        self.assertFalse(result['consensusClockInjected'])
+        self.assertEqual(result['agreement'], observed)
+        with self.assertRaisesRegex(AssertionError, 'registration phase'):
+            driver.activate_complete_clock(drill, bootstrap)
+        self.assertEqual(len(events), 3, 'duplicate activation must start/kill no additional child')
 
     def test_registration_window_refuses_actual_daa_zero_before_carrier_spend(self):
         original = dict(envelopeValidFromDaa=1, envelopeValidUntilDaa=32)
