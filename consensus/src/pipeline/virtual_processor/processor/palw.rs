@@ -1977,21 +1977,16 @@ impl VirtualStateProcessor {
         }
         let registered_root = class.artifact_root;
         let record = self.palw_class_carriage_store.read().get(class_id)?;
-        let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 = borsh::from_slice(&record.carriage).ok()?;
-        // The id IS the profile's hash; a row that fails this was corrupted, and absent (None)
-        // fails closed at every consumer.
-        if carriage.profile.shape_profile_id() != class_id {
+        if record.artifact_root != registered_root || record.registered_daa != class.registered_daa {
             return None;
         }
-        // **The canonical job is NOT covered by the class id, so the row is re-tied to the class
-        // the chain currently holds.** `class_id` hashes the profile alone; a registration that
-        // lost a reorg and the one that won can share an id while differing in the artifact root
-        // (which weights) and the canonical job (which prices the class). Existence alone let a
-        // losing branch's canonical through — this pins the root, so a row describing another
-        // registration of the same graph is refused rather than served.
-        if record.artifact_root != registered_root {
-            return None;
-        }
+        let carriage = kaspa_consensus_core::palw_class_sync_v1::validate_class_declaration_v1(
+            class_id,
+            class,
+            state.class_semantics_v1(&class_id),
+            &record.carriage,
+        )
+        .ok()?;
         Some((carriage.profile, carriage.canonical))
     }
 
@@ -2015,6 +2010,180 @@ impl VirtualStateProcessor {
             .into_iter()
             .filter_map(|class_id| store.get(class_id).map(|record| (class_id, record.carriage.clone())))
             .collect()
+    }
+
+    pub fn pruning_point_palw_state_shared_v1_impl(
+        &self,
+        point: BlockHash,
+    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>> {
+        let params = self.palw_state_params_v2.as_ref()?;
+        self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, point).ok().flatten()
+    }
+
+    /// Declarations bound to the requested snapshot, never to this node's tip.
+    /// Strict coverage is negotiated by protocol 107; old peers retain their
+    /// historical manual-material fallback. Frozen graphs are retained as sync
+    /// material, while the execution getter still refuses to serve them.
+    pub fn palw_class_carriages_for_snapshot_v1_impl(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        let store = self.palw_class_carriage_store.read();
+        let mut declarations = Vec::new();
+        for (id, class) in &snapshot.classes {
+            if snapshot.tir_classes.contains_key(id) || snapshot.gen_classes.contains_key(id) {
+                continue; // These carry their IR/program records in the state itself.
+            }
+            if self.palw_snapshot_builtin_class_v1(*id, class, snapshot.class_semantics.get(id))? {
+                continue;
+            }
+            let Some(record) = store.get(*id) else {
+                if complete {
+                    return Err(format!("snapshot class {id} has no declaration index row"));
+                }
+                continue;
+            };
+            if record.artifact_root != class.artifact_root || record.registered_daa != class.registered_daa {
+                if complete {
+                    return Err(format!("snapshot class {id} declaration index belongs to another registration"));
+                }
+                continue;
+            }
+            match kaspa_consensus_core::palw_class_sync_v1::validate_class_declaration_v1(
+                *id,
+                class,
+                snapshot.class_semantics.get(id),
+                &record.carriage,
+            ) {
+                Ok(_) => {
+                    if complete {
+                        self.palw_snapshot_declaration_identity_v1(*id, class, snapshot.class_semantics.get(id), &record.carriage)?;
+                    }
+                    declarations.push((*id, record.carriage.clone()));
+                }
+                Err(error) if complete => return Err(error),
+                Err(_) => {}
+            }
+        }
+        Ok(declarations)
+    }
+
+    /// Validate the offered set before a durable pruning-state installation.
+    pub fn palw_validate_snapshot_declarations_v1_impl(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: &[(kaspa_hashes::Hash64, Vec<u8>)],
+        complete: bool,
+    ) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for (id, bytes) in declarations {
+            if !seen.insert(*id) {
+                return Err(format!("duplicate snapshot declaration {id}"));
+            }
+            let class = snapshot.classes.get(id).ok_or_else(|| format!("unknown snapshot declaration {id}"))?;
+            if snapshot.tir_classes.contains_key(id) || snapshot.gen_classes.contains_key(id) {
+                return Err(format!("class {id} already carries its program in the snapshot"));
+            }
+            kaspa_consensus_core::palw_class_sync_v1::validate_class_declaration_v1(
+                *id,
+                class,
+                snapshot.class_semantics.get(id),
+                bytes,
+            )?;
+            if complete {
+                self.palw_snapshot_declaration_identity_v1(*id, class, snapshot.class_semantics.get(id), bytes)?;
+            }
+        }
+        if complete {
+            for (id, class) in &snapshot.classes {
+                if seen.contains(id) || snapshot.tir_classes.contains_key(id) || snapshot.gen_classes.contains_key(id) {
+                    continue;
+                }
+                if !self.palw_snapshot_builtin_class_v1(*id, class, snapshot.class_semantics.get(id))? {
+                    return Err(format!("snapshot class {id} is missing its required declaration"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn palw_snapshot_declaration_identity_v1(
+        &self,
+        id: kaspa_hashes::Hash64,
+        class: &kaspa_consensus_core::palw_state_v2::PalwClassStateV2,
+        semantics: Option<&kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        // Already checked against the declaration by the shared helper.
+        if semantics.is_some() {
+            return Ok(());
+        }
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        for object in &self.palw_genesis_objects_v2 {
+            if let PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                pwu_rule,
+                slash_value_per_pwu,
+                admission: Some(authentic),
+                ..
+            } = object
+            {
+                if *class_id == id
+                    && *artifact_root == class.artifact_root
+                    && *pwu_rule == class.pwu_rule
+                    && *slash_value_per_pwu == class.slash_value_per_pwu
+                    && class.registered_daa == 0
+                    && class.registrant_bond.is_none()
+                    && borsh::to_vec(authentic.as_ref()).map_err(|e| e.to_string())? == bytes
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Err(format!("class {id}: missing authenticated legacy canonical identity for complete snapshot capability"))
+    }
+
+    fn palw_snapshot_builtin_class_v1(
+        &self,
+        id: kaspa_hashes::Hash64,
+        class: &kaspa_consensus_core::palw_state_v2::PalwClassStateV2,
+        semantics: Option<&kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    ) -> Result<bool, String> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        let Some((root, pwu, slash)) = self.palw_genesis_objects_v2.iter().find_map(|object| match object {
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id, artifact_root, pwu_rule, slash_value_per_pwu, admission: None, ..
+            } if *class_id == id => Some((*artifact_root, *pwu_rule, *slash_value_per_pwu)),
+            _ => None,
+        }) else {
+            return Ok(false);
+        };
+        if class.artifact_root != root
+            || class.pwu_rule != pwu
+            || class.slash_value_per_pwu != slash
+            || class.registered_daa != 0
+            || class.registrant_bond.is_some()
+        {
+            return Ok(false);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(court) = self.palw_court_params_v2.as_ref() {
+            if let Some(entry) =
+                misaka_palw_base0::classes::canonical_classes_v1(court).into_iter().find(|entry| entry.class_id() == id)
+            {
+                let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+                    &entry.profile,
+                    entry.canonical_job.0,
+                    entry.canonical_job.1,
+                );
+                kaspa_consensus_core::palw_class_sync_v1::validate_class_context_v1(id, class, semantics, &entry.profile, &canonical)?;
+                return Ok(true);
+            }
+        }
+        // A matching catalog label alone is not a compiled execution declaration.
+        Ok(false)
     }
 
     /// **ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive.**
@@ -2043,18 +2212,14 @@ impl VirtualStateProcessor {
             .flatten()
             .ok_or("this node holds no V2 state to check a declaration against")?;
         let class = state.class(&class_id).ok_or_else(|| format!("this chain does not hold class {class_id}"))?;
-        if matches!(class.status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Frozen { .. }) {
-            return Err(format!("class {class_id} is frozen; a stopped class is not one to start serving"));
-        }
-        let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 =
-            borsh::from_slice(carriage_bytes).map_err(|e| format!("the supplied carriage does not decode: {e}"))?;
-        let derived = carriage.profile.shape_profile_id();
-        if derived != class_id {
-            return Err(format!("the supplied profile hashes to {derived}, not to {class_id} — it is another class's graph"));
-        }
-        if carriage.canonical.shape_profile_id != class_id {
-            return Err("the supplied canonical job names another class, and it is what prices this one".to_string());
-        }
+        // Retain frozen class material for future snapshots without enabling
+        // execution; the execution getter remains status gated.
+        kaspa_consensus_core::palw_class_sync_v1::validate_class_declaration_v1(
+            class_id,
+            class,
+            state.class_semantics_v1(&class_id),
+            carriage_bytes,
+        )?;
         let record = crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
             registered_daa: class.registered_daa,
             artifact_root: class.artifact_root,

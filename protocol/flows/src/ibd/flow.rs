@@ -2815,6 +2815,21 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !palw_active {
             return Ok(None);
         }
+        let capacity = self
+            .ctx
+            .consensus()
+            .unguarded_session()
+            .spawn_blocking(move |c| {
+                kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(
+                    pruning_point,
+                    c.palw_native_snapshot_resource_bound_v1(pruning_point),
+                )
+            })
+            .await;
+        if let Err(why) = capacity {
+            warn!("[palw-sidecar] native snapshot capacity refused before receive: {why}");
+            return Err(ProtocolError::PruningSidecarUnavailable("PALW native RAM/DB capacity", pruning_point.to_string()));
+        }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return self.request_pruning_point_palw_chunks(pruning_point).await;
         }
@@ -2896,31 +2911,14 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         declarations: Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>,
     ) -> Result<(), ProtocolError> {
         let pruning_point = import_session.point;
-        consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state_for_session(import_session, carriage)).await?;
-        info!("imported the PALW state of the pruning point {}", pruning_point);
-        // **After the state, because each declaration is checked against it** (ADR-0067
-        // Decision 6). A refusal is per-entry and never fatal: the state is the consensus half and
-        // it is already in; a declaration this node could not verify simply leaves that class
-        // unservable, which is where a pruned sync stood before this existed.
-        if !declarations.is_empty() {
-            let total = declarations.len();
-            let adopted = consensus
-                .clone()
-                .spawn_blocking(move |c| {
-                    declarations
-                        .into_iter()
-                        .filter(|(class_id, bytes)| match c.palw_adopt_class_carriage_v1(*class_id, bytes) {
-                            Ok(()) => true,
-                            Err(why) => {
-                                kaspa_core::debug!("[palw-class-carriage] peer's declaration for {class_id} refused: {why}");
-                                false
-                            }
-                        })
-                        .count()
-                })
-                .await;
-            info!("adopted {adopted} of {total} class declaration(s) offered with the pruning point state");
-        }
+        let complete = self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED;
+        consensus
+            .clone()
+            .spawn_blocking(move |c| {
+                c.import_pruning_point_palw_snapshot_for_session(import_session, carriage, declarations, complete)
+            })
+            .await?;
+        info!("imported PALW state and validated class material for pruning point {}", pruning_point);
         Ok(())
     }
 

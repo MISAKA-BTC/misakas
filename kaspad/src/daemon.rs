@@ -525,6 +525,14 @@ pub(crate) fn create_core_with_runtime_inner(
     crate::palw_prefill_run::arm_prefill_run_cap_v1(args.palw_prefill_run_max);
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
+    kaspa_consensus_core::palw_native_resource_v1::arm_native_resource_limits_v1(args.palw_native_resource_admission_v1.then_some(
+        kaspa_consensus_core::palw_native_resource_v1::NativeSnapshotResourceLimitsV1 {
+            // A missing explicit budget is zero capacity, never unlimited.
+            memory_bytes: args.palw_native_memory_budget.unwrap_or(0),
+            database_bytes: args.palw_native_database_budget.unwrap_or(0),
+        },
+    ));
+    crate::palw_resource_admission_v2::arm(args.palw_resource_admission_v2);
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
     // int-10.2 D1: and, where the operator named one, the host ledger every node on this host shares —
     // the host pool is rebuilt over it (same share, same carve) before any service can reserve.

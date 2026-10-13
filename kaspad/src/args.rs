@@ -775,6 +775,15 @@ pub struct Args {
     /// host's `MemAvailable` and four of them on one host therefore promise away four times what is
     /// there.
     pub palw_host_memory_budget: Option<u64>,
+    /// Explicit local capability: refuse unknown/saturated model demand and unknown host capacity.
+    #[serde(default)]
+    pub palw_resource_admission_v2: bool,
+    #[serde(default)]
+    pub palw_native_resource_admission_v1: bool,
+    #[serde(default)]
+    pub palw_native_memory_budget: Option<u64>,
+    #[serde(default)]
+    pub palw_native_database_budget: Option<u64>,
     /// How many nodes that budget is divided between. Declared rather than discovered: counting
     /// siblings at startup is a race, and the sibling that loses it is the one that gets OOM-killed.
     pub palw_host_node_count: u32,
@@ -1035,6 +1044,10 @@ impl Default for Args {
             disable_grpc: false,
             ram_scale: 1.0,
             palw_host_memory_budget: None,
+            palw_resource_admission_v2: false,
+            palw_native_resource_admission_v1: false,
+            palw_native_memory_budget: None,
+            palw_native_database_budget: None,
             palw_host_node_count: 1,
             palw_host_memory_share: None,
             palw_seat_replay_slots: None,
@@ -3316,6 +3329,19 @@ Setting to 0 prevents the preallocation and sets the maximum to {}, leading to 0
 a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance especially for syncing peers faster"),
         )
         .arg(
+            Arg::new("palw-native-resource-admission-v1")
+                .long("palw-native-resource-admission-v1").action(ArgAction::SetTrue)
+                .help("Explicit local native snapshot capacity: refuse before materialization unless trusted whole RAM/DB structural bounds are available. Current unknown bounds are refused; this does not approve the 100k fixture."),
+            Arg::new("palw-native-memory-budget").long("palw-native-memory-budget")
+                .value_parser(clap::value_parser!(u64)).requires("palw-native-resource-admission-v1")
+                .help("Whole native snapshot RAM capacity in bytes for the explicit local capability."),
+            Arg::new("palw-native-database-budget").long("palw-native-database-budget")
+                .value_parser(clap::value_parser!(u64)).requires("palw-native-resource-admission-v1")
+                .help("Whole native snapshot DB installation capacity in bytes, including WAL and compaction copies."),
+            Arg::new("palw-resource-admission-v2")
+                .long("palw-resource-admission-v2")
+                .action(ArgAction::SetTrue)
+                .help("PALW local capacity capability: require a derived model working set, known holding bytes and a host capacity bound before readiness or execution. Does not approve native consensus/DB resources or model prices."),
             Arg::new("palw-host-memory-budget")
                 .long("palw-host-memory-budget")
                 .env("KASPAD_PALW_HOST_MEMORY_BUDGET")
@@ -3872,6 +3898,21 @@ impl Args {
             disable_dns_seeding: arg_match_unwrap_or::<bool>(&m, "nodnsseed", defaults.disable_dns_seeding),
             disable_grpc: arg_match_unwrap_or::<bool>(&m, "nogrpc", defaults.disable_grpc),
             ram_scale: arg_match_unwrap_or::<f64>(&m, "ram-scale", defaults.ram_scale),
+            palw_native_resource_admission_v1: arg_match_unwrap_or::<bool>(
+                &m,
+                "palw-native-resource-admission-v1",
+                defaults.palw_native_resource_admission_v1,
+            ),
+            palw_native_memory_budget: m.get_one::<u64>("palw-native-memory-budget").copied().or(defaults.palw_native_memory_budget),
+            palw_native_database_budget: m
+                .get_one::<u64>("palw-native-database-budget")
+                .copied()
+                .or(defaults.palw_native_database_budget),
+            palw_resource_admission_v2: arg_match_unwrap_or::<bool>(
+                &m,
+                "palw-resource-admission-v2",
+                defaults.palw_resource_admission_v2,
+            ),
             palw_host_memory_budget: m.get_one::<u64>("palw-host-memory-budget").copied().or(defaults.palw_host_memory_budget),
             palw_host_node_count: arg_match_unwrap_or::<u32>(&m, "palw-host-node-count", defaults.palw_host_node_count),
             palw_host_memory_share: m.get_one::<u64>("palw-host-memory-share").copied().or(defaults.palw_host_memory_share),

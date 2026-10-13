@@ -867,6 +867,18 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Atomically install a root-verified PALW snapshot and its validated
+    /// execution declarations under the current durable import authority.
+    fn import_pruning_point_palw_snapshot_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
+        declarations: Vec<(kaspa_hashes::Hash64, Vec<u8>)>,
+        complete: bool,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
     fn import_pruning_point_overlay_snapshot_for_session(
         &self,
         session: PruningImportSessionV1,
@@ -1628,6 +1640,44 @@ pub trait ConsensusApi: Send + Sync {
     /// ADR-0067 Decision 6: the class declarations this node can serve a pruned-syncing peer.
     fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         Vec::new()
+    }
+
+    /// A trusted implementation may supply a whole native restore/DB bound.
+    /// Unknown remains unknown; encoded byte caps and measured fixtures do not
+    /// qualify a bound. The explicit local capability refuses `None`.
+    fn palw_native_snapshot_resource_bound_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Option<crate::palw_native_resource_v1::NativeSnapshotResourceBoundV1> {
+        None
+    }
+
+    /// Shared immutable captured snapshot: serving peers do not each clone a
+    /// native 100k carriage. The legacy owned getter remains available.
+    fn pruning_point_palw_state_shared_v1(
+        &self,
+        point: crate::BlockHash,
+    ) -> Option<std::sync::Arc<crate::palw_state_v2::PalwStateCarriageV2>> {
+        self.pruning_point_palw_state(point).map(std::sync::Arc::new)
+    }
+
+    /// Snapshot-bound material, with explicit negotiated complete coverage.
+    fn palw_class_carriages_for_snapshot_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _complete: bool,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        Err("this consensus does not index snapshot declarations".into())
+    }
+
+    /// Read-only validation, performed before pruning-state installation.
+    fn palw_validate_snapshot_declarations_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _declarations: &[(kaspa_hashes::Hash64, Vec<u8>)],
+        _complete: bool,
+    ) -> Result<(), String> {
+        Err("this consensus cannot validate snapshot declarations".into())
     }
 
     /// **RFC-0007: the vertex tables at the tip** — the counts, and `seat`'s own `(round, leaves_root, convicted)` rows from

@@ -1290,6 +1290,10 @@ impl Qwen25A16Backend {
     /// **Hold the cache in `profile`'s representation** — `A16-KV-i32` (the oracle) or
     /// `A16-KV-i16`. A node-local choice: every root this backend commits is the same under either.
     pub fn with_runtime_profile(mut self, profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1) -> Self {
+        assert!(
+            profile != kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1::Base0KvI8,
+            "BASE0 i8 storage is not an A16 runtime representation"
+        );
         self.runtime_profile = profile;
         self
     }

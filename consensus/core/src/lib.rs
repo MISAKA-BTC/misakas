@@ -246,6 +246,8 @@ pub mod palw_class_identity_v1;
 pub mod palw_class_seating_fence_v1;
 /// RFC-0001 §2.9: the job's tokenizer must be the class's listed one; dormant behind `palw_fp_tokenizer_match`.
 pub mod palw_class_semantics_v1;
+pub mod palw_class_sync_v1;
+pub mod palw_native_resource_v1;
 /// ADR-0152 §4-quater — class-derived verification deadlines behind
 /// `Params::palw_class_verify_deadline`: the constants, the measured-row type and the two pure
 /// derivations of `D(c)` (the state-reading half is in `palw_state_v2`). `None` on every preset but

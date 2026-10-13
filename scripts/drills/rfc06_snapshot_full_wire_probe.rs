@@ -51,6 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if reader.read(&mut extra)? != 0 || declarations != authentic {
         return Err("declaration bytes differ from the complete authentic genesis admissions".into());
     }
+    eprintln!(
+        "[rfc06-full-codec] stage=source-and-declarations-bound source_bytes={source_bytes} declaration_vec_bytes={declaration_vec_bytes}"
+    );
     let begun = Instant::now();
     let mut sender = SnapshotSender::encode_snapshot_compressed(SnapshotSpill::new()?, point, &carriage, &declarations, [0x73; 32])?;
     let profile = sender.profile.ok_or("compressed sender missing profile")?;
@@ -58,6 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count = sender.count;
     let root = sender.root;
     let encode_ms = begun.elapsed().as_millis();
+    eprintln!(
+        "[rfc06-full-codec] stage=encoded canonical_bytes={} wire_bytes={wire} chunks={count} encode_ms={encode_ms}",
+        profile.decoded
+    );
     let begun = Instant::now();
     let mut receiver = SnapshotReceiver::new_compressed(SnapshotSpill::new()?, point, root, wire, count, profile)?;
     for index in 0..count {
@@ -72,6 +79,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &bytes,
         )?;
     }
+    eprintln!("[rfc06-full-codec] stage=chunks-received received={count} total={count}");
+    eprintln!("[rfc06-full-codec] stage=decode-start");
     let (decoded, received_declarations) = receiver.decode_snapshot()?;
     if decoded != carriage {
         return Err("canonical state changed in transport".into());

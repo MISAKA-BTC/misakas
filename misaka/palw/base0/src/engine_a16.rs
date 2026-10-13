@@ -273,6 +273,7 @@ impl KvSideV1 {
         match profile {
             KvStorageProfileV1::A16KvI32 | KvStorageProfileV1::Q36KvI32 => KvSideV1::I32(Vec::new()),
             KvStorageProfileV1::A16KvI16 => KvSideV1::I16(Vec::new()),
+            KvStorageProfileV1::Base0KvI8 => panic!("BASE0 i8 storage is not an A16 runtime representation"),
         }
     }
 
@@ -730,6 +731,7 @@ impl KvSideV1 {
         match profile {
             KvStorageProfileV1::A16KvI32 | KvStorageProfileV1::Q36KvI32 => KvSideV1::I32(vec![0; elements]),
             KvStorageProfileV1::A16KvI16 => KvSideV1::I16(vec![0; elements]),
+            KvStorageProfileV1::Base0KvI8 => panic!("BASE0 i8 storage is not an A16 runtime representation"),
         }
     }
 

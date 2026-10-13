@@ -954,7 +954,7 @@ impl Consensus {
             // Store the currently bodyless anticone for trusted validation.
             meta.set_body_missing_anticone(&mut batch, anticone).unwrap();
         }
-        self.db.write(batch).unwrap();
+        self.virtual_processor.write_pruning_import_barrier(batch);
         drop(pruning_point_write);
         Ok(())
     }
@@ -2368,6 +2368,18 @@ impl ConsensusApi for Consensus {
         })
     }
 
+    fn import_pruning_point_palw_snapshot_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: Vec<(kaspa_hashes::Hash64, Vec<u8>)>,
+        complete: bool,
+    ) -> PruningImportResult<()> {
+        self.virtual_processor.with_pruning_import_session(Some(session), |_| {
+            self.virtual_processor.import_pruning_point_palw_snapshot(session.point, carriage, Some((declarations, complete)))
+        })
+    }
+
     fn import_pruning_point_overlay_snapshot_for_session(
         &self,
         session: PruningImportSessionV1,
@@ -2824,6 +2836,30 @@ impl ConsensusApi for Consensus {
 
     fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
         self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
+    }
+
+    fn pruning_point_palw_state_shared_v1(
+        &self,
+        point: BlockHash,
+    ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>> {
+        self.virtual_processor.pruning_point_palw_state_shared_v1_impl(point)
+    }
+
+    fn palw_class_carriages_for_snapshot_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        self.virtual_processor.palw_class_carriages_for_snapshot_v1_impl(snapshot, complete)
+    }
+
+    fn palw_validate_snapshot_declarations_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: &[(kaspa_hashes::Hash64, Vec<u8>)],
+        complete: bool,
+    ) -> Result<(), String> {
+        self.virtual_processor.palw_validate_snapshot_declarations_v1_impl(snapshot, declarations, complete)
     }
 
     fn palw_v2_pending_vertex_equivocations_v1(&self) -> Vec<kaspa_consensus_core::palw_vertex_v1::PalwVertexEquivocationV1> {
@@ -3885,7 +3921,7 @@ impl ConsensusApi for Consensus {
             let mut meta = self.pruning_meta_stores.write();
             let mut batch = rocksdb::WriteBatch::default();
             meta.set_pruning_utxoset_stable_flag(&mut batch, val).unwrap();
-            self.db.write(batch).unwrap();
+            self.virtual_processor.write_pruning_import_barrier(batch);
             Ok(())
         })
     }

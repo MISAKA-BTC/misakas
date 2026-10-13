@@ -15,6 +15,7 @@ use std::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub(crate) const CHUNK_BYTES: usize = 4 << 20;
+const COMPRESSION_INPUT_BYTES: usize = 64 << 10;
 pub(crate) const SESSION_TTL: Duration = Duration::from_secs(600);
 /// Two sessions across all peers and receive/serve flows: at most 768 MiB spill files
 /// and two 4 MiB chunk buffers. Decoded/native state memory is additional, not a RAM proof.
@@ -159,6 +160,34 @@ impl Drop for SnapshotSpill {
     }
 }
 
+/// Bound preflight/serialization CPU to the lease as well as continuation I/O.
+/// Check after at most one fixed input buffer, avoiding a clock syscall per
+/// Borsh scalar while a 100k native state emits millions of fields.
+struct LeaseDeadlineWriter<'a, W> {
+    inner: &'a mut W,
+    created: Instant,
+    checked_bytes: usize,
+}
+impl<W: Write> Write for LeaseDeadlineWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.checked_bytes == 0 || self.checked_bytes >= COMPRESSION_INPUT_BYTES {
+            if self.created.elapsed() > SESSION_TTL {
+                return Err(invalid("snapshot serialization lease expired"));
+            }
+            self.checked_bytes = 1;
+        }
+        let count = self.inner.write(bytes)?;
+        self.checked_bytes = self.checked_bytes.saturating_add(count);
+        Ok(count)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        if self.created.elapsed() > SESSION_TTL {
+            return Err(invalid("snapshot serialization lease expired"));
+        }
+        self.inner.flush()
+    }
+}
+
 struct BoundedHashWriter<'a> {
     file: &'a mut dyn Write,
     hash: MerkleBranchHash64,
@@ -250,10 +279,42 @@ impl BorshSerialize for SnapshotEnvelope<'_> {
         serialize_envelope(self.carriage, self.declarations, writer, crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64)
     }
 }
-struct CompressedSnapshotEnvelope<'a>(SnapshotEnvelope<'a>);
+struct CompressedSnapshotEnvelope<'a> {
+    snapshot: SnapshotEnvelope<'a>,
+    state_bytes: u64,
+    decoded_bytes: u64,
+}
 impl BorshSerialize for CompressedSnapshotEnvelope<'_> {
     fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        serialize_envelope(self.0.carriage, self.0.declarations, writer, DECODED_SNAPSHOT_MAX_BYTES)
+        // The caller preflights this immutable borrowed native snapshot once.
+        // Check the actual stream against that exact count without walking the
+        // 100k state again just to emit its already-known frame header.
+        let mut exact = ExactCanonicalWriter { writer, remaining: self.decoded_bytes };
+        SNAPSHOT_FORMAT.serialize(&mut exact)?;
+        self.state_bytes.serialize(&mut exact)?;
+        self.snapshot.carriage.serialize(&mut exact)?;
+        self.snapshot.declarations.serialize(&mut exact)?;
+        if exact.remaining != 0 {
+            return Err(invalid("canonical snapshot differs from its preflight count"));
+        }
+        Ok(())
+    }
+}
+struct ExactCanonicalWriter<'a, W> {
+    writer: &'a mut W,
+    remaining: u64,
+}
+impl<W: Write> Write for ExactCanonicalWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() as u64 > self.remaining {
+            return Err(invalid("canonical snapshot exceeds its preflight count"));
+        }
+        let written = self.writer.write(bytes)?;
+        self.remaining -= written as u64;
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
     }
 }
 fn serialize_envelope<W: Write>(
@@ -271,7 +332,7 @@ fn serialize_envelope<W: Write>(
     declarations.serialize(writer)
 }
 
-fn decode_snapshot(reader: &mut impl Read, total: u64) -> io::Result<Snapshot> {
+fn decode_snapshot(reader: &mut impl Read, total: u64, complete_material: bool) -> io::Result<Snapshot> {
     if u16::deserialize_reader(reader)? != SNAPSHOT_FORMAT {
         return Err(invalid("unknown snapshot framing version"));
     }
@@ -312,8 +373,13 @@ fn decode_snapshot(reader: &mut impl Read, total: u64) -> io::Result<Snapshot> {
             let mut data = vec![0; bytes as usize];
             reader.read_exact(&mut data)?;
             declarations.push((class, data));
-        } else if io::copy(&mut (&mut *reader).take(bytes), &mut io::sink())? != bytes {
-            return Err(invalid("snapshot declaration truncated"));
+        } else {
+            if complete_material {
+                return Err(invalid("compressed snapshot has unknown or duplicate declaration"));
+            }
+            if io::copy(&mut (&mut *reader).take(bytes), &mut io::sink())? != bytes {
+                return Err(invalid("snapshot declaration truncated"));
+            }
         }
         remaining -= bytes;
     }
@@ -348,7 +414,12 @@ impl SnapshotSender {
         let mut writer = BoundedHashWriter { file: &mut buffered, hash: stream_hasher_profile(point, profile), total: 0 };
         if profile.is_some() {
             let mut encoder = flate2::write::ZlibEncoder::new(&mut writer, flate2::Compression::fast());
-            borsh::to_writer(&mut encoder, value)?;
+            // Borsh emits millions of small fields for a native 100k snapshot.
+            // Aggregate them before deflate, using fixed bounded scratch. Do
+            // not call ZlibEncoder::flush: it inserts a compressed sync marker.
+            let mut input = BufWriter::with_capacity(COMPRESSION_INPUT_BYTES, &mut encoder);
+            borsh::to_writer(&mut LeaseDeadlineWriter { inner: &mut input, created: spill.created, checked_bytes: 0 }, value)?;
+            input.into_inner().map_err(|e| e.into_error())?;
             encoder.finish()?;
         } else {
             borsh::to_writer(&mut writer, value)?;
@@ -357,6 +428,9 @@ impl SnapshotSender {
         let total = writer.total;
         let root = writer.hash.finalize();
         drop(buffered);
+        if spill.expired() {
+            return Err(invalid("snapshot serialization lease expired"));
+        }
         if total == 0 {
             return Err(invalid("empty snapshot stream"));
         }
@@ -378,14 +452,23 @@ impl SnapshotSender {
         nonce: [u8; 32],
     ) -> io::Result<Self> {
         let mut size = SizeWriter(0, DECODED_SNAPSHOT_MAX_BYTES);
-        carriage.serialize(&mut size)?;
+        carriage.serialize(&mut LeaseDeadlineWriter { inner: &mut size, created: spill.created, checked_bytes: 0 })?;
         let decoded = snapshot_payload_size_with_cap(
             size.0,
             declarations.iter().map(|(_, bytes)| bytes.len() as u64),
             DECODED_SNAPSHOT_MAX_BYTES,
         )?;
         let profile = SnapshotCompressionV1::from_wire(SNAPSHOT_CODEC_ZLIB_V1, &nonce, decoded)?.unwrap();
-        Self::encode_profile(spill, point, &CompressedSnapshotEnvelope(SnapshotEnvelope { carriage, declarations }), Some(profile))
+        Self::encode_profile(
+            spill,
+            point,
+            &CompressedSnapshotEnvelope {
+                snapshot: SnapshotEnvelope { carriage, declarations },
+                state_bytes: size.0,
+                decoded_bytes: decoded,
+            },
+            Some(profile),
+        )
     }
     pub(crate) fn expired(&self) -> bool {
         self.spill.expired()
@@ -513,7 +596,7 @@ impl SnapshotReceiver {
         if self.profile.is_some() {
             return self.decode_compressed_snapshot();
         }
-        self.decode_with(|reader, total| decode_snapshot(reader, total))
+        self.decode_with(|reader, total| decode_snapshot(reader, total, false))
     }
     fn decode_compressed_snapshot(mut self) -> io::Result<Snapshot> {
         if !self.complete() || self.hash.clone().finalize() != self.root {
@@ -523,8 +606,9 @@ impl SnapshotReceiver {
         self.spill.file.flush()?;
         self.spill.file.seek(SeekFrom::Start(0))?;
         let decoder = flate2::bufread::ZlibDecoder::new(BufReader::new(&mut self.spill.file));
-        let mut reader = DecodedLimitReader { inner: decoder, expected: profile.decoded, read: 0 };
-        let value = decode_snapshot(&mut reader, profile.decoded)?;
+        let mut reader =
+            DecodedLimitReader { inner: decoder, expected: profile.decoded, read: 0, created: self.spill.created, checked_at: 0 };
+        let value = decode_snapshot(&mut reader, profile.decoded, true)?;
         let mut extra = [0];
         if reader.read(&mut extra)? != 0 || reader.read != profile.decoded || reader.inner.total_in() != self.total {
             return Err(invalid("compressed snapshot canonical length/EOF/single stream differs"));
@@ -551,11 +635,19 @@ struct DecodedLimitReader<R> {
     inner: R,
     expected: u64,
     read: u64,
+    created: Instant,
+    checked_at: u64,
 }
 impl<R: Read> Read for DecodedLimitReader<R> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
             return Ok(0);
+        }
+        if self.checked_at == 0 || self.read.saturating_sub(self.checked_at) >= COMPRESSION_INPUT_BYTES as u64 {
+            if self.created.elapsed() >= SESSION_TTL {
+                return Err(invalid("snapshot decode lease expired"));
+            }
+            self.checked_at = self.read.max(1);
         }
         // At most one byte beyond the declared cap is inspected to distinguish
         // exact EOF from a compression bomb. Never emit that byte to Borsh.
@@ -657,10 +749,10 @@ mod tests {
         receiver
     }
     #[test]
-    fn compressed_native_snapshot_keeps_canonical_state_and_filtering() {
+    fn compressed_native_snapshot_keeps_canonical_state_and_complete_declarations() {
         let budget = Arc::new(Semaphore::new(2));
         let carriage = native_carriage();
-        let declarations = vec![(h(7), vec![0x73; 4096]), (h(7), vec![0x74; 10]), (h(9), vec![0x75; 8])];
+        let declarations = vec![(h(7), vec![0x73; 4096])];
         let canonical = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
         let mut sender =
             SnapshotSender::encode_snapshot_compressed(lease(&budget), h(1), &carriage, &declarations, [0x31; 32]).unwrap();
@@ -688,6 +780,74 @@ mod tests {
         drop(sender);
         assert_eq!(budget.available_permits(), 2);
     }
+    #[test]
+    fn compressed_complete_material_refuses_duplicate_and_unknown_before_allocation() {
+        let budget = Arc::new(Semaphore::new(1));
+        let carriage = native_carriage();
+        for declarations in [vec![(h(7), vec![1]), (h(7), vec![2])], vec![(h(9), vec![3])]] {
+            let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
+            let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: raw.len() as u64 };
+            assert!(receive_compressed_raw(&budget, &zlib(&raw), profile).decode_snapshot().is_err());
+            assert_eq!(budget.available_permits(), 1);
+        }
+    }
+
+    #[test]
+    fn serialization_deadline_refuses_before_emitting_and_preserves_sink() {
+        let mut output = Vec::new();
+        let created = Instant::now() - SESSION_TTL - Duration::from_secs(1);
+        let mut writer = LeaseDeadlineWriter { inner: &mut output, created, checked_bytes: 0 };
+        assert!(writer.write_all(&[1]).is_err());
+        assert!(writer.flush().is_err());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn exact_canonical_writer_refuses_overrun_and_forwards_write_failures() {
+        let mut bytes = Vec::new();
+        let mut exact = ExactCanonicalWriter { writer: &mut bytes, remaining: 3 };
+        exact.write_all(&[1, 2, 3]).unwrap();
+        assert_eq!(exact.remaining, 0);
+        assert!(exact.write_all(&[4]).is_err());
+        struct Refuse;
+        impl Write for Refuse {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("disk refused"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut refused = Refuse;
+        let mut exact = ExactCanonicalWriter { writer: &mut refused, remaining: 3 };
+        assert!(exact.write_all(&[1]).is_err());
+        assert_eq!(exact.remaining, 3);
+    }
+
+    #[test]
+    fn buffered_deflate_is_byte_identical_to_field_writes_and_decodes_old_streams() {
+        let carriage = native_carriage();
+        let declarations = vec![(h(7), vec![0x81; 131073])];
+        let envelope = SnapshotEnvelope { carriage: &carriage, declarations: &declarations };
+        let canonical = borsh::to_vec(&envelope).unwrap();
+        let profile = SnapshotCompressionV1 { nonce: [1; 32], decoded: canonical.len() as u64 };
+        let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        envelope.serialize(&mut old).unwrap();
+        let old = old.finish().unwrap();
+        let mut new = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut input = BufWriter::with_capacity(COMPRESSION_INPUT_BYTES, &mut new);
+        envelope.serialize(&mut input).unwrap();
+        input.into_inner().map_err(|e| e.into_error()).unwrap();
+        let new = new.finish().unwrap();
+        assert_eq!(old, new, "resume roots require identical compressed bytes");
+        let budget = Arc::new(Semaphore::new(1));
+        for stream in [&old, &new] {
+            let (decoded, entries) = receive_compressed_raw(&budget, stream, profile).decode_snapshot().unwrap();
+            assert_eq!(decoded, carriage);
+            assert_eq!(entries, declarations);
+        }
+    }
+
     #[test]
     fn compression_negotiation_nonce_codec_and_separate_caps_refuse_downgrades() {
         assert_eq!(compression_request_nonce(106, 0, &[]).unwrap(), None);
@@ -740,7 +900,13 @@ mod tests {
             assert!(receive_compressed_raw(&budget, &good, SnapshotCompressionV1 { decoded, ..profile }).decode_snapshot().is_err());
             assert_eq!(budget.available_permits(), 1);
         }
-        let mut reader = DecodedLimitReader { inner: std::io::Cursor::new(vec![3; 4096]), expected: 17, read: 0 };
+        let mut reader = DecodedLimitReader {
+            inner: std::io::Cursor::new(vec![3; 4096]),
+            expected: 17,
+            read: 0,
+            created: Instant::now(),
+            checked_at: 0,
+        };
         assert!(io::copy(&mut reader, &mut io::sink()).is_err());
         assert!(reader.read <= 17, "bomb bytes may never be emitted beyond the declared count");
     }

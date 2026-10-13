@@ -429,7 +429,7 @@ impl PalwMemoryLedgerV1 {
             (None, Some(live)) => Some(live.saturating_add(reserved)),
             (None, None) => None,
         };
-        match capacity.map(|c| c.saturating_sub(self.proof_carve)) {
+        match crate::palw_resource_admission_v2::admission_capacity(capacity.map(|c| c.saturating_sub(self.proof_carve)), need_bytes) {
             Some(capacity) if need_bytes > capacity => Err(PalwMemoryRefusalV1 {
                 pool: self.pool,
                 key: None,
@@ -464,7 +464,7 @@ impl PalwMemoryLedgerV1 {
             proof_carve_bytes: self.proof_carve,
             host,
         };
-        match available {
+        match crate::palw_resource_admission_v2::admission_capacity(available, need_bytes) {
             Some(available) if need_bytes > available => Err(refusal(available, None)),
             _ => match &self.host {
                 // The host's aggregate, as a dry run (int-10.2 D1): nothing is registered.
@@ -488,7 +488,7 @@ impl PalwMemoryLedgerV1 {
     ) -> Result<PalwMemoryReservationV1, PalwMemoryRefusalV1> {
         let mut state = self.lock();
         let (share, live, reserved, available) = self.available_for(&state, key.role);
-        if let Some(available) = available
+        if let Some(available) = crate::palw_resource_admission_v2::admission_capacity(available, need_bytes)
             && need_bytes > available
         {
             let proof_carve_bytes = if key.role == PALW_READINESS_PROOF_ROLE_V1 { 0 } else { self.proof_carve };

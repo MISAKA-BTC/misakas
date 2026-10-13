@@ -218,20 +218,35 @@ impl RequestPruningPointPalwStateFlow {
             // so a peer naming a hash this node never captured bought a SECOND full tip
             // materialization for a field that was never populated.
             let (carriage, class_carriages) = session
-                .spawn_blocking(move |c| match c.pruning_point_palw_state(pp) {
-                    Some(state) => {
-                        let declarations = c.palw_class_carriages_for_sync_v1();
-                        // Refuse before allocating a whole encoded Vec on the legacy
-                        // path. Chunked and legacy peers use the same canonical total.
-                        match crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations) {
-                            Ok(bytes) => (Some(bytes), declarations),
-                            Err(error) => {
-                                kaspa_core::warn!("[palw-sidecar] cannot serve PALW snapshot for {pp}: {error}");
-                                (None, Vec::new())
+                .spawn_blocking(move |c| {
+                    if let Err(why) = kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(
+                        pp,
+                        c.palw_native_snapshot_resource_bound_v1(pp),
+                    ) {
+                        kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why}");
+                        return (None, Vec::new());
+                    }
+                    match c.pruning_point_palw_state_shared_v1(pp) {
+                        Some(state) => {
+                            let declarations = match c.palw_class_carriages_for_snapshot_v1(&state, false) {
+                                Ok(declarations) => declarations,
+                                Err(error) => {
+                                    kaspa_core::warn!("[palw-sidecar] snapshot declarations for {pp}: {error}");
+                                    return (None, Vec::new());
+                                }
+                            };
+                            // Refuse before allocating a whole encoded Vec on the legacy
+                            // path. Chunked and legacy peers use the same canonical total.
+                            match crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations) {
+                                Ok(bytes) => (Some(bytes), declarations),
+                                Err(error) => {
+                                    kaspa_core::warn!("[palw-sidecar] cannot serve PALW snapshot for {pp}: {error}");
+                                    (None, Vec::new())
+                                }
                             }
                         }
+                        None => (None, Vec::new()),
                     }
-                    None => (None, Vec::new()),
                 })
                 .await;
             let reply = match carriage {
@@ -328,8 +343,16 @@ impl RequestPruningPointPalwStateFlow {
             let session = self.ctx.consensus().unguarded_session();
             let sender = session
                 .spawn_blocking(move |c| {
-                    c.pruning_point_palw_state(pp).map(|carriage| {
-                        let declarations = c.palw_class_carriages_for_sync_v1();
+                    if let Err(why) = kaspa_consensus_core::palw_native_resource_v1::admit_native_snapshot_v1(
+                        pp,
+                        c.palw_native_snapshot_resource_bound_v1(pp),
+                    ) {
+                        kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why}");
+                        return None;
+                    }
+                    c.pruning_point_palw_state_shared_v1(pp).map(|carriage| {
+                        let declarations =
+                            c.palw_class_carriages_for_snapshot_v1(&carriage, nonce.is_some()).map_err(std::io::Error::other)?;
                         match nonce {
                             Some(nonce) => SnapshotSender::encode_snapshot_compressed(spill, pp, &carriage, &declarations, nonce),
                             None => SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations),
