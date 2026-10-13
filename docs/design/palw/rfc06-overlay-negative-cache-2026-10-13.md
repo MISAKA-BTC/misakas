@@ -65,3 +65,32 @@ libraries. [Results](evidence/rfc06-overlay-negative-cache-2026-10-13-tests.log)
 and [source/library/binary hashes](evidence/rfc06-overlay-negative-cache-2026-10-13.json)
 are retained. Full integrated compilation and renewed native100k resource and
 wire-cap trials remain required; no model-size, fleet or security approval follows.
+
+## Controlled adjacent-SST measurement
+
+A separate predeclared 60-second leaf run passed in 17.25 seconds against the
+actual production `CachedDbAccess` and revised rewarded-epochs store. It used the
+Default RocksDB preset and consensus 256 MiB block cache (two 128 MiB shards),
+with a 160 MiB deterministic pseudo-random adjacent value larger than one shard.
+This is a controlled SST stress fixture, not native bonds or a model artifact.
+Both implementations returned the same missing-key result on each read.
+
+| Round, 12 reads of the same absent key | Legacy generic cache | Revised store |
+| --- | ---: | ---: |
+| First | 5,306,484 µs | 532,302 µs |
+| Second | 4,912,598 µs | 1 µs |
+| Third | 4,917,974 µs | 1 µs |
+
+The revised store incurs the first DB read, then reuses its absence. Later rounds
+reuse that same cache; microsecond figures have timer-resolution limits. This
+confirms that the selected fix avoids repeated large-block reads/checksums in an
+actual DB. It establishes neither native100k whole-node throughput nor sustained
+performance once pending-key saturation disables this minimum cache. The whole
+benchmark maximum RSS was 691,978,240 bytes, including DB/write/compaction setup;
+it is not decoder/model/node RSS. Its owned DB totaled 167,821,131 bytes and was
+removed after recording its file sizes. No other cache was touched.
+[Plan](evidence/rfc06-overlay-negative-cache-bench-2026-10-13-plan.json),
+[raw timing/RSS](evidence/rfc06-overlay-negative-cache-bench-2026-10-13-log),
+[fixture source](evidence/rfc06-overlay-negative-cache-bench-2026-10-13-source.rs)
+and [source hashes/results](evidence/rfc06-overlay-negative-cache-bench-2026-10-13.json)
+are retained. A rebuilt, independently predeclared native100k run remains necessary.
