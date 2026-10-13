@@ -1940,6 +1940,7 @@ async fn g14_a_dissected_class_registered_past_the_int13_court_window_commits_th
 #[test]
 fn g14_genesis_registration_failure_does_not_commit_utxo_valid_state() {
     use crate::model::stores::{
+        palw_class_carriage::DbPalwClassCarriageStore,
         palw_state_v2::DbPalwStateV2Store,
         statuses::{DbStatusesStore, StatusesStoreReader},
         utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
@@ -1961,7 +1962,76 @@ fn g14_genesis_registration_failure_does_not_commit_utxo_valid_state() {
     assert_ne!(statuses.get(config.genesis.hash).ok(), Some(kaspa_consensus_core::blockstatus::BlockStatus::StatusUTXOValid));
     let multisets = DbUtxoMultisetsStore::new(db.clone(), CachePolicy::Count(16));
     assert!(multisets.get(config.genesis.hash).is_err(), "genesis UTXO data was never committed");
+    let declarations = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    for object in &bundle.genesis_objects {
+        if let Obj::ClassRegistered { class_id, .. } = object {
+            assert!(declarations.get(*class_id).is_none(), "rejected genesis cannot publish a class declaration");
+        }
+    }
     let palw = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
     assert!(!palw.has_delta(config.genesis.hash).unwrap());
     assert!(palw.tip_record().unwrap().is_none());
+}
+
+#[test]
+fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter() {
+    use crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore;
+    use kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2;
+    use kaspa_database::{
+        create_temp_db,
+        prelude::{CachePolicy, ConnBuilder},
+    };
+    let (config, bundle, _, _) = t12_tir_config(0);
+    let classes: Vec<_> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|object| {
+            if let Obj::ClassRegistered { class_id, artifact_root, admission, .. } = object {
+                Some((*class_id, *artifact_root, admission.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(classes.len(), 3, "the launch profile contains a binary floor and two held declaration classes");
+    assert_eq!(classes.iter().filter(|(_, _, carriage)| carriage.is_some()).count(), 2);
+    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _rx) = async_channel::unbounded();
+    let first = TestConsensus::with_db(db.clone(), &config, sender);
+    let state = first.consensus.palw_state_v2_tip().expect("committed genesis state");
+    let root = state.state_root();
+    let sync: BTreeMap<_, _> = first.consensus.palw_class_carriages_for_sync_v1().into_iter().collect();
+    assert_eq!(sync.len(), 2, "the real sync endpoint serves the two genesis declarations");
+    let fresh = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+    for (class_id, artifact_root, admission) in &classes {
+        let class = state.class(class_id).expect("accepted class");
+        assert_eq!(class.artifact_root, *artifact_root);
+        match admission {
+            Some(carriage) => {
+                let record = fresh.get(*class_id).expect("durable declaration, independent cache");
+                assert_eq!(record.registered_daa, class.registered_daa);
+                assert_eq!(record.artifact_root, class.artifact_root);
+                assert_eq!(record.carriage, borsh::to_vec(carriage.as_ref()).unwrap());
+                assert_eq!(sync.get(class_id), Some(&record.carriage));
+                let decoded: PalwClassAdmissionCarriageV2 = borsh::from_slice(&record.carriage).unwrap();
+                assert_eq!(decoded.profile.shape_profile_id(), *class_id);
+                assert_eq!(decoded.canonical.shape_profile_id, *class_id);
+                let (profile, canonical) = first.consensus.palw_registered_class_carriage_v1(*class_id).expect("actual serving read");
+                assert_eq!(profile.shape_profile_id(), *class_id);
+                assert_eq!(canonical.shape_profile_id, *class_id);
+            }
+            None => {
+                assert!(fresh.get(*class_id).is_none(), "binary-derived BASE0 does not acquire a fabricated declaration");
+                assert!(!sync.contains_key(class_id));
+            }
+        }
+    }
+    drop(first);
+    let (sender, _rx2) = async_channel::unbounded();
+    let mut reopen = config.clone();
+    reopen.process_genesis = false;
+    let second = TestConsensus::with_db(db, &reopen, sender);
+    assert_eq!(second.consensus.palw_state_v2_tip().unwrap().state_root(), root);
+    assert_eq!(second.consensus.palw_class_carriages_for_sync_v1().into_iter().collect::<BTreeMap<_, _>>(), sync);
 }

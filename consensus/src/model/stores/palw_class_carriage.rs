@@ -39,7 +39,7 @@
 
 use std::sync::Arc;
 
-use kaspa_database::prelude::{CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, StoreError, StoreResult};
+use kaspa_database::prelude::{BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DirectDbWriter, StoreError, StoreResult};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use kaspa_hashes::Hash64;
 use kaspa_utils::mem_size::MemSizeEstimator;
@@ -108,5 +108,42 @@ impl DbPalwClassCarriageStore {
     /// doc's argument (the id is the profile's hash).
     pub fn insert(&mut self, class_id: Hash64, record: PalwClassCarriageRecord) -> StoreResult<()> {
         self.access.write(DirectDbWriter::new(&self.db), class_id, Arc::new(record))
+    }
+
+    /// Genesis declarations share the native UTXO/PALW commit. Do not publish
+    /// a positive cache row before the containing RocksDB batch commits.
+    /// The caller retains its store write guard through that commit.
+    pub(crate) fn insert_batch(
+        &mut self,
+        batch: &mut rocksdb::WriteBatch,
+        class_id: Hash64,
+        record: PalwClassCarriageRecord,
+    ) -> StoreResult<()> {
+        self.access.write_many_without_cache(BatchDbWriter::new(batch), &mut std::iter::once((class_id, Arc::new(record))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+
+    #[test]
+    fn genesis_batch_carriage_is_not_visible_before_commit_and_survives_fresh_cache() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+        let id = Hash64::from_u64_word(1);
+        let record = PalwClassCarriageRecord { registered_daa: 0, artifact_root: Hash64::from_u64_word(2), carriage: vec![3, 4] };
+        let mut abandoned = rocksdb::WriteBatch::default();
+        store.insert_batch(&mut abandoned, id, record.clone()).unwrap();
+        assert!(store.get(id).is_none(), "staged declarations cannot authorize service");
+        drop(abandoned);
+        assert!(DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16)).get(id).is_none());
+        let mut committed = rocksdb::WriteBatch::default();
+        store.insert_batch(&mut committed, id, record.clone()).unwrap();
+        db.write(committed).unwrap();
+        assert_eq!(*store.get(id).unwrap(), record);
+        assert_eq!(*DbPalwClassCarriageStore::new(db, CachePolicy::Count(16)).get(id).unwrap(), record);
     }
 }

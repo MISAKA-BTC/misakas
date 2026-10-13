@@ -317,6 +317,7 @@ struct PalwUtxoCommitV2 {
     root: Hash64,
     delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
     genesis: Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
 }
 
 pub struct VirtualStateProcessor {
@@ -2702,7 +2703,12 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(|(root, delta)| PalwUtxoCommitV2 { root, delta, genesis: None }),
+                            palw_v2_staged.map(|(root, delta)| PalwUtxoCommitV2 {
+                                root,
+                                delta,
+                                genesis: None,
+                                genesis_carriages: Vec::new(),
+                            }),
                         );
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
@@ -3111,12 +3117,21 @@ impl VirtualStateProcessor {
         palw_v2_staged: Option<PalwUtxoCommitV2>,
     ) {
         let mut batch = WriteBatch::default();
+        let mut genesis_class_store = None;
         if let Some(staged) = palw_v2_staged {
             let mut store = self.palw_state_v2_store.write();
             store.insert_delta_batch(&mut batch, current, staged.root, &staged.delta).unwrap();
             if let Some(genesis) = staged.genesis {
                 assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
                 store.set_tip_batch(&mut batch, current, &genesis).unwrap();
+            }
+            if !staged.genesis_carriages.is_empty() {
+                assert_eq!(current, self.genesis.hash, "only genesis declarations use this initial commit");
+                let mut class_store = self.palw_class_carriage_store.write();
+                for (class_id, record) in staged.genesis_carriages {
+                    class_store.insert_batch(&mut batch, class_id, record).unwrap();
+                }
+                genesis_class_store = Some(class_store);
             }
         }
         if let Some(mut staged) = evm_staged {
@@ -3235,6 +3250,7 @@ impl VirtualStateProcessor {
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
+        drop(genesis_class_store);
         if let Some(ticket) = rewarded_commit {
             ticket.committed();
         }
@@ -5467,7 +5483,35 @@ impl VirtualStateProcessor {
                 &self.palw_transition_extras_for(&point),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
-            PalwUtxoCommitV2 { root: genesis_state.state_root(), delta, genesis: Some(genesis_state) }
+            let mut genesis_carriages = Vec::new();
+            for object in &objects {
+                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                    class_id,
+                    artifact_root,
+                    admission: Some(carriage),
+                    ..
+                } = object
+                {
+                    let accepted = genesis_state.class(class_id).expect("the genesis class registration was accepted");
+                    assert_eq!(accepted.artifact_root, *artifact_root, "genesis declaration must name the accepted artifact");
+                    assert_eq!(accepted.registered_daa, point.daa_score);
+                    assert_eq!(
+                        carriage.profile.shape_profile_id(),
+                        *class_id,
+                        "genesis declaration must authenticate its class profile"
+                    );
+                    assert_eq!(carriage.canonical.shape_profile_id, *class_id, "genesis canonical job must name the same profile");
+                    genesis_carriages.push((
+                        *class_id,
+                        crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                            registered_daa: accepted.registered_daa,
+                            artifact_root: accepted.artifact_root,
+                            carriage: borsh::to_vec(carriage.as_ref()).expect("the accepted genesis declaration must encode"),
+                        },
+                    ));
+                }
+            }
+            PalwUtxoCommitV2 { root: genesis_state.state_root(), delta, genesis: Some(genesis_state), genesis_carriages }
         });
 
         // Derive the complete registration transition before any UTXO-valid write.
