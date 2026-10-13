@@ -234,9 +234,13 @@ pub fn derive_native_redemption_v33(
     }
     let start =
         (output_index as usize).checked_sub(rank).ok_or("native redemption33 output does not preserve original queue order")?;
-    for (offset, (queue_key, raw)) in before.rows().iter().take(crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK).enumerate() {
-        if raw.len() != 72 || after.rows().iter().any(|(k, _)| k == queue_key) {
-            return Err("native redemption33 original full drain prefix not consumed".into());
+    for (offset, (_, raw)) in before.rows().iter().take(crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK).enumerate() {
+        // Other legacy pooled keys may legitimately be enqueued again by
+        // this block. Their post-state presence is not a second delivery of
+        // our unique original credit. Authenticate the complete paid prefix
+        // and require absence only of this non-reusable original job key.
+        if raw.len() != 72 {
+            return Err("native redemption33 bounded original full drain prefix differs".into());
         }
         let queued: crate::palw_state_v2::PalwPayoutV2 =
             borsh::from_slice(raw).map_err(|_| "native redemption33 bounded drain prefix grammar")?;

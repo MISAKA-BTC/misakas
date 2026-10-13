@@ -2323,7 +2323,7 @@ impl VirtualStateProcessor {
             &header,
             block,
             &self.native_redemption_params_v33,
-            transactions.iter().map(|tx| tx.as_ref()),
+            transactions.iter(),
         )?;
         Ok(((*header).clone(), proof))
     }

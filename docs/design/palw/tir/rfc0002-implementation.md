@@ -3399,7 +3399,8 @@ pooled payout meaning. Delivery33 derives a real coinbase inclusion proof from
 the original validated block body using the owning Crescendo mass fence and
 Hash64 transaction Merkle domain. The independent verifier checks pinned
 pre/post state openings, the exact original credit, the whole canonical payout
-drain prefix, output order/value/script and consumption of those queue rows.
+drain prefix, output order/value/script and consumption of the unique original
+credit queue. Other pooled keys may be legitimately re-enqueued by that block.
 It returns the original credit's real transaction outpoint, not a receipt flag.
 RPC202's new redemption query exports the coinbase proof alongside the same
 immutable audit anchor; ordinary proof responses preserve version1 bytes.
