@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "kind": "owned-incomplete-native-test-db",
+  "testPid": 2956,
+  "testExitCode": 124,
+  "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/rusty-kaspa/.tmpp7qlCM",
+  "ownedFiles": [
+    {
+      "name": "000017.sst",
+      "bytes": 1426
+    },
+    {
+      "name": "000018.sst",
+      "bytes": 8423811
+    },
+    {
+      "name": "000027.sst",
+      "bytes": 1150
+    },
+    {
+      "name": "000028.sst",
+      "bytes": 8424746
+    },
+    {
+      "name": "000029.sst",
+      "bytes": 8424527
+    },
+    {
+      "name": "000030.sst",
+      "bytes": 303349712
+    },
+    {
+      "name": "000043.sst",
+      "bytes": 1374280
+    },
+    {
+      "name": "000044.sst",
+      "bytes": 34126645
+    },
+    {
+      "name": "000046.sst",
+      "bytes": 1589
+    },
+    {
+      "name": "000047.sst",
+      "bytes": 335410951
+    },
+    {
+      "name": "000049.log",
+      "bytes": 5448
+    },
+    {
+      "name": "000050.sst",
+      "bytes": 335448205
+    },
+    {
+      "name": "000051.sst",
+      "bytes": 1388259
+    },
+    {
+      "name": "000052.sst",
+      "bytes": 34136813
+    },
+    {
+      "name": "000053.sst",
+      "bytes": 6421
+    },
+    {
+      "name": "000054.sst",
+      "bytes": 335412922
+    },
+    {
+      "name": "000055.sst",
+      "bytes": 1883
+    },
+    {
+      "name": "CURRENT",
+      "bytes": 16
+    },
+    {
+      "name": "IDENTITY",
+      "bytes": 36
+    },
+    {
+      "name": "LOCK",
+      "bytes": 0
+    },
+    {
+      "name": "LOG",
+      "bytes": 156952
+    },
+    {
+      "name": "MANIFEST-000005",
+      "bytes": 6410
+    },
+    {
+      "name": "OPTIONS-000007",
+      "bytes": 7864
+    }
+  ],
+  "logicalBytes": 1406110066,
+  "completeNative100k": false
+}
