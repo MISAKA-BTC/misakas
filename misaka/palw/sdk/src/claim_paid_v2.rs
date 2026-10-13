@@ -188,8 +188,8 @@ pub fn paid_claim_funding_object_v2(
     max_sources: u32,
     policy: &kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeePolicyV1,
 ) -> Result<KernelRouteObjectV1, Refusal> {
-    for ((table, _), bytes) in &route.aux {
-        if *table != kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2 {
+    for ((table, key), bytes) in &route.aux {
+        if *table != kaspa_consensus_core::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
             continue;
         }
         let a: PalwPaidClaimAuthorityV2 =
@@ -486,8 +486,9 @@ pub fn paid_claim_final_from_kernel_rows_v2(
         .aux_row(PAID_CLAIM_FINALS_V2, &borsh::to_vec(&enrollment).unwrap())
         .ok_or_else(|| Refusal::new("CLAIM_FINAL_MISSING", "paid V2 Final projection absent"))?;
     let mut found = None;
-    for ((table, _), bytes) in route.aux.range((PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new())) {
-        if *table != PAID_CLAIM_ENROLLMENTS_V2 {
+    for ((table, key), bytes) in route.aux.range((PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new()))
+    {
+        if *table != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
             continue;
         }
         let a: PalwPaidClaimAuthorityV2 =

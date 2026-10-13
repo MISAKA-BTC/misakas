@@ -129,16 +129,21 @@ impl PalwKernelRouteStateV1 {
         Ok(row)
     }
     pub fn paid_claim_enrollment_v3(&self, enrollment: &Digest) -> Result<PalwPaidClaimAuthorityV2, String> {
-        for ((t, _), v) in &self.aux {
-            if *t == PAID_CLAIM_ENROLLMENTS_V2 {
-                let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(v).map_err(|e| e.to_string())?;
-                if a.enrollment.id() == *enrollment {
-                    return Ok(a);
-                }
-            }
+        let index: PalwPaidClaimIndexV3 = self
+            .aux_row(PAID_CLAIM_ENROLLMENTS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, enrollment))
+            .ok_or("paid enrollment index missing")?;
+        if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::Enrollment || index.owner != *enrollment {
+            return Err("paid enrollment index substituted".into());
         }
-        Err("paid enrollment missing".into())
+        let a: PalwPaidClaimAuthorityV2 = self
+            .aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).unwrap())
+            .ok_or("paid enrollment index target missing")?;
+        if a.enrollment.id() != *enrollment || a.context.id() != index.target {
+            return Err("paid enrollment index does not bind its primary authority".into());
+        }
+        Ok(a)
     }
+
     pub fn paid_claim_source_authority_v3(&self, context: &Digest) -> Result<PalwPaidClaimSourceAuthorityV3, String> {
         if let Some(a) = self.aux_row::<PalwPaidClaimAuthorityV2>(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(context).unwrap()) {
             a.validate(&self.ledger()?)?;
@@ -157,29 +162,29 @@ impl PalwKernelRouteStateV1 {
                 base_claim: a.enrollment.base_claim,
             });
         }
-        for ((t, _), v) in &self.aux {
-            if *t == PAID_CLAIM_ROUNDS_V2 {
-                let row: PalwPaidClaimRoundV3 = borsh::from_slice(v).map_err(|e| e.to_string())?;
-                if row.context.id() != *context {
-                    continue;
-                }
-                let a = self.paid_claim_enrollment_v3(&row.enrollment)?;
-                row.validate(&a, &self.ledger()?)?;
-                if self.beacon_source_target_v4(context)? != row.target {
-                    return Err("round source target mismatch".into());
-                }
-                return Ok(PalwPaidClaimSourceAuthorityV3 {
-                    context: row.context,
-                    source_target: row.target,
-                    source_policy: a.source_policy,
-                    authorized_daa: row.accepted_daa,
-                    sponsor: row.sponsor,
-                    base_claim: a.enrollment.base_claim,
-                });
-            }
+        let index: PalwPaidClaimIndexV3 = self
+            .aux_row(PAID_CLAIM_ROUNDS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, context))
+            .ok_or("paid staged context index missing")?;
+        if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::StagedContext || index.owner != *context {
+            return Err("paid staged context index invalid".into());
         }
-        Err("paid source authority missing".into())
+        let row: PalwPaidClaimRoundV3 =
+            self.aux_row(PAID_CLAIM_ROUNDS_V2, &borsh::to_vec(&index.target).unwrap()).ok_or("staged source index target missing")?;
+        let a = self.paid_claim_enrollment_v3(&row.enrollment)?;
+        row.validate(&a, &self.ledger()?)?;
+        if row.id() != index.target || row.context.id() != *context || self.beacon_source_target_v4(context)? != row.target {
+            return Err("staged source index substitutes its round/context/target".into());
+        }
+        Ok(PalwPaidClaimSourceAuthorityV3 {
+            context: row.context,
+            source_target: row.target,
+            source_policy: a.source_policy,
+            authorized_daa: row.accepted_daa,
+            sponsor: row.sponsor,
+            base_claim: a.enrollment.base_claim,
+        })
     }
+
     pub fn paid_claim_round_check_authority_v3(
         &self,
         enrollment: &Digest,

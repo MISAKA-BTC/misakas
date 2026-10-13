@@ -18,6 +18,25 @@ pub const PAID_CLAIM_REVIEW_SCOPES_V2: u8 = 122;
 pub const PAID_CLAIM_ROUNDS_V2: u8 = 123;
 pub const PAID_CLAIM_FINALS_V2: u8 = 124;
 
+/// Fixed decoded footprint, separate from authority/round rows by 65-byte key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PalwPaidClaimIndexKindV3 {
+    Enrollment,
+    BaseClaim,
+    StagedContext,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwPaidClaimIndexV3 {
+    pub version: u16,
+    pub kind: PalwPaidClaimIndexKindV3,
+    pub owner: Digest,
+    pub target: Digest,
+}
+pub const PAID_CLAIM_ID_INDEX_PREFIX_V3: u8 = 0x49;
+pub const PAID_CLAIM_BASE_INDEX_PREFIX_V3: u8 = 0x42;
+pub fn paid_claim_index_key_v3(prefix: u8, owner: &Digest) -> Vec<u8> {
+    [vec![prefix], owner.to_vec()].concat()
+}
 /// Explicit aux119 envelope for typed native resource preflight and restore.
 /// These unshipped rows never reinterpret an older wire or observed receipt.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -262,17 +281,20 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         Ok(a)
     }
     pub fn paid_claim_for_base_v2(&self, claim: &Digest) -> Result<Option<PalwPaidClaimAuthorityV2>, String> {
-        for ((table, _), bytes) in &self.aux {
-            if *table == PAID_CLAIM_ENROLLMENTS_V2 {
-                let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
-                if a.enrollment.base_claim == *claim {
-                    a.validate(&self.ledger()?)?;
-                    return Ok(Some(a));
-                }
-            }
+        let key = paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim);
+        let Some(index) = self.aux_row::<PalwPaidClaimIndexV3>(PAID_CLAIM_ENROLLMENTS_V2, &key) else { return Ok(None) };
+        if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != *claim {
+            return Err("paid base index invalid".into());
         }
-        Ok(None)
+        let a: PalwPaidClaimAuthorityV2 =
+            self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).unwrap()).ok_or("paid base index target missing")?;
+        a.validate(&self.ledger()?)?;
+        if a.enrollment.base_claim != *claim || a.context.id() != index.target {
+            return Err("paid base index substitutes immutable enrollment".into());
+        }
+        Ok(Some(a))
     }
+
     pub fn paid_claim_check_authority_v2(
         &self,
         context: &Digest,
@@ -305,6 +327,9 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         for ((table, key), bytes) in
             self.aux.range((PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new()))
         {
+            if key.len() != 64 {
+                continue;
+            }
             let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
             if *table != PAID_CLAIM_ENROLLMENTS_V2 || *key != borsh::to_vec(&a.context.id()).unwrap() {
                 return Err("paid claim authority key mismatch".into());
@@ -323,14 +348,19 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 self.aux_row::<PalwPaidClaimLockV2>(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&a.enrollment.id()).unwrap())
             {
                 let mut signers = std::collections::BTreeSet::new();
-                for ((_, key), bytes) in self.aux.range((PAID_CLAIM_RECEIPTS_V2, Vec::new())..(PAID_CLAIM_RECEIPTS_V2 + 1, Vec::new()))
-                {
+                for seat in &lock.seats {
+                    let signer = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(seat);
+                    let expected = object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(a.enrollment.id(), signer));
+                    let key = borsh::to_vec(&expected).unwrap();
+                    let Some(bytes) = self.aux.get(&(PAID_CLAIM_RECEIPTS_V2, key.clone())) else {
+                        continue;
+                    };
                     let receipt: PaidClaimReceiptV2 = borsh::from_slice(bytes).map_err(|e| e.to_string())?;
                     if receipt.enrollment != a.enrollment.id() {
-                        continue;
+                        return Err("paid seat receipt substitutes enrollment".into());
                     }
                     let expected = object_id(b"MISAKA/PALW/PAID-CLAIM-RECEIPT/V2", &(receipt.enrollment, receipt.signer));
-                    if *key != borsh::to_vec(&expected).unwrap()
+                    if key != borsh::to_vec(&expected).unwrap()
                         || receipt.version != 2
                         || !receipt.complete
                         || receipt.round != 0
@@ -454,8 +484,59 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             return Err(refuse("retained class/job capacity exceeded".into()));
         }
         let mut live = 0u32;
+        // Bounded restore-only scratch: at most maximum_jobs <= 65,536
+        // fixed (Digest,u32) entries. No cached authority cloning or resettable
+        // admission counters are introduced into the consensus state.
+        let mut per_job = std::collections::BTreeMap::<Digest, u32>::new();
+        for ((table, key), bytes) in
+            route.aux.range((PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new()))
+        {
+            if *table != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
+                continue;
+            }
+            let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+            if !per_job.contains_key(&a.job.id()) && per_job.len() >= p.maximum_jobs as usize {
+                return Err(refuse("unbounded restore job scratch".into()));
+            }
+            let total = per_job.entry(a.job.id()).or_default();
+            *total = total.checked_add(1).ok_or_else(|| refuse("job admission overflow".into()))?;
+        }
         for ((table, key), bytes) in &route.aux {
             if !owned(*table) {
+                continue;
+            }
+            if key.len() == 65 && matches!(*table, PAID_CLAIM_ENROLLMENTS_V2 | PAID_CLAIM_ROUNDS_V2) {
+                let index: PalwPaidClaimIndexV3 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
+                let owner: Digest = key[1..].try_into().expect("65-byte index key");
+                if index.version != 3 || index.owner != owner {
+                    return Err(refuse("index owner/version mismatch".into()));
+                }
+                match (*table, key[0], index.kind) {
+                    (PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::Enrollment) => {
+                        let a = route.paid_claim_enrollment_v3(&owner).map_err(&refuse)?;
+                        if a.context.id() != index.target {
+                            return Err(refuse("enrollment index target mismatch".into()));
+                        }
+                    }
+                    (PAID_CLAIM_ENROLLMENTS_V2, PAID_CLAIM_BASE_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::BaseClaim) => {
+                        let a: PalwPaidClaimAuthorityV2 = route
+                            .aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).unwrap())
+                            .ok_or_else(|| refuse("base index target missing".into()))?;
+                        a.validate(&l).map_err(&refuse)?;
+                        if a.enrollment.base_claim != owner || a.context.id() != index.target {
+                            return Err(refuse("base index replaces primary authority".into()));
+                        }
+                    }
+                    (PAID_CLAIM_ROUNDS_V2, PAID_CLAIM_ID_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::StagedContext) => {
+                        let row: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 = route
+                            .aux_row(PAID_CLAIM_ROUNDS_V2, &borsh::to_vec(&index.target).unwrap())
+                            .ok_or_else(|| refuse("source index round missing".into()))?;
+                        if row.context.id() != owner || row.id() != index.target {
+                            return Err(refuse("staged context index substitutes round".into()));
+                        }
+                    }
+                    _ => return Err(refuse("index namespace/kind mismatch".into())),
+                }
                 continue;
             }
             let id: Digest = borsh::from_slice(key).map_err(|e| refuse(format!("aux key: {e}")))?;
@@ -521,16 +602,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     {
                         return Err(refuse("job key/payer/mathematical class/capacity substituted".into()));
                     }
-                    let mut admitted = 0u32;
-                    for ((t, _), v) in &route.aux {
-                        if *t == PAID_CLAIM_ENROLLMENTS_V2 {
-                            let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(v).map_err(|e| refuse(e.to_string()))?;
-                            if a.job.id() == j.id() {
-                                admitted = admitted.checked_add(1).ok_or_else(|| refuse("job admission overflow".into()))?;
-                            }
-                        }
-                    }
-                    if admitted > j.maximum_consumers {
+                    if per_job.get(&j.id()).copied().unwrap_or(0) > j.maximum_consumers {
                         return Err(refuse("job lifetime admission budget exceeded".into()));
                     }
                 }
@@ -543,6 +615,21 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     let j: PaidClaimJobV2 = route
                         .aux_row(PAID_CLAIM_JOBS_V2, &borsh::to_vec(&a.job.id()).unwrap())
                         .ok_or_else(|| refuse("enrollment job absent".into()))?;
+                    let index: PalwPaidClaimIndexV3 = route
+                        .aux_row(
+                            PAID_CLAIM_ENROLLMENTS_V2,
+                            &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &a.enrollment.id()),
+                        )
+                        .ok_or_else(|| refuse("enrollment index absent".into()))?;
+                    let base_index: PalwPaidClaimIndexV3 = route
+                        .aux_row(
+                            PAID_CLAIM_ENROLLMENTS_V2,
+                            &paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, &a.enrollment.base_claim),
+                        )
+                        .ok_or_else(|| refuse("base index absent".into()))?;
+                    if index.target != id || base_index.target != id {
+                        return Err(refuse("authority index differs from primary context".into()));
+                    }
                     if id != a.context.id()
                         || a.class != c
                         || a.job != j
@@ -583,8 +670,25 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     {
                         return Err(refuse("receipt key/time/interactive routing substituted".into()));
                     }
-                    // Full assignment/seed/statement/unique signer projection was
-                    // repeated by route.ledger() above, including cold restore.
+                    let lock: PalwPaidClaimLockV2 = route
+                        .aux_row(PAID_CLAIM_LOCKS_V2, &borsh::to_vec(&receipt.enrollment).unwrap())
+                        .ok_or_else(|| refuse("receipt has no initial lock".into()))?;
+                    if receipt.version != 2
+                        || !receipt.complete
+                        || receipt.round != 0
+                        || receipt.message_root != [0; 64]
+                        || receipt.assignment != lock.assignment
+                        || receipt.sample_seed != lock.seed
+                        || receipt.source_context != lock.context
+                        || receipt.verification_class != a.class.id()
+                        || receipt.evidence_root != a.enrollment.commit_root
+                        || receipt.transcript_root != a.enrollment.prior_transcript
+                        || receipt.signed_daa < lock.locked_daa
+                        || !a.enrollment.lifetime.receipt_open(receipt.signed_daa)
+                        || !lock.seats.iter().any(|s| crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(s) == receipt.signer)
+                    {
+                        return Err(refuse("receipt replaces complete assigned statement/seed/clock".into()));
+                    }
                 }
                 PAID_CLAIM_EVIDENCE_V2 => {
                     let e: PalwPaidClaimEvidenceV3 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
@@ -621,6 +725,14 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     let a = route.paid_claim_enrollment_v3(&row.enrollment).map_err(&refuse)?;
                     row.validate(&a, &l).map_err(&refuse)?;
+                    if a.class.source_policy.interactive_mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+                        let index: PalwPaidClaimIndexV3 = route
+                            .aux_row(PAID_CLAIM_ROUNDS_V2, &paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &row.context.id()))
+                            .ok_or_else(|| refuse("staged source index missing".into()))?;
+                        if index.target != row.id() {
+                            return Err(refuse("round source index differs from primary row".into()));
+                        }
+                    }
                     if id != row.id()
                         || row.accepted_daa > now
                         || row.lock.as_ref().is_some_and(|lock| lock.locked_daa > now)
@@ -648,7 +760,17 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         if !route.paid_claim_interactive_complete_v3(&a, &l).map_err(&refuse)? {
                             return Err(refuse("Final has incomplete interactive plan".into()));
                         }
-                        let last = route.paid_claim_round_v3(&a.enrollment.id(), plan.rounds - 1).map_err(&refuse)?;
+                        let last: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 = route
+                            .aux_row(
+                                PAID_CLAIM_ROUNDS_V2,
+                                &borsh::to_vec(&misaka_palw_kernel::claim_interactive_v3::round_id_v3(
+                                    a.enrollment.id(),
+                                    plan.rounds - 1,
+                                ))
+                                .unwrap(),
+                            )
+                            .ok_or_else(|| refuse("last Final round absent".into()))?;
+                        last.validate(&a, &l).map_err(&refuse)?;
                         (last.lock.ok_or_else(|| refuse("Final round lock absent".into()))?, plan.rounds, last.transcript_root)
                     } else {
                         (

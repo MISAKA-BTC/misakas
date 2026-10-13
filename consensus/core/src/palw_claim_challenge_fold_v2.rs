@@ -22,17 +22,11 @@ fn count(b: &TransitionBuilder<'_>, table: u8) -> usize {
 }
 fn authority(b: &TransitionBuilder<'_>, id: &Digest) -> Result<PalwPaidClaimAuthorityV2, PalwStateV2Error> {
     let r = b.state.kernel_route.as_ref().ok_or_else(|| refused("paid claim route missing"))?;
-    for ((table, _), bytes) in &r.aux {
-        if *table == PAID_CLAIM_ENROLLMENTS_V2 {
-            let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
-            if a.enrollment.id() == *id {
-                a.validate(&r.ledger().map_err(refused)?).map_err(refused)?;
-                return Ok(a);
-            }
-        }
-    }
-    Err(refused("paid enrollment missing"))
+    let a = r.paid_claim_enrollment_v3(id).map_err(refused)?;
+    a.validate(&r.ledger().map_err(refused)?).map_err(refused)?;
+    Ok(a)
 }
+
 fn source_fences(
     b: &TransitionBuilder<'_>,
     now: u64,
@@ -189,7 +183,7 @@ fn apply_inner(
             let used = r
                 .aux
                 .iter()
-                .filter(|((t, _), _)| *t == PAID_CLAIM_ENROLLMENTS_V2)
+                .filter(|((t, key), _)| *t == PAID_CLAIM_ENROLLMENTS_V2 && key.len() == 64)
                 .map(|(_, v)| borsh::from_slice::<PalwPaidClaimAuthorityV2>(v))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| refused(e.to_string()))?;
@@ -283,6 +277,16 @@ fn apply_inner(
             row.liability_until = Some(e.lifetime.liability_until);
             extend_signed_kernel_income_v2(b, ctx, e.base_claim, *signer, e.lifetime.liability_until)?;
             put(b, PAID_CLAIM_ENROLLMENTS_V2, &a.context.id(), &a);
+            for (prefix, kind, owner) in [
+                (PAID_CLAIM_ID_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::Enrollment, e.id()),
+                (PAID_CLAIM_BASE_INDEX_PREFIX_V3, PalwPaidClaimIndexKindV3::BaseClaim, e.base_claim),
+            ] {
+                b.write_kernel_row(
+                    PAID_CLAIM_ENROLLMENTS_V2,
+                    paid_claim_index_key_v3(prefix, &owner),
+                    Some(borsh::to_vec(&PalwPaidClaimIndexV3 { version: 3, kind, owner, target: a.context.id() }).unwrap()),
+                );
+            }
             // Interim V1 receipts cannot cover this new verification identity.
             b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, key(&e.base_claim), None);
             b.write_kernel_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, key(&e.base_claim), None);
@@ -589,18 +593,7 @@ fn receipt_fold(
     put(b, PAID_CLAIM_RECEIPTS_V2, &id, receipt);
     let mut l = route_fold::load_ledger(b, ctx)?;
     let before = l.to_rows();
-    let r = b.state.kernel_route.as_ref().unwrap();
-    let count = r
-        .aux
-        .iter()
-        .filter(|((t, _), _)| *t == PAID_CLAIM_RECEIPTS_V2)
-        .map(|(_, v)| borsh::from_slice::<PaidClaimReceiptV2>(v))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| refused(e.to_string()))?
-        .iter()
-        .filter(|v| v.enrollment == receipt.enrollment)
-        .count() as u32;
-    if count >= lock.quorum {
+    if l.paid_claim_consumers_v2.get(&a.enrollment.base_claim).is_some_and(|c| c.complete) {
         l.apply_paid_claim_tally_v2(&a.enrollment.base_claim).map_err(refused)?;
     }
     route_fold::flush(b, &l, &before);
@@ -613,8 +606,8 @@ pub(super) fn tick_paid_claim_final_projection_v2(
     let Some(r) = b.state.kernel_route.as_ref() else { return Ok(()) };
     let l = r.ledger().map_err(refused)?;
     let mut projections = Vec::new();
-    for ((t, _), bytes) in &r.aux {
-        if *t != PAID_CLAIM_ENROLLMENTS_V2 {
+    for ((t, key), bytes) in &r.aux {
+        if *t != PAID_CLAIM_ENROLLMENTS_V2 || key.len() != 64 {
             continue;
         }
         let a: PalwPaidClaimAuthorityV2 = borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
@@ -810,6 +803,9 @@ pub(super) fn refresh_pending_paid_source_locks_v2(
     }
     let mut invalid_rounds = Vec::new();
     for ((_, key), bytes) in r.aux.range((PAID_CLAIM_ROUNDS_V2, Vec::new())..(PAID_CLAIM_ROUNDS_V2 + 1, Vec::new())) {
+        if key.len() != 64 {
+            continue;
+        }
         let mut row: crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3 =
             borsh::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
         let Some(lock) = row.lock.as_mut() else {
@@ -914,6 +910,21 @@ fn round_message(
     row.validate(&a, &r.ledger().map_err(refused)?).map_err(refused)?;
     admit_review(b, ctx, policy, &a, row.id(), u32::from(plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon))?;
     put(b, PAID_CLAIM_ROUNDS_V2, &row.id(), &row);
+    if plan.mode == misaka_palw_challenge::InteractiveModeV1::StagedBeacon {
+        b.write_kernel_row(
+            PAID_CLAIM_ROUNDS_V2,
+            paid_claim_index_key_v3(PAID_CLAIM_ID_INDEX_PREFIX_V3, &row.context.id()),
+            Some(
+                borsh::to_vec(&PalwPaidClaimIndexV3 {
+                    version: 3,
+                    kind: PalwPaidClaimIndexKindV3::StagedContext,
+                    owner: row.context.id(),
+                    target: row.id(),
+                })
+                .unwrap(),
+            ),
+        );
+    }
     Ok(())
 }
 fn round_fund(

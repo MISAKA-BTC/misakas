@@ -128,3 +128,35 @@ Private workspace/material/execution work hard caps are 256 MiB/32 MiB/100M, and
 actual job positions are used to rederive execution bounds before repeated Greedy
 work. Source-bound numbers are exported as private preflight bounds, never measured
 host consumption, network resource approval or source profitability.
+
+## Authenticated lookups and private factory
+
+New unshipped aux115 has 64-byte context authority keys and 65-byte `0x49` plus
+enrollment-ID / `0x42` plus base-claim-ID index keys. Aux123 has 64-byte round keys
+and 65-byte `0x49` plus staged-context keys. Fixed `PalwPaidClaimIndexV3` rows bind
+version, kind, owner and primary target. Native journal creates pointers atomically;
+restore rejects missing or substituted pointers. These lookups no longer scan all
+retained enrollments/rounds. Cold receipt projection reads only assigned committee
+seat keys, avoiding a full receipt scan per claim. Restore counts admissions once
+in bounded temporary per-job scratch (at most 65,536 fixed entries), and validates
+primary rows against one loaded ledger without cloning that ledger per pointer.
+All new index bytes count toward the native inventory; the typed wire preflight
+must dispatch the new 65-byte key variants before parsing their bodies.
+
+`private_integration/paid_claim_factory.rs` creates a distinct, exact paid-v3
+private configuration from complete-v1, with source/fee/ClaimV2/typed-root/material
+and mandatory native budget/reporter/provider dependencies, mirrored from DAA 0.
+Whole reward-block B-quantum and one-KAS capital units are explicit mechanics-only
+caps, not market parameters or release approval. Every proposal is value checked;
+actual source/court timing and prerequisite gates are retained. Only an ephemeral
+validation copy makes these specifically unreleased activation fields dormant.
+Public startup/presets keep their existing refusal, and the private node compares
+its full consensus fingerprint with this exact factory before serving loopback.
+
+`paid_bootstrap.rs` preserves the old complete-v1 exporter and generates a separate
+base-material subtree. It verifies identical genesis and actual paid-v3 native
+registration scope/signature, re-signs a new fired-policy envelope, derives the
+actual artifact, and commits the new paid ruleset in an explicitly versioned
+conformance statement. Its manifest never promotes old control/receipt evidence
+and reports new native inclusion, conformance, paid work, source lock and Final as
+unobserved. Actual acceptance remains pending consolidated verification.

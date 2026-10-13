@@ -114,5 +114,6 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
         "resourceApproval":false,"nativeEnrollmentIncluded":false,
         "sourceLocked":false,"receiptQuorumIncluded":false,"nativeFinalObserved":false,"releaseApproval":false});
     write_new(&output.join("manifest.json"), &serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?)?;
+    std::fs::File::open(output).and_then(|d| d.sync_all()).map_err(|e| format!("paid work directory sync: {e}"))?;
     Ok(manifest)
 }

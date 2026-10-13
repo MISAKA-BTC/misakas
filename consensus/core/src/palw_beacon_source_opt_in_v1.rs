@@ -202,15 +202,11 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         let ledger = self.ledger()?;
         // A prospective OPV claim which depends on paid Panel checking cannot
         // re-enter the Panel-independent source pool through its old base codec.
-        let dependent: std::collections::BTreeSet<_> = self.aux
-            .range((crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2, Vec::new())..(crate::palw_claim_challenge_v2::PAID_CLAIM_ENROLLMENTS_V2 + 1, Vec::new()))
-            .map(|(_, v)| borsh::from_slice::<crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2>(v).map(|a|a.enrollment.base_claim))
-            .collect::<Result<_, _>>().map_err(|e| e.to_string())?;
         let finals: std::collections::BTreeMap<_, _> = self
             .finals_read_v1()?
             .into_iter()
             .filter_map(|f| {
-                if dependent.contains(&f.receipt.claim) { return None; }
+                if ledger.paid_claim_consumers_v2.contains_key(&f.receipt.claim) { return None; }
                 let bytes = f.event?;
                 let w: misaka_palw_challenge::AttributedWorkV1 = borsh::from_slice(&bytes).ok()?;
                 Some((f.receipt.claim, w.event))
