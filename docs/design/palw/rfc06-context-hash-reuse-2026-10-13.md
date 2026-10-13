@@ -39,8 +39,15 @@ records every changed Rust source, canonical source, executable and linked-libra
 SHA256, plus [ordinary results](evidence/rfc06-context-hash-reuse-2026-10-13-tests.log)
 and the three raw measurement logs. A narrow Cargo build encountered a different
 core feature graph and was stopped rather than allocating another large core variant.
-The integrated consumers still require the matching-feature node build, inherited
-prefix end-to-end test, sparse/dense equivalence and actual backend certification.
+The integrated BASE0 library subsequently compiled in the central matching-feature
+consensus test graph. The existing inherited-prefix end-to-end test passed (1/1,
+2.96 seconds): actual floor backend execution, seat replay, public conviction of
+a lying prefix, and preservation of version-2 job-bound leaves.
+[Raw consumer result](evidence/rfc06-context-hash-inheritance-2026-10-13-tests.log)
+and the linked-library/executable/source hashes are in the machine evidence above.
+It was compiled directly against that newly built BASE0 rlib, without another Cargo
+feature graph. Broader sparse/dense and all-family backend certification remain
+required for integration and do not become model resource/cost approval.
 
 ## Remaining RFC06 gates
 

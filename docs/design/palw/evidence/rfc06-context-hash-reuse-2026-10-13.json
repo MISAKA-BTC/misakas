@@ -88,5 +88,37 @@
   ],
   "wholeModelCostApproved": false,
   "native100kAccepted": false,
-  "prunedP2pAccepted": false
+  "prunedP2pAccepted": false,
+  "integratedConsumerValidation": {
+    "test": "inherited_prefix_leaves_are_job_independent_equal_the_recomputed_ones_and_leave_version_2_alone",
+    "passed": 1,
+    "failed": 0,
+    "seconds": 2.96,
+    "log": "rfc06-context-hash-inheritance-2026-10-13-tests.log",
+    "testExecutableSha256": "dd38f4dd10afbc94f3b46a1f7516b745b509447468d4b0d879f33137a897e15f",
+    "testSourceSha256": "a49407493a5465ba7bece279825ff82cf461cd8954a44fa71e571ec10d5a21ae",
+    "linkedLibraries": [
+      {
+        "name": "borsh",
+        "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libborsh-c57124d88bb5020f.rlib",
+        "sha256": "5532aa752af250630dc85869e908413d1ecf7975ad76a0d28e15fd50f6bf8fd7"
+      },
+      {
+        "name": "kaspa_consensus_core",
+        "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-be23711162d81ece.rlib",
+        "sha256": "090700d32eb74f9a590edb8a2cd482c8435002f84b2f10323ff512e204a64f98"
+      },
+      {
+        "name": "kaspa_hashes",
+        "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-8bac37c40ca97cbc.rlib",
+        "sha256": "01124151345dcf7bd4297f228c7dd259702db9df383d262d9b8ec37fcedd451a"
+      },
+      {
+        "name": "misaka_palw_base0",
+        "path": "/tmp/misaka-rfc67812-node-target/debug/deps/libmisaka_palw_base0-28ef21f6b7b307bc.rlib",
+        "sha256": "2dec58be9ae5841012148ab7be46b3710c2a88a166457c494569e41c4ee7ea66"
+      }
+    ],
+    "scope": "matching-feature actual base0 consumer compilation and floor inheritance execute/seat/court/v2 preservation; not all-model resource approval"
+  }
 }
