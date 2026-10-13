@@ -553,6 +553,9 @@ impl Params {
         if self.palw_paid_consumer_lifecycle_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_paid_consumer_lifecycle_v1 = None;
         }
+        if self.palw_panel_lifetime_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_panel_lifetime_v2 = None; }
+        if self.palw_claim_challenge_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_challenge_v2 = None; }
+        if self.palw_monetary_material_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_monetary_material_v1 = None; }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
@@ -1020,6 +1023,9 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_panel_lifetime_v2,
+            palw_claim_challenge_v2,
+            palw_monetary_material_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -1318,6 +1324,9 @@ impl Params {
             ("palw_bond_budget_v1", palw_bond_budget_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_material_income_v3", *palw_material_income_v3),
+            ("palw_panel_lifetime_v2", palw_panel_lifetime_v2.as_ref().map(|f| f.activation)),
+            ("palw_claim_challenge_v2", palw_claim_challenge_v2.as_ref().map(|f| f.activation)),
+            ("palw_monetary_material_v1", palw_monetary_material_v1.as_ref().map(|f| f.activation)),
             ("palw_paid_consumer_lifecycle_v1", palw_paid_consumer_lifecycle_v1.as_ref().map(|f| f.activation)),
             ("palw_model_bond_allocation_v1", palw_model_bond_allocation_v1.as_ref().map(|fence| fence.activation)),
             ("palw_reporter_share_v2", *palw_reporter_share_v2),
@@ -1674,6 +1683,9 @@ impl Params {
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.digest().as_bytes());
         }
+        if let Some(f) = &self.palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &self.palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &self.palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(at) = self.palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());
@@ -2421,6 +2433,9 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_panel_lifetime_v2,
+            palw_claim_challenge_v2,
+            palw_monetary_material_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -3249,6 +3264,9 @@ impl Params {
         if let Some(f) = palw_paid_consumer_lifecycle_v1.as_mut() {
             fork(&mut f.activation, visit);
         }
+        if let Some(f) = palw_panel_lifetime_v2.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_claim_challenge_v2.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_monetary_material_v1.as_mut() { fork(&mut f.activation, visit); }
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }
@@ -3785,6 +3803,9 @@ impl Params {
             palw_bond_budget_v1,
             palw_reporter_income_v2,
             palw_material_income_v3,
+            palw_panel_lifetime_v2,
+            palw_claim_challenge_v2,
+            palw_monetary_material_v1,
             palw_paid_consumer_lifecycle_v1,
             palw_model_bond_allocation_v1,
             palw_reporter_share_v2,
@@ -4676,6 +4697,9 @@ impl Params {
             h.write(f.activation.daa_score().to_le_bytes());
             h.write(f.policy.digest().as_bytes());
         }
+        if let Some(f) = &palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
+        if let Some(f) = &palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(at) = palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());

@@ -5479,6 +5479,12 @@ impl VirtualStateProcessor {
             && !self.palw_kernel_inner_fence_at(fence, daa_score)
         {
             return Err(match fence {
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ClaimChallengeV2 => {
+                    "a paid Claim V2 object is refused: palw_claim_challenge_v2 is not in force at this block".into()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelLifetimeV2 => {
+                    "a prospective Panel lifetime consent is refused: palw_panel_lifetime_v2 is not in force at this block".into()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
                     "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
                         .to_string()
@@ -5515,6 +5521,12 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> bool {
         match fence {
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ClaimChallengeV2 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_challenge_v2_at(daa_score).is_some())
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelLifetimeV2 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.panel_lifetime_v2_at(daa_score).is_some())
+            }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {
                     f.activation != kaspa_consensus_core::config::params::ForkActivation::never() && f.activation.is_active(daa_score)
@@ -9471,5 +9483,24 @@ impl VirtualStateProcessor {
             }
         });
         Ok(PalwForkChoiceServedV1 { sink, tips, entries, dns_gate })
+    }
+}
+
+impl VirtualStateProcessor {
+    pub(crate) fn palw_monetary_material_release_delta_v1(
+        &self, root: Hash64, consent: Hash64, tail: Hash64, block: BlockHash,
+    ) -> Result<bool, String> {
+        let (_, delta) = self.palw_state_v2_store.read().delta_of(block).map_err(|e| e.to_string())?;
+        if delta.point.block != block { return Err("material release delta substitutes its carrying block".into()); }
+        for entry in &delta.entries {
+            if let kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table: 120, key, old: Some(bytes), new: None } = entry
+                && key.as_slice() == root.as_byte_slice()
+            {
+                let row: kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1 =
+                    borsh::from_slice(bytes).map_err(|e| e.to_string())?;
+                if row.terms.root == root && row.consent == consent && row.tail_block == Some(tail) { return Ok(true); }
+            }
+        }
+        Ok(false)
     }
 }

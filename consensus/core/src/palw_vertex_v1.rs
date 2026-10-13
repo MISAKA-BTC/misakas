@@ -772,6 +772,9 @@ pub fn palw_vertex_leaf_fate_v1(
     verdict: &PalwReceiptVerdictV2,
 ) -> PalwVertexLeafFateV1 {
     use PalwVertexLeafFateV1::{Counted, Ignored, Supplementary};
+    if crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(state, params, claim_id, daa_score).is_err() {
+        return Ignored("actual inclusion exceeds signed Panel service or pause budget");
+    }
     let (Some(claim), Some(panel)) = (state.claim(claim_id), state.panel(claim_id)) else { return Ignored("no such claim or panel") };
     let Some(fence) = params.vertex_from_daa() else { return Ignored("the fence is not armed") };
     if panel.bound_daa < fence {

@@ -89,7 +89,7 @@ pub use consumer::*;
 mod material;
 pub use material::{
     PALW_BOND_BUDGET_STATE_VERSION_V3, PALW_BUDGET_TABLE_MATERIAL_INCOME_V1, PalwMaterialIncomeV1, PalwMaterialPaymentV1,
-    material_pending_id_v1,
+    material_pending_id_v1, material_queue_receipt_id_v1,
 };
 
 // ---- the four dimensions ------------------------------------------------------------------------------------------------------
@@ -722,12 +722,15 @@ impl Params {
                 .state
                 .clone()
                 .with_bond_budget(mirror)
+                .with_claim_challenge_v2(self.palw_claim_challenge_v2.filter(|f| f.activation != ForkActivation::never()))
                 .with_reporter_income_from(
                     self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()),
                 )
                 .with_material_income_from(
                     self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score()),
                 )
+                .with_monetary_material(self.palw_monetary_material_v1.as_ref().filter(|f| f.activation != ForkActivation::never())
+                    .map(|f| crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1 { from_daa: f.activation.daa_score(), policy: f.policy.clone() }))
                 .with_paid_consumer_lifecycle(
                     self.palw_paid_consumer_lifecycle_v1
                         .as_ref()

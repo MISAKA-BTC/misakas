@@ -791,6 +791,9 @@ impl TransitionBuilder<'_> {
         claim_id: Hash64,
         plan: PalwBudgetPlanV1,
     ) -> Result<(), PalwStateV2Error> {
+        if plan.origin != PalwBudgetOriginV1::KernelRoute && plan.reservation.reward_sompi > 0 {
+            self.state.require_monetary_material_enrollment_v1(self.params, claim_id, ctx.daa_score, None)?;
+        }
         if self.state.bond_budget.is_none() {
             let mirror = self.bond_budget_mirror_at(ctx.daa_score).expect("a plan exists only past the fence");
             self.create_bond_budget_v1(ctx, &mirror)?;
@@ -1855,6 +1858,11 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
         .map(|(id, _)| *id)
         .collect();
     for id in paid {
+        if let Some(held) = builder.state.bond_budget.as_ref().and_then(|b|b.claim_row(&id)) {
+            if let Some(queue) = drained.iter().find(|queue|native_queued_income_id_v1(**queue,&held.bond)==id) {
+                super::palw_monetary_material_fold_v1::observe_payment(builder,ctx,id,*queue);
+            }
+        }
         builder
             .bond_budget_op(|budget, _, j| budget.confirm_native_income_payment_v1(&mirror.policy, &id, now, j))
             .expect("created")

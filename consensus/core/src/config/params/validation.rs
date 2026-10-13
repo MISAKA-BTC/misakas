@@ -175,6 +175,9 @@ impl Params {
         self.validate_palw_bond_budget_v1()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
+        self.validate_palw_panel_lifetime_v2()?;
+        self.validate_palw_claim_challenge_v2()?;
+        self.validate_palw_monetary_material_v1()?;
         self.validate_palw_paid_consumer_lifecycle_v1()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.

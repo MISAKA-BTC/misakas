@@ -770,3 +770,110 @@ async fn x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_q
     let replay = replay_with_lane(&cw.net, &lane).await;
     cw.net.assert_same(&replay, "actual full happy native settlement/queue-window replay");
 }
+
+/// Actual ML-DSA carriers/native coinbase and a fresh Consensus on the same DB.
+/// The unused-root service contract proves consent/fee plumbing; it makes no
+/// native model-work or physical complete-copy claim.
+#[tokio::test]
+async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recovers_its_authority() {
+    use kaspa_consensus_core::palw_bond_budget_v1::{PalwBondBudgetFenceV1, PalwBondBudgetPolicyV1};
+    use kaspa_consensus_core::palw_monetary_material_v1::*;
+    use kaspa_consensus_core::palw_provider_court_v1::{PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, palw_provider_court_message_v1};
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (config, _, premine, floats) = kernel_config();
+    let mut params = config.params.clone();
+    let mut budget = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+    budget.capital_unit_sompi = 100_000_000;
+    budget.reward_per_unit_sompi = 100_000_000;
+    let policy = PalwMonetaryMaterialPolicyV1 {
+        version: 1,
+        max_contracts: 16,
+        max_contracts_per_provider: 8,
+        max_bytes_per_contract: 1_000_000,
+        max_bytes_per_provider: 8_000_000,
+        minimum_collateral_sompi: 100_000_000,
+        minimum_fee_sompi: 1_000_000,
+        window_daa: budget.window_daa,
+        response_window_daa: 64,
+        max_enrollment_daa: 200,
+        cost_report_root: Hash64::from_bytes([0xD4; 64]),
+    };
+    params.palw_bond_budget_v1 = Some(PalwBondBudgetFenceV1 { activation: ForkActivation::new(1), policy: budget });
+    params.palw_reporter_income_v2 = Some(ForkActivation::new(1));
+    params.palw_material_income_v3 = Some(ForkActivation::new(1));
+    params.palw_provider_court_v1 = Some(ForkActivation::new(1));
+    params.palw_monetary_material_v1 =
+        Some(PalwMonetaryMaterialFenceV1 { activation: ForkActivation::new(1), policy: policy.clone() });
+    params.sync_palw_bond_budget_v1();
+    assert!(params.validate_palw_monetary_material_v1().is_err(), "test consent is not public cost/liveness approval");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => unreachable!(),
+    };
+    let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), |c| TestConsensus::with_db(db.clone(), c, sender));
+    net.beat_to(1).await;
+    let root = Hash64::from_bytes([0xE4; 64]);
+    let mut enrollment = PalwMonetaryMaterialEnrollmentV1 {
+        terms: PalwMonetaryMaterialTermsV1 {
+            version: 1,
+            root,
+            dependencies: Vec::new(),
+            exec_plan_root: None,
+            sponsor: net.bond(0),
+            nonce: Hash64::from_bytes([0xE5; 64]),
+            policy: policy.id(),
+            max_material_bytes: 1_000,
+                material_manifest: None,
+            window_daa: policy.window_daa,
+            enrollment_until_daa: net.daa() + 100,
+            payment_relative_until_finality: true,
+        },
+        offers: vec![2usize, 3]
+            .into_iter()
+            .map(|card| PalwMonetaryMaterialOfferV1 {
+                provider: net.bond(card),
+                collateral_sompi: policy.minimum_collateral_sompi,
+                prepaid_fee_sompi: policy.minimum_fee_sompi,
+                signature: Vec::new(),
+            })
+            .collect(),
+    };
+    enrollment.offers.sort_by_key(|o| o.provider);
+    let payload = enrollment.payload();
+    for offer in &mut enrollment.offers {
+        let card = [2usize, 3].into_iter().find(|card| net.bond(*card) == offer.provider).unwrap();
+        let message = palw_provider_court_message_v1(net.domain, 240, &offer.provider, &payload);
+        offer.signature = sign(card, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0xD1);
+    }
+    let message = palw_provider_court_message_v1(net.domain, 240, &enrollment.terms.sponsor, &payload);
+    let object = Obj::MonetaryMaterialEnrolledV1 {
+        enrollment: Box::new(enrollment.clone()),
+        signature: sign(0, message.as_byte_slice(), PALW_PROVIDER_COURT_MLDSA87_CONTEXT_V1, 0xD2),
+    };
+    let before = net.collateral(0);
+    let provider_before = [net.collateral(2), net.collateral(3)];
+    net.send(vec![(0, object.clone())]).await;
+    for _ in 0..4 {
+        net.chain.heartbeat(net.ttpb(), Vec::new()).await;
+    }
+    let state = net.chain.tip_state().1;
+    let row = state.monetary_material_row_v1(root).expect("real signed enrollment admitted");
+    assert_eq!(net.collateral(0), before - 2 * policy.minimum_fee_sompi, "sponsor-owned escrow debited once");
+    assert_eq!([net.collateral(2), net.collateral(3)], provider_before, "fee uses the native payout queue");
+    let payment = row.last_payment.as_ref().expect("actual coinbase drain authority");
+    assert_eq!(payment.root, root);
+    assert_eq!(payment.amount, policy.minimum_fee_sompi);
+    assert!(payment.paid_daa >= row.accepted_daa);
+    assert!(row.providers.iter().all(|p| p.fee_queued));
+    assert_eq!(state.material_income_hold_until_v1(&net.bundle.state, root), Some(u64::MAX));
+    net.send(vec![(0, object)]).await;
+    assert_eq!(net.collateral(0), before - 2 * policy.minimum_fee_sompi, "replay creates no second escrow/fee");
+    let recovered = net.restart(db);
+    let rows = recovered.chain.ctx.consensus.palw_monetary_material_covenants_v1().expect("fresh coherent native read");
+    let restored = rows.into_iter().find(|r| r.terms.root == root).unwrap();
+    assert_eq!(restored.consent, row.consent);
+    assert_eq!(restored.last_payment, row.last_payment);
+    assert_eq!(recovered.chain.ctx.consensus.palw_material_income_hold_until_v1(root), Some(u64::MAX));
+}

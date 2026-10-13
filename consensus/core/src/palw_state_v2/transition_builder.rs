@@ -8454,6 +8454,7 @@ impl<'a> TransitionBuilder<'a> {
     /// attempt whose licence set recounted to `basis_k ≥ 2` — an S2 licence and every free-prompt
     /// licence never tick. The deadline is DL-1's ([`palw_rcore_deadline_v1`]).
     pub(super) fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&self.state, self.params, &claim_id, daa_score)?;
         if self.state.paid_consumer_contract_v1(&claim_id).is_some() {
             // The licence's earliest Final is the one Final floor (`palw_claim_final_floor_v1`, the td0 rule; R6781-F merge), plus one.
             let through = palw_claim_final_floor_v1(&self.state, self.params, &claim_id, &claim, daa_score)?

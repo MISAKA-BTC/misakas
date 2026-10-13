@@ -935,6 +935,14 @@ pub(super) fn apply_root_declared_v2(
         &claim_id,
         declaration.expiry_daa,
     )?;
+    builder.state.require_monetary_material_enrollment_v1(builder.params, claim_id, daa, None)?;
+    if let Some(consent) = builder.state.monetary_material_row_v1(claim_id) {
+        if consent.terms.exec_plan_root != Some(declaration.plan_root)
+            || !consent.terms.dependencies.contains(&declaration.prefix_claim)
+        {
+            return Err(refused("monetary provider did not sign this root's complete execution plan/prefix".into()));
+        }
+    }
     // ---- writes ----
     if builder.state.kernel_route.is_some() {
         super::palw_kernel_route_fold_v1::bind_exec_reward_v1(

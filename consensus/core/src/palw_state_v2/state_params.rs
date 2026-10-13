@@ -162,9 +162,12 @@ impl PalwStateParamsV2 {
             floor_reserve_from_daa: None,
             anchor_window_from_daa: None,
             panel_v3: None,
+            panel_lifetime_v2: None,
+            palw_claim_challenge_v2: None,
             bond_budget: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
+            monetary_material: None,
             paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
@@ -1842,5 +1845,31 @@ impl PalwStateParamsV2 {
         // denom ≥ 1000 (tolerance floor × epoch ≥ 1), so the ceiling division is ≤ 1000 and a
         // whole-table base grant is always fundable.
         (1_000_000u128.div_ceil(denom)).max(1) as u16
+    }
+}
+
+impl PalwStateParamsV2 {
+    pub fn monetary_material_from_v1(&self) -> Option<u64> { self.monetary_material.as_ref().map(|m|m.from_daa) }
+    pub fn with_monetary_material(mut self, mirror: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>) -> Self { self.monetary_material = mirror; self }
+    pub fn monetary_material_at_v1(&self, daa: u64) -> Option<&crate::palw_monetary_material_v1::PalwMonetaryMaterialPolicyV1> {
+        self.monetary_material.as_ref().filter(|m| daa >= m.from_daa && self.material_income_active_at(daa)).map(|m| &m.policy)
+    }
+}
+
+impl crate::palw_state_v2::PalwStateParamsV2 {
+    pub fn with_panel_lifetime_v2(mut self, mirror: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>) -> Self { self.panel_lifetime_v2 = mirror; self }
+    pub fn panel_lifetime_v2_at(&self, daa: u64) -> Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2> {
+        self.panel_lifetime_v2.filter(|m| daa >= m.from_daa)
+    }
+}
+
+impl PalwStateParamsV2 {
+    pub fn with_claim_challenge_v2(mut self, fence: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>) -> Self {
+        self.palw_claim_challenge_v2 = fence;
+        self
+    }
+    pub fn claim_challenge_v2_at(&self, daa: u64) -> Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2> {
+        self.palw_claim_challenge_v2.filter(|f| f.activation != crate::config::params::ForkActivation::never()
+            && f.activation.is_active(daa))
     }
 }

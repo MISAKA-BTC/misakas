@@ -76,6 +76,12 @@ pub fn material_pending_id_v1(income: Hash64) -> Hash64 {
     keyed64(b"misaka-palw/material-income/pending/v1", &[income.as_byte_slice()])
 }
 
+/// Canonical exact original-entitlement link; a recipient's aggregate queue ID
+/// alone cannot identify one source fee within a coalesced payment.
+pub fn material_queue_receipt_id_v1(income: Hash64, queued: Hash64, now: u64) -> Hash64 {
+    keyed64(b"misaka-palw/material-income/queue/v1", &[material_pending_id_v1(income).as_byte_slice(),queued.as_byte_slice(),&now.to_le_bytes()])
+}
+
 impl PalwBondBudgetStateV1 {
     pub fn activate_material_income_v3(&mut self, j: &mut Vec<PalwBudgetWriteV1>) {
         if self.header.version < PALW_BOND_BUDGET_STATE_VERSION_V3 {
@@ -198,7 +204,7 @@ impl PalwBondBudgetStateV1 {
         if pending.payment != (PalwMaterialPaymentV1::Pending { income }) || now < pending.accepted_daa || amount > pending.amount {
             return Err(PalwBudgetRefusalV1::Assignment("material transfer differs from its funded pending subject"));
         }
-        let key = keyed64(b"misaka-palw/material-income/queue/v1", &[id.as_byte_slice(), queued.as_byte_slice(), &now.to_le_bytes()]);
+        let key = material_queue_receipt_id_v1(income, queued, now);
         let old = self.material_income.get(&key).copied();
         let payment =
             PalwMaterialPaymentV1::Queued { income: Some(queued), queue: None, queued_daa: now, paid_daa: None, release_daa: None };

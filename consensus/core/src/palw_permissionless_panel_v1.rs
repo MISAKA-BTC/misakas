@@ -109,7 +109,10 @@ impl Params {
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return };
         let mirror = self.palw_panel_v3_mirror_v1(network, palw_ruleset_id_v2(bundle));
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
-            bundle.state = bundle.state.clone().with_panel_v3(mirror);
+            bundle.state = bundle.state.clone().with_panel_v3(mirror).with_panel_lifetime_v2(
+                self.palw_panel_lifetime_v2.filter(|f| f.activation != ForkActivation::never())
+                    .map(|f| crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2 { from_daa: f.activation.daa_score(), policy: f.policy })
+            );
         }
     }
 

@@ -400,6 +400,18 @@ impl ConsensusSessionOwned {
         self.consensus.palw_material_income_hold_until_v1(claim)
     }
 
+    pub fn palw_monetary_material_covenants_v1(
+        &self,
+    ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
+        self.consensus.palw_monetary_material_covenants_v1()
+    }
+
+    pub fn palw_monetary_material_release_finalized_v1(
+        &self, root: Hash64, consent: Hash64, tail: Hash64, release_block: BlockHash,
+    ) -> Result<bool, String> {
+        self.consensus.palw_monetary_material_release_finalized_v1(root, consent, tail, release_block)
+    }
+
     pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
         self.consensus.palw_v2_registration_terms()
     }

@@ -58,6 +58,23 @@ pub(super) fn fund_panel_sources_v2(
         .ok_or_else(|| refuse("Panel liability overflow"))?;
     let target = panel_source_target_v2(&source.policy, context, &request, &panel, tail, &route.header.policy)
         .map_err(PalwStateV2Error::KernelRouteRefused)?;
+    // A sponsor cannot extend a consumer's service consent. Conversely, this
+    // historical funding codec cannot silently enlarge its signed source hold.
+    // New absolute consumer contracts must fit the source contract actually
+    // signed and funded for this exact frozen epoch, including retry/pause tail.
+    if builder.params.panel_lifetime_v2_at(ctx.daa_score).is_some() {
+        for (id, claim) in &builder.state.claims {
+            if claim.work_id.is_none_or(|work| !snapshot.assigned_work_ids.contains(&work.as_bytes())) {
+                continue;
+            }
+            if let Some(consent) = crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(&builder.state, builder.params, id, claim)
+                .map_err(PalwStateV2Error::KernelRouteRefused)? {
+                if consent.terms.liability_until_daa > target.terms.hold_until {
+                    return Err(refuse("the funded source hold does not cover its signed absolute Panel consumer liability"));
+                }
+            }
+        }
+    }
     let key = borsh::to_vec(&target.terms.context).expect("context serializes");
     let cap = fee.policy.max_funded_sources.min(target.terms.max_total);
     let minimum = fee.policy.minimum_fee_for(&target).map_err(PalwStateV2Error::KernelRouteRefused)?;

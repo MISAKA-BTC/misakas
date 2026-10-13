@@ -167,6 +167,8 @@ mod palw_flat_model_vector_fold_v9;
 #[path = "palw_model_refutation_seal_fold_v4.rs"]
 mod palw_model_refutation_seal_fold_v4;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
+#[path = "palw_monetary_material_fold_v1.rs"]
+mod palw_monetary_material_fold_v1;
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
 // Lane LG14-A: the legacy route's dispute reservations (tags 154–155), their lapse, release and burn, and the reserved DA budget.
@@ -193,6 +195,8 @@ mod palw_adapter_class_fold_v1;
 // through their one writers.
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
+#[path = "palw_panel_lifetime_fold_v2.rs"]
+mod palw_panel_lifetime_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
 mod palw_panel_v3_fold_v1;
 pub use palw_panel_v3_fold_v1::{
@@ -1827,6 +1831,10 @@ pub struct PalwStateParamsV2 {
     /// reads it). `None` on every shipped preset, and `validate_palw_permissionless_panel_v1` refuses every armed one.
     #[borsh(skip)]
     panel_v3: Option<crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1>,
+    #[borsh(skip)]
+    panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>,
+    #[borsh(skip)]
+    pub(crate) palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
     /// **Lane BUDGET (ADR-0176 / ADR-0177): `Params::palw_bond_budget_v1` and `palw_model_bond_allocation_v1`, mirrored by
     /// `Params::sync_palw_bond_budget_v1`** — the fences' heights and policies (the fold's budget hooks read it). `None` on every shipped
     /// preset, and validation refuses both armed.
@@ -1837,6 +1845,8 @@ pub struct PalwStateParamsV2 {
     reporter_income_from_daa: Option<u64>,
     #[borsh(skip)]
     material_income_from_daa: Option<u64>,
+    #[borsh(skip)]
+    monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
     #[borsh(skip)]
     paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
@@ -3725,7 +3735,7 @@ pub fn palw_claim_receipt_deadline_v1(
     claim: &PalwClaimStateV2,
 ) -> Result<Option<u64>, PalwStateV2Error> {
     let Some(panel) = state.panels.get(claim_id) else { return Ok(None) };
-    panel
+    let deadline = panel
         .bound_daa
         .checked_add(params.receipt_window_for_claim_v1(
             state,
@@ -3733,8 +3743,10 @@ pub fn palw_claim_receipt_deadline_v1(
             crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
             panel.bound_daa,
         ))
-        .map(Some)
-        .ok_or(PalwStateV2Error::Overflow("receipt deadline"))
+        .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
+    let consent = crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(state, params, claim_id, claim)
+        .map_err(PalwStateV2Error::KernelRouteRefused)?;
+    Ok(Some(consent.map_or(deadline, |row| deadline.min(row.terms.service_until_daa))))
 }
 
 /// **DL-1 (S's rows): a claim's one deadline**, a pure function of rooted data and the last point's
@@ -7206,6 +7218,20 @@ pub enum PalwConsensusObjectV2 {
         sequence: u64,
         signature: Vec<u8>,
     } = 140,
+    /// New signed payment-relative monetary material consent. No old lease is extended.
+    MonetaryMaterialEnrolledV1 {
+        enrollment: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialEnrollmentV1>,
+        signature: Vec<u8>,
+    } = 240,
+    MonetaryMaterialReplacedV1 {
+        replacement: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialReplacementV1>,
+        signature: Vec<u8>,
+    } = 241,
+    MonetaryMaterialActionV1 {
+        action: Box<crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1>,
+        signer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    } = 242,
 }
 
 /// **Is this object an onboarding object (tags 104–107, 109)** — a variant an older build cannot decode and skips (A-2)? Below
@@ -13481,6 +13507,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_improve_material_fold_v1::settle_improvement_material_v1(&mut builder, ctx)?;
     // RFC-0010: the permissionless Panel's engine against the pre-object base, as the fold's step 2f does.
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
+    palw_monetary_material_fold_v1::tick(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     Ok(builder.checkpoint().0)
 }
@@ -13966,6 +13993,7 @@ fn apply_palw_transition_v7_inner(
     //     one-ledger headroom as it stands before anything this block carries. Mirrored in `palw_v2_pre_object_base_v1`. A no-op
     //     below `palw_permissionless_panel_v1`.
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
+    palw_monetary_material_fold_v1::tick(&mut builder, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
     //
@@ -14440,6 +14468,7 @@ fn apply_palw_transition_v7_inner(
     palw_terminal_carriage_fold_v1::sweep(&mut builder, ctx);
     palw_staged_court_fold_v1::sweep(&mut builder, ctx);
 
+    palw_monetary_material_fold_v1::refresh(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -17376,7 +17405,8 @@ fn apply_audit_receipt_batch_v1(
         return Err(PalwStateV2Error::AuditReceiptRefused { auditor: *auditor, why });
     }
     for entry in entries {
-        if !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry) {
+        if crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, &entry.claim_id, ctx.daa_score).is_err()
+            || !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry) {
             continue;
         }
         let claim = builder.state.claims.get(&entry.claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(entry.claim_id))?;
@@ -20727,6 +20757,7 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
+    builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
     let claim = match &budget_plan {
@@ -20735,6 +20766,7 @@ fn apply_attempt(
         }
         None => claim,
     };
+    let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
     builder.reserve_for_claim(&claim)?;
     if let Some(contract) = consumer_plan {
         builder.commit_paid_consumer_v1(claim_id, contract)?;
@@ -20813,6 +20845,10 @@ fn apply_attempt(
     // merged loop and must leave no mark, and only past the deep fence.
     if builder.extras.audit_2026_09_11_deep_active {
         builder.seen_exec.insert(origin.execution_key);
+    }
+    if let Some(authorization) = panel_authorization {
+        palw_panel_lifetime_fold_v2::capture(builder, claim_id, authorization)
+            .expect("a prevalidated native claim must have its immutable Panel consent fields");
     }
     Ok(())
 }
@@ -24714,6 +24750,9 @@ mod staged_court_state_tests_v1 {
         assert!(borsh::from_slice::<PalwStateCarriageV2>(&empty_tail).is_err());
     }
 }
+
+#[path = "palw_claim_challenge_fold_v2.rs"]
+mod palw_claim_challenge_fold_v2;
 
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_state_v2.rs"]

@@ -3054,6 +3054,12 @@ pub struct Params {
     /// Root-exact physical monetary payment/material retention, schema v3.
     /// Separate dormant fence; requires budget and reporter schemas at/below it.
     pub palw_material_income_v3: Option<ForkActivation>,
+    /// Prospective producer-signed absolute Panel service lifetime. Dormant.
+    pub palw_panel_lifetime_v2: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2>,
+    /// Signed Claim V2 seed/checker/lifetime contract; dormant without scoped review.
+    pub palw_claim_challenge_v2: Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2>,
+    /// Explicit signed payment-relative material covenants; dormant without cost approval.
+    pub palw_monetary_material_v1: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1>,
     /// Immutable paid native consumer service/backstop/material contract. Dormant.
     pub palw_paid_consumer_lifecycle_v1: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1>,
     /// **ADR-0177 D3–D5: the model-bond allocation** ([`crate::palw_bond_budget_v1`]): past this height a bond's signed capital
@@ -5915,6 +5921,9 @@ impl Params {
             palw_bond_budget_v1: self.palw_bond_budget_v1.clone(),
             palw_reporter_income_v2: self.palw_reporter_income_v2,
             palw_material_income_v3: self.palw_material_income_v3,
+            palw_panel_lifetime_v2: self.palw_panel_lifetime_v2,
+            palw_claim_challenge_v2: self.palw_claim_challenge_v2,
+            palw_monetary_material_v1: self.palw_monetary_material_v1.clone(),
             palw_paid_consumer_lifecycle_v1: self.palw_paid_consumer_lifecycle_v1.clone(),
             palw_model_bond_allocation_v1: self.palw_model_bond_allocation_v1.clone(),
             palw_reporter_share_v2: self.palw_reporter_share_v2,
@@ -7037,6 +7046,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7355,6 +7367,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -7655,6 +7670,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,
@@ -13117,6 +13135,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_budget_v1: None,
     palw_reporter_income_v2: None,
     palw_material_income_v3: None,
+    palw_panel_lifetime_v2: None,
+    palw_claim_challenge_v2: None,
+    palw_monetary_material_v1: None,
     palw_paid_consumer_lifecycle_v1: None,
     palw_model_bond_allocation_v1: None,
     palw_reporter_share_v2: None,

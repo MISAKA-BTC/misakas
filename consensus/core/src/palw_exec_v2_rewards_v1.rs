@@ -72,6 +72,7 @@ pub(super) fn require_native_session_window(
     root_id: &Hash64,
     required_until: u64,
 ) -> Result<(), PalwStateV2Error> {
+    crate::palw_panel_lifetime_v2::require_panel_session_window_v2(state, params, root_id, required_until)?;
     state.require_paid_consumer_backstop_v1(root_id, required_until)?;
     let root = state.exec_v2.roots.get(root_id);
     let mut bound = match root {

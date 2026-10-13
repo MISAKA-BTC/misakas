@@ -3477,6 +3477,47 @@ impl VirtualStateProcessor {
                 }
                 // **Lane DA16 (tags 150–153): the provider court** — the fence, an Active signer, its signature over the payload; the
                 // leases, units and verdicts are the fold's.
+                Obj::MonetaryMaterialEnrolledV1 { enrollment, signature } => {
+                    if bundle.state.monetary_material_at_v1(point.daa_score).is_none() {
+                        return Err("monetary material enrollment is dormant".into());
+                    }
+                    let payload = enrollment.payload();
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 240, &enrollment.terms.sponsor, &payload, signature)?;
+                    for offer in &enrollment.offers {
+                        self.palw_provider_court_signature_ok(state, point.daa_score, 240, &offer.provider, &payload, &offer.signature)?;
+                    }
+                }
+                Obj::MonetaryMaterialReplacedV1 { replacement, signature } => {
+                    if bundle.state.monetary_material_at_v1(point.daa_score).is_none() {
+                        return Err("monetary material replacement is dormant".into());
+                    }
+                    let payload = replacement.payload();
+                    self.palw_provider_court_signature_ok(state, point.daa_score, 241, &replacement.enrollment.terms.sponsor, &payload, signature)?;
+                    for offer in &replacement.enrollment.offers {
+                        self.palw_provider_court_signature_ok(state, point.daa_score, 241, &offer.provider, &payload, &offer.signature)?;
+                    }
+                }
+                Obj::MonetaryMaterialActionV1 { action, signer, signature } => {
+                    if bundle.state.monetary_material_at_v1(point.daa_score).is_none() {
+                        return Err("monetary material action is dormant".into());
+                    }
+                    if let kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::Release { root, consent, tail_block } = action.as_ref() {
+                        let row = state.monetary_material_row_v1(*root).ok_or("material release has no enrollment")?;
+                        if row.consent != *consent || row.tail_block != Some(*tail_block) {
+                            return Err("material release substitutes its consent/tail".into());
+                        }
+                        let block_data = self.ghostdag_store.get_data(point.block).map_err(|e| e.to_string())?;
+                        let pruning_point = self.pruning_point_store.read().pruning_point().map_err(|e| e.to_string())?;
+                        let finality = self.depth_manager.calc_finality_point(&block_data, pruning_point);
+                        if !self.reachability_service.is_chain_ancestor_of(*tail_block, block_data.selected_parent)
+                            || !self.reachability_service.is_chain_ancestor_of(*tail_block, finality) {
+                            return Err("monetary material tail is not finalized on the carrying block's selected chain".into());
+                        }
+                    } else {
+                        let payload = borsh::to_vec(action.as_ref()).map_err(|e| e.to_string())?;
+                        self.palw_provider_court_signature_ok(state, point.daa_score, 242, signer, &payload, signature)?;
+                    }
+                }
                 Obj::ProviderLeaseV1 { subject, reserved, serve_until_daa, provider, signature } => {
                     let payload = borsh::to_vec(&(subject, reserved, serve_until_daa)).map_err(|e| e.to_string())?;
                     self.palw_provider_court_signature_ok(state, point.daa_score, 150, provider, &payload, signature)?;

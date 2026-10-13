@@ -1411,6 +1411,64 @@ impl ConsensusApi for Consensus {
         )
     }
 
+    fn palw_monetary_material_covenants_v1(
+        &self,
+    ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("monetary material requires ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("monetary material view has an incomplete import".into());
+        }
+        let (point, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("monetary material state is missing")?;
+        let after = self.lkg_virtual_state.load();
+        let (after_import, after_stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !after_stable
+            || after_import.active.is_some()
+            || import.epoch != after_import.epoch
+            || point != after.ghostdag_data.selected_parent
+            || before.ghostdag_data.selected_parent != point
+        {
+            return Err("monetary material view changed generation or returned an old tip".into());
+        }
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        Ok(state.monetary_material_rows_v1())
+    }
+
+    fn palw_monetary_material_release_finalized_v1(
+        &self, root: kaspa_hashes::Hash64, consent: kaspa_hashes::Hash64, tail: kaspa_hashes::Hash64, release_block: BlockHash,
+    ) -> Result<bool, String> {
+        // This coherent read also refuses incomplete imports, stale tips and
+        // missing states. An unsigned absence can never authorize file GC.
+        let before = self.lkg_virtual_state.load();
+        let (import_before, stable_before) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() { return Err("material GC import is incomplete".into()); }
+        let rows = self.palw_monetary_material_covenants_v1()?;
+        if rows.iter().any(|row| row.terms.root == root) { return Ok(false); }
+        if !self.virtual_processor.palw_monetary_material_release_delta_v1(root, consent, tail, release_block)? { return Ok(false); }
+        let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        for block in [tail, release_block] {
+            if !self.reachability_service.has_reachability_data(block)
+                || !self.reachability_service.is_chain_ancestor_of(block, before.ghostdag_data.selected_parent)
+                || !self.reachability_service.is_chain_ancestor_of(block, finality)
+            { return Ok(false); }
+        }
+        let after = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() || import.epoch != import_before.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent {
+            return Err("material GC witness changed snapshot/import generation".into());
+        }
+        Ok(true)
+    }
+
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is
     /// the same snapshot every other `palw_*` answer here takes.
     fn palw_model_market_v1(

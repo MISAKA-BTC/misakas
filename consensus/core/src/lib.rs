@@ -198,6 +198,7 @@ pub mod palw_base0_profile;
 pub mod palw_batch_licence_v1;
 pub mod palw_beacon_source_fee_v1;
 pub mod palw_panel_source_fee_v2;
+pub mod palw_panel_lifetime_v2;
 pub mod palw_beacon_source_opt_in_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
@@ -882,3 +883,12 @@ pub mod palw_flat_execution_v11;
 pub mod palw_flat_model_vector_da_v9;
 pub mod palw_flat_model_vector_v9;
 pub mod palw_tokenizer_owned_court_v1;
+
+pub mod palw_monetary_material_v1;
+
+pub mod palw_claim_challenge_v2;
+pub mod palw_claim_interactive_v3;
+
+pub mod palw_material_capacity_v1;
+
+pub mod palw_monetary_material_evidence_v1;

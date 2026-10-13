@@ -475,6 +475,7 @@ impl PalwKernelRouteStateV1 {
                 Some(bytes) => Some(borsh::from_slice(bytes).map_err(|_| "malformed court-scope activation")?),
                 None => None,
             };
+            self.apply_paid_claim_consumer_inputs_v2(&mut ledger)?;
             Ok(ledger)
         };
         if let Some(cached) = self.ledger_cache.get() {
@@ -696,8 +697,9 @@ impl PalwKernelRouteStateV1 {
                 .map(|row| row.committed_daa)
                 .min()
                 .unwrap_or(receipt.accepted_daa);
-            let (final_path, event) = match receipt.mode {
-                VerificationModeV1::OptimisticPublicVerification => {
+            let (final_path, event) = match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
+                (_, true) => ("PaidClaimV2", None),
+                (VerificationModeV1::OptimisticPublicVerification, false) => {
                     let ctx = WorkFinalContextV1 {
                         accepted_position: earliest,
                         settlement_position: receipt.final_daa,
@@ -719,7 +721,7 @@ impl PalwKernelRouteStateV1 {
                     };
                     ("PanelIndependent", Some(borsh::to_vec(&attributed).map_err(|e| e.to_string())?))
                 }
-                VerificationModeV1::PanelLicensed => ("PanelLicensed", None),
+                (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
             };
             let statement = receipt.assurance.statement();
             out.push(KernelFinalReadV1 { receipt, final_path, event, statement });
@@ -1363,6 +1365,8 @@ impl PalwKernelRouteStateV1 {
                 self.rows.keys().filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut cached = cached;
+            self.apply_paid_claim_consumer_inputs_v2(&mut cached)?;
             return Ok(cached);
         }
         let rows: LedgerRowsV1 = self
@@ -1380,6 +1384,7 @@ impl PalwKernelRouteStateV1 {
                 row.get(..64).ok_or("native9 truncated admitted owner")?.try_into().map_err(|_| "native9 owner size")?;
             ledger.note_native_candidate_projection_v9(owner, class)?;
         }
+        self.apply_paid_claim_consumer_inputs_v2(&mut ledger)?;
         Ok(ledger)
     }
 }

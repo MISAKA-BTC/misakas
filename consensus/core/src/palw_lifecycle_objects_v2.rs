@@ -1154,11 +1154,12 @@ pub enum PalwLifecycleKindFenceV1 {
     /// Independently versioned registered semantic metadata (tag164).
     ClassSemanticsV1 = 9,
     StagedPublicCourtV1 = 10,
+    MonetaryMaterialV1 = 11,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1170,6 +1171,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::LegacyPublicFilerV1,
         Self::ClassSemanticsV1,
         Self::StagedPublicCourtV1,
+        Self::MonetaryMaterialV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1186,6 +1188,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::LegacyPublicFilerV1 => "palw_legacy_public_filer_v1",
             Self::ClassSemanticsV1 => "palw_class_semantics_v1",
             Self::StagedPublicCourtV1 => "palw_staged_public_court_v1",
+            Self::MonetaryMaterialV1 => "palw_monetary_material_v1",
         }
     }
 }
@@ -1359,6 +1362,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         | O::LegacyHeldAnswerDeclaredV2 { .. }
         | O::LegacyHeldAnswerChunkV2 { .. } => PalwLifecycleKindOwnerV1::Fence(F::LegacyHeldDaV2),
         // Lane BUDGET: a bond's capital assignment (140).
+        O::MonetaryMaterialEnrolledV1 { .. } | O::MonetaryMaterialReplacedV1 { .. } | O::MonetaryMaterialActionV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::MonetaryMaterialV1),
         O::BondCapitalAssignedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ModelBondAllocationV1),
         O::ClassSemanticsDeclaredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::ClassSemanticsV1),
         // RFC-0008 v2 (X8R): the work-root declaration (130).
@@ -1514,6 +1518,9 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (165, "PublicCourtStreamOpenedV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (166, "PublicCourtStreamLeafV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
     (167, "PublicCourtStreamMoveV1", PalwLifecycleKindFenceV1::StagedPublicCourtV1),
+    (240, "MonetaryMaterialEnrolledV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
+    (241, "MonetaryMaterialReplacedV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
+    (242, "MonetaryMaterialActionV1", PalwLifecycleKindFenceV1::MonetaryMaterialV1),
     (131, "ExecOriginRecordedV1", PalwLifecycleKindFenceV1::ExecPayloadV2),
 ];
 
@@ -1598,6 +1605,7 @@ impl crate::config::params::Params {
                     PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
                     PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
                     PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
+                    PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
                 },
             )
         })
@@ -1683,17 +1691,21 @@ pub enum PalwKernelInnerFenceV1 {
     BeaconSourceOptInV1,
     /// Signed prepaid source escrow; needs this monetary fence plus source opt-in and OPV.
     BeaconSourceFeeV1,
+    ClaimChallengeV2,
+    PanelLifetimeV2,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
         Self::ModelRefutationSealV1,
         Self::BeaconSourceOptInV1,
         Self::BeaconSourceFeeV1,
+        Self::ClaimChallengeV2,
+        Self::PanelLifetimeV2,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1704,6 +1716,8 @@ impl PalwKernelInnerFenceV1 {
             Self::ModelRefutationSealV1 => "palw_model_refutation_seal_v1",
             Self::BeaconSourceOptInV1 => "palw_beacon_source_opt_in_v1",
             Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
+            Self::ClaimChallengeV2 => "palw_claim_challenge_v2",
+            Self::PanelLifetimeV2 => "palw_panel_lifetime_v2",
         }
     }
 }
@@ -1778,6 +1792,8 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::Spec { .. } => Some(PalwKernelInnerFenceV1::TypedRootsV1),
         K::SealModelRefutationV4 { .. } | K::RevealModelRefutationV4 { .. } => Some(PalwKernelInnerFenceV1::ModelRefutationSealV1),
         K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
+        K::PaidClaimV2 { .. } => Some(PalwKernelInnerFenceV1::ClaimChallengeV2),
+        K::EnrollPanelConsumerLifetimeV2 { .. } | K::AuthorizePanelLifetimeV2 { .. } => Some(PalwKernelInnerFenceV1::PanelLifetimeV2),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -1848,6 +1864,9 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (61, "FundBeaconSourceFee", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
     (62, "OptInPaidBeaconSource", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
     (63, "FundPanelBeaconSourceFeeV2", Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)),
+    (64, "PaidClaimV2", Some(PalwKernelInnerFenceV1::ClaimChallengeV2)),
+    (65, "EnrollPanelConsumerLifetimeV2", Some(PalwKernelInnerFenceV1::PanelLifetimeV2)),
+    (66, "AuthorizePanelLifetimeV2", Some(PalwKernelInnerFenceV1::PanelLifetimeV2)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2081,6 +2100,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     a2_row(PalwA2SlotV1::ObjectTags { lo: 120, hi: 120 }, "palw_permissionless_panel_v1", "RFC-0010 V3 production fold", true),
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", true),
+    a2_row(PalwA2SlotV1::ObjectTags { lo: 240, hi: 242 }, "palw_monetary_material_v1", "RFC08 explicit monetary material covenants", true),
     // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
     // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 140, hi: 140 }, "palw_model_bond_allocation_v1", "BUDGET capital assignment", true),
@@ -2138,6 +2158,11 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-7 FundBeaconSourceFee / OptInPaidBeaconSource / FundPanelBeaconSourceFeeV2",
         true,
     ),
+    a2_row(PalwA2SlotV1::KernelInner { lo:64,hi:64 }, "palw_claim_challenge_v2", "RFC07 prospective signed paid ClaimVerification", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo:65,hi:66 }, "palw_panel_lifetime_v2", "RFC07 signed absolute Panel consumer lifetime", true),
+    a2_row(PalwA2SlotV1::StateEncoding { what:"kernel route aux113-119,122-124: paid class/job/producer authority, future locks, receipts, lifetime counter/evidence/review scopes/rounds/Final projections" }, "palw_claim_challenge_v2", "RFC07 all-target paid claim authority", true),
+    a2_row(PalwA2SlotV1::StateEncoding { what:"kernel route aux121 signed absolute Panel consumer lifetime" }, "palw_panel_lifetime_v2", "RFC07 signed absolute consumer lifetime", true),
+    a2_row(PalwA2SlotV1::StateEncoding { what: "kernel route aux120 signed monetary material covenants, pending physical payment and finalized tail anchors" }, "palw_monetary_material_v1", "RFC08 monetary material", true),
     // codex RFC-6/7/8/12 final (lane R6781-F): the state its kinds write, each only past its own dormant fence (below it no row
     // exists and every root is unchanged). codex's own numbers are spent on the integration line: kernel ledger tables 29 / 30 →
     // table 27 kinds 5 / 6; kernel route aux 46 / 47 / 48 / 49 → 108 / 109 / 110 / 111; bond budget table 6 → 9.
@@ -2434,6 +2459,7 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
     (164, 164, "G14 prospective registered semantics", &["palw_class_semantics_v1"]),
     (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
+    (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1"]),
 ];
 
 #[cfg(test)]
@@ -3449,6 +3475,9 @@ pub(crate) mod tests {
                 admission: None,
             };
             vec![
+                (240, zero_filled_kind(240)),
+                (241, zero_filled_kind(241)),
+                (242, zero_filled_kind(242)),
                 (104, O::ArtifactBoundV1 { v2_class: h, kernel_param_root: h, signer: bond(), signature: vec![1] }),
                 (
                     105,
@@ -4691,6 +4720,9 @@ pub(crate) mod tests {
             (165, 0x868504c5edc94377),
             (166, 0x1d9abdb5bb45bba5),
             (167, 0x38f4084b1c64b5bb),
+            (240, 0x1e3927497888f406),
+            (241, 0xea3ca0815325dc6e),
+            (242, 0x4755be04217925fc),
             (131, 0xf970df6a8bdc323c),
         ];
 

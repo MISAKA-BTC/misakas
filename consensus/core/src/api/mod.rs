@@ -486,6 +486,18 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Coherent signed service terms, recovery state and native payment/tail
+    /// authority. An unavailable view cannot discharge a provider obligation.
+    fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
+        Err("monetary material covenant reads are unavailable".into())
+    }
+
+    /// Physical GC authority requires the accepted release itself (as well as
+    /// its payment tail) to survive every admitted selected-chain reorg.
+    fn palw_monetary_material_release_finalized_v1(
+        &self, _root: Hash64, _consent: Hash64, _tail: Hash64, _release_block: BlockHash,
+    ) -> Result<bool, String> { Err("monetary material finality witnesses are unavailable".into()) }
+
     /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
     ///
     /// The row `(session_id, side)` holds — count, `present` bitmap, deadlines, digest, deposit —

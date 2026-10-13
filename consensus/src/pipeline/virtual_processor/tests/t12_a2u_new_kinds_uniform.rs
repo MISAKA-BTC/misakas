@@ -140,6 +140,15 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.sync_palw_permissionless_panel_v1();
             }
             PalwLifecycleKindFenceV1::ProviderCourtV1 => params.palw_provider_court_v1 = Some(at),
+            PalwLifecycleKindFenceV1::MonetaryMaterialV1 => {
+                use kaspa_consensus_core::palw_monetary_material_v1::*;
+                params.palw_monetary_material_v1 = Some(PalwMonetaryMaterialFenceV1 { activation:at,
+                    policy:PalwMonetaryMaterialPolicyV1 { version:1,max_contracts:16,max_contracts_per_provider:8,
+                        max_bytes_per_contract:1_000_000,max_bytes_per_provider:8_000_000,minimum_collateral_sompi:1,
+                        minimum_fee_sompi:1,window_daa:params.palw_bond_budget_v1.as_ref().map_or(280,|b|b.policy.window_daa),
+                        response_window_daa:64,max_enrollment_daa:100,cost_report_root:Hash64::from_bytes([0xF4;64]) } });
+                params.sync_palw_bond_budget_v1();
+            }
             // codex G14 (2026-10-11): class semantics declarations and the staged public court, each its own Some-only fence.
             PalwLifecycleKindFenceV1::ClassSemanticsV1 => params.palw_class_semantics_v1 = Some(at),
             // The staged public court and LG14-A's terminal evidence (tags 162-167) file objective offences: past their own fence
@@ -197,6 +206,12 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     }
     for fence in PalwKernelInnerFenceV1::ALL {
         match fence {
+            PalwKernelInnerFenceV1::ClaimChallengeV2 => {
+                params.palw_claim_challenge_v2 = Some(kaspa_consensus_core::palw_claim_challenge_v2::PalwClaimChallengeFenceV2::unapproved_probe_at(at));
+            }
+            PalwKernelInnerFenceV1::PanelLifetimeV2 => {
+                params.palw_panel_lifetime_v2 = Some(kaspa_consensus_core::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at));
+            }
             PalwKernelInnerFenceV1::PanelFreeV1 => {
                 params.palw_panel_free_v1 =
                     Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::interim_v1(at, Vec::new()));
@@ -215,6 +230,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwKernelInnerFenceV1::ModelRefutationSealV1 => params.palw_model_refutation_seal_v1 = Some(at),
         }
     }
+    params.sync_palw_claim_challenge_v2();
+    params.sync_palw_permissionless_panel_v1();
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
     // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
     for row in PALW_A2_KIND_FENCE_TABLE_V1.iter().filter(|row| row.landed) {
@@ -233,6 +250,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_legacy_public_filer_v1"
             | "palw_beacon_source_opt_in_v1"
             | "palw_beacon_source_fee_v1"
+            | "palw_claim_challenge_v2"
+            | "palw_panel_lifetime_v2"
             | "palw_exec_payload_v2"
             | "palw_model_refutation_seal_v1"
             | "palw_class_semantics_v1"

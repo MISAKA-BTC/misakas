@@ -62,3 +62,5 @@ pub(crate) fn put_len(state: &mut blake2b_simd::State, bytes: &[u8]) {
     state.update(&(bytes.len() as u64).to_le_bytes());
     state.update(bytes);
 }
+
+pub mod monetary_material;
