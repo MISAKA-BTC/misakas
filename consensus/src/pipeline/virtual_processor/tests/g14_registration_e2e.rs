@@ -1999,9 +1999,9 @@ fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter()
     let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, _rx) = async_channel::unbounded();
     let first = TestConsensus::with_db(db.clone(), &config, sender);
-    let state = first.consensus.palw_state_v2_tip().expect("committed genesis state");
+    let state = first.palw_state_v2_tip().expect("committed genesis state");
     let root = state.state_root();
-    let sync: BTreeMap<_, _> = first.consensus.palw_class_carriages_for_sync_v1().into_iter().collect();
+    let sync: BTreeMap<_, _> = first.palw_class_carriages_for_sync_v1().into_iter().collect();
     assert_eq!(sync.len(), 2, "the real sync endpoint serves the two genesis declarations");
     let fresh = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
     for (class_id, artifact_root, admission) in &classes {
@@ -2017,7 +2017,7 @@ fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter()
                 let decoded: PalwClassAdmissionCarriageV2 = borsh::from_slice(&record.carriage).unwrap();
                 assert_eq!(decoded.profile.shape_profile_id(), *class_id);
                 assert_eq!(decoded.canonical.shape_profile_id, *class_id);
-                let (profile, canonical) = first.consensus.palw_registered_class_carriage_v1(*class_id).expect("actual serving read");
+                let (profile, canonical) = first.palw_registered_class_carriage_v1(*class_id).expect("actual serving read");
                 assert_eq!(profile.shape_profile_id(), *class_id);
                 assert_eq!(canonical.shape_profile_id, *class_id);
             }
@@ -2032,6 +2032,6 @@ fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter()
     let mut reopen = config.clone();
     reopen.process_genesis = false;
     let second = TestConsensus::with_db(db, &reopen, sender);
-    assert_eq!(second.consensus.palw_state_v2_tip().unwrap().state_root(), root);
-    assert_eq!(second.consensus.palw_class_carriages_for_sync_v1().into_iter().collect::<BTreeMap<_, _>>(), sync);
+    assert_eq!(second.palw_state_v2_tip().unwrap().state_root(), root);
+    assert_eq!(second.palw_class_carriages_for_sync_v1().into_iter().collect::<BTreeMap<_, _>>(), sync);
 }
