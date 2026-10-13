@@ -83,7 +83,8 @@ fn stream_hasher_profile(point: Hash64, profile: Option<SnapshotCompressionV1>) 
     }
     h
 }
-pub(crate) fn chunk_hash(point: Hash64, root: Hash64, total: u64, count: u32, index: u32, bytes: &[u8]) -> Hash64 {
+#[cfg(test)] // The live raw106 path uses the same profile helper with None.
+fn chunk_hash(point: Hash64, root: Hash64, total: u64, count: u32, index: u32, bytes: &[u8]) -> Hash64 {
     chunk_hash_profile(point, root, total, count, index, bytes, None)
 }
 pub(crate) fn chunk_hash_profile(
