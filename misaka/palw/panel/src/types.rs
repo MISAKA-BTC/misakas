@@ -368,6 +368,12 @@ pub trait ConsensusViewV1 {
     fn receipt_clock(&self, _claim: &Hash64) -> Option<ReceiptClockV1> {
         None
     }
+    /// Prospective native consent, authenticated by the host's rooted rows.
+    /// Absolute service expiry includes receipt retries and pauses. A paused
+    /// court continues; expiry never decides its outcome or erases earned cash.
+    fn consumer_service_limits(&self, _claim: &Hash64) -> Option<(u64, u32)> {
+        None
+    }
     /// **The population of a stratified claim** ([`PanelStrataV1`]), at the same checkpoint and under the same rules as
     /// [`Self::candidates`]: the candidates and, aligned with them, each one's stratum bits (bit `s`: may hold a class seat of
     /// stratum `s`; the CLASS role iff some bit, the OUTSIDER role for the outsider population). The default — a host that cannot

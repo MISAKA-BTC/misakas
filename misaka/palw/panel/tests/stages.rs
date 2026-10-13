@@ -66,10 +66,11 @@ struct View {
     seats: Vec<SeatCandidateV1>,
     terminal: BTreeSet<Hash64>,
     clock: BTreeMap<Hash64, ReceiptClockV1>,
+    limits: BTreeMap<Hash64, (u64, u32)>,
 }
 impl View {
     fn new(n: u64) -> Self {
-        Self { seats: (1..=n).map(seat).collect(), terminal: BTreeSet::new(), clock: BTreeMap::new() }
+        Self { seats: (1..=n).map(seat).collect(), terminal: BTreeSet::new(), clock: BTreeMap::new(), limits: BTreeMap::new() }
     }
 }
 impl ConsensusViewV1 for View {
@@ -91,6 +92,9 @@ impl ConsensusViewV1 for View {
     }
     fn receipt_clock(&self, c: &Hash64) -> Option<ReceiptClockV1> {
         self.clock.get(c).copied()
+    }
+    fn consumer_service_limits(&self, c: &Hash64) -> Option<(u64, u32)> {
+        self.limits.get(c).copied()
     }
 }
 fn initial(p: PanelPolicyV1) -> PermissionlessPanelStateV1 {
@@ -259,6 +263,60 @@ fn the_hosts_receipt_clock_pauses_and_rebases_the_engines_timeout() {
     let (retried, e) = s.fold(&step(h(5), 6, 24, vec![], vec![]), &v).unwrap();
     assert_eq!(e.bindings[&h(10)].retry_index, 1);
     assert_eq!(retried.claim(&h(10)).unwrap().binding_history.len(), 2);
+}
+
+#[test]
+fn absolute_consent_includes_retries_and_cannot_be_extended_by_a_paused_court() {
+    let mut view = View::new(6);
+    view.limits.insert(h(10), (16, 0));
+    let mut state = initial(policy());
+    for st in [
+        step(h(0), 1, 1, vec![claim(10)], vec![]),
+        step(h(1), 2, 2, vec![], vec![]),
+        step(h(2), 3, 3, vec![], vec![]),
+        step(h(3), 4, 10, vec![], vec![proof()]),
+        step(h(4), 5, 13, vec![], vec![]),
+    ] {
+        state = state.fold(&st, &view).unwrap().0;
+    }
+    assert!(matches!(state.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Bound(_)));
+    let (expired, events) = state.advance(&step(h(5), 6, 17, vec![], vec![]), &view).unwrap();
+    assert!(events.bindings.is_empty());
+    assert!(matches!(expired.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Voided { .. }));
+    view.clock.insert(h(10), ReceiptClockV1::Paused);
+    let (paused, events) = state.advance(&step(h(5), 6, 30, vec![], vec![]), &view).unwrap();
+    assert!(events.non_fraud_voids.is_empty(), "service expiry never waives a pending court");
+    assert!(matches!(paused.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Bound(_)));
+    view.clock.insert(h(10), ReceiptClockV1::Running { bound_daa: 30 });
+    let st = step(h(6), 7, 31, vec![], vec![]);
+    let (whole, whole_events) = paused.fold(&st, &view).unwrap();
+    let (parts, part_events, _) = staged(&paused, &st, &view);
+    assert_eq!((whole.root(), whole_events), (parts.root(), part_events));
+    assert!(matches!(whole.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Voided { .. }));
+    assert_eq!(
+        whole.claim(&h(10)).unwrap().binding_history.len(),
+        1,
+        "a rebased clock cannot purchase a new service window after consent expires"
+    );
+}
+
+#[test]
+fn a_draw_cannot_start_a_receipt_window_that_exceeds_absolute_consent() {
+    let mut view = View::new(6);
+    view.limits.insert(h(10), (15, 1));
+    let mut state = initial(policy());
+    for st in [
+        step(h(0), 1, 1, vec![claim(10)], vec![]),
+        step(h(1), 2, 2, vec![], vec![]),
+        step(h(2), 3, 3, vec![], vec![]),
+        step(h(3), 4, 10, vec![], vec![proof()]),
+    ] {
+        state = state.fold(&st, &view).unwrap().0;
+    }
+    let (next, events) = state.advance(&step(h(4), 5, 13, vec![], vec![]), &view).unwrap();
+    assert!(events.bindings.is_empty());
+    assert!(next.claim(&h(10)).unwrap().binding_history.is_empty());
+    assert!(matches!(next.claim(&h(10)).unwrap().phase, ClaimPhaseV3::Voided { .. }));
 }
 
 /// A host whose source rule answers `set` for every epoch (the freeze stage asks it once per epoch, at the commitment).

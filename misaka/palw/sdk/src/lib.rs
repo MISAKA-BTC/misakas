@@ -84,6 +84,7 @@ pub mod kernel_rows;
 /// that rebuilds the chain's conformance verdict from public reads.
 pub mod onboarding_chain;
 pub mod panel_source_fee_v2;
+pub mod panel_lifetime_v2;
 pub mod onboarding_snapshot;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;
