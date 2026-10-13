@@ -1,0 +1,40 @@
+{
+  "schema": "misaka.rfc02.decoder-linear-weights16-rerun-plan.v1",
+  "selected_after_frozen_failure": true,
+  "profile": {
+    "schema": "misaka.palw.decoder-linear-weights.v16",
+    "linear_weight_bits": 16,
+    "main_weights": "per-row i16, including split outlier main rows and experts",
+    "outliers": "same selected channels with width-aware i64 shift headroom",
+    "stored_quant_formats": "unchanged",
+    "activation_scales_and_math": "unchanged"
+  },
+  "original_task_protocol_sha256": "4336f7660c1bff144711983084aba8b64b91314c495df876fccf0bed432cc191",
+  "source_manifest_sha256": "64ab29ad66c4b852673cc3da25416c72ce6af5c568ee53a78ec1734291ae61a8",
+  "source_repository": "Qwen/Qwen2.5-0.5B-Instruct",
+  "source_revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "context": 512,
+  "original_advertised_context": 32768,
+  "calibration_stats_sha256": "823da807c76a4369fb68169029e8e06399fc138cbfd35eb97e80b96fa0404da3",
+  "calibration_tokens_sha256": "5fabe8c49b97ec5a587e42d227a2c9c42878d16acbfe3a725ea36a802778fed9",
+  "calibration_stats_digest": "699c5f6a99095a24c3cd928188b13e188ae77a746703cc2d508d70a2cd0379c7",
+  "quant_policy": {
+    "headroom16": 2.0,
+    "headroom32": 4.0,
+    "headroom_resid": 4.0
+  },
+  "max_window": null,
+  "math": "libm-v1",
+  "task_pins_and_thresholds": "exactly original context512 three jobs, fixed32 outputs including after EOS, 0.95 token agreement, 2/3 exact jobs, 1.0 both source+integer task success",
+  "new_artifact_and_task_protocol_must_be_hashed_and_committed_before_generation": true,
+  "source_quality_failures_retained": true,
+  "old_profile_artifact_failures_and_original_context_failure_retained": true,
+  "fullcontext_source_fidelity_nativeFinal_or_A6_A8_established": false,
+  "converter_resource_caps": {
+    "block_f32_mib": 16,
+    "parameter_output_bytes": 2147483648,
+    "container_file_bytes": 2147483648,
+    "row_streaming": true,
+    "temporary_chunk_store_deleted_after_container_assembly": true
+  }
+}
