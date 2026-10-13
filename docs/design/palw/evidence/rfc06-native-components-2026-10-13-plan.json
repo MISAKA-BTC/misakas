@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-native-component-probe-plan",
+  "samples": 64,
+  "timeoutSeconds": 60,
+  "runMode": "current debug library dependency profile; probe harness opt-level2",
+  "nativeAcceptance": false,
+  "measurements": [
+    "MLDSA87 public key generation duration",
+    "canonical Borsh bond key/record lengths",
+    "400k candidate structural lower bound"
+  ],
+  "librarySha256": {
+    "libkaspa_consensus_core-be23711162d81ece.rlib": "090700d32eb74f9a590edb8a2cd482c8435002f84b2f10323ff512e204a64f98",
+    "libkaspa_hashes-8bac37c40ca97cbc.rlib": "01124151345dcf7bd4297f228c7dd259702db9df383d262d9b8ec37fcedd451a",
+    "libborsh-c57124d88bb5020f.rlib": "5532aa752af250630dc85869e908413d1ecf7975ad76a0d28e15fd50f6bf8fd7",
+    "liblibcrux_ml_dsa-58cdd374973d4d63.rlib": "bcde6e80ee498d0485afdb2ebad9ea49f4b768a63f480821eeca9a9d4d667e29"
+  },
+  "sourceSha256": "829e594d57037c0d5249435c604b88d5a1acb919d73b5ce48afe80d6ecad9c33"
+}
