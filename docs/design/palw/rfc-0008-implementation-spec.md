@@ -1454,3 +1454,24 @@ one whole block; the corrected fixture preserves the native block charge and fun
 genesis. Raw failed/passing logs are linked in [the material acceptance record](rfc08-native-material-acceptance-2026-10-13.md).
 The native signed-provider control remains pending, so these core results do not establish full cryptographic/node,
 physical-payment or pruned transport acceptance of this guard.
+
+### 15.12 Explicit monetary material covenant and typed wire capacity
+
+The 2026-10-14 source checkpoint introduces a separate provider-and-sponsor-signed
+payment-relative covenant (kinds 240–242, aux120). New signed manifests bind complete
+original/continuation codec bytes; native/kernel work checks its exact execution/body
+scope before admission. Provider fees use sponsor-owned funding and the common native
+coinbase queue, with exact original entitlements and real P+W receipts. Replacement
+preserves charged providers until physical service-fee payment. GC requires accepted
+native release history plus selected-chain finality of the release itself, beyond its
+payment tail. Existing finite leases and all public presets retain their meaning.
+
+The durable provider validates full NativeHeld/kernel/segmented material and exact
+byte counters before signing, atomically publishes with a crash-released kernel lease,
+revalidates on reopen and serves the retained typed disclosure. Unsupported codecs
+return explicit reasons. Completed-service economic evidence requires actual native
+income, complete retired-generation fee history and reviewed actual costs; future
+payment/recovery time remains unknown, so public activation is refused. Source is
+prepared but uncompiled/unexecuted under the user's code-first order. The complete
+scope, test seams and still-required acceptance are recorded in
+[the covenant checkpoint](rfc08-monetary-material-covenant-2026-10-14.md).

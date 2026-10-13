@@ -1443,28 +1443,84 @@ impl ConsensusApi for Consensus {
     }
 
     fn palw_monetary_material_release_finalized_v1(
-        &self, root: kaspa_hashes::Hash64, consent: kaspa_hashes::Hash64, tail: kaspa_hashes::Hash64, release_block: BlockHash,
+        &self,
+        root: kaspa_hashes::Hash64,
+        consent: kaspa_hashes::Hash64,
+        tail: kaspa_hashes::Hash64,
+        release_block: BlockHash,
     ) -> Result<bool, String> {
         // This coherent read also refuses incomplete imports, stale tips and
         // missing states. An unsigned absence can never authorize file GC.
         let before = self.lkg_virtual_state.load();
         let (import_before, stable_before) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
-        if !stable_before || import_before.active.is_some() { return Err("material GC import is incomplete".into()); }
+        if !stable_before || import_before.active.is_some() {
+            return Err("material GC import is incomplete".into());
+        }
         let rows = self.palw_monetary_material_covenants_v1()?;
-        if rows.iter().any(|row| row.terms.root == root) { return Ok(false); }
-        if !self.virtual_processor.palw_monetary_material_release_delta_v1(root, consent, tail, release_block)? { return Ok(false); }
+        if rows.iter().any(|row| row.terms.root == root) {
+            return Ok(false);
+        }
+        if !self.virtual_processor.palw_monetary_material_release_delta_v1(root, consent, tail, release_block)? {
+            return Ok(false);
+        }
         let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
         for block in [tail, release_block] {
             if !self.reachability_service.has_reachability_data(block)
                 || !self.reachability_service.is_chain_ancestor_of(block, before.ghostdag_data.selected_parent)
                 || !self.reachability_service.is_chain_ancestor_of(block, finality)
-            { return Ok(false); }
+            {
+                return Ok(false);
+            }
         }
         let after = self.lkg_virtual_state.load();
         let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
-        if !stable || import.active.is_some() || import.epoch != import_before.epoch
-            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent {
+        if !stable
+            || import.active.is_some()
+            || import.epoch != import_before.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
             return Err("material GC witness changed snapshot/import generation".into());
+        }
+        Ok(true)
+    }
+
+    fn palw_monetary_material_unused_offer_finalized_v1(
+        &self,
+        root: kaspa_hashes::Hash64,
+        enrollment_until: u64,
+    ) -> Result<bool, String> {
+        let before = self.lkg_virtual_state.load();
+        let (import_before, stable_before) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() {
+            return Err("unused-offer import is incomplete".into());
+        }
+        if self.palw_monetary_material_covenants_v1()?.iter().any(|row| row.terms.root == root) {
+            return Ok(false);
+        }
+        let finality = self.virtual_processor.virtual_finality_point(&before.ghostdag_data, self.pruning_point());
+        if !self.reachability_service.has_reachability_data(finality)
+            || !self.reachability_service.is_chain_ancestor_of(finality, before.ghostdag_data.selected_parent)
+            || self.headers_store.get_daa_score(finality).map_err(|e| e.to_string())? <= enrollment_until
+        {
+            return Ok(false);
+        }
+        // Current absence could be caused by an unfinalized release, which
+        // an admitted reorg may undo. Require absence AT the finalized block.
+        let finalized_state = self
+            .virtual_processor
+            .palw_candidate_state_v2_checked(finality)
+            .map_err(|e| format!("unused-offer finalized state unavailable: {e:?}"))?;
+        if finalized_state.monetary_material_row_v1(root).is_some() {
+            return Ok(false);
+        }
+        let after = self.lkg_virtual_state.load();
+        let (import_after, stable_after) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after
+            || import_after.active.is_some()
+            || import_before.epoch != import_after.epoch
+            || before.ghostdag_data.selected_parent != after.ghostdag_data.selected_parent
+        {
+            return Err("unused offer changed snapshot/import generation".into());
         }
         Ok(true)
     }

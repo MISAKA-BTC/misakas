@@ -81,10 +81,10 @@ fn check_enrollment(
     }
     if let Some(old) = prior {
         if old.terms != *t
-            || old.providers.iter().filter(|p| !p.charged || !p.fee_queued).count() + e.offers.len()
+            || old.providers.iter().filter(|p| !p.charged || !p.fee_paid).count() + e.offers.len()
                 > PALW_MONETARY_MATERIAL_MAX_PROVIDERS_V1
             || e.offers.iter().any(|o| {
-                old.providers.iter().any(|previous| previous.provider == o.provider && (!previous.charged || !previous.fee_queued))
+                old.providers.iter().any(|previous| previous.provider == o.provider && (!previous.charged || !previous.fee_paid))
             })
         {
             return Err(refused("replacement changes the accepted obligation or reuses an old provider"));
@@ -182,8 +182,25 @@ fn providers(e: &PalwMonetaryMaterialEnrollmentV1, now: u64) -> Vec<PalwMonetary
             fee_context: e.id(),
             fee_accepted_daa: now,
             fee_queued: false,
+            fee_paid: false,
         })
         .collect()
+}
+fn append_service_fee_history(
+    row: &mut PalwMonetaryMaterialRowV1,
+    e: &PalwMonetaryMaterialEnrollmentV1,
+) -> Result<(), PalwStateV2Error> {
+    for offer in &e.offers {
+        let income = super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), e.terms.root, &offer.provider);
+        row.service_fee_count = row.service_fee_count.checked_add(1).ok_or_else(|| refused("service fee history count overflow"))?;
+        row.service_fee_total_sompi = row
+            .service_fee_total_sompi
+            .checked_add(u128::from(offer.prepaid_fee_sompi))
+            .ok_or_else(|| refused("cumulative service fee backing overflows"))?;
+        row.service_fee_history_root =
+            monetary_service_fee_history_next_v1(row.service_fee_history_root, income, offer.prepaid_fee_sompi);
+    }
+    Ok(())
 }
 pub(super) fn enroll(
     builder: &mut TransitionBuilder<'_>,
@@ -194,7 +211,7 @@ pub(super) fn enroll(
         return Err(refused("root is already enrolled; use signed replacement"));
     }
     check_enrollment(builder, ctx, e, None)?;
-    let row = PalwMonetaryMaterialRowV1 {
+    let mut row = PalwMonetaryMaterialRowV1 {
         terms: e.terms.clone(),
         consent: e.id(),
         sequence: 0,
@@ -207,8 +224,13 @@ pub(super) fn enroll(
         tail_blue_score: None,
         last_payment: None,
         payment_history_root: Hash64::default(),
+        service_fee_count: 0,
+        service_fee_total_sompi: 0,
+        service_fee_paid_sompi: 0,
+        service_fee_history_root: Hash64::default(),
         queued_entitlements: BTreeMap::new(),
     };
+    append_service_fee_history(&mut row, e)?;
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
     write(builder, e.terms.root, Some(&row));
     fund(builder, ctx, e)?;
@@ -224,8 +246,9 @@ pub(super) fn replace(
         return Err(refused("replacement replay or wrong consent generation"));
     }
     check_enrollment(builder, ctx, &r.enrollment, Some(&old))?;
+    append_service_fee_history(&mut old, &r.enrollment)?;
 
-    old.providers.retain(|p| !p.charged || !p.fee_queued);
+    old.providers.retain(|p| !p.charged || !p.fee_paid);
     old.providers.extend(providers(&r.enrollment, ctx.daa_score));
     old.sequence = r.sequence;
     old.consent = r.id();
@@ -693,6 +716,15 @@ pub(super) fn observe_payment(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
                 b"MISAKA/PALW/MONETARY-MATERIAL-PAYMENT-HISTORY/V1",
                 &(row.payment_history_root, &observation),
             ));
+            if let Some(entitlement) = observation.entitlement
+                && let Some(provider) = row.providers.iter_mut().find(|p| p.fee_income == entitlement)
+                && !provider.fee_paid
+                && observation.amount == provider.prepaid_fee_sompi
+            {
+                provider.fee_paid = true;
+                row.service_fee_paid_sompi =
+                    row.service_fee_paid_sompi.checked_add(u128::from(observation.amount)).unwrap_or(u128::MAX);
+            }
             row.last_payment = Some(observation.clone());
             write(builder, row.terms.root, Some(&row));
         }
@@ -818,6 +850,10 @@ mod tests {
         let r = PalwMonetaryMaterialReplacementV1 { root: h(9), previous: first.consent, sequence: 1, enrollment: renewed };
         replace(&mut builder, &ctx(3), &r).unwrap();
         assert_eq!(builder.state.pending_payouts, earned_before);
+        let renewed = builder.state.monetary_material_row_v1(h(9)).unwrap();
+        assert_eq!(renewed.providers.len(), 4, "charged old generations remain until their physical fees are paid");
+        assert_eq!(renewed.service_fee_count, 4);
+        assert_eq!(renewed.service_fee_total_sompi, 28);
         assert!(!builder.state.monetary_material_recovery_needed_v1(h(9)));
         let recovered = builder.state.clone();
         assert!(replace(&mut builder, &ctx(4), &r).is_err());

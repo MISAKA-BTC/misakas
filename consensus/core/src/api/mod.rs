@@ -495,8 +495,18 @@ pub trait ConsensusApi: Send + Sync {
     /// Physical GC authority requires the accepted release itself (as well as
     /// its payment tail) to survive every admitted selected-chain reorg.
     fn palw_monetary_material_release_finalized_v1(
-        &self, _root: Hash64, _consent: Hash64, _tail: Hash64, _release_block: BlockHash,
-    ) -> Result<bool, String> { Err("monetary material finality witnesses are unavailable".into()) }
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _tail: Hash64,
+        _release_block: BlockHash,
+    ) -> Result<bool, String> {
+        Err("monetary material finality witnesses are unavailable".into())
+    }
+
+    fn palw_monetary_material_unused_offer_finalized_v1(&self, _root: Hash64, _enrollment_until: u64) -> Result<bool, String> {
+        Err("monetary material unused-offer witnesses are unavailable".into())
+    }
 
     /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
     ///

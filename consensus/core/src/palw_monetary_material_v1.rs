@@ -237,6 +237,7 @@ pub struct PalwMonetaryMaterialProviderV1 {
     pub fee_context: Hash64,
     pub fee_accepted_daa: u64,
     pub fee_queued: bool,
+    pub fee_paid: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwMonetaryMaterialChallengeV1 {
@@ -285,8 +286,19 @@ pub struct PalwMonetaryMaterialRowV1 {
     /// A historical economic receipt needs an authenticated delta/block proof.
     pub last_payment: Option<PalwMonetaryMaterialPaymentObservationV1>,
     pub payment_history_root: Hash64,
+    /// Bounded accumulators include retired generations without retaining all rows.
+    pub service_fee_count: u64,
+    pub service_fee_total_sompi: u128,
+    pub service_fee_paid_sompi: u128,
+    pub service_fee_history_root: Hash64,
     /// Only live unpaid material queue receipts, not cumulative history.
     pub queued_entitlements: std::collections::BTreeMap<Hash64, Hash64>,
+}
+pub fn monetary_service_fee_history_next_v1(previous: Hash64, income: Hash64, amount: u64) -> Hash64 {
+    Hash64::from_bytes(misaka_palw_kernel::hash::object_id(
+        b"MISAKA/PALW/MONETARY-SERVICE-FEE-HISTORY/V1",
+        &(previous, income, amount),
+    ))
 }
 impl PalwMonetaryMaterialRowV1 {
     pub fn healthy(&self, state: &PalwChainStateV2) -> bool {
@@ -477,6 +489,8 @@ impl PalwChainStateV2 {
                 || !row.terms.payment_relative_until_finality
                 || row.terms.max_material_bytes == 0
                 || row.terms.max_material_bytes > p.max_bytes_per_contract
+                || row.service_fee_paid_sompi > row.service_fee_total_sompi
+                || row.providers.iter().any(|p| p.fee_paid && !p.fee_queued)
                 || row.providers.len() > PALW_MONETARY_MATERIAL_MAX_PROVIDERS_V1
                 || row.providers.is_empty()
                 || row.terms.dependencies.len() > PALW_MONETARY_MATERIAL_MAX_DEPENDENCIES_V1
@@ -512,7 +526,9 @@ impl PalwChainStateV2 {
             for challenge in &row.challenges {
                 if challenge.native_missing.is_some() != challenge.native_binding.is_some()
                     || (challenge.native_missing.is_some()
-                        && (challenge.dependency != row.terms.root || challenge.stage != 255 || challenge.segment_part.is_some()))
+                        && (!self.monetary_material_scope_v1(&row).contains(&challenge.dependency)
+                            || challenge.stage != 255
+                            || challenge.segment_part.is_some()))
                     || (challenge.segment_part.is_some() && challenge.stage != 0)
                 {
                     return Err(bad("material court unit fields disagree"));

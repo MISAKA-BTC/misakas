@@ -407,9 +407,17 @@ impl ConsensusSessionOwned {
     }
 
     pub fn palw_monetary_material_release_finalized_v1(
-        &self, root: Hash64, consent: Hash64, tail: Hash64, release_block: BlockHash,
+        &self,
+        root: Hash64,
+        consent: Hash64,
+        tail: Hash64,
+        release_block: BlockHash,
     ) -> Result<bool, String> {
         self.consensus.palw_monetary_material_release_finalized_v1(root, consent, tail, release_block)
+    }
+
+    pub fn palw_monetary_material_unused_offer_finalized_v1(&self, root: Hash64, enrollment_until: u64) -> Result<bool, String> {
+        self.consensus.palw_monetary_material_unused_offer_finalized_v1(root, enrollment_until)
     }
 
     pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {

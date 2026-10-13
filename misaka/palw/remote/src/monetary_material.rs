@@ -14,12 +14,59 @@ use std::{
 };
 
 pub struct DurableMonetaryMaterialProviderV1 {
+    // The kernel releases this lease on crash; a PID-file lease would strand
+    // capacity or allow concurrent snapshots to overwrite accepted material.
+    _lease: File,
     file: PathBuf,
     max_contract_bytes: u64,
     total_capacity: u64,
     store: PalwMonetaryMaterialProviderStoreV1,
 }
 impl DurableMonetaryMaterialProviderV1 {
+    pub fn prepare_material(
+        &mut self,
+        provider: PalwBondKeyV2,
+        enrollment: &PalwMonetaryMaterialEnrollmentV1,
+        held: &[PalwHeldMaterialBundleV1],
+        positions: &[kaspa_consensus_core::palw_material_capacity_v1::PalwKernelMaterialBundleV1],
+        segmented: &[kaspa_consensus_core::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1],
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Hash64, String> {
+        if !enrollment.offers.iter().any(|o| o.provider == provider) || enrollment.terms.max_material_bytes > self.max_contract_bytes {
+            return Err("provider did not offer this complete material capacity".into());
+        }
+        let manifest = enrollment.terms.material_manifest.as_ref().ok_or("material enrollment lacks its exact signed manifest")?;
+        if manifest.root != enrollment.terms.root {
+            return Err("material manifest obligation was substituted".into());
+        }
+        let mut candidate = self.store.clone();
+        candidate
+            .admit_material(
+                enrollment.id(),
+                manifest,
+                enrollment.terms.max_material_bytes,
+                self.total_capacity,
+                held,
+                positions,
+                segmented,
+                ledger,
+                authority,
+            )
+            .map_err(|e| e.to_string())?;
+        self.publish(candidate)?;
+        Ok(enrollment.id())
+    }
+    pub fn answer_material(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+    ) -> Result<PalwMonetaryMaterialActionV1, String> {
+        self.store.answer_action(consent, root, dependency, provider, demand).map_err(|e| e.to_string())
+    }
     pub fn open(
         file: &Path,
         max_contract_bytes: u64,
@@ -30,6 +77,10 @@ impl DurableMonetaryMaterialProviderV1 {
         if max_contract_bytes == 0 || total_capacity < max_contract_bytes {
             return Err("provider material capacity is invalid".into());
         }
+        let parent = file.parent().ok_or("provider file has no parent")?;
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        let name = file.file_name().and_then(|name| name.to_str()).ok_or("provider file name is not UTF-8")?;
+        let lease = acquire_provider_lease(&parent.join(format!("{name}.lock")))?;
         let store = match File::open(file) {
             Ok(mut source) => {
                 let limit = total_capacity.checked_add(1 << 20).ok_or("provider persistence cap overflow")?;
@@ -44,13 +95,29 @@ impl DurableMonetaryMaterialProviderV1 {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => PalwMonetaryMaterialProviderStoreV1::default(),
             Err(error) => return Err(error.to_string()),
         };
-        Ok(Self { file: file.to_path_buf(), max_contract_bytes, total_capacity, store })
+        // Pending snapshots were never signature-authorized: the signing API
+        // returns only after atomic publication. With the kernel lease held,
+        // these exact owned names cannot belong to a concurrent live writer.
+        let prefix = format!("{name}.pending-");
+        for entry in fs::read_dir(parent).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_prefix(&prefix))
+                .is_some_and(|suffix| suffix.parse::<u32>().is_ok())
+            {
+                fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store })
     }
     fn publish(&mut self, candidate: PalwMonetaryMaterialProviderStoreV1) -> Result<(), String> {
         let encoded = candidate.encoded().map_err(|e| e.to_string())?;
         let parent = self.file.parent().ok_or("provider file has no parent directory")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let temporary = self.file.with_extension(format!("pending-{}", std::process::id()));
+        let name = self.file.file_name().and_then(|name| name.to_str()).ok_or("provider filename is not UTF-8")?;
+        let temporary = parent.join(format!("{name}.pending-{}", std::process::id()));
         // Never overwrite another writer's pending generation. Failure retains
         // the old memory/durable generation and does not authorize a signature.
         let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| e.to_string())?;
@@ -142,4 +209,31 @@ impl DurableMonetaryMaterialProviderV1 {
         self.publish(candidate)?;
         Ok(true)
     }
+    pub fn discard_expired_offer(
+        &mut self,
+        enrollment: &PalwMonetaryMaterialEnrollmentV1,
+        native_expiry: impl FnMut(Hash64, u64) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        let mut candidate = self.store.clone();
+        if !candidate.discard_expired_offer(enrollment, native_expiry).map_err(|e| e.to_string())? {
+            return Ok(false);
+        }
+        self.publish(candidate)?;
+        Ok(true)
+    }
+}
+
+#[cfg(unix)]
+fn acquire_provider_lease(path: &Path) -> Result<File, String> {
+    use std::os::fd::AsRawFd;
+    let lease = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| e.to_string())?;
+    // SAFETY: flock uses the live File's descriptor; no pointers or aliasing.
+    if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(format!("provider snapshot is already leased or unavailable: {}", std::io::Error::last_os_error()));
+    }
+    Ok(lease)
+}
+#[cfg(not(unix))]
+fn acquire_provider_lease(_path: &Path) -> Result<File, String> {
+    Err("durable monetary material provider needs a kernel file lease on this platform".into())
 }

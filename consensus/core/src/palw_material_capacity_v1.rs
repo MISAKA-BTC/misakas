@@ -326,7 +326,117 @@ impl PalwHeldMaterialBundleV1 {
 pub struct PalwMonetaryMaterialProviderStoreV1 {
     contracts: BTreeMap<Hash64, (Hash64, PalwMaterialManifestV1, BTreeMap<Hash64, Vec<u8>>)>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwMonetaryMaterialDemandV1 {
+    Held(PalwHeldMissingV1),
+    Kernel { stage: u8, position: u32 },
+    Segmented { position: u32, part: u32 },
+}
 impl PalwMonetaryMaterialProviderStoreV1 {
+    /// Recovery of an offer that never obtained an accepted contract. The
+    /// original signed preimage is checked locally; native finality must put
+    /// every possible enrollment block beyond its admission deadline.
+    pub fn discard_expired_offer(
+        &mut self,
+        enrollment: &crate::palw_monetary_material_v1::PalwMonetaryMaterialEnrollmentV1,
+        mut native_expiry: impl FnMut(Hash64, u64) -> Result<bool, String>,
+    ) -> Result<bool, PalwMaterialCapacityErrorV1> {
+        let id = enrollment.id();
+        let Some((_, manifest, _)) = self.contracts.get(&id) else { return Ok(false) };
+        if manifest.root != enrollment.terms.root || enrollment.terms.material_manifest.as_ref() != Some(manifest) {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        }
+        if !native_expiry(enrollment.terms.root, enrollment.terms.enrollment_until_daa)
+            .map_err(PalwMaterialCapacityErrorV1::Authentication)?
+        {
+            return Ok(false);
+        }
+        self.contracts.remove(&id);
+        Ok(true)
+    }
+    pub fn admit_material(
+        &mut self,
+        consent: Hash64,
+        manifest: &PalwMaterialManifestV1,
+        max_bytes: u64,
+        total_capacity: u64,
+        held: &[PalwHeldMaterialBundleV1],
+        positions: &[PalwKernelMaterialBundleV1],
+        segmented: &[PalwSegmentedMaterialBundleV1],
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        mut authority: impl FnMut(Hash64) -> Option<PalwMaterialNativeAuthorityV1>,
+    ) -> Result<(), PalwMaterialCapacityErrorV1> {
+        let mut checked = Vec::new();
+        for bundle in held {
+            let native = authority(bundle.claim).ok_or(PalwMaterialCapacityErrorV1::Incomplete)?;
+            checked
+                .push((bundle.verify(native, max_bytes)?, borsh::to_vec(bundle).map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?));
+        }
+        for bundle in positions {
+            checked.push((
+                bundle.verify(ledger.ok_or(PalwMaterialCapacityErrorV1::Incomplete)?, max_bytes)?,
+                borsh::to_vec(bundle).map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?,
+            ));
+        }
+        for bundle in segmented {
+            checked.push((
+                bundle.verify(ledger.ok_or(PalwMaterialCapacityErrorV1::Incomplete)?, max_bytes)?,
+                borsh::to_vec(bundle).map_err(|_| PalwMaterialCapacityErrorV1::Capacity)?,
+            ));
+        }
+        self.admit_verified(consent, manifest, max_bytes, total_capacity, checked)
+    }
+    pub fn answer_action(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: crate::palw_state_v2::PalwBondKeyV2,
+        demand: PalwMonetaryMaterialDemandV1,
+    ) -> Result<crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1, PalwMaterialCapacityErrorV1> {
+        use crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1 as A;
+        use PalwMaterialCapacityErrorV1 as E;
+        let (_, manifest, data) = self.contracts.get(&consent).ok_or(E::Incomplete)?;
+        if manifest.root != root {
+            return Err(E::Substitution);
+        }
+        let scope = manifest.scope(dependency).ok_or(E::Incomplete)?;
+        let bytes = data.get(&dependency).ok_or(E::Incomplete)?;
+        if bytes.len() as u64 != scope.bytes {
+            return Err(E::Substitution);
+        }
+        match demand {
+            PalwMonetaryMaterialDemandV1::Held(missing) => self.held_answer_action(consent, root, dependency, provider, missing),
+            PalwMonetaryMaterialDemandV1::Kernel { stage, position } => {
+                if scope.codec != PalwMaterialCodecV1::KernelPositions {
+                    return Err(E::Substitution);
+                }
+                let bundle: PalwKernelMaterialBundleV1 = borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                if bundle.claim != dependency || digest(b"MISAKA/PALW/MONETARY-KERNEL-BUNDLE/V1", &bundle) != scope.content {
+                    return Err(E::Substitution);
+                }
+                let bytes = bundle
+                    .positions
+                    .into_iter()
+                    .find(|(s, p, _)| (*s, *p) == (stage, position))
+                    .map(|(_, _, b)| b)
+                    .ok_or(E::Incomplete)?;
+                Ok(A::Answer { root, provider, dependency, stage, position, bytes })
+            }
+            PalwMonetaryMaterialDemandV1::Segmented { position, part } => {
+                if scope.codec != PalwMaterialCodecV1::SegmentedParts {
+                    return Err(E::Substitution);
+                }
+                let bundle: PalwSegmentedMaterialBundleV1 = borsh::from_slice(bytes).map_err(|e| E::Authentication(e.to_string()))?;
+                if bundle.claim != dependency || digest(b"MISAKA/PALW/MONETARY-SEGMENTED-BUNDLE/V1", &bundle) != scope.content {
+                    return Err(E::Substitution);
+                }
+                let bytes =
+                    bundle.parts.into_iter().find(|(p, s, _)| (*p, *s) == (position, part)).map(|(_, _, b)| b).ok_or(E::Incomplete)?;
+                Ok(A::SegmentedAnswer { root, provider, dependency, position, part, bytes })
+            }
+        }
+    }
     /// The verifier must use native accepted-delta + selected-chain finality
     /// authority. A proposed release, fixed TTL or merely absent row is refused.
     pub fn release_if_finalized(
@@ -523,6 +633,9 @@ impl PalwMonetaryMaterialProviderStoreV1 {
         provider: crate::palw_state_v2::PalwBondKeyV2,
         missing: PalwHeldMissingV1,
     ) -> Result<crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1, PalwMaterialCapacityErrorV1> {
+        if self.contracts.get(&consent).is_none_or(|(_, manifest, _)| manifest.root != root) {
+            return Err(PalwMaterialCapacityErrorV1::Substitution);
+        }
         Ok(crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1::HeldAnswer {
             root,
             dependency,

@@ -825,7 +825,7 @@ async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recover
             nonce: Hash64::from_bytes([0xE5; 64]),
             policy: policy.id(),
             max_material_bytes: 1_000,
-                material_manifest: None,
+            material_manifest: None,
             window_daa: policy.window_daa,
             enrollment_until_daa: net.daa() + 100,
             payment_relative_until_finality: true,
@@ -862,6 +862,9 @@ async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recover
     let row = state.monetary_material_row_v1(root).expect("real signed enrollment admitted");
     assert_eq!(net.collateral(0), before - 2 * policy.minimum_fee_sompi, "sponsor-owned escrow debited once");
     assert_eq!([net.collateral(2), net.collateral(3)], provider_before, "fee uses the native payout queue");
+    assert_eq!(row.service_fee_total_sompi, u128::from(2 * policy.minimum_fee_sompi));
+    assert_eq!(row.service_fee_paid_sompi, row.service_fee_total_sompi);
+    assert!(row.providers.iter().all(|provider| provider.fee_paid));
     let payment = row.last_payment.as_ref().expect("actual coinbase drain authority");
     assert_eq!(payment.root, root);
     assert_eq!(payment.amount, policy.minimum_fee_sompi);
