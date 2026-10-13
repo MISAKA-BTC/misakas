@@ -25,6 +25,9 @@ impl NativeDemandCheckerV1 {
         let memory = memory.bytes().ok_or(memory)?;
         let database = inventory.database_v1();
         let database = database.bytes().ok_or(database)?;
+        self.reserve_requests_v1(memory, database)
+    }
+    pub(crate) fn reserve_requests_v1(self: &Arc<Self>, memory: u64, database: u64) -> Result<NativeDemandLeaseV1, NativeCoverageV1> {
         let mut state = self
             .state
             .lock()
@@ -35,6 +38,15 @@ impl NativeDemandCheckerV1 {
             .database
             .checked_add(database)
             .ok_or_else(|| NativeCoverageV1::overflow::<Self>("simultaneous logical DB requests"))?;
+        if native_resource_admission_enabled_v1() {
+            let quota = actual_hard_memory_quota_v1()?;
+            if next_memory > quota.headroom_bytes() {
+                return Err(NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>(
+                    "aggregate physical quota headroom",
+                    "all outstanding typed requests exceed currently observed enforced quota headroom",
+                ));
+            }
+        }
         if next_memory > self.limits.memory_bytes || next_database > self.limits.database_bytes {
             return Err(NativeCoverageV1::unsupported::<Self>(
                 "logical native capacity",
@@ -95,6 +107,13 @@ pub fn reserve_native_install_v1(
     point: BlockHash,
     state: &crate::palw_state_v2::PalwChainStateV2,
 ) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    reserve_native_install_in_database_v1(point, state, None)
+}
+pub fn reserve_native_install_in_database_v1(
+    point: BlockHash,
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    database_path: Option<&std::path::Path>,
+) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
     if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
         return Ok(None);
     }
@@ -112,11 +131,50 @@ pub fn reserve_native_install_v1(
     let carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(state);
     let mut count = Count(0);
     borsh::to_writer(&mut count, &carriage).map_err(|_| NativeCoverageV1::overflow::<Count>("canonical installation byte count"))?;
-    reserve_native_snapshot_v1(point, Ok(inventory_accepted_state_v1(state, point, count.0, NativeSnapshotOperationV1::Install)))
+    let inventory = inventory_accepted_state_v1(state, point, count.0, NativeSnapshotOperationV1::Install);
+    let memory = inventory.logical_memory_v1();
+    let memory = memory.bytes().ok_or(memory)?;
+    let path = database_path.ok_or_else(|| {
+        NativeCoverageV1::unsupported::<NativeHardDatabaseQuotaV1>(
+            "actual database layout",
+            "no audited single-directory RocksDB factory provenance; external WAL/table files may escape project quota",
+        )
+    })?;
+    let quota = actual_hard_database_quota_v1(path)?;
+    // This is whole physical disk coverage, including existing history, WAL and
+    // compaction files; it does not promise a write succeeds under quota pressure.
+    let database = quota.limit_bytes();
+    let minimum_write = count.0.checked_mul(2).ok_or_else(|| NativeCoverageV1::overflow::<Vec<u8>>("tip/pruning singleton writes"))?;
+    if minimum_write > quota.headroom_bytes() {
+        return Err(NativeCoverageV1::unsupported::<NativeHardDatabaseQuotaV1>(
+            "actual database quota headroom",
+            "even the two canonical singleton payloads exceed observed quota headroom",
+        ));
+    }
+    if native_resource_admission_enabled_v1() {
+        let memory_quota = actual_hard_memory_quota_v1()?;
+        if memory > memory_quota.headroom_bytes() {
+            return Err(NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>(
+                "actual install memory headroom",
+                "typed requests exceed observed enforced quota headroom",
+            ));
+        }
+        admit_native_snapshot_v1(
+            point,
+            Some(NativeSnapshotResourceBoundV1 {
+                version: 1,
+                point,
+                memory_upper_bytes: memory_quota.limit_bytes(),
+                database_upper_bytes: database,
+            }),
+        )
+        .map_err(|why| NativeCoverageV1::unsupported::<NativeHardDatabaseQuotaV1>("actual native RAM/DB hard quotas", &why))?;
+    }
+    LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.reserve_requests_v1(memory, database)).transpose()
 }
-/// Until a structural wire preflight is available, no peer-provided byte length
-/// or resource inventory is a trusted receiver allocation bound. This refuses
-/// even if a local Serve inventory for the advertised point exists.
+/// Guard for callers with no actual structural wire preflight. A peer-provided
+/// byte length/resource estimate and local Serve metadata cannot authorize an
+/// arbitrary incoming shape. Protocol 107 uses reserve_native_wire_v1 instead.
 pub fn admit_native_receive_v1(point: BlockHash) -> Result<(), NativeCoverageV1> {
     if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
         return Ok(());
@@ -152,4 +210,36 @@ mod tests {
         assert!(matches!(install.database_v1(), NativeCoverageV1::Unsupported { .. }));
         assert!(checker.reserve(&install).is_err());
     }
+}
+
+pub fn reserve_native_wire_v1(
+    point: BlockHash,
+    preflight: &super::wire::NativeWirePreflightV1,
+) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
+        return Ok(None);
+    }
+    let memory = preflight.memory_requests_v1().map_err(|why| {
+        NativeCoverageV1::unsupported::<super::wire::NativeWirePreflightV1>("actual incoming Borsh shape", &why.to_string())
+    })?;
+    if native_resource_admission_enabled_v1() {
+        let quota = actual_hard_memory_quota_v1()?;
+        if memory > quota.headroom_bytes() {
+            return Err(NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>(
+                "actual incoming physical quota",
+                "requested allocations exceed observed enforced quota headroom",
+            ));
+        }
+        admit_native_snapshot_v1(
+            point,
+            Some(NativeSnapshotResourceBoundV1 {
+                version: 1,
+                point,
+                memory_upper_bytes: quota.limit_bytes(),
+                database_upper_bytes: 0,
+            }),
+        )
+        .map_err(|why| NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>("actual incoming physical quota", &why))?;
+    }
+    LOGICAL.get().and_then(Option::as_ref).map(|checker| checker.reserve_requests_v1(memory, 0)).transpose()
 }

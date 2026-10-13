@@ -26,11 +26,17 @@ pub fn actual_hard_memory_quota_v1() -> Result<NativeHardMemoryQuotaV1, NativeCo
     };
     let refuse = |why: &str| NativeCoverageV1::unsupported::<NativeHardMemoryQuotaV1>("allocator.physical-memory", why);
     let read = |path: &Path| -> Result<String, NativeCoverageV1> {
-        let metadata = fs::metadata(path).map_err(|_| refuse("kernel quota file is unavailable"))?;
-        if metadata.len() > 64 * 1024 {
+        use std::io::Read;
+        let mut text = String::new();
+        fs::File::open(path)
+            .map_err(|_| refuse("kernel quota file is unavailable"))?
+            .take((64 << 10) + 1)
+            .read_to_string(&mut text)
+            .map_err(|_| refuse("kernel quota metadata cannot be read"))?;
+        if text.len() > 64 << 10 {
             return Err(refuse("kernel quota metadata exceeds bounded input"));
         }
-        fs::read_to_string(path).map_err(|_| refuse("kernel quota metadata cannot be read"))
+        Ok(text)
     };
     let mountinfo = read(Path::new("/proc/self/mountinfo"))?;
     if !mountinfo.lines().any(|line| {

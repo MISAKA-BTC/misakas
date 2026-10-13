@@ -44,6 +44,16 @@ impl NativeCoverageV1 {
         }
     }
 }
+impl std::fmt::Display for NativeCoverageV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bounded { bytes } => write!(f, "bounded {bytes} bytes"),
+            Self::Unsupported { component, native_type, reason } => write!(f, "unsupported {component} ({native_type}): {reason}"),
+            Self::Overflow { component, native_type } => write!(f, "overflow {component} ({native_type})"),
+        }
+    }
+}
+impl std::error::Error for NativeCoverageV1 {}
 pub trait NativeHeapV1 {
     /// Additional heap beyond `size_of::<Self>()`, including capacity and nested ownership.
     fn native_heap_v1(&self, component: &str) -> NativeCoverageV1;
@@ -92,7 +102,11 @@ impl<T: NativeHeapV1, const N: usize> NativeHeapV1 for [T; N] {
 }
 impl<T: NativeHeapV1> NativeHeapV1 for Vec<T> {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        self.iter().fold(allocation::<T>(self.capacity(), path), |sum, item| sum.add::<Self>(item.native_heap_v1(path), path))
+        let Some(growth) = self.len().checked_mul(2) else { return NativeCoverageV1::overflow::<Self>(path) };
+        // The point retains the current Vec capacity; a serialized cache/restore
+        // can additionally use the pinned Borsh geometric growth capacity.
+        self.iter()
+            .fold(allocation::<T>(self.capacity().max(growth), path), |sum, item| sum.add::<Self>(item.native_heap_v1(path), path))
     }
     fn native_entries_v1(&self) -> u64 {
         self.len() as u64
@@ -100,7 +114,8 @@ impl<T: NativeHeapV1> NativeHeapV1 for Vec<T> {
 }
 impl NativeHeapV1 for String {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        allocation::<u8>(self.capacity(), path)
+        let Some(growth) = self.len().checked_mul(2) else { return NativeCoverageV1::overflow::<Self>(path) };
+        allocation::<u8>(self.capacity().max(growth), path)
     }
     fn native_entries_v1(&self) -> u64 {
         self.len() as u64
@@ -135,7 +150,7 @@ impl<T: NativeHeapV1> NativeHeapV1 for Arc<T> {
 /// This is allocation-request accounting under the repository's pinned std;
 /// allocator arenas, committed pages and physical overhead are separate coverage.
 #[allow(dead_code)]
-struct BTreeNodeEnvelopeV1<K, V> {
+pub(crate) struct BTreeNodeEnvelopeV1<K, V> {
     parent: usize,
     metadata: [usize; 4],
     keys: [K; 16],

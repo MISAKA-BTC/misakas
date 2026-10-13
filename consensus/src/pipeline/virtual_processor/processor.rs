@@ -6370,8 +6370,12 @@ impl VirtualStateProcessor {
         // Install uses the actual typed, authenticated state and its rebuilt
         // indices, never the sender's byte length or local Serve metadata. Keep
         // this operation's demand reserved through the durable WAL barrier.
-        let _native_install_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_v1(pruning_point, &state)
-            .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
+        let _native_install_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
+            pruning_point,
+            &state,
+            self.db.native_single_directory_quota_path_v1(),
+        )
+        .map_err(|why| PruningImportError::PruningPointImportContextUnavailable(pruning_point, why.to_string()))?;
         // Pin the established target after validation and through the durable batch.
         // Pruning -> PALW -> metadata matches pruning advancement's lock order.
         let pruning_point_read = self.pruning_point_store.read();

@@ -56,12 +56,13 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         if raw[pos]==';':body='';end=pos+1;form='unit'
         else:body,end=brace(raw,pos);form='named' if raw[pos]=='{' else 'tuple'
         path='::'.join(x for x in [crate,module,name] if x)
-        item=dict(kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
+        attrs=raw[max(raw.rfind('}',0,m.start()),raw.rfind(';',0,m.start()))+1:m.start()]
+        item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
 
 primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','Hash','Hash32','Digest','()'}
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow'}
-queue=['crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
+queue=['crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3','crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1','crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimLockV2','crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2','crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3','crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3','misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2','misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2','misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2','misaka_palw_challenge::approval_scope::LifetimeCounterV3','misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3','crate::palw_kernel_route_v1::KernelAssignmentV1','crate::palw_kernel_route_v1::PalwKernelChunkGroupV1','misaka_palw_kernel::receipt::PalwConstraintReceiptV1','crate::palw_onboarding_v1::ArtifactBindingRowV1','crate::palw_onboarding_v1::KernelBindingRowV1','crate::palw_onboarding_v1::ConformanceRowV1','crate::palw_onboarding_v1::ConformanceAttemptRowV1','crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1','crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1','crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1','crate::palw_state_v2::PalwClassAdmissionCarriageV2','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
        'crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2','crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2','crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2',
        'misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2','misaka_palw_kernel::panel_lifetime_v2::PanelConsumerLifetimeTermsV2']; visited=set(); generated=[]; unresolved=[]
 
@@ -80,7 +81,7 @@ def references(t, origin):
         if token in defs: resolved=token
         elif token in aliases: resolved=token
         elif '::' not in token and len(alias_byname.get(name,[]))==1: resolved=alias_byname[name][0]
-        elif '::' not in token and len(byname.get(name,[]))==1: resolved=byname[name][0]['path']
+        elif len(byname.get(name,[]))==1: resolved=byname[name][0]['path']
         elif '::' not in token and origin['path'].rsplit('::',1)[0]+'::'+token in defs:resolved=origin['path'].rsplit('::',1)[0]+'::'+token
         else:
             resolved=token if '::' in token else origin['path'].rsplit('::',1)[0]+'::'+token
@@ -153,9 +154,11 @@ private={}; public=[]
 for item,code,is_private in generated:
     if is_private:
         private.setdefault(item['module'],[]).append(code)
-    else:public.append(code.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::'))
+    else:public.append(code.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::').replace('crate::palw_bond_budget_v1::consumer::','crate::palw_bond_budget_v1::'))
 OUT.write_text((header+'\n'.join(public)+'\n'+ '\n'.join('native_unsupported!('+p+');' for p in sorted(set(unresolved)-manual))).rstrip()+'\n')
 private_dir=OUT.parent/'private';private_dir.mkdir(exist_ok=True)
+for old in private_dir.glob('*.rs'):
+    if old.read_text().startswith('// Generated owner-local field visitor') and old.stem not in {m.replace('::','_') for m in private}:old.unlink()
 for module,codes in private.items():
     filename=module.replace('::','_')+'.rs'
     (private_dir/filename).write_text('// Generated owner-local field visitor. Root/hash/codec unchanged.\n#[allow(unused_imports)]\nuse crate::palw_native_resource_v1::{NativeHeapV1, NativeCoverageV1, native_struct, native_tuple_struct, native_enum, native_unit};\n'+'\n'.join(codes)+'\n')

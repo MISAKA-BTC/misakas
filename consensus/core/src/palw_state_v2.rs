@@ -24757,3 +24757,7 @@ mod palw_claim_challenge_fold_v2;
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_state_v2.rs"]
 mod native_resource_inventory_v1;
+
+#[path = "palw_native_resource_v1/private/wire_carriage.rs"]
+mod native_wire_carriage_v1;
+pub(crate) use native_wire_carriage_v1::{scan_carriage_native_wire_v1,restore_index_native_shape_v1};

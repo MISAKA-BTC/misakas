@@ -131,6 +131,7 @@ pub struct IbdFlow {
     pub(super) incoming_route: IncomingRoute,
     pub(super) body_only_ibd_permitted: bool,
     header_format: HeaderFormat,
+    pub(super) native_palw_receive_lease_v1: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
@@ -204,6 +205,7 @@ impl IbdFlow {
             body_only_ibd_permitted,
             header_format,
             connection_generation: verification_trace::next_connection_generation(),
+            native_palw_receive_lease_v1: None,
             active_recovery_permit: None,
             earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
@@ -314,6 +316,7 @@ impl IbdFlow {
                     self.ctx.chain_participation().end_decision();
                 }
                 self.active_recovery_permit = None;
+                self.native_palw_receive_lease_v1 = None;
                 // Release the reservation only when the attempt it authorised actually finished.
                 // Clearing it on failure spends the handoff on one stumble and drops the node back
                 // to the branch it had already decided against — measured: after the first permitted
@@ -2815,9 +2818,14 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if !palw_active {
             return Ok(None);
         }
-        if let Err(why) = kaspa_consensus_core::palw_native_resource_v1::admit_native_receive_v1(pruning_point) {
-            warn!("[palw-sidecar] native snapshot capacity refused before receive: {why:?}");
-            return Err(ProtocolError::PruningSidecarUnavailable("PALW native RAM/DB capacity", pruning_point.to_string()));
+        self.native_palw_receive_lease_v1 = None;
+        if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED
+            && (kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
+                || kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1())
+        {
+            return Err(ProtocolError::Other(
+                "explicit native receive admission requires negotiated protocol 107 structural preflight",
+            ));
         }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return self.request_pruning_point_palw_chunks(pruning_point).await;

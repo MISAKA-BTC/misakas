@@ -1,0 +1,126 @@
+use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+impl NativeWireScanV1 for crate::palw_bond_budget_v1::PalwBondBudgetStateV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        let version = reader.short()?;
+        if !(1..=4).contains(&version) {
+            return Err(wire::wire_bad("unknown budget version"));
+        }
+        let mut sum = NativeWireShapeV1::default();
+        sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        sum =
+            sum.merge(<Option<crate::palw_bond_budget_v1::PalwAllocationEpochV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        let bonds = if version >= 1 {
+            <BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_bond_budget_v1::PalwBudgetBondRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(bonds)?;
+        let claims = if version >= 1 {
+            <BTreeMap<crate::Hash64, crate::palw_bond_budget_v1::PalwBudgetClaimRowV1> as NativeWireScanV1>::scan_native_wire_v1(
+                reader,
+            )?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(claims)?;
+        let releases = if version >= 1 {
+            <BTreeSet<(u64, crate::Hash64)> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(releases)?;
+        let assignments = if version >= 1 {
+            <BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_bond_budget_v1::PalwCapitalAssignmentRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(assignments)?;
+        let models = if version >= 1 {
+            <BTreeMap<crate::Hash64, crate::palw_bond_budget_v1::PalwModelBudgetRowV1> as NativeWireScanV1>::scan_native_wire_v1(
+                reader,
+            )?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(models)?;
+        let liability_releases = if version >= 1 {
+            <BTreeSet<(u64, crate::palw_state_v2::PalwBondKeyV2)> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(liability_releases)?;
+        let reporter_income = if version >= 2 {
+            <BTreeMap<crate::Hash64, crate::palw_bond_budget_v1::PalwReporterIncomeBindingV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(reporter_income)?;
+        let material_income = if version >= 3 {
+            <BTreeMap<crate::Hash64, crate::palw_bond_budget_v1::PalwMaterialIncomeV1> as NativeWireScanV1>::scan_native_wire_v1(
+                reader,
+            )?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(material_income)?;
+        let consumer_contracts = if version >= 4 {
+            <BTreeMap<crate::Hash64, crate::palw_bond_budget_v1::PalwPaidConsumerContractV1> as NativeWireScanV1>::scan_native_wire_v1(
+                reader,
+            )?
+        } else {
+            NativeWireShapeV1::default()
+        };
+        sum = sum.merge(consumer_contracts)?;
+        sum = sum.allocation(
+            consumer_contracts.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>(),
+        )?;
+        sum = sum.allocation(
+            consumer_contracts.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>(),
+        )?;
+        sum = sum.allocation(
+            material_income.outer_entries,
+            std::mem::size_of::<
+                crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<Option<crate::Hash64>, BTreeSet<crate::Hash64>>,
+            >(),
+        )?;
+        sum = sum.allocation(
+            material_income.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>(),
+        )?;
+        sum = sum.allocation(
+            material_income.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, BTreeSet<crate::Hash64>>>(),
+        )?;
+        sum = sum.allocation(
+            material_income.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>(),
+        )?;
+        sum = sum.allocation(
+            material_income.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>(),
+        )?;
+        sum =
+            sum.allocation(
+                claims.outer_entries,
+                std::mem::size_of::<
+                    crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, usize>,
+                >(),
+            )?;
+        sum = sum.allocation(
+            claims.outer_entries,
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, ()>>(),
+        )?;
+        sum =
+            sum.allocation(
+                reporter_income.outer_entries,
+                std::mem::size_of::<
+                    crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::palw_state_v2::PalwBondKeyV2, usize>,
+                >(),
+            )?;
+        Ok(sum)
+    }
+}

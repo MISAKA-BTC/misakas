@@ -2,18 +2,29 @@
 //! Encoded bytes and a sampled RSS are not native restore/DB upper bounds.
 use crate::BlockHash;
 use std::sync::OnceLock;
-mod typed;
+pub(crate) mod typed;
 pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
 pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 mod demand;
 mod generated;
 mod inventory;
 mod kernel_ledger;
+pub(crate) mod wire;
+mod wire_budget;
+mod wire_generated;
+mod wire_kernel_aux;
 pub use demand::{
     NativeDemandCheckerV1, NativeDemandLeaseV1, admit_native_receive_v1, arm_native_logical_limits_v1,
-    native_logical_admission_enabled_v1, reserve_native_install_v1, reserve_native_snapshot_v1,
+    native_logical_admission_enabled_v1, reserve_native_install_in_database_v1, reserve_native_install_v1, reserve_native_snapshot_v1,
+    reserve_native_wire_v1,
 };
+pub use wire::{
+    NativeWirePreflightV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, NativeWireValuePreflightV1,
+    preflight_native_carriage_v1, preflight_native_snapshot_v1, preflight_native_value_v1,
+};
+mod database_quota;
 mod quota;
+pub use database_quota::{NativeHardDatabaseQuotaV1, actual_hard_database_quota_v1};
 pub use inventory::{NativeSnapshotInventoryV1, NativeSnapshotOperationV1, inventory_accepted_state_v1};
 pub use quota::{NativeHardMemoryQuotaV1, actual_hard_memory_quota_v1};
 

@@ -599,6 +599,34 @@ impl SnapshotReceiver {
         }
         self.decode_with(|reader, _| T::deserialize_reader(reader))
     }
+    pub(crate) fn decode_snapshot_with_native_lease(
+        mut self,
+    ) -> io::Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>)> {
+        use kaspa_consensus_core::palw_native_resource_v1::*;
+        let lease = if native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() {
+            if !self.complete() || self.hash.clone().finalize() != self.root {
+                return Err(invalid("native preflight stream hash/EOF mismatch"));
+            }
+            let profile = self
+                .profile
+                .ok_or_else(|| invalid("explicit native receive admission requires negotiated protocol 107 compressed profile"))?;
+            self.spill.file.flush()?;
+            self.spill.file.seek(SeekFrom::Start(0))?;
+            let decoder = flate2::bufread::ZlibDecoder::new(BufReader::new(&mut self.spill.file));
+            let mut reader =
+                DecodedLimitReader { inner: decoder, expected: profile.decoded, read: 0, created: self.spill.created, checked_at: 0 };
+            let preflight = preflight_native_snapshot_v1(&mut reader, profile.decoded)?;
+            let mut extra = [0];
+            if reader.read(&mut extra)? != 0 || reader.read != profile.decoded || reader.inner.total_in() != self.total {
+                return Err(invalid("native preflight CRC/single-stream/exact decoded length mismatch"));
+            }
+            reserve_native_wire_v1(self.point, &preflight).map_err(|why| invalid(&format!("native structural admission: {why:?}")))?
+        } else {
+            None
+        };
+        let snapshot = self.decode_snapshot()?;
+        Ok((snapshot, lease))
+    }
     pub(crate) fn decode_snapshot(self) -> io::Result<Snapshot> {
         if self.profile.is_some() {
             return self.decode_compressed_snapshot();
