@@ -65,3 +65,9 @@ identity mismatch and fused binding mismatch. [Raw control results](evidence/rfc
 and [source/library/binary hashes](evidence/rfc06-snapshot-declarations-2026-10-13.json)
 are retained. The actual native100k raw dump, matching full-snapshot wire result,
 whole-node resource bounds and multi-process P2P/pruning remain unmeasured.
+
+The new [complete snapshot probe](rfc06-snapshot-full-wire-2026-10-13.md) separately
+checks received declaration **byte equality** and full state equality, with strict
+complete-fixture binding checks. It leaves the earlier state-only probe and its
+pinned build inputs unchanged. Its matching-v2 controls are separate from these
+earlier declaration-only control hashes.

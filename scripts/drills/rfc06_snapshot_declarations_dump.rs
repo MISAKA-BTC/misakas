@@ -23,7 +23,7 @@ use std::{
 const CANONICAL_INPUT_LIMIT: u64 = 512 << 20;
 
 #[derive(Clone)]
-struct ExpectedClass {
+pub(crate) struct ExpectedClass {
     id: Hash64,
     artifact_root: Hash64,
     pwu: PalwPwuRuleV2,
@@ -32,7 +32,7 @@ struct ExpectedClass {
     admission: Option<Box<PalwClassAdmissionCarriageV2>>,
 }
 
-fn fixture_classes() -> Result<(Hash64, Vec<ExpectedClass>), String> {
+pub(crate) fn fixture_classes() -> Result<(Hash64, Vec<ExpectedClass>), String> {
     // t12_with_harness_cards only changes BondRegistered keys/payouts and the
     // premine/genesis identity. complete_armed adds bonds and Panel parameters.
     // Neither changes the ClassRegistered objects returned by this public API.
@@ -59,7 +59,7 @@ fn fixture_classes() -> Result<(Hash64, Vec<ExpectedClass>), String> {
     Ok((bundle.base_class_id, classes))
 }
 
-fn complete_declarations(
+pub(crate) fn complete_declarations(
     carriage: &PalwStateCarriageV2,
     base: Hash64,
     expected: &[ExpectedClass],
