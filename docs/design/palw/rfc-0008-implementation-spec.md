@@ -1446,3 +1446,11 @@ provider terms. Both new controls are pending fresh compile/execution; source pr
 This guard closes a specific admission mismatch. Physical payment plus W can still be unknown or later than a finite
 contract. No maximum physical queue latency, profitable worker offer or provider renewal/funding transition is inferred.
 The full consumer, pruned material and economic acceptance gates remain open and public presets remain dormant.
+
+The corrected core control passed on 2026-10-13 after a 7m53s incremental build (0.06s test runtime). The same fresh
+executable passed 90 EXEC-fold cases, including this control, with one existing ignored resource case, and 64 budget
+cases with none ignored. The first fixture had failed before the guard because its unapproved B rate could not admit
+one whole block; the corrected fixture preserves the native block charge and funds that declared requirement before
+genesis. Raw failed/passing logs are linked in [the material acceptance record](rfc08-native-material-acceptance-2026-10-13.md).
+The native signed-provider control remains pending, so these core results do not establish full cryptographic/node,
+physical-payment or pruned transport acceptance of this guard.

@@ -114,6 +114,15 @@ attempt admission correctly refused the underfunded fixture and the subsequent P
 its B rate and open-claim ceiling to the same adequate pre-genesis mechanics values as the native control. The
 production material guard is unchanged. Fresh execution remains required; the failed fixture is not a guard PASS.
 
+The corrected command terminated successfully: fresh build 7m53s, one focused test passed in 0.06s. It used the existing
+node target, jobs2, debug0, `CARGO_INCREMENTAL=1` and `evm,private-integration-config,legacy-secp256k1`, with `--lib`.
+[The passing core log](evidence/rfc08-paid-material-core-pass-2026-10-13.log) retains the exact test and executable.
+That same fresh executable then passed [90 EXEC-fold cases](evidence/rfc08-paid-material-exec-regressions-2026-10-13.log)
+with one existing ignored resource case, and [64 budget cases](evidence/rfc08-paid-material-budget-regressions-2026-10-13.log)
+with none ignored. The focused case is included in those 90, not an additional independent case. These runs cover the
+new paid-material admission/restore guard and existing no-contract accounting/recovery controls; the actual ML-DSA
+provider/native carrier control still requires the root's later consensus build/run.
+
 ## Remaining acceptance
 
 Signed provider TTL and collectible collateral must cover each admitted whole path. The current finite native
