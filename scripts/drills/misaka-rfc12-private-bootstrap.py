@@ -151,7 +151,7 @@ def registration_window(bootstrap, daa):
 
 
 def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_check=False,
-        maximum_binding=None, maximum_check=None):
+        maximum_binding=None, maximum_check=None, progress=None):
     for role in ('A', 'B', 'JOIN'):
         drill.start(role)
         drill.wait(lambda role=role: ready(drill, role, bootstrap), role + ' exact private process identity')
@@ -175,10 +175,18 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
     for role in ('B', 'JOIN'):
         drill.join_link(role, 'A')
     included = drill.wait(lambda: agreement(drill, bootstrap), 'actual native registration/binding across ordinary P2P')
+    evidence = dict(registrationWindow=window, preview=preview, submission=sent, included=included,
+        cumulativeCarrierFeeSompi=budget['spent'], carrierBudget=budget, completeCheck=None)
+    # Retain completed observations even if a later maturity/check/reopen fails.
+    # The live budget records deductions made by later batches before a refusal;
+    # neither this checkpoint nor carrier inclusion is a complete-check PASS.
+    if progress:
+        progress(evidence, False)
     complete_evidence = None
     if complete_check:
         complete_evidence = complete.run(drill, sampler, cli, salt, fixture, bootstrap, budget,
             maximum_binding, maximum_check, agreement, rpc_read, command)
+        evidence['completeCheck'] = complete_evidence
     # Freeze production by terminating only our actual producer child; reopen
     # its same DB as an observer with the identical consensus factory.
     drill.kill('A')
@@ -198,8 +206,14 @@ def run(drill, sampler, cli, salt, fixture, bootstrap, maximum_fee, complete_che
                 [tuple(row[k] for k in columns) for row in after[field]], 'cold persistence changed binding terms'
         else:
             assert before[field] == after[field], 'cold persistence changed ' + field
-    return dict(registrationWindow=window, preview=preview, submission=sent, included=included, reopened=reopened,
-        cumulativeCarrierFeeSompi=budget['spent'], completeCheck=complete_evidence)
+    evidence.update(reopened=reopened, cumulativeCarrierFeeSompi=budget['spent'], completeCheck=complete_evidence)
+    if progress:
+        progress(evidence, True)
+    return evidence
+
+
+def record_observed_progress(result, evidence, cold_reopened):
+    result.update(nativeRegistrationBindingMeasured=True, coldReopenMeasured=cold_reopened, evidence=evidence)
 
 
 def main():
@@ -226,6 +240,7 @@ def main():
     drill = None
     result = dict(status='FAIL', artifactDirectory=str(root), resourceLimits=limits, resourceLimitsMet=False,
         maximumCarrierFeeSompi=args.maximum_carrier_fee_sompi, nativeRegistrationBindingMeasured=False,
+        coldReopenMeasured=False,
         completeCheckRequested=args.complete_check, maximumBindingReservationSompi=args.maximum_binding_reservation_sompi,
         maximumCompleteCheckFeeSompi=args.maximum_complete_check_fee_sompi, totalWorkflowTimeoutSeconds=args.timeout,
         completeCheckMeasured=False, matureUsefulWorkMeasured=False, prunedIbdMeasured=False,
@@ -249,7 +264,8 @@ def main():
         drill.workflow_deadline = time.monotonic() + args.timeout
         result['bootstrap'] = bootstrap
         result['evidence'] = run(drill, sampler, cli, args.salt, fixture, bootstrap, args.maximum_carrier_fee_sompi,
-            args.complete_check, args.maximum_binding_reservation_sompi, args.maximum_complete_check_fee_sompi)
+            args.complete_check, args.maximum_binding_reservation_sompi, args.maximum_complete_check_fee_sompi,
+            lambda evidence, cold: record_observed_progress(result, evidence, cold))
         result.update(status='REGISTRATION_BINDING_TRANSPORT_PASS', nativeRegistrationBindingMeasured=True)
         if args.complete_check:
             result.update(status='COMPLETE_CHECK_TRANSPORT_PASS', completeCheckMeasured=True)
@@ -263,6 +279,8 @@ def main():
                 except Exception as status_error:
                     result['lastNodeStatuses'][role] = {'error': str(status_error)}
     finally:
+        if 'evidence' in result:
+            result['evidence']['cumulativeCarrierFeeSompi'] = result['evidence']['carrierBudget']['spent']
         result['sampledOwnedResources'] = sampler.stop()
         if drill:
             drill.close()

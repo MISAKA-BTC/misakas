@@ -18,6 +18,48 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverControls(unittest.TestCase):
+    def test_later_complete_refusal_preserves_inclusion_and_actual_prior_fees_without_pass(self):
+        class FakeDrill:
+            plan = dict(nodes={'A': dict(borsh='owned:1')})
+
+            def start(self, role):
+                pass
+
+            def join_link(self, role, target):
+                pass
+
+            def wait(self, predicate, label):
+                return predicate()
+
+        included = {role: dict(sink='observed', onboarding=dict(found=True)) for role in ('A', 'B', 'JOIN')}
+        preview = dict(dry_run=True, total_fee_sompi=12)
+        sent = dict(ok=True, submitted=True, carriers=[dict(fee_sompi=5), dict(fee_sompi=7)])
+        result = dict(status='FAIL', nativeRegistrationBindingMeasured=False, coldReopenMeasured=False,
+            completeCheckMeasured=False)
+
+        def later_refusal(_drill, _sampler, _cli, _salt, _fixture, _bootstrap, budget, *args):
+            driver.complete.cap_and_charge(dict(carriers=[dict(fee_sompi=13)]), budget)
+            raise driver.transport.Blocked('complete verdict refused after a funded carrier')
+
+        bootstrap = dict(envelopeValidFromDaa=0, envelopeValidUntilDaa=0,
+            fundingKeyFile='owned.key', signedRegistration='registration', artifactBinding='binding')
+        with patch.object(driver, 'ready', return_value=True), \
+                patch.object(driver, 'rpc_read', return_value=dict(virtualDaaScore=0)), \
+                patch.object(driver, 'command', side_effect=[preview, sent]), \
+                patch.object(driver, 'agreement', return_value=included), \
+                patch.object(driver.complete, 'run', side_effect=later_refusal):
+            with self.assertRaisesRegex(driver.transport.Blocked, 'complete verdict refused'):
+                driver.run(FakeDrill(), None, Path('/owned/cli'), '74' * 32, Path('/owned/fixture'),
+                    bootstrap, 100, True, 100, 1,
+                    lambda evidence, cold: driver.record_observed_progress(result, evidence, cold))
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertTrue(result['nativeRegistrationBindingMeasured'])
+        self.assertFalse(result['coldReopenMeasured'])
+        self.assertFalse(result['completeCheckMeasured'])
+        self.assertEqual(result['evidence']['included'], included)
+        self.assertEqual(result['evidence']['carrierBudget']['spent'], 25)
+        self.assertIsNone(result['evidence']['completeCheck'])
+
     def test_registration_window_refuses_actual_daa_zero_before_carrier_spend(self):
         original = dict(envelopeValidFromDaa=1, envelopeValidUntilDaa=32)
         with self.assertRaisesRegex(driver.transport.Blocked, 'excludes actual DAA 0'):
