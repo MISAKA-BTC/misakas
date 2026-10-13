@@ -330,7 +330,11 @@ def main() -> int:
             "shape_ready_share_of_L_files": sh["share"],
             "lb95": sh["lb95"],
             "target": 0.90,
-            "meets_target": sh["lb95"] >= 0.90,
+            "shape_ready_meets_target": sh["lb95"] >= 0.90,
+            # RFC02 A8 requires active-kernel full-task Final evidence. This
+            # header-only report has none, even if its shape estimate is high.
+            "meets_target": False,
+            "acceptance_status": "NOT_RUN",
             "unjudged_eligible": sh["unjudged_eligible"],
             "lower_pass_est": round(e_lower.total()["total"], 1),
         },

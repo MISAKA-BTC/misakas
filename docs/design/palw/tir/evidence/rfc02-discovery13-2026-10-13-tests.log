@@ -1,0 +1,21 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 11s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-67d459dcc3034cdc)
+
+running 13 tests
+test flat_quota11::discovery13::tests::block_identity_cannot_rebind_but_distinct_dag_blocks_can_share_a_daa_score ... ok
+test flat_quota11::discovery13::tests::expired_collection_pays_current_rows_without_restoring_old_credits_or_guarantees ... ok
+test flat_quota11::discovery13::tests::paid_discovery_needs_no_proof_coordinate_but_binds_native_original_money_and_subject ... ok
+test flat_quota11::discovery13::tests::reserved_search_survives_ordinary_saturation_and_failed_attempts_stay_spent ... ok
+test flat_quota11::discovery13::tests::conversion_transfers_one_original_slot_new_maturity_and_no_unused_credit ... ok
+test flat_quota11::discovery13::tests::restoration_rechecks_exact_attempt_price_and_live_terminal_guard ... ok
+test flat_quota11::discovery13::tests::actor_role_clock_job_and_oversized_carrier_cannot_spend_reserved_search ... ok
+test flat_quota11::discovery13::tests::conversion_refuses_foreign_money_claim_operator_or_fresh_proof_without_mutation ... ok
+test flat_quota11::discovery13::tests::retire_consumes_unused_reserve_once_and_does_not_refund_same_interval_capacity ... ok
+test flat_quota11::discovery13::tests::selected_root_rebinding_cannot_restore_original_discovery ... ok
+test flat_quota11::discovery13::tests::delivery_reserves_cover_ordinary_all_discovery_and_post_proof_slots ... ok
+test flat_quota11::discovery13::tests::fixed_paid_row_roundtrip_binds_all_axes_and_refuses_hostile_frames ... ok
+test flat_quota11::discovery13::tests::shared_catalog_limits_and_each_axis_cap_refuse_atomically ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 217 filtered out; finished in 0.04s

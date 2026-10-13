@@ -4196,3 +4196,49 @@ completion percentage; accepted native honest-Final model records remain0.
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 詳細は[RFC/ADRレビューの整理（2026-10-12）](../design/palw/rfc-adr-review-resolution-2026-10-12.md) と[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 Proposal Aの `class_seated`（executor以外のモデル保有operatorを `seat_count` 以上、registrant・executorを除いた独立operatorの下限）は、モデル配布監査ではなく、実際にclaimを検証できるPanelを形成する条件として維持する（ADR-0177 D1補足：Miner・Panelは保有必須、登録者に配布義務はない）。Panel=1暫定modeでは、単一seatで全検証scopeを覆える経路だけを対象とし、旧複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定）。
+
+### §14.52 — Paid pre-proof discovery and one-slot proof conversion, v13 (2026-10-13)
+
+`flat_quota11::discovery13` defines an explicit v13 policy and bounded fixed-row
+transition API. A discovery ticket needs an authenticated original funded claim,
+independent owner/operator, original deposit receipt and permanent native nonce
+absence. It needs neither a prebuilt proof nor a known fault coordinate. Its
+policy commits the original quota policy and a bounded request allowance.
+Producer admission must cover ordinary lifetime answers plus discovery answers
+for all four retained job slots and the eight post-proof protected demands.
+Underfunding or arithmetic overflow refuses; declaring a ticket does not reserve
+producer deliveries retrospectively.
+
+The ticket uses the original v11 global, actor and job retained-slot counters
+and all 21 cumulative resource axes. Admission reserves request envelopes,
+fixed journal operations and the existing independently derived seal/court/chunk
+plan together. Requests debit before decoding or calling a provider; failed
+expensive attempts stay paid. They consume reserved capacity even when ordinary
+capacity is exhausted. Immutable selected-row roots, exact per-attempt costs,
+ownership, maturity, original interval and deadline are independently checked.
+All returned rows must be applied in a single native journal transaction.
+
+Conversion authenticates a new exact own proof seal on the same claim, vector,
+owner/operator and original deposit receipt. It takes a new proof maturity and
+transfers one retained slot and only the prepaid proof guarantee to the existing
+v11 protected row. Unused discovery capacity becomes consumption, never an
+ordinary refund. Same-interval retirement likewise consumes unused guarantees;
+after an authenticated native rollover, collection pays a new ordinary fixed
+journal operation and restores no expired credits. Native must preserve a
+permanent spent-ticket/nonce anchor through row collection.
+
+This is a bounded discovery reservation component, not a completed native route.
+The v13 policy must be bound and checked by the eventual versioned native
+Fund/claim/demand/answer/close path. A configured request count is not a theorem
+that every unknown relation can be localized within that count or before its
+deadline. Original-model acquisition remains external (mode A). Native atomic
+coin/nonce/row application, operator-wide capital and rotation accounting,
+complete localization bounds, aggregate adversarial liveness, funded execution
+Final/redemption and all §II.14/A6/A8 acceptance remain open. No shipping fence,
+frozen TIR byte, v7/v9 court, v11 policy root or existing seal grammar changes.
+
+The local-LLM census now reports its shape threshold separately from A8
+acceptance. A header-only report with zero measured active-kernel full-task
+Finals always has `meets_target=false` and `acceptance_status=NOT_RUN`, even
+when its shape-ready lower confidence bound exceeds 90%. Historical shape
+measurements are retained; they are not Final evidence.

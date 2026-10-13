@@ -22,6 +22,9 @@ mod protected;
 pub use protected::*;
 mod sharded;
 pub use sharded::*;
+/// Explicit v13 pre-proof discovery over the same authenticated aggregates.
+/// Legacy v11 paid proof seals retain their wire and quota rules.
+pub mod discovery13;
 #[cfg(test)]
 mod protected_tests;
 

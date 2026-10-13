@@ -71,7 +71,9 @@ def main() -> int:
     w(f"| **`L_listed`** / **`L_files`** | **{n(f['L_listed'])}** / **{n(f['L_files'])}** |")
     w("")
     tr = lo["tir"]
-    w(f"TIR `Final`: **0 measured**. TIR shape-ready over `L_files`: **{pct(tr['shape_ready_share_of_L_files'])}** (one-sided 95 % LB {pct(tr['lb95'])}) against the 90 % target — **{'met' if tr['meets_target'] else 'not met'}**.\n")
+    w(f"TIR `Final`: **{tr['final_measured']} measured**. TIR shape-ready over `L_files`: **{pct(tr['shape_ready_share_of_L_files'])}** "
+      f"(one-sided 95 % LB {pct(tr['lb95'])}). RFC02 A8 active-kernel full-task Final acceptance: **not measured**; "
+      "header-only shape coverage cannot satisfy the 90 % target.\n")
     w("| Route | Gate | First TIR blocker | Units (est.) | Share of `L_files` | Leading arguments |")
     w("| --- | --- | --- | ---: | ---: | --- |")
     for q in lo["residual_queue"][:28]:

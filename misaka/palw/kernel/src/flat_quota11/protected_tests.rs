@@ -12,10 +12,26 @@ fn fixture() -> (
 ) {
     fixture_with_config(257, None, None)
 }
-fn fixture_with_config(
+pub(super) fn fixture_with_config(
     max_actors: u32,
     cap: Option<QuotaQuantitiesV11>,
     under: Option<(u8, ResourceAxisV10, u128)>,
+) -> (
+    CheckedExecutionClassV11,
+    CheckedJobQuotaPlanV11,
+    QuotaPolicyV11,
+    TrustedEpochV11,
+    ExecutionJobStateV11,
+    NativePaidSealAnchorV11,
+    QuotaStateV11,
+) {
+    fixture_with_config_and_answers(max_actors, cap, under, None)
+}
+pub(super) fn fixture_with_config_and_answers(
+    max_actors: u32,
+    cap: Option<QuotaQuantitiesV11>,
+    under: Option<(u8, ResourceAxisV10, u128)>,
+    producer_answers: Option<u32>,
 ) -> (
     CheckedExecutionClassV11,
     CheckedJobQuotaPlanV11,
@@ -54,6 +70,9 @@ fn fixture_with_config(
     policy.block = policy.plan.clone();
     policy.actor = policy.plan.clone();
     policy.network = policy.plan.clone();
+    if let Some(answers) = producer_answers {
+        policy.future_attempts[2] = answers;
+    }
     policy.max_actors = max_actors;
     policy.max_subjects = 257;
     if let Some(cap) = cap {

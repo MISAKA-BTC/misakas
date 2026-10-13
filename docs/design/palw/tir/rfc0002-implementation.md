@@ -3060,3 +3060,71 @@ Branch `rfc02/merge-final` from the integration line `319c3695e`: `rfc02/takeove
   RFC02-T's inner 36/37 protects the frozen 23/27/32 refutations past `palw_model_refutation_seal_v1`. The sealed-bounty rule protects
   the kernel `FileProof`. RFC02-T's flat-v5 pursuit gate now also applies to codex's protected v6 posts past that fence.
 * No int-12 wire type changed: every new kind is inside tag 110 or 113, and both are post-int-12.
+
+## Workspace continuation — paid pre-proof discovery v13, 2026-10-13
+
+The requested workspace branch is `codex/workspace-rfc02`, created from the
+fetched `origin/pre` at `96813336a`. The quoted `64699e960` was not the current
+remote value at branch creation. No attachment body was present; this increment
+uses §II.14 and the latest ledger's explicit remaining guarantees.
+
+Added `flat_quota11::discovery13`, a bounded fixed-row API for a paid discovery
+reservation made before a proof or coordinate exists. The same original global,
+actor and job aggregates/retained counters cover discovery and proof slots.
+Producer lifetime answer counts must include all four discovery sessions and
+all eight later protected demands. Exact original job/quota roots derive the
+request, journal and proof envelopes. Failed expensive requests keep their
+predebit. Conversion preserves one slot and original money, takes a new proof
+maturity and consumes unused discovery allowance. Same-interval retirement
+cannot refund capacity; expired collection charges current ordinary capacity
+and cannot revive old guarantees. Native callers still authenticate coins,
+keys/roots/absence and permanent spent-ticket/nonces, then apply returned rows
+atomically. This API is not yet connected to consensus object dispatch.
+
+Thirteen new controls cover original native money/claim/clock/operator bindings,
+fixed framing, delivery underfunding/overflow, ordinary saturation, failed
+attempts, per-axis caps, shared slot exhaustion, exact rooted restoration,
+conversion/new maturity/v11 handoff, duplicate conversion, terminal guards and
+same/next-interval retirement, and same-DAA distinct DAG blocks. Initial trial fixtures wrongly assumed a
+four-DAA challenge window; corrected boundary tests derive the actual original
+claim's challenge end. These are component tests, not checkpoint completion.
+
+Corrected the local-LLM census's target flag: shape-ready confidence is exposed
+as `shape_ready_meets_target`; zero measured active-kernel full-task Finals give
+`meets_target=false` and `acceptance_status=NOT_RUN`. Its rendered report no
+longer suggests shape-only coverage satisfies A8. No population denominator,
+threshold, failure record or actual Final count was changed.
+
+Remaining: native policy/nonce/escrow/quota/UTXO dispatch and transactional
+Fund→Commit→DA/court→Final; complete unknown-coordinate discovery/delivery
+bounds and deadlines; principal/window capital accounting; full versioned
+length and typed H/media execution integration; real checkpoint/task/context
+and independent Final/redemption evidence; A6/A8 measured cohorts and confidence.
+The full RFC02 goal is active and **not complete**. Shipping fences remain dormant.
+
+Validation for this discovery increment (before native dispatch integration):
+
+```sh
+cargo test --locked -p misaka-palw-kernel --lib discovery13
+cargo test --locked -p misaka-palw-kernel --lib --test flat_execution11 --test flat_lengths7 --test flat_graph7 --test flat_graph9 --test flat_inputs12
+cargo test --locked -p kaspa-consensus-core --lib palw_flat_execution_v11::tests
+cargo clippy --locked -p misaka-palw-kernel --lib --tests -- -D warnings
+cargo check --locked -p kaspa-consensus-core
+```
+
+The broad run passes228 kernel library cases (one existing ignored case),26
+execution,10 graph7,6 graph9,5 typed-input and5 length cases. It contains the
+first12 discovery controls; the final13-control run adds the same-DAA DAG case
+and rechecks the final owned discovery source. The five native carrier controls
+pass separately, before new dispatch edits. These counts are overlapping
+regressions, not new model acceptance credit. Clippy including tests, Python
+syntax checks, formatter and whitespace checks pass. Exact selected output is
+retained in [discovery controls](evidence/rfc02-discovery13-2026-10-13-tests.log),
+[native carrier baseline](evidence/rfc02-discovery13-native-carrier-baseline-2026-10-13.log)
+and [Clippy](evidence/rfc02-discovery13-2026-10-13-clippy.log).
+
+The user subsequently supplied local original weights and the historical census
+snapshot, and authorized parallel implementation. Native funded execution,
+versioned typed stage lengths/checker/court and predeclared checkpoint/cohort
+work are now proceeding on this same branch. These later changes require their
+own coherent validation and do not inherit completion from this increment.
