@@ -33,6 +33,23 @@
 use crate::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 
+/// Immutable retained capture access. Implementations must bound each allocation to `length`;
+/// callers reserve source-reader scratch before opening a backend. This is a responder input,
+/// never a public verifier credential.
+pub trait PalwOriginalCaptureReaderV1: Send + Sync {
+    fn len_v1(&self) -> u64;
+    fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String>;
+}
+
+/// Bounded projection of original Flat public bytes. `None` means structural indexing is still
+/// in progress, not an answer or a verdict. Native EOF authentication remains mandatory.
+pub trait PalwFlatPublicSourceReaderV1: Send {
+    fn poll_v1(
+        &mut self,
+        cursor: crate::palw_flat_constraint_stream_v1::PalwFlatConstraintCursorV1,
+    ) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintActionV1>, String>;
+}
+
 /// The roots an attempt carries, and the bytes that answer for them.
 ///
 /// Family-agnostic on purpose: a block header commits these four values and does not know which
@@ -469,6 +486,31 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _tile: u8,
     ) -> Result<crate::palw_step_refute::PalwTraceEventDisclosureV1, String> {
         Err("this family has no data-availability responder".to_string())
+    }
+
+    fn open_flat_public_source_v1(
+        &self,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn PalwFlatPublicSourceReaderV1>, String> {
+        Err("this family has no bounded original Flat source responder".into())
+    }
+
+    /// Project only original public Flat logits/IDs while saving an already executed capture.
+    /// A sidecar is acceleration, never admission authority. `false` means another scheme.
+    fn write_flat_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn disclose_selected_event_v1(
+        &self,
+        _material: &[u8],
+        _row: u32,
+        _tile: u32,
+        _maximum_leaves: u64,
+    ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String>
+    {
+        Err("this family has no prospective full-width selected source responder".into())
     }
 
     fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {

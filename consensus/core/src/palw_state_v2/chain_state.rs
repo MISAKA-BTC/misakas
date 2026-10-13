@@ -147,7 +147,9 @@ impl PalwChainStateV2 {
             staged_holds: BTreeSet::new(),
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
+            staged_inventory_by_owner:BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
+            staged_selected_responders: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),
@@ -3561,6 +3563,10 @@ impl PalwChainStateV2 {
             return Err(PalwStateV2Error::CarriageInconsistent(
                 "public prefix responder index differs from literal live obligations".into(),
             ));
+        }
+        let selected: BTreeSet<_> = self.staged_courts.values().flat_map(palw_staged_court_fold_v1::selected_response_index_rows_v1).collect();
+        if selected != self.staged_selected_responders {
+            return Err(PalwStateV2Error::CarriageInconsistent("selected responder index differs from literal paid obligations".into()));
         }
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;

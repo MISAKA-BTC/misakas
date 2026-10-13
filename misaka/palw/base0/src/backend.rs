@@ -764,6 +764,34 @@ impl PalwExecutionBackendV1 for Base0Backend {
         crate::produce::base0_disclose_trace_event_v1(material, row, tile)
     }
 
+    fn disclose_selected_event_v1(
+        &self,
+        material: &[u8],
+        row: u32,
+        tile: u32,
+        maximum_leaves: u64,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1,
+        ),
+        String,
+    > {
+        crate::produce::base0_disclose_selected_event_v1(material, row, tile, maximum_leaves)
+    }
+
+    fn open_flat_public_source_v1(
+        &self,
+        source: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwOriginalCaptureReaderV1>,
+        binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwFlatPublicSourceReaderV1>, String> {
+        Ok(Box::new(crate::flat_public_source::Base0FlatPublicSourceV1::open_v1(source, binding)?))
+    }
+
+    fn write_flat_public_source_v1(&self, material: &[u8], out: &mut dyn std::io::Write) -> Result<bool, String> {
+        crate::flat_public_source::write_flat_public_source_v1(material, out)
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see

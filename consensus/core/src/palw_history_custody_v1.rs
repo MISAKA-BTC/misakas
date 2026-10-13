@@ -18,19 +18,36 @@ pub const PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1: usize = crate::palw_freeprompt_
 
 /// An explicit outer envelope; no trailing bytes are ignored by a legacy decoder.
 /// The original inner FP claim, PoW message and signature are byte-for-byte intact.
-#[derive(Clone, Debug, PartialEq, Eq, BorshDeserialize, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwHistoryFpEnvelopeV1 {
     pub version: u16,
     pub original_payload: Vec<u8>,
     pub pledge: PalwHistoryCustodyPledgeV1,
+    pub original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+}
+impl BorshDeserialize for PalwHistoryFpEnvelopeV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self {
+            version: BorshDeserialize::deserialize_reader(reader)?,
+            original_payload: crate::palw_public_binding_v1::read_bounded_bytes_v1(
+                reader,
+                crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES,
+            )?,
+            pledge: BorshDeserialize::deserialize_reader(reader)?,
+            original_binding: BorshDeserialize::deserialize_reader(reader)?,
+        })
+    }
 }
 impl PalwHistoryFpEnvelopeV1 {
     pub fn check_v1(&self) -> Result<(), String> {
         self.pledge.check_v1()?;
+        self.original_binding.check_wire_v1()?;
         if self.version != 1
             || self.original_payload.is_empty()
             || self.original_payload.len() > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
             || self.original_payload.starts_with(PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
+            || self.original_binding.execution_root_v1() != self.pledge.execution_root
+            || self.original_binding.job_context_v1().cu_ruleset_id != self.pledge.cu_ruleset_id
             || borsh::object_length(self).map_err(|e| e.to_string())? + PALW_HISTORY_FP_ENVELOPE_MAGIC_V1.len()
                 > PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1
         {
@@ -69,7 +86,7 @@ impl PalwHistoryFpEnvelopeV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshDeserialize, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwHistoryCustodyPledgeV1 {
     pub version: u16,
     pub claim: Hash64,
@@ -84,6 +101,24 @@ pub struct PalwHistoryCustodyPledgeV1 {
     pub accept_until_daa: u64,
     pub material_until_daa: u64,
     pub signature: Vec<u8>,
+}
+impl BorshDeserialize for PalwHistoryCustodyPledgeV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self {
+            version: BorshDeserialize::deserialize_reader(reader)?,
+            claim: BorshDeserialize::deserialize_reader(reader)?,
+            producer: BorshDeserialize::deserialize_reader(reader)?,
+            execution_root: BorshDeserialize::deserialize_reader(reader)?,
+            job_identity: BorshDeserialize::deserialize_reader(reader)?,
+            cu_ruleset_id: BorshDeserialize::deserialize_reader(reader)?,
+            resource_plan_id: BorshDeserialize::deserialize_reader(reader)?,
+            maximum_records: BorshDeserialize::deserialize_reader(reader)?,
+            maximum_custodians: BorshDeserialize::deserialize_reader(reader)?,
+            accept_until_daa: BorshDeserialize::deserialize_reader(reader)?,
+            material_until_daa: BorshDeserialize::deserialize_reader(reader)?,
+            signature: crate::palw_public_binding_v1::read_signature_v1(reader)?,
+        })
+    }
 }
 impl PalwHistoryCustodyPledgeV1 {
     pub fn authenticate_original_object_v1<F>(
@@ -166,7 +201,7 @@ impl PalwHistoryCustodyPledgeV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshDeserialize, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwHistoryCustodyGrantV1 {
     pub version: u16,
     pub claim: Hash64,
@@ -175,6 +210,19 @@ pub struct PalwHistoryCustodyGrantV1 {
     pub pledge_id: Hash64,
     pub valid_receipt_digest: Hash64,
     pub signature: Vec<u8>,
+}
+impl BorshDeserialize for PalwHistoryCustodyGrantV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self {
+            version: BorshDeserialize::deserialize_reader(reader)?,
+            claim: BorshDeserialize::deserialize_reader(reader)?,
+            seat: BorshDeserialize::deserialize_reader(reader)?,
+            signed_daa: BorshDeserialize::deserialize_reader(reader)?,
+            pledge_id: BorshDeserialize::deserialize_reader(reader)?,
+            valid_receipt_digest: BorshDeserialize::deserialize_reader(reader)?,
+            signature: crate::palw_public_binding_v1::read_signature_v1(reader)?,
+        })
+    }
 }
 impl PalwHistoryCustodyGrantV1 {
     pub fn receipt_digest_v1(receipt: &crate::palw_panel_v2::PalwSeatReceiptV2) -> Hash64 {
@@ -314,18 +362,36 @@ pub fn history_recovery_resource_plan_v1(
     custodian_count: usize,
     prices: PalwRenderingResourcePricesV1,
 ) -> Result<PalwRenderingResourcePlanV1, String> {
-    if custodian_count == 0 || prices.inclusion_margin_daa == 0 {
+    history_recovery_resource_plan_with_wait_v1(
+        maximum_records,
+        custodian_count,
+        crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().acquisition_daa,
+        prices,
+    )
+}
+
+pub fn history_recovery_resource_plan_with_wait_v1(
+    maximum_records: u64,
+    custodian_count: usize,
+    response_span_daa: u64,
+    prices: PalwRenderingResourcePricesV1,
+) -> Result<PalwRenderingResourcePlanV1, String> {
+    if custodian_count == 0 || response_span_daa == 0 || prices.inclusion_margin_daa == 0 {
         return Err("history recovery quote needs a bounded literal custody set and positive inclusion margin".into());
     }
     let n = u128::from(maximum_records);
     // Include the independent owner, who may answer without acquiring liability.
-    let slots = u128::from(u64::try_from(custodian_count).map_err(|_| "history custody count overflows u64")?) + 1;
+    let custodians = u128::from(u64::try_from(custodian_count).map_err(|_| "history custody count overflows u64")?);
+    let slots = custodians + 1;
     let record = PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 as u128;
     let parts = record.div_ceil(PALW_HISTORY_CUSTODY_PART_BYTES_V1 as u128);
     let mul = |a: u128, b: u128| a.checked_mul(b).ok_or_else(|| "history recovery quote multiplication overflows".to_string());
     let add = |a: u128, b: u128| a.checked_add(b).ok_or_else(|| "history recovery quote addition overflows".to_string());
-    let bytes = mul(mul(n, slots)?, record)?;
-    let moves = add(add(mul(n, add(1, mul(slots, parts + 2)?)?)?, 1)?, u128::from(prices.reorg_replay_moves))?;
+    let moves = add(add(add(mul(n, add(1, mul(slots, parts + 2)?)?)?, 2)?, custodians)?, u128::from(prices.reorg_replay_moves))?;
+    // Raw records are multipart. Each signed outer carrier (also initial grant,
+    // demand, collection and context) occupies <=90k INCLUDING its witnesses.
+    let carrier = crate::palw_constraint_stream_carriage_v1::PALW_PREFIX_BATCH_CARRIER_BYTES_V1 as u128;
+    let bytes = mul(moves, carrier)?;
     // Borsh state retains one unanswered record per slot, never the whole chain.
     let row = add(mul(slots, record + 512)?, 4096)?;
     // Accepted state, COW next state, reversible old/new checkpoints and allocator
@@ -334,11 +400,17 @@ pub fn history_recovery_resource_plan_v1(
     let ram = add(mul(row, 8)?, record * 4)?;
     // Accepted reversible deltas can retain a full mutable checkpoint at each
     // bounded move. Pricing only the final live row misses this native disk cost.
-    let journals = mul(moves, add(row, 90_000)?)?;
+    let journals = mul(moves, add(mul(row, 2)?, carrier)?)?;
     let archive = mul(n, record + 256)?;
-    let storage = add(add(row, journals)?, archive)?;
-    let rent = add(mul(bytes, u128::from(prices.rent_per_stream_byte))?, mul(storage, u128::from(prices.rent_per_row_byte))?)?;
+    let storage =
+        add(add(add(row, journals)?, archive)?, crate::palw_prefix_history_v1::PALW_STAGED_CACHE_LEASE_STORAGE_BYTES_V1 as u128)?;
+    let work = add(bytes, mul(mul(n, slots)?, record)?)?;
+    let rent = add(
+        add(mul(bytes, u128::from(prices.rent_per_stream_byte))?, mul(storage, u128::from(prices.rent_per_row_byte))?)?,
+        mul(work, u128::from(prices.rent_per_parser_step))?,
+    )?;
     let narrow = |v: u128| u64::try_from(v).map_err(|_| "history recovery resource quote overflows u64".to_string());
+    let inclusion = add(mul(moves, u128::from(prices.inclusion_margin_daa))?, mul(n, u128::from(response_span_daa))?)?;
     Ok(PalwRenderingResourcePlanV1 {
         prefix_tokens: 0,
         vocab: 0,
@@ -346,9 +418,9 @@ pub fn history_recovery_resource_plan_v1(
         maximum_stream_leaves: maximum_records,
         maximum_eog_bytes: 0,
         maximum_moves: narrow(moves)?,
-        maximum_parser_steps: 0,
-        maximum_blake_blocks: narrow(mul(mul(n, slots)?, record.div_ceil(128) + 1)?)?,
-        inclusion_daa: narrow(mul(moves, u128::from(prices.inclusion_margin_daa))?)?,
+        maximum_parser_steps: narrow(work)?,
+        maximum_blake_blocks: narrow(add(mul(mul(n, slots)?, record.div_ceil(128) + 1)?, bytes.div_ceil(128))?)?,
+        inclusion_daa: narrow(inclusion)?,
         rent_sompi: narrow(rent)?,
         deposit_sompi: narrow(mul(moves, u128::from(prices.deposit_per_move))?)?,
         row_bytes: narrow(storage)?,
@@ -356,13 +428,34 @@ pub fn history_recovery_resource_plan_v1(
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshDeserialize, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub enum PalwHistoryRecoveryActionV1 {
     Demand,
     Begin { answerer: PalwBondKeyV2, total_bytes: u32 },
     Part { answerer: PalwBondKeyV2, offset: u32, bytes: Vec<u8> },
     Finish { answerer: PalwBondKeyV2 },
     Collect,
+}
+impl BorshDeserialize for PalwHistoryRecoveryActionV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let action = match u8::deserialize_reader(reader)? {
+            0 => Self::Demand,
+            1 => Self::Begin {
+                answerer: BorshDeserialize::deserialize_reader(reader)?,
+                total_bytes: BorshDeserialize::deserialize_reader(reader)?,
+            },
+            2 => Self::Part {
+                answerer: BorshDeserialize::deserialize_reader(reader)?,
+                offset: BorshDeserialize::deserialize_reader(reader)?,
+                bytes: crate::palw_public_binding_v1::read_bounded_bytes_v1(reader, PALW_HISTORY_CUSTODY_PART_BYTES_V1)?,
+            },
+            3 => Self::Finish { answerer: BorshDeserialize::deserialize_reader(reader)? },
+            4 => Self::Collect,
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown bounded history recovery action")),
+        };
+        action.check_wire_v1().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(action)
+    }
 }
 impl PalwHistoryRecoveryActionV1 {
     pub fn answerer_v1(&self) -> Option<PalwBondKeyV2> {
@@ -569,8 +662,7 @@ impl PalwHistoryRecoveryV1 {
                 if buffer.bytes.len() != buffer.total_bytes as usize {
                     return Err("history record is not complete at EOF".into());
                 }
-                let record: PalwPrefixHistoryRecordV1 = borsh::from_slice(&buffer.bytes).map_err(|e| e.to_string())?;
-                record.authenticates_request_v1(&demand.request)?;
+                let record = PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(&buffer.bytes, &demand.request)?;
                 self.remaining_sequence = record.sequence - 1;
                 self.remaining_head = record.previous_head;
                 self.demand = None;
@@ -820,7 +912,47 @@ mod tests {
     }
     #[test]
     fn explicit_fp_wrapper_is_bounded_nonrecursive_and_rejects_ignored_tails() {
-        let envelope = PalwHistoryFpEnvelopeV1 { version: 1, original_payload: vec![3, 0, 8], pledge: pledge() };
+        let pledge = pledge();
+        let h = Hash64::from_u64_word(1);
+        let context = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"testnet-11".to_vec(),
+            job_id: h,
+            job_nullifier: h,
+            assignment_id: h,
+            execution_seed: [1; 32],
+            model_profile_id: h,
+            runtime_manifest_hash: h,
+            runtime_class_id: h,
+            shape_profile_id: h,
+            trace_scheme_id: crate::palw_v2::trace_scheme_id_v2(),
+            cu_ruleset_id: pledge.cu_ruleset_id,
+            tokenizer_id: h,
+            prompt_token_ids_hash: h,
+            declared_prefill_tokens: 1,
+            exact_decode_tokens: 1,
+            max_context_tokens: 2,
+        };
+        let original_binding = crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(
+            crate::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1 {
+                version: 1,
+                job_context: context,
+                checkpoint_profile: crate::palw_legs::PalwCheckpointProfileV1 {
+                    version: 1,
+                    checkpoint_interval: 1,
+                    state_layout_id: h,
+                },
+                state_chunk_map_id: h,
+                full_logits_trace_root: h,
+                activation_leg_root: h,
+                step_leaf_count: 1,
+                step_merkle_root: h,
+                checkpoint_count: 1,
+                checkpoint_merkle_root: h,
+                committed_execution_root: pledge.execution_root,
+            },
+        );
+        let envelope = PalwHistoryFpEnvelopeV1 { version: 1, original_payload: vec![3, 0, 8], pledge, original_binding };
         let encoded = envelope.encode_v1().unwrap();
         assert_eq!(PalwHistoryFpEnvelopeV1::decode_v1(&encoded).unwrap(), envelope);
         assert!(envelope.original_fp_v1().is_err());
@@ -834,5 +966,31 @@ mod tests {
         large.original_payload = vec![0; crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES + 1];
         assert!(large.encode_v1().is_err());
         assert!(PalwHistoryFpEnvelopeV1::decode_v1(&vec![0; PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1 + 1]).is_err());
+    }
+    #[test]
+    fn history_parts_and_envelope_reject_declared_allocation_bombs_before_reading_body() {
+        let mut part = vec![2];
+        part.extend(borsh::to_vec(&bond(7)).unwrap());
+        part.extend(0u32.to_le_bytes());
+        part.extend(u32::MAX.to_le_bytes());
+        assert!(borsh::from_slice::<PalwHistoryRecoveryActionV1>(&part).is_err());
+        let mut envelope = PALW_HISTORY_FP_ENVELOPE_MAGIC_V1.to_vec();
+        envelope.extend(1u16.to_le_bytes());
+        envelope.extend(u32::MAX.to_le_bytes());
+        assert!(PalwHistoryFpEnvelopeV1::decode_v1(&envelope).is_err());
+        let valid =
+            PalwHistoryRecoveryActionV1::Part { answerer: bond(7), offset: 0, bytes: vec![1; PALW_HISTORY_CUSTODY_PART_BYTES_V1] };
+        assert_eq!(borsh::from_slice::<PalwHistoryRecoveryActionV1>(&borsh::to_vec(&valid).unwrap()).unwrap(), valid);
+    }
+    #[test]
+    fn original_history_budget_includes_every_response_wait_and_signed_outer_carrier() {
+        let prices = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let short = history_recovery_resource_plan_with_wait_v1(100, 6, 10, prices).unwrap();
+        let long = history_recovery_resource_plan_with_wait_v1(100, 6, 4096, prices).unwrap();
+        assert_eq!(long.inclusion_daa - short.inclusion_daa, 100 * (4096 - 10));
+        assert!(long.maximum_stream_bytes >= long.maximum_moves * 90_000);
+        assert!(long.maximum_moves > 100 * (1 + 7 * 5));
+        assert!(history_recovery_resource_plan_with_wait_v1(1, 6, 0, prices).is_err());
+        assert!(history_recovery_resource_plan_with_wait_v1(u64::MAX, 6, u64::MAX, prices).is_err());
     }
 }

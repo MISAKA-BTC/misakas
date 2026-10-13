@@ -117,8 +117,7 @@ impl Records {
     fn read(&self, wanted: &PalwPrefixHistoryRequestV1) -> Option<PalwPrefixHistoryRecordV1> {
         bounded(&self.path(wanted.head), PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1)
             .ok()
-            .and_then(|raw| borsh::from_slice::<PalwPrefixHistoryRecordV1>(&raw).ok())
-            .filter(|r| r.authenticates_request_v1(wanted).is_ok())
+            .and_then(|raw| PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(&raw, wanted).ok())
     }
     fn save(&mut self, wanted: &PalwPrefixHistoryRequestV1, row: &PalwPrefixHistoryRecordV1) -> Result<(), String> {
         if self.scan.is_some() {

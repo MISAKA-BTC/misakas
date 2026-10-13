@@ -3,8 +3,9 @@
 Base: `origin/pre` = `64699e960bc2782efba2550e247efdfdf5f325a2`.
 Workspace branch: `codex/g14-public-conviction`. The original checkout's existing
 changes are preserved in its original branch. Full G14 is **not complete**.
-The status estimate is about 50% of end-to-end acceptance and about 70% of code
-implementation. These are informal weighted estimates, not a measured acceptance
+The current status estimate is about 50% of end-to-end acceptance and about
+75-80% of source implementation, up from the earlier 70% source baseline.
+These are informal weighted estimates, not a measured acceptance
 score. Source-only work, failed runs and nonterminal trials do not count as done.
 
 ## Source-First Workflow
@@ -15,10 +16,10 @@ only `origin/codex/g14-public-conviction`. WIP commits preserve source work, not
 proof of compilation or end-to-end completion. Before each checkpoint, shared
 editing is coordinated; raw evidence logs, target binaries, captures and secrets
 are excluded. No force push, direct `pre` push or history rewrite is authorized.
-The first source checkpoint still has incomplete common history, authenticated
-preclaim inventory, selected-event native routing and Flat semantic/service
-connections. Functional verification remains deferred until source integration
-is complete, as requested.
+The first source checkpoint is `49c5c735f`, confirmed on the remote workspace
+branch. Subsequent source integration is still incomplete and unqualified.
+Functional verification remains deferred until source integration is complete,
+as requested.
 
 The latest user instruction is to complete the remaining source implementation
 and integration first, then run the verification suite together. All agents are
@@ -36,10 +37,32 @@ metadata and irreversible-pruning-point GC grants, keyless service retirement,
 global public-history DB read permits, and explicit TickService shutdown in
 network fixtures. These changes do not qualify an earlier socket failure.
 
-The required-family Bundle, retained original seed/context queries, checked SUM
-resource terms, tokenizer owner intake inventory, and Tiled Constraint scheduler
-are under integration. Native archives now project Bundle's active prefix
-checkpoint rather than silently ignoring Bundle movements.
+New source connections include required-family Bundle fixed acquisition/semantic
+windows, retained original seed/context queries, checked SUM resource terms,
+tokenizer EOF inventory, and Tiled Constraint scheduling. Native archives project
+Bundle's active prefix checkpoint and persist recovered original records in the
+same accepted batch, without changing original signatures/clocks or recursively
+archiving recovery. All remain uncompiled and unrun at the current source tip.
+
+The compact original execution binding is now mandatory in the dormant HFP1
+envelope and survives native carry, per-object rehearsal and final candidate
+extras. Original public job, execution root, CU rules, authenticated EOF size,
+family SUM commitment and prospective producer pledge are checked at admission.
+The raw inventory hash includes the original u64 actual-length prefix; false
+declared tokenizer lengths are not acquisition size authority. Its node actor
+and canonical producer readiness/publication remain under integration.
+
+Shared Flat public material now has separate native claim lease/expiry indices,
+created at claim admission before any seed and unioned across all accepted owner
+seeds/forks. Per-seed GC ACK cannot retire shared metadata. Native pages visit at
+most64 expiry rows, use only strict irreversible-pruning-point expiry, and ACK
+the exact current union. Metadata bytes are included in the resource quote.
+Actual file unlink still needs the complete admission-clock/finality proof that
+no later accepted lease can invalidate a prior shared deletion authorization;
+rechecking a page and rejecting a stale ACK alone cannot undo a file deletion.
+History raw carriers now authenticate their bounded bytes against the rooted
+original head before nested Borsh vector decoding. These are source additions,
+not new acceptance evidence.
 
 The new history custody module defines a prospective producer-signed pledge,
 a separately signed literal Valid-seat grant, backwards rooted recovery with
@@ -53,29 +76,37 @@ producer, execution root and job pin. Isolation/header doors are configured by
 the dormant stage fence; real fee, mass and transaction identity remain outer
 transaction facts. The companion survives per-object rehearsal and the final
 candidate fold through explicit extras. Expected ruleset, authenticated inventory,
-resource commitment and absolute horizon still need the common admission check.
+resource commitment and absolute horizon are now connected to the common
+admission check in source, not yet qualified by execution.
 The prospective default helper avoids re-running a sibling's producer charge
 and does not invent a live claim phase after terminal conviction. Native
-carriage/admission, Bundle dispatch, node recovery and automatic collection still
-need connection. Existing semantic-source receipts are not retroactive history
+carriage/admission and Bundle history dispatch are connected in source;
+node recovery actors and automatic collection still need integration.
+Existing semantic-source receipts are not retroactive history
 grants. Unit test sources for recovery and lease storage have been added, not run.
 
-Additional all-format gaps are now explicit: original Flat Constraint needs a
-bounded stream court rather than conversion to Tiled, and maximum vocabulary
-requires original u32 tile acquisition without an u8 cast. Both are implementation
-work, not permission to exclude supported profiles. Native fork-union archive
-retention is not yet proven within its quoted storage envelope.
+Additional all-format gaps are explicit: original Flat Constraint has a bounded
+two-pass stream court and original read-at backend in source, but the shared
+native duties/filer/actor integration remains incomplete. New selected-event
+acquisition preserves u32 tiles, but old arithmetic paths still need their full
+format/size audit. Qualified TIR has a genuine typed hydration/semantic bridge
+gap, and a maximum-size token table still needs bounded file/index-backed holding
+and streaming mask work. None is permission to exclude supported profiles.
+Native fork-union archive retention and global population/RAM capacity are not
+yet proven within their quoted storage envelopes.
 
 Raw tokenizer format currently has no authenticated actual-file-size cap before
 EOF. A false declared length cannot justify finite claim-wide acquisition terms.
-Owner intake EOF inventory is useful but does not by itself prove original
-claim-acceptance-wide deadlines/capital. The requested policy decision about
-pre-admission public EOF inventory remains unanswered; it is not implicit
-approval of a new arbitrary raw-file cap. No shipping fence is armed and no
+Owner intake EOF inventory alone does not prove original claim-wide bounds.
+The new native preclaim inventory authenticates the actual raw operand length
+at EOF before computing claim-wide family terms; this is not an arbitrary
+raw-file cap. Producer publication/readiness is still being connected, so the
+new admission cannot yet be considered a usable end-to-end route.
+No shipping fence is armed and no
 maximum, deadline, fee or mass gate is weakened to manufacture completion.
 
-The 50% whole / 70% code figures above remain the last informal baseline, not a
-new measurement of this source-only phase. Full G14 remains unqualified until
+The 50% whole / 75-80% source figures are informal estimates, not measured
+coverage or proof of completion. Full G14 remains unqualified until
 all source connections and the subsequent terminal verification are complete.
 
 ## Implementation

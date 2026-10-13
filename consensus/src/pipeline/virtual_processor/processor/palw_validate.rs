@@ -3610,21 +3610,24 @@ impl VirtualStateProcessor {
                     seed.check(court.max_close_bytes())?;
                     let owner = state.bond(&seed.reserver).ok_or("staged owner has no registered bond")?;
                     let bundle = match state.staged_owned_row_v1(seed.claim, seed.reserver) {
-                        Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(bundle)) => Some(bundle),
+                        Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(bundle)) => {
+                            Some(bundle)
+                        }
                         _ => None,
                     };
                     let authorized = match bundle {
-                        Some(bundle) => bundle.reserved_daa == seed.reserved_daa
-                            && bundle.opened.len() < bundle.plan.stages.len()
-                            && bundle.opened.len() == bundle.active.map_or(0, |n| n as usize + 1)
-                            && point.daa_score >= bundle.plan.terms.accepted_daa
-                            && point.daa_score < bundle.plan.stages[bundle.opened.len()].terms.open_until_daa,
-                        None => state.legacy_dispute_reservation_v1(&seed.claim, &seed.reserver)
+                        Some(bundle) => {
+                            bundle.reserved_daa == seed.reserved_daa
+                                && bundle.opened.len() < bundle.plan.stages.len()
+                                && bundle.opened.len() == bundle.active.map_or(0, |n| n as usize + 1)
+                                && point.daa_score >= bundle.plan.terms.accepted_daa
+                                && point.daa_score < bundle.plan.stages[bundle.opened.len()].terms.open_until_daa
+                        }
+                        None => state
+                            .legacy_dispute_reservation_v1(&seed.claim, &seed.reserver)
                             .is_some_and(|reservation| reservation.reserved_daa == seed.reserved_daa),
                     };
-                    if !authorized
-                        || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
-                    {
+                    if !authorized || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
                         return Err("staged move changes live reservation identity or owner is inactive".into());
                     }
                     if !Self::verify_mldsa87_with_context_bool(
@@ -3687,29 +3690,110 @@ impl VirtualStateProcessor {
                         &state,
                         (movement.claim, movement.reserver),
                     )?;
-                    let authorized = match paid {
-                        Some(paid) => {
-                            let control_terms = match (&movement.action, state.staged_owned_row_v1(movement.claim, movement.reserver)) {
-                                (stage::PalwConstraintStreamActionV1::ActivateStage { .. }
-                                    | stage::PalwConstraintStreamActionV1::InventoryPart { .. }
-                                    | stage::PalwConstraintStreamActionV1::InventoryFinish,
-                                    Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(bundle))) => bundle.plan.terms,
-                                _ => paid.terms,
+                    let artifact = match &movement.action {
+                        stage::PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } => {
+                            let contract = match state.staged_owned_row_v1(movement.claim, movement.reserver) {
+                                _ => state
+                                    .staged_claim_contract_v1(&movement.claim)
+                                    .ok_or("history grant has no accepted material contract")?,
                             };
-                            let until = if matches!(movement.action, stage::PalwConstraintStreamActionV1::PrefixPublicCollect { .. }) {
-                                paid.terms.collect_until_daa
-                            } else {
-                                control_terms.stream_until_daa
-                            };
-                            paid.reserved_daa == movement.reserved_daa
-                                && paid.seed_id == movement.seed_id
-                                && point.daa_score >= paid.terms.accepted_daa
-                                && point.daa_score < until
-                                && point.daa_score < paid.terms.material_until_daa
+                            let signer = state.bond(&grant.seat).ok_or("history grant signer is not registered")?;
+                            grant.validate_signature_v1(receipt, &signer.pubkey, Self::verify_mldsa87_with_context_bool)?;
+                            Some(
+                                movement.reserver == grant.seat
+                                    && movement.claim == grant.claim
+                                    && movement.reserved_daa == contract.terms.accepted_daa
+                                    && point.daa_score >= contract.terms.accepted_daa
+                                    && point.daa_score < contract.terms.material_until_daa
+                                    && contract
+                                        .prefix_custody
+                                        .as_ref()
+                                        .is_some_and(|custody| custody.matches_credited_receipt_v1(movement.claim, receipt)),
+                            )
                         }
-                        None => state
-                            .legacy_dispute_reservation_v1(&movement.claim, &movement.reserver)
-                            .is_some_and(|r| r.reserved_daa == movement.reserved_daa),
+                        stage::PalwConstraintStreamActionV1::ArtifactInventoryOpen { offer, .. } => {
+                            offer.validate_signature_v1(&owner.pubkey, Self::verify_mldsa87_with_context_bool)?;
+                            Some(
+                                movement.claim == offer.artifact_hash
+                                    && movement.reserver == offer.opener
+                                    && movement.seed_id == offer.id_v1()
+                                    && movement.reserved_daa == 0
+                                    && point.daa_score < offer.accept_until_daa,
+                            )
+                        }
+                        stage::PalwConstraintStreamActionV1::ArtifactInventoryMove(_) => {
+                            Some(state.staged_tokenizer_inventory_open_v1(movement.claim, movement.reserver).is_some_and(|row| {
+                                movement.seed_id == row.offer.id_v1()
+                                    && movement.reserved_daa == row.opened_daa
+                                    && point.daa_score >= row.opened_daa
+                                    && point.daa_score < row.until_daa
+                            }))
+                        }
+                        _ => None,
+                    };
+                    let authorized = if let Some(artifact) = artifact {
+                        artifact
+                    } else {
+                        match paid {
+                            Some(paid) => {
+                                let control_terms =
+                                    match (&movement.action, state.staged_owned_row_v1(movement.claim, movement.reserver)) {
+                                        (
+                                            stage::PalwConstraintStreamActionV1::ActivateStage { .. }
+                                            | stage::PalwConstraintStreamActionV1::InventoryPart { .. }
+                                            | stage::PalwConstraintStreamActionV1::InventoryFinish
+                                            | stage::PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+                                            | stage::PalwConstraintStreamActionV1::SelectedEventAnswer(_)
+                                            | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                                            | stage::PalwConstraintStreamActionV1::HistoryRecovery { .. },
+                                            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
+                                                bundle,
+                                            )),
+                                        ) => bundle.plan.terms,
+                                        _ => paid.terms,
+                                    };
+                                let until = if matches!(
+                                    movement.action,
+                                    stage::PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
+                                        | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                                        | stage::PalwConstraintStreamActionV1::HistoryRecovery {
+                                            action:
+                                                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryRecoveryActionV1::Collect,
+                                            ..
+                                        }
+                                ) {
+                                    control_terms.collect_until_daa
+                                } else {
+                                    control_terms.stream_until_daa
+                                };
+                                let literal_seed =
+                                    match (&movement.action, state.staged_owned_row_v1(movement.claim, movement.reserver)) {
+                                        (
+                                            stage::PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+                                            | stage::PalwConstraintStreamActionV1::SelectedEventAnswer(_)
+                                            | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. },
+                                            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
+                                                bundle,
+                                            )),
+                                        ) => bundle.plan.id_v1(bundle.claim),
+                                        (
+                                            stage::PalwConstraintStreamActionV1::HistoryRecovery { .. },
+                                            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
+                                                bundle,
+                                            )),
+                                        ) => bundle.plan.id_v1(bundle.claim),
+                                        _ => paid.seed_id,
+                                    };
+                                paid.reserved_daa == movement.reserved_daa
+                                    && literal_seed == movement.seed_id
+                                    && point.daa_score >= paid.terms.accepted_daa
+                                    && point.daa_score < until
+                                    && point.daa_score < paid.terms.material_until_daa
+                            }
+                            None => state
+                                .legacy_dispute_reservation_v1(&movement.claim, &movement.reserver)
+                                .is_some_and(|r| r.reserved_daa == movement.reserved_daa),
+                        }
                     };
                     if !authorized || !matches!(owner.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
                         return Err("staged move changes live reservation identity or owner is inactive".into());

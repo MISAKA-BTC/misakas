@@ -682,6 +682,30 @@ pub fn base0_material_decode_any_v1(bytes: &[u8]) -> Result<Base0RetentionV1, Pr
 /// `Err` is "this build cannot answer", which on an armed chain is a default. `Ok(OutOfRange)` is
 /// "the accused event is not in the committed run", which `check_trace_event_disclosure_v1`
 /// verifies from the binding alone and is a refutation, not an answer.
+pub fn base0_disclose_selected_event_v1(
+    material: &[u8],
+    row: u32,
+    tile: u32,
+    maximum_leaves: u64,
+) -> Result<
+    (
+        kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+        kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1,
+    ),
+    String,
+> {
+    let retention = base0_material_decode_any_v1(material).map_err(|_| "the original selected capture does not decode".to_string())?;
+    let binding = retention.binding();
+    let event = kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedTiledEventV1::of_public_rows_v1(
+        binding,
+        retention.logits_rows(),
+        retention.generated_token_ids(),
+        kaspa_consensus_core::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1 { row, tile },
+        maximum_leaves,
+    )?;
+    Ok((binding.clone(), event))
+}
+
 pub fn base0_disclose_trace_event_v1(
     material: &[u8],
     row: u32,

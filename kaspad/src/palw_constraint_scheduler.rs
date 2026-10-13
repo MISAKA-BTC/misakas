@@ -522,11 +522,126 @@ impl ConstraintSchedulerV1 {
     /// An accepted seed is read from the rooted public archive, not nominated again after
     /// restart. A reconstructed checkpoint never supplies admission authority.
     #[allow(clippy::too_many_arguments)]
+    pub(super) fn open_from_flat_v1(
+        target: &PalwOffenceTargetV1,
+        job: &PalwFreePromptJobV3,
+        binding: &PalwStepBindingV2,
+        pin: &kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        source_id: Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        witness: Option<u32>,
+        table: Arc<PalwTokenTableV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+    ) -> Result<Self, String> {
+        if progress.cursor.is_some()
+            || progress.seed_id.is_some()
+            || progress.claim != target.claim_id
+            || progress.reserver == target.executor_bond
+            || progress.terms.accepted_daa > progress.reserved_daa
+            || progress.reserved_daa > progress.now_daa
+            || progress.now_daa >= progress.terms.open_until_daa
+            || !pin.matches_binding_v1(binding)
+        {
+            return Err("flat constraint opening changes paid owner/source/original clock".into());
+        }
+        let extra = borsh::object_length(binding).map_err(|e| e.to_string())? as u64;
+        let reservation = reserve_v1(target, job, &[], extra, &table, ledger)?;
+        palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
+        if table.tokenizer_id != job.tokenizer_id || table.vocab() != binding.shape_profile.vocab_size {
+            return Err("flat constraint table differs from original registered tokenizer/vocabulary".into());
+        }
+        let root = palw_fp_constraint_table_root_v1(job).ok_or("flat constraint job lacks immutable table root")?;
+        let eog_opening = opening_v1(&table, table.vocab())?;
+        if step_opening_root_capped_v1(table.entries.len() as u64 + 1, &eog_opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+            .map_err(|e| e.to_string())?
+            != root
+        {
+            return Err("flat constraint EOG holding differs from original table commitment".into());
+        }
+        let mut eog = table.eog_token_ids.clone();
+        eog.sort_unstable();
+        if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab()) {
+            return Err("flat constraint EOG holding is not a canonical set".into());
+        }
+        let court = PalwConstraintStreamCourtV1::new_from_flat_pin_v1(
+            target.claim_id,
+            progress.reserver,
+            progress.reserved_daa,
+            target.execution_root,
+            binding,
+            job,
+            pin,
+            witness,
+            eog.len() as u32,
+            &eog_opening,
+        )?;
+        let empty = || PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: Vec::new() };
+        let mut seed = PalwConstraintStreamSeedV1 {
+            version: 1,
+            claim: target.claim_id,
+            reserver: progress.reserver,
+            reserved_daa: progress.reserved_daa,
+            binding: binding.clone(),
+            job: None,
+            pin: PalwTiledDecodePinV1 {
+                position: 0,
+                generated_token_ids: Vec::new(),
+                row_root: Hash64::default(),
+                row_opening: empty(),
+                committed_tile_lanes: Vec::new(),
+                committed_opening: empty(),
+                beat_tile_lanes: Vec::new(),
+                beat_opening: empty(),
+                beat_lane: 0,
+            },
+            witness,
+            eog_count: eog.len() as u32,
+            eog_opening,
+            auxiliary: Some(
+                kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint {
+                    source_id,
+                    answerer,
+                },
+            ),
+            signature: Vec::new(),
+            retained_profile: None,
+        };
+        if borsh::object_length(&seed).map_err(|e| e.to_string())? + kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
+            > 90_000
+        {
+            seed.use_retained_profile_v1()?;
+        }
+        if borsh::object_length(&seed).map_err(|e| e.to_string())? + kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
+            > 90_000
+        {
+            return Err("flat semantic seed exceeds original fixed signed carrier".into());
+        }
+        let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "flat semantic seed digest width")?);
+        Ok(Self { seed, seed_id, terms: progress.terms, table, eog, court, moves: 1, pending: None, _reservation: reservation })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reopen(
         target: &PalwOffenceTargetV1,
         job: &PalwFreePromptJobV3,
         binding: &PalwStepBindingV2,
         seed: &PalwConstraintStreamSeedV1,
+        table: Arc<PalwTokenTableV1>,
+        progress: &PalwStagedOwnedProgressV1,
+        maximum_leaves: u64,
+        ledger: &Arc<PalwMemoryLedgerV1>,
+    ) -> Result<Self, String> {
+        Self::reopen_with_flat_v1(target, job, binding, seed, None, table, progress, maximum_leaves, ledger)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reopen_with_flat_v1(
+        target: &PalwOffenceTargetV1,
+        job: &PalwFreePromptJobV3,
+        binding: &PalwStepBindingV2,
+        seed: &PalwConstraintStreamSeedV1,
+        flat: Option<&kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>,
         table: Arc<PalwTokenTableV1>,
         progress: &PalwStagedOwnedProgressV1,
         maximum_leaves: u64,
@@ -540,7 +655,13 @@ impl ConstraintSchedulerV1 {
             || progress.reserver == target.executor_bond
             || progress.now_daa < seed.reserved_daa
             || progress.now_daa >= progress.terms.collect_until_daa
-            || seed.auxiliary.is_some()
+            || match &seed.auxiliary {
+                None => flat.is_some(),
+                Some(kaspa_consensus_core::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint {
+                    ..
+                }) => flat.is_none(),
+                Some(_) => true,
+            }
             || seed.job.as_deref().is_some_and(|j| j != job)
         {
             return Err("public constraint archive changes admitted seed/owner/job/clock".into());
@@ -573,19 +694,23 @@ impl ConstraintSchedulerV1 {
         {
             return Err("archived EOG count differs from authenticated holding".into());
         }
-        let court = PalwConstraintStreamCourtV1::new(
-            target.claim_id,
-            seed.reserver,
-            seed.reserved_daa,
-            target.execution_root,
-            binding,
-            job,
-            &seed.pin,
-            seed.witness,
-            seed.eog_count,
-            &seed.eog_opening,
-            maximum_leaves,
-        )?;
+        let court = if let Some(flat) = flat {
+            seed.court_from_authenticated_flat_pin_v1(target.execution_root, job, binding, flat)?
+        } else {
+            PalwConstraintStreamCourtV1::new(
+                target.claim_id,
+                seed.reserver,
+                seed.reserved_daa,
+                target.execution_root,
+                binding,
+                job,
+                &seed.pin,
+                seed.witness,
+                seed.eog_count,
+                &seed.eog_opening,
+                maximum_leaves,
+            )?
+        };
         Ok(Self {
             seed: seed.clone(),
             seed_id,

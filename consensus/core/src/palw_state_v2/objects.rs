@@ -3346,7 +3346,7 @@ pub(super) fn apply_object(
             };
             let mut claim = claim;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
-            let staged_contract = builder.prepare_staged_claim_with_job_v1(&mut claim, public_job.as_deref())?;
+            let staged_contract = builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?;
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
             let consumer_plan = builder.plan_paid_consumer_v1(*claim_id, &claim)?;

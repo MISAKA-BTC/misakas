@@ -603,7 +603,7 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     let live = state.claim(&seed.claim).unwrap().clone();
     let builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
     let mut admitted = live.clone();
-    let contract = builder.prepare_staged_claim_with_job_v1(&mut admitted, Some(&commit)).unwrap().unwrap();
+    let contract = builder.prepare_staged_claim_with_job_v1(seed.claim, &mut admitted, Some(&commit)).unwrap().unwrap();
     let contract = match &contract {
         PalwStagedCourtRowV1::Claim(contract) => contract,
         PalwStagedCourtRowV1::ClaimBundle(contract) => &contract.claim,
@@ -637,13 +637,13 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     extras.staged_public_court.as_mut().unwrap().prices.rent_per_parser_step = u64::MAX;
     let rejected = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
     let mut unchanged = live.clone();
-    assert!(rejected.prepare_staged_claim_with_job_v1(&mut unchanged, Some(&commit)).is_err());
+    assert!(rejected.prepare_staged_claim_with_job_v1(seed.claim, &mut unchanged, Some(&commit)).is_err());
     assert_eq!(unchanged, live);
     assert_eq!(rejected.state.state_root(), state.state_root());
     assert!(rejected.entries.is_empty());
     extras.staged_public_court = None;
     let dormant = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
-    assert!(dormant.prepare_staged_claim_with_job_v1(&mut unchanged, Some(&commit)).unwrap().is_none());
+    assert!(dormant.prepare_staged_claim_with_job_v1(seed.claim, &mut unchanged, Some(&commit)).unwrap().is_none());
     assert_eq!(unchanged, live);
 }
 

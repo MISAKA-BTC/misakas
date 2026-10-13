@@ -3046,7 +3046,10 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
             .filter_map(|row| row.owner_accounting_v1())
             .map(|(_, _, deposit, _)| u128::from(deposit))
             .fold(0u128, u128::saturating_add),
-    )
+    ).saturating_add(state.staged_inventory_by_owner.range((*bond,ZERO_HASH64)..)
+        .take_while(|(owner,_)|owner==bond)
+        .filter_map(|(_,artifact)|state.staged_tokenizer_inventory_open_v1(*artifact,*bond))
+        .map(|row|u128::from(row.plan.deposit_sompi)).fold(0u128,u128::saturating_add))
 }
 
 /// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
@@ -8045,6 +8048,13 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
         // is read where the folded state is not in hand).
         PalwConsensusObjectV2::CourtCloseDeclared { count, .. } => palw_court_close_min_fee_v1(*count as u64),
         PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
+            if matches!(movement.action, crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::ArtifactInventoryOpen { .. }) => {
+            let crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::ArtifactInventoryOpen { offer, .. } = &movement.action else { unreachable!() };
+            crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1::quote_v1(offer.maximum_bytes,
+                crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1())
+                .map(|plan|plan.rent_sompi).unwrap_or(u64::MAX)
+        }
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement }
             if matches!(movement.action, crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::BundleOpen { .. }) => {
             let crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamActionV1::BundleOpen { plan } = &movement.action else { unreachable!() };
             plan.prepayment_rent_v1().unwrap_or(u64::MAX)
@@ -8112,7 +8122,7 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
                     .map(|p| p.envelope.rent_sompi)
                     .unwrap_or(u64::MAX)
                 }
-                None => {
+                None|Some(crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1::FlatConstraint{..}) => {
                     config.claim_terms(0, 4095, seed.binding.shape_profile.vocab_size).map(|t| t.plan.rent_sompi).unwrap_or(u64::MAX)
                 }
             }
@@ -10583,8 +10593,10 @@ pub struct PalwChainStateV2 {
     staged_due: BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>,
     /// Derived owner-local allowance/exposure index: other reservers cannot occupy this lane.
     staged_by_owner: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    staged_inventory_by_owner:BTreeSet<(PalwBondKeyV2,Hash64)>,
     /// Rebuildable signer/EDF queue over exact live public-prefix obligations.
     staged_prefix_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+    staged_selected_responders: BTreeSet<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
     /// RFC-0004: the governed lines by `(next_due_daa, line_id)` — the order the fold advances them
     /// in (spec 17 §17.5.2).
     improvement_due: BTreeSet<(u64, Hash64)>,
@@ -19103,6 +19115,7 @@ pub struct PalwTransitionExtrasV1 {
     /// Transaction-local producer pledges extracted from the prospective FP envelope.
     /// An ordinary FP claim must never borrow another transaction's pledge.
     pub history_custody_pledges: BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    pub public_original_bindings: BTreeMap<Hash64,crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
     /// **ADR-0133 §7: `Params::palw_seat_gate_possession`'s HEIGHT.** Past it
     /// `required_ready_seats` is the possession question alone — the panel plus the spare — and a
     /// class heavier than its fleet is admitted RARELY (one claim in flight, the smallest
@@ -21302,13 +21315,16 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             let old_due = palw_staged_court_fold_v1::index_rows(lookup, row).0;
             let old_responses = palw_staged_court_fold_v1::response_index_rows(row);
+            let old_selected = palw_staged_court_fold_v1::selected_response_index_rows_v1(row);
             row.restore_checkpoint_v1(install)
                 .map_err(|_| PalwStateV2Error::DeltaMismatch("staged checkpoint exceeds immutable contract"))?;
             let new_due = palw_staged_court_fold_v1::index_rows(lookup, row).0;
             let new_responses = palw_staged_court_fold_v1::response_index_rows(row);
+            let new_selected = palw_staged_court_fold_v1::selected_response_index_rows_v1(row);
             state.staged_due.remove(&(old_due, lookup));
             state.staged_due.insert((new_due, lookup));
             palw_staged_court_fold_v1::update_response_indices(state, old_responses, new_responses);
+            palw_staged_court_fold_v1::update_selected_response_indices_v1(state, old_selected, new_selected);
         }
         PalwDeltaEntryV2::TerminalEvidence { key, old, new } => swap_write!(state.terminal_evidence, key, old, new),
         PalwDeltaEntryV2::TerminalPart { key, index, old, new } => {
@@ -23625,7 +23641,9 @@ impl PalwStateCarriageV2 {
             staged_holds: BTreeSet::new(),
             staged_due: BTreeSet::new(),
             staged_by_owner: BTreeSet::new(),
+            staged_inventory_by_owner:BTreeSet::new(),
             staged_prefix_responders: BTreeSet::new(),
+            staged_selected_responders: BTreeSet::new(),
             improvement_due: BTreeSet::new(),
             improvement_heads_of: BTreeMap::new(),
             improvement_retiring: BTreeSet::new(),

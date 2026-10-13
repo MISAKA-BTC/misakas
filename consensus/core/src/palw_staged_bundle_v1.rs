@@ -83,6 +83,26 @@ impl BorshDeserialize for PalwStagedBundlePlanV1 {
     }
 }
 impl PalwStagedBundlePlanV1 {
+    pub fn inventory_until_v1(&self) -> Result<Option<u64>, String> {
+        self.inventory
+            .as_ref()
+            .map(|p| {
+                self.terms
+                    .open_until_daa
+                    .checked_add(p.envelope.inclusion_daa)
+                    .ok_or_else(|| "immutable raw intake clock overflow".to_string())
+            })
+            .transpose()
+    }
+    pub fn preseed_source_until_v1(&self, family: PalwStagedFamilyV1, config: PalwStagedPublicCourtConfigV1) -> Result<u64, String> {
+        let stage = self.stages.iter().find(|s| s.family == family).ok_or("source family is not required")?;
+        stage
+            .terms
+            .open_until_daa
+            .checked_sub(config.prices.inclusion_margin_daa.checked_mul(2).ok_or("seed transition margin overflow")?)
+            .filter(|n| *n > self.terms.accepted_daa)
+            .ok_or_else(|| "source has no immutable prepaid seed/activation margin".into())
+    }
     pub fn derive_v1(
         accepted_daa: u64,
         families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
@@ -246,6 +266,8 @@ pub struct PalwStagedBundleContractV1 {
     pub claim: PalwStagedClaimContractV1,
     pub plan: PalwStagedBundlePlanV1,
     pub config: PalwStagedPublicCourtConfigV1,
+    pub history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1,
+    pub original_binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -297,6 +319,10 @@ pub struct PalwTokenizerInventoryV1 {
 }
 impl PalwTokenizerInventoryV1 {
     pub fn new_v1(plan: &PalwTokenizerInventoryPlanV1, expected_hash: Hash64, declared_bytes: u64, until_daa: u64) -> Self {
+        let mut hash = crate::palw_rendering_stream_v1::LeafHashContinuationV1::new(
+            crate::palw_tokenizer_rendering_v1::PALW_TOKENIZER_RAW_DOMAIN_V1,
+        );
+        hash.update(&plan.maximum_bytes.to_le_bytes());
         Self {
             maximum_bytes: plan.maximum_bytes,
             expected_hash,
@@ -305,9 +331,7 @@ impl PalwTokenizerInventoryV1 {
             offset: 0,
             sealed: false,
             moves_used: 0,
-            hash: crate::palw_rendering_stream_v1::LeafHashContinuationV1::new(
-                crate::palw_tokenizer_rendering_v1::PALW_TOKENIZER_RAW_DOMAIN_V1,
-            ),
+            hash,
         }
     }
     pub fn part_v1(&mut self, now: u64, offset: u64, bytes: &[u8], plan: &PalwTokenizerInventoryPlanV1) -> Result<(), String> {
@@ -331,7 +355,8 @@ impl PalwTokenizerInventoryV1 {
         if now >= self.until_daa
             || self.sealed
             || self.moves_used >= plan.envelope.maximum_moves
-            || self.hash.byte_count() != Some(u128::from(self.offset))
+            || self.offset != self.maximum_bytes
+            || self.hash.byte_count() != Some(u128::from(self.offset) + 128 + 8)
             || self.hash.finish() != self.expected_hash
         {
             return Err("raw inventory has no immutable registered file hash at exact EOF".into());
@@ -401,6 +426,11 @@ pub struct PalwStagedSeedContextV1 {
     pub job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwSelectedSourceContextV1 {
+    pub binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
+    pub job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedOpenedFamilyV1 {
     pub row: PalwStagedFamilyRowV1,
     pub context: crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwStagedSeedContextV1>,
@@ -413,6 +443,13 @@ pub struct PalwOwnedStagedBundleV1 {
     pub execution_root: Hash64,
     pub plan: PalwStagedBundlePlanV1,
     pub inventory: Option<PalwTokenizerInventoryV1>,
+    pub selected: Option<crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1>,
+    pub selected_context: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwSelectedSourceContextV1>>,
+    pub flat: Option<
+        crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
+    >,
+    pub flat_context: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwSelectedSourceContextV1>>,
+    pub history_recovery: std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
     pub active: Option<u8>,
     pub opened: Vec<PalwStagedOpenedFamilyV1>,
 }
@@ -444,6 +481,11 @@ pub struct PalwStagedBundleCheckpointV1 {
     pub active_index: Option<u8>,
     pub active_seed: Option<Hash64>,
     pub inventory: Option<PalwTokenizerInventoryV1>,
+    pub selected: Option<crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1>,
+    pub flat: Option<
+        crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
+    >,
+    pub history_recovery: std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
     pub active_checkpoint: Option<PalwStagedFamilyCheckpointV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -498,6 +540,9 @@ impl PalwOwnedStagedBundleV1 {
             active_index: self.active,
             active_seed: self.active_seed_v1().map(|seed| Hash64::from_bytes(seed.signing_message().try_into().expect("64"))),
             inventory: self.inventory.clone(),
+            selected: self.selected.clone(),
+            flat: self.flat.clone(),
+            history_recovery: self.history_recovery.clone(),
             active_checkpoint: self.active_v1().map(|row| row.checkpoint_v1().map(PalwStagedFamilyCheckpointV1)).transpose()?,
         })
     }
@@ -514,7 +559,58 @@ impl PalwOwnedStagedBundleV1 {
             _ => return Err("bundle checkpoint changes immutable inventory or intake clock".into()),
         }
         let mut candidate = self.clone();
+        match (&self.flat, &cp.flat) {
+            (Some(old), Some(new))
+                if (
+                    old.claim,
+                    old.owner,
+                    old.reserved_daa,
+                    old.bundle_id,
+                    old.source_id,
+                    old.respond_until_daa,
+                    old.collect_until_daa,
+                    old.producer,
+                    &old.custodians,
+                ) == (
+                    new.claim,
+                    new.owner,
+                    new.reserved_daa,
+                    new.bundle_id,
+                    new.source_id,
+                    new.respond_until_daa,
+                    new.collect_until_daa,
+                    new.producer,
+                    &new.custodians,
+                ) => {}
+            (None, None) => {}
+            _ => return Err("checkpoint changes immutable flat source admission or custody".into()),
+        }
+        match (&self.selected, &cp.selected) {
+            (Some(old), Some(new))
+                if (
+                    old.claim,
+                    old.owner,
+                    old.reserved_daa,
+                    old.bundle_id,
+                    old.respond_until_daa,
+                    old.collect_until_daa,
+                    &old.custodians,
+                ) == (
+                    new.claim,
+                    new.owner,
+                    new.reserved_daa,
+                    new.bundle_id,
+                    new.respond_until_daa,
+                    new.collect_until_daa,
+                    &new.custodians,
+                ) => {}
+            (None, None) => {}
+            _ => return Err("checkpoint changes immutable selected source admission or custody".into()),
+        }
         candidate.inventory = cp.inventory.clone();
+        candidate.selected = cp.selected.clone();
+        candidate.flat = cp.flat.clone();
+        candidate.history_recovery = cp.history_recovery.clone();
         match (candidate.active_mut_v1(), &cp.active_checkpoint) {
             (Some(row), Some(cp)) => row.restore_checkpoint_v1(&cp.0)?,
             (None, None) => {}
@@ -526,12 +622,55 @@ impl PalwOwnedStagedBundleV1 {
     }
     pub fn check_v1(&self) -> Result<(), String> {
         self.plan.check_v1()?;
+        if self.history_recovery.len() > PALW_STAGED_REQUIRED_FAMILIES_V1 {
+            return Err("bundle history recovery set exceeds required family bound".into());
+        }
+        for (seed, recovery) in &self.history_recovery {
+            recovery.check_v1()?;
+            if (recovery.initial.claim, recovery.initial.owner, recovery.initial.reserved_daa, recovery.initial.seed_id)
+                != (self.claim, self.owner, self.reserved_daa, *seed)
+                || self.seed_row_v1(*seed).is_none()
+                || recovery.collect_until_daa > self.plan.terms.collect_until_daa
+            {
+                return Err("bundle recovery substitutes paid original stage identity or horizon".into());
+            }
+        }
+        match (&self.selected, &self.selected_context) {
+            (Some(selected), Some(context)) => {
+                if (selected.claim, selected.owner, selected.reserved_daa, selected.bundle_id)
+                    != (self.claim, self.owner, self.reserved_daa, self.plan.id_v1(self.claim))
+                    || selected.requests.len() > crate::palw_selected_event_source_v1::PALW_SELECTED_EVENT_MAX_REQUESTS_V1
+                    || selected.custodians.contains(&self.owner)
+                    || selected.collect_until_daa > self.plan.terms.collect_until_daa
+                    || context.binding.committed_execution_root != self.execution_root
+                {
+                    return Err("selected source changes literal paid frame or original execution".into());
+                }
+            }
+            (None, None) => {}
+            _ => return Err("selected source has no retained authenticated original context".into()),
+        }
+        match (&self.flat, &self.flat_context) {
+            (Some(flat), Some(context)) => {
+                flat.check_v1()?;
+                if (flat.claim, flat.owner, flat.reserved_daa, flat.bundle_id)
+                    != (self.claim, self.owner, self.reserved_daa, self.plan.id_v1(self.claim))
+                    || flat.collect_until_daa > self.plan.terms.collect_until_daa
+                    || context.binding.committed_execution_root != self.execution_root
+                    || self.selected.is_some()
+                {
+                    return Err("flat source changes original frame, scheme or source allocation".into());
+                }
+            }
+            (None, None) => {}
+            _ => return Err("flat source loses original authenticated public context".into()),
+        }
         match (&self.inventory, &self.plan.inventory) {
             (Some(inventory), Some(plan))
                 if inventory.maximum_bytes == plan.maximum_bytes
                     && inventory.offset <= plan.maximum_bytes
                     && inventory.moves_used <= plan.envelope.maximum_moves
-                    && inventory.hash.byte_count() == Some(u128::from(inventory.offset))
+                    && inventory.hash.byte_count() == Some(u128::from(inventory.offset) + 128 + 8)
                     && (!inventory.sealed || inventory.hash.finish() == inventory.expected_hash) => {}
             (None, None) => {}
             _ => return Err("bundle inventory exceeds its literal prepaid maximum or EOF authenticator".into()),

@@ -2414,7 +2414,6 @@ impl<'a> TransitionBuilder<'a> {
         default: &crate::palw_history_custody_v1::PalwHistoryRecoveryDefaultV1,
         winner: PalwBondKeyV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
         let request = &default.request;
         if contract.pledge.check_v1().is_err()
             || request.check_v1().is_err()
@@ -2439,7 +2438,28 @@ impl<'a> TransitionBuilder<'a> {
         {
             return Err(PalwStateV2Error::CarriageInconsistent("history default differs from the accepted pledge and literal expired custody grant".into()));
         }
-        let offence = palw_da_offence_id_v1(&contract.producer.0, &request.claim);
+        let covering = default.custodians.iter().copied().filter(|bond| *bond != contract.producer).collect();
+        self.staged_selected_default_charge_v1(ctx, request.claim, claim, contract.producer, &covering, winner)
+    }
+
+    /// The rooted prospective source fold supplies the exact expired demand and
+    /// its literal unpaid signed-Valid set. Panel membership is not that proof.
+    /// History invokes this economic leg only after its separate pledge checks.
+    pub(super) fn staged_selected_default_charge_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        producer: PalwBondKeyV2,
+        covering: &std::collections::BTreeSet<PalwBondKeyV2>,
+        winner: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
+        if producer != claim.bond || ctx.daa_score < claim.accepted_daa
+            || winner == producer || covering.contains(&producer) || covering.contains(&winner) {
+            return Err(PalwStateV2Error::CarriageInconsistent("retained source default changes producer, independent winner or literal signer roles".into()));
+        }
+        let offence = palw_da_offence_id_v1(&producer.0, &claim_id);
         let producer_already_charged = self.state.consumed_offences.contains_key(&offence);
         // A sibling default may already have voided the claim and paid the reporter.
         // Retained family custody must not rerun that economic leg or reset its phase.
@@ -2450,11 +2470,11 @@ impl<'a> TransitionBuilder<'a> {
             _ => (PalwDaStageV1::Live, false),
         };
         let charge = PalwDaDefaultChargeV1 {
-            claim_id: request.claim,
-            producer: contract.producer,
+            claim_id,
+            producer,
             stage,
-            g: self.claim_g_v1(&request.claim).map(|g| g.g()).unwrap_or(0),
-            covering: default.custodians.iter().copied().filter(|bond| *bond != contract.producer).collect(),
+            g: self.claim_g_v1(&claim_id).map(|g| g.g()).unwrap_or(0),
+            covering: covering.iter().copied().collect(),
             winner,
         };
         self.da_default_charge_with_producer_leg_v1(ctx, claim, &charge, live_producer_leg && !producer_already_charged)

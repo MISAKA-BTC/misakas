@@ -877,6 +877,8 @@ pub mod palw_staged_court_state_v1;
 pub mod palw_staged_bundle_v1;
 pub mod palw_flat_constraint_stream_v1;
 pub mod palw_selected_event_source_v1;
+pub mod palw_tokenizer_artifact_inventory_v1;
+pub mod palw_public_binding_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
 

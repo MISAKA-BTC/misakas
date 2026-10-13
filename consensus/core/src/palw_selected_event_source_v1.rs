@@ -69,25 +69,26 @@ pub fn selected_event_resource_plan_v1(
     let n = |x: u128| u64::try_from(x).map_err(|_| "selected source resource quote overflow".to_string());
     let moves = 2u64.checked_mul(u64::from(maximum_custodians) + 2).ok_or("selected source move quote overflow")?;
     let bytes = n(u128::from(moves) * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128)?;
-    let work = n(u128::from(moves) * (u128::from(decode) * u128::from(vocab) * 16 + 64 * 256))?;
+    let work = n(u128::from(moves) * (u128::from(decode) * u128::from(vocab) * 16 + u128::from(profile_bytes) * 16 + 64 * 256))?;
     let row =
-        n(2 * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128 + u128::from(profile_bytes) + u128::from(maximum_custodians) * 768 + 8192)?;
+        n(2 * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128 + u128::from(profile_bytes) + u128::from(maximum_custodians) * 1024 + 8192)?;
+    let retained = n(u128::from(bytes) + u128::from(row) * u128::from(moves))?;
     Ok(crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1 {
         prefix_tokens: 0,
         vocab,
-        maximum_stream_bytes: bytes,
+        maximum_stream_bytes: retained,
         maximum_stream_leaves: 2,
         maximum_eog_bytes: 0,
         maximum_moves: moves,
         maximum_parser_steps: work,
         maximum_blake_blocks: n(u128::from(work).div_ceil(64))?,
         inclusion_daa: n(u128::from(moves) * u128::from(config.prices.inclusion_margin_daa))?,
-        rent_sompi: n(u128::from(bytes) * u128::from(config.prices.rent_per_stream_byte)
+        rent_sompi: n(u128::from(retained) * u128::from(config.prices.rent_per_stream_byte)
             + u128::from(work) * u128::from(config.prices.rent_per_parser_step)
             + u128::from(row) * u128::from(config.prices.rent_per_row_byte))?,
         deposit_sompi: n(u128::from(moves) * u128::from(config.prices.deposit_per_move))?,
         row_bytes: row,
-        resident_ram_bytes: n(u128::from(row) * 4 + 65_536)?,
+        resident_ram_bytes: n(u128::from(row) * 8 + 65_536)?,
     })
 }
 

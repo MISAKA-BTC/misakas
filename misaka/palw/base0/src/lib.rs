@@ -77,6 +77,7 @@ pub mod plan;
 /// RFC-0001 §2.6 stage 1: the node-only KV prefix cache for the answer-only path.
 pub mod prefix_cache;
 pub mod produce;
+pub mod flat_public_source;
 pub mod qwen25_a16_backend;
 pub mod qwen36;
 pub mod qwen36_backend;

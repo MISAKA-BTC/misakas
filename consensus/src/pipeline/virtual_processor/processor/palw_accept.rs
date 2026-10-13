@@ -366,7 +366,7 @@ impl VirtualStateProcessor {
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         let objects = objects
             .into_iter()
-            .map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee, history_pledge: None, refund: None, unrefundable: None })
+            .map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee, history_pledge: None, original_binding: None, refund: None, unrefundable: None })
             .collect();
         self.palw_v2_accepted_objects(state, state_params, point, objects, block, None)
     }
@@ -392,7 +392,7 @@ impl VirtualStateProcessor {
     ) {
         let objects = objects
             .into_iter()
-            .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, refund, unrefundable: None })
+            .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, refund, unrefundable: None })
             .collect();
         self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None, &[])
     }
@@ -655,7 +655,9 @@ impl VirtualStateProcessor {
                 &mut refunds,
                 block,
             );
-            let PalwCarriedObjectV1 { object, carrier_fee, history_pledge, refund, unrefundable } = carried;
+            let PalwCarriedObjectV1 { object, carrier_fee, history_pledge, original_binding, refund, unrefundable } = carried;
+            let public_original_bindings = history_pledge.as_ref().zip(original_binding).map(|(pledge, header)| (pledge.claim, header))
+                .into_iter().collect::<std::collections::BTreeMap<_, _>>();
             let history_custody_pledges = history_pledge.into_iter().map(|pledge| (pledge.claim, pledge)).collect::<std::collections::BTreeMap<_, _>>();
             refund_owed = (refund.is_some() || unrefundable.is_some()).then_some(PalwPendingCarrierRefundV1 {
                 accepted_before: accepted.len(),
@@ -1400,6 +1402,7 @@ impl VirtualStateProcessor {
                         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                             own_attempt_class,
                             history_custody_pledges: history_custody_pledges.clone(),
+                            public_original_bindings: public_original_bindings.clone(),
                             model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                             ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                         },
@@ -1597,6 +1600,7 @@ impl VirtualStateProcessor {
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 own_attempt_class,
                                 history_custody_pledges: history_custody_pledges.clone(),
+                                public_original_bindings: public_original_bindings.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
@@ -1617,6 +1621,7 @@ impl VirtualStateProcessor {
                             self.palw_da_court_at(point.daa_score),
                             &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
                                 history_custody_pledges: history_custody_pledges.clone(),
+                                public_original_bindings: public_original_bindings.clone(),
                                 model_classes_registered_in_block: model_classes_registered_in_block.clone(),
                                 ..self.palw_transition_extras_for_objects(&folded, point, std::slice::from_ref(&object))
                             },
@@ -1779,6 +1784,7 @@ impl VirtualStateProcessor {
                 .filter(|f| f.is_active(daa_score))
                 .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
             history_custody_pledges: Default::default(),
+            public_original_bindings: Default::default(),
             model_classes_registered_in_block: Default::default(),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
@@ -2006,12 +2012,14 @@ impl VirtualStateProcessor {
         let txs = self.accepted_txs_from_acceptance_data(acceptance);
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
         let mut history_carriers = std::collections::HashMap::new();
+        let mut original_bindings = std::collections::HashMap::new();
         let mut history_views = Vec::new();
         if history_armed {
             for tx in txs.iter().filter(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT) {
                 match kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload) {
                     Ok(envelope) => {
                         history_carriers.insert(tx.id(), envelope.pledge);
+                        original_bindings.insert(tx.id(), envelope.original_binding);
                         // Transient decoder view deliberately retains the outer
                         // cached carrier ID. It is never validated as a real TX.
                         let mut view = tx.clone();
@@ -2266,20 +2274,20 @@ impl VirtualStateProcessor {
         self.palw_v2_derived_panel_bindings(state, block, block_daa)
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, refund: None, unrefundable: None })
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, refund: None, unrefundable: None })
             .chain(extraction.objects.into_iter().chain(evaluation.objects).map(|carried| {
                 let history_pledge = match &carried.object {
                     kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { claim, .. } => history_pledges.get(claim).cloned(),
                     _ => None,
                 };
                 PalwCarriedObjectV1 {
-                    carrier_fee: fee_of(carried.carrier), history_pledge,
+                    carrier_fee: fee_of(carried.carrier), history_pledge, original_binding: original_bindings.get(&carried.carrier).cloned(),
                     object: carried.object, refund: None, unrefundable: None,
                 }
             }))
             .chain(lifecycle_objects.into_iter().map(|carried| {
                 let (refund, unrefundable) = refund_of(&carried);
-                PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), history_pledge: None, refund, unrefundable, object: carried.object }
+                PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), history_pledge: None, original_binding: None, refund, unrefundable, object: carried.object }
             }))
             .collect()
     }

@@ -1091,6 +1091,7 @@ pub(super) struct PalwCarriedObjectV1 {
     pub(super) carrier_fee: u64,
     /// Original transaction-local companion, never borrowed from another carrier.
     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
     /// **The 2026-09-23 Position route matrix, P-B1: what this object's carrier is owed if acceptance
     /// refuses it.** `Some` only for a carrier-borne `ModelBuy`/`ModelSeed` past
     /// `palw_audit_2026_09_23`, resolved in `palw_v2_objects_of_block` where the carrier is in hand;
@@ -2355,6 +2356,10 @@ impl VirtualStateProcessor {
                                 );
                                 let history_custody_pledges = objects.iter().filter_map(|carried| carried.history_pledge.clone())
                                     .map(|pledge| (pledge.claim, pledge)).collect();
+                                let public_original_bindings = objects.iter().filter_map(|carried| {
+                                    carried.history_pledge.as_ref().zip(carried.original_binding.as_ref())
+                                        .map(|(pledge, header)| (pledge.claim, header.clone()))
+                                }).collect();
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
                                 // dropped rather than fatal to the block that accepted it.
@@ -2552,6 +2557,7 @@ impl VirtualStateProcessor {
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
                                         extras.history_custody_pledges = history_custody_pledges;
+                                        extras.public_original_bindings = public_original_bindings;
                                         if state_params.exec_v2_active_at(point.daa_score) {
                                             if attempt.is_some()
                                                 && let Ok(bytes) = borsh::to_vec(header.as_ref())
@@ -3111,10 +3117,10 @@ impl VirtualStateProcessor {
         if let Some((state_root, delta)) = palw_v2_staged {
             let mut store = self.palw_state_v2_store.write();
             store.insert_delta_batch(&mut batch, current, state_root, &delta).unwrap();
-            if delta.entries.iter().any(|entry| matches!(entry,
-                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove {
-                    old: kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCheckpointV1::PublicPrefix(_), ..
-                })) {
+            if delta.entries.iter().any(|entry| match entry {
+                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { old, .. } => old.public_prefix_checkpoint_v1().is_some(),
+                _ => false,
+            }) {
                 let mut movements = Vec::new();
                 for row in acceptance_data.iter() {
                     let transactions = self.block_transactions_store.get(row.block_hash).unwrap();
@@ -3132,6 +3138,7 @@ impl VirtualStateProcessor {
                 // bytes are retained under their native head, independent of body pruning.
                 store.archive_prefix_movements_batch_v1(&mut batch, &delta, &movements).unwrap();
             }
+            store.archive_recovered_prefix_history_batch_v1(&mut batch, &delta).unwrap();
             store.archive_staged_cache_leases_batch_v1(&mut batch, &delta).unwrap();
         }
         if let Some(mut staged) = evm_staged {
@@ -3675,7 +3682,7 @@ impl VirtualStateProcessor {
     ) -> Vec<PalwCarriedObjectV1> {
         objects
             .into_iter()
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, refund: None, unrefundable: None })
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, history_pledge: None, original_binding: None, refund: None, unrefundable: None })
             .collect()
     }
 

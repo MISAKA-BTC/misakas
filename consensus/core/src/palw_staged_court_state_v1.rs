@@ -43,6 +43,8 @@ impl<T: BorshDeserialize> BorshDeserialize for PalwSharedCourtV1<T> {
 pub enum PalwStagedCourtKeyV1 {
     Claim(Hash64),
     Owner(Hash64, PalwBondKeyV2),
+    InventoryOpen(Hash64, PalwBondKeyV2),
+    Inventory(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -61,19 +63,21 @@ pub enum PalwStagedCourtRowV1 {
     PublicPrefix(PalwSharedCourtV1<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1>),
     ClaimBundle(Box<crate::palw_staged_bundle_v1::PalwStagedBundleContractV1>),
     OwnerBundle(PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1>),
+    ArtifactInventoryOpen(PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1>),
+    ArtifactInventory(crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) => None,
             _ => Some(self),
         }
     }
     pub fn active_row_mut_v1(&mut self) -> Option<&mut Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) => None,
             _ => Some(self),
         }
     }
@@ -107,6 +111,7 @@ impl PalwStagedCourtRowV1 {
             Self::Prefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             Self::PublicPrefix(c) => Some((c.claim, c.reserver, c.deposit_locked, c.terms.material_until_daa)),
             Self::OwnerBundle(c) => Some((c.claim, c.owner, c.plan.terms.plan.deposit_sompi, c.plan.terms.material_until_daa)),
+            Self::ArtifactInventoryOpen(c) => Some((c.offer.artifact_hash, c.offer.opener, c.plan.deposit_sompi, c.until_daa)),
             _ => None,
         }
     }
@@ -148,11 +153,24 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Tokenizer(c)) if (*claim, *bond) == c.key() => c.check(),
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::Prefix(c)) if (*claim, *bond) == (c.claim, c.reserver) => c.check(),
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::PublicPrefix(c)) if (*claim, *bond) == (c.claim, c.reserver) => c.check(),
-            (PalwStagedCourtKeyV1::Claim(_), Self::ClaimBundle(c)) => {
+            (PalwStagedCourtKeyV1::Claim(claim), Self::ClaimBundle(c)) => {
                 c.plan.check_v1()?;
+                c.config.check()?;
+                c.history_custody.check_v1(&c.claim.panel)?;
+                if c.history_custody.pledge.claim != *claim
+                    || c.history_custody.pledge.material_until_daa < c.claim.terms.material_until_daa
+                {
+                    return Err("bundle contract substitutes original pledge claim or retention promise".into());
+                }
                 Self::Claim(c.claim.clone()).check(key)
             }
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::OwnerBundle(c)) if (*claim, *bond) == (c.claim, c.owner) => c.check_v1(),
+            (PalwStagedCourtKeyV1::InventoryOpen(hash, owner), Self::ArtifactInventoryOpen(c))
+                if (*hash, *owner) == (c.offer.artifact_hash, c.offer.opener) =>
+            {
+                c.check_v1()
+            }
+            (PalwStagedCourtKeyV1::Inventory(hash), Self::ArtifactInventory(c)) if *hash == c.artifact_hash => c.check_v1(),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }
@@ -167,6 +185,20 @@ pub enum PalwStagedCheckpointV1 {
     Bundle(Box<crate::palw_staged_bundle_v1::PalwStagedBundleCheckpointV1>),
 }
 impl PalwStagedCheckpointV1 {
+    pub fn history_recoveries_v1(
+        &self,
+    ) -> Option<&std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryRecoveryV1>> {
+        match self {
+            Self::Bundle(cp) => Some(&cp.history_recovery),
+            _ => None,
+        }
+    }
+    pub fn history_recovery_for_seed_v1(&self, seed: Hash64) -> Option<&crate::palw_history_custody_v1::PalwHistoryRecoveryV1> {
+        match self {
+            Self::Bundle(cp) => cp.history_recovery.get(&seed),
+            _ => None,
+        }
+    }
     pub fn public_prefix_checkpoint_v1(&self) -> Option<&crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCheckpointV1> {
         match self {
             Self::PublicPrefix(cp) => Some(cp),
@@ -177,6 +209,150 @@ impl PalwStagedCheckpointV1 {
             _ => None,
         }
     }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedSelectedProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub session: crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1,
+    pub context: Option<PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1>>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTokenizerArtifactInventoryProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub class_id: Hash64,
+    pub semantics: crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    pub certificate: Option<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    pub attempt: Option<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1>,
+}
+pub fn palw_tokenizer_artifact_inventory_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    class: Hash64,
+    opener: PalwBondKeyV2,
+) -> Result<Option<PalwTokenizerArtifactInventoryProgressV1>, String> {
+    let point = state.last_point().ok_or("artifact inventory has no accepted snapshot")?;
+    let Some(semantics) = state.class_semantics_v1(&class).filter(|s| s.raw_tokenizer_bytes.is_some()) else { return Ok(None) };
+    Ok(Some(PalwTokenizerArtifactInventoryProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        class_id: class,
+        semantics: semantics.clone(),
+        certificate: state.staged_tokenizer_inventory_v1(semantics.tokenizer_id).cloned(),
+        attempt: state.staged_tokenizer_inventory_open_v1(semantics.tokenizer_id, opener).cloned(),
+    }))
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedPublicContextV1 {
+    pub binding: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    pub job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedFlatProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub session: PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
+    pub context: PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1>,
+}
+pub fn palw_staged_flat_source_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+) -> Result<Option<PalwStagedFlatProgressV1>, String> {
+    let point = state.last_point().ok_or("flat source has no accepted snapshot")?;
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = state.staged_owned_row_v1(key.0, key.1) else { return Ok(None) };
+    if point.daa_score < bundle.plan.terms.accepted_daa || point.daa_score >= bundle.plan.terms.material_until_daa {
+        return Ok(None);
+    }
+    let Some(session) = &bundle.flat else { return Ok(None) };
+    let context = bundle.flat_context.as_ref().ok_or("flat source lost original authenticated context")?;
+    Ok(Some(PalwStagedFlatProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        session: session.clone(),
+        context: context.clone(),
+    }))
+}
+pub fn palw_staged_flat_pin_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+    source: Hash64,
+    answerer: PalwBondKeyV2,
+) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>, String> {
+    let Some(progress) = palw_staged_flat_source_v1(state, key)? else { return Ok(None) };
+    if progress.session.source_id != source {
+        return Err("flat pin lookup substitutes accepted original source".into());
+    }
+    progress.session.authenticated_pin_v1(&answerer).map(Some)
+}
+pub fn palw_staged_public_context_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+) -> Result<Option<PalwStagedPublicContextV1>, String> {
+    let point = state.last_point().ok_or("public context has no accepted snapshot")?;
+    let Some(contract) = state.staged_bundle_contract_v1(claim) else { return Ok(None) };
+    if point.daa_score < contract.claim.terms.accepted_daa || point.daa_score >= contract.claim.terms.material_until_daa {
+        return Ok(None);
+    }
+    let original = state.staged_original_job_v1(claim)?.ok_or("public context lost accepted original FP job")?;
+    Ok(Some(PalwStagedPublicContextV1 { binding: contract.original_binding.clone(), job: original.job }))
+}
+/// The caller supplies an authenticated accepted state. The session is prospective
+/// until its first native-checked demand; it does not authorize a new owner frame.
+pub fn palw_staged_selected_events_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, crate::palw_state_v2::PalwBondKeyV2),
+) -> Result<Option<PalwStagedSelectedProgressV1>, String> {
+    let point = state.last_point().ok_or("selected source snapshot has no accepted clock")?;
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = state.staged_owned_row_v1(key.0, key.1) else { return Ok(None) };
+    if point.daa_score < bundle.plan.terms.accepted_daa || point.daa_score >= bundle.plan.terms.material_until_daa {
+        return Ok(None);
+    }
+    let session = match &bundle.selected {
+        Some(session) => session.clone(),
+        None => {
+            let next = bundle.active.map_or(0, |n| n as usize + 1);
+            let Some(stage) =
+                bundle.plan.stages.get(next).filter(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
+            else {
+                return Ok(None);
+            };
+            let target =
+                crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &key.0).ok_or("selected source target absent")?;
+            let profile = state.fp_work_profile_of(&target.class_id).ok_or("selected source has no accepted profile")?;
+            if profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1() {
+                return Ok(None);
+            }
+            let contract = state.staged_claim_contract_v1(&key.0).ok_or("selected source contract absent")?;
+            let bundle_contract = state.staged_bundle_contract_v1(key.0).ok_or("selected source required-family contract absent")?;
+            let respond = bundle
+                .plan
+                .preseed_source_until_v1(crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint, bundle_contract.config)?;
+            let custody = contract
+                .prefix_custody
+                .as_ref()
+                .ok_or("selected source has no original signed material contract")?
+                .current_signed_v1();
+            if !custody.public_qualified_v1() {
+                return Err("selected source original custody is unqualified".into());
+            }
+            let custodians = custody.expected_panel.into_iter().chain([contract.producer]).collect();
+            crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1::new_v1(
+                key.0,
+                key.1,
+                bundle.reserved_daa,
+                bundle.plan.id_v1(key.0),
+                respond,
+                stage.terms.collect_until_daa,
+                custodians,
+            )?
+        }
+    };
+    Ok(Some(PalwStagedSelectedProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        session,
+        context: bundle.selected_context.clone(),
+    }))
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwStagedFaultV1 {
@@ -538,8 +714,8 @@ pub fn palw_staged_owned_progress_v1(
         },
         bundle: match owned {
             Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => Some(bundle.progress_v1()),
-            _ => match state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(key.0)) {
-                Some(PalwStagedCourtRowV1::ClaimBundle(bundle)) => Some(crate::palw_staged_bundle_v1::PalwStagedBundleProgressV1 {
+            _ => match state.staged_bundle_contract_v1(key.0) {
+                Some(bundle) => Some(crate::palw_staged_bundle_v1::PalwStagedBundleProgressV1 {
                     bundle_id: bundle.plan.id_v1(key.0),
                     plan: bundle.plan.clone(),
                     active_index: None,
@@ -554,8 +730,8 @@ pub fn palw_staged_owned_progress_v1(
     }))
 }
 
-/// Only the prefix family retains its full admitted binding/job. Other typed
-/// courts must not invent an original signed binding from partial public fields.
+/// Restore only native-admitted original context. Legacy single rows without that
+/// public context must not invent a binding from partial court fields.
 pub fn palw_staged_owned_context_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     key: (Hash64, PalwBondKeyV2),
@@ -567,7 +743,46 @@ pub fn palw_staged_owned_context_v1(
     }
     let context = match state.staged_owned_row_v1(key.0, key.1) {
         Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) => {
-            let Some(stage) = bundle.active.and_then(|index| bundle.opened.get(index as usize)) else { return Ok(None) };
+            if let Some(context) = &bundle.selected_context {
+                if bundle.active.is_none()
+                    || bundle.active.is_some_and(|n| {
+                        bundle
+                            .plan
+                            .stages
+                            .get(n as usize + 1)
+                            .is_some_and(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
+                    })
+                {
+                    return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
+                }
+            }
+            if let Some(context) = &bundle.flat_context {
+                if bundle.active.is_none()
+                    || bundle.active.is_some_and(|n| {
+                        bundle
+                            .plan
+                            .stages
+                            .get(n as usize + 1)
+                            .is_some_and(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
+                    })
+                {
+                    return Ok(Some((context.binding.as_ref().clone(), context.job.as_ref().clone())));
+                }
+            }
+            let Some(stage) = bundle.active.and_then(|index| bundle.opened.get(index as usize)) else {
+                let contract = state.staged_bundle_contract_v1(key.0).ok_or("paid bundle original claim context absent")?;
+                let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = &contract.original_binding
+                else {
+                    return Ok(None);
+                };
+                let original = state.staged_original_job_v1(key.0)?.ok_or("paid bundle original public job absent")?;
+                let profile = state
+                    .fp_work_profile_of(&original.job.class_id)
+                    .ok_or("paid original context lacks authenticated class profile")?;
+                // This is hydration of already admitted public material, not a fresh seed gate.
+                let binding = header.resolve_v1(profile, original.execution_root, u64::MAX)?;
+                return Ok(Some((binding, original.job)));
+            };
             return Ok(Some((stage.context.binding.as_ref().clone(), stage.context.job.as_ref().clone())));
         }
         Some(PalwStagedCourtRowV1::Prefix(row)) => row.court_v1().admitted_context_v1(),

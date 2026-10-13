@@ -1175,6 +1175,39 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged original seed reader unavailable".into())
     }
 
+    fn palw_tokenizer_artifact_inventory_v1(
+        &self,
+        _class: crate::Hash64,
+        _opener: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwTokenizerArtifactInventoryProgressV1>, String> {
+        Err("tokenizer artifact inventory reader unavailable".into())
+    }
+
+    fn palw_staged_public_context_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
+        Err("staged original public context reader unavailable".into())
+    }
+
+    fn palw_staged_selected_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (Vec<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>),
+        String,
+    > {
+        Err("staged selected indexed duties reader unavailable".into())
+    }
+
+    fn palw_staged_selected_events_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedSelectedProgressV1>, String> {
+        Err("staged selected source reader unavailable".into())
+    }
+
     fn palw_staged_bundle_plan_v1(
         &self,
         _claim: crate::Hash64,
@@ -1223,6 +1256,21 @@ pub trait ConsensusApi: Send + Sync {
 
     fn palw_staged_cache_gc_ack_v1(&self, _lease: crate::palw_prefix_history_v1::PalwStagedCacheLeaseV1) -> Result<bool, String> {
         Err("native accepted cache lease acknowledgement unavailable".into())
+    }
+
+    fn palw_shared_claim_cache_gc_page_v1(
+        &self,
+        _after: Option<(u64, crate::Hash64)>,
+        _limit: usize,
+    ) -> Result<crate::palw_prefix_history_v1::PalwSharedClaimCacheGcPageV1, String> {
+        Err("native shared claim cache lease reader unavailable".into())
+    }
+
+    fn palw_shared_claim_cache_gc_ack_v1(
+        &self,
+        _lease: crate::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
+    ) -> Result<bool, String> {
+        Err("native shared claim cache lease acknowledgement unavailable".into())
     }
 
     fn palw_prefix_page_write_v1(

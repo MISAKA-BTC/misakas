@@ -41,6 +41,10 @@ pub enum PalwAuxiliaryPublicCourtSeedV1 {
         /// Exact producer, qualified current Panel and independent owner slot count.
         slots: u32,
     },
+    FlatConstraint {
+        source_id: Hash64,
+        answerer: PalwBondKeyV2,
+    },
 }
 /// Content-addressed profile already retained by the claim's class certification. The byte
 /// quote prices hydration; it cannot substitute a different graph for that historic class.
@@ -122,10 +126,50 @@ pub enum PalwConstraintStreamActionV1 {
         cursor_id: Hash64,
         demand_id: Hash64,
     },
-    BundleOpen { plan: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1 },
-    ActivateStage { previous_seed: Hash64, next_seed: Hash64 },
-    InventoryPart { offset: u64, bytes: Vec<u8> },
+    BundleOpen {
+        plan: crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1,
+    },
+    ActivateStage {
+        previous_seed: Hash64,
+        next_seed: Hash64,
+    },
+    InventoryPart {
+        offset: u64,
+        bytes: Vec<u8>,
+    },
     InventoryFinish,
+    SelectedEventDemand {
+        binding: crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+        demand: crate::palw_selected_event_source_v1::PalwSelectedEventDemandV1,
+    },
+    SelectedEventAnswer(crate::palw_selected_event_source_v1::PalwSelectedEventAnswerV1),
+    SelectedEventCollect {
+        coordinate: crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1,
+        demand_id: Hash64,
+    },
+    ArtifactInventoryOpen {
+        class_id: Hash64,
+        offer: crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryOfferV1,
+    },
+    ArtifactInventoryMove(crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryActionV1),
+    HistoryCustodyGrant {
+        grant: crate::palw_history_custody_v1::PalwHistoryCustodyGrantV1,
+        receipt: crate::palw_panel_v2::PalwSeatReceiptV2,
+    },
+    HistoryRecovery {
+        stage_seed: Hash64,
+        action: crate::palw_history_custody_v1::PalwHistoryRecoveryActionV1,
+    },
+    FlatSourceOpen {
+        binding: crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1,
+    },
+    FlatSourceAnswer(crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceAnswerV1),
+    FlatSourceNominate {
+        source_id: Hash64,
+        position: u32,
+        beat: Option<u32>,
+    },
+    FlatSourceCollect,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwConstraintStreamMoveV1 {
@@ -255,6 +299,37 @@ impl PalwConstraintStreamSeedV1 {
         let job = self.job.as_deref().ok_or("unrooted seed cannot resolve its public job reference")?;
         self.court_with_rooted_job(expected_claim_root, ladder, job)
     }
+    /// Local replay helper only. Native admission obtains `pin` from its accepted
+    /// literal source row, never from a caller's serialized pin or checkpoint.
+    pub fn court_from_authenticated_flat_pin_v1(
+        &self,
+        root: Hash64,
+        job: &PalwFreePromptJobV3,
+        binding: &PalwStepBindingV2,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+    ) -> Result<PalwConstraintStreamCourtV1, String> {
+        self.check(90_000)?;
+        if !matches!(self.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::FlatConstraint { .. }))
+            || self.resolved_binding_v1(job.class_id, Some(&binding.shape_profile))? != *binding
+            || self.job.as_deref().is_some_and(|actual| actual != job)
+        {
+            return Err("flat local replay substitutes original signed auxiliary or public context".into());
+        }
+        let seed = Hash64::from_bytes(self.signing_message().try_into().map_err(|_| "flat original seed digest width")?);
+        PalwConstraintStreamCourtV1::new_from_flat_pin_with_seed_context_v1(
+            self.claim,
+            self.reserver,
+            self.reserved_daa,
+            root,
+            binding,
+            job,
+            pin,
+            self.witness,
+            self.eog_count,
+            &self.eog_opening,
+            Some(seed),
+        )
+    }
     pub fn court_with_rooted_job(
         &self,
         expected_claim_root: Hash64,
@@ -330,6 +405,10 @@ impl PalwConstraintStreamMoveV1 {
     pub fn authorization_bond_v1(&self) -> PalwBondKeyV2 {
         match &self.action {
             PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::SelectedEventAnswer(answer) => answer.answerer,
+            PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, .. } => grant.seat,
+            PalwConstraintStreamActionV1::HistoryRecovery { action, .. } => action.answerer_v1().unwrap_or(self.reserver),
+            PalwConstraintStreamActionV1::FlatSourceAnswer(answer) => answer.answerer,
             _ => self.reserver,
         }
     }
@@ -349,18 +428,58 @@ impl PalwConstraintStreamMoveV1 {
     }
     pub fn check(&self) -> Result<(), String> {
         check_signature_shape(self.version, &self.signature)?;
-        if matches!(&self.action, PalwConstraintStreamActionV1::BundleOpen { .. }
-            | PalwConstraintStreamActionV1::ActivateStage { .. } | PalwConstraintStreamActionV1::InventoryPart { .. }
-            | PalwConstraintStreamActionV1::InventoryFinish) {
+        if matches!(
+            &self.action,
+            PalwConstraintStreamActionV1::BundleOpen { .. }
+                | PalwConstraintStreamActionV1::ActivateStage { .. }
+                | PalwConstraintStreamActionV1::InventoryPart { .. }
+                | PalwConstraintStreamActionV1::InventoryFinish
+                | PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+                | PalwConstraintStreamActionV1::SelectedEventAnswer(_)
+                | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                | PalwConstraintStreamActionV1::ArtifactInventoryOpen { .. }
+                | PalwConstraintStreamActionV1::ArtifactInventoryMove(_)
+                | PalwConstraintStreamActionV1::HistoryCustodyGrant { .. }
+                | PalwConstraintStreamActionV1::HistoryRecovery { .. }
+                | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+                | PalwConstraintStreamActionV1::FlatSourceAnswer(_)
+                | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+                | PalwConstraintStreamActionV1::FlatSourceCollect
+        ) {
             if self.phase != PalwConstraintStreamPhaseV1::PrefixCourt {
                 return Err("bundle control changes its fixed carrier phase".into());
             }
             bounded_encoded_len(self, PALW_PREFIX_BATCH_CARRIER_BYTES_V1)?;
-            if let PalwConstraintStreamActionV1::BundleOpen { plan } = &self.action { plan.check_v1()?; }
+            if let PalwConstraintStreamActionV1::BundleOpen { plan } = &self.action {
+                plan.check_v1()?;
+            }
             if let PalwConstraintStreamActionV1::InventoryPart { bytes, .. } = &self.action
-                && (bytes.is_empty() || bytes.len() > 65_536) {
+                && (bytes.is_empty() || bytes.len() > 65_536)
+            {
                 return Err("inventory packet exceeds fixed raw-hash chunk".into());
             }
+        }
+        if let PalwConstraintStreamActionV1::SelectedEventAnswer(answer) = &self.action {
+            answer.check_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::FlatSourceAnswer(answer) = &self.action {
+            answer.action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::HistoryCustodyGrant { grant, receipt } = &self.action {
+            grant.check_receipt_v1(receipt)?;
+        }
+        if let PalwConstraintStreamActionV1::HistoryRecovery { action, .. } = &self.action {
+            action.check_wire_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::ArtifactInventoryOpen { offer, .. } = &self.action {
+            offer.check_v1()?;
+        }
+        if let PalwConstraintStreamActionV1::ArtifactInventoryMove(
+            crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryActionV1::Part { bytes, .. },
+        ) = &self.action
+            && (bytes.is_empty() || bytes.len() > 65_536)
+        {
+            return Err("artifact inventory part exceeds native bounded carrier".into());
         }
         if let PalwConstraintStreamActionV1::PrefixPublicAnswer(answer) = &self.action {
             answer.check()?;
@@ -435,9 +554,27 @@ impl PalwConstraintStreamMoveV1 {
             PalwConstraintStreamActionV1::BundleOpen { .. }
             | PalwConstraintStreamActionV1::ActivateStage { .. }
             | PalwConstraintStreamActionV1::InventoryPart { .. }
-            | PalwConstraintStreamActionV1::InventoryFinish => Err("bundle control is not a semantic court action".into()),
+            | PalwConstraintStreamActionV1::InventoryFinish
+            | PalwConstraintStreamActionV1::SelectedEventDemand { .. }
+            | PalwConstraintStreamActionV1::SelectedEventAnswer(_)
+            | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+            | PalwConstraintStreamActionV1::ArtifactInventoryOpen { .. }
+            | PalwConstraintStreamActionV1::ArtifactInventoryMove(_)
+            | PalwConstraintStreamActionV1::HistoryCustodyGrant { .. }
+            | PalwConstraintStreamActionV1::HistoryRecovery { .. }
+            | PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+            | PalwConstraintStreamActionV1::FlatSourceAnswer(_)
+            | PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+            | PalwConstraintStreamActionV1::FlatSourceCollect => Err("bundle control is not a semantic court action".into()),
         }
     }
+}
+pub(crate) fn palw_staged_verify_mldsa87_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    let Ok(key): Result<[u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN], _> = key.try_into() else { return false };
+    let Ok(signature): Result<[u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN], _> = signature.try_into() else { return false };
+    let key = libcrux_ml_dsa::ml_dsa_87::MLDSA87VerificationKey::new(key);
+    let signature = libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature::new(signature);
+    libcrux_ml_dsa::ml_dsa_87::portable::verify(&key, message, context, &signature).is_ok()
 }
 #[cfg(test)]
 mod tests {

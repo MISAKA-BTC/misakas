@@ -4,8 +4,8 @@ use crate::{BlockHash, Hash64, palw_constraint_stream_carriage_v1::PalwConstrain
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1: usize = 90_224;
-// 212-byte Borsh lease,70-byte lookup key,78-byte expiry key, plus margin.
-pub const PALW_STAGED_CACHE_LEASE_STORAGE_BYTES_V1: u64 = 384;
+// Seed metadata384 plus shared claim metadata256 (72-byte row and two indices).
+pub const PALW_STAGED_CACHE_LEASE_STORAGE_BYTES_V1: u64 = 640;
 const DOMAIN: &[u8] = b"misaka-palw/prefix-public/accepted-history/v1";
 
 /// Native cache maintenance metadata, created only by successful rooted seed
@@ -30,9 +30,7 @@ impl PalwStagedCacheLeaseV1 {
     pub fn merge_accepted_fork_v1(&mut self, other: Self) -> Result<(), String> {
         self.check_v1()?;
         other.check_v1()?;
-        if (self.claim, self.owner, self.reserved_daa, self.seed_id)
-            != (other.claim, other.owner, other.reserved_daa, other.seed_id)
-        {
+        if (self.claim, self.owner, self.reserved_daa, self.seed_id) != (other.claim, other.owner, other.reserved_daa, other.seed_id) {
             return Err("accepted cache lease changes immutable seed identity".into());
         }
         self.material_until_daa = self.material_until_daa.max(other.material_until_daa);
@@ -45,6 +43,39 @@ pub struct PalwStagedCacheGcPageV1 {
     pub pruning_block: BlockHash,
     pub irreversible_daa: u64,
     pub leases: Vec<PalwStagedCacheLeaseV1>,
+    pub next: Option<(u64, Hash64)>,
+}
+
+/// Retention union for material shared by every owner of one claim. It is
+/// installed by native claim/seed acceptance, never by a local file or peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshDeserialize, BorshSerialize)]
+pub struct PalwSharedClaimCacheLeaseV1 {
+    pub claim: Hash64,
+    pub material_until_daa: u64,
+}
+impl PalwSharedClaimCacheLeaseV1 {
+    pub fn check_v1(&self) -> Result<(), String> {
+        if self.claim == Hash64::default() || self.material_until_daa == 0 {
+            return Err("shared public material lease lacks its original claim or retention horizon".into());
+        }
+        Ok(())
+    }
+    pub fn merge_accepted_fork_v1(&mut self, other: Self) -> Result<(), String> {
+        self.check_v1()?;
+        other.check_v1()?;
+        if self.claim != other.claim {
+            return Err("shared public material union substitutes another claim".into());
+        }
+        self.material_until_daa = self.material_until_daa.max(other.material_until_daa);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwSharedClaimCacheGcPageV1 {
+    pub pruning_block: BlockHash,
+    pub irreversible_daa: u64,
+    pub leases: Vec<PalwSharedClaimCacheLeaseV1>,
     pub next: Option<(u64, Hash64)>,
 }
 
@@ -118,9 +149,21 @@ impl PalwPrefixHistoryRecordV1 {
     pub fn head_v1(&self) -> Result<Hash64, String> {
         self.check_v1()?;
         let encoded = borsh::to_vec(self).map_err(|e| e.to_string())?;
-        Ok(Hash64::from_bytes(
-            blake2b_simd::Params::new().hash_length(64).key(DOMAIN).hash(&encoded).as_bytes().try_into().expect("64"),
-        ))
+        Ok(Self::encoded_head_v1(&encoded))
+    }
+    fn encoded_head_v1(encoded: &[u8]) -> Hash64 {
+        Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(DOMAIN).hash(&encoded).as_bytes().try_into().expect("64"))
+    }
+    /// Authenticate the bounded raw carrier against a native rooted request
+    /// before a nested Borsh vector can allocate from peer-selected lengths.
+    pub fn decode_authenticated_request_v1(encoded: &[u8], request: &PalwPrefixHistoryRequestV1) -> Result<Self, String> {
+        request.check_v1()?;
+        if encoded.len() > PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 || Self::encoded_head_v1(encoded) != request.head {
+            return Err("public history carrier does not match its bounded original accepted head".into());
+        }
+        let record: Self = borsh::from_slice(encoded).map_err(|e| e.to_string())?;
+        record.authenticates_request_v1(request)?;
+        Ok(record)
     }
     /// The read snapshot supplies every expected field. No archive metadata chooses the
     /// owner, seed, branch, sequence or extension of the original paid material horizon.
@@ -234,5 +277,37 @@ mod tests {
         assert_eq!(second.previous_head, head);
         assert!(PalwPrefixHistoryRecordV1::new(Hash64::default(), 2, first.accepted_block, 100, 200, first.movement.clone()).is_err());
         assert!(PalwPrefixHistoryRecordV1::new(head, 2, first.accepted_block, 200, 200, first.movement).is_err());
+    }
+    #[test]
+    fn untrusted_record_bytes_authenticate_before_nested_carrier_decoding() {
+        let row = record();
+        let request = PalwPrefixHistoryRequestV1 {
+            claim: row.movement.claim,
+            owner: row.movement.reserver,
+            reserved_daa: row.movement.reserved_daa,
+            seed_id: row.movement.seed_id,
+            head: row.head_v1().unwrap(),
+            sequence: row.sequence,
+            material_until_daa: row.material_until_daa,
+        };
+        let encoded = borsh::to_vec(&row).unwrap();
+        assert_eq!(PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(&encoded, &request).unwrap(), row);
+        let mut tampered = encoded.clone();
+        // The signature length is the final vector prefix for this scalar action.
+        let offset = tampered.len() - crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN - 4;
+        tampered[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let error = PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(&tampered, &request).unwrap_err();
+        assert!(error.contains("accepted head"));
+        assert!(PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(&encoded[..encoded.len() - 1], &request).is_err());
+        assert!(
+            PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(
+                &vec![0; PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 + 1],
+                &request,
+            )
+            .is_err()
+        );
+        let mut wrong_owner = request;
+        wrong_owner.owner.0.index += 1;
+        assert!(PalwPrefixHistoryRecordV1::decode_authenticated_request_v1(&encoded, &wrong_owner).is_err());
     }
 }

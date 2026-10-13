@@ -2460,6 +2460,42 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_owned_seed_v1_impl(key)
     }
 
+    fn palw_tokenizer_artifact_inventory_v1(
+        &self,
+        class: kaspa_consensus_core::Hash64,
+        opener: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwTokenizerArtifactInventoryProgressV1>, String> {
+        self.virtual_processor.palw_tokenizer_artifact_inventory_v1_impl(class, opener)
+    }
+
+    fn palw_staged_public_context_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
+        self.virtual_processor.palw_staged_public_context_v1_impl(claim)
+    }
+
+    fn palw_staged_selected_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+        ),
+        String,
+    > {
+        self.virtual_processor.palw_staged_selected_duties_v1_impl(signer, after)
+    }
+
+    fn palw_staged_selected_events_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedSelectedProgressV1>, String> {
+        self.virtual_processor.palw_staged_selected_events_v1_impl(key)
+    }
+
     fn palw_staged_bundle_plan_v1(
         &self,
         claim: kaspa_consensus_core::Hash64,
@@ -2514,6 +2550,21 @@ impl ConsensusApi for Consensus {
         lease: kaspa_consensus_core::palw_prefix_history_v1::PalwStagedCacheLeaseV1,
     ) -> Result<bool, String> {
         self.virtual_processor.palw_staged_cache_gc_ack_v1_impl(lease)
+    }
+
+    fn palw_shared_claim_cache_gc_page_v1(
+        &self,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheGcPageV1, String> {
+        self.virtual_processor.palw_shared_claim_cache_gc_page_v1_impl(after, limit)
+    }
+
+    fn palw_shared_claim_cache_gc_ack_v1(
+        &self,
+        lease: kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
+    ) -> Result<bool, String> {
+        self.virtual_processor.palw_shared_claim_cache_gc_ack_v1_impl(lease)
     }
 
     fn palw_terminal_progress_v1(

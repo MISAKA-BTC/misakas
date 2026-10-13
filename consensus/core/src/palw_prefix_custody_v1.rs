@@ -83,6 +83,13 @@ pub struct PalwPrefixCustodyContractV1 {
     pub credited: BTreeMap<PalwBondKeyV2, PalwPrefixCustodyReceiptV1>,
 }
 impl PalwPrefixCustodyContractV1 {
+    /// The retained digest authenticates the exact signature already credited by
+    /// native V2/V3/V4 receipt validation, without reinterpreting its signing domain.
+    pub fn matches_credited_receipt_v1(&self, claim:Hash64,receipt:&crate::palw_panel_v2::PalwSeatReceiptV2)->bool {
+        let Some(saved)=self.credited.get(&receipt.seat_bond) else {return false};
+        let mut replay=self.clone(); replay.credited.remove(&receipt.seat_bond);
+        replay.qualify(claim,receipt,saved.credited_daa) && replay.credited.get(&receipt.seat_bond)==Some(saved)
+    }
     pub fn new(
         execution_root: Hash64,
         job_identity: Hash64,
