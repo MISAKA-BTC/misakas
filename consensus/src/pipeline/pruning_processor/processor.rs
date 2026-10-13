@@ -624,13 +624,13 @@ impl PruningProcessor {
                 // kaspa-pq (ADR-0009 Addendum B §B.3(c)): prune the per-block
                 // rewarded `(bond, epoch)` keys. A no-op for blocks that rewarded
                 // nothing (no row), i.e. every block while the overlay is dormant.
-                self.rewarded_epochs_store.delete_batch(&mut batch, current).unwrap();
+                let rewarded_commit = self.rewarded_epochs_store.delete_batch_tracked(&mut batch, current).unwrap();
                 // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): prune the per-block
                 // validator quality sub-pool sibling. A no-op while inert (no row).
                 // The per-epoch `epoch_accumulator_store` is keyed by epoch (not
                 // block), so it is not pruned here — bounded by epoch count and
                 // inert today; pruning finalized-and-buried epochs is a later slice.
-                self.block_quality_pool_store.delete_batch(&mut batch, current).unwrap();
+                let quality_commit = self.block_quality_pool_store.delete_batch_tracked(&mut batch, current).unwrap();
                 // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): prune the per-block reserve balance.
                 // A no-op while inert (no row). The drip recurrence only reads the immediate
                 // (recent) selected parent, so pruning deep blocks never breaks it.
@@ -749,6 +749,8 @@ impl PruningProcessor {
 
                 // Flush the batch to the DB
                 self.db.write(batch).unwrap();
+                rewarded_commit.committed();
+                quality_commit.committed();
 
                 // Calling the drops explicitly after the batch is written in order to avoid possible errors.
                 drop(reachability_write);

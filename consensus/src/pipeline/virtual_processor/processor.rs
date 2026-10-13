@@ -3218,12 +3218,16 @@ impl VirtualStateProcessor {
         self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
         self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
         self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
-        if !rewarded_keys.is_empty() {
-            self.rewarded_epochs_store.insert_batch(&mut batch, current, Arc::new(rewarded_keys)).unwrap();
-        }
-        if quality_subpool > 0 {
-            self.block_quality_pool_store.insert_batch(&mut batch, current, quality_subpool).unwrap();
-        }
+        let rewarded_commit = if !rewarded_keys.is_empty() {
+            Some(self.rewarded_epochs_store.insert_batch_tracked(&mut batch, current, Arc::new(rewarded_keys)).unwrap())
+        } else {
+            None
+        };
+        let quality_commit = if quality_subpool > 0 {
+            Some(self.block_quality_pool_store.insert_batch_tracked(&mut batch, current, quality_subpool).unwrap())
+        } else {
+            None
+        };
         if reserve_balance > 0 {
             self.reserve_balance_store.insert_batch(&mut batch, current, reserve_balance).unwrap();
         }
@@ -3231,6 +3235,12 @@ impl VirtualStateProcessor {
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
+        if let Some(ticket) = rewarded_commit {
+            ticket.committed();
+        }
+        if let Some(ticket) = quality_commit {
+            ticket.committed();
+        }
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(write_guard);
     }
@@ -6479,12 +6489,14 @@ impl VirtualStateProcessor {
         if insert_reserve {
             self.reserve_balance_store.insert_batch(&mut batch, pruning_point, canonical.reserve_balance).unwrap();
         }
-        overlay_write.set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
+        let overlay_commit =
+            overlay_write.set_batch_tracked(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
         // Legacy monetary/bond rights are another sidecar of the same import.
         // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
+        overlay_commit.committed();
         drop(pruning_meta_write);
         Ok(())
     }
@@ -6591,11 +6603,13 @@ impl VirtualStateProcessor {
         let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
         let snapshot = self.compute_overlay_snapshot(pruning_point, &view);
         let mut batch = WriteBatch::default();
-        self.pruning_overlay_snapshot_store
+        let overlay_commit = self
+            .pruning_overlay_snapshot_store
             .write()
-            .set_batch(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
+            .set_batch_tracked(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
             .unwrap();
         self.db.write(batch).unwrap();
+        overlay_commit.committed();
     }
 
     pub fn are_pruning_points_violating_finality(&self, pp_list: PruningPointsList) -> bool {

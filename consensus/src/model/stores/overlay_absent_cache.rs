@@ -23,13 +23,47 @@ pub(super) struct OverlayAbsentCache<K> {
 
 struct Invalidation<K> {
     generation: u64,
-    pending: IndexMap<K, ()>,
+    pending: IndexMap<K, usize>,
     disabled: bool,
 }
 
 struct AbsentEntries<K> {
     generation: u64,
     rows: IndexMap<K, DbKey>,
+}
+
+/// Acknowledged only after the corresponding RocksDB batch committed successfully.
+/// Dropping a ticket deliberately leaves the key pending: enqueue/abandon does
+/// not prove durability. Tickets cannot be cloned or acknowledged twice.
+#[must_use = "acknowledge after successful DB commit; dropping keeps safe uncached fallback"]
+pub(crate) struct OverlayCommitTicket<K> {
+    key: K,
+    entries: Arc<Mutex<AbsentEntries<K>>>,
+    invalidation: Arc<Mutex<Invalidation<K>>>,
+}
+
+impl<K: Eq + Hash> OverlayCommitTicket<K> {
+    pub(crate) fn committed(self) {
+        let mut state = self.invalidation.lock();
+        let previous = state.generation;
+        state.generation = previous.checked_add(1).expect("overlay cache mutation generation exhausted");
+        if !state.disabled {
+            let count = state.pending.get_mut(&self.key).expect("acknowledged overlay key must be pending");
+            if *count > 1 {
+                *count -= 1;
+            } else {
+                state.pending.swap_remove(&self.key);
+            }
+        }
+        let mut entries = self.entries.lock();
+        // Retain this cache's unrelated stable misses across each block commit.
+        // An independent sibling write still invalidates all its older misses.
+        if entries.generation != previous || state.disabled {
+            entries.rows.clear();
+        }
+        entries.generation = state.generation;
+        entries.rows.swap_remove(&self.key);
+    }
 }
 
 impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
@@ -96,10 +130,18 @@ impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
         self.mutate_inner(key, false, mutation)
     }
 
-    /// Keep queued keys uncached until reopen. Without a DB commit hook, neither
-    /// optimistic positive-cache reads nor generation changes prove durability.
+    /// Legacy unacknowledged enqueue: conservatively keep the key pending.
     pub(super) fn mutate_batch<T>(&self, key: &K, mutation: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
         self.mutate_inner(key, true, mutation)
+    }
+
+    pub(super) fn mutate_batch_tracked<T>(
+        &self,
+        key: &K,
+        mutation: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<(T, OverlayCommitTicket<K>), StoreError> {
+        let value = self.mutate_inner(key, true, mutation)?;
+        Ok((value, OverlayCommitTicket { key: key.clone(), entries: self.entries.clone(), invalidation: self.invalidation.clone() }))
     }
 
     fn mutate_inner<T>(&self, key: &K, batch: bool, mutation: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
@@ -107,14 +149,21 @@ impl<K: Clone + Eq + Hash> OverlayAbsentCache<K> {
         let mut state = self.invalidation.lock();
         let previous = state.generation;
         state.generation = previous.checked_add(1).expect("overlay cache mutation generation exhausted");
-        if batch && !state.disabled && !state.pending.contains_key(key) {
-            if state.pending.len() == MAX_ABSENT_OVERLAY_ROWS {
+        if batch && !state.disabled {
+            if let Some(count) = state.pending.get_mut(key) {
+                if *count == MAX_ABSENT_OVERLAY_ROWS {
+                    state.pending.clear();
+                    state.disabled = true;
+                } else {
+                    *count += 1;
+                }
+            } else if state.pending.len() == MAX_ABSENT_OVERLAY_ROWS {
                 // Permanently fall back to ordinary DB reads for this store
                 // instance. No unbounded dirty-key list or unsafe eviction.
                 state.pending.clear();
                 state.disabled = true;
             } else {
-                state.pending.insert(key.clone(), ());
+                state.pending.insert(key.clone(), 1);
             }
         }
         let mut entries = self.entries.lock();
@@ -239,6 +288,82 @@ mod tests {
             let _ = sibling.read(usize::MAX, missing::<u64>);
         }
         assert!(sibling.entries.lock().rows.is_empty());
+    }
+
+    #[test]
+    fn acknowledged_batches_retire_pending_without_flushing_other_misses() {
+        let cache = OverlayAbsentCache::new(2);
+        let reads = AtomicUsize::new(0);
+        let _ = cache.read(usize::MAX, || {
+            reads.fetch_add(1, Ordering::Relaxed);
+            missing::<u64>()
+        });
+        for key in 0..MAX_ABSENT_OVERLAY_ROWS * 2 {
+            let (_, ticket) = cache.mutate_batch_tracked(&key, || Ok(())).unwrap();
+            assert_eq!(cache.invalidation.lock().pending.get(&key), Some(&1));
+            ticket.committed();
+            assert!(cache.invalidation.lock().pending.is_empty());
+            let _ = cache.read(usize::MAX, || {
+                reads.fetch_add(1, Ordering::Relaxed);
+                missing::<u64>()
+            });
+        }
+        assert!(!cache.invalidation.lock().disabled);
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn same_key_reverse_commit_keeps_pending_until_every_ticket_acknowledged() {
+        let cache = OverlayAbsentCache::new(2);
+        let (_, insert) = cache.mutate_batch_tracked(&1, || Ok(())).unwrap();
+        let (_, delete) = cache.mutate_batch_tracked(&1, || Ok(())).unwrap();
+        assert_eq!(cache.invalidation.lock().pending.get(&1), Some(&2));
+        // The newer delete commits first, while the older insert is still queued.
+        delete.committed();
+        assert_eq!(cache.invalidation.lock().pending.get(&1), Some(&1));
+        let sibling = cache.clone_with_new_cache(2);
+        assert!(sibling.read(1, missing::<u64>).is_err());
+        assert!(sibling.entries.lock().rows.is_empty());
+        insert.committed();
+        assert!(cache.invalidation.lock().pending.is_empty());
+        assert_eq!(sibling.read(1, || Ok(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn abandoned_failed_and_unwound_tickets_cannot_release_pending_absence() {
+        let cache = OverlayAbsentCache::new(2);
+        let (_, abandoned) = cache.mutate_batch_tracked(&1, || Ok(())).unwrap();
+        drop(abandoned);
+        let (_, successful) = cache.mutate_batch_tracked(&1, || Ok(())).unwrap();
+        successful.committed();
+        assert_eq!(cache.invalidation.lock().pending.get(&1), Some(&1));
+        assert!(cache.mutate_batch_tracked(&2, || Err::<(), _>(StoreError::DataInconsistency("enqueue failure".into()))).is_err());
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (_, _ticket) = cache.mutate_batch_tracked(&3, || Ok(())).unwrap();
+            panic!("abandon staged batch");
+        }));
+        assert!(unwound.is_err());
+        for key in 1..=3 {
+            let _ = cache.read(key, missing::<u64>);
+            assert!(!cache.entries.lock().rows.contains_key(&key));
+            assert_eq!(cache.invalidation.lock().pending.get(&key), Some(&1));
+        }
+    }
+
+    #[test]
+    fn same_key_abandoned_ticket_bound_disables_safely() {
+        let cache = OverlayAbsentCache::new(2);
+        for _ in 0..=MAX_ABSENT_OVERLAY_ROWS {
+            let (_, ticket) = cache.mutate_batch_tracked(&1, || Ok(())).unwrap();
+            drop(ticket);
+        }
+        assert!(cache.invalidation.lock().disabled);
+        assert!(cache.invalidation.lock().pending.is_empty());
+        let (_, ticket) = cache.mutate_batch_tracked(&1, || Ok(())).unwrap();
+        ticket.committed();
+        assert!(cache.invalidation.lock().disabled);
+        let _ = cache.read(1, missing::<u64>);
+        assert!(cache.entries.lock().rows.is_empty());
     }
 
     #[test]

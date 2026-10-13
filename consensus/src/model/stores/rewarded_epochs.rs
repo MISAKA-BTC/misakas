@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::overlay_absent_cache::OverlayAbsentCache;
+use super::overlay_absent_cache::{OverlayAbsentCache, OverlayCommitTicket};
 
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{BlockHasher, tx::TransactionOutpoint};
@@ -71,6 +71,30 @@ impl DbRewardedEpochsStore {
 
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.absent.mutate_batch(&hash, || self.access.delete(BatchDbWriter::new(batch), hash))
+    }
+
+    pub(crate) fn insert_batch_tracked(
+        &self,
+        batch: &mut WriteBatch,
+        hash: BlockHash,
+        keys: Arc<RewardedEpochKeys>,
+    ) -> Result<OverlayCommitTicket<BlockHash>, StoreError> {
+        let (_, ticket) = self.absent.mutate_batch_tracked(&hash, || {
+            if self.access.has(hash)? {
+                return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+            }
+            self.access.write(BatchDbWriter::new(batch), hash, keys)
+        })?;
+        Ok(ticket)
+    }
+
+    pub(crate) fn delete_batch_tracked(
+        &self,
+        batch: &mut WriteBatch,
+        hash: BlockHash,
+    ) -> Result<OverlayCommitTicket<BlockHash>, StoreError> {
+        let (_, ticket) = self.absent.mutate_batch_tracked(&hash, || self.access.delete(BatchDbWriter::new(batch), hash))?;
+        Ok(ticket)
     }
 }
 
@@ -152,6 +176,33 @@ mod tests {
         let writer = store.clone_with_new_cache(CachePolicy::Empty);
         writer.insert(other, rewarded(1)).unwrap();
         assert_eq!(store.get(other).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tracked_batch_reverse_commit_and_abandon_use_real_db() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbRewardedEpochsStore::new(db.clone(), CachePolicy::Count(16));
+        let h = Hash64::from_bytes([0x37; 64]);
+        assert!(store.get(h).is_err());
+        let mut insert = WriteBatch::default();
+        let insert_ticket = store.insert_batch_tracked(&mut insert, h, rewarded(2)).unwrap();
+        let mut delete = WriteBatch::default();
+        let delete_ticket = store.delete_batch_tracked(&mut delete, h).unwrap();
+        let reader = store.clone_with_new_cache(CachePolicy::Count(16));
+        assert!(reader.get(h).is_err());
+        db.write(delete).unwrap();
+        delete_ticket.committed();
+        assert!(reader.get(h).is_err());
+        db.write(insert).unwrap();
+        insert_ticket.committed();
+        assert_eq!(reader.get(h).unwrap().len(), 2);
+        assert_eq!(store.get(h).unwrap().len(), 2);
+        let mut abandoned = WriteBatch::default();
+        let abandoned_ticket = store.delete_batch_tracked(&mut abandoned, h).unwrap();
+        drop(abandoned);
+        drop(abandoned_ticket);
+        // An abandoned delete cannot turn this committed row into cached absence.
+        assert_eq!(store.clone_with_new_cache(CachePolicy::Count(16)).get(h).unwrap().len(), 2);
     }
 
     /// `RewardedEpochKeys` is a `Vec`, so it is UNIT-estimable (its length).

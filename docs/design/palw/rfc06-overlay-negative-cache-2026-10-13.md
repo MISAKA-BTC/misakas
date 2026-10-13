@@ -94,3 +94,8 @@ removed after recording its file sizes. No other cache was touched.
 [fixture source](evidence/rfc06-overlay-negative-cache-bench-2026-10-13-source.rs)
 and [source hashes/results](evidence/rfc06-overlay-negative-cache-bench-2026-10-13.json)
 are retained. A rebuilt, independently predeclared native100k run remains necessary.
+
+The subsequent [tracked post-commit follow-up](rfc06-overlay-commit-tickets-2026-10-13.md)
+connects all formal batch writers and retires successfully committed pending references.
+Its separate source hashes and 23-test controls preserve the distinction from these
+minimum-cache timing results; new integrated/native acceptance remains pending.

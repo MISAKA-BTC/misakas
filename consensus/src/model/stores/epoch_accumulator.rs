@@ -37,7 +37,10 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use rocksdb::WriteBatch;
 
-use super::{U64Key, overlay_absent_cache::OverlayAbsentCache};
+use super::{
+    U64Key,
+    overlay_absent_cache::{OverlayAbsentCache, OverlayCommitTicket},
+};
 
 /// Per-epoch [`EpochTally`] accumulator store (ADR-0018 "本格版" Phase 1), keyed by
 /// `u64` epoch. Recomputed/overwritten per virtual-state commit while an epoch is
@@ -123,6 +126,30 @@ impl DbBlockQualityPoolStore {
 
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
         self.absent.mutate_batch(&hash, || self.access.delete(BatchDbWriter::new(batch), hash))
+    }
+
+    pub(crate) fn insert_batch_tracked(
+        &self,
+        batch: &mut WriteBatch,
+        hash: BlockHash,
+        quality_subpool: u64,
+    ) -> Result<OverlayCommitTicket<BlockHash>, StoreError> {
+        let (_, ticket) = self.absent.mutate_batch_tracked(&hash, || {
+            if self.access.has(hash)? {
+                return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+            }
+            self.access.write(BatchDbWriter::new(batch), hash, quality_subpool)
+        })?;
+        Ok(ticket)
+    }
+
+    pub(crate) fn delete_batch_tracked(
+        &self,
+        batch: &mut WriteBatch,
+        hash: BlockHash,
+    ) -> Result<OverlayCommitTicket<BlockHash>, StoreError> {
+        let (_, ticket) = self.absent.mutate_batch_tracked(&hash, || self.access.delete(BatchDbWriter::new(batch), hash))?;
+        Ok(ticket)
     }
 }
 
@@ -257,6 +284,25 @@ mod tests {
         db.write(batch).unwrap();
         assert_eq!(store.get(h).unwrap(), 99);
         assert_eq!(DbBlockQualityPoolStore::new(db, CachePolicy::Count(16)).get(h).unwrap(), 99);
+    }
+
+    #[test]
+    fn quality_tracked_reverse_commit_releases_only_its_ticket() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbBlockQualityPoolStore::new(db.clone(), CachePolicy::Count(16));
+        let h = Hash64::from_bytes([0x38; 64]);
+        let mut insert = WriteBatch::default();
+        let insert_ticket = store.insert_batch_tracked(&mut insert, h, 42).unwrap();
+        let mut delete = WriteBatch::default();
+        let delete_ticket = store.delete_batch_tracked(&mut delete, h).unwrap();
+        let reader = store.clone_with_new_cache(CachePolicy::Count(16));
+        assert!(reader.get(h).is_err());
+        db.write(delete).unwrap();
+        delete_ticket.committed();
+        assert!(reader.get(h).is_err());
+        db.write(insert).unwrap();
+        insert_ticket.committed();
+        assert_eq!(reader.get(h).unwrap(), 42);
     }
 
     /// The per-block reserve-balance store inserts/reads/deletes a `u64`; an absent block reads as

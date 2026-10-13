@@ -14,7 +14,7 @@
 //! Mirrors the [`super::dns_state`] singleton pattern. Before the first write
 //! [`PruningPointOverlaySnapshotStoreReader::get`] returns `KeyNotFound`.
 
-use super::overlay_absent_cache::OverlayAbsentCache;
+use super::overlay_absent_cache::{OverlayAbsentCache, OverlayCommitTicket};
 use kaspa_consensus_core::dns_finality::PruningPointOverlaySnapshot;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResult;
@@ -55,6 +55,15 @@ impl DbPruningPointOverlaySnapshotStore {
 
     pub fn set_batch(&mut self, batch: &mut WriteBatch, snapshot: PruningPointOverlaySnapshot) -> StoreResult<()> {
         self.absent.mutate_batch(&(), || self.access.write(BatchDbWriter::new(batch), &snapshot))
+    }
+
+    pub(crate) fn set_batch_tracked(
+        &mut self,
+        batch: &mut WriteBatch,
+        snapshot: PruningPointOverlaySnapshot,
+    ) -> StoreResult<OverlayCommitTicket<()>> {
+        let (_, ticket) = self.absent.mutate_batch_tracked(&(), || self.access.write(BatchDbWriter::new(batch), &snapshot))?;
+        Ok(ticket)
     }
 }
 
@@ -108,5 +117,38 @@ mod tests {
         };
         writer.set(snapshot.clone()).unwrap();
         assert_eq!(store.get().unwrap(), snapshot);
+    }
+
+    #[test]
+    fn singleton_tracked_commit_abandon_and_reverse_overwrite_db_values() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPruningPointOverlaySnapshotStore::new(db.clone());
+        let first = PruningPointOverlaySnapshot {
+            pruning_point: Hash64::from_bytes([0x47; 64]),
+            snapshot: OverlaySnapshot { bonds: vec![], reserve_balance: 42, window: vec![] },
+        };
+        let second = PruningPointOverlaySnapshot {
+            pruning_point: Hash64::from_bytes([0x48; 64]),
+            snapshot: OverlaySnapshot { bonds: vec![], reserve_balance: 99, window: vec![] },
+        };
+        let mut batch1 = WriteBatch::default();
+        let ticket1 = store.set_batch_tracked(&mut batch1, first.clone()).unwrap();
+        let mut batch2 = WriteBatch::default();
+        let ticket2 = store.set_batch_tracked(&mut batch2, second.clone()).unwrap();
+        let reader = store.clone_with_new_cache();
+        assert!(reader.get().is_err());
+        db.write(batch2).unwrap();
+        ticket2.committed();
+        assert_eq!(reader.get().unwrap(), second);
+        db.write(batch1).unwrap();
+        ticket1.committed();
+        // Use an empty positive cache: this ticket mechanism owns negative
+        // coherence, not the generic item's optimistic positive-cache ordering.
+        assert_eq!(store.clone_with_new_cache().get().unwrap(), first);
+        let mut abandoned = WriteBatch::default();
+        let ticket = store.set_batch_tracked(&mut abandoned, second).unwrap();
+        drop(abandoned);
+        drop(ticket);
+        assert_eq!(store.clone_with_new_cache().get().unwrap(), first);
     }
 }
