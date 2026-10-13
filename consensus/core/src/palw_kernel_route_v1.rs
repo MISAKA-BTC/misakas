@@ -171,6 +171,9 @@ pub struct PalwKernelRouteExtrasV1 {
     pub funded_execution: Option<crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
     /// Independent V2 external stage semantics and native policy.
     pub stage_execution: Option<crate::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    /// Actual physical mass constants, resolved from Params only where a new
+    /// native namespace is active. They do not assert reserved-lane readiness.
+    pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,

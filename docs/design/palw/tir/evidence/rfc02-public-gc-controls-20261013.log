@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 01s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-67d459dcc3034cdc)
+
+running 1 test
+test flat_quota11::protected_tests::public_selected_gc_charges_distinct_payer_preserves_owner_allowance_and_authenticates_fifth_row ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 231 filtered out; finished in 0.00s
+

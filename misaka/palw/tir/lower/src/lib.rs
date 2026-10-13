@@ -72,6 +72,7 @@ pub mod hf_schema;
 pub mod hf_weights;
 pub mod hl;
 pub mod lora;
+pub mod layout_pass15;
 pub mod lower;
 pub mod model;
 pub mod ngram;

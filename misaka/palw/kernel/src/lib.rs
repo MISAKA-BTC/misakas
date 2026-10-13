@@ -106,6 +106,8 @@ pub mod flat_history8;
 pub mod flat_inputs12;
 pub mod flat_lengths7;
 pub mod flat_point9;
+pub mod flat_price15;
+pub mod flat_price20;
 /// RFC-0002 item 3 (RFC02-T): a flat-v5 candidate's worst-case public pursuit on G14-B's clock and carriage.
 pub mod flat_pursuit5;
 pub mod flat_quota11;
@@ -123,6 +125,7 @@ pub mod flat_seal7;
 /// Explicit opt-in point-counterexample TopK courts over the frozen flat-v5 commitments.
 /// No consensus route implicitly accepts the new v7 proof grammar.
 pub mod flat_topk7;
+pub mod flat_topk_locator21;
 pub mod gate;
 pub mod hash;
 pub mod hide;

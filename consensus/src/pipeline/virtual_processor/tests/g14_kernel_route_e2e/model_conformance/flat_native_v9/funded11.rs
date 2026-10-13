@@ -50,6 +50,7 @@ async fn funded(
         .filter(|((table, _), _)| *table == EXECUTION_PREPARATION_TABLE_V11)
         .find_map(|(_, raw)| borsh::from_slice::<NativeExecutionPreparationV11>(raw).ok().map(|p| p.id()))
         .expect("native exact preparation");
+    action(net, 0, EXECUTION_ACTION_ACCEPT_V18, borsh::to_vec(&request.preparation).unwrap()).await;
     action(net, 2, EXECUTION_ACTION_FUND_V11, borsh::to_vec(&request).unwrap()).await;
     let ids: Vec<Digest> = net
         .api()

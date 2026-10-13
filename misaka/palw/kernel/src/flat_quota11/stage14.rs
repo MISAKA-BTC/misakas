@@ -27,6 +27,199 @@ impl CheckedStageQuotaV14 {
             &(14u16, self.class, self.source, self.admission, self.policy, self.plan.record().root()),
         )
     }
+    /// Readonly native fixed-record restoration. Expected wrapper root is
+    /// authenticated by original native membership; no carrier may supply it.
+    /// This grants no admission, baseline, source service or payout authority.
+    pub fn restore_native_record(
+        class: Digest,
+        source: Digest,
+        admission: Digest,
+        policy: Digest,
+        record: &QuotaPlanRecordV11,
+        expected: Digest,
+    ) -> Result<Self, String> {
+        let plan = CheckedJobQuotaPlanV11::restore(record, &record.root())?;
+        let checked = Self { class, source, admission, policy, plan };
+        if class == [0; 64] || source == [0; 64] || admission == [0; 64] || policy == [0; 64] || checked.root() != expected {
+            return Err("stage quote cache differs from authenticated original wrapper".into());
+        }
+        Ok(checked)
+    }
+}
+/// Price source delivery over the ORIGINAL real-weight geometry and maximum
+/// relation operands. Actual external job inputs do not become source weights.
+/// Four retained owners plus the immutable public request lifetime are bounded
+/// independently of frozen DA11's eight attempts.
+pub fn derive_stage_source_plan_v14(
+    class: &CheckedStageClassV14,
+    stage: &CheckedStageQuotaV14,
+    quota: &QuotaPolicyV11,
+    discovery: &discovery13::DiscoveryPolicyV13,
+) -> Result<source16::SourcePlanV16, String> {
+    discovery.check(quota)?;
+    if stage.class != class.root() || stage.source != class.source().id() || stage.policy != class.policy_root() {
+        return Err("stage source delivery changes original class/source/policy".into());
+    }
+    let mut leaves = 1u64;
+    for param in &class.source().program().params {
+        let shape: Vec<_> = param.shape.iter().map(|n| *n as usize).collect();
+        let layout = crate::merkle3::LayoutV3::try_of(&shape).ok_or("stage real source layout overflow")?;
+        leaves = leaves.max(layout.leaves(crate::merkle::AXIS_ROW)).max(layout.leaves(crate::merkle::AXIS_COL));
+    }
+    let depth = if leaves <= 1 { 0 } else { 64 - (leaves - 1).leading_zeros() };
+    let operands = class.maximum_scope().relations.iter().try_fold(0u64, |n, relation| {
+        let count =
+            relation.operand_leaves.iter().try_fold(0u64, |v, count| v.checked_add(*count).ok_or("stage operand count overflow"))?;
+        Ok::<_, String>(n.max(count))
+    })?;
+    // Header, authenticated bisection replies, final bound-PC leaf and one
+    // allowance for its real inventory piece. Computation operands are also
+    // independently complete at maximum geometry.
+    let each = (depth as u64).checked_add(3).ok_or("stage source depth overflow")?.max(operands);
+    let requests = each
+        .checked_mul(PROTECTED_SEALS_PER_JOB_V11 as u64)
+        .and_then(|n| n.checked_add(discovery.ordinary_lifetime_requests as u64))
+        .filter(|n| *n > 0 && *n <= 1 << 20)
+        .ok_or("stage source lifetime request bound")? as u32;
+    source16::derive_source_plan_base_v16(
+        class.root(),
+        class.source().parameters().root(),
+        class.source().inventory_root(),
+        class.source().parameters(),
+        stage.plan(),
+        quota,
+        requests,
+    )
+}
+
+pub fn derive_stage_trace_plan_v14(
+    class: &CheckedStageClassV14,
+    stage: &CheckedStageQuotaV14,
+    quota: &QuotaPolicyV11,
+) -> Result<trace17::TracePlanV17, String> {
+    if stage.class != class.root() || stage.source != class.source().id() || stage.policy != class.policy_root() {
+        return Err("stage trace quote changes original source/class/policy".into());
+    }
+    let record = stage.plan.record();
+    trace17::derive_trace_plan_base_v17(
+        class.root(),
+        record.program_root,
+        record.parameter_root,
+        class.maximum_scope().root(),
+        stage.plan(),
+        quota,
+    )
+}
+pub(super) struct CheckedStageSourceGrantV14 {
+    pub(super) binding: SubjectBindingV11,
+    pub(super) consent: Digest,
+    pub(super) producer_operator: Digest,
+    pub(super) epoch: TrustedEpochV11,
+    pub(super) source_plan: Digest,
+}
+pub(super) struct CheckedStageTraceGrantV14 {
+    pub(super) binding: SubjectBindingV11,
+    pub(super) consent: Digest,
+    pub(super) epoch: TrustedEpochV11,
+    pub(super) trace_plan: Digest,
+}
+pub fn check_stage_trace_admission_v14(
+    class: &CheckedStageClassV14,
+    book: &StageJobBookV14,
+    stage: &CheckedStageQuotaV14,
+    quota: &QuotaPolicyV11,
+    epoch: &TrustedEpochV11,
+    trace: &trace17::TracePlanV17,
+    native: &NativeStageQuotaAnchorV14,
+) -> Result<trace17::CheckedTraceAdmissionV17, String> {
+    epoch.check(quota)?;
+    book.check_restored(class, stage)?;
+    let grant = check_stage_quota_admission_v14(class, book, stage, quota, native)?;
+    if epoch.block_hash != native.block
+        || epoch.block_daa != native.daa
+        || epoch.network_interval != book.admitted_interval
+        || book.trace_plan != trace.root()
+        || derive_stage_trace_plan_v14(class, stage, quota)?.root() != trace.root()
+    {
+        return Err("stage trace supplement lacks original consent18/funded epoch/checked quote".into());
+    }
+    trace17::from_checked_stage_admission_v17(
+        CheckedStageTraceGrantV14 { binding: grant.binding, consent: book.acceptance, epoch: epoch.clone(), trace_plan: trace.root() },
+        trace,
+    )
+}
+pub fn check_stage_source_admission_v14(
+    class: &CheckedStageClassV14,
+    book: &StageJobBookV14,
+    stage: &CheckedStageQuotaV14,
+    quota: &QuotaPolicyV11,
+    discovery: &discovery13::DiscoveryPolicyV13,
+    epoch: &TrustedEpochV11,
+    source: &source16::SourcePlanV16,
+    native: &NativeStageQuotaAnchorV14,
+) -> Result<source16::CheckedSourceAdmissionV16, String> {
+    epoch.check(quota)?;
+    book.check_restored(class, stage)?;
+    let granted = check_stage_quota_admission_v14(class, book, stage, quota, native)?;
+    if epoch.block_daa != native.daa
+        || epoch.block_hash != native.block
+        || epoch.network_interval != book.admitted_interval
+        || derive_stage_source_plan_v14(class, stage, quota, discovery)?.root() != source.root()
+        || book.source_plan != source.root()
+        || book.trace_plan != derive_stage_trace_plan_v14(class, stage, quota)?.root()
+        || book.producer_operator == [0; 64]
+    {
+        return Err("stage source obligation lacks original funded epoch/real source/consent lineage".into());
+    }
+    source16::from_checked_stage_admission_v16(
+        CheckedStageSourceGrantV14 {
+            binding: granted.binding,
+            consent: book.acceptance,
+            producer_operator: book.producer_operator,
+            epoch: epoch.clone(),
+            source_plan: source.root(),
+        },
+        source,
+    )
+}
+/// Native obtains these lengths from immutable bounded headers and prepays
+/// before restoring the original source/class/book. This quote supplies only
+/// ordinary work, never a baseline, seal, source obligation or payout grant.
+pub fn derive_stage_restore_metadata_v14(
+    source_bytes: u32,
+    class_bytes: u32,
+    book_bytes: u32,
+    input_bytes: u64,
+    carrier_bytes: u32,
+) -> Result<DerivedOrdinaryMetadataV11, String> {
+    let lengths = [source_bytes as u64, class_bytes as u64, book_bytes as u64, input_bytes, carrier_bytes as u64];
+    let (mut work, mut bytes) = (0u128, 0u64);
+    for n in lengths {
+        bytes = bytes.checked_add(n).ok_or("stage restore bytes overflow")?;
+        let n = n as u128;
+        work = work
+            .checked_add(n.checked_mul(n).and_then(|v| v.checked_mul(64)).ok_or("stage restore square overflow")?)
+            .and_then(|v| v.checked_add(n.checked_mul(1024)?))
+            .ok_or("stage restore work overflow")?;
+    }
+    let mut quantities = action_envelope(work.checked_add(65536).ok_or("stage restore work overflow")?, bytes, None)?;
+    include_native_post_io_v11(&mut quantities, bytes)?;
+    Ok(DerivedOrdinaryMetadataV11 { quantities })
+}
+/// An independent public source filing spends only its caller's ordinary pool.
+/// A valid result can deny fresh aliases; it grants no funded-job conviction,
+/// reserved seal, finder award or escrow authority.
+pub fn derive_stage_source_filing_v14(
+    source: &crate::flat_inputs12::source14::CheckedStageSourceV14,
+    carrier_bytes: u64,
+) -> Result<DerivedOrdinaryMetadataV11, String> {
+    let bound = crate::flat_execution11::native_source_court_bound_v11(source.program().encode().len(), source.parameters())?;
+    if carrier_bytes > bound.max_proof_bytes.checked_add(70).ok_or("stage source filing extent overflow")? {
+        return Err("stage source public filing exceeds original real-PC quote".into());
+    }
+    let mut q = action_envelope(bound.work as u128, carrier_bytes, Some((bound.work, bound.max_proof_bytes, bound.scratch_bytes)))?;
+    include_source_court_io_v11(&mut q, source.parameters())?;
+    Ok(DerivedOrdinaryMetadataV11 { quantities: q })
 }
 /// Exact requester-owned image decoding, interval validation and commitment
 /// work. Charge before acquiring images so invalid inputs cannot consume an
@@ -83,9 +276,23 @@ pub fn derive_stage_quota_v14(class: &CheckedStageClassV14, job: &CheckedStageJo
     }
     let assembled = filing.checked_add(ACTION_OUTER_ALLOWANCE_V11).ok_or("stage proof carrier overflow")?;
     let source_bytes = source.program().encode().len() as u64;
+    let source_wire = 2u64
+        + 4
+        + source.program().encode().len() as u64
+        + 64
+        + borsh::to_vec(source.parameters()).map_err(|e| e.to_string())?.len() as u64;
+    let class_wire = 2u64 + 64 + 4 + class.template().lengths.to_bytes()?.len() as u64 + 4 + 64;
+    let fixed_restore = derive_stage_restore_metadata_v14(
+        u32::try_from(source_wire).map_err(|_| "stage source cache extent overflow")?,
+        u32::try_from(class_wire).map_err(|_| "stage class cache extent overflow")?,
+        4096,
+        0,
+        0,
+    )?;
     let restore = native_candidate_restore_work_from_scope_v11(&program, pc, maximum)?
         .checked_add(source_bytes.checked_mul(source_bytes).ok_or("stage source restore work overflow")?)
         .and_then(|n| n.checked_add(source_bytes.checked_mul(128)?))
+        .and_then(|n| n.checked_add(u64::try_from(fixed_restore.quantities().get(ResourceAxisV10::MetadataWork)).ok()?))
         .ok_or("stage restore work overflow")?;
     let output_count = match class.template().program.output {
         misaka_palw_tir::program_v2::OutputDecl::Rows { .. } => job.job().positions as u64,
@@ -123,6 +330,26 @@ pub fn derive_stage_quota_v14(class: &CheckedStageClassV14, job: &CheckedStageJo
         action_envelope(native_action_metadata_v11(restore, post, assembled, true)?, assembled, Some((work, filing, scratch)))?,
         action_envelope(16 << 10, MAX_FIXED_ACTION_BYTES_V11, None)?,
     ];
+    for axis in ResourceAxisV10::ALL {
+        if axis != ResourceAxisV10::MetadataWork {
+            actions[0].set(
+                axis,
+                actions[0]
+                    .get(axis)
+                    .checked_add(fixed_restore.quantities().get(axis))
+                    .ok_or("stage original restore axis overflow")?,
+            );
+        }
+    }
+    let pc_bytes = borsh::to_vec(pc).map_err(|e| e.to_string())?.len() as u128;
+    actions[0].set(
+        ResourceAxisV10::ParameterHashBytes,
+        actions[0]
+            .get(ResourceAxisV10::ParameterHashBytes)
+            .checked_add(pc_bytes.checked_mul(64).ok_or("stage repeated PC hash extent overflow")?)
+            .ok_or("stage PC hash quota overflow")?,
+    );
+    include_native_post_io_v11(&mut actions[0], post)?;
     for (axis, extra) in [
         (ResourceAxisV10::CopiedReferenceBytes, raw_inputs * 3),
         (ResourceAxisV10::OwnedPeakBytes, raw_inputs * 4),
@@ -173,6 +400,76 @@ pub enum StageTerminalV14 {
     Convicted,
     Final,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum StageAdjudicationKindV14 {
+    ComputationMismatch,
+    SourceMismatch,
+    SourceHeaderMismatch,
+    BoundSourceUnavailable,
+}
+/// Native constructs this only after the independently verified original paid
+/// proof or original producer-bound pending PC unit default. A negative source
+/// fact by itself cannot supply this authenticated per-job adjudication.
+pub struct NativeStageJudgmentV14 {
+    pub job: Digest,
+    pub original_book: Digest,
+    pub book: Digest,
+    pub class: Digest,
+    pub claim: Digest,
+    pub source: Digest,
+    pub source_parameters: Digest,
+    pub inventory: Digest,
+    pub consent18: Digest,
+    pub proof: Digest,
+    pub finder: Digest,
+    pub finder_operator: Digest,
+    pub established_daa: u64,
+    pub current_daa: u64,
+    pub kind: StageAdjudicationKindV14,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct StageSettlementV14 {
+    pub version: u16,
+    pub job: Digest,
+    pub class: Digest,
+    pub claim: Digest,
+    pub source: Digest,
+    pub proof: Digest,
+    pub terminal: StageTerminalV14,
+    pub kind: StageAdjudicationKindV14,
+    pub escrow_debit: u64,
+    pub requester_refund: u64,
+    pub producer_credit: u64,
+    pub collected_original_slash: u64,
+    pub finder: Digest,
+    pub finder_credit: u64,
+    pub burned: u64,
+    pub established_daa: u64,
+}
+impl StageSettlementV14 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/kernel/stage-original-settlement/v14", self)
+    }
+    pub fn check(&self) -> Result<(), String> {
+        if self.version != 14
+            || self.terminal != StageTerminalV14::Convicted
+            || self.job == [0; 64]
+            || self.class == [0; 64]
+            || self.claim == [0; 64]
+            || self.source == [0; 64]
+            || self.proof == [0; 64]
+            || self.finder == [0; 64]
+            || self.escrow_debit == 0
+            || self.requester_refund != self.escrow_debit
+            || self.producer_credit != 0
+            || self.collected_original_slash == 0
+            || self.finder_credit.checked_add(self.burned) != Some(self.collected_original_slash)
+        {
+            return Err("stage terminal settlement loses original escrow/slash conservation".into());
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct StageJobBookV14 {
     version: u16,
@@ -180,6 +477,13 @@ pub struct StageJobBookV14 {
     policy: Digest,
     source: Digest,
     job: FlatStageJobV14,
+    acceptance: Digest,
+    quota_policy: Digest,
+    execution_policy: Digest,
+    source_plan: Digest,
+    trace_plan: Digest,
+    fee_plan: Digest,
+    availability_terms: Digest,
     admission: FlatStageAdmissionV14,
     quota_plan: Digest,
     requester_operator: Digest,
@@ -197,6 +501,7 @@ pub struct StageJobBookV14 {
     committed_daa: Option<u64>,
     challenge_end_daa: Option<u64>,
     producer_reserved: u64,
+    settlement: Option<StageSettlementV14>,
 }
 /// Native supplies these from the original class/source/policy and real coins.
 /// This is never a wire-deserialized grant or an availability assertion.
@@ -204,6 +509,12 @@ pub struct NativeStageFundingV14 {
     pub class: Digest,
     pub source: Digest,
     pub policy: Digest,
+    pub acceptance: Digest,
+    pub consent_version: u16,
+    pub source_plan: Digest,
+    pub trace_plan: Digest,
+    pub fee_plan: Digest,
+    pub availability_terms: Digest,
     pub source_matures_daa: u64,
     pub source_refuted: bool,
     pub requester: Digest,
@@ -233,6 +544,30 @@ impl StageJobBookV14 {
     pub fn class_id(&self) -> Digest {
         self.class
     }
+    pub fn source_binding(&self) -> Digest {
+        self.source
+    }
+    pub fn native_policy_root(&self) -> Digest {
+        self.policy
+    }
+    pub fn execution_policy_root(&self) -> Digest {
+        self.execution_policy
+    }
+    pub fn acceptance(&self) -> Digest {
+        self.acceptance
+    }
+    pub fn source_plan_root(&self) -> Digest {
+        self.source_plan
+    }
+    pub fn trace_plan_root(&self) -> Digest {
+        self.trace_plan
+    }
+    pub fn fee_plan_root(&self) -> Digest {
+        self.fee_plan
+    }
+    pub fn availability_terms_root(&self) -> Digest {
+        self.availability_terms
+    }
     pub fn requester_operator(&self) -> Digest {
         self.requester_operator
     }
@@ -248,6 +583,22 @@ impl StageJobBookV14 {
     pub fn challenge_end_daa(&self) -> Option<u64> {
         self.challenge_end_daa
     }
+    pub fn committed_daa(&self) -> Option<u64> {
+        self.committed_daa
+    }
+    /// Immutable original Fund projection, independently reconstructed from
+    /// the private book rather than a caller-supplied funded-root label.
+    pub fn original_funded_root(&self) -> Digest {
+        let mut original = self.clone();
+        original.escrow_remaining = original.original_debit;
+        original.terminal = StageTerminalV14::Funded;
+        original.claim_root = None;
+        original.committed_daa = None;
+        original.challenge_end_daa = None;
+        original.producer_reserved = 0;
+        original.settlement = None;
+        original.root()
+    }
     pub fn terminal(&self) -> StageTerminalV14 {
         self.terminal
     }
@@ -262,6 +613,9 @@ impl StageJobBookV14 {
     }
     pub fn producer_reserved(&self) -> u64 {
         self.producer_reserved
+    }
+    pub fn settlement(&self) -> Option<&StageSettlementV14> {
+        self.settlement.as_ref()
     }
     pub fn claim_root(&self) -> Option<Digest> {
         self.claim_root
@@ -291,6 +645,13 @@ impl StageJobBookV14 {
             || self.quota_plan != plan.root()
             || self.original_debit != self.reward
             || self.reward == 0
+            || self.acceptance == [0; 64]
+            || self.quota_policy == [0; 64]
+            || self.execution_policy == [0; 64]
+            || self.source_plan == [0; 64]
+            || self.trace_plan == [0; 64]
+            || self.fee_plan == [0; 64]
+            || self.availability_terms == [0; 64]
             || self.escrow_remaining > self.original_debit
             || self.admitted_daa >= self.commit_deadline_daa
             || self.commit_deadline_daa >= self.deadline_daa
@@ -300,6 +661,7 @@ impl StageJobBookV14 {
         match self.terminal {
             StageTerminalV14::Funded
                 if self.escrow_remaining == self.original_debit
+                    && self.settlement.is_none()
                     && self.claim_root.is_none()
                     && self.producer_reserved == 0
                     && self.committed_daa.is_none()
@@ -309,6 +671,7 @@ impl StageJobBookV14 {
             }
             StageTerminalV14::Challengeable
                 if self.escrow_remaining == self.original_debit
+                    && self.settlement.is_none()
                     && self.claim_root.is_some()
                     && self.producer_reserved != 0
                     && self.committed_daa.is_some()
@@ -318,6 +681,7 @@ impl StageJobBookV14 {
             }
             StageTerminalV14::Refunded
                 if self.escrow_remaining == 0
+                    && self.settlement.is_none()
                     && self.claim_root.is_none()
                     && self.producer_reserved == 0
                     && self.committed_daa.is_none()
@@ -325,7 +689,18 @@ impl StageJobBookV14 {
             {
                 ()
             }
-            StageTerminalV14::Convicted | StageTerminalV14::Final if self.escrow_remaining == 0 => (),
+            StageTerminalV14::Convicted if self.escrow_remaining == 0 && self.producer_reserved == 0 => {
+                let s = self.settlement.as_ref().ok_or("stage conviction lacks original settlement")?;
+                s.check()?;
+                if s.job != self.id()
+                    || s.class != self.class
+                    || s.source != self.source
+                    || Some(s.claim) != self.claim_root
+                    || s.escrow_debit != self.original_debit
+                {
+                    return Err("stage conviction settlement changes original source/job/escrow".into());
+                }
+            }
             _ => return Err("stage terminal money/reserve state is inconsistent".into()),
         }
         Ok(())
@@ -344,6 +719,7 @@ impl StageJobBookV14 {
     ) -> Result<u64, String> {
         self.check_restored(class, plan)?;
         if self.terminal != StageTerminalV14::Funded
+            || execution.root() != self.execution_policy
             || producer != self.job.producer
             || available_original_reserve < execution.required_producer_reserve
             || daa < self.admitted_daa
@@ -409,8 +785,70 @@ impl StageJobBookV14 {
         self.terminal = StageTerminalV14::Refunded;
         Ok(amount)
     }
+    pub fn adjudicate(
+        &mut self,
+        class: &CheckedStageClassV14,
+        plan: &CheckedStageQuotaV14,
+        execution: &ExecutionPolicyV11,
+        native: &NativeStageJudgmentV14,
+        collected_original: u64,
+    ) -> Result<StageSettlementV14, String> {
+        self.check_restored(class, plan)?;
+        if self.terminal != StageTerminalV14::Challengeable
+            || self.settlement.is_some()
+            || execution.root() != self.execution_policy
+            || native.job != self.id()
+            || native.original_book != self.original_funded_root()
+            || native.book != self.root()
+            || native.class != self.class
+            || Some(native.claim) != self.claim_root
+            || native.source != self.source
+            || native.source_parameters != class.source().parameters().root()
+            || native.inventory != class.source().inventory_root()
+            || native.consent18 != self.acceptance
+            || native.proof == [0; 64]
+            || native.finder == [0; 64]
+            || native.finder == self.job.producer
+            || native.finder_operator == [0; 64]
+            || native.finder_operator == self.producer_operator
+            || native.established_daa < self.committed_daa.ok_or("stage conviction commit clock absent")?
+            || native.established_daa > self.deadline_daa
+            || native.current_daa < native.established_daa
+            || collected_original != self.producer_reserved
+            || collected_original != execution.required_producer_reserve
+        {
+            return Err("stage adjudication lacks exact original18 per-job proof/default/source/claim/collected liability".into());
+        }
+        let finder_credit = u64::try_from((collected_original as u128) * (execution.finder_permille as u128) / 1000)
+            .map_err(|_| "stage finder division overflow")?;
+        let settlement = StageSettlementV14 {
+            version: 14,
+            job: self.id(),
+            class: self.class,
+            claim: native.claim,
+            source: self.source,
+            proof: native.proof,
+            terminal: StageTerminalV14::Convicted,
+            kind: native.kind,
+            escrow_debit: self.original_debit,
+            requester_refund: self.original_debit,
+            producer_credit: 0,
+            collected_original_slash: collected_original,
+            finder: native.finder,
+            finder_credit,
+            burned: collected_original - finder_credit,
+            established_daa: native.established_daa,
+        };
+        settlement.check()?;
+        self.escrow_remaining = 0;
+        self.producer_reserved = 0;
+        self.terminal = StageTerminalV14::Convicted;
+        self.settlement = Some(settlement.clone());
+        Ok(settlement)
+    }
     pub fn quota_subject(&self, plan: &CheckedStageQuotaV14, policy: &QuotaPolicyV11) -> Result<SubjectBindingV11, String> {
         if self.version != 14
+            || policy.root() != self.quota_policy
             || self.class != plan.class
             || self.source != plan.source
             || self.policy != plan.policy
@@ -452,6 +890,12 @@ impl StageJobBookV14 {
             || class.root() != native.class
             || class.source().id() != native.source
             || class.policy_root() != native.policy
+            || native.acceptance == [0; 64]
+            || native.consent_version != 18
+            || native.source_plan == [0; 64]
+            || native.trace_plan == [0; 64]
+            || native.fee_plan == [0; 64]
+            || native.availability_terms == [0; 64]
             || native.source_refuted
             || native.source_matures_daa > native.daa
             || job.job().requester != native.requester
@@ -481,6 +925,13 @@ impl StageJobBookV14 {
             policy: class.policy_root(),
             source: class.source().id(),
             job: job.job().clone(),
+            acceptance: native.acceptance,
+            quota_policy: quota.root(),
+            execution_policy: execution.root(),
+            source_plan: native.source_plan,
+            trace_plan: native.trace_plan,
+            fee_plan: native.fee_plan,
+            availability_terms: native.availability_terms,
             admission: job.admission().clone(),
             quota_plan: plan.root(),
             requester_operator: native.requester_operator,
@@ -498,7 +949,51 @@ impl StageJobBookV14 {
             committed_daa: None,
             challenge_end_daa: None,
             producer_reserved: 0,
+            settlement: None,
         })
+    }
+}
+
+impl QuotaStateV11 {
+    /// Same frozen current ordinary expired-close debit, followed only by an
+    /// authenticated stage14 terminal book and original escrow transition.
+    /// Native authenticates the original row, beneficiary and shared nonce
+    /// before passing this private book; this method creates no payout right.
+    pub fn mark_expired_stage_terminal_closed_v14(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        binding: &SubjectBindingV11,
+        class: &CheckedStageClassV14,
+        plan: &CheckedStageQuotaV14,
+        terminal: &StageJobBookV14,
+        paid: &ExpiredTerminalDebitV11,
+    ) -> Result<(), String> {
+        self.check_context(policy, epoch)?;
+        terminal.check_restored(class, plan)?;
+        if self.epoch != *epoch
+            || paid.receipt.policy_root != self.policy_root
+            || paid.receipt.epoch != *epoch
+            || paid.receipt.subject_binding != binding.root()
+            || paid.after_block != self.block.consumed
+            || paid.after_network != self.network.consumed
+            || self.actors.get(&paid.actor).is_none_or(|a| a.consumed != paid.after_actor)
+            || epoch.block_daa <= terminal.deadline_daa
+            || terminal.quota_subject(plan, policy)? != *binding
+            || terminal.terminal != StageTerminalV14::Refunded
+            || terminal.escrow_remaining != 0
+            || terminal.original_debit == 0
+            || terminal.claim_root.is_some()
+            || terminal.producer_reserved != 0
+        {
+            return Err("late stage terminal lacks exact prepaid current debit and original refunded book".into());
+        }
+        let subject = self.subjects.get_mut(&binding.job_id).ok_or("stage original baseline subject absent")?;
+        if subject.binding != *binding || subject.closed {
+            return Err("late stage original subject rebound or already closed".into());
+        }
+        subject.closed = true;
+        Ok(())
     }
 }
 
@@ -569,6 +1064,11 @@ pub struct NativeStageQuotaAnchorV14 {
     pub class: Digest,
     pub source: Digest,
     pub policy: Digest,
+    pub acceptance: Digest,
+    pub source_plan: Digest,
+    pub trace_plan: Digest,
+    pub fee_plan: Digest,
+    pub availability_terms: Digest,
     pub funded_book_root: Digest,
     pub job_id: Digest,
     pub original_debit_receipt: Digest,
@@ -578,6 +1078,54 @@ pub struct NativeStageQuotaAnchorV14 {
     pub daa: u64,
     pub source_refuted: bool,
     pub source_matures_daa: u64,
+}
+/// Authenticated original native funded/header/terminal membership and the
+/// permanent operator counter. This is never a deserialized route grant.
+pub struct NativeStageTerminalAnchorV14 {
+    pub job_id: Digest,
+    pub original_funded_book_root: Digest,
+    pub terminal_book_root: Digest,
+    pub acceptance18: Digest,
+    pub nonce: NativeRequesterNonceWitnessV11,
+    pub established_daa: u64,
+    pub principal_refund: u64,
+    pub principal_queue: Digest,
+}
+pub fn check_stage_quota_terminal_v14(
+    class: &CheckedStageClassV14,
+    book: &StageJobBookV14,
+    plan: &CheckedStageQuotaV14,
+    policy: &QuotaPolicyV11,
+    native: &NativeStageTerminalAnchorV14,
+) -> Result<CheckedQuotaTerminalV11, String> {
+    book.check_restored(class, plan)?;
+    if book.terminal != StageTerminalV14::Refunded
+        || book.escrow_remaining != 0
+        || book.claim_root.is_some()
+        || book.producer_reserved != 0
+        || native.job_id != book.id()
+        || native.original_funded_book_root != book.original_funded_root()
+        || native.terminal_book_root != book.root()
+        || native.acceptance18 != book.acceptance
+        || native.nonce.requester != book.job.requester
+        || native.nonce.requester_operator_id != book.requester_operator
+        || native.nonce.next_nonce <= canonical_nonce_v11(&book.job.nonce)?
+        || native.nonce.counter_root != native_requester_nonce_counter_root_v11(&book.requester_operator, native.nonce.next_nonce)
+        || native.established_daa <= book.deadline_daa
+        || native.principal_refund != book.original_debit
+        || native.principal_queue == [0; 64]
+    {
+        return Err("stage terminal grant lacks genuine original18 refunded escrow/header/shared nonce".into());
+    }
+    Ok(CheckedQuotaTerminalV11 {
+        binding: book.quota_subject(plan, policy)?,
+        funded_job_root: book.original_funded_root(),
+        terminal_book_root: book.root(),
+        request_key: object_id(
+            b"misaka-palw/kernel/stage-original-request-key/v14",
+            &(book.class, book.job.requester, book.job.producer, book.job.nonce, book.acceptance),
+        ),
+    })
 }
 pub fn check_stage_quota_admission_v14(
     class: &CheckedStageClassV14,
@@ -594,6 +1142,12 @@ pub fn check_stage_quota_admission_v14(
         || book.class != native.class
         || book.source != native.source
         || book.policy != native.policy
+        || book.acceptance != native.acceptance
+        || book.source_plan != native.source_plan
+        || book.trace_plan != native.trace_plan
+        || book.fee_plan != native.fee_plan
+        || book.availability_terms != native.availability_terms
+        || native.acceptance == [0; 64]
         || book.class != class.root()
         || book.source != class.source().id()
         || book.policy != class.policy_root()

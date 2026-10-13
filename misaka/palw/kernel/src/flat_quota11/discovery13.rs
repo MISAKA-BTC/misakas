@@ -95,8 +95,10 @@ pub fn derive_discovery_plan_v13(
     policy.check(quota)?;
     let proof = derive_protected_seal_plan_v11(job)?;
     let row = action_envelope(DISCOVERY_JOURNAL_BYTES_V13 as u128 * 64, DISCOVERY_JOURNAL_BYTES_V13, None)?;
-    // Request pricing includes the exact original native class/post restoration
-    // envelope. It is never a cheaper caller-declared unit or callback cost.
+    // This frozen request quote covers the selected ticket/journal plus the
+    // frozen11 request image. It DOES NOT cover native class/post restoration;
+    // native must obtain a separately versioned caller-owned supplemental debit
+    // before any such restore or callback. This component cannot authorize Final.
     let request = job.action(QuotaActionKindV11::DARequest, &[])?.quantities().checked_add(&row)?;
     let guarantee = request
         .checked_mul(policy.requests_per_session)?

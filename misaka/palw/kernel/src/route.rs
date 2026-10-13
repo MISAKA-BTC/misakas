@@ -686,6 +686,21 @@ impl fmt::Display for KernelRefusalV1 {
 }
 
 impl std::error::Error for KernelRefusalV1 {}
+/// Borrow the two independently fenced native action frames before allocating
+/// their body vectors. Callers still authenticate the exact outer bytes and
+/// native owns any expensive inner decode after its original paid predebit.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct BorrowedNativeActionV1<'a> {pub tag:u8,pub action:u8,pub body:&'a [u8]}
+pub fn borrowed_native_action_v1(bytes:&[u8])->Result<Option<BorrowedNativeActionV1<'_>>,KernelRefusalV1>{
+    let Some(tag)=bytes.get(1).copied() else{return Ok(None);};
+    let (cap,last)=match tag{TAG_FUNDED_EXECUTION_V11=>(MAX_FUNDED_EXECUTION_BYTES_V11,18),TAG_STAGE_EXECUTION_V14=>(MAX_STAGE_EXECUTION_BYTES_V14,15),_=>return Ok(None)};
+    let bad=|why:&str|KernelRefusalV1::new("NativeAction",RefusalKindV1::Malformed,why);
+    if bytes.first()!=Some(&KERNEL_ROUTE_VERSION_V1)||bytes.len()>cap{return Err(bad("native route version/byte cap"));}
+    let action=*bytes.get(2).ok_or_else(||bad("native action absent"))?;
+    let raw=bytes.get(3..7).ok_or_else(||bad("native action count absent"))?;let n=u32::from_le_bytes(raw.try_into().unwrap()) as usize;
+    if action>last||n!=bytes.len().saturating_sub(7){return Err(bad("native action exact bounded count"));}
+    Ok(Some(BorrowedNativeActionV1{tag,action,body:&bytes[7..]}))
+}
 
 /// A writer that only counts (the encoded size of an object without allocating it).
 struct CountingWriter(usize);
@@ -822,7 +837,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_FUNDED_EXECUTION_V11 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated funded action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 12)
+            if rest.get(1).is_none_or(|a| *a > 18)
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "funded action/count differs from exact bounded carrier".into()));
@@ -830,7 +845,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 12)
+            if rest.get(1).is_none_or(|a| *a > 15)
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1106,6 +1121,21 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes(){
+        for object in [KernelRouteObjectV1::FundedExecutionV11{action:15,body:vec![7;128<<10]},KernelRouteObjectV1::StageExecutionV14{action:14,body:vec![9;4096]}] {
+            let raw=object.encode();let frame=borrowed_native_action_v1(&raw).unwrap().unwrap();
+            assert_eq!(frame.body.as_ptr(),raw[7..].as_ptr());assert_eq!(frame.body.len(),raw.len()-7);
+            assert_eq!(KernelRouteObjectV1::decode(&raw).unwrap(),object);
+            let mut lie=raw.clone();lie[3..7].copy_from_slice(&u32::MAX.to_le_bytes());assert!(borrowed_native_action_v1(&lie).is_err());
+            let mut extra=raw;extra.push(0);assert!(borrowed_native_action_v1(&extra).is_err());
+        }
+        assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw{bond:[1;64]}.encode()).unwrap().is_none());
+        for(tag,last)in[(TAG_FUNDED_EXECUTION_V11,18),(TAG_STAGE_EXECUTION_V14,14)]{
+            let mut raw=vec![1,tag,last,0,0,0,0];assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action,last);
+            raw[2]=last+1;assert!(borrowed_native_action_v1(&raw).is_err());raw[2]=last;raw[0]=2;assert!(borrowed_native_action_v1(&raw).is_err());
+        }
+    }
 
     fn demand() -> KernelRouteObjectV1 {
         KernelRouteObjectV1::FileDemand { demander: [1; 64], claim: [2; 64], stage: 3, position: 0x0102_0304 }

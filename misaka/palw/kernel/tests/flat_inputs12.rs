@@ -219,6 +219,14 @@ fn stage14_source_class_wires_exclude_virtual_inputs_and_bind_native_policy() {
     let mut other_inventory = wire.clone();
     other_inventory.inventory_root[0] ^= 1;
     assert_ne!(source.id(), other_inventory.check().unwrap().id());
+    assert_ne!(source.relation_root(), other_inventory.check().unwrap().relation_root());
+    let mut relabeled = template.program.clone();
+    relabeled.blocks[0].name = "different-stage-label".into();
+    let mut alias = wire.clone();
+    alias.program_bytes = relabeled.encode();
+    let alias = alias.check().unwrap();
+    assert_ne!(source.id(), alias.id());
+    assert_eq!(source.relation_root(), alias.relation_root(), "same invalid real R/PC cannot regain admission through program labels");
     let class_wire = FlatStageClassWireV14 {
         version: 14,
         source_binding: source.id(),
@@ -286,7 +294,7 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
         network: cap,
         max_subjects: 16,
         max_actors: 16,
-        future_attempts: [2, 2, 16, 2, 2, 1],
+        future_attempts: [2, 2, 64, 2, 2, 1],
     };
     let execution = ExecutionPolicyV11 {
         version: 11,
@@ -312,6 +320,14 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
     job.nonce = nonce_bytes_v11(0);
     let actual = class.check_job(&job).unwrap();
     let plan = derive_stage_quota_v14(&class, &actual).unwrap();
+    let discovery = discovery13::DiscoveryPolicyV13 {
+        version: 13,
+        quota_policy_root: policy.root(),
+        requests_per_session: 2,
+        ordinary_lifetime_requests: 32,
+    };
+    let source_plan = derive_stage_source_plan_v14(&class, &plan, &policy, &discovery).unwrap();
+    let trace_plan = derive_stage_trace_plan_v14(&class, &plan, &policy).unwrap();
     assert_eq!(plan.plan().record().source_court_bound, native_source_court_bound_v11(source_wire.program_bytes.len(), &pc).unwrap());
     assert_eq!(plan.plan().record().class_scope_root, class.maximum_scope().root());
     assert_eq!(plan.plan().record().actual_scope_root, actual.scope().root());
@@ -319,6 +335,12 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
         class: class.root(),
         source: class.source().id(),
         policy: class.policy_root(),
+        acceptance: [6; 64],
+        consent_version: 18,
+        source_plan: source_plan.root(),
+        trace_plan: trace_plan.root(),
+        fee_plan: [22; 64],
+        availability_terms: [23; 64],
         source_matures_daa: 5,
         source_refuted: false,
         requester: job.requester,
@@ -353,6 +375,11 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
         class: class.root(),
         source: class.source().id(),
         policy: class.policy_root(),
+        acceptance: [6; 64],
+        source_plan: source_plan.root(),
+        trace_plan: trace_plan.root(),
+        fee_plan: [22; 64],
+        availability_terms: [23; 64],
         funded_book_root: book.root(),
         job_id: book.id(),
         original_debit_receipt: book.debit_receipt(),
@@ -373,6 +400,49 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
     let mut state = QuotaStateV11::new(&policy, epoch.clone()).unwrap();
     state.admit_baseline(&policy, &epoch, job.producer, &grant, plan.plan()).unwrap();
     assert!(state.admit_baseline(&policy, &epoch, job.producer, &grant, plan.plan()).is_err());
+    assert!(source_plan.requests() >= 44);
+    let source_admission =
+        check_stage_source_admission_v14(&class, &book, &plan, &policy, &discovery, &epoch, &source_plan, &anchor).unwrap();
+    let global = state.global_row();
+    let producer = state.actor_row(&job.producer).unwrap();
+    let subject = state.subject(&book.id()).unwrap();
+    let mut source_shard = source16::SourceShardV16::from_native_rows(
+        &policy,
+        &source_plan,
+        &global,
+        &global.root(),
+        (&producer, &producer.root()),
+        (subject, &subject.row_root()),
+        None,
+    )
+    .unwrap();
+    source_shard.admit(&policy, &epoch, &source_plan, &source_admission).unwrap();
+    let trace_grant = check_stage_trace_admission_v14(&class, &book, &plan, &policy, &epoch, &trace_plan, &anchor).unwrap();
+    let mut trace_shard = trace17::TraceShardV17::from_native_rows(
+        &policy,
+        &trace_plan,
+        source_shard.global_row(),
+        &source_shard.global_row().root(),
+        job.producer,
+        Some((source_shard.producer_row(), &source_shard.producer_row().root())),
+        (subject, &subject.row_root()),
+        None,
+    )
+    .unwrap();
+    trace_shard.admit(&policy, &epoch, &trace_plan, &trace_grant).unwrap();
+    assert_eq!(trace_shard.trace_row().unwrap().original_paid_root, book.acceptance());
+    assert!(trace_shard.admit(&policy, &epoch, &trace_plan, &trace_grant).is_err());
+    let source_row = source_shard.source_row().unwrap().clone();
+    assert_eq!(source_row.original_consent_root, book.acceptance());
+    assert_eq!(source_row.parameter, pc.root());
+    assert_ne!(source_row.parameter, actual.combined_parameters().root());
+    assert_eq!(source_row.deadline_daa, book.deadline_daa());
+    assert!(source_shard.admit(&policy, &epoch, &source_plan, &source_admission).is_err());
+    let later = TrustedEpochV11::from_chain(&policy, [99; 64], 11).unwrap();
+    assert!(check_stage_source_admission_v14(&class, &book, &plan, &policy, &discovery, &later, &source_plan, &anchor).is_err());
+    let mut changed_policy = policy.clone();
+    changed_policy.plan.0[0] -= 1;
+    assert!(book.quota_subject(&plan, &changed_policy).is_err());
     assert!(plan.plan().record().action_envelopes[3].get(ResourceAxisV10::CourtWork) > 0);
     let inputs = actual.acquire(&template, &pc, &Inputs::new(), &mut full_budget()).unwrap();
     struct Combined<'a>(&'a MapParams, &'a AuthenticatedInputsV12);
@@ -412,7 +482,113 @@ fn stage14_funding_shared_nonce_original_debit_quota_and_authenticated_output_ca
     assert!(check_stage_quota_admission_v14(&class, &claimed, &plan, &policy, &anchor).is_err());
     assert!(claimed.refund_unclaimed(book.deadline_daa() + 1).is_err());
     let mut unclaimed = book;
+    let original_root = unclaimed.root();
+    let binding = unclaimed.quota_subject(&plan, &policy).unwrap();
+    let late = TrustedEpochV11::from_chain(&policy, [77; 64], unclaimed.deadline_daa() + 1).unwrap();
+    let mut close_state = state.clone();
+    let remaining = close_state.subject(&unclaimed.id()).unwrap().guarantee_remaining.clone();
+    let stale = close_state.debit_expired_terminal(&policy, &late, job.requester, &binding, plan.plan()).unwrap();
+    assert!(close_state.mark_expired_stage_terminal_closed_v14(&policy, &late, &binding, &class, &plan, &unclaimed, &stale).is_err());
     assert_eq!(unclaimed.refund_unclaimed(unclaimed.deadline_daa() + 1).unwrap(), 20);
+    assert_eq!(unclaimed.original_funded_root(), original_root);
+    let paid = close_state.debit_expired_terminal(&policy, &late, job.requester, &binding, plan.plan()).unwrap();
+    assert!(close_state.mark_expired_stage_terminal_closed_v14(&policy, &late, &binding, &class, &plan, &unclaimed, &stale).is_err());
+    close_state.mark_expired_stage_terminal_closed_v14(&policy, &late, &binding, &class, &plan, &unclaimed, &paid).unwrap();
+    assert!(close_state.subject(&unclaimed.id()).unwrap().closed);
+    assert_eq!(close_state.subject(&unclaimed.id()).unwrap().guarantee_remaining, remaining);
+    let terminal = check_stage_quota_terminal_v14(
+        &class,
+        &unclaimed,
+        &plan,
+        &policy,
+        &NativeStageTerminalAnchorV14 {
+            job_id: unclaimed.id(),
+            original_funded_book_root: original_root,
+            terminal_book_root: unclaimed.root(),
+            acceptance18: unclaimed.acceptance(),
+            nonce: NativeRequesterNonceWitnessV11 {
+                requester: job.requester,
+                requester_operator_id: [11; 64],
+                next_nonce: 1,
+                counter_root: native_requester_nonce_counter_root_v11(&[11; 64], 1),
+            },
+            established_daa: late.block_daa,
+            principal_refund: 20,
+            principal_queue: [8; 64],
+        },
+    )
+    .unwrap();
+    let g = close_state.global_row();
+    let actor = close_state.actor_row(&job.requester).unwrap();
+    let subject = close_state.subject(&unclaimed.id()).unwrap();
+    let mut collection = CheckedQuotaShardV11::from_native_rows(
+        &policy,
+        &g,
+        &g.root(),
+        job.requester,
+        unclaimed.id(),
+        None,
+        Some((&actor, &actor.root())),
+        Some((subject, &subject.row_root())),
+        None,
+    )
+    .unwrap();
+    let next_interval = TrustedEpochV11::from_chain(&policy, [55; 64], 1001).unwrap();
+    let retired = source16::retire_expired_source_v16(
+        &mut collection,
+        &policy,
+        &next_interval,
+        &source_plan,
+        &source_row,
+        &source_row.root(),
+        &terminal,
+    )
+    .unwrap();
+    assert!(retired.retired);
+    assert_eq!(retired.guarantee_remaining, QuotaQuantitiesV11::default());
+    assert_eq!(retired.consumed, retired.committed);
+    let trace_original = trace_shard.trace_row().unwrap().clone();
+    let retired_trace = trace17::retire_expired_trace_v17(
+        &mut collection,
+        &policy,
+        &next_interval,
+        &trace_plan,
+        &trace_original,
+        &trace_original.root(),
+        &terminal,
+    )
+    .unwrap();
+    assert!(retired_trace.retired);
+    assert_eq!(retired_trace.remaining, QuotaQuantitiesV11::default());
+    assert_eq!(retired_trace.consumed, retired_trace.committed);
+    assert!(
+        trace17::retire_expired_trace_v17(
+            &mut collection,
+            &policy,
+            &next_interval,
+            &trace_plan,
+            &retired_trace,
+            &retired_trace.root(),
+            &terminal
+        )
+        .is_err()
+    );
+    collection.collect_closed_expired(&policy, &next_interval, &terminal).unwrap();
+    assert!(collection.subject_row().is_none());
+    assert_ne!(collection.actor_row().interval.consumed, source_row.committed);
+    assert!(
+        source16::retire_expired_source_v16(
+            &mut collection,
+            &policy,
+            &next_interval,
+            &source_plan,
+            &retired,
+            &retired.root(),
+            &terminal
+        )
+        .is_err()
+    );
+    assert!(close_state.mark_expired_stage_terminal_closed_v14(&policy, &late, &binding, &class, &plan, &unclaimed, &paid).is_err());
     assert!(unclaimed.refund_unclaimed(unclaimed.deadline_daa() + 1).is_err());
 }
 

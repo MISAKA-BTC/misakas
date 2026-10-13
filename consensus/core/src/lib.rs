@@ -876,6 +876,8 @@ pub mod palw_staged_court_state_v1;
 pub mod palw_tokenizer_table_stream_v1;
 
 pub mod palw_flat_execution_v11;
+pub mod palw_flat_execution_pursuit_v19;
+pub mod palw_native_carriage_v22;
 pub mod palw_flat_model_vector_da_v9;
 pub mod palw_flat_model_vector_v9;
 pub mod palw_flat_stage_v14;

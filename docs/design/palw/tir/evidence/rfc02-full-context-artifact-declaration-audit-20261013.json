@@ -1,0 +1,355 @@
+{
+  "schema": "misaka.rfc02.artifact-declaration-audit.v1",
+  "rows": [
+    {
+      "checkpoint": "qwen25-0.5b",
+      "repository": "Qwen/Qwen2.5-0.5B-Instruct",
+      "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+      "source_declared_context": 32768,
+      "pack_sha256": "b6d4bf3323c4bd58ba1c4fd26dca180011c5207f754780122af27206ec00c741",
+      "program_sha256": "462899c98ec4aa7885a7afa99338e9972c1e16428cfa1ff1783a8f1c2443f731",
+      "declared_class_contexts": [
+        512
+      ],
+      "artifact_lowering_max_window": null,
+      "required_task_components": [
+        "text"
+      ],
+      "metadata_keys": [
+        "architecture",
+        "calibration",
+        "converter",
+        "frontend",
+        "logits_scale",
+        "math",
+        "max_window",
+        "model_id",
+        "policy",
+        "quant",
+        "resid_scale",
+        "scope"
+      ],
+      "scope15_pricing_does_not_change_declared_class_context_or_prove_original_source_context": true,
+      "real_complete_task_or_original_context_execution_or_final_established": false,
+      "declaration_record": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen25-0.5b/f92976a633d80611/pack/pack.json",
+      "frontend_feature_scope": {
+        "excluded": [],
+        "input": "token ids",
+        "output": "next-token logits",
+        "schema": "misaka.palw.feature-scope.v1",
+        "task": "text-generation",
+        "text_only": false
+      },
+      "source_scope_components_absent_from_declared_frontend": [],
+      "source_full_task_scope_completed": false
+    },
+    {
+      "checkpoint": "qwen35-0.8b",
+      "repository": "Qwen/Qwen3.5-0.8B",
+      "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+      "source_declared_context": 262144,
+      "pack_sha256": "41953287a9dee7592c360ed3250a14822bb335109c02f72d3f30a42f5a862eb6",
+      "program_sha256": "d0e1e88952e69903176f6dc718826e2f56a009c8ac8476c2cc5af88134d79f72",
+      "declared_class_contexts": [
+        512
+      ],
+      "artifact_lowering_max_window": null,
+      "required_task_components": [
+        "text",
+        "image"
+      ],
+      "metadata_keys": [
+        "architecture",
+        "calibrated_context",
+        "calibration",
+        "calibration_length_rule",
+        "converter",
+        "frontend",
+        "logits_scale",
+        "math",
+        "max_window",
+        "model_id",
+        "policy",
+        "quant",
+        "resid_scale",
+        "scope"
+      ],
+      "scope15_pricing_does_not_change_declared_class_context_or_prove_original_source_context": true,
+      "real_complete_task_or_original_context_execution_or_final_established": false,
+      "declaration_record": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/qwen35-0.8b/e349609cefd4682e/pack/pack.json",
+      "frontend_feature_scope": {
+        "excluded": [
+          {
+            "bytes": 201185792,
+            "evidence": [
+              "config.vision_config",
+              "config.image_token_id",
+              "config.vision_start_token_id",
+              "config.vision_end_token_id",
+              "config.video_token_id",
+              "tensors model.visual.* (153)"
+            ],
+            "kind": "vision",
+            "modal": true,
+            "tensors": 153,
+            "what": "vision tower",
+            "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image"
+          },
+          {
+            "bytes": 40905728,
+            "evidence": [
+              "tensors mtp.* (15)"
+            ],
+            "kind": "mtp",
+            "modal": false,
+            "tensors": 15,
+            "what": "multi-token-prediction heads",
+            "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them"
+          }
+        ],
+        "input": "token ids",
+        "output": "next-token logits",
+        "schema": "misaka.palw.feature-scope.v1",
+        "task": "text-generation",
+        "text_only": true
+      },
+      "source_scope_components_absent_from_declared_frontend": [
+        {
+          "bytes": 201185792,
+          "evidence": [
+            "config.vision_config",
+            "config.image_token_id",
+            "config.vision_start_token_id",
+            "config.vision_end_token_id",
+            "config.video_token_id",
+            "tensors model.visual.* (153)"
+          ],
+          "kind": "vision",
+          "modal": true,
+          "tensors": 153,
+          "what": "vision tower",
+          "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image"
+        }
+      ],
+      "source_full_task_scope_completed": false
+    },
+    {
+      "checkpoint": "llama32-1b",
+      "repository": "unsloth/Llama-3.2-1B-Instruct",
+      "revision": "5a8abab4a5d6f164389b1079fb721cfab8d7126c",
+      "source_declared_context": 131072,
+      "pack_sha256": "50db1ac0f10b070aba9fac903faa20a3f8e4b36361284329bce432394eb279f6",
+      "program_sha256": "373ede24bbfd220dddcb1a6ea5fee6bd2d7b012c4ddb05e6e082d527e167e02b",
+      "declared_class_contexts": [
+        512
+      ],
+      "artifact_lowering_max_window": null,
+      "required_task_components": [
+        "text"
+      ],
+      "metadata_keys": [
+        "architecture",
+        "calibration",
+        "converter",
+        "frontend",
+        "logits_scale",
+        "math",
+        "max_window",
+        "model_id",
+        "policy",
+        "quant",
+        "resid_scale",
+        "scope"
+      ],
+      "scope15_pricing_does_not_change_declared_class_context_or_prove_original_source_context": true,
+      "real_complete_task_or_original_context_execution_or_final_established": false,
+      "declaration_record": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/llama32-1b/6b1f330612afb4f1/pack/pack.json",
+      "frontend_feature_scope": {
+        "excluded": [],
+        "input": "token ids",
+        "output": "next-token logits",
+        "schema": "misaka.palw.feature-scope.v1",
+        "task": "text-generation",
+        "text_only": false
+      },
+      "source_scope_components_absent_from_declared_frontend": [],
+      "source_full_task_scope_completed": false
+    },
+    {
+      "checkpoint": "glm-edge-1.5b",
+      "repository": "zai-org/glm-edge-1.5b-chat",
+      "revision": "7b201d3c160c25beda4cf0d107617ad975cd1ca8",
+      "source_declared_context": 8192,
+      "pack_sha256": "62a58785b6da0fa70ab83d3ecffa0c2d25e561e8b6fa0f60ba83f0ec0a5d1311",
+      "program_sha256": "9cbeb4d00b9636fc73670103c45b0f74f0adec23db378026e95200a908fb2960",
+      "declared_class_contexts": [
+        512
+      ],
+      "artifact_lowering_max_window": null,
+      "required_task_components": [
+        "text"
+      ],
+      "metadata_keys": [
+        "architecture",
+        "calibration",
+        "converter",
+        "frontend",
+        "logits_scale",
+        "math",
+        "max_window",
+        "model_id",
+        "policy",
+        "quant",
+        "resid_scale",
+        "scope"
+      ],
+      "scope15_pricing_does_not_change_declared_class_context_or_prove_original_source_context": true,
+      "real_complete_task_or_original_context_execution_or_final_established": false,
+      "declaration_record": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/glm-edge-1.5b/1a21e232e6543ba7/pack/pack.json",
+      "frontend_feature_scope": {
+        "excluded": [],
+        "input": "token ids",
+        "output": "next-token logits",
+        "schema": "misaka.palw.feature-scope.v1",
+        "task": "text-generation",
+        "text_only": false
+      },
+      "source_scope_components_absent_from_declared_frontend": [],
+      "source_full_task_scope_completed": false
+    },
+    {
+      "checkpoint": "smollm2-1.7b",
+      "repository": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+      "revision": "31b70e2e869a7173562077fd711b654946d38674",
+      "source_declared_context": 8192,
+      "pack_sha256": "a7de4550b9725d6a090dadd59e4f43e54021951de2a6ce7a2d2967ffe0241854",
+      "program_sha256": "2bb8d84094f2d6faf74f50a0677e23b9daf2b39c946844fab96daec5af6351d3",
+      "declared_class_contexts": [
+        512
+      ],
+      "artifact_lowering_max_window": null,
+      "required_task_components": [
+        "text"
+      ],
+      "metadata_keys": [
+        "architecture",
+        "calibration",
+        "converter",
+        "frontend",
+        "logits_scale",
+        "math",
+        "max_window",
+        "model_id",
+        "policy",
+        "quant",
+        "resid_scale",
+        "scope"
+      ],
+      "scope15_pricing_does_not_change_declared_class_context_or_prove_original_source_context": true,
+      "real_complete_task_or_original_context_execution_or_final_established": false,
+      "declaration_record": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/smollm2-1.7b/676ac428b0afe1c9/pack/pack.json",
+      "frontend_feature_scope": {
+        "excluded": [],
+        "input": "token ids",
+        "output": "next-token logits",
+        "schema": "misaka.palw.feature-scope.v1",
+        "task": "text-generation",
+        "text_only": false
+      },
+      "source_scope_components_absent_from_declared_frontend": [],
+      "source_full_task_scope_completed": false
+    },
+    {
+      "checkpoint": "huihui-9b",
+      "repository": "huihui-ai/Huihui-Qwen3.5-9B-abliterated",
+      "revision": "05b9e7c9b978ba29bdb8f50a49c30e4b91183339",
+      "source_declared_context": 262144,
+      "pack_sha256": "a106833797c570cb39fcda59241a9f25ed2085d29b4894adf1b713ce2795e149",
+      "program_sha256": "f379df0f77f2866ec7cd3da2dc97fc0b6c3582e63d6b7be5340a3d05ba0f46b5",
+      "declared_class_contexts": [
+        8192
+      ],
+      "artifact_lowering_max_window": null,
+      "required_task_components": [
+        "text",
+        "image"
+      ],
+      "metadata_keys": [
+        "architecture",
+        "calibrated_context",
+        "calibration",
+        "calibration_length_rule",
+        "converter",
+        "frontend",
+        "gdn_core_wide",
+        "logits_scale",
+        "math",
+        "max_window",
+        "model_id",
+        "policy",
+        "quant",
+        "resid_scale",
+        "scope"
+      ],
+      "scope15_pricing_does_not_change_declared_class_context_or_prove_original_source_context": true,
+      "real_complete_task_or_original_context_execution_or_final_established": false,
+      "declaration_record": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/huihui-qwen35-9b/9e958ff3d4e06f49/pack/pack.json",
+      "frontend_feature_scope": {
+        "excluded": [
+          {
+            "bytes": 912020960,
+            "evidence": [
+              "config.vision_config",
+              "config.image_token_id",
+              "config.vision_start_token_id",
+              "config.vision_end_token_id",
+              "config.video_token_id",
+              "tensors model.visual.* (333)"
+            ],
+            "kind": "vision",
+            "modal": true,
+            "tensors": 333,
+            "what": "vision tower",
+            "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image"
+          },
+          {
+            "bytes": 486581248,
+            "evidence": [
+              "tensors mtp.* (15)"
+            ],
+            "kind": "mtp",
+            "modal": false,
+            "tensors": 15,
+            "what": "multi-token-prediction heads",
+            "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them"
+          }
+        ],
+        "input": "token ids",
+        "output": "next-token logits",
+        "schema": "misaka.palw.feature-scope.v1",
+        "task": "text-generation",
+        "text_only": true
+      },
+      "source_scope_components_absent_from_declared_frontend": [
+        {
+          "bytes": 912020960,
+          "evidence": [
+            "config.vision_config",
+            "config.image_token_id",
+            "config.vision_start_token_id",
+            "config.vision_end_token_id",
+            "config.video_token_id",
+            "tensors model.visual.* (333)"
+          ],
+          "kind": "vision",
+          "modal": true,
+          "tensors": 333,
+          "what": "vision tower",
+          "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image"
+        }
+      ],
+      "source_full_task_scope_completed": false
+    }
+  ],
+  "fullscope_registration_fidelity_final_or_a6_a8_credit": false
+}

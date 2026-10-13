@@ -10,6 +10,19 @@ fn slot_key(signer: &PalwBondKeyV2, slot: u8) -> Vec<u8> {
 fn stored_slot(r: &PalwKernelRouteStateV1, signer: &PalwBondKeyV2, slot: u8) -> Option<Hash64> {
     r.aux_row(EXECUTION_DEMAND_SLOT_TABLE_V11, &slot_key(signer, slot))
 }
+pub(super) fn counters(r: &PalwKernelRouteStateV1, id: Digest) -> Result<NativeExecutionDemandCountersV13, PalwStateV2Error> {
+    let Some(raw) = r.aux.get(&(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)))) else {
+        return Ok(NativeExecutionDemandCountersV13::default());
+    };
+    if raw.len() != 12 {
+        return Err(refused("native DA counters fixed framing"));
+    }
+    let c: NativeExecutionDemandCountersV13 = borsh::from_slice(raw).map_err(|_| refused("native DA counters decode"))?;
+    if c.open_ordinary > NATIVE_EXECUTION_OPEN_ORDINARY_V13 || c.collected_ordinal > c.next_ordinal {
+        return Err(refused("native DA counters monotone/open bounds"));
+    }
+    Ok(c)
+}
 pub(super) fn demand(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -47,6 +60,9 @@ pub(super) fn demand(
     if stored_slot(r, signer, request.slot).and_then(|id| r.execution_demand_v11(&id)).is_some_and(|d| !d.body.settled) {
         return Err(refused("native original actor slot occupied"));
     }
+    if source::slot_occupied(r, signer, request.slot)? {
+        return Err(refused("native source/trace shared requester slot occupied"));
+    }
     // The same small native actors also cannot double-borrow a legacy requester
     // slot. Paid discovery entitlements retain their own capacity after normal
     // job request exhaustion, but never another actor's live original slot.
@@ -63,9 +79,24 @@ pub(super) fn demand(
     if request.lane == 0 && !prepay(builder, ctx, signer, class_work(builder, h.class_id, bytes.len())?)? {
         return Ok(());
     }
+    if h.terminal != ExecutionTerminalV11::Challengeable || ctx.daa_score > h.deadline_daa {
+        return Err(refused("native DA original header is closed"));
+    }
+    if request.lane == 1 {
+        let seal = court::seal_row(builder.state.kernel_route.as_ref().unwrap(), &request.entitlement)?;
+        if seal.actor != actor || seal.job_id != id || seal.spent || ctx.daa_score < seal.mature_daa {
+            return Err(refused("native protected DA has no mature original own proof"));
+        }
+    } else if request.lane == 2 {
+        discovery::check_request_owner(builder, ctx, actor, id, request.entitlement)?;
+    }
+    // Supplement survives a subsequent malformed coordinate/body. It pays the
+    // original class/post restoration before the frozen small DARequest token.
+    debit_trace_request(builder, ctx, p, actor, id, request.lane, request.entitlement)?;
     let (_, class, book, plan) = original_job(builder, id)?;
     let claim = book.claim().ok_or_else(|| refused("native demanded job has no original claim"))?;
     let mut state = pursuit(builder.state.kernel_route.as_ref().unwrap(), &id)?;
+    let mut counts = counters(builder.state.kernel_route.as_ref().unwrap(), id)?;
     let deadline =
         ctx.daa_score.checked_add(class.record().horizons.da_answer).ok_or_else(|| refused("native answer deadline overflow"))?;
     let proof_until =
@@ -73,8 +104,11 @@ pub(super) fn demand(
     if book.terminal() != ExecutionTerminalV11::Challengeable
         || ctx.daa_score > claim.challenge_end
         || proof_until > claim.retention_until
-        || state.open_demands >= 8
-        || request.lane == 0 && (state.ordinary_requests >= p.discovery.ordinary_lifetime_requests || state.open_demands >= 3)
+        || state.open_demands >= NATIVE_EXECUTION_OPEN_TOTAL_V13
+        || counts.next_ordinal == u32::MAX
+        || request.lane == 0
+            && (state.ordinary_requests >= p.discovery.ordinary_lifetime_requests
+                || counts.open_ordinary >= NATIVE_EXECUTION_OPEN_ORDINARY_V13)
     {
         return Err(refused("native original DA window/lifetime/open bound"));
     }
@@ -179,10 +213,14 @@ pub(super) fn demand(
     state.open_demands += 1;
     if request.lane == 0 {
         state.ordinary_requests += 1;
+        counts.open_ordinary += 1;
     }
     state.latest_answer_proof_until = state.latest_answer_proof_until.max(proof_until);
     state.required_retained_until = state.required_retained_until.max(proof_until);
     let demand = d.id();
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(14u8, id, counts.next_ordinal)), Some(key(&demand)));
+    counts.next_ordinal += 1;
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, id)), Some(key(&counts)));
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&demand), Some(key(&d)));
     builder.write_kernel_row(EXECUTION_DEMAND_SLOT_TABLE_V11, slot_key(signer, request.slot), Some(key(&demand)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
@@ -192,9 +230,14 @@ pub(super) fn demand(
 fn close_demand(builder: &mut TransitionBuilder<'_>, mut d: NativeExecutionDemandV11) -> Result<(), PalwStateV2Error> {
     let mut state = pursuit(builder.state.kernel_route.as_ref().unwrap(), &d.job_id)?;
     state.open_demands = state.open_demands.checked_sub(1).ok_or_else(|| refused("native open DA count underflow"))?;
+    let mut counts = counters(builder.state.kernel_route.as_ref().unwrap(), d.job_id)?;
+    if d.lane == 0 {
+        counts.open_ordinary = counts.open_ordinary.checked_sub(1).ok_or_else(|| refused("native ordinary DA count underflow"))?;
+    }
     d.body.settled = true;
     builder.write_kernel_row(EXECUTION_DEMAND_TABLE_V11, key(&d.id()), Some(key(&d)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&d.job_id), Some(key(&state)));
+    builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&(13u8, d.job_id)), Some(key(&counts)));
     Ok(())
 }
 pub(super) fn answer(
@@ -217,6 +260,12 @@ pub(super) fn answer(
     if d.body.settled || ctx.daa_score > d.body.deadline_daa || *signer != d.body.poster {
         return Err(refused("native producer answer unauthorized/closed/late"));
     }
+    let trace_plan = trace_plan(builder, p, d.job_id)?;
+    let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let producer = palw_kernel_bond_id_v1(signer);
+    let mut trace = trace_shard(builder, p, &trace_plan, producer, d.job_id, 0, d.job_id)?;
+    trace.debit_reserved(&p.quota, &epoch, &trace_plan, &d.job_id, 0).map_err(refused)?;
+    write_trace(builder, &trace, 0, d.job_id);
     let (_, class, book, plan) = original_job(builder, d.job_id)?;
     if book.terminal() != ExecutionTerminalV11::Challengeable {
         return Err(refused("native DA book terminal"));
@@ -235,7 +284,7 @@ pub(super) fn answer(
     if paid != d.body.bond {
         return Err(refused("native original requester DA debit differs"));
     }
-    builder.add_kernel_payout(d.body.poster_payout, paid)?;
+    pay_delivery_fee(builder, ctx, d.job_id, d.body.poster, d.body.poster_payout, paid, false)?;
     let served = FlatVectorServedRowV9 {
         header: FlatVectorServedHeaderV9 { answered_daa: ctx.daa_score, answer_root: flat_vector_answer_root_v9(&bytes[68..]) },
         answer: bytes[68..].to_vec(),
@@ -247,7 +296,7 @@ pub(super) fn settle(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     signer: &PalwBondKeyV2,
-    _p: &NativeExecutionPoliciesV11,
+    p: &NativeExecutionPoliciesV11,
     bytes: &[u8],
 ) -> Result<(), PalwStateV2Error> {
     let id = Hash64::from_bytes(fixed_id(bytes)?);
@@ -258,7 +307,7 @@ pub(super) fn settle(
     if !prepay(builder, ctx, signer, crate::palw_model_artifact_v2::model_artifact_work_v2(0, 16 << 10).unwrap())? {
         return Ok(());
     }
-    let (mut row, class, mut book, _) = original_job(builder, d.job_id)?;
+    let (mut row, class, mut book, plan) = original_job(builder, d.job_id)?;
     if book.terminal() != ExecutionTerminalV11::Challengeable {
         return close_demand(builder, d);
     }
@@ -286,6 +335,7 @@ pub(super) fn settle(
         return Err(refused("native original DA default slash unavailable"));
     }
     let settlement = book.adjudicate(class.record(), &result, reserve).map_err(refused)?;
+    close_adjudicated_quota(builder,ctx,p,d.job_id,&class,&book,&plan,*signer)?;
     let collected = builder.slash_bond(row.header.producer, reserve as u128)?;
     if collected != reserve {
         return Err(refused("native original DA default debit changed"));

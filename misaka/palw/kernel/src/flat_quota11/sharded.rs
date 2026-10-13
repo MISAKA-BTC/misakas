@@ -79,7 +79,7 @@ impl ProtectedSealSummaryV11 {
         Ok(row)
     }
 }
-fn read_fixed_row<T: BorshDeserialize>(bytes: &[u8], width: u64) -> Result<T, String> {
+pub(super) fn read_fixed_row<T: BorshDeserialize>(bytes: &[u8], width: u64) -> Result<T, String> {
     if bytes.len() as u128 != width as u128 {
         return Err("quota selected row has wrong fixed extent".into());
     }
@@ -435,6 +435,21 @@ impl CheckedQuotaShardV11 {
             return Err("quota expired mark selects a different original job".into());
         }
         self.state.mark_expired_terminal_closed(policy, epoch, binding, class, terminal, paid)
+    }
+    pub fn mark_expired_stage_terminal_closed_v14(
+        &mut self,
+        policy: &QuotaPolicyV11,
+        epoch: &TrustedEpochV11,
+        binding: &SubjectBindingV11,
+        class: &crate::flat_inputs12::source14::CheckedStageClassV14,
+        plan: &stage14::CheckedStageQuotaV14,
+        terminal: &stage14::StageJobBookV14,
+        paid: &ExpiredTerminalDebitV11,
+    ) -> Result<(), String> {
+        if self.selected_job != binding.job_id {
+            return Err("quota expired stage mark selects a different original job".into());
+        }
+        self.state.mark_expired_stage_terminal_closed_v14(policy, epoch, binding, class, plan, terminal, paid)
     }
     pub fn admit_protected_seal(
         &mut self,

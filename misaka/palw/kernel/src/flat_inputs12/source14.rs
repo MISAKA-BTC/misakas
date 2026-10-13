@@ -31,6 +31,15 @@ impl CheckedStageSourceV14 {
     pub fn inventory_root(&self) -> Digest {
         self.wire.inventory_root
     }
+    /// Source correctness is a relation between the real declarations, true R
+    /// inventory and bound PC. Program labels/math/input declarations cannot
+    /// create a fresh relation after this exact real-weight relation is refuted.
+    pub fn relation_root(&self) -> Digest {
+        object_id(
+            b"misaka-palw/kernel/stage-real-source-relation/v14",
+            &(14u16, &self.program.params, self.parameters().root(), self.inventory_root()),
+        )
+    }
     pub fn program_root(&self) -> Digest {
         object_id(b"misaka-palw/kernel/stage-source-program/v14", &self.wire.program_bytes)
     }

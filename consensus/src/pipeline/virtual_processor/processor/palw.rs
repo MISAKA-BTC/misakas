@@ -5280,6 +5280,36 @@ impl VirtualStateProcessor {
                 "a kernel route object is refused: palw_probabilistic_constraints_v1 is not in force at this block (G14)".to_string()
             );
         }
+        // Consumer-owned opaque namespaces are gated from their fixed tag
+        // before signature work or any body allocation. Typed body validation
+        // and its expensive work belong to the prepaid native transition.
+        let opaque_fence = match bytes.get(1).copied() {
+            Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11) => {
+                Some(kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11)
+            }
+            Some(misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14) => {
+                Some(kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14)
+            }
+            _ => None,
+        };
+        if opaque_fence.is_some_and(|fence| !self.palw_kernel_inner_fence_at(fence, daa_score)) {
+            return Err("a native execution object is refused before its owning fence".into());
+        }
+        let native = misaka_palw_kernel::route::borrowed_native_action_v1(bytes).map_err(|why| why.to_string())?;
+        if let Some(action) = native
+            && action.tag == misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11
+            && action.action == 15
+        {
+            let pending: [u8; 64] = action
+                .body
+                .get(..64)
+                .ok_or_else(|| "a source answer lacks its fixed pending-unit identity".to_string())?
+                .try_into()
+                .expect("fixed pending identity extent");
+            if state.kernel_route().and_then(|route| route.execution_source_answer_owner_v16(&pending, daa_score)) != Some(*signer) {
+                return Err("a source answer lacks its original live producer-owned pending unit".into());
+            }
+        }
         let record =
             state.bond(signer).ok_or_else(|| "a kernel route object is signed by a bond this chain does not have".to_string())?;
         if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
@@ -5294,6 +5324,12 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1,
         ) {
             return Err("a kernel route object carries a signature its bond's key does not verify".to_string());
+        }
+        if native.is_some() {
+            // The exact bounded borrowed frame is canonical. The native fold
+            // charges its authenticated source/trace entitlement before any
+            // nested payload decoder; signature preflight must not clone it.
+            return Ok(());
         }
         let object = misaka_palw_kernel::route::KernelRouteObjectV1::decode(bytes).map_err(|refusal| format!("{refusal}"))?;
         // **A-2 uniformity one level down (`PALW_KERNEL_ROUTE_INNER_KINDS_V1`): an inner kind owned by a fence beyond tag 110's is dropped
@@ -6685,6 +6721,14 @@ impl VirtualStateProcessor {
             ruleset[..32].copy_from_slice(&self.palw_kernel_route_ruleset_id.as_bytes());
             kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
                 network_domain: self.palw_network_domain_v2(),
+                native_carriage_mass: (self.palw_kernel_inner_fence_at(
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::FundedExecutionV11,
+                    daa_score,
+                ) || self.palw_kernel_inner_fence_at(
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::StageExecutionV14,
+                    daa_score,
+                ))
+                .then(|| self.native_carriage_mass.clone()),
                 stage_execution: self
                     .palw_stage_execution_v14
                     .as_ref()

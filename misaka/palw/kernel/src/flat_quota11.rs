@@ -25,6 +25,8 @@ pub use sharded::*;
 /// Explicit v13 pre-proof discovery over the same authenticated aggregates.
 /// Legacy v11 paid proof seals retain their wire and quota rules.
 pub mod discovery13;
+pub mod source16;
+pub mod trace17;
 #[cfg(test)]
 mod protected_tests;
 /// Explicit typed-stage bindings reuse the frozen 21-axis accounting engine;

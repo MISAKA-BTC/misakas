@@ -4218,6 +4218,12 @@ capacity is exhausted. Immutable selected-row roots, exact per-attempt costs,
 ownership, maturity, original interval and deadline are independently checked.
 All returned rows must be applied in a single native journal transaction.
 
+The frozen v11 request tariff used here covers fixed request metadata, not a
+full class/post restore. It also does not cover a complete original PC leaf of
+4096 i128 values. An integrated consumer must price those larger operations in
+separate, explicitly consented supplements before restoring or decoding them;
+the v13 ticket alone grants neither operation.
+
 Conversion authenticates a new exact own proof seal on the same claim, vector,
 owner/operator and original deposit receipt. It takes a new proof maturity and
 transfers one retained slot and only the prepaid proof guarantee to the existing
@@ -4268,3 +4274,52 @@ court/DA and independent Final gates, real full-context/checkpoint conditions
 and A6/A8 population criteria in II.14 remain required. Shipping presets keep the
 new fields absent and arming validation remains closed. Current code and actual
 measurement status are recorded in the [implementation ledger](../design/palw/tir/rfc0002-implementation.md).
+
+### 14.54 Original producer consent and additional source obligations
+
+Consent18 precedes Fund and commits the exact original preparation, requester
+and producer principals, operator nonce, reward, quota interval, expiry and
+derived availability/fee policy roots. Old metadata acceptance does not grant
+these rights. A requester cannot allocate another producer's answer capacity,
+catalogue slots or recipient R merely by naming that producer. A consumed
+consent and funded principal nonce remain spent across row collection.
+
+Source16 supplements frozen v11 with an independently derived original-PC
+answer obligation, allowing a complete original leaf within a bounded 128-KiB
+carrier. It covers original headers, subtrees and original 4096-value leaves,
+never a smaller reinterpreted leaf. Its checked quote commits the original
+class, real parameter/source inventory, job quota plan and policy. A rooted
+fixed cached quote is authenticated against those original native roots; a raw
+serialized price vector cannot grant capacity. The source guarantee shares
+all 21 global and producer resource aggregates while preserving the v11
+subject's original attempt/quantity meanings. Answers debit before payload
+decode, including failed attempts. Native pending-request authentication,
+exact per-request attempts, original deadlines and original producer ownership
+are additional obligations of the consumer.
+
+Trace17 separately covers complete original class/post restoration by the
+requesting actor and producer. Source16 and Trace17 are granted only under the
+producer's original Consent18, and paid caller entitlement precedes expensive
+restore. Neither supplement is a Final authority. Public expired collection
+authenticates the original terminal and source row and pays a new current
+caller tariff. It cannot move expired reservations into the current interval,
+refund them or resurrect an obligation.
+
+DA fee income requires explicit capped consent and actual collected caller
+collateral. Original reward plus all credited fees and configured external or
+default gains must remain within the original producer liability. Unpaid or
+partly paid recipient R remains held across sparse DAA jumps; the reuse clock
+starts at actual queue payment. Illustrative policy numbers do not establish
+economic deterrence or guaranteed carriage. Localization turns, simultaneous
+response capacity and whole-path deadlines require their own authenticated
+policy bounds and measurements before independent Final can open.
+
+Physical carriage must use actual consensus compute, transient and contextual
+storage mass. The inner 128-KiB codec limit is not a delivery guarantee: that
+payload plus signature/transaction overhead can exceed the actual 500000 mass
+block. A carrier contract must bound the complete payload, inputs, outputs,
+signature scripts, output scripts, sigops and contextual UTXO storage, and
+authenticate the governing mass constants from Params. New delivery leases
+must share block room with existing H1/readiness lanes, include paid failed
+attempts and proof transport, and prevent fast slot reuse from exceeding the
+promised service rate. A mass quotation alone does not establish that scheduler.

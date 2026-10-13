@@ -1,0 +1,234 @@
+   Compiling cfg-if v1.0.0
+   Compiling libc v0.2.186
+   Compiling once_cell v1.20.2
+   Compiling serde_core v1.0.228
+   Compiling itoa v1.0.11
+   Compiling zmij v1.0.23
+   Compiling crossbeam-utils v0.8.20
+   Compiling byteorder v1.5.0
+   Compiling memchr v2.7.4
+   Compiling pin-project-lite v0.2.14
+   Compiling hashbrown v0.17.0
+   Compiling equivalent v1.0.1
+   Compiling zerocopy v0.7.35
+   Compiling indexmap v2.14.0
+   Compiling serde v1.0.228
+   Compiling futures-core v0.3.31
+   Compiling serde_json v1.0.151
+   Compiling thiserror v1.0.64
+   Compiling typenum v1.17.0
+   Compiling toml_edit v0.22.22
+   Compiling generic-array v0.14.7
+   Compiling concurrent-queue v2.5.0
+   Compiling getrandom v0.2.15
+   Compiling futures-io v0.3.31
+   Compiling parking v2.2.1
+   Compiling bitflags v2.9.4
+   Compiling wasm-bindgen v0.2.100
+   Compiling proc-macro-crate v3.2.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.6
+   Compiling ppv-lite86 v0.2.20
+   Compiling either v1.13.0
+   Compiling slab v0.4.9
+   Compiling event-listener v5.3.1
+   Compiling fastrand v2.1.1
+   Compiling borsh-derive v1.5.1
+   Compiling event-listener-strategy v0.5.2
+   Compiling value-bag v1.9.0
+   Compiling num-traits v0.2.19
+   Compiling log v0.4.22
+   Compiling core-foundation-sys v0.8.7
+   Compiling anyhow v1.0.103
+   Compiling futures-lite v2.3.0
+   Compiling js-sys v0.3.77
+   Compiling borsh v1.5.1
+   Compiling rand_core v0.6.4
+   Compiling errno v0.3.9
+   Compiling unicode-segmentation v1.12.0
+   Compiling futures-sink v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling tracing-core v0.1.36
+   Compiling futures-channel v0.3.31
+   Compiling rustix v0.38.37
+   Compiling tracing v0.1.44
+   Compiling crossbeam-epoch v0.9.20
+   Compiling getrandom v0.3.4
+   Compiling async-channel v2.3.1
+   Compiling atomic-waker v1.1.2
+   Compiling futures-task v0.3.31
+   Compiling async-task v4.7.1
+   Compiling subtle v2.6.1
+   Compiling time v0.3.47
+   Compiling futures-util v0.3.31
+   Compiling piper v0.2.4
+   Compiling cargo_metadata v0.18.1
+   Compiling rand_core v0.9.3
+   Compiling polling v3.7.3
+   Compiling crossbeam-deque v0.8.5
+   Compiling iana-time-zone v0.1.61
+   Compiling async-lock v3.4.2
+   Compiling smallvec v1.13.2
+   Compiling atty v0.2.14
+   Compiling unicode-width v0.1.14
+   Compiling lazy_static v1.5.0
+   Compiling termcolor v1.4.1
+   Compiling event-listener v2.5.3
+   Compiling hexplay v0.3.0
+   Compiling async-io v2.3.4
+   Compiling console v0.15.8
+   Compiling chrono v0.4.38
+   Compiling vergen v8.3.2
+   Compiling rayon-core v1.12.1
+   Compiling rand_chacha v0.9.0
+   Compiling blocking v1.6.1
+   Compiling async-executor v1.13.1
+   Compiling digest v0.10.7
+   Compiling convert_case v0.6.0
+   Compiling rand_chacha v0.3.1
+   Compiling cpufeatures v0.2.14
+   Compiling bytes v1.11.1
+   Compiling downcast v0.11.0
+   Compiling scopeguard v1.2.0
+   Compiling triggered v0.1.2
+   Compiling option-ext v0.2.0
+   Compiling lock_api v0.4.12
+   Compiling dirs-sys v0.4.1
+   Compiling workflow-log v0.18.0
+   Compiling tokio v1.42.1
+   Compiling sha2 v0.10.8
+   Compiling rand v0.8.6
+   Compiling workflow-macro-tools v0.18.0
+   Compiling async-global-executor v2.4.1
+   Compiling workflow-core v0.18.0
+   Compiling rand v0.9.4
+   Compiling rayon v1.10.0
+   Compiling parking_lot_core v0.9.10
+   Compiling rlimit v0.10.2
+   Compiling async-channel v1.9.0
+   Compiling futures-executor v0.3.31
+   Compiling web-sys v0.3.77
+   Compiling kv-log-macro v1.0.7
+   Compiling arrayref v0.3.9
+   Compiling arrayvec v0.7.6
+   Compiling constant_time_eq v0.3.1
+   Compiling blake2b_simd v1.0.2
+   Compiling duct v0.13.7
+   Compiling async-std v1.13.0
+   Compiling futures v0.3.31
+   Compiling parking_lot v0.12.3
+   Compiling workflow-core-macros v0.18.0
+   Compiling memoffset v0.9.1
+   Compiling dirs v5.0.1
+   Compiling wasm-bindgen-futures v0.4.50
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling faster-hex v0.9.0
+   Compiling hash32 v0.3.1
+   Compiling instant v0.1.13
+   Compiling bs58 v0.5.1
+   Compiling stable_deref_trait v1.2.0
+   Compiling arc-swap v1.7.1
+   Compiling heapless v0.8.0
+   Compiling nix v0.28.0
+   Compiling workflow-wasm-macros v0.18.0
+   Compiling workflow-panic-hook v0.18.0
+   Compiling kaspa-utils v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/utils)
+   Compiling num_cpus v1.16.0
+   Compiling mac_address v1.1.7
+   Compiling faster-hex v0.10.1
+   Compiling sysinfo v0.31.4
+   Compiling workflow-wasm v0.18.0
+   Compiling uuid v1.18.1
+   Compiling itertools v0.13.0
+   Compiling ipnet v2.10.1
+   Compiling ryu v1.0.18
+   Compiling hax-lib v0.3.7
+   Compiling ahash v0.8.11
+   Compiling keccak v0.1.6
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/hashes)
+   Compiling destructure_traitobject v0.2.0
+   Compiling adler2 v2.0.0
+   Compiling rand_core v0.10.1
+   Compiling rand v0.10.1
+   Compiling miniz_oxide v0.8.0
+   Compiling unsafe-any-ors v1.0.0
+   Compiling thiserror v2.0.18
+   Compiling libm v0.2.8
+   Compiling hashbrown v0.14.5
+   Compiling libcrux-secrets v0.0.6
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/core)
+   Compiling ordered-float v2.10.1
+   Compiling itertools v0.11.0
+   Compiling half v2.4.1
+   Compiling crc32fast v1.4.2
+   Compiling clap_lex v0.7.6
+   Compiling anstyle v1.0.8
+   Compiling ciborium-io v0.2.2
+   Compiling unsafe-libyaml v0.2.11
+   Compiling regex-syntax v0.8.5
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling regex-automata v0.4.8
+   Compiling ciborium-ll v0.2.2
+   Compiling malachite-base v0.4.16
+   Compiling clap_builder v4.5.51
+   Compiling flate2 v1.0.34
+   Compiling serde-value v0.7.0
+   Compiling libcrux-traits v0.0.8
+   Compiling nix v0.29.0
+   Compiling typemap-ors v1.0.0
+   Compiling derive_more v2.1.1
+   Compiling libcrux-intrinsics v0.0.8
+   Compiling itertools v0.10.5
+   Compiling thread-id v5.1.0
+   Compiling libcrux-platform v0.0.3
+   Compiling same-file v1.0.6
+   Compiling humantime v2.1.0
+   Compiling log-mdc v0.1.0
+   Compiling mock_instant v0.6.0
+   Compiling base64ct v1.6.0
+   Compiling fnv v1.0.7
+   Compiling cast v0.3.0
+   Compiling log4rs v1.4.0
+   Compiling criterion-plot v0.5.0
+   Compiling password-hash v0.5.0
+   Compiling walkdir v2.5.0
+   Compiling libcrux-sha3 v0.0.10
+   Compiling malachite-nz v0.4.16
+   Compiling ctrlc v3.4.5
+   Compiling clap v4.5.51
+   Compiling regex v1.11.0
+   Compiling ciborium v0.2.2
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/challenge)
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/gen)
+   Compiling blake2 v0.10.6
+   Compiling tinytemplate v1.2.1
+   Compiling is-terminal v0.4.13
+   Compiling wasm-bindgen-test-macro v0.3.50
+   Compiling oorandom v11.1.4
+   Compiling anes v0.1.6
+   Compiling criterion v0.5.1
+   Compiling libcrux-ml-dsa v0.0.10
+   Compiling wasm-bindgen-test v0.3.50
+   Compiling kaspa-math v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/math)
+   Compiling argon2 v0.5.3
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/core)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/merkle)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/addresses)
+   Compiling sha3 v0.10.8
+   Compiling workflow-serializer v0.18.0
+   Compiling kaspa-txscript-errors v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript/errors)
+   Compiling bincode v1.3.3
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 36s
+     Running unittests src/lib.rs (/tmp/rfc02-native-check/debug/deps/kaspa_consensus_core-b76d3b72e05b4671)
+
+running 1 test
+test palw_state_v2::tests::bond_budget_fold_v1::funded_reward_and_source_fee_hold_r_through_sparse_partial_payment_and_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3921 filtered out; finished in 0.02s
+

@@ -242,6 +242,42 @@ pub struct FlatExecutionFilingV11 {
     pub kind: u8,
     pub body: Vec<u8>,
 }
+/// New bounded original-PC header counterexample. Its explicit wire version
+/// leaves the legacy v11 mixed/source-tile filing grammar unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceHeaderFaultV16 {
+    pub param: u16,
+    pub layer_code: u32,
+    pub header: misaka_palw_kernel::flat_quota11::source16::opening::HeaderV16,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct NativeSourceHeaderFilingV16 {
+    pub version: u16,
+    pub kind: u8,
+    pub body: Vec<u8>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeVerifiedHeaderFactV16 {
+    pub version: u16,
+    pub binding: Digest,
+    pub program: Digest,
+    pub pc: Digest,
+    pub proof_root: Digest,
+    pub established: u64,
+    pub finder: Digest,
+    pub fault: NativeSourceHeaderFaultV16,
+}
+pub fn decode_native_source_header_filing_v16(bytes: &[u8], cap: u64) -> Result<NativeSourceHeaderFilingV16, String> {
+    if bytes.len() != 7 + 2 + 4 + 162
+        || bytes.len() as u64 > cap
+        || bytes[..2] != 16u16.to_le_bytes()
+        || bytes[2] != 2
+        || u32::from_le_bytes(bytes[3..7].try_into().unwrap()) as usize != bytes.len() - 7
+    {
+        return Err("source header filing16 exact framing".into());
+    }
+    Ok(NativeSourceHeaderFilingV16 { version: 16, kind: 2, body: bytes[7..].to_vec() })
+}
 pub fn decode_flat_execution_filing_v11(bytes: &[u8], admitted_cap: u64) -> Result<FlatExecutionFilingV11, String> {
     if bytes.len() < 7
         || bytes.len() > EXECUTION_FILING_MAX_BYTES_V11
@@ -1008,6 +1044,17 @@ pub struct NativeExecutionPursuitV11 {
     pub latest_answer_proof_until: u64,
     pub required_retained_until: u64,
 }
+/// Separate fixed counters preserve the v11 pursuit framing. Ordinary callers
+/// may occupy three units; the four original protected tickets retain two each.
+/// The monotone ordinal indexes bounded cleanup without scanning the DA table.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionDemandCountersV13 {
+    pub open_ordinary: u32,
+    pub next_ordinal: u32,
+    pub collected_ordinal: u32,
+}
+pub const NATIVE_EXECUTION_OPEN_ORDINARY_V13: u32 = 3;
+pub const NATIVE_EXECUTION_OPEN_TOTAL_V13: u32 = NATIVE_EXECUTION_OPEN_ORDINARY_V13 + 4 * 2;
 impl NativeExecutionPursuitV11 {
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         // At most four retained shared seal/discovery tickets. Inspect both
@@ -1306,5 +1353,120 @@ impl PalwKernelRouteStateV1 {
         }
         let inner = borsh::from_slice(&bytes).ok()?;
         crate::palw_kernel_route_v1::palw_kernel_chunk_inner_matches_target_v1(&inner, &chunk.target).then_some(inner)
+    }
+}
+
+pub const EXECUTION_ACTION_ACCEPT_V13: u8 = 13;
+pub const EXECUTION_ACTION_ACCEPT_V18: u8 = 18;
+pub const EXECUTION_ACTION_SOURCE_REQUEST_V16: u8 = 14;
+pub const EXECUTION_ACTION_SOURCE_ANSWER_V16: u8 = 15;
+pub const EXECUTION_ACTION_SOURCE_SETTLE_V16: u8 = 16;
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceRequestV16 {
+    pub job: Digest,
+    pub lane: u8,
+    pub entitlement: Digest,
+    pub slot: u8,
+    pub param: u16,
+    /// 0 means None; 1..65536 identify the real original layer 0..65535.
+    pub layer_code: u32,
+    pub kind: u8,
+    pub axis: u8,
+    pub level: u8,
+    pub index: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeSourceDemandV16 {
+    pub request: NativeSourceRequestV16,
+    pub requester: PalwBondKeyV2,
+    pub requester_payout: Hash64,
+    pub producer: PalwBondKeyV2,
+    pub producer_payout: Hash64,
+    pub pc: Digest,
+    pub declared_dtype: u8,
+    pub declared_rank: u8,
+    pub declared_shape: [u64; 4],
+    pub filed: u64,
+    pub deadline: u64,
+    pub proof_until: u64,
+    pub bond: u64,
+    pub attempts: u8,
+    pub settled: bool,
+}
+impl NativeSourceDemandV16 {
+    pub fn id(&self) -> Digest {
+        object_id(
+            b"misaka-palw/native/original-bound-pc-demand/v16",
+            &(&self.request, self.requester, self.producer, self.pc, self.filed, self.deadline, self.bond),
+        )
+    }
+}
+/// Producer authorization precedes any reservation against its actor/resource
+/// or monetary windows. The original request carrier retains its frozen bytes.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionConsentV13 {
+    pub version: u16,
+    pub preparation: Digest,
+    pub class_id: Digest,
+    pub original_class_header_root: Digest,
+    pub policies_root: Digest,
+    pub input_root: Digest,
+    pub quota_plan_root: Digest,
+    pub requester: PalwBondKeyV2,
+    pub requester_operator: Digest,
+    pub producer: PalwBondKeyV2,
+    pub producer_operator: Digest,
+    pub nonce: Digest,
+    pub reward: u64,
+    pub accepted_daa: u64,
+    pub expires_daa: u64,
+    pub network_interval: u64,
+}
+impl NativeExecutionConsentV13 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-producer-consent/v13", self)
+    }
+}
+/// Separate contract commits additional PC availability and trace restoration
+/// reservations. A v13 signature alone cannot authorize these extra charges.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionConsentV18 {
+    pub version: u16,
+    pub original_consent13_root: Digest,
+    pub source_plan16_root: Digest,
+    pub trace_plan17_root: Digest,
+    pub availability_terms_root: Digest,
+    pub fee_plan19_root: Digest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionFeePlanV19 {
+    pub version: u16,
+    pub class: Digest,
+    pub quota_plan: Digest,
+    pub original_consent13: Digest,
+    pub reward: u64,
+    pub maximum: u64,
+    pub trace_units: u32,
+    pub source_units: u32,
+    pub trace_unit_fee: u64,
+    pub source_unit_fee: u64,
+}
+impl NativeExecutionFeePlanV19 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-delivery-fee-plan/v19", self)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeExecutionFeesV19 {
+    pub version: u16,
+    pub job: Digest,
+    pub funded_job_root: Digest,
+    pub original_consent18: Digest,
+    pub plan: NativeExecutionFeePlanV19,
+    pub earned: u64,
+}
+impl NativeExecutionConsentV18 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-producer-consent/v18", self)
     }
 }

@@ -142,6 +142,10 @@ pub(super) fn admit(
         return Err(refused("native discovery shared job slots full"));
     }
     shard.admit(&p.quota, &epoch, &plan, &checked).map_err(refused)?;
+    let trace_plan = trace_plan(builder, p, id)?;
+    let checked_trace = check_trace_discovery_v17(&class, &book, &epoch, &trace_plan, &p.discovery, &native).map_err(refused)?;
+    let mut trace = trace_shard_from_rows(p, &trace_plan, shard.global_row(), shard.actor_row(), shard.subject_row(), None)?;
+    trace.admit(&p.quota, &epoch, &trace_plan, &checked_trace).map_err(refused)?;
     let row = NativeExecutionDiscoveryV13 {
         job_id: id,
         funded_job_root: native.funded_job_root,
@@ -162,6 +166,7 @@ pub(super) fn admit(
     };
     state.retained_discovery_keys.push(ticket);
     write(builder, &shard, ticket, id);
+    write_trace(builder, &trace, 2, ticket);
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&row)));
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, counter_key, Some(key(&next)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
@@ -187,6 +192,24 @@ pub(super) fn debit_request(
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     shard.debit_request(&p.quota, &epoch, &plan, job_plan, actor, bytes).map_err(refused)?;
     write(builder, &shard, ticket, job);
+    Ok(())
+}
+pub(super) fn check_request_owner(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    actor: Digest,
+    job: Digest,
+    ticket: Digest,
+) -> Result<(), PalwStateV2Error> {
+    let n = native_row(builder.state.kernel_route.as_ref().unwrap(), &ticket)?;
+    if n.actor != actor
+        || n.job_id != job
+        || n.converted_to.is_some()
+        || ctx.daa_score < n.matures_daa
+        || ctx.daa_score > n.horizon_daa
+    {
+        return Err(refused("native paid discovery original owner/window differs"));
+    }
     Ok(())
 }
 pub(super) fn convert(
@@ -255,6 +278,10 @@ pub(super) fn convert(
         return Err(refused("native converted ticket lost original retained index"));
     }
     let summary = shard.convert(&p.quota, &epoch, &plan, &class, &book, &native).map_err(refused)?;
+    let trace_plan = trace_plan(builder, p, id)?;
+    let checked_trace = check_trace_seal_v17(&class, &book, &epoch, &trace_plan, &native).map_err(refused)?;
+    let mut trace = trace_shard(builder, p, &trace_plan, actor, id, 2, ticket)?;
+    trace.handoff_discovery(&p.quota, &epoch, &trace_plan, &ticket, &checked_trace).map_err(refused)?;
     let seal = NativeExecutionSealV11 {
         version: 11,
         job_id: id,
@@ -283,6 +310,8 @@ pub(super) fn convert(
     state.retained_seal_keys.push(seal_key);
     state.required_retained_until = state.required_retained_until.max(horizon);
     write(builder, &shard, ticket, id);
+    write_trace(builder, &trace, 1, seal_key);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, trace_row_key(2, ticket), None);
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, quota_key(3, &seal_key), Some(key(&(summary.row_root(), summary))));
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&seal_key), Some(key(&seal)));
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, native_key(&ticket), Some(key(&original)));

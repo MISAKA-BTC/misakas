@@ -928,13 +928,19 @@ pub(super) fn apply_kernel_route_object_v1(
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
     // A malformed or over-size encoding, or a signer that is no Active bond, is a dropped object.
-    let Ok(object) = KernelRouteObjectV1::decode(bytes) else { return Ok(()) };
     if bytes.len() > PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
         return Ok(());
     }
     if !builder.state.bonds.get(signer).is_some_and(|b| matches!(b.status, PalwBondStatusV2::Active)) {
         return Ok(());
     }
+    match misaka_palw_kernel::route::borrowed_native_action_v1(bytes) {
+        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11=>return super::palw_flat_execution_fold_v11::apply(builder,ctx,signer,a.action,a.body),
+        Ok(Some(a)) if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14=>return super::palw_flat_stage_fold_v14::apply(builder,ctx,signer,a.action,a.body),
+        Err(_)=>return Ok(()),
+        _=>{}
+    }
+    let Ok(object) = KernelRouteObjectV1::decode(bytes) else { return Ok(()) };
     // RFC-0002 P0 (RFC02-T): past `palw_model_refutation_seal_v1` a candidate refutation is only a sealed reveal (inner 37); the frozen
     // unsealed refutations pay whoever is included first — an equivalent re-encoding of an honest finder's proof — so they are refused
     // by name before any court, fee or row.

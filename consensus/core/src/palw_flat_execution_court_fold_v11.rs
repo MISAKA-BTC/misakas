@@ -112,6 +112,11 @@ pub(super) fn seal(
         return Err(refused("native own seal duplicate"));
     }
     shard.admit_protected_seal(&p.quota, &epoch, &checked, &plan).map_err(refused)?;
+    let trace_plan = trace_plan(builder, p, id)?;
+    let checked_trace = check_trace_seal_v17(&class, &book, &epoch, &trace_plan, &native).map_err(refused)?;
+    let mut trace =
+        trace_shard_from_rows(p, &trace_plan, &shard.global_row(), &shard.actor_row(), shard.subject_row().unwrap(), None)?;
+    trace.admit(&p.quota, &epoch, &trace_plan, &checked_trace).map_err(refused)?;
     let row = NativeExecutionSealV11 {
         version: 11,
         job_id: id,
@@ -138,6 +143,7 @@ pub(super) fn seal(
     state.retained_seal_keys.push(protected_key.root());
     state.required_retained_until = state.required_retained_until.max(horizon);
     write_shard(builder, &shard, id);
+    write_trace(builder, &trace, 1, protected_key.root());
     builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&protected_key.root()), Some(key(&row)));
     builder.write_kernel_row(EXECUTION_DEMAND_COUNT_TABLE_V11, key(&id), Some(key(&state)));
     builder.note_kernel_bond(signer);
@@ -182,8 +188,14 @@ pub(super) fn reveal(
     shard.debit_protected(&p.quota, &epoch, &plan, ProtectedActionKindV11::Court, &bytes[132..]).map_err(refused)?;
     write_shard(builder, &shard, id);
     seal.check_reveal(&actor, &salt, &bytes[132..], ctx.daa_score).map_err(refused)?;
-    let filing = decode_flat_execution_filing_v11(&bytes[132..], plan.action_carrier_cap(QuotaActionKindV11::Court).map_err(refused)?)
-        .map_err(refused)?;
+    let cap = plan.action_carrier_cap(QuotaActionKindV11::Court).map_err(refused)?;
+    let (filing_kind, filing_body) = if bytes[132..].starts_with(&16u16.to_le_bytes()) {
+        let f = decode_native_source_header_filing_v16(&bytes[132..], cap).map_err(refused)?;
+        (f.kind, f.body)
+    } else {
+        let f = decode_flat_execution_filing_v11(&bytes[132..], cap).map_err(refused)?;
+        (f.kind, f.body)
+    };
     let native_class = checked_class(builder, ctx, p, row.header.class_id, false)?;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let post_bytes = r.aux.get(&(EXECUTION_PROTECTED_TABLE_V11, key(&id))).ok_or_else(|| refused("native committed post absent"))?;
@@ -192,9 +204,9 @@ pub(super) fn reveal(
     }
     let post = decode_flat_execution_post_v11(post_bytes).map_err(|e| refused(e.to_string()))?;
     let view = checked_flat_execution_post_v11(r, &native_class, &book, &post).map_err(refused)?;
-    let kind = match filing.kind {
+    let kind = match filing_kind {
         0 => {
-            let fault = misaka_palw_kernel::flat_court9::FlatFaultV9::from_bytes(&filing.body).map_err(|e| refused(e.to_string()))?;
+            let fault = misaka_palw_kernel::flat_court9::FlatFaultV9::from_bytes(&filing_body).map_err(|e| refused(e.to_string()))?;
             misaka_palw_kernel::flat_court9::verify_flat_fault_v9(&view.context(), &fault).map_err(|e| refused(format!("{e:?}")))?;
             NativeAdjudicationKindV11::ComputationFault
         }
@@ -203,7 +215,7 @@ pub(super) fn reveal(
                 .model_artifact_binding_header_v2(&Hash64::from_bytes(class.record().binding_id))
                 .ok_or_else(|| refused("native original source absent"))?;
             let proof = crate::palw_model_artifact_v2::decode_model_artifact_proof_v2(
-                &filing.body,
+                &filing_body,
                 binding.pc_instances,
                 binding.max_proof_bytes,
             )
@@ -220,6 +232,29 @@ pub(super) fn reveal(
                 &proof,
             )
             .map_err(refused)?;
+            NativeAdjudicationKindV11::SourceMismatch
+        }
+        2 => {
+            let fault: NativeSourceHeaderFaultV16 =
+                borsh::from_slice(&filing_body).map_err(|_| refused("native source header fault framing"))?;
+            if fault.layer_code > 65536 {
+                return Err(refused("native source header layer framing"));
+            }
+            let layer = if fault.layer_code == 0 { None } else { Some((fault.layer_code - 1) as u16) };
+            let pc = native_class
+                .parameters()
+                .by_instance
+                .get(&(fault.param, layer))
+                .ok_or_else(|| refused("source header fault outside original real PC map"))?;
+            let decl = native_class
+                .view()
+                .program
+                .params
+                .get(fault.param as usize)
+                .ok_or_else(|| refused("source header fault original declaration absent"))?;
+            if !fault.header.authenticates(pc) || fault.header.matches_decl(decl.dtype, &decl.shape) {
+                return Err(refused("source header fault is not authenticated original PC declaration mismatch"));
+            }
             NativeAdjudicationKindV11::SourceMismatch
         }
         _ => return Err(refused("native filing grammar")),
@@ -244,11 +279,27 @@ pub(super) fn reveal(
         return Err(refused("native original slash no longer conserved"));
     }
     let s = book.adjudicate(class.record(), &result, claim.reserved_original).map_err(refused)?;
+    close_adjudicated_quota(builder,ctx,p,id,&class,&book,&plan,*signer)?;
     let collected = builder.slash_bond(row.header.producer, s.collected_original_slash as u128)?;
     if collected != s.collected_original_slash {
         return Err(refused("native court collected a different original slash"));
     }
-    if kind == NativeAdjudicationKindV11::SourceMismatch {
+    if kind == NativeAdjudicationKindV11::SourceMismatch && filing_kind == 2 {
+        let fact = NativeVerifiedHeaderFactV16 {
+            version: 16,
+            binding: class.record().binding_id,
+            program: class.record().program_root,
+            pc: class.record().parameter_root,
+            proof_root: seal.proof_root,
+            established: ctx.daa_score,
+            finder: actor,
+            fault: borsh::from_slice(&filing_body).map_err(|_| refused("native verified header fact framing"))?,
+        };
+        let k = key(&(16u8, fact.binding));
+        if !builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(EXECUTION_SOURCE_FACT_TABLE_V11, k.clone())) {
+            builder.write_kernel_row(EXECUTION_SOURCE_FACT_TABLE_V11, k, Some(key(&fact)));
+        }
+    } else if kind == NativeAdjudicationKindV11::SourceMismatch {
         let header = NativeVerifiedSourceFactHeaderV11 {
             version: 11,
             binding_id: class.record().binding_id,
@@ -260,7 +311,7 @@ pub(super) fn reveal(
             established_daa: ctx.daa_score,
             finder: actor,
             finder_operator: seal.operator,
-            proof_bytes_len: filing.body.len() as u32,
+            proof_bytes_len: filing_body.len() as u32,
         };
         // The first original verified theorem owns its finder and clock.
         if !builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(EXECUTION_SOURCE_FACT_TABLE_V11, key(&header.binding_id)))
@@ -268,7 +319,7 @@ pub(super) fn reveal(
             builder.write_kernel_row(
                 EXECUTION_SOURCE_FACT_TABLE_V11,
                 key(&header.binding_id),
-                Some(key(&NativeVerifiedSourceFactV11 { header, proof_bytes: filing.body })),
+                Some(key(&NativeVerifiedSourceFactV11 { header, proof_bytes: filing_body })),
             );
         }
     }

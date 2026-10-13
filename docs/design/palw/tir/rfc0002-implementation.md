@@ -3193,3 +3193,94 @@ committed observations. The root locator uses authenticated logarithmic
 segment/position/node bisection; header/operand acquisition and terminal proof
 costs remain separate. No fixture, header-only census or reduced-context pilot
 is credited as A6/A8 full-task success.
+
+### Continuation after the native snapshot
+
+Pre-Fund producer Consent18 now binds the exact preparation, principals,
+operator nonce, original interval, expiry and derived additional availability
+and capped fee roots in both namespaces. This repairs the snapshot's known
+victim-producer reservation gap. Old metadata acceptance does not grant these
+additional rights. Current native node tests still need coherent rerunning
+after the consent, source, pursuit and monetary changes; the snapshot's remote
+build does not test those later edits.
+
+Frozen v11/v13 request metadata was insufficient to restore a complete class
+or deliver an original 4096-value i128 PC leaf. Separate Source16 and Trace17
+supplements preserve the old quantities and attempts. Source16 authenticates a
+fixed cached quote against the original class/job/policy roots and reserves its
+own PC answer guarantee within the same global/producer 21-axis totals. The
+source codec retains original headers, odd-carry subtree paths and full leaves.
+Trace17 prices original class/post restoration separately for producer and
+requester; admission and failed expensive attempts must be charged before
+restore. Native borrowed dispatch and exact pending-request ownership are
+still being integrated; component success is not proof of those node gates.
+
+Three Source16 controls pass, covering original consent/owner/epoch binding,
+failed answers, unchanged frozen11 subject meanings, fixed cached-quote root
+and price tampering, and public expired collection without old credit revival.
+Two intermediate test failures were zero-axis mutations in the test itself,
+corrected to actual bit changes; they were not accepted successes. The final
+selected output is [Source16 controls](evidence/rfc02-source16-controls-20261013.log).
+The independent distinct-payer protected GC control also passes, including
+owner allowance preservation and authenticated counter updates; see
+[public GC control](evidence/rfc02-public-gc-controls-20261013.log). Native must
+still apply every returned row and explicit tombstone atomically.
+
+The native monetary fold control for reward role11 and capped source fee role19
+passes with both roles: an unpaid hold survives the original H+W, partial
+payment leaves remaining R and the withdrawal gate held, each queue starts W
+at its actual payment, and the final release happens once. Every transition
+round-trips carriage, applies and undoes its exact delta. This is a monetary
+control using admitted fixture holds, not a native Final or court verdict; see
+[sparse income control](evidence/rfc02-native-sparse-income-controls-20261013.log).
+
+The fixed dense-checkpoint task measurements retain failures. Qwen0.5 scores
+64/96 token matches and 1/3 exact sequences; GLM78/96 and2/3; Smol96/96 and3/3;
+Llama91/96 and2/3. Smol's source-task semantic success is only1/3, so perfect
+integer token agreement alone cannot pass the task gate. All four combined
+task gates fail their predeclared requirements. Qwen's prepared native fixture
+contains 26 positions and6570 nodes per position and reproduces the three-token
+arithmetic reference; its context64/artifact512 is not original-context32768
+coverage. Static original-context audits still refuse complete jobs at resource
+or declaration gates. Candidate lowering/pricing extensions are independently
+versioned; they do not revise the original failed observations.
+
+The separately predeclared layout15 equivalence run on actual Qwen0.5 weights
+passes: all151,936 logits match at every one of26 positions, the same
+660,615,904 complete integer parameter bytes are used, and both programs emit
+`[19,17,151645]`. The original6570-node program and transformed6666-node program
+have independent identities. This is integer lowering equivalence only; it
+does not fix a source model's wrong semantic answers or establish original
+context, active native checker, Final or population coverage. Its observation
+is [layout15 bitexact run](evidence/rfc02-qwen05-layout15-bitexact-observation-20261013.json),
+with protocol frozen before execution in `53dd07105`.
+
+The processor now verifies borrowed, exact-length native63/64 frames without
+allocating a second body vector. Source15 preflight reads only fixed original
+pending/producer/attempt/deadline rows; the native fold then debits before nested
+decode. The coherent processor check passes, recorded in
+[snapshot2 check](evidence/rfc02-native-snapshot2-processor-check-20261013.log).
+It emitted one unused-parameter warning in the in-progress stage source fold;
+this check is compilation evidence, not native node-test or Final evidence.
+
+Consumer-resolved NativeCarriageMassParams22 and a complete carrier envelope
+now account for actual compute/transient/contextual storage mass. Two controls
+pass: the raw128-KiB envelope refuses against actual block mass, a bounded source
+packet matches the production mass calculator, and script/sigops/dust-storage
+growth refuses. See [physical mass controls](evidence/rfc02-native-carriage-mass-controls-20261013.log).
+The future global delivery lease and protected selector are still under
+implementation, including coexistence with original H1/readiness carriage.
+
+The subsequent frozen native/stage snapshot compiles through the consensus
+processor without warnings; see [final snapshot2 compilation](evidence/rfc02-native-snapshot2-final-check-20261013.log).
+Stage ordinary real-PC request/answer/default and capped fee accounting are now
+connected, while genuine Convicted quota-terminal marking, protected discovery
+lanes and independent Final remain open. The rooted stage collection path
+collects genuine expired Refunded jobs without restoring guarantees and keeps
+the original principal/highwater anchors. These transitions still require new
+native signed node tests; the earlier snapshot build cannot certify them.
+
+The current D_all full end-to-end coverage remains0/128. Independent native
+Final/redemption, stage source court/DA, calibrated economic/carriage guarantees,
+and the two A6 receipt windows/A8 population criteria remain open. Every shipped
+new namespace fence stays absent and activation validation remains closed.

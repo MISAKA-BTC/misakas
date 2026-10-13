@@ -57,6 +57,7 @@ misaka-palw-tir-exec = { path = "../exec" }
 # Freeze criterion 4 on the lowered programs (tests/three_way.rs): the second implementation beside
 # the reference evaluator and the typed backend. Tests only.
 misaka-palw-tir-ref2 = { path = "../../../../testing/reference/palw-tir-ref2" }
+sha2.workspace = true
 
 [features]
 # The per-architecture Rust parsers this crate had before model adapters became data

@@ -19,6 +19,9 @@ pub const STAGE_ACTION_COMMIT_V14: u8 = 3;
 pub const STAGE_ACTION_CLOSE_V14: u8 = 4;
 pub const STAGE_ACTION_SOURCE_SEAL_V14: u8 = 5;
 pub const STAGE_ACTION_SOURCE_REVEAL_V14: u8 = 6;
+pub const STAGE_ACTION_ACCEPT_V14: u8 = 13;
+pub const STAGE_ACTION_ACCEPT_V18: u8 = 14;
+pub const STAGE_ACTION_COLLECT_V14: u8 = 15;
 pub const STAGE_CATALOG_MAX_V14: usize = 8;
 pub const STAGE_NATIVE_INPUT_BYTES_MAX_V14: usize = 1 << 20;
 
@@ -67,6 +70,7 @@ pub struct NativeStageSourceHeaderV14 {
     pub input_declarations_root: Digest,
     pub parameters_root: Digest,
     pub inventory_root: Digest,
+    pub relation_root: Digest,
     pub source_bytes_len: u32,
     pub program_bytes_len: u32,
     pub pc_instances: u32,
@@ -100,6 +104,7 @@ impl NativeStageSourceRowV14 {
             || checked.input_declarations_root() != self.header.input_declarations_root
             || checked.parameters().root() != self.header.parameters_root
             || checked.inventory_root() != self.header.inventory_root
+            || checked.relation_root() != self.header.relation_root
             || source.program_bytes.len() != self.header.program_bytes_len as usize
             || source.source_parameters.by_instance.len() != self.header.pc_instances as usize
         {
@@ -133,13 +138,14 @@ pub struct StageFundRequestV14 {
     pub class: Digest,
     pub producer: PalwBondKeyV2,
     pub reward: u64,
+    pub acceptance: Digest,
     pub job_bytes: Vec<u8>,
     pub input_images: Vec<Vec<u8>>,
 }
 impl StageFundRequestV14 {
     pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
         use std::io::Read;
-        if raw.len() > STAGE_NATIVE_INPUT_BYTES_MAX_V14 + 2048 {
+        if raw.len() > STAGE_NATIVE_INPUT_BYTES_MAX_V14 + 2112 {
             return Err("stage funded input carrier cap".into());
         }
         let mut r = Cursor::new(raw);
@@ -150,6 +156,7 @@ impl StageFundRequestV14 {
         let class = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
         let producer = PalwBondKeyV2::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
         let reward = u64::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let acceptance = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
         let n = u32::deserialize_reader(&mut r).map_err(|e| e.to_string())? as usize;
         if n > 2 + 4 * 64 + 16 + 4 + 16 * 64 || n > raw.len().saturating_sub(r.position() as usize) {
             return Err("funded stage job count exceeds wire cap".into());
@@ -173,11 +180,148 @@ impl StageFundRequestV14 {
             r.read_exact(&mut image).map_err(|e| e.to_string())?;
             input_images.push(image);
         }
-        let out = Self { version, class, producer, reward, job_bytes, input_images };
+        let out = Self { version, class, producer, reward, acceptance, job_bytes, input_images };
         if r.position() as usize != raw.len() || borsh::to_vec(&out).map_err(|e| e.to_string())? != raw {
             return Err("funded stage carrier has surplus or noncanonical bytes".into());
         }
         Ok(out)
+    }
+}
+
+/// Signed by the original producer, binding exact independently derived
+/// preparation before a requester can occupy any producer quota or job slot.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct StageAcceptRequestV14 {
+    pub version: u16,
+    pub class: Digest,
+    pub requester: PalwBondKeyV2,
+    pub reward: u64,
+    pub expires_daa: u64,
+    pub source: Digest,
+    pub policy: Digest,
+    pub admission: Digest,
+    pub quota: Digest,
+    pub job_bytes: Vec<u8>,
+}
+impl StageAcceptRequestV14 {
+    pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
+        use std::io::Read;
+        if raw.len() > 2048 {
+            return Err("stage producer acceptance carrier exceeds cap".into());
+        }
+        let mut r = Cursor::new(raw);
+        let version = u16::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        if version != 14 {
+            return Err("unknown stage acceptance version".into());
+        }
+        let class = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let requester = PalwBondKeyV2::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let reward = u64::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let expires_daa = u64::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let source = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let policy = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let admission = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let quota = Digest::deserialize_reader(&mut r).map_err(|e| e.to_string())?;
+        let n = u32::deserialize_reader(&mut r).map_err(|e| e.to_string())? as usize;
+        if n > 2 + 4 * 64 + 16 + 4 + 16 * 64 || n != raw.len().saturating_sub(r.position() as usize) {
+            return Err("stage acceptance job count differs from bounded exact wire".into());
+        }
+        let mut job_bytes = vec![0; n];
+        r.read_exact(&mut job_bytes).map_err(|e| e.to_string())?;
+        misaka_palw_kernel::flat_inputs12::bounded14::FlatStageJobV14::from_bytes(&job_bytes)?;
+        Ok(Self { version, class, requester, reward, expires_daa, source, policy, admission, quota, job_bytes })
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageAcceptanceV14 {
+    pub version: u16,
+    pub id: Digest,
+    pub class: Digest,
+    pub source: Digest,
+    pub policy: Digest,
+    pub job: Digest,
+    pub admission: Digest,
+    pub quota: Digest,
+    pub requester: PalwBondKeyV2,
+    pub producer: PalwBondKeyV2,
+    pub requester_operator: Digest,
+    pub producer_operator: Digest,
+    pub nonce: Digest,
+    pub reward: u64,
+    pub accepted_daa: u64,
+    pub expires_daa: u64,
+}
+impl NativeStageAcceptanceV14 {
+    pub fn content_id(&self) -> Digest {
+        object_id(
+            b"misaka-palw/native/stage-producer-acceptance/v14",
+            &(
+                self.version,
+                self.class,
+                self.source,
+                self.policy,
+                self.job,
+                self.admission,
+                self.quota,
+                self.requester,
+                self.producer,
+                self.requester_operator,
+                self.producer_operator,
+                self.nonce,
+                self.reward,
+                self.accepted_daa,
+                self.expires_daa,
+            ),
+        )
+    }
+}
+/// New consent grammar explicitly names the additional producer-owned source
+/// and trace delivery contracts. Old action13 metadata never authorizes them.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct StageAcceptRequestV18 {
+    pub version: u16,
+    pub preparation_bytes: Vec<u8>,
+    pub source_plan: Digest,
+    pub trace_plan: Digest,
+    pub availability_terms: Digest,
+    pub fee_plan: Digest,
+}
+impl StageAcceptRequestV18 {
+    pub fn from_bytes(raw: &[u8]) -> Result<Self, String> {
+        if raw.len() < 262 || raw.len() > 2310 || u16::from_le_bytes(raw[..2].try_into().unwrap()) != 18 {
+            return Err("stage consent18 version/carrier extent".into());
+        }
+        let n = u32::from_le_bytes(raw[2..6].try_into().unwrap()) as usize;
+        if n > 2048 || n != raw.len() - 262 {
+            return Err("stage consent18 preparation count exceeds exact bounded frame".into());
+        }
+        StageAcceptRequestV14::from_bytes(&raw[6..6 + n])?;
+        Ok(Self {
+            version: 18,
+            preparation_bytes: raw[6..6 + n].to_vec(),
+            source_plan: raw[6 + n..70 + n].try_into().unwrap(),
+            trace_plan: raw[70 + n..134 + n].try_into().unwrap(),
+            availability_terms: raw[134 + n..198 + n].try_into().unwrap(),
+            fee_plan: raw[198 + n..262 + n].try_into().unwrap(),
+        })
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageAcceptanceV18 {
+    pub version: u16,
+    pub id: Digest,
+    pub preparation: NativeStageAcceptanceV14,
+    pub source_plan: Digest,
+    pub trace_plan: Digest,
+    pub availability_terms: Digest,
+    pub fee_plan: Digest,
+}
+impl NativeStageAcceptanceV18 {
+    pub fn content_id(&self) -> Digest {
+        object_id(
+            b"misaka-palw/native/stage-source-trace-consent/v18",
+            &(self.version, self.preparation.content_id(), self.source_plan, self.trace_plan, self.availability_terms, self.fee_plan),
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -185,6 +329,12 @@ pub struct NativeStageJobHeaderV14 {
     pub version: u16,
     pub id: Digest,
     pub class: Digest,
+    pub acceptance: Digest,
+    pub source_binding: Digest,
+    pub policy_root: Digest,
+    pub admission_root: Digest,
+    pub stage_quota_root: Digest,
+    pub quota_record: misaka_palw_kernel::flat_quota11::QuotaPlanRecordV11,
     pub original_book_root: Digest,
     pub book_root: Digest,
     pub book_bytes_len: u32,
@@ -207,6 +357,163 @@ pub struct NativeStageJobRowV14 {
     pub book_bytes: Vec<u8>,
     pub input_images: Vec<Vec<u8>>,
     pub trace_bytes: Vec<u8>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStagePrincipalRefundV14 {
+    pub version: u16,
+    pub job: Digest,
+    pub original_book: Digest,
+    pub terminal_book: Digest,
+    pub acceptance18: Digest,
+    pub requester: PalwBondKeyV2,
+    pub payout: Hash64,
+    pub queue: Hash64,
+    pub amount: u64,
+    pub established_daa: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageNegativeSourceFactV14 {
+    pub version: u16,
+    pub relation: Digest,
+    pub source: Digest,
+    pub source_program: Digest,
+    pub parameters: Digest,
+    pub inventory: Digest,
+    pub proof: Digest,
+    pub established_daa: u64,
+    pub reporter: PalwBondKeyV2,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageFeePlanV20 {
+    pub version: u16,
+    pub class: Digest,
+    pub quota_plan: Digest,
+    pub original_preparation: Digest,
+    pub governing_policy: Digest,
+    pub reward: u64,
+    pub maximum: u64,
+    pub trace_units: u32,
+    pub source_units: u32,
+    pub trace_unit_fee: u64,
+    pub source_unit_fee: u64,
+}
+impl NativeStageFeePlanV20 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/stage-original-delivery-fee-plan/v20", self)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageFeesV20 {
+    pub version: u16,
+    pub job: Digest,
+    pub original_book: Digest,
+    pub consent18: Digest,
+    pub plan: NativeStageFeePlanV20,
+    pub earned: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStagePursuitV14 {
+    pub version: u16,
+    pub job: Digest,
+    pub class: Digest,
+    pub original_book: Digest,
+    pub consent18: Digest,
+    pub open_demands: u32,
+    pub retained_seals: u32,
+    pub retained_discovery: u32,
+    pub requests_admitted: u32,
+    pub required_until: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeStageCollectedV14 {
+    pub version: u16,
+    pub job: Digest,
+    pub class: Digest,
+    pub original_book: Digest,
+    pub terminal_book: Digest,
+    pub consent18: Digest,
+    pub requester_operator: Digest,
+    pub original_nonce: Digest,
+    pub principal_credit: Digest,
+    pub source_retired: Digest,
+    pub trace_retired: Digest,
+    pub collected_daa: u64,
+}
+pub fn stage_delivery_fee_plan_v20(
+    ledger: &misaka_palw_kernel::ledger::LedgerPolicyV1,
+    p: &NativeStagePoliciesV14,
+    request: &StageAcceptRequestV14,
+    source_units: u32,
+) -> Result<NativeStageFeePlanV20, String> {
+    p.check(ledger.network_domain)?;
+    if request.version != 14
+        || request.class == [0; 64]
+        || request.policy != p.root()
+        || request.reward == 0
+        || request.reward > p.execution.execution.reward_cap
+        || source_units == 0
+        || source_units > 1 << 20
+    {
+        return Err("stage fee quote changes original principals/preparation/policy/reward".into());
+    }
+    let trace_unit_fee =
+        ledger.demand_bond.max(ledger.dismissal_fee_v1(crate::palw_model_artifact_v2::model_artifact_work_v2(0, 16 << 10).unwrap()));
+    let source_unit_fee = ledger.demand_bond.max(
+        ledger.dismissal_fee_v1(
+            crate::palw_model_artifact_v2::model_artifact_work_v2(
+                0,
+                misaka_palw_kernel::flat_quota11::source16::SOURCE_ANSWER_MAX_BYTES_V16 as usize,
+            )
+            .unwrap(),
+        ),
+    );
+    let possible =
+        (trace_unit_fee as u128) * (p.execution.quota.future_attempts[2] as u128) + (source_unit_fee as u128) * (source_units as u128);
+    let maximum = (p.execution.execution.reward_cap - request.reward).min(possible.min(u64::MAX as u128) as u64);
+    if request.reward as u128
+        + maximum as u128
+        + p.execution.execution.external_gain_cap as u128
+        + p.execution.execution.default_obligation as u128
+        > p.execution.execution.required_producer_reserve as u128
+    {
+        return Err("stage original reserve fails reward/all capped delivery fees/external/default gain".into());
+    }
+    Ok(NativeStageFeePlanV20 {
+        version: 20,
+        class: request.class,
+        quota_plan: request.quota,
+        original_preparation: object_id(b"misaka-palw/native/stage-preparation/v14", request),
+        governing_policy: object_id(b"misaka-palw/native/stage-governing-ledger-policy/v20", ledger),
+        reward: request.reward,
+        maximum,
+        trace_units: p.execution.quota.future_attempts[2],
+        source_units,
+        trace_unit_fee,
+        source_unit_fee,
+    })
+}
+pub fn stage_availability_terms_v18(
+    p: &NativeStagePoliciesV14,
+    request: &StageAcceptRequestV14,
+    source: Digest,
+    trace: Digest,
+    fee: Digest,
+) -> Digest {
+    object_id(
+        b"misaka-palw/native/stage-original-availability-terms/v18",
+        &(
+            18u16,
+            p.root(),
+            object_id(b"misaka-palw/native/stage-preparation/v14", request),
+            source,
+            trace,
+            fee,
+            &p.execution.execution.horizons,
+            request.expires_daa / p.execution.quota.interval_daa,
+            misaka_palw_kernel::flat_quota11::source16::SOURCE_ANSWER_MAX_BYTES_V16,
+            STAGE_NATIVE_INPUT_BYTES_MAX_V14 as u64,
+        ),
+    )
 }
 
 /// Bounded source R/PC court over the original V2 real weight namespace.
@@ -240,6 +547,27 @@ pub fn verify_stage_source_proof_v14(row: &NativeStageSourceRowV14, proof_bytes:
 }
 
 impl PalwKernelRouteStateV1 {
+    pub fn stage_source_refuted_relation_v14(&self, relation: &Digest) -> bool {
+        self.aux_row::<NativeStageNegativeSourceFactV14>(STAGE_TABLE_V14, &stage_key_v14(14, relation))
+            .is_some_and(|f| f.version == 14 && f.relation == *relation && f.proof != [0; 64])
+    }
+    pub fn stage_acceptance_v18(&self, id: &Digest) -> Option<NativeStageAcceptanceV18> {
+        let row: NativeStageAcceptanceV18 = self.aux_row(STAGE_TABLE_V14, &stage_key_v14(10, id))?;
+        (row.version == 18
+            && row.id == *id
+            && row.content_id() == *id
+            && row.preparation.version == 14
+            && row.preparation.id == row.preparation.content_id()
+            && row.source_plan != [0; 64]
+            && row.trace_plan != [0; 64]
+            && row.fee_plan != [0; 64]
+            && row.availability_terms != [0; 64])
+            .then_some(row)
+    }
+    pub fn stage_acceptance_v14(&self, id: &Digest) -> Option<NativeStageAcceptanceV14> {
+        let row: NativeStageAcceptanceV14 = self.aux_row(STAGE_TABLE_V14, &stage_key_v14(9, id))?;
+        (row.version == 14 && row.id == *id && row.content_id() == *id).then_some(row)
+    }
     pub fn stage_job_header_v14(&self, id: &Digest) -> Option<NativeStageJobHeaderV14> {
         let raw = self.aux.get(&(STAGE_TABLE_V14, stage_key_v14(5, id)))?;
         let h = NativeStageJobHeaderV14::deserialize_reader(&mut Cursor::new(raw)).ok()?;
@@ -292,6 +620,11 @@ impl PalwKernelRouteStateV1 {
         let book = misaka_palw_kernel::flat_quota11::stage14::StageJobBookV14::from_rooted_bytes(&book_bytes, h.book_root).ok()?;
         if book.id() != h.id
             || book.class_id() != h.class
+            || book.acceptance() != h.acceptance
+            || book.source_binding() != h.source_binding
+            || book.native_policy_root() != h.policy_root
+            || book.admission().root() != h.admission_root
+            || book.original_funded_root() != h.original_book_root
             || book.requester_operator() != h.requester_operator
             || book.producer_operator() != h.producer_operator
             || book.deadline_daa() != h.deadline_daa
