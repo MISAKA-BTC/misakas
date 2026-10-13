@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use super::overlay_absent_cache::OverlayAbsentCache;
+
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{BlockHasher, tx::TransactionOutpoint};
 use kaspa_database::prelude::CachePolicy;
@@ -13,8 +15,8 @@ use rocksdb::WriteBatch;
 /// the `(bond_outpoint, epoch)` pairs that the block rewarded in its coinbase
 /// validator fan-out (ADR-0013).
 ///
-/// Written at `commit_utxo_state` for each UTXO-valid chain block (empty for
-/// blocks that reward nothing, e.g. every block while the overlay is dormant).
+/// Written at `commit_utxo_state` for non-empty UTXO-valid chain block lists.
+/// Empty lists are absent rows, including while the overlay is dormant.
 /// A descendant block's coinbase reward computation reads its ancestors' lists
 /// within a bounded window to enforce cross-block `(bond, epoch)` reward
 /// uniqueness — so each pair is rewarded at most once on the selected chain.
@@ -40,47 +42,56 @@ pub trait RewardedEpochsStore: RewardedEpochsStoreReader {
 pub struct DbRewardedEpochsStore {
     db: Arc<DB>,
     access: CachedDbAccess<BlockHash, Arc<RewardedEpochKeys>, BlockHasher>,
+    absent: OverlayAbsentCache<BlockHash>,
 }
 
 impl DbRewardedEpochsStore {
     pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
-        Self { db: Arc::clone(&db), access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::RewardedEpochs.into()) }
+        Self {
+            db: Arc::clone(&db),
+            access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::RewardedEpochs.into()),
+            absent: OverlayAbsentCache::for_policy(cache_policy),
+        }
     }
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
-        Self::new(Arc::clone(&self.db), cache_policy)
+        let mut cloned = Self::new(Arc::clone(&self.db), cache_policy);
+        cloned.absent = self.absent.clone_for_policy(cache_policy);
+        cloned
     }
 
     pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, keys: Arc<RewardedEpochKeys>) -> Result<(), StoreError> {
-        if self.access.has(hash)? {
-            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
-        }
-        self.access.write(BatchDbWriter::new(batch), hash, keys)?;
-        Ok(())
+        self.absent.mutate_batch(&hash, || {
+            if self.access.has(hash)? {
+                return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+            }
+            self.access.write(BatchDbWriter::new(batch), hash, keys)
+        })
     }
 
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
-        self.access.delete(BatchDbWriter::new(batch), hash)
+        self.absent.mutate_batch(&hash, || self.access.delete(BatchDbWriter::new(batch), hash))
     }
 }
 
 impl RewardedEpochsStoreReader for DbRewardedEpochsStore {
     fn get(&self, hash: BlockHash) -> Result<Arc<RewardedEpochKeys>, StoreError> {
-        self.access.read(hash)
+        self.absent.read(hash, || self.access.read(hash))
     }
 }
 
 impl RewardedEpochsStore for DbRewardedEpochsStore {
     fn insert(&self, hash: BlockHash, keys: Arc<RewardedEpochKeys>) -> Result<(), StoreError> {
-        if self.access.has(hash)? {
-            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
-        }
-        self.access.write(DirectDbWriter::new(&self.db), hash, keys)?;
-        Ok(())
+        self.absent.mutate(&hash, || {
+            if self.access.has(hash)? {
+                return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+            }
+            self.access.write(DirectDbWriter::new(&self.db), hash, keys)
+        })
     }
 
     fn delete(&self, hash: BlockHash) -> Result<(), StoreError> {
-        self.access.delete(DirectDbWriter::new(&self.db), hash)
+        self.absent.mutate(&hash, || self.access.delete(DirectDbWriter::new(&self.db), hash))
     }
 }
 
@@ -114,6 +125,33 @@ mod tests {
         assert!(store.insert(h, keys.clone()).is_err());
         store.delete(h).unwrap();
         assert!(store.get(h).is_err());
+    }
+
+    #[test]
+    fn absence_batch_commit_clone_restore_and_reopen() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbRewardedEpochsStore::new(db.clone(), CachePolicy::Count(16));
+        let h = Hash64::from_bytes([0x33; 64]);
+        assert!(store.get(h).is_err());
+        let mut batch = WriteBatch::default();
+        store.insert_batch(&mut batch, h, rewarded(2)).unwrap();
+        let sibling = store.clone_with_new_cache(CachePolicy::Count(16));
+        // An independently cached reader sees the DB before batch commit.
+        assert!(sibling.get(h).is_err());
+        db.write(batch).unwrap();
+        assert_eq!(sibling.get(h).unwrap().len(), 2);
+        assert_eq!(store.get(h).unwrap().len(), 2);
+        store.delete(h).unwrap();
+        assert!(store.get(h).is_err());
+        store.insert(h, rewarded(3)).unwrap();
+        assert_eq!(store.get(h).unwrap().len(), 3);
+        let reopened = DbRewardedEpochsStore::new(db.clone(), CachePolicy::Count(16));
+        assert_eq!(reopened.get(h).unwrap().len(), 3);
+        let other = Hash64::from_bytes([0x44; 64]);
+        assert!(store.get(other).is_err());
+        let writer = store.clone_with_new_cache(CachePolicy::Empty);
+        writer.insert(other, rewarded(1)).unwrap();
+        assert_eq!(store.get(other).unwrap().len(), 1);
     }
 
     /// `RewardedEpochKeys` is a `Vec`, so it is UNIT-estimable (its length).

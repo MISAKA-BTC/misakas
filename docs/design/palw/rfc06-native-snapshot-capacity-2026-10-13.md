@@ -40,11 +40,13 @@ not compressible integer-word ids. These unsigned funding descriptors are not mi
 payments: the fixture's funded genesis UTXO commitment remains its authority.
 Setup prints progress every 10k keys. `MISAKA_RFC06_NATIVE_CARRIAGE_OUT` optionally
 writes the actual four-seal canonical carriage using create-new private-file
-semantics, so exact transport measurements can consume its bytes. This new fixture
-has syntax/diff validation only until the next integrated test build/run; the old
-binary's results are not relabelled as this new profile.
+semantics, so exact transport measurements can consume its bytes. The new fixture compiled in the matching integrated native test binary. Its
+separately predeclared opt3 run completed key setup in 45.450 seconds, then
+timed out at 900.022 seconds without carriage output. [Raw result and bottleneck
+analysis](rfc06-overlay-negative-cache-2026-10-13.md) preserve this failure; it is
+not four-seal resource or snapshot transport acceptance.
 
-A negotiated version-107 experimental compressed transport is being implemented
+A negotiated version-107 experimental compressed transport has been implemented
 without changing state Borsh, consensus roots or public activation parameters.
 It separates the existing 384 MiB compressed-wire cap from a 512 MiB canonical
 encoded cap. The latter adds 111,970,912 bytes to the measured lower bound for this

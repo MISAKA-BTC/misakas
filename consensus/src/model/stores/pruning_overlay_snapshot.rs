@@ -14,6 +14,7 @@
 //! Mirrors the [`super::dns_state`] singleton pattern. Before the first write
 //! [`PruningPointOverlaySnapshotStoreReader::get`] returns `KeyNotFound`.
 
+use super::overlay_absent_cache::OverlayAbsentCache;
 use kaspa_consensus_core::dns_finality::PruningPointOverlaySnapshot;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResult;
@@ -34,30 +35,78 @@ pub trait PruningPointOverlaySnapshotStore: PruningPointOverlaySnapshotStoreRead
 pub struct DbPruningPointOverlaySnapshotStore {
     db: Arc<DB>,
     access: CachedDbItem<PruningPointOverlaySnapshot>,
+    absent: OverlayAbsentCache<()>,
 }
 
 impl DbPruningPointOverlaySnapshotStore {
     pub fn new(db: Arc<DB>) -> Self {
-        Self { db: Arc::clone(&db), access: CachedDbItem::new(db, DatabaseStorePrefixes::PruningPointOverlaySnapshot.into()) }
+        Self {
+            db: Arc::clone(&db),
+            access: CachedDbItem::new(db, DatabaseStorePrefixes::PruningPointOverlaySnapshot.into()),
+            absent: OverlayAbsentCache::new(1),
+        }
     }
 
     pub fn clone_with_new_cache(&self) -> Self {
-        Self::new(Arc::clone(&self.db))
+        let mut cloned = Self::new(Arc::clone(&self.db));
+        cloned.absent = self.absent.clone_with_new_cache(1);
+        cloned
     }
 
     pub fn set_batch(&mut self, batch: &mut WriteBatch, snapshot: PruningPointOverlaySnapshot) -> StoreResult<()> {
-        self.access.write(BatchDbWriter::new(batch), &snapshot)
+        self.absent.mutate_batch(&(), || self.access.write(BatchDbWriter::new(batch), &snapshot))
     }
 }
 
 impl PruningPointOverlaySnapshotStoreReader for DbPruningPointOverlaySnapshotStore {
     fn get(&self) -> StoreResult<PruningPointOverlaySnapshot> {
-        self.access.read()
+        self.absent.read((), || self.access.read())
     }
 }
 
 impl PruningPointOverlaySnapshotStore for DbPruningPointOverlaySnapshotStore {
     fn set(&mut self, snapshot: PruningPointOverlaySnapshot) -> StoreResult<()> {
-        self.access.write(DirectDbWriter::new(&self.db), &snapshot)
+        self.absent.mutate(&(), || self.access.write(DirectDbWriter::new(&self.db), &snapshot))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::dns_finality::OverlaySnapshot;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    use kaspa_hashes::Hash64;
+
+    #[test]
+    fn singleton_absence_queued_commit_clone_and_reopen() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPruningPointOverlaySnapshotStore::new(db.clone());
+        assert!(store.get().is_err());
+        let snapshot = PruningPointOverlaySnapshot {
+            pruning_point: Hash64::from_bytes([0x45; 64]),
+            snapshot: OverlaySnapshot { bonds: vec![], reserve_balance: 42, window: vec![] },
+        };
+        let mut batch = WriteBatch::default();
+        store.set_batch(&mut batch, snapshot.clone()).unwrap();
+        let sibling = store.clone_with_new_cache();
+        assert!(sibling.get().is_err());
+        db.write(batch).unwrap();
+        assert_eq!(sibling.get().unwrap(), snapshot);
+        assert_eq!(store.get().unwrap(), snapshot);
+        assert_eq!(DbPruningPointOverlaySnapshotStore::new(db).get().unwrap(), snapshot);
+    }
+
+    #[test]
+    fn singleton_direct_write_invalidates_independently_cached_absence() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPruningPointOverlaySnapshotStore::new(db);
+        assert!(store.get().is_err());
+        let mut writer = store.clone_with_new_cache();
+        let snapshot = PruningPointOverlaySnapshot {
+            pruning_point: Hash64::from_bytes([0x46; 64]),
+            snapshot: OverlaySnapshot { bonds: vec![], reserve_balance: 99, window: vec![] },
+        };
+        writer.set(snapshot.clone()).unwrap();
+        assert_eq!(store.get().unwrap(), snapshot);
     }
 }

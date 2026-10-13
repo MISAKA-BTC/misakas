@@ -1,0 +1,43 @@
+
+running 16 tests
+test stores::epoch_accumulator::tests::block_quality_pool_insert_get_delete ... ok
+test stores::epoch_accumulator::tests::block_quality_pool_pending_batch_and_same_hash_restore ... ok
+test stores::epoch_accumulator::tests::epoch_accumulator_set_get_overwrite ... ok
+test stores::epoch_accumulator::tests::reserve_balance_insert_get_delete ... ok
+test stores::overlay_absent_cache::tests::bounded_disabled_and_failed_mutation_invalidation ... ok
+test stores::overlay_absent_cache::tests::fresh_and_disabled_sibling_writes_invalidate_old_absence ... ok
+test stores::overlay_absent_cache::tests::late_miss_cannot_hide_concurrent_insert_or_restore ... ok
+test stores::overlay_absent_cache::tests::pending_saturation_disables_without_an_unbounded_dirty_list ... ok
+test stores::overlay_absent_cache::tests::queued_batch_misses_are_never_published_in_new_sibling_cache ... ok
+test stores::overlay_absent_cache::tests::repeated_absence_avoids_reads_but_errors_are_retried ... ok
+test stores::pruning_overlay_snapshot::tests::singleton_absence_queued_commit_clone_and_reopen ... ok
+test stores::pruning_overlay_snapshot::tests::singleton_direct_write_invalidates_independently_cached_absence ... ok
+test stores::rewarded_epochs::tests::absence_batch_commit_clone_restore_and_reopen ... ok
+test stores::rewarded_epochs::tests::insert_get_delete_under_count_policy ... ok
+test stores::rewarded_epochs::tests::value_has_no_byte_estimation - should panic ... 
+thread 'stores::rewarded_epochs::tests::value_has_no_byte_estimation' (17010682) panicked at /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/utils/src/mem_size.rs:40:9:
+not implemented
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test stores::rewarded_epochs::tests::value_is_unit_estimable ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+        0.72 real         0.07 user         0.04 sys
+            20709376  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1810  page reclaims
+                   1  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  51  voluntary context switches
+                 361  involuntary context switches
+           842490456  instructions retired
+           334827016  cycles elapsed
+             6046176  peak memory footprint

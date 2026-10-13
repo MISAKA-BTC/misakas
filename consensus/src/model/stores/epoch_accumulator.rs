@@ -37,7 +37,7 @@ use kaspa_database::prelude::{BatchDbWriter, CachedDbAccess, DirectDbWriter};
 use kaspa_database::registry::DatabaseStorePrefixes;
 use rocksdb::WriteBatch;
 
-use super::U64Key;
+use super::{U64Key, overlay_absent_cache::OverlayAbsentCache};
 
 /// Per-epoch [`EpochTally`] accumulator store (ADR-0018 "本格版" Phase 1), keyed by
 /// `u64` epoch. Recomputed/overwritten per virtual-state commit while an epoch is
@@ -88,6 +88,7 @@ impl DbEpochAccumulatorStore {
 pub struct DbBlockQualityPoolStore {
     db: Arc<DB>,
     access: CachedDbAccess<BlockHash, u64, BlockHasher>,
+    absent: OverlayAbsentCache<BlockHash>,
 }
 
 impl DbBlockQualityPoolStore {
@@ -95,29 +96,33 @@ impl DbBlockQualityPoolStore {
         Self {
             db: Arc::clone(&db),
             access: CachedDbAccess::new(db, cache_policy, DatabaseStorePrefixes::BlockValidatorQualityPool.into()),
+            absent: OverlayAbsentCache::for_policy(cache_policy),
         }
     }
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
-        Self::new(Arc::clone(&self.db), cache_policy)
+        let mut cloned = Self::new(Arc::clone(&self.db), cache_policy);
+        cloned.absent = self.absent.clone_for_policy(cache_policy);
+        cloned
     }
 
     pub fn get(&self, hash: BlockHash) -> Result<u64, StoreError> {
-        self.access.read(hash)
+        self.absent.read(hash, || self.access.read(hash))
     }
 
     /// Append this block's quality sub-pool. Each chain block writes once (the
     /// commit path is append-only per block), so a re-insert is rejected.
     pub fn insert_batch(&self, batch: &mut WriteBatch, hash: BlockHash, quality_subpool: u64) -> Result<(), StoreError> {
-        if self.access.has(hash)? {
-            return Err(StoreError::KeyAlreadyExists(hash.to_string()));
-        }
-        self.access.write(BatchDbWriter::new(batch), hash, quality_subpool)?;
-        Ok(())
+        self.absent.mutate_batch(&hash, || {
+            if self.access.has(hash)? {
+                return Err(StoreError::KeyAlreadyExists(hash.to_string()));
+            }
+            self.access.write(BatchDbWriter::new(batch), hash, quality_subpool)
+        })
     }
 
     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
-        self.access.delete(BatchDbWriter::new(batch), hash)
+        self.absent.mutate_batch(&hash, || self.access.delete(BatchDbWriter::new(batch), hash))
     }
 }
 
@@ -229,6 +234,29 @@ mod tests {
         store.delete_batch(&mut batch, h).unwrap();
         db.write(batch).unwrap();
         assert!(store.get(h).is_err());
+    }
+
+    #[test]
+    fn block_quality_pool_pending_batch_and_same_hash_restore() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbBlockQualityPoolStore::new(db.clone(), CachePolicy::Count(16));
+        let h = Hash64::from_bytes([0x35; 64]);
+        assert!(store.get(h).is_err());
+        let mut batch = WriteBatch::default();
+        store.insert_batch(&mut batch, h, 42).unwrap();
+        let sibling = store.clone_with_new_cache(CachePolicy::Count(16));
+        assert!(sibling.get(h).is_err());
+        db.write(batch).unwrap();
+        assert_eq!(sibling.get(h).unwrap(), 42);
+        let mut batch = WriteBatch::default();
+        store.delete_batch(&mut batch, h).unwrap();
+        db.write(batch).unwrap();
+        assert!(store.get(h).is_err());
+        let mut batch = WriteBatch::default();
+        store.insert_batch(&mut batch, h, 99).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.get(h).unwrap(), 99);
+        assert_eq!(DbBlockQualityPoolStore::new(db, CachePolicy::Count(16)).get(h).unwrap(), 99);
     }
 
     /// The per-block reserve-balance store inserts/reads/deletes a `u64`; an absent block reads as

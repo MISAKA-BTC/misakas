@@ -1,0 +1,18 @@
+{
+  "test": "specific overlay negative-cache/store controls",
+  "deadlineSeconds": 60,
+  "threads": 1,
+  "binary": "/tmp/misaka-rfc67812-runtime/overlay-absence-leaf",
+  "binarySha256": "2323ad3844f212b57eff20169e09cc50d4045c23daaefda9ee3472014d6175fb",
+  "deps": {
+    "rocksdb": "/tmp/misaka-rfc67812-node-target/debug/deps/librocksdb-1051681b1c647835.rlib",
+    "parking_lot": "/tmp/misaka-rfc67812-node-target/debug/deps/libparking_lot-8de9406302607524.rlib",
+    "kaspa_utils": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_utils-1359c7195c3b2bc5.rlib",
+    "indexmap": "/tmp/misaka-rfc67812-node-target/debug/deps/libindexmap-3eb036414c6ce2e3.rlib",
+    "kaspa_hashes": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-3fc5d0c1255d8f6c.rlib",
+    "kaspa_consensus_core": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-6bbd04bb0b7b74a6.rlib",
+    "kaspa_database": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_database-73c0e2813b89ae91.rlib"
+  },
+  "native100kAccepted": false,
+  "performanceApproval": false
+}
