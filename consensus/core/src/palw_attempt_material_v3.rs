@@ -281,6 +281,15 @@ pub fn draft_native_ready_v3(
     })
 }
 
+/// **Where the owned PAV3 custody form is required** (lead default 2026-10-15, pending user review): past
+/// `palw_monetary_material_v1`, for every native attempt EXCEPT the BASE floor class. The floor carries no paid material, and
+/// requiring provider signatures for it would let provider absence halt floor liveness. Below the fence: never (and a PAV3 carriage
+/// there is refused by the shape gate as the live build refuses it). One predicate for consensus, the kaspad producer and the
+/// remote miner.
+pub fn palw_native_custody_required_v3(params: &crate::palw_state_v2::PalwStateParamsV2, class_id: &Hash64, daa: u64) -> bool {
+    params.monetary_material_at_v1(daa).is_some() && *class_id != params.base_class_id()
+}
+
 /// Explicit parser for the two native header forms. Old decode_wire accepts
 /// only PAV2; owned-form callers use this function after their fence check.
 pub fn native_attempt_base_v3(bytes: &[u8]) -> Result<PalwAttemptEnvelopeV2, String> {

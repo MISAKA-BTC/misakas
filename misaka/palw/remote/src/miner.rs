@@ -285,7 +285,7 @@ pub fn step(
     signer: &dyn AttemptSigner,
     network_draw: &dyn Fn(&Header, u64, bool) -> bool,
 ) -> Result<StepOutcome, MinerHalt> {
-    step_with_custody(nodes, cfg, state, executor, signer, network_draw, &|_| false, None)
+    step_with_custody(nodes, cfg, state, executor, signer, network_draw, &|_, _| false, None)
 }
 
 /// [`step`] that knows where the RFC-0008 native custody form is in force (`custody_in_force(template DAA)`, from this build's
@@ -298,7 +298,7 @@ pub fn step_with_custody(
     executor: &mut dyn AttemptExecutor,
     signer: &dyn AttemptSigner,
     network_draw: &dyn Fn(&Header, u64, bool) -> bool,
-    custody_in_force: &dyn Fn(u64) -> bool,
+    custody_in_force: &dyn Fn(u64, &Hash64) -> bool,
     custody: Option<&mut dyn crate::attempt::NativeCustodyV3>,
 ) -> Result<StepOutcome, MinerHalt> {
     let views: Vec<ViewAdapter<'_>> = nodes.iter().map(|n| ViewAdapter(*n)).collect();
@@ -350,7 +350,8 @@ pub fn step_with_custody(
     };
     let gated = GatedSigner { inner: signer, recheck: &recheck };
 
-    let native = custody_in_force(template_header.daa_score);
+    // The BASE floor class is exempt (lead default 2026-10-15): the caller's predicate takes the template's class.
+    let native = custody_in_force(template_header.daa_score, &accepted.observation.facts.class_id);
     let mounted = match (native, custody) {
         (false, _) => mount_attempt(
             &accepted,

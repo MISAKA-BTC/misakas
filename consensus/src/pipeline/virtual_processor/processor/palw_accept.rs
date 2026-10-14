@@ -2376,6 +2376,9 @@ impl VirtualStateProcessor {
         let state =
             self.palw_candidate_state_v2_checked(checkpoint).map_err(|e| format!("provider pre-entropy state unavailable: {e:?}"))?;
         let a = &ready.base.attempt;
+        if !palw_native_custody_required_v3(params, &a.class_id, header.daa_score) {
+            return Err("native custody is not required here (BASE floor class exempt)".into());
+        }
         let network = self.palw_network_domain_v2();
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         ready.base.validate_stateless_v2(network, pre_pow, header.timestamp, header.nonce).map_err(|e| e.to_string())?;

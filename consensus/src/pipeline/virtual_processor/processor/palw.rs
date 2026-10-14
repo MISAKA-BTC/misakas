@@ -8093,8 +8093,12 @@ impl VirtualStateProcessor {
             .map_err(|e| e.to_string())?;
         let native_ready =
             if kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
-                if state_params.monetary_material_at_v1(header.daa_score).is_none() {
-                    return Err("PAV3 native custody form below its monetary fence".into());
+                if !kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(
+                    state_params,
+                    &envelope.attempt.class_id,
+                    header.daa_score,
+                ) {
+                    return Err("PAV3 native custody form below its monetary fence or for the exempt BASE floor class".into());
                 }
                 let ready = kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(
                     &header.palw_commitment,
@@ -8103,7 +8107,11 @@ impl VirtualStateProcessor {
                 ready.verify_prior(state, anchor, header.daa_score, Self::verify_mldsa87_with_context_bool)?;
                 Some((ready.class_ticket(anchor), ready))
             } else {
-                if state_params.monetary_material_at_v1(header.daa_score).is_some() {
+                if kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(
+                    state_params,
+                    &envelope.attempt.class_id,
+                    header.daa_score,
+                ) {
                     return Err("new native work requires the owned signed PAV3 custody form".into());
                 }
                 None

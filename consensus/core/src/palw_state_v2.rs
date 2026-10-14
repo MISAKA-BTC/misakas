@@ -20790,8 +20790,13 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
-    let monetary_ready = palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)?;
-    if monetary_ready.is_none() {
+    // Lead default 2026-10-15 (pending user review): the BASE floor class is exempt from native custody (no paid material; provider
+    // absence must not halt floor liveness). Below the monetary fence both calls below are no-ops for every class, so skipping
+    // them for the floor is byte-identical there.
+    let floor_exempt = claim.class_id == builder.params.base_class_id();
+    let monetary_ready =
+        if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
+    if monetary_ready.is_none() && !floor_exempt {
         builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     }
     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;

@@ -788,8 +788,13 @@ fn main() {
         }
         // RFC-0008 PAV3: where this build's compiled params put the native custody form in force, this binary (no provider
         // exchange) holds by name rather than drawing a PAV2 attempt every peer refuses.
-        let custody_in_force =
-            |daa: u64| params.palw_monetary_material_v1.as_ref().is_some_and(|fence| fence.activation.is_active(daa));
+        let custody_in_force = |daa: u64, class: &kaspa_hashes::Hash64| {
+            params.palw_monetary_material_v1.as_ref().is_some_and(|fence| fence.activation.is_active(daa))
+                && match &params.palw_consensus_mode {
+                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => *class != bundle.base_class_id,
+                    _ => true,
+                }
+        };
         let outcome = step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, None);
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));

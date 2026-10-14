@@ -1647,6 +1647,8 @@ impl PalwProducerService {
             .palw_monetary_material_v1
             .as_ref()
             .is_some_and(|fence| fence.activation.is_active(template.block.header.daa_score))
+            // Lead default 2026-10-15: the BASE floor class is exempt (no paid material) and keeps producing PAV2.
+            && !facts.is_base_class
         {
             return Err(format!(
                 "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: new native work at DAA {} needs a PAV3 provider exchange this node does not run",
