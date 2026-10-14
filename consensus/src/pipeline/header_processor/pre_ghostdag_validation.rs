@@ -937,4 +937,57 @@ mod palw_carriage_lane_tests {
             }
         }
     }
+
+    /// **RFC-0008 PAV3: provider signatures are free bytes to the PoW, so the executor seal is checked here** — a relayed
+    /// byte flip in any provider signature, or in the seal itself, is refused at the header stage from one solve, while the
+    /// honest sealed carriage passes the same stateless arm as its PAV2 base. Roster membership stays the fold's question.
+    #[test]
+    fn a_pav3_provider_signature_or_seal_flip_is_refused_statelessly() {
+        use kaspa_consensus_core::palw_attempt_material_v3::{
+            PalwAttemptMaterialEnvelopeV3, PalwNativeMaterialBindingV3, PalwNativeMaterialReadyV3,
+        };
+        use kaspa_consensus_core::palw_material_capacity_v1::{PalwMaterialCodecV1, PalwMaterialManifestV1, PalwMaterialScopeV1};
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        let lane = PalwAttemptLaneV1::Unfenced;
+        let algo_id = POW_ALGO_ID_PALW_COMMITTED_V2;
+        let unsealed = header_with(algo_id, Vec::new());
+        let base = PalwAttemptEnvelopeV2::decode_wire(&signed_carriage(&unsealed, lane.attempt_version(), 1_000)).unwrap();
+        let claim = attempt_id_v2(&base.attempt);
+        let manifest = PalwMaterialManifestV1 {
+            root: Hash64::from_u64_word(0x51),
+            scopes: vec![PalwMaterialScopeV1 {
+                claim,
+                commitment: base.attempt.execution_root,
+                codec: PalwMaterialCodecV1::NativeHeldComplete,
+                bytes: 1,
+                units: 1,
+                content: Hash64::from_u64_word(0x52),
+            }],
+        };
+        let provider = |word| PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(word), 0));
+        let ready = PalwNativeMaterialReadyV3 {
+            version: 3,
+            session: manifest.root,
+            consent: Hash64::from_u64_word(0x53),
+            binding: PalwNativeMaterialBindingV3 { claim, execution_key: Hash64::from_u64_word(0x54), manifest },
+            providers: vec![provider(0x61), provider(0x62)],
+        };
+        let len = base.signature.len();
+        let sealed =
+            PalwAttemptMaterialEnvelopeV3::assemble(base, ready, vec![vec![0x11; len], vec![0x22; len]], |message, context| {
+                libcrux_ml_dsa::ml_dsa_87::sign(&keypair().signing_key, message, context, [0x5Bu8; 32])
+                    .map(|s| s.as_ref().to_vec())
+                    .map_err(|e| format!("{e:?}"))
+            })
+            .unwrap();
+        let carried = |envelope: &PalwAttemptMaterialEnvelopeV3| header_with(algo_id, envelope.encode_wire());
+        assert_eq!(palw_carriage_stateless_v1(&carried(&sealed), lane, domain(), None, 0), Ok(()), "the honest sealed carriage");
+        let mut flipped = sealed.clone();
+        flipped.provider_signatures[1][7] ^= 0x01;
+        assert_ne!(carried(&flipped).hash, carried(&sealed).hash, "a provider signature byte is block identity");
+        assert!(palw_carriage_stateless_v1(&carried(&flipped), lane, domain(), None, 0).is_err(), "provider flip refused");
+        let mut reseal = sealed.clone();
+        reseal.seal[0] ^= 0x01;
+        assert!(palw_carriage_stateless_v1(&carried(&reseal), lane, domain(), None, 0).is_err(), "seal flip refused");
+    }
 }
