@@ -647,8 +647,8 @@ P_m(d)  = S̄_m(d)^1.5 / sum_j S̄_j(d)^1.5                        [分母0な�
   モデル枠を実際に使うには、それに見合うMinerと計算能力が要る。資本預託だけでは支払わず、有効claim・Final・固有workを要する。
 * **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbase（`R_m`）とブロック報酬は、claimを生成したMinerと、
   検証責任を果たしたVerifierにだけ帰属する。登録者・ownerへのcoinbase legは置かない（[ADR-0091](../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の
-  「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**である。売買ごとのBILI額の1 %がownerへ入り、5 %がburnされる
-  （[ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)・[ADR-0090](../adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)）。
+  「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**である。売買ごとのBILI額の5 %がownerへ入り、5 %がburnされる
+  （[ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`で[ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)の1 %から引き上げ）。
   モデルが使われてPositionの売買が増えるほど登録者の収入が増える。報酬の5 %によるPosition買い上げ（ADR-0091）はlegもburnもなく、価格を上げるだけで登録者へ払わない。
   登録者が自らMiner/Verifierとして参加した場合は、その役割の報酬を他の参加者と同じ規則で受ける。
 * **Verifier元本の未決事項。** Panel=0での検証者の参加手順、検証責任の範囲、拘束期間、報酬条件、bondを預けるだけで実際には検査しない問題への対策は、
@@ -667,7 +667,7 @@ P_m(d)  = S̄_m(d)^1.5 / sum_j S̄_j(d)^1.5                        [分母0な�
 | ブロック生成機会 | `P_m`に比例 |
 | coinbase | 同じ`P_m`に比例、二重乗算なし |
 | 個別Minerの上限 | 7日相当DAAのQ/B/R/F |
-| モデル登録者の収入 | ModelPositionの売買手数料（1 %）のみ。マイナー報酬は直接分配しない |
+| モデル登録者の収入 | ModelPositionの売買手数料（5 %、ADR-0114）のみ。マイナー報酬は直接分配しない |
 | モデルの取得・共有 | オフチェーン |
 | 「不正の期待利益が負」 | 最終Goal・gateにしない（PRINCIPLES §0） |
 | 非公開モデルの残余リスク | 明示的に許容し、bond上限と公開反証で対応 |
