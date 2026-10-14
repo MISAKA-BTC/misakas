@@ -1796,3 +1796,283 @@ fn convert(
 }
 
 fn source_relation(class:&NativeTextClassV29)->Digest{object_id(b"misaka-palw/native/exact-real-source-relation/v29",&(29u16,class.original_program,class.real_parameter,class.inventory))}
+/// Text29's own action grammar inside the funded namespace (actions 27..=40). The
+/// caller (`palw_flat_execution_fold_v11::apply`) runs this only past BOTH the
+/// funded fence and the trusted Final27 fence; below them every Text29 body rides
+/// unjudged. A refusal is a dismissed body: any persisted predebit stays paid.
+/// Action 34 has no body of its own — a paid paged proof reveals only at its
+/// complete Part/Assembly/Court-debited assembly through action 32.
+pub(super) fn apply(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    action: u8,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    match action {
+        TEXT_REGISTER_ACTION_V29 => register(builder, ctx, signer, p, body),
+        TEXT_PREPARE_ACTION_V29 => prepare(builder, ctx, signer, p, body),
+        TEXT_ACCEPT_ACTION_V29 => accept(builder, ctx, signer, p, body),
+        TEXT_FUND_ACTION_V29 => fund(builder, ctx, signer, p, body),
+        TEXT_COMMIT_ACTION_V29 => commit(builder, ctx, signer, p, body),
+        TEXT_PAGE_ACTION_V29 => super::paged::part(builder, ctx, signer, body),
+        TEXT_OWN_ACTION_V29 => own(builder, ctx, signer, p, body),
+        TEXT_REVEAL_ACTION_V29 => Err(refused("text29 paged proof reveals only at its paid assembly (action 32)")),
+        TEXT_CLOSE_ACTION_V29 => close(builder, ctx, signer, p, body),
+        TEXT_REQUEST_ACTION_V29 => public::request(builder, ctx, signer, p, body),
+        TEXT_ANSWER_ACTION_V29 => public::answer(builder, ctx, signer, p, body),
+        TEXT_DEFAULT_ACTION_V29 => public::default(builder, ctx, signer, p, body),
+        TEXT_DISCOVERY_ACTION_V29 => convert(builder, ctx, signer, p, body),
+        TEXT_COLLECT_ACTION_V29 => match body.first() {
+            // kind 0: retire one expired paid paged owner (exact 129 bytes).
+            Some(0) => expire_owner(builder, ctx, signer, p, body),
+            // kind 1: collect the next indexed public answer/default cache of one job.
+            Some(1) if body.len() == 65 => public::collect_step(builder, ctx, signer, p, body[1..].try_into().unwrap()),
+            // kind 2: retire one terminal job's own rows once every liability is gone.
+            Some(2) if body.len() == 65 => collect_terminal(builder, ctx, signer, p, body[1..].try_into().unwrap()),
+            _ => Err(refused("text29 collection exact kind grammar")),
+        },
+        _ => Err(refused("unknown text29 action")),
+    }
+}
+/// Requester DA bonds still open on Text29 public requests (part of the bond's
+/// unavailable collateral beside the original producer reserve).
+pub(super) fn demand_reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {
+    public::reserved(r, bond)
+}
+/// Public collection of one genuinely terminal Text29 job (collection kind 2).
+/// Mirrors the funded v24 / Stage28 collectors: every paid owner, public answer
+/// and default cache must already be retired; the source guarantee, the shared
+/// quota subject and the joint queue30/physical22 leases are retired ONCE under
+/// a kernel-checked original terminal grant; then the finite owner catalogues
+/// regain their slots. The immutable original credit receipt (credit kind 0),
+/// consumed-consent anchor (kind 3) and the permanent nonce counter survive, so
+/// redemption audit and replay protection never depend on retained job rows.
+fn collect_terminal(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    id: Digest,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_flat_execution_capacity_v22::NativeCarriageGlobalV22;
+    use misaka_palw_kernel::flat_quota11::{source16::retire_expired_source_v16, stage14::source26::StageSourceCallerRowV26};
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let h = original_header(r, id)?;
+    let post_bytes = r.aux.get(&(EXECUTION_PROTECTED_TABLE_V11, k(0, &id))).map_or(0, Vec::len);
+    if !paid_restore(builder, ctx, signer, p, Some(h.class), 65 + h.book_bytes as usize + post_bytes)? {
+        return Ok(());
+    }
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let b = original_book(r, &h)?;
+    let f = b.funding().clone();
+    let s = b.settlement().ok_or_else(|| refused("text29 collection genuine original settlement absent"))?.clone();
+    let (credited, queue, established): (NativeTextSettlementV29, Hash64, u64) = r
+        .aux_row(EXECUTION_CREDIT_TABLE_V11, &k(0, &id))
+        .ok_or_else(|| refused("text29 collection immutable original credit receipt absent"))?;
+    if !matches!(b.terminal(), NativeTextTerminalV29::Final | NativeTextTerminalV29::Convicted | NativeTextTerminalV29::Refunded)
+        || credited != s
+        || queue != terminal_queue(&h, s.producer > 0)
+        || b.escrow() != 0
+        || ctx.daa_score <= f.deadline
+        || b.claim().is_some_and(|c| ctx.daa_score <= c.retained_until)
+    {
+        return Err(refused("text29 collection lacks genuine expired original terminal and single credit"));
+    }
+    if !public::all_collected(r, id)? {
+        return Err(refused("text29 collection original public answer/default caches remain"));
+    }
+    if let Ok(status) = paid_status(r, id) {
+        if status.active || status.paid_owners.iter().any(|v| *v != [0; 64]) || ctx.daa_score <= status.latest_paid_horizon {
+            return Err(refused("text29 collection original paid owner liability remains"));
+        }
+    }
+    let owners: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &id, 4 + 4 * 64).unwrap_or_default();
+    if owners.len() > 4 {
+        return Err(refused("text29 collection original owner lifetime catalogue differs"));
+    }
+    for owner in &owners {
+        let own = r.native_paged_seal_original_v29(id, *owner).ok_or_else(|| refused("text29 collection archived owner absent"))?;
+        let (root, caller): (Digest, StageSourceCallerRowV26) = r
+            .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(26u8, id, *owner)))
+            .ok_or_else(|| refused("text29 collection original caller retirement absent"))?;
+        if !own.retired
+            || own.original_funding != h.funding
+            || ctx.daa_score <= own.horizon
+            || caller.root() != root
+            || !caller.retired
+            || caller.owner != *owner
+            || caller.original_paid != own.original_paid_receipt
+            || caller.remaining != Default::default()
+        {
+            return Err(refused("text29 collection original owner/source/cache liability remains"));
+        }
+    }
+    let prep: Prepared = read(r, EXECUTION_POLICY_TABLE_V11, 0, &id, (1 << 20) + 8192)
+        .ok_or_else(|| refused("text29 collection original initial contract absent"))?;
+    let q = quote(builder, p, &prep.wire)?;
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if q.maximum.record() != &f.maximum || q.quota.plan().record().root() != h.quota_root {
+        return Err(refused("text29 collection original quote/maximum rebound"));
+    }
+    let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let counter = r.execution_nonce_counter_v11(&f.request.requester_operator).map_err(refused)?;
+    let terminal = check_text_terminal_v29(
+        &q.quota,
+        &funded_anchor(&b, &q.quota),
+        &p.quota,
+        &TextNativeTerminalAnchorV29 {
+            job: id,
+            funding: h.funding,
+            terminal_book: b.root(),
+            request_key: f.request.root(),
+            nonce_witness: nonce_witness(f.request.requester, &counter),
+            producer_credit: s.producer,
+            requester_credit: s.requester,
+            actual_slash: s.actual_collected_slash,
+            finder_credit: s.finder_credit,
+            escrow_debit: s.escrow_debit,
+            proof: s.proof,
+            established,
+            closed_escrow: b.escrow() == 0,
+        },
+        &epoch,
+    )
+    .map_err(refused)?;
+    // Source guarantee: same interval retires on the producer's own shard; a later
+    // interval charges only the current caller's ordinary fixed-row collection.
+    let (source_root, source_row) = read_rooted::<SourceObligationV16>(r, key(&(16u8, id)), SOURCE_ROW_BYTES_V16 as usize)?
+        .ok_or_else(|| refused("text29 collection original source obligation absent"))?;
+    if source_row.plan_root != q.source.root() || source_row.original_consent_root != f.consent {
+        return Err(refused("text29 collection original source consent/quote differs"));
+    }
+    let mut shard = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), id)?;
+    let mut producer_source = None;
+    if !source_row.retired {
+        if epoch.network_interval == f.admitted_interval {
+            let base = quota_shard(builder, p, &epoch, f.request.producer, id)?;
+            let mut src = source_shard_from_rows(
+                p,
+                &q.source,
+                &base.global_row(),
+                &base.actor_row(),
+                base.subject_row().ok_or_else(|| refused("text29 collection original subject absent"))?,
+                Some((&source_row, &source_root)),
+            )?;
+            src.retire(&p.quota, &epoch, &q.source, &terminal).map_err(refused)?;
+            producer_source = Some(src);
+        } else {
+            retire_expired_source_v16(&mut shard, &p.quota, &epoch, &q.source, &source_row, &source_root, &terminal)
+                .map_err(refused)?;
+        }
+    }
+    // Joint original queue30 + physical22 retirement, exactly once.
+    let (qlease_root, mut qlease): (Digest, NativeQueueLeaseV30) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(30u8, id, 1u8)))
+        .ok_or_else(|| refused("text29 collection original queue lease absent"))?;
+    let (jroot, mut journal): (Digest, NativePagedLeaseJournalV29) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(29u8, id, 22u8)))
+        .ok_or_else(|| refused("text29 collection original physical lease absent"))?;
+    let (pgroot, mut physical): (Digest, NativeCarriageGlobalV22) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(22u8, 0u8)))
+        .ok_or_else(|| refused("text29 collection original physical global absent"))?;
+    let qraw = r
+        .aux
+        .get(&(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8))))
+        .ok_or_else(|| refused("text29 collection original queue global absent"))?;
+    if qraw.len() > NATIVE_QUEUE_ROW_LIMIT_V30 {
+        return Err(refused("text29 collection queue global cap"));
+    }
+    let (qgroot, mut global): (Digest, NativeQueueGlobalV30) =
+        borsh::from_slice(qraw).map_err(|_| refused("text29 collection queue global grammar"))?;
+    let (slotroot, slots): (Digest, crate::palw_flat_execution_capacity_v22::NativePhysicalSlotsV22) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(22u8, id, 2u8)))
+        .ok_or_else(|| refused("text29 collection original streams absent"))?;
+    if qlease.root() != qlease_root
+        || qlease.job != id
+        || qlease.original_funding != h.funding
+        || qlease.original_plan != f.maximum.queue_plan
+        || journal.root() != jroot
+        || journal.namespace != 29
+        || journal.job != id
+        || journal.funding != h.funding
+        || journal.lease_root != journal.lease.root()
+        || physical.root() != pgroot
+        || global.root() != qgroot
+        || slots.root() != slotroot
+        || slots.job != id
+        || slots.owners.iter().any(|v| *v != [0; 64])
+        || slots.not_before.iter().any(|d| ctx.daa_score <= *d)
+    {
+        return Err(refused("text29 collection original queue/physical/stream terms differ or remain owned"));
+    }
+    let closure = CheckedNativeQueueClosureV30::from_current_native(
+        id,
+        h.funding,
+        qlease_root,
+        journal.lease_root,
+        b.root(),
+        ctx.daa_score,
+        false,
+    )
+    .map_err(refused)?;
+    let qp = &builder.extras.kernel_route.as_ref().unwrap().native_final.as_ref().unwrap().policy.queue_policy;
+    global.retire(&mut physical, qp, &mut qlease, &mut journal.lease, &closure).map_err(refused)?;
+    shard.collect_closed_expired(&p.quota, &epoch, &terminal).map_err(refused)?;
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let mut requester_ids: Vec<Digest> = read(r, EXECUTION_JOB_OWNER_TABLE_V11, 0, &h.requester, 4 + 8 * 64).unwrap_or_default();
+    let mut producer_ids: Vec<Digest> = read(r, EXECUTION_JOB_OWNER_TABLE_V11, 1, &h.producer, 4 + 8 * 64).unwrap_or_default();
+    if !requester_ids.contains(&id) || !producer_ids.contains(&id) {
+        return Err(refused("text29 collection original catalogue membership absent"));
+    }
+    requester_ids.retain(|v| *v != id);
+    producer_ids.retain(|v| *v != id);
+    // ---- every fallible check is above; journal writes only below ----
+    if let Some(src) = &producer_source {
+        write_source_shard(builder, src, id);
+    }
+    write_shard(builder, &shard, id);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(30u8, 0u8)), Some(key(&(global.root(), global))));
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, 0u8)), Some(key(&(physical.root(), physical))));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(0, &h.requester), Some(key(&requester_ids)));
+    builder.write_kernel_row(EXECUTION_JOB_OWNER_TABLE_V11, k(1, &h.producer), Some(key(&producer_ids)));
+    builder.write_kernel_row(
+        EXECUTION_CREDIT_TABLE_V11,
+        k(4, &id),
+        Some(key(&(b.root(), object_id(b"misaka-palw/native/text-collected-credit/v29", &(&s, queue, established)), ctx.daa_score))),
+    );
+    for owner in &owners {
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, *owner)), None);
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, id, *owner)), None);
+    }
+    for kk in [
+        quota_key(2, &id),
+        key(&(16u8, id)),
+        key(&(16u8, id, 1u8)),
+        key(&(26u8, id, 0u8)),
+        key(&(29u8, id, 0u8)),
+        key(&(29u8, id, 1u8)),
+        key(&(29u8, id, 3u8)),
+        key(&(29u8, id, 22u8)),
+        key(&(29u8, id, 23u8)),
+        key(&(30u8, id, 1u8)),
+        key(&(22u8, id)),
+        key(&(22u8, id, 2u8)),
+    ] {
+        builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, kk, None);
+    }
+    for (table, kk) in [
+        (EXECUTION_JOB_TABLE_V11, k(0, &id)),
+        (EXECUTION_JOB_TABLE_V11, k(1, &id)),
+        (EXECUTION_POLICY_TABLE_V11, k(0, &id)),
+        (EXECUTION_PROTECTED_TABLE_V11, k(0, &id)),
+        (EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id)),
+        (EXECUTION_DEMAND_COUNT_TABLE_V11, k(0, &id)),
+    ] {
+        builder.write_kernel_row(table, kk, None);
+    }
+    builder.note_kernel_bond(&h.requester);
+    builder.note_kernel_bond(&h.producer);
+    Ok(())
+}

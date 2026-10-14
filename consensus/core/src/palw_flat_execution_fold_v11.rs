@@ -26,6 +26,12 @@ mod final27;
 mod gc;
 #[path = "palw_flat_execution_source_fold_v16.rs"]
 pub(super) mod source;
+#[path = "palw_native_paged_fold_v29.rs"]
+mod paged;
+/// Text29 (original-maximum EOS text jobs) inside the funded namespace,
+/// actions 27..=40; dormant below the funded and Final27 fences.
+#[path = "palw_native_text_fold_v29.rs"]
+mod text29;
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())
@@ -773,6 +779,9 @@ pub(super) fn apply(
         EXECUTION_ACTION_FUND_V23 => fund(builder, ctx, signer, &p, body, true, false),
         25 => final27::accept(builder, ctx, signer, &p, body),
         26 => fund(builder, ctx, signer, &p, body, true, true),
+        crate::palw_native_text_stop_v29::TEXT_REGISTER_ACTION_V29..=crate::palw_native_text_stop_v29::TEXT_COLLECT_ACTION_V29 => {
+            text29::apply(builder, ctx, signer, &p, action, body)
+        }
         EXECUTION_ACTION_COMMIT_V11 => commit(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_CLOSE_V11 => close(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SEAL_V11 => court::seal(builder, ctx, signer, &p, body),
@@ -1109,6 +1118,8 @@ impl PalwChainStateV2 {
             .filter_map(|id| r.execution_job_header_v11(&id))
             .filter(|h| h.producer == *bond)
             .fold(0u128, |sum, h| sum.saturating_add(h.producer_reserved as u128))
+            // Text29 keeps its own namespaced producer catalogue and headers.
+            .saturating_add(text29::reserved(r, bond))
     }
 }
 
@@ -1124,6 +1135,9 @@ pub(super) fn candidate_withdraw_held(
     let count = route
         .aux
         .range((EXECUTION_JOB_TABLE_V11, Vec::new())..(EXECUTION_JOB_TABLE_V11 + 1, Vec::new()))
+        // Only original v11 job keys (one 64-byte digest). Text29 shares the table
+        // under its own namespaced (29, kind, id) keys and never names a v9 candidate.
+        .filter(|((_, k), _)| k.len() == 64)
         .take(EXECUTION_LIVE_JOBS_MAX_V11 as usize + 1)
         .count();
     if count == 0 {
@@ -1138,6 +1152,9 @@ pub(super) fn candidate_withdraw_held(
     }
     let route = builder.state.kernel_route.as_ref().unwrap();
     for ((_, job_key), bytes) in route.aux.range((EXECUTION_JOB_TABLE_V11, Vec::new())..(EXECUTION_JOB_TABLE_V11 + 1, Vec::new())) {
+        if job_key.len() != 64 {
+            continue;
+        }
         let job: Digest = borsh::from_slice(job_key).map_err(|_| refused("native original job retention key"))?;
         let h = native_execution_job_header_v11(bytes).map_err(refused)?;
         if h.job_id != job {
@@ -1161,7 +1178,7 @@ impl PalwChainStateV2 {
             .filter_map(|id| r.execution_demand_v11(&id))
             .filter(|d| d.body.requester == *bond && !d.body.settled)
             .fold(0u128, |sum, d| sum.saturating_add(d.body.bond as u128));
-        trace.saturating_add(source::reserved(self, bond))
+        trace.saturating_add(source::reserved(self, bond)).saturating_add(text29::demand_reserved(r, bond))
     }
 }
 
