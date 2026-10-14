@@ -6,6 +6,9 @@
 > **Implementation update 2026-10-11:** The non-seat watcher, dormant segment-resident pricing and per-shard V3 engine are implemented; their implementation is not activation approval. V3 restore now derives its seal/entropy commitments and retains the verified output after shared-epoch pruning under explicit engine carriage version 2. Live shard v1 at DAA 5,300 is preserved. See [SHARD §1.4](../design/palw/shard-rfc6-10.md#14-restore-time-seal-and-entropy-provenance-2026-10-11) and the [four-RFC audit](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md). D-S drill, public source/soundness, economic and worst-resource approvals remain open.
 >
 
+> **Spec closures 2026-10-15:** normative rules and named parameters for R6-CELL/DRAW/OUTSIDE/PRICE/MIGRATION and ALL-MODEL are in [Spec closures — 2026-10-15](#spec-closure-2026-10-15). No PASS, activation or change to live v1 is implied.
+>
+
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
@@ -364,7 +367,8 @@ compares roots; a cell needs its inputs' leaves (§1.3). These are the routes, i
 3. **On chain, enforced.** It uses the IR DA units past `palw_tir_fence2`: `TirStepLeaf { index }` for a
    leaf, and `TirStepNode` for a 10-level subtree frontier (64 KiB). Withholding past `W_disclose`
    (1,200 DAA on testnet-12) is a default under the DA court's rules: void and slash (ADR-0062, ADR-0152
-   DA-1..9).
+   DA-1..9). *(2026-10-15: demands are limited to claim-specific step material; demands for model weight bytes are
+   prohibited for new rulesets — spec closures, ALL-MODEL item 3.)*
 
 A cell's inputs are *runs*: one carry-out run per position, and history rows in whole tiles. So this RFC
 adds one unit, **`TirStepRun { first, count }`**: a contiguous run of step leaves with its two boundary
@@ -416,7 +420,7 @@ PALW-VF-33's run inside each shard: `K = s_shard − 1 = 2` segments, one drawn 
 both, each partial seat attesting one by the drawn rotation. So `S_P = s_shard − 1` is the target, and
 every cell is attested by two seats: the full-shard seat and its partial seat.
 
-The recommended first step (open question 5) is `S_P = 1`. Each seat then attests its whole shard, and
+The recommended first step (open question 5) is `S_P = 1` *(historical; the Decision section governs v1)*. Each seat then attests its whole shard, and
 a shard's two attesters are its first two seats. Segments switch on per class later.
 
 ### 4.2 An outsider per shard (ADR-0147, generalised)
@@ -439,7 +443,8 @@ It verifies every row against the class root, as a seat does at readiness.
 
 Its cost is the shard's bytes, not the model's. That is §8's 26 % for a 4-shard 1.5B class, and 7.7 GiB
 of a 32B shape at 4 shards. An outsider that cannot fetch or hold its shard says `Incapable`; the part
-cannot license and the claim voids at its receipt deadline. This is ADR-0147's rule: *the cost of a
+cannot license and the claim voids at its receipt deadline. *(2026-10-15: this is a non-fraud termination; it never
+slashes, penalizes the registrant or suspends the class — spec closures, R6-OUTSIDE item 3, under ADR-0177 D1.)* This is ADR-0147's rule: *the cost of a
 model the network does not run lands on the claims of that model*. What changes is that "the network
 does not run" now means "no outsider can hold one shard", not "no outsider can hold the model".
 
@@ -734,6 +739,8 @@ on the reference evaluator only and needs no GPU.
 
 ## 10. Activation
 
+*(Historical plan: `palw_tir_shard_v1` is armed on testnet-12 at DAA 5,300; later V3/segment-v2 profiles have their own fences.)*
+
 **One dormant fence, `palw_tir_shard_v1`.** Past it, for IR classes only:
 
 - `ClassShardPlanDeclared` may name an IR class (`S_L`, `S_P`);
@@ -844,7 +851,8 @@ with a declared plan:
 
 ## Compatibility and migration
 
-- Dormant: no fingerprint, object, receipt or rule changes until the fence is armed (§10).
+- Dormant: no fingerprint, object, receipt or rule changes until the fence is armed (§10). *(Historical: v1 is armed on
+  testnet-12 at DAA 5,300; see the 2026-10-08 status note and spec closures, R6-MIGRATION.)*
 - Legacy classes are untouched, and so are ADR-0099/0100's fences and refusals.
 - A flat IR class (no plan) is exactly today's: `S_L = 1`, the recount over cells is the recount over
   segments.
@@ -991,3 +999,123 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 **状態:** 設計の改定・提案。実装、敵対的試験、経済評価、ネットワーク有効化は未実施。数値は本番定数ではない。 全文は[Panel=1・Bond/time予算・モデル拘束資本倍率の改定案（2026-10-12）](../design/palw/panel1-bond-budget-model-capital-amendments-2026-10-12.md) §4。
 
 Panel=1暫定modeでは、単一seatで全shard・全検証scopeを覆える経路だけを対象にする。shard outsider、segment mask、`seats-1` 等の複数seat前提を一括定数置換しない（RFC-0010 2026-10-12改定の1-seat移行監査）。
+
+<a id="spec-closure-2026-10-15"></a>
+
+## Spec closures — 2026-10-15
+
+**Scope and reading rule.** This section closes specification gaps for R6-CELL, R6-DRAW, R6-OUTSIDE, R6-PRICE,
+R6-MIGRATION and the cross-cutting ALL-MODEL group of the
+[design audit's requirement index](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引).
+It states rules that the [RFC6/10 implementation record](../design/palw/shard-rfc6-10.md) and the 2026-10-13/14 RFC06
+records implement but this RFC never stated, and marks stale text. [PRINCIPLES](../PRINCIPLES.md) and
+ADR-0173/0176/0177/0178 rank above it; later user rulings prevail over older RFC text. Nothing here changes live
+shard v1 at DAA 5,300, arms a fence, assigns a height or records a PASS. Mechanics or private-process results are not
+independent review or economic evidence. "USER DECISION REQUIRED" marks a named parameter whose value needs the
+user's decision; a recommendation appears only where an existing record justifies it.
+
+### R6-CELL — coverage of new cell profiles
+
+The first-divergence lemma (§2.1) remains a localization/conformance lemma for a **complete** check of a cell's
+commit points. For any new probabilistic or algebraic cell profile (RFC07 Part V/VI) the following are normative:
+
+- **PALW-SH-10 (relation coverage).** A cell receipt's declared scope MUST name every relation of the cell it
+  covers — products, quantization/rounding, nonlinear, routing/TopK, `Hist`/`Fixed` memory updates, carry-in and
+  carry-out boundary rows, decode-token door — and the claim's licence MUST cover every relation of every cell.
+  A relation without a checker leaves the claim unlicensable.
+- **PALW-SH-11 (boundary equality).** Equality of a carry-out with the next shard's carry-in, and of a checkpoint with
+  the next segment's input, MUST have a designated checker or an aggregate relation that covers it. A committed but
+  unchecked boundary is not coverage.
+- **PALW-SH-12 (whole-claim error).** The whole-claim false-accept bound is the union over all cells, relations,
+  boundaries and selection loss, charged per RFC07's cumulative accounting. Checking a random subset of cells is
+  not whole-claim coverage; one faulty cell is found only with its selection probability.
+- **PALW-SH-13 (localization).** A failed check localizes through authenticated partitions to an existing exact
+  terminal (`TirShardCourtAccused`, logits doors, H-dissection), with bounded total work, bytes and moves, and is
+  fileable by any eligible public bond holding the authenticated material.
+- Remaining (observations): proof of whole-claim soundness for small constraint checks, and boundary/memory/routing
+  coverage per accepted model profile, are not established.
+
+### R6-DRAW — the V3 per-shard draw
+
+In addition to the 2026-10-11 restore contract above:
+
+1. Per-stratum populations, seed and strata are frozen in the pre-entropy snapshot. Each stratum draws its class seats
+   one per operator, plus an optional outsider whose operator holds no other outsider seat of the claim in this or an
+   earlier round.
+2. A retry excludes every operator that sat in that stratum in an earlier round; alternates are never reused per stratum.
+3. **One reservation:** a bond seated in several strata of one round reserves its per-seat exposure once per claim and
+   binding; retries do not accumulate reservations.
+4. A stratum that cannot be filled ends the claim `NoCapablePanel` (non-fraud). A sharded class never falls back to a
+   flat panel.
+5. The per-block draw budget counts draws (one per stratum); the first due claim that does not fit stops that block's
+   draws; no subset of strata is chosen.
+6. **Named parameters** (V3 only; live v1 constants unchanged): per-claim retry bound, strata count bounds (code:
+   2..64), class seats and outsider per stratum, and the retained candidate-population cap (the dormant mechanics refuse a
+   fifth retained 100k population): **value: USER DECISION REQUIRED**.
+7. **Snapshot transport.** Four retained 100k populations with 100,001 bonds encode to 437,719,699 bytes, above the
+   unchanged legacy 384 MiB cap; that shape requires the negotiated protocol-107 compressed transport. Its experimental
+   bounds (512 MiB canonical decoded, 384 MiB wire) are not approved: **value: USER DECISION REQUIRED**. Old peers keep
+   protocol 106 and the legacy cap; a timeout never switches codec.
+8. Remaining: V3 arming, historical collateral headroom, multi-process P2P/pruned IBD (validation-only).
+
+### R6-OUTSIDE — non-seat verification and pre-emption
+
+1. A non-seat watcher holds no seat, signs no receipt and needs no outsider selection. It may file
+   `TirShardCourtAccused` or a `TirStepRun` DA demand within the non-seat budget, using only public authenticated
+   material; it never asks the producer with a seat's signature.
+2. **Pre-emption.** While a DA session, court session or `DefaultDisputed` state is open on a claim, no non-fraud end
+   (neutral void, receipt/bind timeout) and no Final may take effect; the engine's own decision is deferred, not
+   re-rolled. An accusation carried in the same block as an already decided end is late, not pre-emptive.
+3. **Outsider `Incapable` (reconciles §4.2 with ADR-0177 D1 supplement).** When an outsider cannot obtain or hold its
+   shard, the part cannot license and the claim ends as a **non-fraud termination** for missing required verification.
+   This MUST NOT slash anyone, penalize the registrant, suspend the class's registration or stop rewards of other valid
+   claims, and it is not a judgement of fraud.
+4. **No positive detection floor is assumed.** A watcher's existence is not evidence that a check happened; where no
+   independent holder of the model checks, the effective detection probability may be zero (ADR-0177 D7 and its note).
+5. Remaining: actual detection-floor evidence; watcher compensation (see R6-PRICE).
+
+### R6-PRICE — cell work, residency and capacity
+
+1. Past the dormant `palw_tir_shard_segment_v2` fence, a seat's price share is `max(Σ work, Σ resident)` over its
+   mask's cells (floored at 125 ‰, capped at 1,000 ‰), keyed on the claim's immutable `accepted_daa`; the lock a counted
+   signer posts and the pay weight fixed at bind MUST use that same share. The slash term is unchanged.
+2. Seat readiness past that fence is node policy: a node proves possession of a shard only when its ledger can hold the
+   shard's heaviest cell. Node readiness, local resource admission flags and local quota evidence are **never** an
+   on-chain capacity proof or a consensus input. Unknown resource bounds refuse (fail closed); they are never zero.
+3. The class room (§6.2) and the measured-speed constant (2,000 ‰) are unchanged.
+4. **Named parameters**, each requiring measurement on release hardware: worst-cell public material bytes, worst-cell
+   fresh-verifier time, per-shard court capacity, and the non-seat watcher's compensation/fee. **value: USER DECISION
+   REQUIRED** (no measured basis exists).
+
+### R6-MIGRATION — live v1, history and new profiles
+
+1. The rules armed on testnet-12 at DAA 5,300 are preserved; any change requires a new versioned fence.
+2. The **Decision** section is authoritative for v1. Where the historical questions differ (question 5's `S_P = 1`
+   against the Decision's layers-only default with `S_P = 2` offered), `palw_tir_shard_plan_shape_v1` and the Decision
+   govern.
+3. **Superseded text (kept as history):** the 2026-10-08 status note's list of open items (watcher, segment pricing, V3)
+   is superseded by the 2026-10-11 implementation update; the 概要 "有効化" bullet, §10's "One dormant fence", and the
+   compatibility bullet "Dormant: no fingerprint …" describe the pre-activation plan, not t12 after DAA 5,300.
+4. New profiles (V3 draw, segment pricing v2, probabilistic cells) need their own versioned fence and approval and stay
+   dormant until an independent Work Beacon bootstrap is verified (N3, 2026-10-12 user ruling).
+
+### ALL-MODEL — shared rules for RFC6/7/8/12
+
+1. **Identity.** A registered model's ID/root, weights, tokenizer/config and execution spec are immutable
+   (ADR-0175); different content is a new Model ID. Claims bind that root/spec; fetched bytes are authenticated against it.
+2. **No acquisition gate.** The chain does not manage model distribution, seeders or acquisition results. Miner and
+   Panel MUST possess the correct model to participate under the applicable ruleset; a registrant owes no distribution.
+   Acquisition failure alone never slashes, suspends registration or rewards, or extends a challenge window.
+3. **Claim-specific evidence only.** New demand units target claim-specific witness/state/trace; requests that would
+   enumerate or reconstruct model weights are prohibited. The four armed t12 court routes that can compel model bytes
+   (`HeldStepLeaf`, `AttnRootClaimOperands`, `TirGenRootClaimParams`, `SeatReadinessLeaves`) are closed by a **dormant
+   restriction fence** (2026-10-12 user ruling D2). A profile whose terminal needs model operands the court cannot
+   authenticate under that restriction MUST NOT be presented as adjudicable.
+4. **Non-public evidence paths** (e.g. V5 image/source IDs, `PanelDa`) are excluded from new reward and weight for
+   claims accepted after a new fence (2026-10-12 user ruling N4).
+5. **Allocation.** Model coinbase allocation uses distinct bound capital `S_m` without double counting, inside the fixed
+   total budget and every per-bond Q/B/R/F cap; it changes no block frequency, DAA, fork choice or Final weight, and pays
+   only valid claims. Allocation curve: **value: USER DECISION REQUIRED** (current provisional: `A_m = S_m^α`, α = 1.5,
+   per the 2026-10-10 ruling; the 2026-10-12 `S_m·μ(S_m)`, μ ∈ [1.3, 2.0] proposal is undecided).
+6. The effective detection probability of a closed model may be zero; this is an open safety gate, not closed by
+   allocation economics.

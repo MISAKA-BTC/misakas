@@ -11,6 +11,8 @@ Status: implemented behind an **unassigned** `Params::palw_dns_retirement` fence
 All shipped network presets use `None`. No network, activation height, D/W threshold,
 operator/class concentration cap, or legacy evidence horizon is assigned by this implementation.
 There is no CLI override for this policy. Test fixtures do not constitute deployment settings.
+Spec closures of 2026-10-15 are in the [RFC](0012-palw-only-consensus-and-native-evm-settlement.md#spec-closure-2026-10-15)
+and summarized [below](#spec-closures--2026-10-15).
 The [RFC's release gates](0012-palw-only-consensus-and-native-evm-settlement.md#8-implementation-sequence-and-release-gates)
 remain mandatory before activation.
 
@@ -112,6 +114,9 @@ keeps retirement status, evidence and the legacy PALW status at one generation.
 
 ## Money and retained liabilities
 
+*(2026-10-15: the split and fee shares in this section are the RFC §6 **proposal** encoded in the unarmed fence's
+policy values for mechanics tests. They are not adopted; production values are USER DECISION REQUIRED.)*
+
 New eligible non-floor attempts escrow 92% and useful-work inclusion earns up to 8%,
 with zero new DNS subsidy. Normal and native-settlement transaction fees go to their
 carrier (100% worker, zero DNS/service). Allocation uses the lower earning/paying
@@ -139,7 +144,10 @@ bridge notices report native evidence availability instead of DNS funding/quorum
 This is dormant engineering support, **not a completed production migration or a PALW common-prefix security proof**. Status after lane X12
 ([record](../design/palw/rfc-0012-implementation-record.md), [policy proposal](../design/palw/rfc-0012-policy-proposal.md)):
 
-* **Policy.** D, W, concentration caps, evidence horizon and trusted-sync assumptions are *proposed with measurements*, not assigned. Open:
+* **Policy.** D, W, concentration caps, evidence horizon and trusted-sync assumptions are *proposed with measurements*, not assigned.
+  2026-10-11 user ruling (drill only): D = 3, W = 6,331,093,440 pwu, operator cap 400 ‰, class cap 1000 ‰ (re-evaluate 600 ‰ at ≥ 3
+  REAL classes with mature work), maturity `max(accepted + 5,400, later retirement deadline)`, legacy horizon 10,080 DAA. Production values
+  remain USER DECISION REQUIRED (RFC [R12-SETTLE](0012-palw-only-consensus-and-native-evm-settlement.md#spec-closure-2026-10-15)). Open:
   the maturity-rule decision (≥ 7.5 days to the first `safe`), a live census of operators / classes / `pwu` per window, release builds.
 * **Private-network matrix.** Run in-process (`rfc12_zero_dns_matrix`: healthy zero-DNS deposits, withdrawals and market orders across the
   fence; opposed DNS state; sibling / deep forks and partitions; fee / subsidy / retained-liability reconciliation; restart; old-version node;
@@ -156,3 +164,17 @@ conservation, opposed DNS state at the retirement fence, transaction/template re
 old entitlement preservation, native generation mismatch and atomic row persistence.
 Legacy bridge/execution/reorg tests remain part of validation; they do not by themselves
 satisfy the private-network activation matrix above.
+
+## Spec closures — 2026-10-15
+
+This records how the [RFC's 2026-10-15 section](0012-palw-only-consensus-and-native-evm-settlement.md#spec-closure-2026-10-15)
+maps onto this dormant implementation. It changes no code, preset, fingerprint or height and assigns no PASS.
+
+| Requirement | Specified in the RFC | Implementation observation (not verified here) |
+| --- | --- | --- |
+| R12-AUTHORITY | Rule E at or below retirement; per-call-site predicate (incumbent sink / accepting DAA / lower earn-pay DAA); trusted-sync statement and removal inventory as release artifacts | EVM-execution and snapshot-boundary predicates not yet specified; no multi-process zero-DNS drill |
+| R12-SETTLE | Shared open DA + computation court inventory; delta-read unique work; EXEC consumer horizon; maturity ≥ every applicable court/DA/liability endpoint; named D/W/caps/M/horizon | Values above are drill-provisional only; census and D1 derivation/attack evidence absent |
+| R12-BRIDGE | Claim/refund exclusivity at the executing block's accepting DAA; market effects in the same generation | Real market fills and two-ledger root equality after reorg not observed |
+| R12-HEADS | Synchronous WAL barriers; publication history with the UTXO generation; one-batch declaration/tip/marker install; no tag publication from an incomplete copy | Power-loss and every-store atomicity not established; recent barrier/batch sources are uncompiled checkpoints per the completion record |
+| R12-MONEY | 92/8/0 and 100% carrier fees not adopted; invariants (no extra issuance, escrow ≤ withheld base, old entitlements kept); 2026-10-11 ExecutionCap / market-fee rulings | Split and fee schedule are USER DECISION REQUIRED |
+| R12-OPS | Retired kinds 0x10/0x11/0x19; import-status capability; wRPC v1/v2; observation-bounds document and 100k latency bound | Bound values are USER DECISION REQUIRED; third-party tooling migration open |

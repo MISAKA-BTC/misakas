@@ -20,6 +20,8 @@
 | Original prototype branch | `rfc7/algebraic` (off `rfc4/int` @ `ce04e5c22`); the 2026-10-06 design revision is audited against `main` commit `7bff920dc`. No claim that the new scheme runs on a deployed node. |
 | Related | RFC-0006 (layer-sharded panels, lane M3), lane M2's runtime residency for IR classes (`TirRowSourceV1`, ADR-0112 for IR classes), lane P's root-cause report of the testnet-12 panel backlog (`rcore/int-10-p1:docs/design/palw/t12-panel-backlog-1001.md`), ADR-0029 (carriage), ADR-0038 (receipts are claims), ADR-0062 (the data-availability court), ADR-0069 (weight needs adjudicability), ADR-0072 (the ticket is the execution), ADR-0080 (a receipt is 4,772 bytes), ADR-0097/0099/0100 (shards, the stratified panel), ADR-0103 (held context), ADR-0112 (residency), ADR-0124 (supplementary receipts), ADR-0133 (verification is its own clock), ADR-0147 (the admission jury), ADR-0152 (collateral, ejection), ADR-0160 (capacity) |
 
+> **Spec closures 2026-10-15:** normative rules and named parameters for R7-SUBJECT/SOURCE/RANDOM/RELATION/ECON are in [Spec closures — 2026-10-15](#spec-closure-2026-10-15). They imply no PASS, approval or activation.
+
 > **Revision precedence:** Part VI owns new post-commit source eligibility, ordering, seed derivation, sampling, interactive-round timing and recovery; other RFCs reference it instead of defining competing seeds. Part V owns checker/receipt coverage. Part II's private sketches and Parts III/IV's older assignment/audit sources are historical or legacy protocols, not substitutions for the new public challenge source. Existing consensus is governed by [spec 18](../spec/palw/18-verification-certificates.md), not retroactively changed by this RFC.
 
 > **Kernel-only boundary (2026-10-06):** [ADR0172](../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
@@ -956,6 +958,7 @@ soundness policy form one approved tuple; reject unknown/inconsistent ids or reg
 The exact canonical codec/hash suite, integer widths, tagged optional fields and resource ceilings must be pinned in
 the release; missing values are an activation blocker, not node-local defaults. No k, D, delay or retry value is
 selected by this document. Changing a policy creates a new identity/version, never changes an in-flight subject.
+*(2026-10-15: k, D, delay and retry are named parameters marked USER DECISION REQUIRED in the spec-closure section, R7-SOURCE.)*
 
 `subject_kind` is one of `KERNEL_CONFORMANCE`, `MODEL_CONFORMANCE`, `CLAIM_VERIFICATION`, `WORK_SLICE`,
 `PUBLIC_PROSECUTION`. Before challenge collection, bind its immutable subject id and roots: Kernel descriptor,
@@ -1088,6 +1091,8 @@ For interactive GKR/sum-check, the active policy pins exactly one reviewed mode:
   canonical bytes, using the pinned transform and distinct round domain. Require its own random-oracle/QROM,
   commitment-binding, adaptive grinding/query and post-quantum review; a public beacon does not prove that transform sound.
 
+*(2026-10-15: the initial paid ClaimVerification V2 contract is NonInteractive; both interactive modes are refused until a
+separately versioned compiler exists. See the spec-closure section, R7-RANDOM item 4.)*
 Choose/freeze the mode before execution; it is not a per-prover fallback. Publishing a single seed and all future
 interactive challenges before later messages is never acceptable. Transcript mismatch, missing round or source
 exhaustion is unresolved/failed verification, not a passing receipt. No client RFC specifies its own transform.
@@ -1287,3 +1292,157 @@ G7およびPart IV/Vの外部監査主体を、Panelに選ばれたseatから普
 
 §VI.3の「既存の独立して有効なPALW workをsourceにする」規則に、自己依存しない根を追加する候補を設計する。`BootstrapExact`（仮称）は、小さく資源有界な実際のモデル/kernel計算を検証するsource専用経路で、全validatorが明示された入力・実行規則から厳密に検証でき、通常のWork Beacon・そのBeaconによるPanel選出・候補model自身のconformance・将来のPALW Finalを要求しない。source-only経路はoptimisticなPanel=0 modeではなく別の明示的exact-validation種別とし、初期案では追加の報酬・ブロック権・Final weightを発生させない。
 §VI.8: `IndependentValidityVerified` と `EntropyEligibilityVerified` を別の判定にする。後者にはtargetのcommit後の予測困難性、候補の自由な選別、withholding、private fork、複数bond、隠れた未公表試行、reorg、source ID再包装への耐性が必要で、正しい確定的な計算でも事前計算可能なら不適格である。依存グラフは型付きの有向非循環グラフとし、candidateのsourceに自身やその新しいsemanticsに依存するworkを含めない（Final・settlement・Panel assignmentまで含めて検査）。既存block hash・管理者seed・heartbeat・BASE-0・委員会seed・local RNGへの隠れたfallbackは追加しない。十分なbootstrap sourceが設計・検証されない場合、新しい報酬profileはDormantに維持する（既存チェーンの通常動作は止めない）。
+
+<a id="spec-closure-2026-10-15"></a>
+
+## Spec closures — 2026-10-15
+
+**Scope and reading rule.** This section closes specification gaps for R7-SUBJECT, R7-SOURCE, R7-RANDOM,
+R7-RELATION and R7-ECON of the
+[design audit's requirement index](../design/palw/rfc-0006-0007-0008-0012-design-audit-2026-10-10.md#完全解消を判定する要件の索引).
+It states, as normative text, rules that the later design records implement but this RFC never stated, and
+reconciles contradictions in favour of [PRINCIPLES](../PRINCIPLES.md), ADR-0173/0176/0177/0178 and later user
+rulings. Superseded body text is annotated, not deleted. Detail lives in
+[the paid consumer contract](../design/palw/rfc07-paid-consumer-contract-2026-10-13.md),
+[full approval accounting](../design/palw/rfc07-full-approval-accounting-2026-10-13.md),
+[the Panel paid consumer](../design/palw/rfc07-panel-paid-consumer-2026-10-13.md),
+[the ClaimVerification migration design](../design/palw/rfc07-claim-paid-v2-migration-design-2026-10-13.md) and
+[the paid ClaimVerification V2 checkpoint](../design/palw/rfc07-claim-paid-v2-implementation-2026-10-14.md).
+Nothing here is an implementation PASS, external 128-bit review, source-independence evidence, economic approval
+or activation. Both approval registries stay empty; every new fence stays absent on public presets.
+"USER DECISION REQUIRED" marks a named parameter whose value needs the user's decision; a recommendation appears
+only where an existing record justifies it.
+
+### R7-SUBJECT — immutable subject binding
+
+1. Every receipt, relation check, lock, interactive round message, tally and Final projection MUST bind the
+   immutable subject frozen before its source window: `subject_kind`, subject id, class/kernel/plan/checker suite,
+   scope, input/state/output/trace commitments and openings. A receipt for one subject, scope, policy, class or job
+   MUST NOT count for another; a missing or narrower scope contributes no coverage. Inapplicable roots use typed
+   absence, never a wildcard zero.
+2. **Paid ClaimVerification V2** (signed kernel inner 64 `PaidClaimV2`, fence `palw_claim_challenge_v2`, dormant)
+   has three separate signed authorities — class registrant, job payer, claim producer — plus an optional source
+   sponsor who can sign only its own fee/capacity/context. New identities use new domains. An already committed V1
+   claim MUST NOT be enrolled; after a job is enrolled, an ordinary V1 reveal of it is refused, and V1 receipts/tallies
+   cannot cover the V2 identity. One canonical base-job settlement and one useful-work identity are preserved.
+3. **Producer consent and clocks.** The producer signs a not-before anchor and a finite accepted-until interval.
+   Actual inclusion inside it MUST NOT extend any checking, challenge, dispute or liability endpoint. The source
+   window is derived from the actual native accepted DAA, including sparse DAA; the whole source window, native source
+   Final floor, settlement depth and original checking rights must fit the signed checking deadline, otherwise
+   admission is refused. Court and grace requests must fit the signed horizon; a late daemon cannot rebase it.
+4. **Checker snapshot.** Eligible source profiles and checker bond/operator candidates are frozen at producer
+   commitment; seats are selected from that snapshot with the verified future seed. Joining after entropy adds no
+   candidate. Distinct operators are enforced but are not proof of independent economic control.
+5. **Panel target.** Panel inner 63 freezes the epoch snapshot, exact request, source/cost policy and named sponsor
+   before entropy; assigned work remains excluded as a source after it becomes terminal. The source-contract `H`
+   derived there is **not** the last possible Panel consumer position (retries, paused receipt clocks, bounded draw
+   queues and sparse DAA can defer it). The absolute consumer expiry is specified by the signed Panel lifetime V2
+   contract (RFC8 2026-10-15 section, R8-WINDOW item 6); its terminal result MUST NOT neutralize a timely open
+   fraud/default demand.
+6. **Named parameters** `PalwClaimChallengePolicyV2 {maximum_classes, maximum_jobs, maximum_live_claims,
+   maximum_enrollments_per_job, maximum_stream_blocks, maximum_rounds}` — invariants: all non-zero;
+   `maximum_rounds ≤ 64`; classes/jobs/live claims ≤ 65,536; enrollments per job ≤ 1,024;
+   `maximum_jobs × maximum_enrollments_per_job ≤ 1,000,000`; a zero `lifetime_review_scope`,
+   `source_independence_evidence` or `economic_evidence` means private mechanics only. **value: USER DECISION REQUIRED.**
+
+### R7-SOURCE — eligibility, order, distinct work and payment
+
+1. §VI.3 stands. Added rules from the implemented collector:
+   - The qualifying set MUST have pairwise distinct canonical work identities, and every source Final must be
+     chronologically consistent with the reveal; a duplicate or an inconsistency **vetoes the whole attempt**.
+     Dropping a source after reveal to select a different subset is forbidden.
+   - The authenticated job payer (kernel ledger table 18 / the seal fact's poster) is the source's consumer
+     identity. Sources sharing one payer count as one toward quorum. A historical job without an authenticated payer
+     row stays `Absent`; it is never inferred from producer, registrant or genesis operator.
+   - For a Panel target, sources must be Panel-independent.
+2. **Paid opt-in.** Each target reserves its own source collateral (kernel table 30) and the recipient's fixed `R`
+   before any source row is accepted. Withholding, reseal, deadline failure or public conviction creates a permanent
+   veto and forfeits only the contracted collateral; fee principal returns once to the sponsor and cancels the
+   corresponding `R` without income. A standing source Final pays nothing by itself; after the whole signed horizon
+   the closing tick moves the same `R` into the payout queue, and `R` persists through actual payment + W.
+   A target veto never confiscates an honest source's fulfilled prepaid fee.
+3. **Sponsor permit.** A sponsor authorizes only its own free collateral for one exact pre-entropy context, fixed
+   gross fee, capacity and expiry, frozen before the seal window starts. Replacing a payer or fee contract after
+   entropy is visible is refused. No implicit pooling; an arbitrary class registrant is not automatically the payer.
+4. **Bootstrap (N3, 2026-10-12 user ruling).** Until an independent bootstrap source is designed and verified,
+   new reward profiles stay dormant; bootstrap through Panel=0 `OpvFinal` is not enabled. `IndependentValidityVerified`
+   and `EntropyEligibilityVerified` are separate judgements.
+5. **Independence evidence** requires an exact release identity, an external measurement and disjoint observed
+   control identities. Distinct keys or operator ids alone are insufficient.
+6. **Named parameters:**
+   - `source_seal_deposit` `d_src`: **value: USER DECISION REQUIRED** (recommended: the derived parity value
+     `d_src = c_ab·T_w/T_ab`, 28.6 BILI at the interim terms and 49% reporter share —
+     [econ record B12/D-B12](../design/palw/econ-verifier-incentive-and-allocation.md); the honest-race seal cap of
+     1 BILI is a different price, so the two must be split as that record's S3 states).
+   - Producer/global concurrent source caps, source-Final slack (invariant: ≥ the ledger's challenge + court + grace
+     sum), source fee floor: **value: USER DECISION REQUIRED**.
+   - `work_count_k`, `settlement_depth_D`, `anchor_delay_slots`, `retry_limit` of §VI.2: **value: USER DECISION
+     REQUIRED** (no recommendation; §VI.8 item 2 analysis absent).
+
+### R7-RANDOM — collection, composition and grinding
+
+1. **Collection.** All qualifying seals in the window are mixed in a fixed canonical order; one withheld or invalid
+   source vetoes the attempt; the result is independent of input order. `BEACON_UNAVAILABLE` stays pending, with no
+   fallback seed (§VI.7).
+2. **Effective bits (cumulative accounting).** A full approval MUST charge algebraic, commitment-binding, source and
+   coverage failure events, each paying the retries, adaptive subjects, grinding and (for source failures) beacons per
+   attempt, combined by union without independence, and unioned over every authorized current **and historical**
+   suite/policy. An `Unknown` term contributes probability 1 (zero bits); nothing defaults to exact. Algebraic-only
+   tuples cannot yield full approval. A new review digest, policy version or ruleset MUST NOT reset earlier failure
+   terms. The target is an **effective** 128-bit bound (2026-10-08 user ruling); a short seal TTL/window MUST NOT be
+   presented as 128-bit, and 2-bit settings are drill-only.
+3. **Lifetime counter.** Each subject admission spends a canonical counter before entropy, inside a committed
+   `LifetimeReviewScopeV3` (chain/ruleset/start/end, complete historical suite/policy registry, Q/G/beacon caps,
+   independent review/source/economic roots). The counter survives retries, policy changes, restart and row
+   retirement and reorgs with canonical state. Abandoned-fork and offline grinding (`G`) is a reviewed external
+   bound; a node-local non-rollback counter is not consensus authority.
+4. **Interactive modes.** The initial paid V2 contract is **NonInteractive**; `StagedBeacon` and Fiat–Shamir are
+   refused at class registration and StageMessage until a separately versioned interactive compiler exists.
+   The separately versioned full-material-opening plan (`CompiledClaimProofPlanV3`) fixes target, mode, 1–64 rounds,
+   stream budget and an opening cap ≤ 64 MiB; it is not a compact sum-check compiler. Staged rounds need a producer-
+   signed StageMessage, a new source context from its own accepted DAA with a strictly later seal window, and a new
+   sponsor reserve; Fiat–Shamir recomputes the transform over the statement, source anchor/output and all earlier
+   messages and challenges. The initial seed is never reused as every later challenge (§VI.6 unchanged).
+5. **Streams.** The V2 rejection stream has a finite block budget shared across scopes/stages, distinct labels and
+   no biased fallback; exhaustion is `unavailable`, never success or fraud. The derived seed is passed directly to
+   the checker and MUST NOT be written into the V1 beacon slot.
+6. **Non-entropy bytes.** Header hashes, signatures, carriers, provider Ready signatures and executor seals of the
+   PAV3 header carriage (RFC8 2026-10-15, R8-LANE) are outside seed-bearing and ticket-bearing bytes.
+7. **Named parameters** `Q` (total adaptive-subject ceiling), retries per subject, staged-beacon ceiling, `G`, the
+   global error allocation: **value: USER DECISION REQUIRED** (bound by the review; no recommendation).
+
+### R7-RELATION — relation coverage per target
+
+1. Program and Pipeline use the seeded mathematical verifier, including decode, authenticated material and exact
+   edges. Typed memory/composite use separately labelled seeded checks per committed step/stage; retrieval stays
+   exact. Segmented uses its exact full replay with authenticated root comparison. Diagnostic subsets never
+   constitute coverage.
+2. A class/profile whose relation family (routing/TopK, history, gather, quantization, boundary) lacks a public
+   refutation path to a bounded exact court with bounded costs MUST NOT be eligible for reward or weight
+   (PRINCIPLES §6).
+3. A locally verified success is a private type that cannot be deserialized from an asserted receipt. A receipt is
+   seat assurance, not native recomputation.
+4. Before admitting a reviewed scope, native code compares the review's raw algebraic bound with the registered
+   plan, positions, repetitions and step/stage union; a source policy's M127 field label cannot overstate a CRT result.
+5. Remaining (observations): v1/v2 node evidence exists; v4/v5 courts not reached; compact proof families need
+   their own contracts; class-by-class public refutation of routing/history/gather is open.
+
+### R7-ECON — costs, collection and lazy verification
+
+1. The expected per-draw capital surcharge is not a per-epoch guarantee, and a prize cap is not a collection floor
+   (ECON §5f / model §15 correction).
+2. Economic evidence is admissible only with the exact release observation identity and reviewer, the measured
+   interval, an actual native payment observation reconstructed to the coinbase transaction and queue output, the
+   exact original entitlement and material receipt, prepaid fee terms and source operator. A promise, a FeePaid event,
+   a queue amount or an opaque digest alone does not pass.
+3. Gross slash is not the attacker's loss: evaluate ADR-0176 D6 with the reporter share (ADR-0032, dormant
+   `palw_reporter_share_v2`) netted out.
+4. ECON round-4 UNKNOWN/FAIL statuses are unchanged by this text.
+5. Named parameters: per-attempt deposit binding against one-deposit-many-attempts and its concurrency cap `N_max`
+   (econ record S4) — **value: USER DECISION REQUIRED**.
+6. Remaining: measured costs, collection floor, funded minimum, lazy-verifier deterrence (validation/evidence).
+
+### ALL-MODEL
+
+RFC6's 2026-10-15 section holds the shared rules. For this RFC: challenge subjects bind the immutable model root;
+model acquisition is not a source-eligibility or seed input.
