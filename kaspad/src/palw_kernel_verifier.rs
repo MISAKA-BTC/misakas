@@ -50,8 +50,9 @@ use misaka_palw_remote::pursuit::{
 use misaka_palw_tir::MapParams;
 
 /// The court queue's round of this verifier's kernel-route objects — a round no other lane keys by (the reporter's `u32::MAX − 1…3`,
-/// the replay filer's `− 6`, operator DA `− 7`, audit `− 8`, riders `− 9`, LG14-A `− 10…12`).
-pub(super) const PALW_KERNEL_VERIFIER_ROUND_V1: u32 = u32::MAX - 13;
+/// the replay filer's `− 6`, operator DA `− 7`, audit `− 8`, riders `− 9`, LG14-A `− 10…14`, public sources `− 15…18`).
+/// It was `− 13`, which LG14-A's release round also used: a disarmed verifier's queue sweep dropped queued releases.
+pub(super) const PALW_KERNEL_VERIFIER_ROUND_V1: u32 = u32::MAX - 19;
 
 /// An object queued this many DAA ago and still not on chain (nor in this node's mempool) is offered again.
 pub(super) const PALW_KERNEL_VERIFIER_RESEND_DAA_V1: u64 = 6;

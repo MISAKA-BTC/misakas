@@ -58,6 +58,13 @@ fn merge_shared_cache_lease_v1(
     Ok(())
 }
 
+/// A lease is frozen once its paid horizon is strictly below the irreversible
+/// pruning-point DAA: exactly the GC candidate/ACK condition. Frozen metadata is
+/// never extended or recreated, so a GC grant read for it stays the final union.
+pub(crate) fn palw_cache_lease_frozen_v1(material_until_daa: u64, irreversible_daa: u64) -> bool {
+    material_until_daa < irreversible_daa
+}
+
 fn recovered_history_record_v1(
     old: &PalwHistoryRecoveryV1,
     new: &PalwHistoryRecoveryV1,
@@ -118,13 +125,21 @@ impl DbPalwStateV2Store {
     }
     /// Atomic with the state tip. No wire request or local manifest can install a
     /// lease, and a reverted acceptance cannot shorten another fork's retention.
-    pub fn archive_staged_cache_leases_batch_v1(&self, batch: &mut WriteBatch, delta: &PalwStateDeltaV2) -> StoreResult<()> {
+    /// `irreversible_daa` is the native pruning point's DAA read under the same
+    /// pruning lock as the commit; it freezes every already-expired lease.
+    pub fn archive_staged_cache_leases_batch_v1(
+        &self,
+        batch: &mut WriteBatch,
+        delta: &PalwStateDeltaV2,
+        irreversible_daa: u64,
+    ) -> StoreResult<()> {
         self.archive_staged_cache_lease_rows_batch_v1(
             batch,
             delta.entries.iter().filter_map(|entry| match entry {
                 PalwDeltaEntryV2::StagedCourtSeed { key, new: Some(row), .. } => Some((*key, row)),
                 _ => None,
             }),
+            irreversible_daa,
         )
     }
     /// Only the native importer of an authenticated pruning snapshot calls this.
@@ -134,8 +149,9 @@ impl DbPalwStateV2Store {
         &self,
         batch: &mut WriteBatch,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        irreversible_daa: u64,
     ) -> StoreResult<()> {
-        self.archive_staged_cache_lease_rows_batch_v1(batch, state.staged_cache_lease_rows_v1())
+        self.archive_staged_cache_lease_rows_batch_v1(batch, state.staged_cache_lease_rows_v1(), irreversible_daa)
     }
     fn archive_staged_cache_lease_rows_batch_v1<'a>(
         &self,
@@ -146,6 +162,7 @@ impl DbPalwStateV2Store {
                 &'a kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1,
             ),
         >,
+        irreversible_daa: u64,
     ) -> StoreResult<()> {
         let mut leases = std::collections::BTreeMap::<Hash64, PalwStagedCacheLeaseV1>::new();
         let mut shared = std::collections::BTreeMap::<Hash64, PalwSharedClaimCacheLeaseV1>::new();
@@ -176,13 +193,14 @@ impl DbPalwStateV2Store {
                 }
             }
         }
-        self.write_staged_cache_leases_batch_v1(batch, &leases)?;
-        self.write_shared_claim_cache_leases_batch_v1(batch, &shared)
+        self.write_staged_cache_leases_batch_v1(batch, &leases, irreversible_daa)?;
+        self.write_shared_claim_cache_leases_batch_v1(batch, &shared, irreversible_daa)
     }
     fn write_staged_cache_leases_batch_v1(
         &self,
         batch: &mut WriteBatch,
         leases: &std::collections::BTreeMap<Hash64, PalwStagedCacheLeaseV1>,
+        irreversible_daa: u64,
     ) -> StoreResult<()> {
         for (&seed, &accepted) in leases {
             accepted.check_v1().map_err(StoreError::DataInconsistency)?;
@@ -191,11 +209,19 @@ impl DbPalwStateV2Store {
             }
             let mut lease = accepted;
             if let Some(previous) = self.staged_cache_lease_v1(seed)? {
+                // An irreversibly expired lease may already be under bounded file retirement.
+                // A delayed or stale-fork union must not extend it: GC acknowledges exactly it.
+                if palw_cache_lease_frozen_v1(previous.material_until_daa, irreversible_daa) {
+                    continue;
+                }
                 lease.merge_accepted_fork_v1(previous).map_err(StoreError::DataInconsistency)?;
                 if lease == previous {
                     continue;
                 }
                 batch.delete(cache_expiry_key(previous.material_until_daa, seed));
+            } else if palw_cache_lease_frozen_v1(accepted.material_until_daa, irreversible_daa) {
+                // Never recreate metadata for material whose paid horizon is already irreversible.
+                continue;
             }
             batch.put(cache_lease_key(seed), borsh::to_vec(&lease).map_err(|e| StoreError::DataInconsistency(e.to_string()))?);
             batch.put(cache_expiry_key(lease.material_until_daa, seed), []);
@@ -218,6 +244,7 @@ impl DbPalwStateV2Store {
         &self,
         batch: &mut WriteBatch,
         leases: &std::collections::BTreeMap<Hash64, PalwSharedClaimCacheLeaseV1>,
+        irreversible_daa: u64,
     ) -> StoreResult<()> {
         for (&claim, &accepted) in leases {
             accepted.check_v1().map_err(StoreError::DataInconsistency)?;
@@ -226,11 +253,18 @@ impl DbPalwStateV2Store {
             }
             let mut lease = accepted;
             if let Some(previous) = self.shared_claim_cache_lease_v1(claim)? {
+                // Same freeze as per-seed leases: shared files may already be partially
+                // unlinked under this exact expired union, so it is never extended.
+                if palw_cache_lease_frozen_v1(previous.material_until_daa, irreversible_daa) {
+                    continue;
+                }
                 lease.merge_accepted_fork_v1(previous).map_err(StoreError::DataInconsistency)?;
                 if lease == previous {
                     continue;
                 }
                 batch.delete(shared_cache_expiry_key(previous.material_until_daa, claim));
+            } else if palw_cache_lease_frozen_v1(accepted.material_until_daa, irreversible_daa) {
+                continue;
             }
             batch.put(shared_cache_lease_key(claim), borsh::to_vec(&lease).map_err(|e| StoreError::DataInconsistency(e.to_string()))?);
             batch.put(shared_cache_expiry_key(lease.material_until_daa, claim), []);
@@ -572,7 +606,7 @@ mod tests {
     }
     fn save_lease(store: &DbPalwStateV2Store, lease: PalwStagedCacheLeaseV1) {
         let mut batch = WriteBatch::default();
-        store.write_staged_cache_leases_batch_v1(&mut batch, &[(lease.seed_id, lease)].into_iter().collect()).unwrap();
+        store.write_staged_cache_leases_batch_v1(&mut batch, &[(lease.seed_id, lease)].into_iter().collect(), 0).unwrap();
         store.db.write(batch).unwrap();
     }
     #[test]
@@ -628,7 +662,7 @@ mod tests {
         let mut changed = lease(3, 300);
         changed.claim = Hash64::from_u64_word(99);
         let mut batch = WriteBatch::default();
-        assert!(store.write_staged_cache_leases_batch_v1(&mut batch, &[(changed.seed_id, changed)].into_iter().collect()).is_err());
+        assert!(store.write_staged_cache_leases_batch_v1(&mut batch, &[(changed.seed_id, changed)].into_iter().collect(), 0).is_err());
         assert_eq!(store.staged_cache_lease_v1(changed.seed_id).unwrap().unwrap().material_until_daa, 200);
     }
     fn save_shared(store: &DbPalwStateV2Store, accepted: impl IntoIterator<Item = PalwSharedClaimCacheLeaseV1>) {
@@ -637,7 +671,7 @@ mod tests {
             merge_shared_cache_lease_v1(&mut leases, lease).unwrap();
         }
         let mut batch = WriteBatch::default();
-        store.write_shared_claim_cache_leases_batch_v1(&mut batch, &leases).unwrap();
+        store.write_shared_claim_cache_leases_batch_v1(&mut batch, &leases, 0).unwrap();
         store.db.write(batch).unwrap();
     }
     #[test]
@@ -662,6 +696,46 @@ mod tests {
         assert!(store.acknowledge_shared_claim_cache_gc_v1(late, 301).unwrap());
     }
     #[test]
+    fn delayed_stale_fork_union_cannot_extend_or_recreate_an_irreversibly_expired_lease() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(64));
+        let expired = lease(3, 200);
+        save_lease(&store, expired);
+        let shared = PalwSharedClaimCacheLeaseV1 { claim: expired.claim, material_until_daa: 200 };
+        save_shared(&store, [shared]);
+        // The local retirement worker reads both grants while their files are being unlinked.
+        let seed_grant = store.staged_cache_gc_candidates_v1(201, None, 64).unwrap().0[0];
+        let shared_grant = store.shared_claim_cache_gc_candidates_v1(201, None, 64).unwrap().0[0];
+        // A delayed candidate commit carrying a later accepted-fork horizon arrives afterwards.
+        let mut batch = WriteBatch::default();
+        let later = lease(3, 400);
+        store.write_staged_cache_leases_batch_v1(&mut batch, &[(later.seed_id, later)].into_iter().collect(), 201).unwrap();
+        let mut union = std::collections::BTreeMap::new();
+        merge_shared_cache_lease_v1(&mut union, PalwSharedClaimCacheLeaseV1 { material_until_daa: 400, ..shared }).unwrap();
+        store.write_shared_claim_cache_leases_batch_v1(&mut batch, &union, 201).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.staged_cache_lease_v1(expired.seed_id).unwrap(), Some(expired), "frozen seed lease is never extended");
+        assert_eq!(store.shared_claim_cache_lease_v1(shared.claim).unwrap(), Some(shared), "frozen shared union is never extended");
+        assert!(store.acknowledge_staged_cache_gc_v1(seed_grant, 201).unwrap());
+        assert!(store.acknowledge_shared_claim_cache_gc_v1(shared_grant, 201).unwrap());
+        // After retirement, the same delayed union cannot recreate metadata for unlinked files.
+        let mut batch = WriteBatch::default();
+        store.write_staged_cache_leases_batch_v1(&mut batch, &[(expired.seed_id, expired)].into_iter().collect(), 201).unwrap();
+        let mut union = std::collections::BTreeMap::new();
+        merge_shared_cache_lease_v1(&mut union, shared).unwrap();
+        store.write_shared_claim_cache_leases_batch_v1(&mut batch, &union, 201).unwrap();
+        db.write(batch).unwrap();
+        assert!(store.staged_cache_lease_v1(expired.seed_id).unwrap().is_none());
+        assert!(store.shared_claim_cache_lease_v1(shared.claim).unwrap().is_none());
+        // A still-live lease (horizon at or above the irreversible clock) keeps the ordinary union.
+        save_lease(&store, lease(4, 201));
+        let mut batch = WriteBatch::default();
+        let extended = lease(4, 300);
+        store.write_staged_cache_leases_batch_v1(&mut batch, &[(extended.seed_id, extended)].into_iter().collect(), 201).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.staged_cache_lease_v1(extended.seed_id).unwrap(), Some(extended));
+    }
+    #[test]
     fn verified_state_row_restoration_creates_preseed_hold_without_shortening_an_accepted_fork() {
         use kaspa_consensus_core::palw_staged_court_state_v1::{
             PalwStagedClaimContractV1, PalwStagedCourtKeyV1, PalwStagedCourtRowV1,
@@ -680,7 +754,7 @@ mod tests {
         });
         let mut batch = WriteBatch::default();
         store
-            .archive_staged_cache_lease_rows_batch_v1(&mut batch, std::iter::once((PalwStagedCourtKeyV1::Claim(claim), &row)))
+            .archive_staged_cache_lease_rows_batch_v1(&mut batch, std::iter::once((PalwStagedCourtKeyV1::Claim(claim), &row)), 0)
             .unwrap();
         db.write(batch).unwrap();
         let initial = store.shared_claim_cache_lease_v1(claim).unwrap().unwrap();
@@ -690,7 +764,7 @@ mod tests {
         save_shared(&store, [fork]);
         let mut batch = WriteBatch::default();
         store
-            .archive_staged_cache_lease_rows_batch_v1(&mut batch, std::iter::once((PalwStagedCourtKeyV1::Claim(claim), &row)))
+            .archive_staged_cache_lease_rows_batch_v1(&mut batch, std::iter::once((PalwStagedCourtKeyV1::Claim(claim), &row)), 0)
             .unwrap();
         db.write(batch).unwrap();
         assert_eq!(store.shared_claim_cache_lease_v1(claim).unwrap(), Some(fork));

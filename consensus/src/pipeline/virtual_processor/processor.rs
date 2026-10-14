@@ -3122,13 +3122,19 @@ impl VirtualStateProcessor {
                 | kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { .. }
             ))
         }).map(|_| self.pruning_point_store.read());
-        let archive_public_material = public_pruning_guard.as_ref().is_some_and(|guard| {
+        // Only a block on the irreversible chain itself archives public material: the pruning
+        // point is in its selected chain, or it is one of the pruning point's chain ancestors.
+        // A stale fork's block is never archived, whatever its DAA. The pruning clock read
+        // under the same lock also freezes already-expired leases inside the store writer.
+        let public_irreversible = public_pruning_guard.as_ref().map(|guard| {
             let pruning = guard.pruning_point().expect("native public archive pruning point");
             let pruning_daa = self.headers_store.get_daa_score(pruning).expect("native public archive pruning clock");
-            let candidate_daa = palw_v2_staged.as_ref().expect("public archive candidate").1.point.daa_score;
-            candidate_daa >= pruning_daa || self.reachability_service.try_is_chain_ancestor_of(current, pruning)
-                .unwrap_or(false)
+            let on_irreversible_chain = self.reachability_service.try_is_chain_ancestor_of(pruning, current).unwrap_or(false)
+                || self.reachability_service.try_is_chain_ancestor_of(current, pruning).unwrap_or(false);
+            (on_irreversible_chain, pruning_daa)
         });
+        let archive_public_material = public_irreversible.is_some_and(|(on_chain, _)| on_chain);
+        let public_irreversible_daa = public_irreversible.map_or(0, |(_, daa)| daa);
         // Native archive/lease GC must not race a prepared but uncommitted union.
         // Hold the same store exclusion through the atomic DB commit below.
         let mut palw_archive_guard = palw_v2_staged.as_ref().map(|_| self.palw_state_v2_store.write());
@@ -3158,7 +3164,7 @@ impl VirtualStateProcessor {
             }
             if archive_public_material {
                 store.archive_recovered_prefix_history_batch_v1(&mut batch, &delta).unwrap();
-                store.archive_staged_cache_leases_batch_v1(&mut batch, &delta).unwrap();
+                store.archive_staged_cache_leases_batch_v1(&mut batch, &delta, public_irreversible_daa).unwrap();
             }
         }
         if let Some(mut staged) = evm_staged {
@@ -6282,7 +6288,15 @@ impl VirtualStateProcessor {
         let mut batch = WriteBatch::default();
         let mut store = self.palw_state_v2_store.write();
         store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
-        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state)
+        // Live claim/owner holds come from the verified state itself, written in the same batch
+        // as its tip. Holds already below this imported irreversible clock are not recreated.
+        let imported_irreversible_daa = self
+            .headers_store
+            .get_daa_score(pruning_point)
+            .ok()
+            .or_else(|| state.last_point().map(|point| point.daa_score))
+            .unwrap_or(0);
+        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa)
             .expect("restoring verified PALW material leases cannot fail");
         // The same state, also as this node's servable snapshot. Without it a node that just
         // joined by a pruned sync holds the pruning-point state but cannot HAND it on until

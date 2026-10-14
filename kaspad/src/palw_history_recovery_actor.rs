@@ -10,7 +10,8 @@ use kaspa_consensus_core::{
     palw_state_v2::PalwBondKeyV2,
 };
 
-pub(super) const HISTORY_ROUND_V1: u32 = u32::MAX - 17;
+/// Distinct from the Flat responder (`u32::MAX - 17`): both queues retain entries by round.
+pub(super) const HISTORY_ROUND_V1: u32 = u32::MAX - 18;
 const HISTORY_CARRIER_RAM_V1: u64 = PALW_PREFIX_HISTORY_MAX_RECORD_BYTES_V1 as u64 * 8 + 65_536;
 pub(super) type HistoryDutyCursorV1 = (u64, Hash64, PalwBondKeyV2, Hash64);
 

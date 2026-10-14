@@ -94,6 +94,10 @@ mod palw_operator_da;
 mod artifact_inventory;
 #[path = "palw_flat_source_responder.rs"]
 mod flat_source_responder;
+/// Paid public history recovery: the literal custodians' answers (producer and granted Valid
+/// seats) and the outside owner's native Demand/Collect when every peer and archive lacks a link.
+#[path = "palw_history_recovery_actor.rs"]
+mod history_recovery_actor;
 /// Lane LG14-A (RFC-0014 §6): the common fraud filer — any carrying bond's pursuit, as a non-seat, of a claim its own replay refutes:
 /// a dispute reservation, then reserved DA demands that localize the first divergent step to a terminal the fold adjudicates (node
 /// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
@@ -8248,12 +8252,17 @@ impl PalwPanelService {
             return;
         }
         let mut gc = public_prefix::PrefixCacheGcV1::default();
+        let mut shared_gc = crate::palw_flat_public_source::SharedClaimCacheGcV1::default();
         while self.tick(std::time::Duration::from_secs(2)).await {
             let session = self.consensus_manager.consensus().unguarded_session();
-            if self.consensus_config.params.palw_staged_public_court_v1_active_at(session.get_virtual_daa_score())
-                && let Err(why) = gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await
-            {
+            if !self.consensus_config.params.palw_staged_public_court_v1_active_at(session.get_virtual_daa_score()) {
+                continue;
+            }
+            if let Err(why) = gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await {
                 debug!("[{PALW_PANEL}] keyless public cache retirement remains pending: {why}");
+            }
+            if let Err(why) = shared_gc.tick_v1(&session, &self.config.retention_dir).await {
+                debug!("[{PALW_PANEL}] keyless shared public material retirement remains pending: {why}");
             }
         }
     }
@@ -8527,8 +8536,10 @@ impl PalwPanelService {
         let mut public_prefix_response_cursor = None;
         let mut public_selected_response_cursor = None;
         let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
+        let mut public_history_response_book = history_recovery_actor::HistoryResponderBookV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
         let mut public_prefix_cache_gc = public_prefix::PrefixCacheGcV1::default();
+        let mut public_shared_cache_gc = crate::palw_flat_public_source::SharedClaimCacheGcV1::default();
         // The DAA each queued item is due by, where one is computable — what the priority lane orders
         // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
         // carried after every dated item, by age. The reporter filer's items are dated by the filer
@@ -8695,6 +8706,11 @@ impl PalwPanelService {
                     public_prefix_cache_gc.tick_v1(&session, &self.config.retention_dir.join("public-prefix-owned")).await
             {
                 debug!("[{PALW_PANEL}] bounded public cache retirement remains pending: {why}");
+            }
+            if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
+                && let Err(why) = public_shared_cache_gc.tick_v1(&session, &self.config.retention_dir).await
+            {
+                debug!("[{PALW_PANEL}] bounded shared public material retirement remains pending: {why}");
             }
             // **RFC-0007: the verification vertex's fence, if it is in force at this tip** — the only thing that makes this node's seat
             // speak in vertices; `None` on every chain that has not armed it, and then every line below the fence is the code that always ran.
@@ -10957,6 +10973,19 @@ impl PalwPanelService {
                 .await
             {
                 debug!("[{PALW_PANEL}] Flat public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .history_recovery_answer_tick_v1(
+                    &session,
+                    bond_key,
+                    &mut public_history_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] public history custody response remains pending: {why}");
             }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);

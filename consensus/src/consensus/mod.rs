@@ -2512,6 +2512,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_staged_history_recovery_v1_impl(key, seed)
     }
 
+    fn palw_v2_accepted_daa_v1(&self) -> Option<u64> {
+        self.virtual_processor.palw_v2_accepted_daa_v1_impl()
+    }
+
     fn palw_history_response_duties_v1(
         &self,
         signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,

@@ -1136,6 +1136,12 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_staged_court_state_v1::palw_staged_original_commitment_v1(&state, claim)
     }
 
+    pub fn palw_v2_accepted_daa_v1_impl(&self) -> Option<u64> {
+        let params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(params).ok()??;
+        state.last_point().map(|point| point.daa_score)
+    }
+
     pub fn palw_staged_history_recovery_v1_impl(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

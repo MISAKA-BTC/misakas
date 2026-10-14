@@ -1221,6 +1221,13 @@ pub trait ConsensusApi: Send + Sync {
         Err("staged public history reader unavailable".into())
     }
 
+    /// The accepted PALW V2 snapshot's own clock (its last applied point's DAA), the clock
+    /// every native reader above judges against. `None` when no accepted snapshot exists.
+    /// Not the virtual DAA: a node's local scheduling must not run ahead of native state.
+    fn palw_v2_accepted_daa_v1(&self) -> Option<u64> {
+        None
+    }
+
     fn palw_history_response_duties_v1(
         &self,
         _signer: crate::palw_state_v2::PalwBondKeyV2,

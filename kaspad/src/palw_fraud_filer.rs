@@ -5018,6 +5018,7 @@ impl PalwPanelService {
         let page_session = session.clone();
         let history_flow_context = self.flow_context.clone();
         let page_directory = self.config.retention_dir.join("public-prefix-owned");
+        let history_directory = page_directory.clone();
         let target = target.clone();
         let binding = binding.clone();
         let job = job.clone();
@@ -5059,7 +5060,25 @@ impl PalwPanelService {
         .await
         .map_err(|e| format!("public prefix blocking worker failed: {e}"))??;
         let object = match decision {
-            PrefixScheduleV1::Wait => return Ok((None, false)),
+            PrefixScheduleV1::Wait => {
+                // Every local, archived and peer source of a rooted link may be gone. Only then
+                // is the paid native backwards recovery opened; an already opened accepted
+                // session is always continued (restart loses the local hint, not the session).
+                if let (Some(seed), Some(_)) = (progress.seed_id, progress.bundle.as_ref()) {
+                    let native_needed = super::public_prefix::needs_native_history_recovery_v1(&history_directory, seed);
+                    return self.fraud_filer_history_recovery_v1(
+                        session,
+                        book,
+                        claim,
+                        &progress,
+                        seed,
+                        native_needed,
+                        court_pending,
+                        court_due,
+                    );
+                }
+                return Ok((None, false));
+            }
             PrefixScheduleV1::Finished(reference) => {
                 court_pending.retain(|(held, round, responder, _)| {
                     (*held, *round, *responder) != (claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false)
@@ -5094,6 +5113,67 @@ impl PalwPanelService {
         };
         Self::fraud_filer_stage_queue_v1(book, claim, object, &progress, current_daa, court_pending, court_due)?;
         Ok((None, false))
+    }
+
+    /// The outside owner's half of paid public history recovery: open the native backwards
+    /// traversal only when the rooted page replay found no local, archived or peer copy, then
+    /// follow the accepted session's own Demand/Collect clocks. Recovered records are archived
+    /// natively, so the ordinary page replay reads them on a later poll. A native default is
+    /// the exact once-only DA charge, never a computation conviction.
+    #[allow(clippy::too_many_arguments)]
+    fn fraud_filer_history_recovery_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        book: &mut PalwFraudFilerBookV1,
+        claim: Hash64,
+        progress: &kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        seed: Hash64,
+        native_needed: bool,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(Option<PalwConvictionFilingV1>, bool), String> {
+        use super::history_recovery_actor::{HistoryOwnerDecisionV1, owner_request_v1};
+        use kaspa_consensus_core::palw_constraint_stream_carriage_v1::PALW_CONSTRAINT_STREAM_CONTEXT_V1;
+        let Some(history) = session.palw_staged_history_recovery_v1((claim, progress.reserver), seed)? else {
+            return Ok((None, false));
+        };
+        // Decide only against the same accepted snapshot as the owner's cursor.
+        if history.snapshot_block != progress.snapshot_block || history.now_daa != progress.now_daa {
+            return Ok((None, false));
+        }
+        if history.session.is_none() && !native_needed {
+            return Ok((None, false));
+        }
+        match owner_request_v1(&history)? {
+            HistoryOwnerDecisionV1::Wait | HistoryOwnerDecisionV1::Recovered => Ok((None, false)),
+            HistoryOwnerDecisionV1::Default => {
+                debug!(
+                    "[{PALW_PANEL}] claim {claim}: native public history default is charged once; this stage's semantic \
+                     continuation has no remaining rooted record source"
+                );
+                Ok((None, false))
+            }
+            HistoryOwnerDecisionV1::Move { mut movement, until_daa } => {
+                movement.signature = self
+                    .sign(&movement.signing_message(), PALW_CONSTRAINT_STREAM_CONTEXT_V1)
+                    .ok_or("no history recovery owner signing key")?;
+                movement.check()?;
+                Self::fraud_filer_stage_queue_v1(
+                    book,
+                    claim,
+                    PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement: Box::new(movement) },
+                    progress,
+                    progress.now_daa,
+                    court_pending,
+                    court_due,
+                )?;
+                // The accepted demand/collection clock, not the child's later stream horizon.
+                court_due
+                    .entry((claim, PALW_FRAUD_FILER_STAGED_ROUND_V1, false))
+                    .and_modify(|held| *held = (*held).min(until_daa.saturating_sub(1)));
+                Ok((None, false))
+            }
+        }
     }
 
     /// A rooted prospective owner court is progressed using only this verifier's holding.
@@ -5410,6 +5490,13 @@ impl PalwPanelService {
                     && bundle.active_index.is_none()
                     && bundle.inventory.is_some_and(|(_, _, sealed, _)| !sealed)
             }),
+            // Owner-signed history Demand/Collect: the bundle frame names the paid owner, the
+            // action names the active public stage. Custodian answers are never owner moves.
+            PalwConstraintStreamActionV1::HistoryRecovery { stage_seed, action, .. } => {
+                action.answerer_v1().is_none()
+                    && progress.seed_id == Some(*stage_seed)
+                    && progress.bundle.as_ref().is_some_and(|bundle| movement.seed_id == bundle.bundle_id)
+            }
             PalwConstraintStreamActionV1::SelectedEventDemand { .. }
             | PalwConstraintStreamActionV1::SelectedEventCollect { .. }
             | PalwConstraintStreamActionV1::FlatSourceOpen { .. }

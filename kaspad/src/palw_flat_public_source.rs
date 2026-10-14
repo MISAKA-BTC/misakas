@@ -84,6 +84,69 @@ pub(crate) fn retain_v1(dir: &Path, claim: Hash64, backend: &dyn PalwExecutionBa
     File::open(dir).and_then(|dir| dir.sync_all()).map_err(|e| e.to_string())?;
     Ok(true)
 }
+/// Remove one claim's shared original public projection. The native caller supplies the exact
+/// accepted claim-wide union and the irreversible pruning clock; a path or mtime never does.
+/// The store freezes such an expired union, so no later accepted lease can resurrect it.
+pub(crate) fn gc_shared_claim_v1(dir: &Path, claim: Hash64, material_until: u64, irreversible_daa: u64) -> Result<bool, String> {
+    if irreversible_daa <= material_until {
+        return Ok(false);
+    }
+    let path = path_v1(dir, claim);
+    for victim in [path.with_extension("flat-public.partial"), path] {
+        match std::fs::remove_file(&victim) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("shared public projection {}: {e}", victim.display())),
+        }
+    }
+    match File::open(dir).and_then(|dir| dir.sync_all()) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Service-wide, keyless retirement of claim-scoped shared public material. One native page of
+/// at most 64 expiry rows is read at a time; metadata is acknowledged only after the files are
+/// gone, and a refused ACK (a changed union) restarts the bounded scan.
+#[derive(Default)]
+pub(crate) struct SharedClaimCacheGcV1 {
+    after: Option<(u64, Hash64)>,
+    irreversible_daa: u64,
+    queued: std::collections::VecDeque<kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1>,
+}
+
+impl SharedClaimCacheGcV1 {
+    pub(crate) async fn tick_v1(&mut self, session: &kaspa_consensusmanager::ConsensusProxy, directory: &Path) -> Result<(), String> {
+        if self.queued.is_empty() {
+            let after = self.after;
+            let page = session.clone().spawn_blocking(move |c| c.palw_shared_claim_cache_gc_page_v1(after, 64)).await?;
+            if page.leases.len() > 64 {
+                return Err("native shared cache GC metadata exceeds bounded page".into());
+            }
+            self.after = page.next;
+            self.irreversible_daa = page.irreversible_daa;
+            self.queued.extend(page.leases);
+        }
+        let Some(lease) = self.queued.pop_front() else { return Ok(()) };
+        if self.irreversible_daa <= lease.material_until_daa {
+            return Ok(());
+        }
+        let directory = directory.to_path_buf();
+        let irreversible = self.irreversible_daa;
+        let done = tokio::task::spawn_blocking(move || gc_shared_claim_v1(&directory, lease.claim, lease.material_until_daa, irreversible))
+            .await
+            .map_err(|e| format!("bounded shared cache GC worker failed: {e}"))??;
+        if done {
+            let accepted = session.clone().spawn_blocking(move |c| c.palw_shared_claim_cache_gc_ack_v1(lease)).await?;
+            if !accepted {
+                self.after = None;
+            }
+        }
+        Ok(())
+    }
+}
+
 struct PartialV1(Option<PathBuf>);
 impl Drop for PartialV1 {
     fn drop(&mut self) {
@@ -96,6 +159,22 @@ impl Drop for PartialV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_projection_gc_needs_strictly_irreversible_expiry_and_is_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let claim = Hash64::from_u64_word(7);
+        let other = Hash64::from_u64_word(8);
+        std::fs::write(path_v1(directory.path(), claim), b"projection").unwrap();
+        std::fs::write(path_v1(directory.path(), claim).with_extension("flat-public.partial"), b"partial").unwrap();
+        std::fs::write(path_v1(directory.path(), other), b"another claim").unwrap();
+        assert!(!gc_shared_claim_v1(directory.path(), claim, 200, 200).unwrap());
+        assert!(path_v1(directory.path(), claim).exists());
+        assert!(gc_shared_claim_v1(directory.path(), claim, 200, 201).unwrap());
+        assert!(!path_v1(directory.path(), claim).exists());
+        assert!(!path_v1(directory.path(), claim).with_extension("flat-public.partial").exists());
+        assert!(path_v1(directory.path(), other).exists(), "only the literal expired claim is retired");
+        assert!(gc_shared_claim_v1(directory.path(), claim, 200, 201).unwrap(), "a repeated GC after a lost ACK is a no-op");
+    }
     #[test]
     fn projected_path_is_literal_claim_scoped_not_private_state_scoped() {
         let claim = Hash64::from_u64_word(7);

@@ -341,6 +341,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_staged_original_commitment_v1(claim)
     }
 
+    /// The accepted PALW V2 snapshot's own DAA (see `ConsensusApi::palw_v2_accepted_daa_v1`).
+    pub fn palw_v2_daa_score(&self) -> Option<u64> {
+        self.consensus.palw_v2_accepted_daa_v1()
+    }
+
     pub fn palw_staged_history_recovery_v1(
         &self,
         key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),

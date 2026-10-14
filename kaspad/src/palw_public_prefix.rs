@@ -87,6 +87,13 @@ impl PrefixCacheGcV1 {
     }
 }
 
+/// A bounded process-local hint: rooted page recovery found a link missing from the local
+/// CAS, the native archive and every peer. It never proves a DA fault; only an accepted
+/// native Demand and its original deadline authorize a collection.
+pub(super) fn needs_native_history_recovery_v1(directory: &std::path::Path, seed: Hash64) -> bool {
+    page_recovery::needs_native_recovery_v1(directory, seed)
+}
+
 pub(super) fn gc_prefix_cache_v1(
     directory: &std::path::Path,
     seed: Hash64,
