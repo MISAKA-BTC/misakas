@@ -157,7 +157,7 @@ pub struct FlatHeaderReadV25 {
 }
 pub trait FlatPublicReadsV25: FlatPublicReadsV5 {
     fn value(&self, read: FlatValueReadV25) -> Option<Vec<u8>>;
-    pub(crate) fn header(&self, read: FlatHeaderReadV25) -> Option<Vec<u8>>;
+    fn header(&self, read: FlatHeaderReadV25) -> Option<Vec<u8>>;
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatFindingV25 {
@@ -243,7 +243,7 @@ fn point(
     u32::try_from(v).map(|v| (v, o)).map_err(error)
 }
 #[allow(clippy::result_large_err)] // the finding IS the evidence, returned once per check; boxing it would change every caller
-fn header(
+pub(crate) fn header(
     c: &FlatContextV25<'_>,
     scope_root: &Digest,
     public: &dyn FlatPublicReadsV25,

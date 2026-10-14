@@ -6364,7 +6364,9 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
  "kaspa-txscript",
+ "kaspa-wrpc-client",
  "libc",
  "libcrux-ml-dsa",
  "libm",
@@ -6384,6 +6386,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "tokio",
 ]
 
 [[package]]

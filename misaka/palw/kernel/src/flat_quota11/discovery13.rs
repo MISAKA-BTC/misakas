@@ -629,7 +629,7 @@ impl DiscoveryShardV13 {
             Some((original_subject, &original_subject.row_root())),
             None,
         )?;
-        paid.debit_ordinary(quota, epoch, &quantities)?;
+        paid.debit_ordinary(quota, epoch, &super::DerivedOrdinaryMetadataV11 { quantities })?;
         let mut global = paid.global_row();
         let payer = paid.actor_row();
         let mut owner = self.actor.clone();

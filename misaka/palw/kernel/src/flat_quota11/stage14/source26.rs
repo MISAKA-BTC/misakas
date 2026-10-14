@@ -347,7 +347,7 @@ impl StageSourceCallerShardV26 {
     pub fn debit_request(&mut self,quota:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&CheckedStageSourcePlanV26,owner:Digest,operator:Digest)->Result<(),String>{
         self.context(quota,epoch,plan)?;let r=self.row.as_ref().ok_or("caller26 original owner absent")?;
         if r.owner!=owner||r.operator!=operator||r.actor!=self.actor.actor||r.retired||self.subject.closed||epoch.block_daa>r.horizon||r.attempts_used>=plan.attempts(){return Err("caller26 request lacks original own prepaid live attempt".into());}
-        let block=self.block(epoch).spend(plan.request_cost(),&quota.block)?;let network=self.global.network.spend(plan.request_cost(),&quota.network)?;let actor=self.actor.interval.spend(plan.request_cost(),&quota.actor)?;
+        let block=self.block(epoch).consume(plan.request_cost(),&quota.block)?;let network=self.global.network.consume(plan.request_cost(),&quota.network)?;let actor=self.actor.interval.consume(plan.request_cost(),&quota.actor)?;
         let r=self.row.as_mut().unwrap();r.attempts_used+=1;r.consumed=r.consumed.checked_add(plan.request_cost())?;r.remaining=r.remaining.checked_sub(plan.request_cost())?;self.global.block=block;self.global.network=network;self.global.epoch=epoch.clone();self.actor.interval=actor;Ok(())
     }
     pub fn admit_request(&mut self,plan:&CheckedStageSourcePlanV26)->Result<(),String>{let r=self.row.as_mut().ok_or("caller26 owner absent")?;if r.retired||r.requests_admitted>=plan.requests()||r.requests_admitted>=r.attempts_used{return Err("caller26 canonical successful request count exceeded".into());}r.requests_admitted+=1;Ok(())}
@@ -361,7 +361,7 @@ impl StageSourceCallerShardV26 {
         if r.retired||r.owner!=owner||r.original_paid!=original_paid||epoch.block_daa<=r.horizon||r.horizon>self.subject.binding.deadline_daa{return Err("caller26 original paid owner has not genuinely expired".into());}
         let remaining=r.remaining.clone();
         if epoch.network_interval==r.interval{
-            let block=self.block(epoch).spend(&remaining,&quota.block)?;let network=self.global.network.spend(&remaining,&quota.network)?;let actor=self.actor.interval.spend(&remaining,&quota.actor)?;
+            let block=self.block(epoch).consume(&remaining,&quota.block)?;let network=self.global.network.consume(&remaining,&quota.network)?;let actor=self.actor.interval.consume(&remaining,&quota.actor)?;
             self.global.block=block;self.global.network=network;self.actor.interval=actor;
         }
         let r=self.row.as_mut().unwrap();r.retired=true;r.consumed=r.committed.clone();r.remaining=QuotaQuantitiesV11::default();self.global.epoch=epoch.clone();Ok(())
@@ -379,7 +379,7 @@ impl StageSourceCallerShardV26 {
     pub fn retire(&mut self,quota:&QuotaPolicyV11,epoch:&TrustedEpochV11,plan:&CheckedStageSourcePlanV26,original_paid:Digest,terminal:&CheckedQuotaTerminalV11)->Result<(),String>{
         self.context(quota,epoch,plan)?;let r=self.row.as_ref().ok_or("caller26 owner absent")?;
         if r.retired||!self.subject.closed||terminal.binding!=self.subject.binding||r.original_paid!=original_paid||epoch.block_daa<=r.horizon{return Err("caller26 retirement lacks genuine closed original terminal/expiry".into());}
-        let extra=r.remaining.clone();let block=self.block(epoch).spend(&extra,&quota.block)?;let network=self.global.network.spend(&extra,&quota.network)?;let actor=self.actor.interval.spend(&extra,&quota.actor)?;
+        let extra=r.remaining.clone();let block=self.block(epoch).consume(&extra,&quota.block)?;let network=self.global.network.consume(&extra,&quota.network)?;let actor=self.actor.interval.consume(&extra,&quota.actor)?;
         let r=self.row.as_mut().unwrap();r.retired=true;r.consumed=r.committed.clone();r.remaining=QuotaQuantitiesV11::default();self.global.block=block;self.global.network=network;self.global.epoch=epoch.clone();self.actor.interval=actor;Ok(())
     }
 }
