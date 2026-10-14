@@ -60,7 +60,10 @@ USAGE:
                           --post-payout-proof32 <file> --payout-output-index N [--post-fork-opening-borsh <file>]
                          [--accepted-spend35-json <file> --spend-chain-header-json <file> --pinned-spend-chain <128hex>
                           --spend-selected-parent-header-json <file> --pinned-spend-selected-parent <128hex>]]
-    palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
+    palw-class native-parts --kind <text-pages29|text-reply29> --file <bytes> --out <fresh-dir> --network <id> --key-file <seed> --bond <txid:index>
+                         (--job <128hex> --seal <128hex> --owner <128hex> | --pending <128hex>) [own-params-snapshot34 pins]
+    palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|text-own29|text-close29|
+                         text-request29|text-default29|text-discovery29|text-collect29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
                          [--initial-sequence N --initial-now-daa N --initial-interval-end N --initial-expires-daa N]
@@ -908,6 +911,79 @@ fn run(args: &[String]) -> Result<(), String> {
                 .write_all(serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?.as_bytes())
                 .map_err(|e| e.to_string())?;
             println!("{report}");
+            Ok(())
+        }
+        "native-parts" => {
+            // Multi-object Text29 carriers: paid paged proof parts (action 32, the last
+            // part's assembly reveals) or producer reply pages (action 37). Every object
+            // is signed before any output exists, as for initial31.
+            use std::io::Write;
+            let kind = take_flag(&mut args, "--kind").ok_or("--kind text-pages29|text-reply29 required")?;
+            let file = take_flag(&mut args, "--file").ok_or("--file whole paged file or reply bytes required")?;
+            let out = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh directory required")?);
+            let digest = |name: &str, args: &mut Vec<String>| -> Result<[u8; 64], String> {
+                let v: kaspa_hashes::Hash64 =
+                    take_flag(args, name).ok_or_else(|| format!("{name} required"))?.parse().map_err(|e| format!("{name}: {e}"))?;
+                Ok(v.as_bytes())
+            };
+            let bytes = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                std::path::Path::new(&file),
+                kaspa_consensus_core::palw_native_text_stop_v29::TEXT_STOP_MAX_FILING_BYTES_V29,
+            )?;
+            let objects = match kind.as_str() {
+                "text-pages29" => {
+                    let (job, seal, owner) =
+                        (digest("--job", &mut args)?, digest("--seal", &mut args)?, digest("--owner", &mut args)?);
+                    misaka_palw_sdk::native_payload_v29::prepare_paged_parts_v29(&job, &seal, &owner, &bytes)?
+                }
+                "text-reply29" => {
+                    let pending = digest("--pending", &mut args)?;
+                    misaka_palw_sdk::native_payload_v29::prepare_text_reply_parts_v29(&pending, &bytes)?
+                }
+                _ => return Err("unknown native-parts kind".into()),
+            };
+            let mut view = network_view(network.as_deref().ok_or("--network owning ruleset required for signing")?)?;
+            apply_own_native_params_v34(&mut args, &mut view.params)?;
+            let key = kaspa_pq_validator_core::load_validator_seed(&take_flag(&mut args, "--key-file").ok_or("--key-file required")?)
+                .map(kaspa_pq_validator_core::ValidatorKey::from_seed)?;
+            let bond = misaka_palw_sdk::improve_objects::spec::bond(&take_flag(&mut args, "--bond").ok_or("--bond required")?)?;
+            if !args.is_empty() || out.exists() {
+                return Err("native-parts requires a fresh output and recognized explicit options".into());
+            }
+            let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                view.params.net.to_string().as_bytes(),
+                Some(view.params.genesis.hash),
+            );
+            let signed = objects
+                .iter()
+                .map(|o| {
+                    misaka_palw_sdk::native_payload_v29::sign_native_payload_v29(&key, domain, bond, o)
+                        .and_then(|v| borsh::to_vec(&v).map_err(|e| e.to_string()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            std::fs::create_dir(&out).map_err(|e| e.to_string())?;
+            let mut files = Vec::new();
+            for (index, raw) in signed.iter().enumerate() {
+                let name = format!("{index:04}.borsh");
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(out.join(&name))
+                    .map_err(|e| e.to_string())?
+                    .write_all(raw)
+                    .map_err(|e| e.to_string())?;
+                files.push(serde_json::json!({"file":name,"bytes":raw.len()}));
+            }
+            let manifest = serde_json::json!({"schema":"misaka.palw.native-parts.v29","kind":kind,"ordered_objects":files,
+                "submission_order":"index order; the last part completes assembly","native_application_or_funding":false});
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(out.join("manifest.json"))
+                .map_err(|e| e.to_string())?
+                .write_all(serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?.as_bytes())
+                .map_err(|e| e.to_string())?;
+            println!("{manifest}");
             Ok(())
         }
         "native-payload" => {

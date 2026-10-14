@@ -47,6 +47,11 @@ fn run() -> Result<(), String> {
     // authenticated later by palw-class against the pinned headers only.
     let spend_chain = args.remove("--spend-chain-block").map(|v| v.parse::<Hash64>().map_err(|e| format!("spend chain: {e}"))).transpose()?;
     let spend_tx = args.remove("--spend-tx-json").map(PathBuf::from);
+    // delivery33's post-payment anchor: the own-chain child of the payment block.
+    let post_pin = args.remove("--pinned-post-header").map(|v| v.parse::<Hash64>().map_err(|e| format!("post header: {e}"))).transpose()?;
+    if post_pin.is_some() && !redemption {
+        return Err("--pinned-post-header requires --redemption true".into());
+    }
     if spend_chain.is_some() != spend_tx.is_some() || (spend_chain.is_some() && !redemption) {
         return Err("spend35 needs --spend-chain-block, --spend-tx-json and --redemption true together".into());
     }
@@ -135,6 +140,9 @@ fn run() -> Result<(), String> {
         || status.genesis_hash != genesis
         || info.network.to_string() != network
         || child_block.verbose_data.as_ref().is_none_or(|v| v.selected_parent_hash != parent_pin)
+        // The operator's OWN independently replayed node must hold the pinned child on its
+        // selected chain; a side-DAG block's state opening is not this chain's Final.
+        || child_block.verbose_data.as_ref().is_none_or(|v| !v.is_chain_block || v.is_header_only)
     {
         return Err("node returned another network/genesis/immutable anchor/collection or unavailable validated audit".into());
     }
@@ -192,6 +200,38 @@ fn run() -> Result<(), String> {
         misaka_palw_sdk::native_redemption_v33::decode_coinbase_proof_v33(raw)?;
         keep(&out, "native-coinbase-proof33.borsh", raw, &mut total, &mut evidence)?;
     }
+    if let Some(post_hash) = post_pin {
+        let (post_block, post_payout) = runtime.block_on(async {
+            let post_block = tokio::time::timeout(Duration::from_secs(timeout), client.get_block(post_hash, false))
+                .await
+                .map_err(|_| "post header timeout".to_string())?
+                .map_err(|e| e.to_string())?;
+            let post_payout = tokio::time::timeout(
+                Duration::from_secs(timeout),
+                client.get_palw_state_proof(kaspa_rpc_core::GetPalwStateProofRequest {
+                    block_hash: post_hash.to_string(),
+                    collection: "pending-payouts-v32".into(),
+                }),
+            )
+            .await
+            .map_err(|_| "post payout RPC timeout".to_string())?
+            .map_err(|e| e.to_string())?;
+            Ok::<_, String>((post_block, post_payout))
+        })?;
+        let verbose = post_block.verbose_data.as_ref().ok_or("post block omits selected parent")?;
+        let post_header = Header::try_from(&post_block.header).map_err(|e| e.to_string())?;
+        if verbose.selected_parent_hash != block
+            || !verbose.is_chain_block
+            || kaspa_consensus_core::hashing::header::hash(&post_header) != post_hash
+            || !post_payout.available
+            || post_payout.collection != "pending-payouts-v32"
+            || post_payout.block_hash != post_hash.to_string()
+        {
+            return Err("post-payment anchor is not the own-chain child of the payment block".into());
+        }
+        keep(&out, "post-header.json", &serde_json::to_vec(&post_header).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
+        keep(&out, "post-payout-proof32.borsh", &encode_native_fact_proof_v32(&fact(&post_payout))?, &mut total, &mut evidence)?;
+    }
     if let (Some(chain_hash), Some(tx_path)) = (spend_chain, spend_tx.as_ref()) {
         let raw = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(tx_path, 8 << 20)?;
         let spend: kaspa_consensus_core::tx::Transaction = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
@@ -200,8 +240,11 @@ fn run() -> Result<(), String> {
                 .await
                 .map_err(|_| "spend chain timeout".to_string())?
                 .map_err(|e| e.to_string())?;
-            let parent_hash =
-                chain_block.verbose_data.as_ref().ok_or("spend chain block omits selected parent")?.selected_parent_hash;
+            let verbose = chain_block.verbose_data.as_ref().ok_or("spend chain block omits selected parent")?;
+            if !verbose.is_chain_block {
+                return Err("spend35 accepting block is not on the own node's selected chain".to_string());
+            }
+            let parent_hash = verbose.selected_parent_hash;
             let chain_parent = tokio::time::timeout(Duration::from_secs(timeout), client.get_block(parent_hash, false))
                 .await
                 .map_err(|_| "spend selected-parent timeout".to_string())?
@@ -275,6 +318,7 @@ fn run() -> Result<(), String> {
         "pinned_child":block.to_string(),"pinned_selected_parent":parent_pin.to_string(),"original_job":job.to_string(),"coinbase_delivery_proof_requested":redemption,
         "provenance_start":from.to_string(),"complete_requested_provenance_retained":reached,"artifacts":evidence,
         "total_retained_bytes":total,"raw_node_assertions_are_unverified":true,"canonical_blocks_verified":false,
+        "pinned_child_on_own_node_selected_chain":true,"spend35_collected":spend_chain.is_some(),
         "native_final_verified":false,"utxo_redemption_verified":false,"A6_or_A8_credit":false});
     std::fs::OpenOptions::new()
         .write(true)

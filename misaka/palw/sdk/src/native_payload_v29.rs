@@ -503,6 +503,46 @@ pub fn decode_native_payload_v29(
                 },
             )
         }
+        "text-own29" => {
+            if raw.len() != 263 {
+                return Err("text29 owner exact 263-byte grammar".into());
+            }
+            prepare_text_own_v29(&borsh::from_slice(raw).map_err(|e| e.to_string())?)
+        }
+        "text-close29" => prepare_text_close_v29(&raw.try_into().map_err(|_| "text29 close exact job digest")?),
+        "text-request29" => {
+            if !(132..=256).contains(&raw.len()) {
+                return Err("text29 public request bounded grammar".into());
+            }
+            prepare_text_request_v29(&borsh::from_slice(raw).map_err(|e| e.to_string())?)
+        }
+        "text-default29" => prepare_text_default_v29(&raw.try_into().map_err(|_| "text29 default exact pending digest")?),
+        "text-discovery29" => {
+            if raw.len() != 262 {
+                return Err("text29 discovery exact 262-byte grammar".into());
+            }
+            let d = |i: usize| -> Digest { raw[i * 64..(i + 1) * 64].try_into().unwrap() };
+            prepare_text_discovery_v29(
+                &d(0),
+                &d(1),
+                &d(2),
+                &d(3),
+                u32::from_le_bytes(raw[256..260].try_into().unwrap()),
+                u16::from_le_bytes(raw[260..262].try_into().unwrap()),
+            )
+        }
+        "text-collect29" => {
+            let d = |at: usize| -> Result<Digest, String> {
+                raw.get(at..at + 64).ok_or("text29 collection digest absent")?.try_into().map_err(|_| "text29 collection digest".to_string())
+            };
+            let kind = match (raw.first(), raw.len()) {
+                (Some(0), 129) => NativeTextCollectV29::Owner { job: d(1)?, owner: d(65)? },
+                (Some(1), 65) => NativeTextCollectV29::PublicCache { job: d(1)? },
+                (Some(2), 65) => NativeTextCollectV29::Terminal { job: d(1)? },
+                _ => return Err("text29 collection exact kind grammar".into()),
+            };
+            prepare_text_collect_v29(&kind)
+        }
         "stage-bundle28" => {
             let b = kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28::from_bytes(raw)?;
             prepare_stage_bundle_v28(&b)
