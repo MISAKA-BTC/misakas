@@ -97,6 +97,8 @@ p_effectiveは検査器の検出率だけでなく、実際の検査、局所化
 
 ## 3A. 追加 — モデル別Miner・Panel claim bondと1.3〜2倍の配分係数
 
+> **2026-10-14決定:** 本節のうち、Miner＋検証者の元本合算（Panel=0に合わせてclaim拘束のpermissionless verifier元本へ一般化）とブロック生成機会への接続を採用した。配分曲線は`μ`案ではなく`α = 1.5`、平均期間は30日相当DAA、`W`は7日相当DAAとした。マイナー報酬はモデル登録者へ直接分配しない。§3A.8の`p_effective`不等式は、[PRINCIPLES §0](../../PRINCIPLES.md)により有効化gateではなく評価指標として読む。正本は[RFC-0015 §8.5.5](../../rfc/0015-panel-free-permissionless-verification.md)。
+
 ### 3A.1 採用したい設計方針と対象攻撃
 
 次の攻撃を明示的な対象にする。悪意ある一人の実質所有者がモデルを非公開にし、モデル登録者、Miner、Panelを別のbond・鍵として自分で用意する。Minerは正当なモデル計算を省略し、共謀Panelがreceiptを出して、反証されないままclaimをFinalに進めようとする。同一bond/operatorの除外だけでは、別IDによる実質同一所有者を排除したことにはならない。
