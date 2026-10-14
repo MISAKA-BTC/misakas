@@ -74,7 +74,7 @@ pub(super) fn register(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV
 // and each component's public output tensors, which must authenticate against
 // that component's own committed trace openings. Every component must already be
 // an individually genuine, settled Stage28 Final; nothing here pays or finalizes.
-type AuditRows = std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>;
+pub(super) type AuditRows = std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>;
 fn aux_read<T: BorshDeserialize>(rows: &AuditRows, raw_key: Vec<u8>, cap: usize) -> Result<T, String> {
     let raw = rows.get(&(STAGE_TABLE_V14, raw_key)).ok_or("master32 audit original row absent")?;
     if raw.len() > cap {
@@ -82,7 +82,7 @@ fn aux_read<T: BorshDeserialize>(rows: &AuditRows, raw_key: Vec<u8>, cap: usize)
     }
     borsh::from_slice(raw).map_err(|_| "master32 audit original row grammar".into())
 }
-fn audit_class(rows: &AuditRows, p: &NativeStagePoliciesV28, id: Digest) -> Result<CheckedStageClassV28, String> {
+pub(super) fn audit_class(rows: &AuditRows, p: &NativeStagePoliciesV28, id: Digest) -> Result<CheckedStageClassV28, String> {
     let h: ClassHeader = aux_read(rows, key(2, &id), 1024)?;
     let bh: BundleHeader = aux_read(rows, key(0, &h.bundle), 8192)?;
     let raw: Vec<u8> = aux_read(rows, key(1, &h.bundle), (16 << 20) + 8)?;

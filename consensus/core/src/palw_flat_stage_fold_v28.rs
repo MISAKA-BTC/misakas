@@ -419,3 +419,34 @@ pub(super) fn audit_record_from_rows_v28(
         observed_queue_amount:payouts.get(&queue).filter(|p|p.payload==h.producer_payout).map(|p|p.amount),rows:audit_rows,
     })
 }
+
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Stateless Stage28 lifecycle extraction for the independent register/seat auditor.
+    pub(crate) fn native_stage_lifecycle_from_rows_v28(
+        rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,p:&NativeStagePoliciesV28,
+        stage:crate::palw_native_audit_proof_v32::NativeLifecycleStageV32,id:Digest,
+    )->Result<crate::palw_native_audit_proof_v32::NativeLifecycleAnchorV32,String>{
+        use crate::palw_native_audit_proof_v32::{NativeLifecycleAnchorV32,NativeLifecycleStageV32 as S};
+        let header=|class:Digest|->Result<ClassHeader,String>{let raw=rows.get(&(STAGE_TABLE_V14,key(2,&class))).ok_or("stage28 lifecycle class header absent")?;if raw.len()>1024{return Err("stage28 lifecycle class cap".into());}borsh::from_slice(raw).map_err(|_|"stage28 lifecycle class grammar".into())};
+        match stage {
+            S::Register=>{
+                let class=master32::audit_class(rows,p,id)?;let h=header(id)?;
+                Ok(NativeLifecycleAnchorV32{namespace:28,stage,class:id,source:h.source,program:h.bundle,maximum_scope:class.maximum_scope().root(),maximum_resource:class.maximum_resources().root(),
+                    job:[0;64],funding:[0;64],consent:[0;64],requester_operator:[0;64],producer_operator:[0;64],terminal:"registered".into(),anchored_daa:0})
+            }
+            S::Seat=>{
+                let raw=rows.get(&(STAGE_TABLE_V14,key(5,&id))).ok_or("stage28 lifecycle header absent")?;if raw.len()>8192{return Err("stage28 lifecycle header cap".into());}
+                let jh:JobHeader=borsh::from_slice(raw).map_err(|_|"stage28 lifecycle header grammar")?;
+                let raw=rows.get(&(STAGE_TABLE_V14,key(6,&id))).ok_or("stage28 lifecycle body absent")?;if raw.len()>(1<<20)+(2<<20)+16384{return Err("stage28 lifecycle body cap".into());}
+                let data:JobData=borsh::from_slice(raw).map_err(|_|"stage28 lifecycle body grammar")?;
+                if jh.id!=id||data.book.len()!=jh.book_bytes as usize{return Err("stage28 lifecycle header/body extent differs".into());}
+                let book:StageJobBookV28=borsh::from_slice(&data.book).map_err(|_|"stage28 lifecycle book grammar")?;
+                let class=master32::audit_class(rows,p,jh.class)?;let actual=class.check_job(book.job())?;let plan=derive_stage_quota_v28(&class,&actual)?;book.check(&class,&actual,&plan)?;
+                let h=header(jh.class)?;
+                if book.id()!=id||book.root()!=jh.book||book.original_root()!=jh.original||book.consent()!=jh.consent||jh.consent==[0;64]||book.contract()!=jh.contract.root(){return Err("stage28 lifecycle funded original consent/contract differs".into());}
+                Ok(NativeLifecycleAnchorV32{namespace:28,stage,class:jh.class,source:h.source,program:h.bundle,maximum_scope:book.maximum_scope_root(),maximum_resource:book.maximum_resources_root(),
+                    job:id,funding:jh.original,consent:jh.consent,requester_operator:book.requester_operator(),producer_operator:book.producer_operator(),terminal:format!("{:?}",book.terminal()),anchored_daa:0})
+            }
+        }
+    }
+}

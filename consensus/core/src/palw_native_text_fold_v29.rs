@@ -2252,3 +2252,86 @@ pub(super) fn audit_record_from_rows_v29(
         rows: audit_rows,
     })
 }
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Stateless lifecycle extraction for the independent register/seat auditor
+    /// (`derive_native_lifecycle_anchor_v32`); rows come from a verified full opening.
+    pub(crate) fn native_text_lifecycle_from_rows_v29(
+        rows: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+        stage: crate::palw_native_audit_proof_v32::NativeLifecycleStageV32,
+        id: Digest,
+    ) -> Result<crate::palw_native_audit_proof_v32::NativeLifecycleAnchorV32, String> {
+        use crate::palw_native_audit_proof_v32::{NativeLifecycleAnchorV32, NativeLifecycleStageV32 as S};
+        let row = |table: u8, k: Vec<u8>, cap: usize| -> Result<Vec<u8>, String> {
+            let raw = rows.get(&(table, k)).ok_or("text29 lifecycle original row absent")?;
+            if raw.len() > cap {
+                return Err("text29 lifecycle original row cap".into());
+            }
+            Ok(raw.clone())
+        };
+        let class_of = |class: Digest| -> Result<ClassHeader, String> {
+            let h: ClassHeader =
+                borsh::from_slice(&row(EXECUTION_CLASS_TABLE_V11, k(0, &class), 2048)?).map_err(|_| "text29 lifecycle class grammar")?;
+            if h.class.id() != class
+                || h.original_source.refuted
+                || h.original_source.program_root != h.class.original_program
+                || h.original_source.parameter_root != h.class.real_parameter
+                || h.original_source.inventory_root != h.class.inventory
+                || rows.contains_key(&(EXECUTION_SOURCE_FACT_TABLE_V11, k(0, &source_relation(&h.class))))
+            {
+                return Err("text29 lifecycle class is not bound to a mature unrefuted original source".into());
+            }
+            Ok(h)
+        };
+        match stage {
+            S::Register => {
+                let h = class_of(id)?;
+                Ok(NativeLifecycleAnchorV32 {
+                    namespace: 29,
+                    stage,
+                    class: id,
+                    source: h.class.source_binding,
+                    program: h.class.original_program,
+                    maximum_scope: h.class.maximum_scope25,
+                    maximum_resource: h.class.maximum_resource29,
+                    job: [0; 64],
+                    funding: [0; 64],
+                    consent: [0; 64],
+                    requester_operator: [0; 64],
+                    producer_operator: [0; 64],
+                    terminal: "registered".into(),
+                    anchored_daa: h.registered.max(h.original_source.matures_daa),
+                })
+            }
+            S::Seat => {
+                let jh: JobHeader =
+                    borsh::from_slice(&row(EXECUTION_JOB_TABLE_V11, k(0, &id), 8192)?).map_err(|_| "text29 lifecycle header grammar")?;
+                let raw = row(EXECUTION_JOB_TABLE_V11, k(1, &id), TEXT_STOP_BOOK_BYTES_V29)?;
+                if jh.job != id || raw.len() != jh.book_bytes as usize {
+                    return Err("text29 lifecycle header/book extent differs".into());
+                }
+                let b = NativeTextBookV29::restore(&raw, jh.funding, jh.book)?;
+                let f = b.funding();
+                let h = class_of(jh.class)?;
+                if f.id() != id || f.request.class != jh.class || f.consent == [0; 64] || f.maximum.root() != jh.maximum {
+                    return Err("text29 lifecycle funded original consent/maximum differs".into());
+                }
+                Ok(NativeLifecycleAnchorV32 {
+                    namespace: 29,
+                    stage,
+                    class: jh.class,
+                    source: h.class.source_binding,
+                    program: h.class.original_program,
+                    maximum_scope: f.maximum.maximum_scope25,
+                    maximum_resource: f.maximum.maximum_resource29,
+                    job: id,
+                    funding: f.root(),
+                    consent: f.consent,
+                    requester_operator: f.request.requester_operator,
+                    producer_operator: f.request.producer_operator,
+                    terminal: format!("{:?}", b.terminal()),
+                    anchored_daa: f.admitted_daa,
+                })
+            }
+        }
+    }
+}

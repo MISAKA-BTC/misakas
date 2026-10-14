@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent native chain auditor for the ``final`` and ``redemption`` stages.
+"""Independent native chain auditor for the ``register``, ``seat``, ``final`` and ``redemption`` stages.
 
 Produces ``misaka.rfc02.independent-native-chain-audit.v3`` (the schema that
 ``checkpoint_cohort_runner.inspect_audit_pair`` requires) from ONE operator's own
@@ -15,7 +15,8 @@ independently replayed node. The producer's stage result supplies only pointers
 A measurement Final (isolated calibration34 devnet) is written with
 ``qualified_native_profile = false`` / ``isolated_calibration = true``; the
 runner and acceptance_cohort.py then keep it as a named failure for A6/A8.
-Register/seat stages are not covered here (exit 2, no output): they stay NOT_RUN.
+Register and seat stages use ``palw-class audit-native-lifecycle32`` on a lifecycle-only
+opening (class on a mature unrefuted source; job funded with the producer's consent).
 This tool runs only in the consolidated validation phase.
 """
 from __future__ import annotations
@@ -57,6 +58,80 @@ def run(argv: list[str], log: Path, timeout: int) -> None:
         raise ValueError(f"{Path(argv[0]).name} refused (see {log.name})")
 
 
+def owning_args(a) -> tuple[list[str], list[str], list[str]]:
+    pins = (a.own_params_snapshot34, a.own_params_snapshot_root, a.own_params_sha256)
+    if any(pins) and not all(pins):
+        raise ValueError("own snapshot pins go together")
+    if not all(pins):
+        return [], [], []
+    return (["--own-params-snapshot34", pins[0], "--own-params-snapshot-root", pins[1]],
+            ["--own-params-sha256", pins[2]], ["--own-params-snapshot-sha256", pins[2]])
+
+
+def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
+    """Register (class on a mature unrefuted source) / seat (job funded with the
+    producer's original consent), re-derived offline from the own node's opening."""
+    ident, child, parent, start = (hex128(ptr.get(k)) for k in ("id", "anchor_child", "anchor_selected_parent", "provenance_start"))
+    fetch = pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
+    klass = pinned_exe(a.palw_class, a.palw_class_sha256)
+    own, own_sha_fetch, own_sha_class = owning_args(a)
+    collected = work / "collected"
+    run([fetch, "--rpc", a.rpc, "--pinned-child", child, "--pinned-selected-parent", parent,
+         "--pinned-provenance-start", start, "--job", ident, "--network", a.network, "--genesis", a.genesis,
+         "--operator-id", a.operator_id, "--node-database-id", a.node_database, *own_sha_fetch, *own,
+         "--lifecycle-only", "true", "--out", str(collected), "--timeout-seconds", "60"], work / "fetch.log", a.timeout_seconds)
+    collection = json.loads((collected / "collection.json").read_text())
+    if (collection.get("genesis") != a.genesis or collection.get("network") != a.network
+            or collection.get("pinned_child_on_own_node_selected_chain") is not True):
+        raise ValueError("own-node collection differs from the predeclared network/genesis/chain")
+    report_path = work / "lifecycle-audit.json"
+    run([klass, "audit-native-lifecycle32", "--stage", a.stage, "--network", a.network, *own, *own_sha_class,
+         "--child-header-json", str(collected / "child-header.json"),
+         "--selected-parent-header-json", str(collected / "selected-parent-header.json"),
+         "--pinned-child", child, "--pinned-selected-parent", parent, "--id", ident,
+         "--aux-proof32", str(collected / "aux-proof32.borsh"), "--out", str(report_path)], work / "audit.log", a.timeout_seconds)
+    report = json.loads(report_path.read_text())
+    ok = report.get("pinned_headers_and_original_rows_verified") is True and report.get("stage") == a.stage
+    seat_ok = a.stage == "register" or all(report.get(k) not in (None, "0" * 128) for k in ("job", "original_funding", "initial_consent"))
+    qualified = report.get("qualified_native_profile") is True
+    evidence_root = Path(a.evidence_root).resolve()
+    if not work.resolve().is_relative_to(evidence_root) or not out.resolve().is_relative_to(evidence_root):
+        raise ValueError("audit work directory and result must be inside the run's evidence root")
+    objects = [{"path": str(p.resolve().relative_to(evidence_root)), "sha256": sha256(p)}
+               for p in sorted(collected.iterdir()) + [report_path] if p.is_file()]
+    child_header = json.loads((collected / "child-header.json").read_text())
+    blank = lambda k: report.get(k) if a.stage == "seat" else ""
+    doc = {
+        "schema": SCHEMA, "scope": scope, "stage": a.stage, "run_plan_sha256": a.run_plan_sha256,
+        "operator_id": a.operator_id, "node_database": a.node_database, "genesis": a.genesis, "network": a.network,
+        "canonical_blocks_verified": collection.get("pinned_child_on_own_node_selected_chain") is True,
+        # Rows exist only as native fold output; register = class bound to a mature unrefuted
+        # source with its derived maximum scope/resources; seat = funded original consent.
+        "native_carriers_verified": ok and seat_ok,
+        "class_source_job_scope_verified": ok and seat_ok,
+        "active_kernel_verified": ok,
+        "resource_reservations_verified": ok and seat_ok,
+        # Before Commit there is no seal/DA liability to verify; nothing is open by construction.
+        "own_seal_and_public_da_verified": ok,
+        "anchor_from_validated_consensus_database": True,
+        "qualified_native_profile": qualified,
+        "isolated_calibration": not qualified,
+        "chain_objects": objects,
+        "validated_anchor": {
+            "network": a.network, "genesis": a.genesis, "anchor_block": child,
+            "anchor_daa": int(child_header.get("daaScore", child_header.get("daa_score", -1))),
+            "active_kernel": f"native/ns{report.get('namespace')}/{collection.get('node_consensus_params_id')}",
+            "class": report.get("class"), "source": report.get("source"), "job": blank("job"),
+            "maximum_scope": report.get("maximum_scope"), "actual_scope": "", "resource_contract": report.get("maximum_resource"),
+            "original_funding": blank("original_funding"), "initial_consent": blank("initial_consent"),
+            "claim": "", "final": "", "single_credit": "", "redemption_transaction": "", "redemption_utxo": "",
+        },
+    }
+    with out.open("x") as f:
+        json.dump(doc, f, indent=2)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     for name in ("stage", "scope", "stage-result", "run-plan-sha256", "audit-result", "node-database", "operator-id",
@@ -68,7 +143,7 @@ def main() -> int:
         ap.add_argument(f"--{name}")
     ap.add_argument("--timeout-seconds", type=int, default=600)
     a = ap.parse_args()
-    if a.stage not in ("final", "redemption"):
+    if a.stage not in ("register", "seat", "final", "redemption"):
         return 2
     out = Path(a.audit_result)
     work = Path(a.work_dir)
@@ -80,6 +155,8 @@ def main() -> int:
     if result.get("schema") != RESULT_SCHEMA or result.get("stage") != a.stage:
         raise ValueError("stage result pointer document differs")
     ptr = result.get("native_pointers") or {}
+    if a.stage in ("register", "seat"):
+        return lifecycle(a, scope, ptr, work, out)
     job, child, parent, start = (hex128(ptr.get(k)) for k in ("job", "final_child", "final_selected_parent", "provenance_start"))
     fetch = pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
     klass = pinned_exe(a.palw_class, a.palw_class_sha256)

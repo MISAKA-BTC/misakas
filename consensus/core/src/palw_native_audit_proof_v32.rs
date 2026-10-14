@@ -350,3 +350,89 @@ pub fn decode_native_master_outputs_v32(raw: &[u8]) -> Result<Vec<Vec<misaka_pal
     }
     Ok(out)
 }
+
+/// Which earlier lifecycle stage an independent auditor anchors (real-checkpoint path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeLifecycleStageV32 {
+    /// The class is registered against a mature, unrefuted original source binding.
+    Register,
+    /// A job is funded with the producer's original signed consent (the "seat" of the
+    /// Panel-free native lane: the consenting producer bond holding the model).
+    Seat,
+}
+/// Fields re-derived from authenticated original rows only. `job`/`funding`/`consent`
+/// are zero for `Register`. Never a producer/node assertion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeLifecycleAnchorV32 {
+    pub namespace: u16,
+    pub stage: NativeLifecycleStageV32,
+    pub class: [u8; 64],
+    pub source: [u8; 64],
+    pub program: [u8; 64],
+    pub maximum_scope: [u8; 64],
+    pub maximum_resource: [u8; 64],
+    pub job: [u8; 64],
+    pub funding: [u8; 64],
+    pub consent: [u8; 64],
+    pub requester_operator: [u8; 64],
+    pub producer_operator: [u8; 64],
+    pub terminal: String,
+    pub anchored_daa: u64,
+}
+pub struct CheckedNativeLifecycleAnchorV32 {
+    anchor: NativeLifecycleAnchorV32,
+    state: Hash64,
+    aux_root: Hash64,
+}
+impl CheckedNativeLifecycleAnchorV32 {
+    pub fn anchor(&self) -> &NativeLifecycleAnchorV32 {
+        &self.anchor
+    }
+    pub fn state_root(&self) -> Hash64 {
+        self.state
+    }
+    pub fn aux_root(&self) -> Hash64 {
+        self.aux_root
+    }
+}
+pub fn derive_native_lifecycle_anchor_v32(
+    auxiliary: &VerifiedNativeAuxRowsV32<'_>,
+    parameters: &crate::config::params::Params,
+    daa: u64,
+    stage: NativeLifecycleStageV32,
+    id: [u8; 64],
+) -> Result<CheckedNativeLifecycleAnchorV32, String> {
+    let mut rows = std::collections::BTreeMap::new();
+    for (k, v) in auxiliary.rows {
+        let (table, key): (u8, Vec<u8>) = borsh::from_slice(k).map_err(|_| "lifecycle32 exact original auxiliary key")?;
+        if rows.insert((table, key), v.clone()).is_some() {
+            return Err("lifecycle32 duplicate original row".into());
+        }
+    }
+    let text_key = |kind: u8| borsh::to_vec(&(29u8, kind, id)).expect("fixed key");
+    let stage_key = |kind: u8| borsh::to_vec(&(28u8, kind, id)).expect("fixed key");
+    let (text_table, stage_table, text_kind, stage_kind) = match stage {
+        NativeLifecycleStageV32::Register => {
+            (crate::palw_flat_execution_v11::EXECUTION_CLASS_TABLE_V11, crate::palw_flat_stage_v14::STAGE_TABLE_V14, 0u8, 2u8)
+        }
+        NativeLifecycleStageV32::Seat => {
+            (crate::palw_flat_execution_v11::EXECUTION_JOB_TABLE_V11, crate::palw_flat_stage_v14::STAGE_TABLE_V14, 0u8, 5u8)
+        }
+    };
+    let anchor = if rows.contains_key(&(text_table, text_key(text_kind))) {
+        if !parameters.palw_native_final_active_at_v27(daa) || !parameters.palw_funded_execution_active_at_v11(daa) {
+            return Err("lifecycle32 Text29 owning fences inactive".into());
+        }
+        PalwChainStateV2::native_text_lifecycle_from_rows_v29(&rows, stage, id)?
+    } else if rows.contains_key(&(stage_table, stage_key(stage_kind))) {
+        let fence = parameters
+            .palw_stage_execution_v28
+            .as_ref()
+            .filter(|f| f.activation.is_active(daa))
+            .ok_or("lifecycle32 Stage28 owning fence inactive")?;
+        PalwChainStateV2::native_stage_lifecycle_from_rows_v28(&rows, &fence.policies, stage, id)?
+    } else {
+        return Err("lifecycle32 no original Text29/Stage28 row for this id".into());
+    };
+    Ok(CheckedNativeLifecycleAnchorV32 { anchor, state: auxiliary.state, aux_root: auxiliary.root })
+}

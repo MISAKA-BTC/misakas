@@ -62,6 +62,9 @@ USAGE:
                           --spend-selected-parent-header-json <file> --pinned-spend-selected-parent <128hex>]]
     palw-class native-calibration34 --network devnet --purpose <measurement|local-qualified> --isolation <128hex>
                          --measurement-manifest <128hex> --physical-service <128hex> --calibrations-json <file> [--stage28 true] --out <fresh>
+    palw-class audit-native-lifecycle32 --stage <register|seat> --network <own-ruleset> --child-header-json <file>
+                         --selected-parent-header-json <file> --pinned-child <128hex> --pinned-selected-parent <128hex>
+                         --id <128hex> --aux-proof32 <file> --out <fresh.json> [own-params-snapshot34 pins]
     palw-class audit-master-composite32 --network <own-ruleset> --child-header-json <file> --selected-parent-header-json <file>
                          --pinned-child <128hex> --pinned-selected-parent <128hex> --master <128hex> --jobs <hex,hex,...>
                          --aux-proof32 <file> --outputs <file> --generated-json <file> --out <fresh.json> [own-params-snapshot34 pins]
@@ -977,6 +980,60 @@ fn run(args: &[String]) -> Result<(), String> {
                     "sha256":hex(&sha),"purpose":if purpose == kaspa_consensus_core::palw_native_calibration_v34::LocalNativePurposeV34::LocalQualified {"local-qualified"} else {"measurement"},
                     "public_preset":false,"release_height":serde_json::Value::Null})
             );
+            Ok(())
+        }
+        "audit-native-lifecycle32" => {
+            let mut view = network_view(network.as_deref().ok_or("--network own ruleset required")?)?;
+            let own_snapshot = apply_own_native_params_v34(&mut args, &mut view.params)?;
+            let pin = |v: Option<String>, name: &str| -> Result<kaspa_hashes::Hash64, String> {
+                v.ok_or_else(|| format!("{name} independent pin required"))?.parse().map_err(|e| format!("{name}: {e}"))
+            };
+            use kaspa_consensus_core::palw_native_audit_proof_v32::NativeLifecycleStageV32 as S;
+            let stage = match take_flag(&mut args, "--stage").as_deref() {
+                Some("register") => S::Register,
+                Some("seat") => S::Seat,
+                _ => return Err("--stage register|seat required".into()),
+            };
+            let child_path = take_flag(&mut args, "--child-header-json").ok_or("--child-header-json required")?;
+            let parent_path = take_flag(&mut args, "--selected-parent-header-json").ok_or("--selected-parent-header-json required")?;
+            let child_pin = pin(take_flag(&mut args, "--pinned-child"), "--pinned-child")?;
+            let parent_pin = pin(take_flag(&mut args, "--pinned-selected-parent"), "--pinned-selected-parent")?;
+            let id = pin(take_flag(&mut args, "--id"), "--id (class for register, job for seat)")?.as_bytes();
+            let aux_path = take_flag(&mut args, "--aux-proof32").ok_or("--aux-proof32 required")?;
+            let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh report required")?);
+            if !args.is_empty() || output.exists() {
+                return Err("audit-native-lifecycle32 exact options/fresh report required".into());
+            }
+            let child = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&child_path))?;
+            let parent = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&parent_path))?;
+            let aux = misaka_palw_sdk::native_audit_io_v32::read_native_fact_proof_v32(std::path::Path::new(&aux_path))?;
+            let checked = misaka_palw_sdk::native_lifecycle_v32::derive_anchored_lifecycle_v32(
+                &child, child_pin, &parent, parent_pin, &view.params, None, &aux, stage, id,
+            )?;
+            let a = checked.anchor();
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let report = serde_json::json!({"schema":"misaka.palw.pinned-native-lifecycle-audit.v32",
+                "stage":if stage == S::Register {"register"} else {"seat"},"network":view.network_id.to_string(),
+                "genesis":hex(&view.params.genesis.hash.as_bytes()),"child":hex(&child_pin.as_bytes()),
+                "independently_pinned_selected_parent":hex(&parent_pin.as_bytes()),"inner_state":hex(&checked.state_root().as_bytes()),
+                "aux_root":hex(&checked.aux_root().as_bytes()),"namespace":a.namespace,"class":hex(&a.class),"source":hex(&a.source),
+                "program":hex(&a.program),"maximum_scope":hex(&a.maximum_scope),"maximum_resource":hex(&a.maximum_resource),
+                "job":hex(&a.job),"original_funding":hex(&a.funding),"initial_consent":hex(&a.consent),
+                "requester_operator":hex(&a.requester_operator),"producer_operator":hex(&a.producer_operator),
+                "terminal":a.terminal,"anchored_daa":a.anchored_daa,
+                "qualified_native_profile":view.params.native_final_is_qualified_v34(),
+                "local_qualified_validation_network":view.params.native_final_is_local_qualified_v34(),
+                "own_snapshot_root":own_snapshot.map(|v| hex(&v)),
+                "pinned_headers_and_original_rows_verified":true,"A6_or_A8_credit":false});
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output)
+                .map_err(|e| e.to_string())?
+                .write_all(serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?.as_bytes())
+                .map_err(|e| e.to_string())?;
+            println!("{report}");
             Ok(())
         }
         "audit-master-composite32" => {

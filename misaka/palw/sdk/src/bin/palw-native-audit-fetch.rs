@@ -63,6 +63,16 @@ fn run() -> Result<(), String> {
     if spend_chain.is_some() != spend_tx.is_some() || (spend_chain.is_some() && !redemption) {
         return Err("spend35 needs --spend-chain-block, --spend-tx-json and --redemption true together".into());
     }
+    // Register/seat anchors need only the full readonly aux opening of the pinned child;
+    // `--job` then names the class (register) or funded job (seat), never a Final.
+    let lifecycle = match args.remove("--lifecycle-only").as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        _ => return Err("--lifecycle-only requires literal true or false".into()),
+    };
+    if lifecycle && redemption {
+        return Err("--lifecycle-only excludes --redemption".into());
+    }
     let max_blocks = args.remove("--max-blocks").map(|s| s.parse::<usize>().map_err(|e| e.to_string())).transpose()?.unwrap_or(512);
     let timeout = args.remove("--timeout-seconds").map(|s| s.parse::<u64>().map_err(|e| e.to_string())).transpose()?.unwrap_or(30);
     if !args.is_empty()
@@ -106,7 +116,11 @@ fn run() -> Result<(), String> {
             Duration::from_secs(timeout),
             client.get_palw_state_proof(kaspa_rpc_core::GetPalwStateProofRequest {
                 block_hash: block.to_string(),
-                collection: format!("{}:{job}", if redemption { "native-redemption-v33" } else { "native-audit-v27" }),
+                collection: if lifecycle {
+                    "kernel-aux-v32".to_string()
+                } else {
+                    format!("{}:{job}", if redemption { "native-redemption-v33" } else { "native-audit-v27" })
+                },
             }),
         )
         .await
@@ -174,8 +188,13 @@ fn run() -> Result<(), String> {
     {
         return Err("native fetch headers differ from original independent pins".into());
     }
-    let record = audit.native_audit_record.as_ref().ok_or("node did not export actual validated native audit record")?;
-    kaspa_consensus_core::palw_native_audit_v27::NativeExecutionAuditRecordV27::from_bytes(record)?;
+    let record = if lifecycle {
+        None
+    } else {
+        let record = audit.native_audit_record.as_ref().ok_or("node did not export actual validated native audit record")?;
+        kaspa_consensus_core::palw_native_audit_v27::NativeExecutionAuditRecordV27::from_bytes(record)?;
+        Some(record)
+    };
     let fact = |response: &kaspa_rpc_core::GetPalwStateProofResponse| PalwFactProofV1 {
         state: PalwStateOpeningV1 { preimage: response.state_preimage.clone() },
         collection: PalwCollectionOpeningV1 {
@@ -203,7 +222,9 @@ fn run() -> Result<(), String> {
     }
     keep(&out, "child-header.json", &serde_json::to_vec(&child).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
     keep(&out, "selected-parent-header.json", &serde_json::to_vec(&parent).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
-    keep(&out, "native-record.borsh", record, &mut total, &mut evidence)?;
+    if let Some(record) = record {
+        keep(&out, "native-record.borsh", record, &mut total, &mut evidence)?;
+    }
     if redemption {
         let raw = audit.native_coinbase_proof.as_ref().ok_or("node omitted actual validated coinbase inclusion proof")?;
         misaka_palw_sdk::native_redemption_v33::decode_coinbase_proof_v33(raw)?;
@@ -324,7 +345,7 @@ fn run() -> Result<(), String> {
         "node_consensus_params_id":status.consensus_params_id,"node_consensus_schedule_id":status.consensus_schedule_id,
         "measurement_final_only":!owning.rfc02_qualified(),
         "qualified_native_profile":owning.rfc02_qualified(),"calibration_receipts_are_not_A6_or_A8_evidence":!owning.rfc02_qualified(),
-        "pinned_child":block.to_string(),"pinned_selected_parent":parent_pin.to_string(),"original_job":job.to_string(),"coinbase_delivery_proof_requested":redemption,
+        "pinned_child":block.to_string(),"pinned_selected_parent":parent_pin.to_string(),"original_job":job.to_string(),"coinbase_delivery_proof_requested":redemption,"lifecycle_only":lifecycle,
         "provenance_start":from.to_string(),"complete_requested_provenance_retained":reached,"artifacts":evidence,
         "total_retained_bytes":total,"raw_node_assertions_are_unverified":true,"canonical_blocks_verified":false,
         "pinned_child_on_own_node_selected_chain":true,"spend35_collected":spend_chain.is_some(),
