@@ -461,22 +461,26 @@ pub fn decode_native_payload_v29(
             text(30, &f)
         }
         "text-commit29" => {
+            // Length caps come from the job's own versioned maximum (request29), exactly as
+            // the consensus decoder reads them — never from the frozen v1 history constant.
+            let req = request.ok_or("--request-borsh original request required")?;
+            let max_generated = req.maximum_new_tokens as usize;
+            let max_segments = req.maximum_positions()?.div_ceil(misaka_palw_kernel::seg::SEG_LEN_V4) as usize;
             let mut r = Cursor::new(raw);
             let version = read(&mut r)?;
             let job = read(&mut r)?;
             let original_funding = read(&mut r)?;
             let maximum_contract = read(&mut r)?;
             let requester_nonce = read(&mut r)?;
-            let generated = vector(&mut r, misaka_palw_tir::program::HISTORY_BOUND_V1_HELD as usize, 4)?;
+            let generated = vector(&mut r, max_generated, 4)?;
             let actual_scope25 = read(&mut r)?;
             let actual_resource29 = read(&mut r)?;
             let evidence: misaka_palw_kernel::seg::SegmentedEvidenceV2 = read(&mut r)?;
-            let segment_roots = vector(&mut r, misaka_palw_kernel::seg::SEG_MAX_SEGMENTS_V4 as usize, 64)?;
+            let segment_roots = vector(&mut r, max_segments, 64)?;
             let final_state = read(&mut r)?;
             if r.position() as usize != raw.len() || version != 29 {
                 return Err("text29 Commit original bounded grammar".into());
             }
-            let req = request.ok_or("--request-borsh original request required")?;
             let p = program.ok_or("--program canonical TIR required")?;
             check_generated_v29(req, p.token_bound, &generated)?;
             evidence.check_structure(&segment_roots)?;

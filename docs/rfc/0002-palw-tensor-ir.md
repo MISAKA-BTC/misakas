@@ -4435,3 +4435,50 @@ credit queue must disappear. The resulting evidence names a real outpoint and
 the original credit; it does not infer maturity, current unspentness or a later
 successful spend. Independent node validation and those UTXO lifecycle checks
 remain part of the completion and A6/A8 evidence.
+
+### II.14.58 Text29 native lane, accepted-spend redemption and the A6/A8 receipt rule (2026-10-15)
+
+> **Change marker — 2026-10-15 (RFC text amended; implementation is an unverified
+> source checkpoint).** This section adds three normative rules and amends
+> II.14.57's last paragraph: the "UTXO lifecycle checks" it left open are now
+> specified by rule 2 below. No shipping fence, preset or release height changes.
+
+1. **Text29 action grammar.** Inside the funded namespace (inner 63), actions
+   27–40 belong to Text29 and are judged only past BOTH `palw_funded_execution_v11`
+   and `palw_native_final_v27`; below either fence the bodies ride unjudged.
+   Action 32 is the common paid paged part for namespaces 28 and 29: the part that
+   completes a paid file's Part/Assembly/Court debits also reveals it. Action 34
+   has no body and is refused by name. Action 40 carries an explicit collection
+   kind: 0 retires one expired paid owner, 1 collects the next indexed public
+   answer/default cache, 2 retires a genuinely terminal job. Kind 2 requires every
+   paid owner, caller row, public cache and physical stream to be retired already;
+   it then retires the source guarantee, the shared quota subject and the joint
+   Queue30/physical22 leases once under a kernel-checked original terminal grant
+   (`check_text_terminal_v29`), returns the finite owner-catalogue slots, and keeps
+   the immutable original credit receipt, consumed-consent anchor and nonce counter.
+   Text29 producer reserves and requester DA bonds count in the bond's unavailable
+   collateral beside the v11 sums.
+2. **Independent redemption is an accepted spend.** A producer Final credit of
+   Text29 uses the SAME unique credit identity as Final27
+   (`native_final_credit_queue_v27(job, funding, settlement, payee)`), so audit32 and
+   delivery33 verify it without any Text29-private row DTO (`namespace = 29`).
+   Redemption is complete only when spend35 shows the exact original credit
+   outpoint consumed by a non-coinbase transaction whose id is in the complete
+   accepted-id list of an independently pinned chain block: the verifier recomputes
+   `AcceptedIdMerkleBranchHash64(selected-parent root || sorted mergeset ids)` and
+   compares it with the pinned header. Consensus acceptance implies maturity, prior
+   unspentness and a valid payee signature; the DAA clock is re-checked against the
+   owning ruleset's coinbase maturity. No producer, Panel seat or serving-node flag is
+   an input. Current unspentness of a not-yet-spent credit is not claimed.
+3. **Measurement Final is not A6/A8 evidence.** An isolated calibration34 devnet
+   (`NativeFinalPurposeV34::IsolatedCalibration`, distinct genesis, pinned snapshot)
+   may produce real Final/delivery/spend receipts for measurement. Every audit report
+   names its class (`final_receipt_class`: `measurement-final` or `qualified-final`).
+   The A6/A8 aggregator counts the `final` stage only for a `qualified-final`
+   audit32 report and the `redemption` stage only when that report also carries a
+   verified delivery33 and spend35; a measurement Final stays in the denominator as
+   the named failure `MEASUREMENT_FINAL_ONLY`. The node and every auditor load the
+   calibration snapshot through one shared factory, and the auditor refuses a node
+   whose announced params fingerprint, schedule id or genesis differs from its own
+   reconstruction. A qualified Final requires a shipping network whose Final27 policy
+   has the `Qualified` purpose; no preset has one, and creating one is a user decision.

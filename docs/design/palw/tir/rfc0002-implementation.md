@@ -3412,3 +3412,60 @@ Text29 whole native transition/audit and full-component composed Final remain
 under implementation. Latest additions and written Merkle/RPC controls remain
 **UNVERIFIED**: no fresh build/test/node/measurement run has occurred during the
 requested code-first phase. D_all remains0/128 end-to-end measured.
+
+### Code-first continuation (Claude, 2026-10-15) — unverified source checkpoint
+
+All items below are **unverified source checkpoints**: no build, check, test,
+clippy, node, devnet or measurement ran (code-first phase). Nothing is armed;
+every new path stays behind `palw_funded_execution_v11` ∧ `palw_native_final_v27`
+(absent on every preset). RFC text: [II.14.58](../../../rfc/0002-palw-tensor-ir.md#ii1458-text29-native-lane-accepted-spend-redemption-and-the-a6a8-receipt-rule-2026-10-15).
+
+- **Calibration34 wiring.** One shared factory,
+  `load_isolated_native_calibration_v34`, is used by the daemon
+  (`--palw-native-calibration-snapshot/-root`) and by the SDK loader behind
+  `palw-class` and `palw-native-audit-fetch`. `check_same_owning_ruleset_v34`
+  refuses a node whose announced `consensus_params_id`, schedule id or genesis
+  differs from the auditor's own reconstruction; peers with another snapshot
+  already differ in handshake fingerprint/genesis. The daemon logs the measurement
+  devnet beside its fingerprint. The fetch CLI also accepts a shipped preset (no
+  snapshot) so a future qualified network uses the same path.
+- **Text29 wired.** `palw_native_text_fold_v29` (with its public DA submodule) and
+  `palw_native_paged_fold_v29` are now modules of the funded fold; actions 27–40
+  dispatch through `text29::apply` (34 refused by name; 40 kinds 0/1/2). New kind-2
+  `collect_terminal` retires source guarantee, quota subject and joint
+  Queue30/physical22 leases once under `check_text_terminal_v29`, then frees the
+  finite catalogues. Text29 producer reserves and requester DA bonds join the
+  unavailable-collateral sums; the v11 candidate-retention scan skips namespaced
+  Text29 keys. SDK builders and `palw-class native-payload` / new `native-parts`
+  cover every Text29 action (paged parts and reply pages as signed object sets).
+  Previously this ~120 KB of fold source was not compiled at all, so the first
+  compile will surface its latent errors.
+- **Independent Final / redemption.** Text29 producer credits use the shared
+  `native_final_credit_queue_v27` identity; audit32 extracts namespace-29 Finals
+  from authenticated rows (`audit_record_from_rows_v29`); the SDK accepts
+  namespace 29. New `palw_native_spend_v35` proves the exact credit outpoint was
+  consumed by a transaction in an independently pinned chain block's committed
+  accepted-id root (implies maturity, prior unspentness, valid spend). Wired into
+  `palw-class audit-native-final32` (`--accepted-spend35-json …`) and the fetch
+  CLI (`--spend-chain-block`, `--spend-tx-json`, `--pinned-post-header`), which
+  now also requires the pinned child on the own node's selected chain.
+- **A6/A8 evidence.** Audit reports carry `final_receipt_class`
+  (`measurement-final` / `qualified-final`). `acceptance_cohort.py` counts the
+  `final` stage only for a qualified audit32 report and `redemption` only with
+  delivery33 + spend35; otherwise named failures (`MEASUREMENT_FINAL_ONLY`,
+  `REDEMPTION_NOT_SPEND_VERIFIED`, `UNAUTHENTICATED_NATIVE_RECEIPT`). New
+  `native_chain_audit_v3.py` produces the runner's
+  `independent-native-chain-audit.v3` for final/redemption stages from one
+  operator's own node (register/seat exporters remain absent → NOT_RUN).
+- **Length versioning.** The SDK Text29 Commit decoder now caps generated tokens
+  and segments from the job's own versioned maximum (as consensus does), not the
+  frozen v1 history constant.
+
+Remaining code (not validation): Stage28 audit32/redemption extraction (its
+producer queue identity is Stage-specific and set before the settlement exists;
+needs an identity decision), Master32 composed Final (bind/finalize actions; the
+component output tensors exceed one carrier and initial31 deliberately cannot
+carry Final-class bodies — transport decision), register/seat chain-audit
+exporters, v8 history long-context typed graph and RFC03 patch/audio lengths.
+Validation still owns every measured calibration root, A6/A8 cohorts and the
+two receipt windows. D_all remains 0/128 end-to-end measured.
