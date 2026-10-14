@@ -440,3 +440,58 @@ normal admission through outside-verifier service and collection; close native
 and socket restart/reorg/pruned-IBD paths; measure maximum-profile time, RAM,
 capital and collusion load; rerun shipping isolation/pins and the final G14 audit.
 Do not label source-only, failed, running or zero-test results complete.
+
+## Source Continuation, 2026-10-15 (unverified source only)
+
+Continued from the Codex snapshot `01ae08063`. Nothing below has been built,
+compiled or run; no new evidence log exists and nothing is labelled PASS. Builds
+remain deferred to the consolidated validation phase.
+
+Audit of the in-progress items from the Codex snapshot:
+
+- (a) Producer pre-submission quote: already wired in source. The canonical
+  producer asks `palw_staged_preclaim_quote_v1` (same `staged_preclaim_quote_v1`
+  planner, `staged_maximum_custodians_v1` and class ladder as admission), signs
+  the pledge and builds the HFP1 envelope. External producers (gateway rail,
+  remote signer) still build plain FP carriers; under the dormant fence their
+  required-family claims are refused at admission (not DA-charged). See remaining.
+- (b) Tiled original row-zero IDs are the first of three counted selected
+  requests in the quote (moves, carrier bytes, two acquisition spans). Present.
+- (c) Late-Demand defaults: selected sessions carry an immutable minimum response
+  span; Flat open checks the first-pass window; PublicPrefix and history demands
+  derive a fixed response span bounded by the original horizon. Present.
+- (d) Implemented now: store writers take the irreversible pruning-point DAA and
+  freeze any lease (per-seed and claim-wide) whose horizon is below it: never
+  extended, never recreated. Commit archives public material only for a block on
+  the pruning point's own selected chain (descendant or chain ancestor), not by
+  DAA comparison. New store regression source added (not run).
+- (e) Pruned-import restore of live claim/owner holds from the verified state in
+  the tip batch was present; it now passes the imported irreversible clock.
+- (f) Float32 Constraint claims are refused at preclaim admission and Flat
+  sessions require the Int32 lane, so honest producers are not DA-charged for a
+  format they cannot answer. The Float32 canonical source/adjudicator is absent
+  (the base Float32 lane has no decode-token adjudicator either).
+
+New source connections:
+
+- History recovery actor is now a panel module. Custodians answer from the
+  native archive, falling back to the bounded authenticated peer pull when a
+  pruned-synced custodian lacks its own copy. The outside owner opens the native
+  backwards recovery only after page replay found no local/archived/peer copy,
+  and always continues an accepted session (Demand/Collect at accepted clocks).
+- Court-queue round collision fixed: history used `MAX-17` (Flat responder) and
+  the kernel verifier used `MAX-13` (LG14-A release). Now `MAX-18` / `MAX-19`.
+- `palw_v2_daa_score` (used by the tokenizer inventory and history actors) did
+  not exist; added as the accepted-snapshot DAA through ConsensusApi/session.
+- Keyless shared claim material retirement (Flat public projection sidecar)
+  wired into both the keyless and seat loops using the native claim-wide union.
+- File-backed public token tables: `--palw-token-table` files above the resident
+  cap are imported with bounded memory and registered by derived root/tokenizer;
+  outside bundle stages use the streaming mask over either holding.
+
+Still not code-complete (not validation): Float32 Constraint source and
+adjudicator; qualified TIR projection for required families; external producer
+HFP1 envelope (needs a preclaim-quote RPC); Valid-seat history custody grant
+issuance (policy decision: opting a seat into history liability); orphan Flat
+sidecars of never-accepted claims; quantitative population/per-block move and
+queue RAM bounds (analysis, possibly a fenced consensus cap needing a decision).

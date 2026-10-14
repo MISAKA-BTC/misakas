@@ -271,7 +271,19 @@ impl super::PalwPanelService {
                     .map_err(|e| e.to_string())?;
                 // No backend, reexecution, private snapshot or membership-based liability.
                 // The native exporter returns the original accepted carrier, not recovery.
-                let Some(record) = session.palw_prefix_history_record_current_v1(demand.request.clone())? else { return Ok(None) };
+                let record = match session.palw_prefix_history_record_current_v1(demand.request.clone())? {
+                    Some(record) => record,
+                    // A pruned-synced or restored custodian may lack its own archive copy. The
+                    // bounded public peer lane can still supply the exact rooted original bytes;
+                    // they are authenticated against the accepted request before any answer.
+                    None => match self.flow_context.palw_prefix_history().poll_v1(&demand.request)? {
+                        Some(record) => {
+                            record.authenticates_request_v1(&demand.request)?;
+                            record
+                        }
+                        None => return Ok(None),
+                    },
+                };
                 let raw = borsh::to_vec(&record).map_err(|e| e.to_string())?;
                 let Some((mut movement, until)) = response_v1(&progress, signer, &raw)? else { return Ok(None) };
                 let kp = self.keypair.as_ref().ok_or("history custodian signing key unavailable")?;

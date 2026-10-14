@@ -6814,6 +6814,95 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn owner_history_recovery_moves_name_the_bundle_frame_and_the_active_stage_only() {
+        use kaspa_consensus_core::{
+            palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1},
+            palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
+            palw_history_custody_v1::PalwHistoryRecoveryActionV1,
+            palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
+            palw_staged_bundle_v1::{PalwStagedBundlePlanV1, PalwStagedBundleProgressV1, PalwStagedFamilyV1},
+            palw_staged_court_state_v1::PalwStagedOwnedProgressV1,
+        };
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let resource = PalwRenderingResourcePlanV1::derive(0, 1, config.prices).unwrap();
+        let plan = PalwStagedBundlePlanV1::derive_v1(300, vec![(PalwStagedFamilyV1::PublicPrefix, resource)], config).unwrap();
+        let c = candidate(4, 300, false);
+        let stage = Hash64::from_u64_word(77);
+        let progress = PalwStagedOwnedProgressV1 {
+            snapshot_block: kaspa_consensus_core::BlockHash::from_u64_word(301),
+            now_daa: plan.stages[0].terms.accepted_daa + 1,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            terms: plan.stages[0].terms,
+            prefix_custodians: None,
+            prefix_page_root: None,
+            seed_id: Some(stage),
+            cursor: None,
+            bundle: Some(PalwStagedBundleProgressV1 {
+                bundle_id: plan.id_v1(c.claim_id),
+                plan: plan.clone(),
+                active_index: Some(0),
+                pending_seed: None,
+                inventory: None,
+            }),
+        };
+        let demand = PalwConstraintStreamMoveV1 {
+            version: 1,
+            claim: c.claim_id,
+            reserver: bond(1),
+            reserved_daa: 300,
+            seed_id: plan.id_v1(c.claim_id),
+            phase: PalwConstraintStreamPhaseV1::PrefixCourt,
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: stage,
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 0,
+                action: PalwHistoryRecoveryActionV1::Demand,
+            },
+            signature: Vec::new(),
+        };
+        assert!(PalwPanelService::fraud_filer_bundle_control_v1(&progress, &demand));
+        let collect = PalwConstraintStreamMoveV1 {
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: stage,
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 310,
+                action: PalwHistoryRecoveryActionV1::Collect,
+            },
+            ..demand.clone()
+        };
+        assert!(PalwPanelService::fraud_filer_bundle_control_v1(&progress, &collect));
+        // A custodian's signed answer is never an owner move, another stage is not this cursor,
+        // and the stage seed is not the bundle frame.
+        let answer = PalwConstraintStreamMoveV1 {
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: stage,
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 310,
+                action: PalwHistoryRecoveryActionV1::Finish { answerer: bond(2) },
+            },
+            ..demand.clone()
+        };
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(&progress, &answer));
+        let other_stage = PalwConstraintStreamMoveV1 {
+            action: PalwConstraintStreamActionV1::HistoryRecovery {
+                stage_seed: Hash64::from_u64_word(78),
+                request_head: Hash64::from_u64_word(5),
+                sequence: 3,
+                demand_opened_daa: 0,
+                action: PalwHistoryRecoveryActionV1::Demand,
+            },
+            ..demand.clone()
+        };
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(&progress, &other_stage));
+        assert!(!PalwPanelService::fraud_filer_bundle_control_v1(&progress, &PalwConstraintStreamMoveV1 { seed_id: stage, ..demand }));
+    }
+
+    #[test]
     fn staged_collection_queue_keeps_the_paid_clock_and_requires_accepted_cursor_progress() {
         use kaspa_consensus_core::{
             palw_constraint_stream_carriage_v1::{PalwConstraintStreamActionV1, PalwConstraintStreamMoveV1},
