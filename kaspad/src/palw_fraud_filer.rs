@@ -3452,19 +3452,39 @@ impl PalwPanelService {
                                 matches!(initial, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. }),
                             ));
                         }
-                        let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
-                            .ok_or("the public verifier does not hold the job's tokenizer table")?;
+                        // The public bundle stage streams the original table in bounded parts (a
+                        // file-backed holding may exceed any resident table); the legacy direct
+                        // proof keeps its in-memory table and its own evidence budget.
+                        let table = if public_bundle_stage {
+                            None
+                        } else {
+                            Some(
+                                kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(&job)
+                                    .ok_or("the public verifier does not hold the job's tokenizer table")?,
+                            )
+                        };
                         let plan = match previous_plan {
                             Some(plan) => Some(plan),
-                            None if public_bundle_stage => constraint_scheduler::nominate_v1(
+                            None if public_bundle_stage => {
+                                let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(&job)
+                                    .ok_or("constrained job has no immutable table root")?;
+                                constraint_scheduler::nominate_v1(
+                                    &target,
+                                    &job,
+                                    initial,
+                                    &own_ids,
+                                    crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
+                                        .ok_or("the public verifier does not hold the job's original public table")?,
+                                    &crate::palw_memory_ledger::host_ledger_v1(),
+                                )?
+                            }
+                            None => constraint::tiled_plan_v1(
                                 &target,
                                 &job,
                                 initial,
                                 &own_ids,
-                                table.clone(),
-                                &crate::palw_memory_ledger::host_ledger_v1(),
+                                table.clone().ok_or("legacy direct proof lost its resident table")?,
                             )?,
-                            None => constraint::tiled_plan_v1(&target, &job, initial, &own_ids, table.clone())?,
                         };
                         let plan = plan.or_else(|| {
                             if public_bundle_stage
@@ -3490,6 +3510,7 @@ impl PalwPanelService {
                         }
                         let selected: Option<Vec<_>> = plan.units().iter().map(|unit| events.get(unit).cloned()).collect();
                         let Some(selected) = selected else { return Ok((None, Some(plan), false)) };
+                        let table = table.ok_or("legacy direct proof lost its resident table")?;
                         let contradiction =
                             constraint::tiled_contradiction_with_budget_v2(&target, &job, plan, &selected, table, maximum)?;
                         let filing = contradiction
@@ -4155,8 +4176,7 @@ impl PalwPanelService {
         let public_events = public_events.map(|events| events.into_iter().cloned().collect::<Vec<_>>());
         let table_root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
             .ok_or("constraint job has no immutable table root")?;
-        let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1()
-            .for_root_and_tokenizer(&table_root, &job.tokenizer_id)
+        let table = crate::palw_public_token_table::public_table_v1(&table_root, &job.tokenizer_id)
             .ok_or("constraint exact public table holding is unavailable")?;
         let binding = binding.clone();
         let job = job.clone();
@@ -4345,10 +4365,18 @@ impl PalwPanelService {
                     case.arithmetic_matched || matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
                 let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
                     .ok_or("Flat Constraint loses immutable table root")?;
-                let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1()
-                    .for_root_and_tokenizer(&root, &job.tokenizer_id)
+                let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
                     .ok_or("Flat exact public table is unavailable")?;
-                let nominee = constraint::authenticated_ids_plan_v1(target, job, binding, ids, own, table)?;
+                // Streaming mask: bounded parts of the original table, never a resident vocabulary.
+                let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
+                    target,
+                    job,
+                    binding,
+                    ids,
+                    own,
+                    table,
+                    &crate::palw_memory_ledger::host_ledger_v1(),
+                )?;
                 let nominee = match nominee {
                     Some(plan) => plan,
                     None if replayed => {
@@ -4504,11 +4532,18 @@ impl PalwPanelService {
                 case.arithmetic_matched || matches!(&case.verdict,PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
             let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(&context.job)
                 .ok_or("selected bootstrap loses immutable Constraint table")?;
-            let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_tables_v1()
-                .for_root_and_tokenizer(&root, &context.job.tokenizer_id)
+            let table = crate::palw_public_token_table::public_table_v1(&root, &context.job.tokenizer_id)
                 .ok_or("selected exact table unavailable")?;
-            let nominee =
-                constraint::authenticated_ids_plan_v1(target, &context.job, binding, &event.generated_token_ids, own, table)?.or_else(
+            let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
+                target,
+                &context.job,
+                binding,
+                &event.generated_token_ids,
+                own,
+                table,
+                &crate::palw_memory_ledger::host_ledger_v1(),
+            )?
+            .or_else(
                     || {
                         (replayed && !event.generated_token_ids.is_empty()).then(|| constraint::TiledPlanV1 {
                             position: 0,

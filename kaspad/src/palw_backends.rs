@@ -3630,6 +3630,15 @@ mod tests {
 pub fn load_token_tables_v1(paths: &[std::path::PathBuf]) -> Result<Vec<(std::path::PathBuf, kaspa_hashes::Hash64, usize)>, String> {
     let mut loaded = Vec::with_capacity(paths.len());
     for path in paths {
+        let size = std::fs::metadata(path).map_err(|e| format!("--palw-token-table {}: {e}", path.display()))?.len();
+        if size > kaspa_consensus_core::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64 {
+            // Larger than any resident table may be: held as a bounded file-backed public operand
+            // (outside verification of the original format), never decoded into memory whole.
+            let (root, vocab) = crate::palw_public_token_table::register_file_table_v1(path)
+                .map_err(|e| format!("--palw-token-table {}: {e}", path.display()))?;
+            loaded.push((path.clone(), root, vocab as usize));
+            continue;
+        }
         let bytes = std::fs::read(path).map_err(|e| format!("--palw-token-table {}: {e}", path.display()))?;
         let table = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_decode_v1(&bytes)
             .map_err(|e| format!("--palw-token-table {}: {e}", path.display()))?;
