@@ -261,3 +261,92 @@ pub fn derive_native_execution_audit_from_proofs_v32(
     }
     Ok(view)
 }
+
+/// Audit-time Master32 composite Final (lead default 2026-10-15, pending user review).
+/// NOT a consensus object: a deterministic function of the verified original aux rows,
+/// the owning ruleset's Stage28 policy and public tokens/outputs. Every component must
+/// already be an individually genuine settled Stage28 Final in those rows.
+pub struct CheckedNativeMasterCompositeV32 {
+    pub master: [u8; 64],
+    pub composite: [u8; 64],
+    pub components: Vec<[u8; 64]>,
+    pub state: Hash64,
+    pub aux_root: Hash64,
+}
+pub fn derive_native_master_composite_v32(
+    auxiliary: &VerifiedNativeAuxRowsV32<'_>,
+    parameters: &crate::config::params::Params,
+    daa: u64,
+    master: [u8; 64],
+    jobs: &[[u8; 64]],
+    values: &[Vec<misaka_palw_tir::Tensor>],
+    generated: &[u32],
+) -> Result<CheckedNativeMasterCompositeV32, String> {
+    let stage = parameters
+        .palw_stage_execution_v28
+        .as_ref()
+        .filter(|f| f.activation.is_active(daa))
+        .ok_or("master32 composite owning Stage28 fence inactive")?;
+    let mut rows = std::collections::BTreeMap::new();
+    for (k, v) in auxiliary.rows {
+        let (table, key): (u8, Vec<u8>) = borsh::from_slice(k).map_err(|_| "master32 composite exact original auxiliary key")?;
+        if rows.insert((table, key), v.clone()).is_some() {
+            return Err("master32 composite duplicate original row".into());
+        }
+    }
+    let (composite, components) =
+        PalwChainStateV2::native_master_composite_from_rows_v32(&rows, &stage.policies, master, jobs, values, generated)?;
+    Ok(CheckedNativeMasterCompositeV32 { master, composite, components, state: auxiliary.state, aux_root: auxiliary.root })
+}
+/// Bounded public transport of component outputs: `u32 stages (<=64)`, then per stage
+/// `u32 tensors (<=65536)`, then per tensor `u8 dtype tag, u8 rank (<=8), rank*u32 dims,
+/// u32 byte length, little-endian bytes`. Every count is bounded by the remaining bytes
+/// BEFORE allocation; the kernel then authenticates each tensor against its trace opening.
+pub const NATIVE_MASTER_OUTPUTS_MAX_BYTES_V32: usize = 256 << 20;
+pub fn decode_native_master_outputs_v32(raw: &[u8]) -> Result<Vec<Vec<misaka_palw_tir::Tensor>>, String> {
+    fn take<'a>(raw: &'a [u8], at: &mut usize, n: usize) -> Result<&'a [u8], String> {
+        let end = at.checked_add(n).ok_or("master32 outputs offset overflow")?;
+        let v = raw.get(*at..end).ok_or("master32 outputs truncated")?;
+        *at = end;
+        Ok(v)
+    }
+    fn u32_at(raw: &[u8], at: &mut usize) -> Result<usize, String> {
+        Ok(u32::from_le_bytes(take(raw, at, 4)?.try_into().unwrap()) as usize)
+    }
+    if raw.len() > NATIVE_MASTER_OUTPUTS_MAX_BYTES_V32 {
+        return Err("master32 outputs byte cap".into());
+    }
+    let mut at = 0;
+    let stages = u32_at(raw, &mut at)?;
+    if stages == 0 || stages > 64 {
+        return Err("master32 outputs stage count".into());
+    }
+    let mut out = Vec::with_capacity(stages);
+    for _ in 0..stages {
+        let n = u32_at(raw, &mut at)?;
+        if n > 65536 || n > raw.len().saturating_sub(at) / 6 {
+            return Err("master32 outputs tensor count".into());
+        }
+        let mut tensors = Vec::with_capacity(n);
+        for _ in 0..n {
+            let tag = take(raw, &mut at, 1)?[0];
+            let dtype = *misaka_palw_tir::DType::ALL.get(tag as usize).ok_or("master32 outputs dtype tag")?;
+            let rank = take(raw, &mut at, 1)?[0] as usize;
+            if rank > 8 {
+                return Err("master32 outputs rank".into());
+            }
+            let mut shape = Vec::with_capacity(rank);
+            for _ in 0..rank {
+                shape.push(u32_at(raw, &mut at)?);
+            }
+            let bytes = u32_at(raw, &mut at)?;
+            let body = take(raw, &mut at, bytes)?;
+            tensors.push(misaka_palw_tir::Tensor::from_le_bytes(dtype, &shape, body).map_err(|e| e.to_string())?);
+        }
+        out.push(tensors);
+    }
+    if at != raw.len() {
+        return Err("master32 outputs trailing bytes".into());
+    }
+    Ok(out)
+}

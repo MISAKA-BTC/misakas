@@ -1,7 +1,7 @@
 //! Native completion capability32. Kernel output projections prove mathematics;
 //! only this private adapter can authenticate original chain/coin provenance.
 use super::*;
-use misaka_palw_kernel::flat_inputs12::composition32::{MasterRequestV32,CheckedMasterRequestV32,CheckedStageInvocationV32,CheckedComponentOutputV32,ComponentOutputContextV32,check_component_output_v32,check_master_final_v32};
+use misaka_palw_kernel::flat_inputs12::composition32::{MasterRequestV32,CheckedMasterRequestV32,CheckedStageInvocationV32,CheckedComponentOutputV32,ComponentOutputContextV32,check_component_output_v32,check_master_final_v32,check_stage_invocation_v32};
 
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
 struct NativeInvocationBindingV32 {
@@ -63,4 +63,152 @@ pub(super) fn register(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV
     let courts=classes.iter().map(misaka_palw_kernel::flat_inputs12::court32::derive_stage_court_scope_v32).collect::<Result<Vec<_>,_>>().map_err(refused)?;
     let h=NativeMasterHeaderV32{version:32,id,requester:*signer,requester_operator:operator,source,manifest:bundle.manifest().root(),nonce:wire.nonce,policy:p.root(),registered:ctx.daa_score,body_bytes:body.len() as u32,classes:wire.classes.clone(),maximum_courts:courts.iter().map(|c|c.root()).collect(),maximum_resources:classes.iter().map(|c|c.maximum_resources().root()).collect(),next_stage:0,terminal:None};catalog.push(id);
     builder.write_kernel_row(STAGE_TABLE_V14,master_key(0,&id),Some(bytes(&h)));builder.write_kernel_row(STAGE_TABLE_V14,master_key(1,&id),Some(bytes(&body.to_vec())));builder.write_kernel_row(STAGE_TABLE_V14,master_key(2,signer),Some(bytes(&catalog)));builder.note_kernel_bond(signer);Ok(())
+}
+
+// ---- Audit-time composite Final (lead default 2026-10-15, pending user review) ----
+//
+// The Master32 composite is NOT a consensus object: no carrier, row or credit is
+// created. It is a deterministic function of public material only — the
+// authenticated original aux rows of one pinned state (audit32's full opening),
+// the owning ruleset's immutable Stage28 policy, the public master decode tokens
+// and each component's public output tensors, which must authenticate against
+// that component's own committed trace openings. Every component must already be
+// an individually genuine, settled Stage28 Final; nothing here pays or finalizes.
+type AuditRows = std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>;
+fn aux_read<T: BorshDeserialize>(rows: &AuditRows, raw_key: Vec<u8>, cap: usize) -> Result<T, String> {
+    let raw = rows.get(&(STAGE_TABLE_V14, raw_key)).ok_or("master32 audit original row absent")?;
+    if raw.len() > cap {
+        return Err("master32 audit original row cap".into());
+    }
+    borsh::from_slice(raw).map_err(|_| "master32 audit original row grammar".into())
+}
+fn audit_class(rows: &AuditRows, p: &NativeStagePoliciesV28, id: Digest) -> Result<CheckedStageClassV28, String> {
+    let h: ClassHeader = aux_read(rows, key(2, &id), 1024)?;
+    let bh: BundleHeader = aux_read(rows, key(0, &h.bundle), 8192)?;
+    let raw: Vec<u8> = aux_read(rows, key(1, &h.bundle), (16 << 20) + 8)?;
+    if raw.len() != bh.bytes as usize {
+        return Err("master32 audit original source byte count".into());
+    }
+    let (manifest, sources) = NativeStageSourceBundleV28::from_bytes(&raw)?.check()?;
+    let wire_raw: Vec<u8> = aux_read(rows, key(3, &id), (1 << 20) + 8)?;
+    let wire = FlatStageClassWireV28::from_bytes(&wire_raw)?;
+    let source = sources.get(wire.stage as usize).ok_or("master32 audit source stage absent")?;
+    let mut class = wire.check(source)?;
+    class.bind_complete_bundle(&manifest)?;
+    let refuted = rows.contains_key(&(STAGE_TABLE_V14, crate::palw_flat_stage_v14::stage_key_v14(14, &source.relation_root())));
+    if h.version != 28
+        || h.id != id
+        || h.bundle != manifest.root()
+        || h.source != source.id()
+        || h.policy != p.root()
+        || wire.policy != p.root()
+        || class.root() != id
+        || h.scope != class.maximum_scope().root()
+        || h.resource != class.maximum_resources().root()
+        || h.bytes as usize != wire_raw.len()
+        || refuted
+    {
+        return Err("master32 audit original source/class/manifest/maxima differ or refuted".into());
+    }
+    Ok(class)
+}
+/// Returns the composite digest of `check_master_final_v32` and every component's
+/// genuine-final root, in stage order. `jobs[i]`/`values[i]` belong to stage i.
+pub(crate) fn audit_master_composite_from_rows_v32(
+    rows: &AuditRows,
+    p: &NativeStagePoliciesV28,
+    master_id: Digest,
+    jobs: &[Digest],
+    values: &[Vec<misaka_palw_tir::Tensor>],
+    generated: &[u32],
+) -> Result<(Digest, Vec<Digest>), String> {
+    let h: NativeMasterHeaderV32 = aux_read(rows, master_key(0, &master_id), 16384)?;
+    let raw: Vec<u8> = aux_read(rows, master_key(1, &master_id), (2 << 20) + 8)?;
+    if h.version != 32 || h.id != master_id || h.body_bytes as usize != raw.len() || h.policy != p.root() {
+        return Err("master32 audit original header/policy/extent differs".into());
+    }
+    let wire = MasterRequestV32::from_bytes(&raw)?;
+    let classes = h.classes.iter().map(|id| audit_class(rows, p, *id)).collect::<Result<Vec<_>, _>>()?;
+    let bh: BundleHeader = aux_read(rows, key(0, &h.source), 8192)?;
+    let bundle_raw: Vec<u8> = aux_read(rows, key(1, &h.source), (16 << 20) + 8)?;
+    if bundle_raw.len() != bh.bytes as usize {
+        return Err("master32 audit original complete source byte count".into());
+    }
+    let (bundle, _) = NativeStageSourceBundleV28::from_bytes(&bundle_raw)?.check()?;
+    let master = wire.check(&bundle, &classes)?;
+    if master.root() != master_id
+        || wire.classes != h.classes
+        || jobs.len() != classes.len()
+        || values.len() != classes.len()
+        || generated.len() > 1 << 20
+    {
+        return Err("master32 audit request/classes/component count differs".into());
+    }
+    let mut finals = Vec::with_capacity(classes.len());
+    for (stage, class) in classes.iter().enumerate() {
+        let job = jobs[stage];
+        let jh: JobHeader = aux_read(rows, key(5, &job), 8192)?;
+        let data: JobData = aux_read(rows, key(6, &job), (1 << 20) + (2 << 20) + 16384)?;
+        if jh.id != job || jh.class != class.root() || data.book.len() != jh.book_bytes as usize || data.trace.len() != jh.trace_bytes as usize {
+            return Err("master32 audit component header/class/extent differs".into());
+        }
+        let book: StageJobBookV28 = borsh::from_slice(&data.book).map_err(|_| "master32 audit component book grammar")?;
+        let actual = class.check_job(book.job())?;
+        let plan = derive_stage_quota_v28(class, &actual)?;
+        book.check(class, &actual, &plan)?;
+        let s = book.settlement().ok_or("master32 audit component settlement absent")?;
+        let (receipt, queue, payload): (StageSettlementV28, crate::Hash64, crate::Hash64) = aux_read(rows, key(14, &job), 1024)?;
+        if book.id() != job
+            || book.root() != jh.book
+            || book.terminal() != StageTerminalV28::Final
+            || receipt != *s
+            || queue != settlement_queue(&jh, true)
+            || payload != jh.producer_payout
+        {
+            return Err("master32 audit component is not an individually genuine settled Final".into());
+        }
+        let invocation = check_stage_invocation_v32(&master, class, book.job(), generated, &finals)?;
+        let trace = StageTraceV14::from_bytes(&data.trace, jh.positions)?;
+        let projection = check_component_output_v32(
+            &invocation,
+            &book,
+            &plan,
+            &trace,
+            &values[stage],
+            &ComponentOutputContextV32 {
+                master: master.root(),
+                invocation: invocation.invocation_root(),
+                inputs: invocation.input_binding_root(),
+                job,
+                funding: jh.original,
+                terminal: book.root(),
+                source: invocation.source().id(),
+                class: jh.class,
+                claim: book.claim().ok_or("master32 audit component claim absent")?,
+                credit_queue: queue.as_bytes(),
+                actual_credit: s.producer_credit,
+                actual_escrow: s.escrow_debit,
+                producer_operator: book.producer_operator(),
+                established: s.established,
+            },
+        )?;
+        finals.push(projection);
+    }
+    let roots = finals.iter().map(|f| f.root()).collect();
+    Ok((check_master_final_v32(&master, &finals)?, roots))
+}
+
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Stateless audit entry (no `self`): only `palw_native_audit_proof_v32::derive_native_master_composite_v32`
+    /// calls this, with rows from a verified full aux opening. Not a consensus transition.
+    pub(crate) fn native_master_composite_from_rows_v32(
+        rows: &AuditRows,
+        p: &NativeStagePoliciesV28,
+        master: Digest,
+        jobs: &[Digest],
+        values: &[Vec<misaka_palw_tir::Tensor>],
+        generated: &[u32],
+    ) -> Result<(Digest, Vec<Digest>), String> {
+        audit_master_composite_from_rows_v32(rows, p, master, jobs, values, generated)
+    }
 }

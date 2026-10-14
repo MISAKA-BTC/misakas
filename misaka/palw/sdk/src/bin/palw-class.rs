@@ -60,6 +60,9 @@ USAGE:
                           --post-payout-proof32 <file> --payout-output-index N [--post-fork-opening-borsh <file>]
                          [--accepted-spend35-json <file> --spend-chain-header-json <file> --pinned-spend-chain <128hex>
                           --spend-selected-parent-header-json <file> --pinned-spend-selected-parent <128hex>]]
+    palw-class audit-master-composite32 --network <own-ruleset> --child-header-json <file> --selected-parent-header-json <file>
+                         --pinned-child <128hex> --pinned-selected-parent <128hex> --master <128hex> --jobs <hex,hex,...>
+                         --aux-proof32 <file> --outputs <file> --generated-json <file> --out <fresh.json> [own-params-snapshot34 pins]
     palw-class native-parts --kind <text-pages29|text-reply29> --file <bytes> --out <fresh-dir> --network <id> --key-file <seed> --bond <txid:index>
                          (--job <128hex> --seal <128hex> --owner <128hex> | --pending <128hex>) [own-params-snapshot34 pins]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|text-own29|text-close29|
@@ -902,6 +905,68 @@ fn run(args: &[String]) -> Result<(), String> {
                 "pinned_headers_and_original_rows_verified":true,"chain_selection_and_validation":"external-independent-pins-required",
                 "utxo_redemption_verified":delivery.get("spend_verified").and_then(|v| v.as_bool()).unwrap_or(false),
                 "coinbase_delivery":delivery,"A6_or_A8_credit":false});
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output)
+                .map_err(|e| e.to_string())?
+                .write_all(serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?.as_bytes())
+                .map_err(|e| e.to_string())?;
+            println!("{report}");
+            Ok(())
+        }
+        "audit-master-composite32" => {
+            // Audit-time composite (NOT a consensus object): every component an individually
+            // genuine settled Stage28 Final in the pinned state's verified rows; outputs public.
+            let mut view = network_view(network.as_deref().ok_or("--network own ruleset required")?)?;
+            let own_snapshot = apply_own_native_params_v34(&mut args, &mut view.params)?;
+            let pin = |v: Option<String>, name: &str| -> Result<kaspa_hashes::Hash64, String> {
+                v.ok_or_else(|| format!("{name} independent pin required"))?.parse().map_err(|e| format!("{name}: {e}"))
+            };
+            let child_path = take_flag(&mut args, "--child-header-json").ok_or("--child-header-json required")?;
+            let parent_path = take_flag(&mut args, "--selected-parent-header-json").ok_or("--selected-parent-header-json required")?;
+            let child_pin = pin(take_flag(&mut args, "--pinned-child"), "--pinned-child")?;
+            let parent_pin = pin(take_flag(&mut args, "--pinned-selected-parent"), "--pinned-selected-parent")?;
+            let master = pin(take_flag(&mut args, "--master"), "--master")?.as_bytes();
+            let jobs = take_flag(&mut args, "--jobs")
+                .ok_or("--jobs comma-separated stage-ordered job ids required")?
+                .split(',')
+                .map(|v| v.parse::<kaspa_hashes::Hash64>().map(|h| h.as_bytes()).map_err(|e| format!("--jobs: {e}")))
+                .collect::<Result<Vec<_>, _>>()?;
+            let aux_path = take_flag(&mut args, "--aux-proof32").ok_or("--aux-proof32 required")?;
+            let outputs_path = take_flag(&mut args, "--outputs").ok_or("--outputs bounded public component outputs required")?;
+            let generated_path = take_flag(&mut args, "--generated-json").ok_or("--generated-json public master tokens required")?;
+            let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh report required")?);
+            if !args.is_empty() || output.exists() {
+                return Err("audit-master-composite32 exact options/fresh report required".into());
+            }
+            let child = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&child_path))?;
+            let parent = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(&parent_path))?;
+            let aux = misaka_palw_sdk::native_audit_io_v32::read_native_fact_proof_v32(std::path::Path::new(&aux_path))?;
+            let values = kaspa_consensus_core::palw_native_audit_proof_v32::decode_native_master_outputs_v32(
+                &misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                    std::path::Path::new(&outputs_path),
+                    kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_MASTER_OUTPUTS_MAX_BYTES_V32,
+                )?,
+            )?;
+            let generated: Vec<u32> = serde_json::from_slice(&misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                std::path::Path::new(&generated_path),
+                16 << 20,
+            )?)
+            .map_err(|e| e.to_string())?;
+            let checked = misaka_palw_sdk::native_master_v32::derive_anchored_master_composite_v32(
+                &child, child_pin, &parent, parent_pin, &view.params, None, &aux, master, &jobs, &values, &generated,
+            )?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let report = serde_json::json!({"schema":"misaka.palw.audit-time-master-composite.v32",
+                "network":view.network_id.to_string(),"genesis":hex(&view.params.genesis.hash.as_bytes()),
+                "child":hex(&child_pin.as_bytes()),"selected_parent":hex(&parent_pin.as_bytes()),
+                "inner_state":hex(&checked.state.as_bytes()),"aux_root":hex(&checked.aux_root.as_bytes()),
+                "master":hex(&checked.master),"composite":hex(&checked.composite),
+                "components":checked.components.iter().map(|c| hex(c)).collect::<Vec<_>>(),
+                "own_snapshot_root":own_snapshot.map(|v| hex(&v)),
+                "composite_is_consensus_object":false,"deterministic_from_public_material":true,"A6_or_A8_credit":false});
             use std::io::Write;
             std::fs::OpenOptions::new()
                 .write(true)
