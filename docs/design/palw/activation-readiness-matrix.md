@@ -269,6 +269,7 @@ Publication is the means by which other miners can join; equal capital is treate
 - Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
   weight and fork choice are not scaled by bond aggregation.
 - The verification-attestation gate (ECON round 2) may continue as a dormant subsidy condition. It is not a p = 0 resolution.
+  **Amended 2026-10-14 (§3k):** the gate is kept and is one of the two ways closure becomes uneconomic: a model nobody else holds cannot be attested, so its model-epoch gets no allocation. The reason stays "verification was not attested", never "the model was not served".
 - **α = 1.5 is the interim policy value (user, 2026-10-10, on ECON round 3).** It passes 52/54 cells against the fixed 2× bar and
   never caps in the 4–30× range. Concentration is 1.4–1.8× reward share per capital share; after migration the top model has 55% of
   capital and 81% of rewards. The value is unapproved for production.
@@ -341,7 +342,8 @@ Recorded in [rfc-adr-review-resolution-2026-10-12.md](rfc-adr-review-resolution-
 - If a model is shared with even one party who can stand up a correct Panel, its fraud is localized from claim evidence, convicted in objective court and slashed. That is required.
 - A closed model's `p = 0` is a residual risk bounded by ADR-0176's per-bond caps, the common hold and no payout before Final.
 - Acceptance adds ADR-0177's two-stage evaluation: (a) the model's total bond / allocation share / scale, closed vs shared; (b) whether the original owner's own share rises, including the self-funding alternative.
-- The allocation curve is not changed here: the interim α = 1.5 (§3g) and the 2026-10-12 `S_m · μ(S_m)` proposal (§3j) stay as they are.
+- The allocation curve is not changed here: the interim α = 1.5 (§3g) and the 2026-10-12 `S_m · μ(S_m)` proposal (§3j) stay as they are. Block issuance is not changed by this section, there is no 30-day average, and `W` (7 days only as an example) stays undecided.
+- Closure is made uneconomic in two ways, with no judgement of whether a model was shared: bond gathers on shared models, and the verification-attestation gate (§3f) pays no allocation to a model-epoch nobody could attest.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 

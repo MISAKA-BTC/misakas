@@ -38,8 +38,11 @@
 
 1. **経済Goal。** モデルを共有して外部minerのbond参加を増やしたモデルが、非公開のまま自己資本だけで採掘するモデルより、
    モデル全体として多くの配分を得る構造を実現する（現行はモデル別coinbase配分、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)）。
-   chainはモデルが共有されたかを判定せず、実際に拘束されたbond資本だけを読む。非公開への直接のペナルティは課さず、
-   公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。
+   chainはモデルが共有されたかを判定せず、実際に拘束されたbond資本と、検証が成立したかだけを読む。非公開は次の二つで不利になる。
+   - 公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。
+   - 検証attestation gate（ECON round 2、readiness §3f）により、bondから抽選された検証者が自分のモデルのコピーでclaimを検査し、
+     所定数が承認しないmodel-epochにはモデル配分を払わない。誰にも共有されないモデルは検証が成立せず、配分を受けられない。
+     理由は「検証が承認されなかった」であり「モデルが配布されなかった」ではない。claim・escrow・Final・weight・slashには触れない。
 2. **共有されたモデルの不正は客観的に裁ける。** 登録モデルが1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、
    そのモデルのclaimの不正は、claim固有の公開・認証済み証拠から局所化し、客観的なcourtで立証してslashできる。これを制度要件とする（§3、
    [ADR-0173](adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)）。
