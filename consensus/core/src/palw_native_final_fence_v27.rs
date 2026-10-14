@@ -14,6 +14,7 @@ impl crate::palw_native_final_v27::PalwNativeFinalFenceV27 {
             policy: crate::palw_native_final_v27::NativeFinalPolicyV27 {
                 version: 27,
                 network_domain,
+                purpose: crate::palw_native_final_v27::NativeFinalPurposeV34::Qualified,
                 queue_policy: crate::palw_native_queue_v30::NativeQueuePolicyV30::probe(network_domain),
                 finder_profit_margin_sompi: 1,
                 producer_deterrence_margin_sompi: 1,
@@ -31,6 +32,11 @@ impl Params {
     }
 
     pub fn validate_palw_native_final_v27(&self) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_native_calibration_v34() {
+            return self.validate_isolated_native_calibration_v34().map_err(|_| {
+                PalwModeV2Error::Invalid("native calibration34 owning isolated genesis or complete original policies are invalid")
+            });
+        }
         match &self.palw_native_final_v27 {
             Some(f) if f.activation != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
                 "palw_native_final_v27 cannot be armed before independent full-context Final/redemption, whole-claim detection, measured delivery/economics and A6/A8 completion evidence",

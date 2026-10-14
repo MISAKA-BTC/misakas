@@ -20,8 +20,12 @@ pub struct AnchoredNativeExecutionAuditV32<'a> {
     view: CheckedNativeExecutionAuditViewV27,
     payouts: &'a [(Vec<u8>, Vec<u8>)],
     payout_proof: &'a PalwFactProofV1,
+    qualified: bool,
 }
 impl AnchoredNativeExecutionAuditV32<'_> {
+    pub fn rfc02_qualified(&self) -> bool {
+        self.qualified
+    }
     pub fn child(&self) -> Hash64 {
         self.child
     }
@@ -120,6 +124,7 @@ pub fn verify_native_execution_audit_v32<'a>(
         view: native.clone(),
         payouts: payout_rows,
         payout_proof: payouts,
+        qualified: parameters.native_final_is_qualified_v34(),
     })
 }
 

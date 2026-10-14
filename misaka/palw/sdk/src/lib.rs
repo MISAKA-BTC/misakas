@@ -86,6 +86,7 @@ pub mod kernel_params;
 pub mod kernel_rows;
 pub mod native_audit_io_v32;
 pub mod native_audit_v32;
+pub mod native_params_v34;
 pub mod native_payload_v29;
 pub mod native_redemption_v33;
 /// Same native derivation for full25 / first-EOS29 maximum contracts.

@@ -9,7 +9,7 @@ pub struct PalwStageExecutionFenceV28 {
     pub policies:NativeStagePoliciesV28,
 }
 pub const STAGE_ACTION_FIRST_V28: u8 = 19;
-pub const STAGE_ACTION_LAST_V28: u8 = 32;
+pub const STAGE_ACTION_LAST_V28: u8 = 33;
 pub const STAGE_COURT_MAX_BYTES_V28: u64 = 16 << 20;
 pub const STAGE_PROOF_PART_MAX_V28: u64 = 32 << 10;
 pub const STAGE_PROOF_PARTS_MAX_V28: u16 = 512;

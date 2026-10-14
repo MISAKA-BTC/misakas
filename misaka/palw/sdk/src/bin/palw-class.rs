@@ -56,6 +56,8 @@ USAGE:
     palw-class audit-native-final32 --network <own-ruleset> --child-header-json <file> --selected-parent-header-json <file>
                          --pinned-child <128hex> --pinned-selected-parent <128hex> --job <128hex>
                          --aux-proof32 <file> --payout-proof32 <file> --out <fresh.json> [--raw-record-borsh <file>] [--fork-opening-borsh <file>]
+                         [--coinbase-proof33-borsh <file> --post-header-json <file> --pinned-post-header <128hex>
+                          --post-payout-proof32 <file> --payout-output-index N [--post-fork-opening-borsh <file>]]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
@@ -219,6 +221,10 @@ a seat holding the parent fetches; a node loads it after the parent (--palw-clas
 first) and serves the candidate from the two files. Every root comes from the consensus functions.
 Exits 1 on a refusal.
 
+Native audit/signing may add --own-params-snapshot34 <borsh> --own-params-snapshot-root <128hex>
+--own-params-snapshot-sha256 <64hex>. The same isolated-devnet factory as the daemon applies every owning policy.
+Calibration receipts grant no A6/A8 qualification.
+
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
 `kernel-preflight` reads bounded canonical TIR directly, without config, model name or frontend.
@@ -248,6 +254,37 @@ struct NetworkView {
     /// `(class_id, artifact_root)` of every class the GENESIS registers — the static half of the
     /// live chain's terms.
     genesis_classes: Vec<(Hash64, Hash64)>,
+}
+
+fn apply_own_native_params_v34(args: &mut Vec<String>, base: &mut Params) -> Result<Option<[u8; 64]>, String> {
+    let file = take_flag(args, "--own-params-snapshot34");
+    let root = take_flag(args, "--own-params-snapshot-root");
+    let sha = take_flag(args, "--own-params-snapshot-sha256");
+    if let Some(file) = file {
+        let root: kaspa_hashes::Hash64 =
+            root.ok_or("--own-params-snapshot-root required")?.parse().map_err(|e| format!("snapshot root: {e}"))?;
+        let sha = sha.ok_or("--own-params-snapshot-sha256 required")?;
+        if sha.len() != 64 || !sha.bytes().all(|v| v.is_ascii_hexdigit()) {
+            return Err("own snapshot exact SHA256 required".into());
+        }
+        let mut hash = [0; 32];
+        for (i, b) in hash.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+        }
+        let owned = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
+            base,
+            std::path::Path::new(&file),
+            root.as_bytes(),
+            hash,
+        )?;
+        *base = owned.into_parameters();
+        Ok(Some(root.as_bytes()))
+    } else {
+        if root.is_some() || sha.is_some() {
+            return Err("own native snapshot pins require --own-params-snapshot34".into());
+        }
+        Ok(None)
+    }
 }
 
 fn network_view(raw: &str) -> Result<NetworkView, String> {
@@ -711,7 +748,8 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "audit-native-final32" => {
-            let view = network_view(network.as_deref().ok_or("--network own ruleset required")?)?;
+            let mut view = network_view(network.as_deref().ok_or("--network own ruleset required")?)?;
+            let own_snapshot = apply_own_native_params_v34(&mut args, &mut view.params)?;
             let child_path = take_flag(&mut args, "--child-header-json").ok_or("--child-header-json required")?;
             let parent_path = take_flag(&mut args, "--selected-parent-header-json").ok_or("--selected-parent-header-json required")?;
             let pin = |v: Option<String>, name: &str| -> Result<kaspa_hashes::Hash64, String> {
@@ -732,6 +770,12 @@ fn run(args: &[String]) -> Result<(), String> {
                         .map_err(|e| e.to_string())
                 })
                 .transpose()?;
+            let delivery_body = take_flag(&mut args, "--coinbase-proof33-borsh");
+            let post_path = take_flag(&mut args, "--post-header-json");
+            let post_pin = take_flag(&mut args, "--pinned-post-header");
+            let post_payout = take_flag(&mut args, "--post-payout-proof32");
+            let delivery_index = take_flag(&mut args, "--payout-output-index");
+            let post_fork_path = take_flag(&mut args, "--post-fork-opening-borsh");
             let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh diagnostic report required")?);
             if !args.is_empty() || output.exists() {
                 return Err("audit32 exact options/fresh report required".into());
@@ -754,6 +798,55 @@ fn run(args: &[String]) -> Result<(), String> {
             )?;
             let record = checked.native().record();
             let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            let delivery = if let Some(body) = delivery_body {
+                let post = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(
+                    &post_path.ok_or("--post-header-json required for actual delivery33")?,
+                ))?;
+                let post_pin = pin(post_pin, "--pinned-post-header")?;
+                let post_payout = misaka_palw_sdk::native_audit_io_v32::read_native_fact_proof_v32(std::path::Path::new(
+                    &post_payout.ok_or("--post-payout-proof32 required")?,
+                ))?;
+                let post_fork = post_fork_path
+                    .map(|path| {
+                        let raw = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(std::path::Path::new(&path), 4096)?;
+                        borsh::from_slice::<kaspa_consensus_core::palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1>(&raw)
+                            .map_err(|e| e.to_string())
+                    })
+                    .transpose()?;
+                let coinbase = misaka_palw_sdk::native_redemption_v33::read_coinbase_proof_borsh_v33(std::path::Path::new(&body))?;
+                let output_index =
+                    delivery_index.ok_or("--payout-output-index required")?.parse::<u32>().map_err(|e| e.to_string())?;
+                let delivered = misaka_palw_sdk::native_redemption_v33::derive_native_credit_delivery_v33(
+                    &checked,
+                    &child,
+                    child_pin,
+                    &post,
+                    post_pin,
+                    &view.params,
+                    post_fork.as_ref(),
+                    &post_payout,
+                    &coinbase,
+                    output_index,
+                )?;
+                let credit = delivered.delivery();
+                serde_json::json!({"schema":"misaka.palw.pinned-original-credit-delivery.v33","proof_root":hex(&delivered.root()),
+                    "payment_block":hex(&credit.block().as_bytes()),"post_header":hex(&delivered.post_header().as_bytes()),
+                    "outpoint":format!("{}:{}",credit.outpoint().transaction_id,credit.outpoint().index),"amount":credit.amount(),
+                    "original_job":hex(&credit.job()),"original_credit":hex(&credit.credit()),"payload":hex(&credit.payload()),
+                    "before_state":hex(&credit.before_state().as_bytes()),"after_state":hex(&credit.after_state().as_bytes()),
+                    "real_coinbase_inclusion_and_original_queue_consumption_verified":true,
+                    "utxo_maturity_verified":false,"current_unspentness_verified":false,"spend_verified":false,"A6_or_A8_credit":false})
+            } else {
+                if post_path.is_some()
+                    || post_pin.is_some()
+                    || post_payout.is_some()
+                    || delivery_index.is_some()
+                    || post_fork_path.is_some()
+                {
+                    return Err("delivery33 options require --coinbase-proof33-borsh".into());
+                }
+                serde_json::Value::Null
+            };
             let report = serde_json::json!({"schema":"misaka.palw.pinned-native-final-audit.v32", "network":view.network_id.to_string(),
                 "genesis":hex(&view.params.genesis.hash.as_bytes()),"child":hex(&child_pin.as_bytes()),
                 "independently_pinned_selected_parent":hex(&parent_pin.as_bytes()),"inner_state":hex(&checked.inner_state().as_bytes()),
@@ -765,8 +858,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 "claim":hex(&record.claim),"final_book":hex(&record.terminal_book),"single_credit":hex(&record.credit),
                 "producer_credit":record.producer_credit,"observed_queue_amount":record.observed_queue_amount,
                 "requester_operator":hex(&record.requester_operator),"producer_operator":hex(&record.producer_operator),
+                "qualified_native_profile":checked.rfc02_qualified(),"own_snapshot_root":own_snapshot.map(|v|hex(&v)),
+                "calibration_receipts_are_not_A6_or_A8_evidence":!checked.rfc02_qualified(),
                 "pinned_headers_and_original_rows_verified":true,"chain_selection_and_validation":"external-independent-pins-required",
-                "utxo_redemption_verified":false,"A6_or_A8_credit":false});
+                "coinbase_delivery":delivery,"utxo_redemption_verified":false,"A6_or_A8_credit":false});
             use std::io::Write;
             std::fs::OpenOptions::new()
                 .write(true)
@@ -811,6 +906,13 @@ fn run(args: &[String]) -> Result<(), String> {
                 })
                 .transpose()?;
             let positions = take_flag(&mut args, "--positions").map(|v| v.parse::<u32>().map_err(|e| e.to_string())).transpose()?;
+            let own_params = if network.is_some() {
+                let mut view = network_view(network.as_deref().unwrap())?;
+                apply_own_native_params_v34(&mut args, &mut view.params)?;
+                Some(view.params)
+            } else {
+                None
+            };
             let key_file = take_flag(&mut args, "--key-file");
             let bond_raw = take_flag(&mut args, "--bond");
             let initial_sequence = take_flag(&mut args, "--initial-sequence");
@@ -832,10 +934,10 @@ fn run(args: &[String]) -> Result<(), String> {
                 .map(|path| kaspa_pq_validator_core::load_validator_seed(&path).map(kaspa_pq_validator_core::ValidatorKey::from_seed))
                 .transpose()?;
             let domain = if signer.is_some() {
-                let view = network_view(network.as_deref().ok_or("--network required for signing")?)?;
+                let params = own_params.as_ref().ok_or("--network owning parameters required for signing")?;
                 Some(kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-                    view.params.net.to_string().as_bytes(),
-                    Some(view.params.genesis.hash),
+                    params.net.to_string().as_bytes(),
+                    Some(params.genesis.hash),
                 ))
             } else {
                 None

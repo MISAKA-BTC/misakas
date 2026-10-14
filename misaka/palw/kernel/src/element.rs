@@ -509,7 +509,7 @@ impl<'a> PreparedV1<'a> {
         misaka_palw_tir::validate_v2::validate_v2(source).map_err(|e|e.to_string())?;
         let last=u16::try_from(source.occurrences().len().checked_sub(1).ok_or("stage32 post occurrence absent")?).map_err(|_|"stage32 occurrence overflow")?;
         let binding=crate::trace::StageBindingV1{first_input:u16::MAX,inputs:0,post_writers:source.post_writes().into_iter().map(|(node,state)|(state,last,node)).collect()};
-        let mut prepared=Self::without_scope(program,None)?;prepared.w=WiringV1::for_stage(program,Some(&binding)).map_err(|e|e.to_string())?;Ok(prepared)
+        let mut prepared=Self::without_scope(program,None)?;prepared.w=WiringV1::for_stage_v32(program,&binding).map_err(|e|e.to_string())?;Ok(prepared)
     }
 
     /// Choose the disclosure/court profile: the frozen v4/v5 one ([`seg_value_modes_v1`], with G14-S hiding tiles) or a

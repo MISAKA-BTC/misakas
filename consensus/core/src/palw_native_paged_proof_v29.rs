@@ -423,7 +423,7 @@ impl PalwKernelRouteStateV1 {
             || status.paid_plan != s.original_plan
             || status.parameter != s.real_parameter
             || status.inventory != s.inventory
-            || !status.paid_owners.contains(&id)
+            || !(status.paid_owners.contains(&id) || archival && s.retired)
             || status.latest_paid_horizon < s.horizon
             || status.admitted_interval != s.admitted_interval
             || status.deadline < s.horizon

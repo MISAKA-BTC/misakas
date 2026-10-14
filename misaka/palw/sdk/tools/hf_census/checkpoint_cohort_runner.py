@@ -192,7 +192,8 @@ def inspect_audit_pair(path: Path, root: Path, scope: dict, stage: str, run_sha:
                 or any(anchor.get(k) in (None, "", False) for k in ("network", "genesis", "anchor_block", "active_kernel", "class", "source", "maximum_scope", "resource_contract"))
                 or type(anchor.get("anchor_daa")) is not int or anchor["anchor_daa"] < 0
                 or anchor["genesis"] != entry["genesis"] or anchor["network"] != entry["network"]
-                or audit.get("anchor_from_validated_consensus_database") is not True):
+                or audit.get("anchor_from_validated_consensus_database") is not True
+                or audit.get("qualified_native_profile") is not True or audit.get("isolated_calibration") is not False):
             return False, "MISSING_VALIDATED_DATABASE_ANCHOR"
         if stage in {"seat", "final", "redemption"} and not all(anchor[k] for k in ("job", "original_funding", "initial_consent")):
             return False, "ORIGINAL_FUNDING_CONSENT_OR_JOB_MISSING"
@@ -468,6 +469,7 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
                         or audit.get("node_database") != entry["node_database"]
                         or audit.get("anchor_from_validated_consensus_database") is not True
                         or audit.get("canonical_blocks_verified") is not True
+                        or audit.get("qualified_native_profile") is not True or audit.get("isolated_calibration") is not False
                         or audit.get("intended_claims_and_queue_accounting_verified") is not True
                         or audit.get("receipt_windows") != read_json(candidate)
                         or not audit.get("chain_objects") or not all(ac.evidence_ok(e, out) for e in audit["chain_objects"])):

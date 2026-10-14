@@ -152,3 +152,45 @@ pub fn decode_coinbase_proof_v33(raw: &[u8]) -> Result<NativeCoinbaseProofV33, S
 pub fn read_coinbase_proof_borsh_v33(path: &std::path::Path) -> Result<NativeCoinbaseProofV33, String> {
     decode_coinbase_proof_v33(&crate::native_audit_io_v32::read_bounded_file_v32(path, (4 << 20) + (64 << 10))?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_coinbase_wire_preflights_all_original_nested_counts() {
+        use kaspa_consensus_core::{
+            subnets::SUBNETWORK_ID_COINBASE,
+            tx::{ScriptPublicKey, Transaction, TransactionOutput},
+        };
+        let tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(12, ScriptPublicKey::from_vec(0, vec![1]))],
+            0,
+            SUBNETWORK_ID_COINBASE,
+            0,
+            vec![2; 64],
+        );
+        let proof = NativeCoinbaseProofV33 {
+            version: 33,
+            block: Hash64::from_bytes([3; 64]),
+            transactions: 1,
+            coinbase: tx,
+            siblings: vec![],
+        };
+        let raw = borsh::to_vec(&proof).unwrap();
+        let actual = decode_coinbase_proof_v33(&raw).unwrap();
+        assert_eq!(actual.coinbase, proof.coinbase);
+        assert_eq!(actual.block, proof.block);
+        let mut hostile = raw.clone();
+        // Proof70B, transaction version2B, original input-count4B, output-count.
+        hostile[76..80].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_coinbase_proof_v33(&hostile).is_err());
+        let mut hostile = raw.clone();
+        hostile[72..76].copy_from_slice(&1u32.to_le_bytes());
+        assert!(decode_coinbase_proof_v33(&hostile).is_err());
+        let mut hostile = raw;
+        hostile.extend_from_slice(&[0]);
+        assert!(decode_coinbase_proof_v33(&hostile).is_err());
+    }
+}

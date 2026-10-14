@@ -26,6 +26,7 @@ struct ClassHeader {
     owner: PalwBondKeyV2,
     wire_bytes: u32,
     registered: u64,
+    original_source:NativeSourceBindingV11,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Prepared {
@@ -103,7 +104,7 @@ fn class(builder: &TransitionBuilder<'_>, id: Digest) -> Result<(ClassHeader, Na
     }
     let wire = decode_register(raw)?;
     let program = TirProgramV1::decode(&wire.program_bytes).map_err(|e| refused(e.to_string()))?;
-    let s = source(r, h.class.source_binding)?;
+    let s = h.original_source.clone();
     if h.class.id() != id
         || s.refuted
         || s.program_root != h.class.original_program
@@ -142,22 +143,19 @@ fn paid_restore(
     if !prepay(builder, ctx, signer, work)? {
         return Ok(false);
     }
-    let cost = derive_ordinary_restore_v29(bytes, work)?;
+    let cost = misaka_palw_kernel::flat_quota11::stage14::bounded28::derive_stage_restore_metadata_v28(
+        0,
+        u32::try_from(wire).map_err(|_| refused("text29 class restore range"))?,
+        8192,
+        0,
+        u32::try_from(body).map_err(|_| refused("text29 current restore body range"))?,
+    )
+    .map_err(refused)?;
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut q = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), [0; 64])?;
     q.debit_ordinary(&p.quota, &epoch, &cost).map_err(refused)?;
     write_shard(builder, &q, [0; 64]);
     Ok(true)
-}
-fn derive_ordinary_restore_v29(bytes: u64, _work: u64) -> Result<DerivedOrdinaryMetadataV11, PalwStateV2Error> {
-    misaka_palw_kernel::flat_quota11::stage14::bounded28::derive_stage_restore_metadata_v28(
-        u32::try_from(bytes).map_err(|_| refused("text29 restore range"))?,
-        0,
-        0,
-        0,
-        0,
-    )
-    .map_err(refused)
 }
 fn decode_register(raw: &[u8]) -> Result<NativeTextRegisterV29, PalwStateV2Error> {
     if raw.len() < 138 || raw.len() > 1 << 20 || raw[..2] != 29u16.to_le_bytes() {
@@ -218,7 +216,7 @@ fn register(
         return Err(refused("text29 original class or finite owner catalog exhausted"));
     }
     ids.push(id);
-    let h = ClassHeader { class: record, owner: *signer, wire_bytes: body.len() as u32, registered: ctx.daa_score };
+    let h = ClassHeader { class: record, owner: *signer, wire_bytes: body.len() as u32, registered: ctx.daa_score,original_source:s };
     builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(0, &id), Some(key(&h)));
     builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, k(1, &id), Some(body.to_vec()));
     builder.write_kernel_row(EXECUTION_CLASS_OWNER_TABLE_V11, k(0, signer), Some(key(&ids)));
@@ -243,6 +241,7 @@ fn quote(
     wire: &NativeTextPrepareV29,
 ) -> Result<Quote, PalwStateV2Error> {
     let (h, registered, program) = class(builder, wire.request.class)?;
+    if builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(EXECUTION_SOURCE_FACT_TABLE_V11,k(0,&source_relation(&h.class)))){return Err(refused("text29 exact original source namespace was independently convicted"));}
     wire.request.check_prompt(&program, &wire.prompt).map_err(refused)?;
     let e = builder.extras.kernel_route.as_ref().unwrap();
     let final_policy = &e.native_final.as_ref().ok_or_else(|| refused("text29 trusted Final27 policy absent"))?.policy;
@@ -1153,6 +1152,11 @@ fn own(
         consumed: paid.admission.clone(),
         remaining: paid.guarantee.clone(),
     };
+    let mut owner_ids: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &id, 4 + 4 * 64).unwrap_or_default();
+    if owner_ids.len() >= 4 || owner_ids.contains(&own.id()) {
+        return Err(refused("text29 original lifetime owner catalogue exhausted"));
+    }
+    owner_ids.push(own.id());
     let status = paid_status(r, id)?;
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let shard = quota_shard(builder, p, &epoch, actor, id)?;
@@ -1238,6 +1242,7 @@ fn own(
     super::paged::write(builder, &projection);
     write_caller(builder, &caller);
     builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, id, 2u8)), Some(key(&(slots.root(), slots))));
+    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id), Some(key(&owner_ids)));
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))));
     Ok(())
 }
@@ -1478,7 +1483,7 @@ pub(super) fn reveal_paged(
     if refutes_source {
         builder.write_kernel_row(
             EXECUTION_SOURCE_FACT_TABLE_V11,
-            k(0, &ch.class.source_binding),
+            k(0, &source_relation(&ch.class)),
             Some(key(&(h.job, seal.proof_root, ctx.daa_score))),
         );
     }
@@ -1566,3 +1571,228 @@ fn close(
     let s = b.finalize(&q.conditions, &closed).map_err(refused)?;
     settle(builder, ctx, p, &mut h, &b, &s, None)
 }
+fn projection_for(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    p: &NativeExecutionPoliciesV11,
+    status: &NativePagedJobStatusV29,
+    own: &NativePagedSealV29,
+    plan: &CheckedNativePagedProofPlanV29,
+) -> Result<crate::palw_native_paged_quota_v29::NativePagedQuotaProjectionV29, PalwStateV2Error> {
+    let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let base = quota_shard(builder, p, &epoch, own.actor, own.job)?;
+    crate::palw_native_paged_quota_v29::NativePagedQuotaProjectionV29::from_native_rows(
+        &p.quota,
+        plan,
+        &base.global_row(),
+        base.global_row().root(),
+        &base.actor_row(),
+        base.actor_row().root(),
+        status,
+        status.root(),
+        Some((own, own.root())),
+    )
+    .map_err(refused)
+}
+fn expire_owner(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    raw: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_paged_quota_v29::*;
+    use misaka_palw_kernel::flat_quota11::stage14::source26::*;
+    if raw.len() != 129 || raw[0] != 0 {
+        return Err(refused("text29 owner expiry exact kind/job/owner grammar"));
+    }
+    let job = raw[1..65].try_into().unwrap();
+    let id = raw[65..129].try_into().unwrap();
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let h = original_header(r, job)?;
+    let own = r.native_paged_seal_original_v29(job, id).ok_or_else(|| refused("text29 archival original paid owner absent"))?;
+    if own.namespace != 29 || own.retired || ctx.daa_score <= own.horizon {
+        return Err(refused("text29 original paid owner immature/already retired"));
+    }
+    let mut removed = 129usize;
+    for index in 0..own.count {
+        if let Some(bytes) = r.aux.get(&(EXECUTION_SEAL_TABLE_V11, key(&(29u8, job, id, index)))) {
+            if bytes.len() > 32 << 10 {
+                return Err(refused("text29 original paid cache extent differs"));
+            }
+            removed = removed.checked_add(bytes.len()).ok_or_else(|| refused("text29 paid cache journal extent overflow"))?;
+        }
+    }
+    if !paid_restore(builder, ctx, signer, p, Some(h.class), removed)? {
+        return Ok(());
+    }
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let book = original_book(r, &h)?;
+    let status = paid_status(r, job)?;
+    if own.original_funding != h.funding
+        || own.maximum_contract != h.maximum
+        || book.claim().map(|c| c.root()) != Some(own.claim)
+        || !matches!(
+            book.terminal(),
+            NativeTextTerminalV29::Challengeable | NativeTextTerminalV29::Final | NativeTextTerminalV29::Convicted
+        )
+    {
+        return Err(refused("text29 owner expiry does not authenticate original live/terminal book"));
+    }
+    let pending = public::owner_open(r, job, id)?;
+    let token =
+        CheckedNativePagedExpiryV29::from_current_native(&status, &own, book.root(), ctx.daa_score, pending).map_err(refused)?;
+    let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let plan = CheckedNativePagedProofPlanV29::restore(
+        r.aux.get(&(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, 1u8)))).ok_or_else(|| refused("text29 original paid quote absent"))?,
+        own.original_plan,
+        &p.quota,
+    )
+    .map_err(refused)?;
+    let mut projection = projection_for(builder, ctx, p, &status, &own, &plan)?;
+    projection.expire_owner(&p.quota, &epoch, &plan, &token).map_err(refused)?;
+    let caller_plan = public::caller_plan(r, job, &book, p)?;
+    let base = public::caller(r, p, &caller_plan, &own, projection.global(), projection.actor())?;
+    let (_, subject): (Digest, QuotaSubjectSummaryV11) =
+        r.aux_row(EXECUTION_QUOTA_TABLE_V11, &quota_key(2, &job)).ok_or_else(|| refused("text29 original caller subject absent"))?;
+    let row = base.caller_row().ok_or_else(|| refused("text29 original caller retirement row absent"))?;
+    let row_root = row.root();
+    let mut caller = StageSourceCallerShardV26::from_native_rows(
+        &p.quota,
+        &caller_plan,
+        projection.global(),
+        &projection.global().root(),
+        own.actor,
+        Some((projection.actor(), &projection.actor().root())),
+        (&subject, &subject.row_root()),
+        Some((row, &row_root)),
+    )
+    .map_err(refused)?;
+    caller.expire_owner(&p.quota, &epoch, &caller_plan, id, own.original_paid_receipt).map_err(refused)?;
+    let (root, mut slots): (Digest, crate::palw_flat_execution_capacity_v22::NativePhysicalSlotsV22) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(22u8, job, 2u8)))
+        .ok_or_else(|| refused("text29 original expiry streams absent"))?;
+    if slots.root() != root || slots.job != job {
+        return Err(refused("text29 original expiry stream root differs"));
+    }
+    slots.retire_owner(id, ctx.daa_score).map_err(refused)?;
+    super::paged::write(builder, &projection);
+    write_caller(builder, &caller);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
+    for index in 0..own.count {
+        builder.write_kernel_row(EXECUTION_SEAL_TABLE_V11, key(&(29u8, job, id, index)), None);
+    }
+    Ok(())
+}
+fn convert(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    raw: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    use misaka_palw_kernel::flat_quota11::stage14::source26::*;
+    if raw.len() != 262 {
+        return Err(refused("text29 exact discovery conversion grammar"));
+    }
+    let job = raw[..64].try_into().unwrap();
+    let old = raw[64..128].try_into().unwrap();
+    let proof = raw[128..192].try_into().unwrap();
+    let seal = raw[192..256].try_into().unwrap();
+    let total = u32::from_le_bytes(raw[256..260].try_into().unwrap());
+    let count = u16::from_le_bytes(raw[260..262].try_into().unwrap());
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let h = original_header(r, job)?;
+    let own = r.native_paged_seal_v29(job, old).ok_or_else(|| refused("text29 original active discovery ticket absent"))?;
+    if own.namespace != 29
+        || own.bond != *signer
+        || own.operator
+            != builder.state.bonds.get(signer).ok_or_else(|| refused("text29 discovery actor absent"))?.operator_id.as_bytes()
+        || !own.discovery
+        || own.spent
+        || own.retired
+    {
+        return Err(refused("text29 conversion does not own original paid independent discovery"));
+    }
+    let book = original_book(r, &h)?;
+    if book.terminal() != NativeTextTerminalV29::Challengeable
+        || book.claim().map(|c| c.root()) != Some(own.claim)
+        || public::owner_open(r, job, old)? != 0
+    {
+        return Err(refused("text29 original discovery still has pending public units or closed book"));
+    }
+    let status = paid_status(r, job)?;
+    let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
+    let plan = CheckedNativePagedProofPlanV29::restore(
+        r.aux
+            .get(&(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, 1u8))))
+            .ok_or_else(|| refused("text29 original paid conversion quote absent"))?,
+        own.original_plan,
+        &p.quota,
+    )
+    .map_err(refused)?;
+    let mut projection = projection_for(builder, ctx, p, &status, &own, &plan)?;
+    projection
+        .convert_discovery(
+            &p.quota,
+            &epoch,
+            &plan,
+            own.actor,
+            own.operator,
+            proof,
+            seal,
+            count,
+            total,
+            ctx.daa_score
+                .checked_add(p.execution.horizons.seal_maturity)
+                .ok_or_else(|| refused("text29 fresh proof maturity overflow"))?,
+        )
+        .map_err(refused)?;
+    // The original conversion price owns fixed caller/stream journals. It is
+    // persisted before subsequent restoration; malformed attempts cannot reset.
+    let new = projection.seal().unwrap().id();
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let quote = public::caller_plan(r, job, &book, p)?;
+    let base = public::caller(r, p, &quote, &own, projection.global(), projection.actor())?;
+    let (_, subject): (Digest, QuotaSubjectSummaryV11) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &quota_key(2, &job))
+        .ok_or_else(|| refused("text29 original conversion subject absent"))?;
+    let row = base.caller_row().ok_or_else(|| refused("text29 original discovery caller absent"))?;
+    let root = row.root();
+    let mut caller = StageSourceCallerShardV26::from_native_rows(
+        &p.quota,
+        &quote,
+        projection.global(),
+        &projection.global().root(),
+        own.actor,
+        Some((projection.actor(), &projection.actor().root())),
+        (&subject, &subject.row_root()),
+        Some((row, &root)),
+    )
+    .map_err(refused)?;
+    caller.transfer_owner(&p.quota, &epoch, &quote, old, new, own.original_paid_receipt).map_err(refused)?;
+    let (root, mut slots): (Digest, crate::palw_flat_execution_capacity_v22::NativePhysicalSlotsV22) = r
+        .aux_row(EXECUTION_QUOTA_TABLE_V11, &key(&(22u8, job, 2u8)))
+        .ok_or_else(|| refused("text29 original discovery stream book absent"))?;
+    if root != slots.root() || slots.job != job || slots.original_consent23 != book.funding().consent {
+        return Err(refused("text29 original discovery stream identity differs"));
+    }
+    slots.transfer_owner(old, new, own.horizon).map_err(refused)?;
+    let mut owners: Vec<Digest> = read(r, EXECUTION_SEAL_ACTOR_TABLE_V11, 0, &job, 4 + 4 * 64)
+        .ok_or_else(|| refused("text29 original discovery lifetime catalogue absent"))?;
+    *owners.iter_mut().find(|v| **v == old).ok_or_else(|| refused("text29 original discovery lifetime member absent"))? = new;
+    builder.write_kernel_row(EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &job), Some(key(&owners)));
+    super::paged::write(builder, &projection);
+    write_caller(builder, &caller);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, job, old)), None);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(26u8, job, old)), None);
+    builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(22u8, job, 2u8)), Some(key(&(slots.root(), slots))));
+    builder.write_kernel_row(
+        EXECUTION_CREDIT_TABLE_V11,
+        k(4, &old),
+        Some(key(&(job, new, own.original_paid_receipt, own.original_ticket, own.horizon))),
+    );
+    Ok(())
+}
+
+fn source_relation(class:&NativeTextClassV29)->Digest{object_id(b"misaka-palw/native/exact-real-source-relation/v29",&(29u16,class.original_program,class.real_parameter,class.inventory))}

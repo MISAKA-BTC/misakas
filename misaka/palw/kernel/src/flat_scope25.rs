@@ -76,7 +76,7 @@ fn maxima(out: &mut FlatResourceScopeV25, b: &FlatCourtBoundsV4) {
 // Monotone H changes neither fixed dimensions nor dtype; after reaching 64,
 // flat path depth/leaf counts only increase. Point-v25 prices every flat leaf at
 // 127 values, so merged-tail oscillation never hides a more expensive earlier H.
-fn grammar_boundary_positions(pr: &PreparedV1<'_>, maximum: u32, s: u16, n: u16) -> Vec<u32> {
+pub(crate) fn grammar_boundary_positions(pr: &PreparedV1<'_>, maximum: u32, s: u16, n: u16) -> Vec<u32> {
     let mut positions = BTreeSet::from([0, maximum - 1]);
     if maximum == 1 {
         return positions.into_iter().collect();

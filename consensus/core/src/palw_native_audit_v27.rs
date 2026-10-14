@@ -55,8 +55,8 @@ pub struct NativeExecutionAuditRecordV27 {
     pub established_daa: u64,
     pub payout_payload: Digest,
     pub payout_queue: Digest,
-    /// A pooled queue may contain other jobs or already have drained. This is
-    /// observation, not a per-job redeemed-UTXO assertion.
+    /// The exact original credit queue may already have drained. This is
+    /// observation, not a redeemed-UTXO assertion; proof33 verifies that separately.
     pub observed_queue_amount: Option<u64>,
     pub rows: Vec<NativeAuditRowV27>,
 }
@@ -144,7 +144,7 @@ impl NativeExecutionAuditRecordV27 {
         for _ in 0..count {
             let table = u8::deserialize_reader(&mut r).map_err(|_| "bounded native audit table")?;
             let key = bounded_audit_bytes(&mut r, 4101)?;
-            let bytes = bounded_audit_bytes(&mut r, 1024 * 1024)?;
+            let bytes = bounded_audit_bytes(&mut r, (2 * 1024 * 1024 - total).min(1024 * 1024))?;
             total = total.checked_add(bytes.len()).filter(|n| *n <= 2 * 1024 * 1024).ok_or("bounded native audit row aggregate")?;
             rows.push(NativeAuditRowV27 { table, key, bytes });
         }

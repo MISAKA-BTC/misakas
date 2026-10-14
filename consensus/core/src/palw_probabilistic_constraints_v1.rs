@@ -25,6 +25,11 @@ impl Params {
 
     /// **The fence's refusal**: this binary carries no acceptance rule for the kernel route, so any armed height is refused.
     pub fn validate_palw_probabilistic_constraints_v1(&self) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_native_calibration_v34() {
+            return self.validate_isolated_native_calibration_v34().map_err(|_| {
+                PalwModeV2Error::Invalid("native calibration34 owning isolated genesis or complete original policies are invalid")
+            });
+        }
         match self.palw_probabilistic_constraints_v1 {
             Some(f) if f != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
                 "palw_probabilistic_constraints_v1 cannot be armed: RFC-0011 §15.7 assigns it no height and this binary has no kernel-route acceptance rule",

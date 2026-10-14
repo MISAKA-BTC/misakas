@@ -63,10 +63,28 @@ pub struct NativeFinalCalibrationV27 {
     pub actual_delivery_ready: bool,
     pub independent_node_ready: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum NativeFinalPurposeV34 {
+    Qualified,
+    /// Separately identified isolated devnet experiment. No production/A6/A8
+    /// qualification is inferred from any receipt made under this purpose.
+    IsolatedCalibration {
+        version: u16,
+        isolation: Digest,
+        base_genesis: crate::Hash64,
+        measurement_manifest: Digest,
+    },
+}
+impl NativeFinalPurposeV34 {
+    pub fn is_qualified(&self) -> bool {
+        matches!(self, Self::Qualified)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeFinalPolicyV27 {
     pub version: u16,
     pub network_domain: Digest,
+    pub purpose: NativeFinalPurposeV34,
     pub queue_policy: crate::palw_native_queue_v30::NativeQueuePolicyV30,
     pub finder_profit_margin_sompi: u64,
     pub producer_deterrence_margin_sompi: u64,
@@ -102,6 +120,15 @@ impl NativeFinalPolicyV27 {
     }
     pub fn check(&self, network: Digest) -> Result<(), String> {
         self.queue_policy.check(network)?;
+        if let NativeFinalPurposeV34::IsolatedCalibration { version, isolation, measurement_manifest, .. } = &self.purpose {
+            if *version != 34
+                || *isolation == [0; 64]
+                || *measurement_manifest == [0; 64]
+                || self.calibrations.iter().any(|c| c.independent_node_ready || c.independent_native_final_root != [0; 64])
+            {
+                return Err("native calibration34 cannot contain a fabricated prior Final or a qualification flag".into());
+            }
+        }
         if self.version != 27
             || self.network_domain != network
             || self.calibrations.is_empty()
@@ -149,17 +176,12 @@ impl NativeFinalPolicyV27 {
             || !c.original_source_ready
             || !c.whole_claim_detector_ready
             || !c.actual_delivery_ready
-            || !c.independent_node_ready
+            || (self.purpose.is_qualified() && !c.independent_node_ready)
             || !source_ready
             || !physical_service_ready
-            || [
-                c.measurement_root,
-                c.source_availability_root,
-                c.whole_claim_detection_root,
-                c.real_delivery_service_root,
-                c.independent_native_final_root,
-            ]
-            .contains(&[0; 64])
+            || [c.measurement_root, c.source_availability_root, c.whole_claim_detection_root, c.real_delivery_service_root]
+                .contains(&[0; 64])
+            || (self.purpose.is_qualified() && c.independent_native_final_root == [0; 64])
             || [
                 b.class,
                 b.program,

@@ -17,6 +17,11 @@ impl Params {
             && self.palw_panel_free_v1.as_ref().is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
     }
     pub fn validate_palw_funded_execution_v11(&self) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_native_calibration_v34() {
+            return self.validate_isolated_native_calibration_v34().map_err(|_| {
+                PalwModeV2Error::Invalid("native calibration34 owning isolated genesis or complete original policies are invalid")
+            });
+        }
         match &self.palw_funded_execution_v11 {
             Some(f) if f.activation != ForkActivation::never() => Err(PalwModeV2Error::Invalid(
                 "palw_funded_execution_v11 cannot be armed: funded public discovery/court/DA, economic and independent checkpoint Final gates remain unapproved",

@@ -5,6 +5,7 @@ use crate::{palw_flat_stage_v28::*,palw_flat_stage_v14::{StageAcceptRequestV14,S
 use borsh::{BorshDeserialize,BorshSerialize};
 use misaka_palw_kernel::{hash::{Digest,object_id},flat_inputs12::{bounded14::FlatStageJobV14,bounded28::*,source28::*,RawExternalInputsV12,RawExternalInputV12},flat_component_source28::*,flat_quota11::{TrustedEpochV11,NativeRequesterNonceWitnessV11,stage14::bounded28::*,stage14::StageTraceV14}};
 #[path="palw_flat_stage_source_fold_v28.rs"]mod source28;
+#[path="palw_flat_stage_master_fold_v32.rs"]mod master32;
 fn key<T:BorshSerialize>(kind:u8,id:&T)->Vec<u8>{bytes(&(28u8,kind,id))}
 fn read<T:BorshDeserialize>(r:&PalwKernelRouteStateV1,kind:u8,id:&impl BorshSerialize,cap:usize)->Option<T>{let raw=r.aux.get(&(STAGE_TABLE_V14,key(kind,id)))?;(raw.len()<=cap).then(||borsh::from_slice(raw).ok()).flatten()}
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize,BorshDeserialize)]
@@ -360,7 +361,7 @@ fn register(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&P
     ids.push(id);let h=ClassHeader{version:28,id,bundle:manifest.root(),source:source.id(),policy:p.root(),scope:class.maximum_scope().root(),resource:class.maximum_resources().root(),bytes:body.len() as u32,owner:*signer};builder.write_kernel_row(STAGE_TABLE_V14,key(2,&id),Some(bytes(&h)));builder.write_kernel_row(STAGE_TABLE_V14,key(3,&id),Some(bytes(&body.to_vec())));builder.write_kernel_row(STAGE_TABLE_V14,key(8,signer),Some(bytes(&ids)));builder.note_kernel_bond(signer);Ok(())
 }
 pub(super) fn apply(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,action:u8,body:&[u8])->Result<(),PalwStateV2Error>{
-    if !(19..=32).contains(&action){return Err(refused("unknown stage28 action before bounded body decode"));}let p=policy(builder,ctx)?;
-    let result=match action {19=>bind(builder,ctx,signer,&p,body),20=>register(builder,ctx,signer,&p,body),21=>accept(builder,ctx,signer,&p,body),22=>fund(builder,ctx,signer,&p,body),23=>commit(builder,ctx,signer,&p,body),24=>owner(builder,ctx,signer,&p,body),25=>source28::request(builder,ctx,signer,&p,body),26=>source28::answer(builder,ctx,signer,&p,body),27=>source28::settle(builder,ctx,signer,&p,body),28=>discovery_convert(builder,ctx,signer,&p,body),29=>finalize(builder,ctx,signer,&p,body),30=>expire_owner(builder,ctx,signer,&p,body),31=>collect_terminal(builder,ctx,signer,&p,body),32=>source28::reply_part(builder,ctx,signer,&p,body),_=>Err(refused("stage28 native action implementation pending"))};
+    if !(19..=33).contains(&action){return Err(refused("unknown stage28 action before bounded body decode"));}let p=policy(builder,ctx)?;
+    let result=match action {19=>bind(builder,ctx,signer,&p,body),20=>register(builder,ctx,signer,&p,body),21=>accept(builder,ctx,signer,&p,body),22=>fund(builder,ctx,signer,&p,body),23=>commit(builder,ctx,signer,&p,body),24=>owner(builder,ctx,signer,&p,body),25=>source28::request(builder,ctx,signer,&p,body),26=>source28::answer(builder,ctx,signer,&p,body),27=>source28::settle(builder,ctx,signer,&p,body),28=>discovery_convert(builder,ctx,signer,&p,body),29=>finalize(builder,ctx,signer,&p,body),30=>expire_owner(builder,ctx,signer,&p,body),31=>collect_terminal(builder,ctx,signer,&p,body),32=>source28::reply_part(builder,ctx,signer,&p,body),33=>master32::register(builder,ctx,signer,&p,body),_=>Err(refused("stage28 native action implementation pending"))};
     match result{Err(PalwStateV2Error::KernelRouteRefused(_))=>Ok(()),other=>other}
 }

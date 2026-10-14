@@ -33,9 +33,15 @@ fn run() -> Result<(), String> {
     let operator = get("--operator-id")?;
     let database = get("--node-database-id")?;
     let owning_params_sha = get("--own-params-sha256")?;
+    let owning_params_file = PathBuf::from(get("--own-params-snapshot34")?);
+    let owning_params_root: Hash64 = get("--own-params-snapshot-root")?.parse().map_err(|e| format!("own snapshot root: {e}"))?;
     let out = PathBuf::from(get("--out")?);
     drop(get);
-    let redemption = args.remove("--redemption").map(|v| v == "true").unwrap_or(false);
+    let redemption = match args.remove("--redemption").as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        _ => return Err("--redemption requires literal true or false".into()),
+    };
     let max_blocks = args.remove("--max-blocks").map(|s| s.parse::<usize>().map_err(|e| e.to_string())).transpose()?.unwrap_or(512);
     let timeout = args.remove("--timeout-seconds").map(|s| s.parse::<u64>().map_err(|e| e.to_string())).transpose()?.unwrap_or(30);
     if !args.is_empty()
@@ -49,6 +55,24 @@ fn run() -> Result<(), String> {
         || database.is_empty()
     {
         return Err("bounded fetch profile/fresh output required".into());
+    }
+    if !owning_params_sha.bytes().all(|v| v.is_ascii_hexdigit()) {
+        return Err("own profile exact SHA256 required".into());
+    }
+    let mut profile_sha = [0u8; 32];
+    for (i, b) in profile_sha.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&owning_params_sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+    }
+    let network_id: kaspa_consensus_core::network::NetworkId = network.parse().map_err(|e| format!("own network: {e}"))?;
+    let base: kaspa_consensus_core::config::params::Params = network_id.into();
+    let owning = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
+        &base,
+        &owning_params_file,
+        owning_params_root.as_bytes(),
+        profile_sha,
+    )?;
+    if owning.parameters().genesis.hash.to_string() != genesis || owning.parameters().net.to_string() != network {
+        return Err("predeclared owning snapshot derives another network/genesis".into());
     }
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().map_err(|e| e.to_string())?;
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&endpoint), None, None, None).map_err(|e| e.to_string())?;
@@ -194,7 +218,8 @@ fn run() -> Result<(), String> {
         }
     }
     let report = serde_json::json!({"schema":"misaka.palw.public-native-anchor-collection.v32","rpc":endpoint,
-        "network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"own_params_sha256":owning_params_sha,
+        "network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"own_params_sha256":owning_params_sha,"own_params_snapshot_root":owning_params_root.to_string(),
+        "qualified_native_profile":owning.rfc02_qualified(),"calibration_receipts_are_not_A6_or_A8_evidence":!owning.rfc02_qualified(),
         "pinned_child":block.to_string(),"pinned_selected_parent":parent_pin.to_string(),"original_job":job.to_string(),"coinbase_delivery_proof_requested":redemption,
         "provenance_start":from.to_string(),"complete_requested_provenance_retained":reached,"artifacts":evidence,
         "total_retained_bytes":total,"raw_node_assertions_are_unverified":true,"canonical_blocks_verified":false,

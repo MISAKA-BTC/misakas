@@ -26,7 +26,7 @@ pub struct NativeInitialStartV31 {
 impl NativeInitialStartV31 {
     pub fn check(&self, now: u64, interval_end: u64) -> Result<(), String> {
         if self.version != 31
-            || !matches!((self.namespace, self.action), (29, 27) | (28, 19) | (28, 20))
+            || !matches!((self.namespace, self.action), (29, 27) | (28, 19) | (28, 20) | (28, 33))
             || self.bytes == 0
             || self.bytes as usize > INITIAL_MAX_BYTES_V31
             || self.count == 0
@@ -125,7 +125,7 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             || h.start.bytes == 0
             || (h.start.bytes as usize).div_ceil(INITIAL_PART_BYTES_V31) != h.start.count as usize
             || h.start.sequence >= self.native_initial_next_sequence_v31()?
-            || !matches!((h.start.namespace, h.start.action), (28, 19) | (28, 20) | (29, 27))
+            || !matches!((h.start.namespace, h.start.action), (28, 19) | (28, 20) | (28, 33) | (29, 27))
             || h.attempts.iter().any(|v| *v > 2)
             || h.assembly_attempts > 2
         {

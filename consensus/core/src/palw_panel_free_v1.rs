@@ -158,6 +158,11 @@ impl Params {
     /// **The fence's refusal**: RFC-0015 §13.3 `ACTIVATION_ALLOWED` is not evidenced and the node carries no Panel=0 acceptance rule,
     /// so any armed height is refused.
     pub fn validate_palw_panel_free_v1(&self) -> Result<(), PalwModeV2Error> {
+        if self.has_isolated_native_calibration_v34() {
+            return self.validate_isolated_native_calibration_v34().map_err(|_| {
+                PalwModeV2Error::Invalid("native calibration34 owning isolated genesis or complete original policies are invalid")
+            });
+        }
         // A fence that is spelled `Some(never())` is collapsed whole (its value is never read); any other value is checked first, so a
         // malformed policy is named as such and not hidden behind the arming refusal.
         if let Some(f) = self.palw_panel_free_v1.as_ref().filter(|f| f.activation != ForkActivation::never())
