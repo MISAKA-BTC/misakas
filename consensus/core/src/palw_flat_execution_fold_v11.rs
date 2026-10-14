@@ -783,6 +783,7 @@ pub(super) fn apply(
             text29::apply(builder, ctx, signer, &p, action, body)
         }
         crate::palw_window_class_v37::TEXT_WINDOW_CLASS_ACTION_V37 => text29::register_window37(builder, ctx, signer, &p, body),
+        crate::palw_window_class_v37::TEXT_WINDOW_ATTACH_ACTION_V37 => text29::attach_window37(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_COMMIT_V11 => commit(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_CLOSE_V11 => close(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SEAL_V11 => court::seal(builder, ctx, signer, &p, body),

@@ -71,7 +71,7 @@ USAGE:
     palw-class native-parts --kind <text-pages29|text-reply29> --file <bytes> --out <fresh-dir> --network <id> --key-file <seed> --bond <txid:index>
                          (--job <128hex> --seal <128hex> --owner <128hex> | --pending <128hex>) [own-params-snapshot34 pins]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|text-own29|text-close29|
-                         text-request29|text-default29|text-discovery29|text-collect29|window-class37|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
+                         text-request29|text-default29|text-discovery29|text-collect29|window-class37|window-attach37|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
                          [--initial-sequence N --initial-now-daa N --initial-interval-end N --initial-expires-daa N]

@@ -4561,3 +4561,20 @@ job lane (fund/commit/court using `WindowFaultV37` and the v8 selection court) i
 class-version step. **A-2:** below `palw_window_class_v37` (or below Final27) action 45 is
 neither rejected nor applied — validation passes it unjudged and the fold returns before any read
 or write, with the identical predicate. The route decoder's funded action ceiling becomes 45.
+
+#### II.14.60a Window-class job path (2026-10-15, unverified source checkpoint)
+
+A window job **is a Text29 job**: preparation, producer consent, Fund, Commit, close/Final,
+collection, audit32 (namespace 29), delivery33 and spend35 are exactly Text29's. Funded action
+46 (`u16 37 ‖ job ‖ window class`) lets the job's **producer** opt its Funded, uncommitted job
+into a registered window class of the same Text29 class — producer consent is required because
+the window courts add liability beyond the original Text29 consent. Attachment re-derives the
+window class, binds the graph to the actual program (`check_window_graph_program_v37`: node
+count, flat slots, history `[min(p+1,W), row]` and writer `row` shapes at the boundary
+positions), requires the job's maximum positions within the class's and both window court
+envelopes within the job's original paid filing bound. A window-bound job additionally accepts,
+through the same paid paged29 owner/Part/Assembly/Court path and the same conviction and
+settlement, a filing in its own envelope (`u16 37, kind, len, body`; the frozen v25 envelope
+keeps kinds 0..=2): kind 3 = `WindowFaultV37` (append/KV binding or continuity), kind 4 = the
+job's deterministic v8 `HistorySelectionFaultV8` (`window_selection_job_v37`). Actions 45/46
+ride unjudged below `palw_window_class_v37` or Final27 (A-2); the route decoder ceiling is 46.

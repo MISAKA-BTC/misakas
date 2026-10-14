@@ -1410,9 +1410,20 @@ pub(super) fn reveal_paged(
     {
         return Err(refused("text29 paid court original complete contract/trace/file differs"));
     }
+    // Window-bound jobs (§II.14.60) accept their own v37 filing envelope; the frozen
+    // v25 envelope and its kinds 0..=2 are unchanged.
+    let window_active = builder
+        .extras
+        .kernel_route
+        .as_ref()
+        .and_then(|e| e.window_class_v37)
+        .is_some_and(|at| ctx.daa_score >= at);
+    let mut refutes_source = false;
+    if window_active && file.get(68..70) == Some(&37u16.to_le_bytes()[..]) {
+        window_court(builder, &h, &b, &post, q.paged.record().maximum_bytes, &file[68..])?;
+    } else {
     let filing = borrowed_native_filing_v25(&file[68..], q.paged.record().maximum_bytes)
         .ok_or_else(|| refused("text29 paid source/trace filing25 grammar"))?;
-    let mut refutes_source = false;
     match filing.kind {
         0 => {
             let actual_scope =
@@ -1481,6 +1492,7 @@ pub(super) fn reveal_paged(
         }
         _ => return Err(refused("text29 paid court unrecognized kind")),
     };
+    }
     let settlement =
         b.convict(seal.proof_root, seal.actor, seal.operator, f.maximum.producer_reserve, ctx.daa_score).map_err(refused)?;
     settle(builder, ctx, &p, &mut h, &b, &settlement, Some(signer))?;
@@ -2112,6 +2124,8 @@ fn collect_terminal(
     for (table, kk) in [
         (EXECUTION_JOB_TABLE_V11, k(0, &id)),
         (EXECUTION_JOB_TABLE_V11, k(1, &id)),
+        // A window-bound job's binding (§II.14.60) leaves with the job.
+        (EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, id))),
         (EXECUTION_POLICY_TABLE_V11, k(0, &id)),
         (EXECUTION_PROTECTED_TABLE_V11, k(0, &id)),
         (EXECUTION_SEAL_ACTOR_TABLE_V11, k(0, &id)),
@@ -2375,4 +2389,111 @@ pub(super) fn register_window37(
     builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, catalog_key, Some(key(&ids)));
     builder.note_kernel_bond(signer);
     Ok(())
+}
+/// Funded action 46 (`palw_window_class_v37`): the job's PRODUCER opts its Funded,
+/// not-yet-committed Text29 job into a registered window class. Producer consent is
+/// required because the window courts add liability beyond the original Text29
+/// consent; nothing about money, maxima or clocks changes. Fund/Commit/Final/
+/// redemption stay exactly Text29's; only courts 3/4 become admissible.
+pub(super) fn attach_window37(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_window_class_v37::*;
+    if builder.extras.kernel_route.as_ref().and_then(|e| e.window_class_v37).is_none_or(|at| ctx.daa_score < at) {
+        return Ok(());
+    }
+    if body.len() != WINDOW_ATTACH_BYTES_V37 || body[..2] != 37u16.to_le_bytes() {
+        return Err(refused("window37 attach exact grammar"));
+    }
+    let job: Digest = body[2..66].try_into().unwrap();
+    let window: Digest = body[66..130].try_into().unwrap();
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let h = original_header(r, job)?;
+    if !paid_restore(builder, ctx, signer, p, Some(h.class), body.len() + h.book_bytes as usize + WINDOW_CLASS_MAX_BODY_BYTES_V37)? {
+        return Ok(());
+    }
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let b = original_book(r, &h)?;
+    let (record, _, _): (NativeWindowClassV37, PalwBondKeyV2, u64) = r
+        .aux_row(EXECUTION_CLASS_TABLE_V11, &key(&(37u8, 0u8, window)))
+        .ok_or_else(|| refused("window37 attach original window class absent"))?;
+    let raw = r.aux.get(&(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, window)))).ok_or_else(|| refused("window37 class body absent"))?;
+    let wire = NativeWindowClassRegisterV37::from_bytes(raw).map_err(refused)?;
+    let (ch, _, program) = class(builder, h.class)?;
+    if h.producer != *signer
+        || b.terminal() != NativeTextTerminalV29::Funded
+        || b.claim().is_some()
+        || record.id() != window
+        || record.text_class != h.class
+        || wire.derive(&ch.class, program.history_bound).map_err(refused)? != record
+        || b.funding().maximum.maximum_positions > record.maximum_positions
+        || builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job))))
+    {
+        return Err(refused("window37 attach needs the producer's own Funded uncommitted job of the window's Text29 class"));
+    }
+    misaka_palw_kernel::flat_window37::check_window_graph_program_v37(&wire.graph, &program).map_err(refused)?;
+    // Both window courts must fit the job's ORIGINAL paid filing bound.
+    let prep: Prepared = read(builder.state.kernel_route.as_ref().unwrap(), EXECUTION_POLICY_TABLE_V11, 0, &job, (1 << 20) + 8192)
+        .ok_or_else(|| refused("window37 attach original preparation absent"))?;
+    let q = quote(builder, p, &prep.wire)?;
+    let cap = q.paged.record().maximum_bytes as u64;
+    let gs = wire.graph.scope().map_err(refused)?;
+    let ss = wire.graph.selection.scope().map_err(refused)?;
+    if gs.filing_bytes + 7 > cap || ss.filing_bytes + 7 > cap {
+        return Err(refused("window37 courts exceed the job's original paid filing bound"));
+    }
+    let binding = NativeWindowJobBindingV37 { version: 37, job, window_class: window, graph: wire.graph.root(), attached_daa: ctx.daa_score };
+    builder.write_kernel_row(EXECUTION_JOB_TABLE_V11, key(&(37u8, 3u8, job)), Some(key(&binding)));
+    builder.note_kernel_bond(signer);
+    Ok(())
+}
+/// Window court verification for a paid paged filing of a window-bound job. Returns
+/// Ok(()) only on an objective continuity/append (kind 3) or v8 selection (kind 4) fault.
+fn window_court(
+    builder: &TransitionBuilder<'_>,
+    h: &JobHeader,
+    b: &NativeTextBookV29,
+    post: &NativeTextPostV29,
+    filing_cap: u32,
+    raw: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_window_class_v37::*;
+    use misaka_palw_kernel::{flat_history8::*, flat_window37::*};
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let binding: NativeWindowJobBindingV37 = r
+        .aux_row(EXECUTION_JOB_TABLE_V11, &key(&(37u8, 3u8, h.job)))
+        .ok_or_else(|| refused("window37 court: job is not window-bound"))?;
+    let body = r.aux.get(&(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, binding.window_class)))).ok_or_else(|| refused("window37 class body absent"))?;
+    let graph = NativeWindowClassRegisterV37::from_bytes(body).map_err(refused)?.graph;
+    let claim = b.claim().ok_or_else(|| refused("window37 court claim absent"))?;
+    if graph.root() != binding.graph || binding.job != h.job {
+        return Err(refused("window37 court binding differs"));
+    }
+    let (kind, filing) = borrowed_window_filing_v37(raw, filing_cap).ok_or_else(|| refused("window37 filing envelope"))?;
+    match kind {
+        3 => {
+            let scope = graph.scope().map_err(refused)?;
+            let fault = WindowFaultV37::from_bytes(filing).map_err(|e| refused(e.to_string()))?;
+            let c = WindowContextV37 {
+                graph: &graph,
+                scope: &scope,
+                job_root: h.job,
+                positions: claim.actual_positions,
+                segment_roots: &post.segment_roots,
+            };
+            verify_window_fault_v37(&c, &fault).map_err(|e| refused(format!("{e:?}")))
+        }
+        4 => {
+            let scope = graph.selection.scope().map_err(refused)?;
+            let job = window_selection_job_v37(&graph, h.job, claim.actual_positions, b.funding().request.nonce);
+            let fault = HistorySelectionFaultV8::from_bytes(filing).map_err(|e| refused(e.to_string()))?;
+            let c = HistorySelectionContextV8 { plan: &graph.selection, job: &job, scope: &scope, segment_roots: &post.segment_roots };
+            verify_history_selection_fault_v8(&c, &fault).map_err(|e| refused(format!("{e:?}")))
+        }
+        _ => Err(refused("window37 unknown court")),
+    }
 }

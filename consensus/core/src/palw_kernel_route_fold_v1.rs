@@ -934,7 +934,7 @@ pub(super) fn apply_kernel_route_object_v1(
         && builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(2) {
             Some(25..=40) => e.native_final.is_none(),
             // Typed window class (§II.14.60): its own fence AND Final27.
-            Some(45) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
+            Some(45 | 46) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
             _ => false,
         })
     {

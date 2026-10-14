@@ -358,3 +358,66 @@ pub fn check_window_step_v37(
     }
     Ok(())
 }
+
+/// Bind a window graph to the ACTUAL v1 program a job executes: same per-position
+/// node count, every coordinate's flat slot, and the declared dtype/shape of each
+/// history (`[min(p+1, window), row..]`) and writer (`row`) node at the boundary
+/// positions (first, last-before-full, first-full, last). A graph that names a
+/// node the program does not compute that way cannot be attached to a job.
+pub fn check_window_graph_program_v37(graph: &WindowGraphV37, program: &misaka_palw_tir::TirProgramV1) -> Result<(), String> {
+    graph.validate()?;
+    let pr = crate::element::PreparedV1::without_scope(program, None)?;
+    if pr.node_count != graph.nodes_per_position || graph.max_positions > program.history_bound {
+        return Err("window37 graph node count or extent differs from the actual program".into());
+    }
+    let at = |n: HistoryNodeV8| -> Result<(), String> {
+        if !pr.valid(n.occurrence, n.node) || pr.index(n.occurrence, n.node) != n.slot {
+            return Err("window37 graph coordinate is not the program's flat slot".into());
+        }
+        Ok(())
+    };
+    at(graph.selection.source)?;
+    at(graph.selection.output)?;
+    let mut probes = vec![0, graph.window - 1, graph.max_positions - 1];
+    if graph.window < graph.max_positions {
+        probes.push(graph.window);
+    }
+    for a in &graph.appends {
+        at(a.history)?;
+        at(a.writer)?;
+        let row: Vec<usize> = a.row_shape.iter().map(|d| *d as usize).collect();
+        for &p in &probes {
+            if pr.declared(a.history.occurrence, a.history.node, p) != (a.dtype, graph.history_shape(a, p)?)
+                || pr.declared(a.writer.occurrence, a.writer.node, p) != (a.dtype, row.clone())
+            {
+                return Err("window37 history/writer node is not computed with the declared window shape".into());
+            }
+        }
+    }
+    Ok(())
+}
+/// The deterministic v8 selection job of a window-bound native job (shared by
+/// native consensus and the prover; no free field).
+pub fn window_selection_job_v37(
+    graph: &WindowGraphV37,
+    job: Digest,
+    positions: u32,
+    nonce: Digest,
+) -> crate::flat_history8::HistorySelectionJobV8 {
+    crate::flat_history8::HistorySelectionJobV8 {
+        version: 8,
+        plan_root: graph.selection.root(),
+        input_root: object_id(b"misaka-palw/kernel/window-job-input/v37", &(graph.root(), job)),
+        positions,
+        nonce,
+    }
+}
+/// Paid filing envelope for window courts, its own version (the frozen v25 envelope
+/// keeps kinds 0..=2): `u16 37, u8 kind (3 continuity | 4 selection), u32 len, body`.
+pub fn borrowed_window_filing_v37(raw: &[u8], original_maximum_bytes: u32) -> Option<(u8, &[u8])> {
+    if raw.len() < 7 || raw.len() > original_maximum_bytes as usize || raw[..2] != 37u16.to_le_bytes() || !matches!(raw[2], 3 | 4) {
+        return None;
+    }
+    let n = u32::from_le_bytes(raw[3..7].try_into().ok()?) as usize;
+    (n == raw.len() - 7).then_some((raw[2], &raw[7..]))
+}

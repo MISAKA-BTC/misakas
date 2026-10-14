@@ -17,6 +17,19 @@ use misaka_palw_kernel::{
 };
 
 pub const TEXT_WINDOW_CLASS_ACTION_V37: u8 = 45;
+/// Producer opt-in that binds one Funded (pre-Commit) Text29 job to a window class:
+/// `u16 37 || job || window class` (130 bytes). Courts 3/4 then apply to that job.
+pub const TEXT_WINDOW_ATTACH_ACTION_V37: u8 = 46;
+pub const WINDOW_ATTACH_BYTES_V37: usize = 130;
+/// Stored per job: `(window class, graph root, attached DAA)`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct NativeWindowJobBindingV37 {
+    pub version: u16,
+    pub job: Digest,
+    pub window_class: Digest,
+    pub graph: Digest,
+    pub attached_daa: u64,
+}
 pub const WINDOW_CLASS_MAX_BODY_BYTES_V37: usize = 96 << 10;
 
 /// Signed body of funded action 45.

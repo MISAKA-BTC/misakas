@@ -298,6 +298,28 @@ pub fn prepare_window_class_v37(
     }
     text_raw(kaspa_consensus_core::palw_window_class_v37::TEXT_WINDOW_CLASS_ACTION_V37, body)
 }
+/// Funded action 46 (§II.14.60): the PRODUCER binds its Funded, uncommitted Text29 job
+/// to a registered window class. Fund/Commit/Final/redemption remain Text29's.
+pub fn prepare_window_attach_v37(job: &Digest, window_class: &Digest) -> Result<PreparedNativePayloadV29, String> {
+    let mut raw = Vec::with_capacity(kaspa_consensus_core::palw_window_class_v37::WINDOW_ATTACH_BYTES_V37);
+    raw.extend_from_slice(&37u16.to_le_bytes());
+    raw.extend_from_slice(job);
+    raw.extend_from_slice(window_class);
+    text_raw(kaspa_consensus_core::palw_window_class_v37::TEXT_WINDOW_ATTACH_ACTION_V37, raw)
+}
+/// The paid filing BODY for a window court (wrapped by `native_paged_file_v29` with the
+/// owner's salt): kind 3 = `WindowFaultV37`, kind 4 = the job's v8 `HistorySelectionFaultV8`.
+pub fn window_filing_v37(kind: u8, fault: &[u8]) -> Result<Vec<u8>, String> {
+    if !matches!(kind, 3 | 4) || fault.is_empty() {
+        return Err("window37 filing kind 3|4 and nonempty fault required".into());
+    }
+    let mut raw = Vec::with_capacity(7 + fault.len());
+    raw.extend_from_slice(&37u16.to_le_bytes());
+    raw.push(kind);
+    raw.extend_from_slice(&(fault.len() as u32).to_le_bytes());
+    raw.extend_from_slice(fault);
+    Ok(raw)
+}
 pub fn prepare_stage_bundle_v28(
     bundle: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28,
 ) -> Result<PreparedNativePayloadV29, String> {
@@ -562,6 +584,12 @@ pub fn decode_native_payload_v29(
                 _ => return Err("text29 collection exact kind grammar".into()),
             };
             prepare_text_collect_v29(&kind)
+        }
+        "window-attach37" => {
+            if raw.len() != 128 {
+                return Err("window37 attach body is job || window class (128 bytes)".into());
+            }
+            prepare_window_attach_v37(&raw[..64].try_into().unwrap(), &raw[64..].try_into().unwrap())
         }
         "window-class37" => prepare_window_class_v37(
             &kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37::from_bytes(raw)?,

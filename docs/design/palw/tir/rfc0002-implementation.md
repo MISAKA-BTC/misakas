@@ -3527,3 +3527,16 @@ and fence. Everything else listed is validation-phase work.
 
 Remaining (job lane): Text window jobs (fund/commit/court with `WindowFaultV37` and the v8
 selection court) are the next class-version step; validation owns every measurement.
+
+### Window-class job path (Claude, 2026-10-15, fourth pass) — unverified source checkpoint
+
+Window jobs reuse Text29 end to end (fund/commit/Final/collection/audit32 ns29/delivery33/
+spend35). New: funded action 46 `attach_window37` (producer opt-in, graph-to-program binding
+`check_window_graph_program_v37`, court envelopes within the original paid filing bound);
+courts 3/4 in `reveal_paged` via `window_court` (own v37 filing envelope
+`borrowed_window_filing_v37`; v25 envelope unchanged); window binding row collected with the
+job; decoder ceiling 46; pre-gate/fold unjudged predicate covers 45|46. SDK
+`prepare_window_attach_v37`, `window_filing_v37`, `native-payload --kind window-attach37`.
+Test sources: kernel `tests/flat_window37.rs` (envelope, selection-job determinism, program
+binding refusal); node below-fence test now sends 45 and 46. No code item of RFC02 remains;
+RFC03 patch/audio stays spec + fenced refusing codec.

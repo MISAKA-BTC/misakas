@@ -5304,7 +5304,7 @@ impl VirtualStateProcessor {
                     }
                 }
                 Some(25..=40) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa) && final27(),
-                Some(45) => {
+                Some(45 | 46) => {
                     self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa)
                         && final27()
                         && self.palw_window_class_v37.is_some_and(active)
@@ -5360,7 +5360,7 @@ impl VirtualStateProcessor {
                 Some(25..=40) => !final27,
                 // Typed window class (§II.14.60): unjudged below its own fence or below Final27,
                 // mirroring the fold's `window_class_v37`/`native_final` early return exactly.
-                Some(45) => !final27 || !window37,
+                Some(45 | 46) => !final27 || !window37,
                 _ => false,
             }
     }

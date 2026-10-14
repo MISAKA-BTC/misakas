@@ -76,3 +76,40 @@ fn step_refuses_substituted_reset_skipped_and_unshifted_histories() {
     check_window_step_v37(&g, 0, 2, Some(&prev), &image(&[[2, 2], [3, 3]]), &row([3, 3])).unwrap();
     assert!(check_window_step_v37(&g, 0, 2, Some(&prev), &image(&[[1, 1], [3, 3]]), &row([3, 3])).is_err(), "unshifted");
 }
+
+#[test]
+fn window_filing_envelope_and_selection_job_are_versioned_and_deterministic() {
+    let g = graph(4);
+    let mut raw = 37u16.to_le_bytes().to_vec();
+    raw.push(3);
+    raw.extend_from_slice(&3u32.to_le_bytes());
+    raw.extend_from_slice(&[1, 2, 3]);
+    assert_eq!(borrowed_window_filing_v37(&raw, 1024), Some((3, &[1u8, 2, 3][..])));
+    let mut v25 = raw.clone();
+    v25[..2].copy_from_slice(&25u16.to_le_bytes());
+    assert!(borrowed_window_filing_v37(&v25, 1024).is_none(), "the frozen v25 envelope is not a window filing");
+    raw[2] = 2;
+    assert!(borrowed_window_filing_v37(&raw, 1024).is_none(), "only kinds 3/4");
+    let a = window_selection_job_v37(&g, [5; 64], 10, [6; 64]);
+    assert_eq!(a, window_selection_job_v37(&g, [5; 64], 10, [6; 64]));
+    assert_ne!(a.root(), window_selection_job_v37(&g, [7; 64], 10, [6; 64]).root());
+    a.check(&g.selection).unwrap();
+}
+
+#[test]
+fn a_graph_cannot_attach_to_a_program_that_does_not_compute_it() {
+    use misaka_palw_tir::{builder::ProgramBuilder, program::HISTORY_BOUND_V1_SMALL};
+    let mut b = ProgramBuilder::new(256, HISTORY_BOUND_V1_SMALL);
+    let x = b.param("x", DType::I32, &[2], false);
+    let mut pre = b.block("pre", vec![]);
+    let y = pre.cast(x, DType::I32);
+    let pre = pre.finish(&[y]);
+    let mut post = b.block("post", vec![misaka_palw_tir::TensorType::fixed(DType::I32, &[2])]);
+    let z = post.cast(misaka_palw_tir::Ref::CarryIn(0), DType::I32);
+    post.commit(z);
+    let post = post.finish(&[]);
+    let program = b.finish(pre, vec![], post, 0);
+    // The synthetic graph names four nodes per position and windowed history shapes the
+    // program never computes: attachment is refused.
+    assert!(check_window_graph_program_v37(&graph(4), &program).is_err());
+}
