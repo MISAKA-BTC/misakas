@@ -25,6 +25,17 @@ pub(super) fn apply_chunk(
 mod source;
 #[path="palw_flat_stage_fold_v28.rs"]
 mod next28;
+/// Stage28 component Final audit extraction (see `next28::audit_record_from_rows_v28`).
+pub(super) fn audit_record_from_rows_v28(
+    rows: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    network_domain: misaka_palw_kernel::hash::Digest,
+    daa: u64,
+    roots: (misaka_palw_kernel::hash::Digest, misaka_palw_kernel::hash::Digest, misaka_palw_kernel::hash::Digest),
+    payouts: &std::collections::BTreeMap<crate::Hash64, PalwPayoutV2>,
+    id: misaka_palw_kernel::hash::Digest,
+) -> Result<crate::palw_native_audit_v27::NativeExecutionAuditRecordV27, String> {
+    next28::audit_record_from_rows_v28(rows, network_domain, daa, roots, payouts, id)
+}
 
 fn refused(why: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(why.into())

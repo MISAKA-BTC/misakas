@@ -222,8 +222,13 @@ pub fn derive_native_redemption_v33(
         return Err("native redemption33 exact original credit/payout amount differs".into());
     }
     let expected = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payload.as_bytes());
-    if Hash64::from_bytes(r.payout_queue)
-        != crate::palw_native_audit_v27::native_final_credit_queue_v27(
+    // Namespace 28 keeps its own Stage28 credit identifier (fixed before its settlement
+    // exists); the privately minted audit view already authenticated it against the
+    // original header and immutable kind-14 receipt. Every other namespace re-derives
+    // the shared unique Final27 identity here.
+    if r.namespace != 28
+        && Hash64::from_bytes(r.payout_queue)
+            != crate::palw_native_audit_v27::native_final_credit_queue_v27(
             r.job,
             r.funding,
             r.settlement,

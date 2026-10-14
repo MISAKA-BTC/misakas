@@ -365,3 +365,57 @@ pub(super) fn apply(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,s
     let result=match action {19=>bind(builder,ctx,signer,&p,body),20=>register(builder,ctx,signer,&p,body),21=>accept(builder,ctx,signer,&p,body),22=>fund(builder,ctx,signer,&p,body),23=>commit(builder,ctx,signer,&p,body),24=>owner(builder,ctx,signer,&p,body),25=>source28::request(builder,ctx,signer,&p,body),26=>source28::answer(builder,ctx,signer,&p,body),27=>source28::settle(builder,ctx,signer,&p,body),28=>discovery_convert(builder,ctx,signer,&p,body),29=>finalize(builder,ctx,signer,&p,body),30=>expire_owner(builder,ctx,signer,&p,body),31=>collect_terminal(builder,ctx,signer,&p,body),32=>source28::reply_part(builder,ctx,signer,&p,body),33=>master32::register(builder,ctx,signer,&p,body),_=>Err(refused("stage28 native action implementation pending"))};
     match result{Err(PalwStateV2Error::KernelRouteRefused(_))=>Ok(()),other=>other}
 }
+
+/// Independent audit extraction of one genuine Stage28 component producer Final from
+/// authenticated original rows only (audit32's full aux opening or the live store).
+/// Stage28 keeps its own credit identifier (`settlement_queue`, fixed before the
+/// settlement exists) — carried verbatim as the record's `payout_queue` and
+/// authenticated here against the original header and the immutable kind-14
+/// receipt; there is no consensus change. Namespace-28 field mapping: `program` is
+/// the complete source-bundle root, `real_parameter`/`inventory` the component
+/// source id (which binds its R/PC/inventory), `trace` the stored trace image root.
+pub(super) fn audit_record_from_rows_v28(
+    rows:&std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,network_domain:Digest,daa:u64,roots:(Digest,Digest,Digest),
+    payouts:&std::collections::BTreeMap<crate::Hash64,PalwPayoutV2>,id:Digest,
+)->Result<crate::palw_native_audit_v27::NativeExecutionAuditRecordV27,String>{
+    use crate::palw_native_audit_v27::{NativeAuditRowV27,NativeExecutionAuditRecordV27};
+    fn get<'a>(rows:&'a std::collections::BTreeMap<(u8,Vec<u8>),Vec<u8>>,kind:u8,id:&Digest,cap:usize)->Result<(Vec<u8>,&'a Vec<u8>),String>{
+        let k=key(kind,id);let raw=rows.get(&(STAGE_TABLE_V14,k.clone())).ok_or("stage28 audit original row absent")?;if raw.len()>cap{return Err("stage28 audit original row cap".into());}Ok((k,raw))
+    }
+    let get=|kind:u8,id:&Digest,cap:usize|get(rows,kind,id,cap);
+    let (hk,raw)=get(5,&id,8192)?;let h:JobHeader=borsh::from_slice(raw).map_err(|_|"stage28 audit header grammar")?;
+    let (_,raw)=get(6,&id,(1<<20)+(2<<20)+16384)?;let data:JobData=borsh::from_slice(raw).map_err(|_|"stage28 audit body grammar")?;
+    if h.id!=id||data.book.len()!=h.book_bytes as usize||data.trace.len()!=h.trace_bytes as usize{return Err("stage28 audit original header/body extents differ".into());}
+    let book:StageJobBookV28=borsh::from_slice(&data.book).map_err(|_|"stage28 audit book grammar")?;
+    let (ck,raw)=get(2,&h.class,1024)?;let ch:ClassHeader=borsh::from_slice(raw).map_err(|_|"stage28 audit class grammar")?;
+    let (rk,raw)=get(14,&id,1024)?;let (credited,queue,payload):(StageSettlementV28,crate::Hash64,crate::Hash64)=borsh::from_slice(raw).map_err(|_|"stage28 audit credit grammar")?;
+    let s=book.settlement().ok_or("stage28 audit Final lacks settlement")?;
+    let nk=borsh::to_vec(&book.requester_operator()).map_err(|e|e.to_string())?;
+    let raw=rows.get(&(crate::palw_flat_execution_v11::EXECUTION_REQUEST_INDEX_TABLE_V11,nk.clone())).ok_or("stage28 audit permanent nonce row absent")?;
+    if raw.len()!=72{return Err("stage28 audit fixed nonce row".into());}
+    let nonce:crate::palw_flat_execution_v11::NativeRequesterNonceRowV11=borsh::from_slice(raw).map_err(|_|"stage28 audit nonce grammar")?;
+    if book.id()!=id||book.root()!=h.book||book.original_root()!=h.original||book.class()!=h.class||ch.id!=h.class||book.contract()!=h.contract.root()
+        ||book.terminal()!=StageTerminalV28::Final||h.terminal!=StageTerminalV28::Final||credited!=*s||queue!=settlement_queue(&h,true)||payload!=h.producer_payout
+        ||s.producer_credit==0||s.producer_credit!=book.reward()||s.escrow_debit!=book.reward()||s.requester_credit!=0||s.actual_slash!=0||s.finder_credit!=0||s.burned!=0
+        ||book.final_after().is_none_or(|at|s.established<=at)||book.claim().is_none()||s.claim!=book.claim()
+        ||nonce.operator!=book.requester_operator()||nonce.next_nonce<=misaka_palw_kernel::flat_execution11::canonical_nonce_v11(&book.job().nonce)?
+        ||book.requester_operator()==book.producer_operator()||book.final_policy_root()==[0;64]{
+        return Err("stage28 audit Final/nonce/original debit/single Stage28 credit agreement differs".into());
+    }
+    let mut audit_rows=Vec::new();
+    for(table,k)in[(STAGE_TABLE_V14,ck),(STAGE_TABLE_V14,hk),(STAGE_TABLE_V14,rk),(crate::palw_flat_execution_v11::EXECUTION_REQUEST_INDEX_TABLE_V11,nk)]{
+        let bytes=rows.get(&(table,k.clone())).ok_or("stage28 audit original row missing")?.clone();audit_rows.push(NativeAuditRowV27{table,key:k,bytes});
+    }
+    let (state_root,ledger_root,aux_root)=roots;
+    Ok(NativeExecutionAuditRecordV27{
+        version:27,namespace:28,network_domain,daa,state_root,ledger_root,aux_root,class:h.class,source:ch.source,program:ch.bundle,real_parameter:ch.source,inventory:ch.source,
+        job:id,funding:h.original,original_escrow_debit:s.escrow_debit,original_escrow_receipt:h.original,original_consent:book.consent(),
+        original_final_policy:book.final_policy_root(),original_final_basis:book.final_basis_root(),maximum_scope:book.maximum_scope_root(),maximum_resource:book.maximum_resources_root(),
+        actual_scope:book.actual_scope_root(),actual_resource:book.actual_resources_root(),claim:book.claim().unwrap(),vector:book.claim().unwrap(),
+        trace:object_id(b"misaka-palw/native/audit-stage-trace-image/v28",&data.trace),output:book.claim().unwrap(),terminal_book:book.root(),
+        settlement:object_id(b"misaka-palw/native/audit-stage-settlement/v28",s),credit:object_id(b"misaka-palw/native/audit-single-credit/v28",&(s,queue,payload)),
+        producer_credit:s.producer_credit,requester_operator:book.requester_operator(),producer_operator:book.producer_operator(),consumed_nonce:book.job().nonce,
+        next_nonce:nonce.next_nonce,established_daa:s.established,payout_payload:h.producer_payout.as_bytes(),payout_queue:queue.as_bytes(),
+        observed_queue_amount:payouts.get(&queue).filter(|p|p.payload==h.producer_payout).map(|p|p.amount),rows:audit_rows,
+    })
+}

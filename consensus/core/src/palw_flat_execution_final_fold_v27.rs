@@ -376,6 +376,20 @@ impl PalwChainStateV2 {
             )?;
             return CheckedNativeExecutionAuditViewV27::from_native_rows(record);
         }
+        // Stage28 component Finals: their own namespaced job header (stage table, kind 5).
+        if !rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&id)))
+            && rows.contains_key(&(crate::palw_flat_stage_v14::STAGE_TABLE_V14, key(&(28u8, 5u8, id))))
+        {
+            let record = super::super::palw_flat_stage_fold_v14::audit_record_from_rows_v28(
+                rows,
+                network_domain,
+                daa,
+                (state_root, ledger_root, aux_root),
+                payouts,
+                id,
+            )?;
+            return CheckedNativeExecutionAuditViewV27::from_native_rows(record);
+        }
         let raw = rows.get(&(EXECUTION_JOB_TABLE_V11, key(&id))).ok_or("native audit original job absent")?;
         let row = decode_native_execution_job_v11(raw)?;
         if row.header.job_id != id {

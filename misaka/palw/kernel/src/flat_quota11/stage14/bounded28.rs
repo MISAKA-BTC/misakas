@@ -113,6 +113,11 @@ impl StageJobBookV28 {
     pub fn source_plan_root(&self)->Digest {self.source_plan}
     pub fn caller_source_root(&self)->Digest {self.caller_source}
     pub fn paged_plan_root(&self)->Digest {self.paged_plan}
+    /// Read-only roots for independent audit extraction (no state/consensus meaning change).
+    pub fn maximum_scope_root(&self)->Digest {self.maximum_scope}
+    pub fn maximum_resources_root(&self)->Digest {self.maximum_resources}
+    pub fn actual_scope_root(&self)->Digest {self.actual_scope}
+    pub fn actual_resources_root(&self)->Digest {self.actual_resources}
     pub fn final_policy_root(&self)->Digest {self.final_policy}
     pub fn final_basis_root(&self)->Digest {self.final_basis}
     pub fn physical_root(&self)->Digest {self.physical}
