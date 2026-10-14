@@ -83,3 +83,44 @@ pub(crate) async fn inspect(ctx: &Ctx, context: &str, ledger_root: &str, aux_roo
     }
     Ok(())
 }
+
+/// Export the exact op-211 kernel route snapshot for offline signed drafting (`palw-class claim-v2 --snapshot`). The served rows
+/// are reconstructed against the caller's pinned roots first; a mismatch writes nothing. The file is created exclusively and
+/// synced, and records no authority beyond those caller-pinned roots.
+pub(crate) async fn snapshot(ctx: &Ctx, ledger_root: &str, aux_root: &str, out: &std::path::Path) -> CliResult {
+    use std::io::Write;
+    let hash =
+        |value: &str, name| Hash64::from_str(value).map_err(|_| CliError::new(exit::CONFIG, format!("{name} must be a 64-byte root")));
+    let expected_ledger = hash(ledger_root, "ledger-root")?;
+    let expected_aux = hash(aux_root, "aux-root")?;
+    let nv = crate::wallet::connect(ctx).await?;
+    let (snapshot, rows) = super::model_complete::kernel_snapshot(&nv).await?;
+    if (snapshot.ledger_root, snapshot.aux_root) != (expected_ledger, expected_aux) {
+        return Err(CliError::new(exit::GENERIC, "served kernel inventory differs from the caller's pinned route roots"));
+    }
+    PalwKernelRouteStateV1::from_served_rows_v1(&snapshot.header, rows.clone(), &expected_ledger, &expected_aux)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("kernel route verification: {e}")))?;
+    let bytes = borsh::to_vec(&(snapshot.header.clone(), rows))
+        .map_err(|e| CliError::new(exit::GENERIC, format!("snapshot encoding: {e}")))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(out)
+        .map_err(|e| CliError::new(exit::CONFIG, format!("{}: {e}", out.display())))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", out.display())))?;
+    let report = serde_json::json!({
+        "schema":"misaka.palw.kernel-snapshot.export.v1",
+        "out":out.display().to_string(), "bytes":bytes.len(),
+        "servedTipDaa":snapshot.tip_daa,
+        "ledgerRoot":expected_ledger.to_string(), "auxRoot":expected_aux.to_string(),
+        "verification":"caller-pinned-route-roots",
+    });
+    if ctx.output == OutputFormat::Json {
+        println!("{report}");
+    } else {
+        println!("wrote {} ({} bytes) for ledger {expected_ledger} / aux {expected_aux}", out.display(), bytes.len());
+    }
+    Ok(())
+}

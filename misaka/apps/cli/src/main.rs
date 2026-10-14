@@ -807,6 +807,19 @@ enum SourceCmd {
         #[arg(long, value_name = "ROOT")]
         aux_root: String,
     },
+    /// Write the complete op-211 kernel route snapshot `(header, rows)` that offline `palw-class claim-v2 --snapshot`
+    /// consumes, after reconstructing it against the caller's pinned roots. The file is not chain authority by itself.
+    Snapshot {
+        /// Ledger root from the caller's authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        ledger_root: String,
+        /// Auxiliary root from the same authenticated chain view.
+        #[arg(long, value_name = "ROOT")]
+        aux_root: String,
+        /// New file (refused if it exists).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -3314,6 +3327,9 @@ async fn run_cli() -> std::process::ExitCode {
         }),
         Command::Model(ModelCmd::Source(SourceCmd::Inspect { context, ledger_root, aux_root })) => {
             Box::pin(async move { operator::model_source::inspect(ctx, &context, &ledger_root, &aux_root).await })
+        }
+        Command::Model(ModelCmd::Source(SourceCmd::Snapshot { ledger_root, aux_root, out })) => {
+            Box::pin(async move { operator::model_source::snapshot(ctx, &ledger_root, &aux_root, &out).await })
         }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {
