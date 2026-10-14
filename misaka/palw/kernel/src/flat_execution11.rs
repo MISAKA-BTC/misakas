@@ -116,7 +116,7 @@ impl ExecutionPolicyV11 {
 }
 /// Fixed authenticated BindModelArtifactV2 header supplied by native state.
 /// Its original binder liability may expire; each new claim has its own reserve.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeSourceBindingV11 {
     pub descriptor: Digest,
     pub program_root: Digest,

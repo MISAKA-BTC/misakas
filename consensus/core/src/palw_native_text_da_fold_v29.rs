@@ -613,7 +613,7 @@ pub(super) fn answer(
                 let shape: Vec<_> = l.shape.iter().map(|n| usize::try_from(*n).ok()).collect::<Option<_>>().unwrap_or_default();
                 *kind == 2
                     && l.axis == *axis
-                    && LayoutV3::try_of(&shape).and_then(|layout| layout.leaf_index(l.axis, l.line, l.tile)) == Some(*index)
+                    && LayoutV3::try_of(&shape).map(|layout| layout.leaf_index(l.axis, l.line, l.tile)) == Some(*index)
                     && l.authenticates(&d.pc)
             }
             Err(_) => false,

@@ -501,15 +501,15 @@ mod tests {
         // The shared loader is the same factory, and the mixing check refuses every other identity.
         let loaded = load_isolated_native_calibration_v34(&base, &bytes, wire.root()).unwrap();
         assert_eq!(loaded.consensus_params_id(), p.consensus_params_id());
-        let (id, sched, gen) =
+        let (id, sched, genesis_hex) =
             (p.consensus_params_id().to_string(), p.consensus_schedule_id().to_string(), p.genesis.hash.to_string());
-        assert!(check_same_owning_ruleset_v34(&loaded, &id, &sched, &gen).is_ok());
-        assert!(check_same_owning_ruleset_v34(&loaded, &base.consensus_params_id().to_string(), &sched, &gen).is_err());
+        assert!(check_same_owning_ruleset_v34(&loaded, &id, &sched, &genesis_hex).is_ok());
+        assert!(check_same_owning_ruleset_v34(&loaded, &base.consensus_params_id().to_string(), &sched, &genesis_hex).is_err());
         assert!(check_same_owning_ruleset_v34(&loaded, &id, &sched, &base.genesis.hash.to_string()).is_err());
         let mut other_policy = wire.clone();
         other_policy.final_policy.finder_profit_margin_sompi += 1;
         if let Ok(q) = other_policy.apply(&base, other_policy.root()) {
-            assert!(check_same_owning_ruleset_v34(&q, &id, &sched, &gen).is_err());
+            assert!(check_same_owning_ruleset_v34(&q, &id, &sched, &genesis_hex).is_err());
         }
     }
     #[test]

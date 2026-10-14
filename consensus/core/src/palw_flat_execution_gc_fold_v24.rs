@@ -46,7 +46,7 @@ fn charge_removed(
     }
     let epoch = TrustedEpochV11::from_chain(&p.quota, ctx.block.as_bytes(), ctx.daa_score).map_err(refused)?;
     let mut shard = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), job)?;
-    shard.debit_ordinary(&p.quota, &epoch, &q).map_err(refused)?;
+    shard.debit_ordinary(&p.quota, &epoch, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(refused)?;
     write_shard(builder, &shard, job);
     Ok(true)
 }

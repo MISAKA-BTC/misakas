@@ -111,11 +111,11 @@ fn basis(
         maximum_court_bytes: c.source_court_bound.max_proof_bytes.max(view.scope.worst_court_bytes),
         maximum_court_work: c
             .source_court_bound
-            .max_work
+            .work
             .max(u64::try_from(q.get(A::CourtWork)).map_err(|_| refused("native Final27 court work overflow"))?),
         maximum_court_scratch: c
             .source_court_bound
-            .max_scratch_bytes
+            .scratch_bytes
             .max(u64::try_from(q.get(A::CourtScratchBytes)).map_err(|_| refused("native Final27 court RAM overflow"))?),
     };
     let policy = policy(builder, builder.state.kernel_route.as_ref().unwrap().header.scalars.daa)?;

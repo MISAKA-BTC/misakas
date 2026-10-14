@@ -73,14 +73,14 @@ impl QuotaQuantitiesV11 {
         }
         Ok(value)
     }
-    fn checked_mul(&self, times: u32) -> Result<Self, String> {
+    pub fn checked_mul(&self, times: u32) -> Result<Self, String> {
         let mut value = Self::default();
         for (out, a) in value.0.iter_mut().zip(self.0.iter()) {
             *out = a.checked_mul(times as u128).ok_or("quota multiplication overflow")?;
         }
         Ok(value)
     }
-    fn within(&self, cap: &Self) -> Result<(), String> {
+    pub fn within(&self, cap: &Self) -> Result<(), String> {
         for axis in ResourceAxisV10::ALL {
             if self.get(axis) > cap.get(axis) {
                 return Err(format!("quota cap exceeded: {axis:?}"));
@@ -833,6 +833,11 @@ pub struct DerivedOrdinaryMetadataV11 {
 impl DerivedOrdinaryMetadataV11 {
     pub fn quantities(&self) -> &QuotaQuantitiesV11 {
         &self.quantities
+    }
+    /// Native folds that derive a fixed ordinary restore/journal envelope from
+    /// authenticated original extents (not a wire declaration) wrap it here.
+    pub fn from_native_envelope(quantities: QuotaQuantitiesV11) -> Self {
+        Self { quantities }
     }
 }
 pub fn derive_ordinary_metadata_v11(program: &TirProgramV1, pc: &ParamCommitmentsV1) -> Result<DerivedOrdinaryMetadataV11, String> {

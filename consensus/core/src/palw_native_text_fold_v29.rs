@@ -103,7 +103,7 @@ fn class(builder: &TransitionBuilder<'_>, id: Digest) -> Result<(ClassHeader, Na
         return Err(refused("text29 original class byte extent differs"));
     }
     let wire = decode_register(raw)?;
-    let program = TirProgramV1::decode(&wire.program_bytes).map_err(|e| refused(e.to_string()))?;
+    let program = TirProgramV1::decode_canonical(&wire.program_bytes).map_err(|e| refused(e.to_string()))?;
     let s = h.original_source.clone();
     if h.class.id() != id
         || s.refuted
@@ -183,7 +183,7 @@ fn register(
         return Ok(());
     }
     let wire = decode_register(body)?;
-    let program = TirProgramV1::decode(&wire.program_bytes).map_err(|e| refused(e.to_string()))?;
+    let program = TirProgramV1::decode_canonical(&wire.program_bytes).map_err(|e| refused(e.to_string()))?;
     let r = builder.state.kernel_route.as_ref().unwrap();
     let s = source(r, wire.source_binding)?;
     if s.refuted
