@@ -5337,6 +5337,23 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **Below Final27, funded actions 25..=40 ride unjudged** (project rule: a new kind is neither
+    /// rejected nor applied below its own fence — rejecting it would split from a release that does not
+    /// know it). The predicate is exactly the one that leaves `PalwKernelRouteExtrasV1::native_final`
+    /// `None` (Final27 active AND the OPV fence active), and the core fold returns before any state read
+    /// or write when that field is `None`, so skipping the signature here can never apply an unsigned body.
+    pub(super) fn palw_native_action_unjudged_at_v1(&self, bytes: &[u8], daa: u64) -> bool {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        let final27 = self
+            .palw_native_final_v27
+            .as_ref()
+            .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
+            && self.palw_kernel_opv_at(daa);
+        !final27
+            && bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
+            && bytes.get(2).is_some_and(|a| (25..=40).contains(a))
+    }
+
     pub(super) fn palw_kernel_route_object_is_signed(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -5353,6 +5370,9 @@ impl VirtualStateProcessor {
         // Consumer-owned opaque namespaces are gated from their fixed tag
         // before signature work or any body allocation. Typed body validation
         // and its expensive work belong to the prepaid native transition.
+        if self.palw_native_action_unjudged_at_v1(bytes, daa_score) {
+            return Ok(());
+        }
         if self.palw_native_action_active_at_v1(state, bytes, daa_score) == Some(false) {
             return Err("a native execution object is refused before its owning fence".into());
         }

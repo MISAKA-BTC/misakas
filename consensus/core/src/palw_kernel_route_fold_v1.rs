@@ -927,6 +927,15 @@ pub(super) fn apply_kernel_route_object_v1(
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
     }
+    // Funded actions 25..=40 below Final27 (native_final absent) are opaque: validation did not check
+    // their signature, so they must have ZERO state effect — no bond, budget, row or fee read/write.
+    // Mirrors `palw_native_action_unjudged_at_v1` in the processor exactly.
+    if builder.extras.kernel_route.as_ref().is_some_and(|e| e.native_final.is_none())
+        && bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
+        && bytes.get(2).is_some_and(|a| (25..=40).contains(a))
+    {
+        return Ok(());
+    }
     // A malformed or over-size encoding, or a signer that is no Active bond, is a dropped object.
     if bytes.len() > PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 {
         return Ok(());

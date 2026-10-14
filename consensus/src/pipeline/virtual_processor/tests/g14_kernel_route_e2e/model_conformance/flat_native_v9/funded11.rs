@@ -128,3 +128,36 @@ async fn execution11_native_commit_binds_original_job_input_and_reserves_produce
     let replay = net.replay().await;
     net.assert_same(&replay, "native exact committed job and closed incomplete Final");
 }
+
+/// Project rule (new kinds ride unjudged below their own fence): with the funded fence active but
+/// Final27 ABSENT, every funded action 25..=40 — well-signed or with a corrupted signature, with a
+/// garbage body — is carried in a VALID block and has ZERO state effect. Unverified source checkpoint
+/// (2026-10-15): written during the code-first phase; it runs in the consolidated validation phase.
+#[tokio::test]
+async fn native_final27_actions_below_their_fence_are_neither_rejected_nor_applied() {
+    let mut net = Net::over_cfg(native_config(), TestConsensus::new);
+    assert!(net.api().is_some(), "kernel route in force");
+    let native = |net: &Net| -> Vec<((u8, Vec<u8>), Vec<u8>)> {
+        net.api()
+            .unwrap()
+            .aux
+            .iter()
+            .filter(|((table, _), _)| (87..=112).contains(table))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    };
+    let before = native(&net);
+    let bonds_before = net.chain.tip_state().1.bond(&net.bond(0)).map(|b| b.collateral);
+    for action in 25u8..=40 {
+        let mut object = net.route(0, &K::FundedExecutionV11 { action, body: vec![action; 300] });
+        if action % 2 == 1 {
+            let Obj::KernelRouteV1 { signature, .. } = &mut object else { unreachable!() };
+            let last = signature.len() - 1;
+            signature[last] ^= 0x01; // an unsigned body must still never be applied
+        }
+        // `send` asserts the node's mempool and template carry it, and the block it folds in is valid.
+        net.send(vec![(0, object)]).await;
+    }
+    assert_eq!(native(&net), before, "below Final27 the opaque actions change no native row");
+    assert_eq!(net.chain.tip_state().1.bond(&net.bond(0)).map(|b| b.collateral), bonds_before, "no fee or predebit");
+}
