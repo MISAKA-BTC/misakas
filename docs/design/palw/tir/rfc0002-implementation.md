@@ -3469,3 +3469,34 @@ carry Final-class bodies — transport decision), register/seat chain-audit
 exporters, v8 history long-context typed graph and RFC03 patch/audio lengths.
 Validation still owns every measured calibration root, A6/A8 cohorts and the
 two receipt windows. D_all remains 0/128 end-to-end measured.
+
+### Lead defaults and remaining code (Claude, 2026-10-15, second pass) — unverified source checkpoint
+
+Each item below is a **lead default pending user review** (reversible); see
+[II.14.59](../../../rfc/0002-palw-tensor-ir.md#ii1459-versioned-length-fields-and-lead-defaults-2026-10-15).
+No build/test/node run; nothing armed; public presets unchanged.
+
+- **Stage28 independent Final/redemption.** `audit_record_from_rows_v28` extracts namespace-28
+  Finals carrying the Stage28 credit identifier; redemption33 skips only the v27 identity
+  re-derivation for namespace 28; SDK accepts 28. Kernel book gained read-only root getters.
+- **Master32 composite at audit time.** `derive_native_master_composite_v32` (core),
+  `native_master_v32` (SDK), `palw-class audit-master-composite32`; bounded public output
+  transport `decode_native_master_outputs_v32`. No on-chain carrier; not a consensus object.
+- **Local qualified validation preset.** `NativeFinalPurposeV34::LocalQualifiedValidation`
+  (isolated genesis binding, Qualified conditions), `local_validation_snapshot_v34`, parser
+  `parse_calibrations_json_v34`, `palw-class native-calibration34`. Loader still refuses the
+  public `Qualified` purpose.
+- **Below-fence pass-through.** `palw_native_action_unjudged_at_v1` (validation) and the
+  matching early return in `apply_kernel_route_object_v1`; node test source
+  `native_final27_actions_below_their_fence_are_neither_rejected_nor_applied` (valid blocks,
+  unchanged native rows and collateral, including corrupted signatures).
+- **Register/seat exporters.** `derive_native_lifecycle_anchor_v32` with Text29/Stage28 row
+  readers, SDK `native_lifecycle_v32`, `palw-class audit-native-lifecycle32`, fetch
+  `--lifecycle-only true`, and `native_chain_audit_v3.py` now covers register, seat, final and
+  redemption — no chain stage is NOT_RUN for lack of code.
+- **Length versioning.** Kernel `flat_lengths36` (FrozenV1 / Window8 rules, token/patch/audio
+  axes, fenced media refusal) and test source `tests/flat_lengths36.rs`.
+
+Remaining code (design-scale): complete typed v8 graph (HistAppend continuity, KV/state
+binding) and its class version adopting contract 36; RFC03 patch/audio typed stage contracts
+and fence. Everything else listed is validation-phase work.

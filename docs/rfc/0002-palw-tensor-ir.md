@@ -4482,3 +4482,51 @@ remain part of the completion and A6/A8 evidence.
    whose announced params fingerprint, schedule id or genesis differs from its own
    reconstruction. A qualified Final requires a shipping network whose Final27 policy
    has the `Qualified` purpose; no preset has one, and creating one is a user decision.
+
+### II.14.59 Versioned length fields and lead defaults (2026-10-15)
+
+> **Change marker — 2026-10-15 (RFC text amended).** Items 1–4 are *lead defaults
+> pending user review* (reversible). Implementation is an unverified source checkpoint.
+> No public preset, fence or release height changes.
+
+**Versioned length fields (normative).** A job length is never reinterpreted: a change of
+maximum, history growth rule or modality unit is a new contract version. Contract 36
+(`LengthContractV36`) binds the program root, a history rule, the maximum positions and one
+declaration per modality axis:
+
+| Field | Meaning |
+| --- | --- |
+| `rule = FrozenV1 { history_bound }` | v1 semantics unchanged: `maximum_positions ≤` the program's frozen `history_bound` |
+| `rule = Window8 { plan, window, selection_cap }` | the v8 window/selection relation (`flat_history8`); the plan root binds graph coordinates, row shape, window and cap; cost and evidence bounds are derived from that plan **at the requested maximum** (`HistorySelectionPlanV8::scope`) |
+| `token { maximum, unit_bytes = 4, profile = 0 }` | exact u32-id axis, `maximum ≤ maximum_positions` |
+| `patch` / `audio { maximum, unit_bytes, profile }` | RFC03 axes: committed bytes per patch / audio frame and the RFC03 encoding/preprocessing profile root |
+
+A job commits its actual lengths before Fund (`check_actual`): every present axis is
+`1..=maximum`, every absent axis is 0, and no claim or later slice can enlarge them. The
+RFC03 patch/audio axes decode (so their bytes ride unjudged below their fence) but are refused
+by name until their typed stage contract and fence ship (`MEDIA_LENGTHS_ARMABLE_V36 = false`).
+A Text/Stage class that adopts contract 36 is itself a new class version; existing
+Text29/Stage28 classes keep their v1/v28 meanings. Still open: the complete typed v8 graph
+(HistAppend continuity, KV/state binding) and the RFC03 media stage contracts.
+
+**Lead defaults (pending user review).**
+1. *Stage28 credit identity.* Stage28 keeps its own credit identifier (fixed before its
+   settlement exists). The audit record carries it as `payout_queue` with `namespace = 28`;
+   audit extraction authenticates it against the original header and the immutable kind-14
+   receipt; redemption33 skips only the v27 re-derivation for namespace 28. No consensus change.
+2. *Master32 composite Final.* Composed at audit time from the components' individually
+   genuine, settled Stage28 Finals in one pinned state's verified rows, the owning Stage28 policy
+   and public tokens/outputs (each output authenticated against its component's trace
+   openings). The composite is **not a consensus object**: no carrier, row or credit.
+3. *Qualified Finals for validation.* A LOCAL purpose `LocalQualifiedValidation` judges Finals
+   under the Qualified conditions but is bound to an isolated devnet genesis and loadable only
+   through the v34 snapshot path (`palw-class native-calibration34 --purpose local-qualified`).
+   It is never a public preset, t12/mainnet or release height. Reports mark
+   `local_qualified_validation_network`.
+4. *Below-fence rule.* While Final27 is inactive, funded actions 25–40 are neither rejected nor
+   applied: validation passes them unjudged and the fold returns before any read or write, using
+   the identical predicate (Final27 active ∧ OPV active).
+
+**Real-checkpoint chain stages.** Register (class bound to a mature unrefuted source with its
+derived maxima) and seat (job funded with the producer's original consent — the Panel-free
+lane's seat) are re-derived from the same verified full aux opening as Final and redemption.

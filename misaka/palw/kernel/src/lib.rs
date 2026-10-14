@@ -107,6 +107,7 @@ pub mod flat_execution11;
 pub mod flat_history8;
 pub mod flat_inputs12;
 pub mod flat_lengths7;
+pub mod flat_lengths36;
 pub mod flat_point9;
 pub mod flat_point25;
 pub mod flat_price15;
