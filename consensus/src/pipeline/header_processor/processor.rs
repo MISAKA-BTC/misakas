@@ -153,6 +153,8 @@ pub struct HeaderProcessor {
     /// `PXE2` envelope and no other, and a block that is not a lane block names no lane block as a parent. `None` on every shipped
     /// preset.
     pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// RFC-0008 `palw_monetary_material_v1`: where the owned PAV3 attempt carriage is a lane form (second lock beside the shape gate).
+    pub(super) palw_native_material_v3: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
     /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
     pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -282,6 +284,7 @@ impl HeaderProcessor {
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_exec_v2: params.palw_exec_payload_v2_fence(),
+            palw_native_material_v3: params.palw_monetary_material_v1.as_ref().map(|fence| fence.activation),
             palw_attempt_activation: params.palw_attempt_activation,
             palw_single_lottery: params.palw_single_lottery,
             palw_attempt_header_pins: params.palw_attempt_header_pins.and_then(|fence| match &params.palw_consensus_mode {

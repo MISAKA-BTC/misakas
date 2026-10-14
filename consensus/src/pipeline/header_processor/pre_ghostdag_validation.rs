@@ -283,6 +283,17 @@ impl HeaderProcessor {
             .map(|(_, state_params)| state_params);
         let receipt_v4_active = self.palw_receipt_spend_v4.is_some_and(|fence| fence.is_active(header.daa_score));
         let exec_v2_active = self.palw_exec_v2.is_some_and(|fence| fence.is_active(header.daa_score));
+        // RFC-0008 PAV3, the by-name second lock: below `palw_monetary_material_v1` the shape gate already refused this carriage as
+        // the live build does (a PAV2 decode, refused for its magic); this names it, and never reaches the stateless arm.
+        if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+            && kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment)
+            && !self.palw_native_material_v3.is_some_and(|fence| fence.is_active(header.daa_score))
+        {
+            return Err(RuleError::BadPalwCarriageAdmission {
+                algo_id: header.pow_algo_id,
+                reason: "a PAV3 native custody carriage below palw_monetary_material_v1".into(),
+            });
+        }
         palw_carriage_stateless_v2(
             header,
             attempt_lane,
