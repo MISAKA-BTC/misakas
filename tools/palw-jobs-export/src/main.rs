@@ -14,7 +14,7 @@
 //! row, never papered over.
 use kaspa_consensus_core::hashing::header::{hash as header_hash, pre_pow_hash_64};
 use kaspa_consensus_core::header::Header;
-use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2_for};
+use kaspa_consensus_core::palw_attempt_v2::{attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2_for};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 // The material decoders are gone with the reads that used them: this tool derives the anchor
@@ -176,7 +176,9 @@ fn main() {
             hash_mismatch += 1;
             continue; // a mis-assembled header would derive a WRONG prompt; refuse, never guess
         }
-        let Ok(envelope) = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) else { continue };
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment) else {
+            continue;
+        };
         let a = &envelope.attempt;
         let class_hex = a.class_id.to_string();
         let (vocab, job, name) = if class_hex == QWEN36_CLASS {

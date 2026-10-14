@@ -25,11 +25,37 @@ pub struct DurableMonetaryMaterialProviderV1 {
 impl DurableMonetaryMaterialProviderV1 {
     /// Prospective consent is immutable. Ready binds the actual one-claim capture
     /// only after the whole typed bundle has been atomically published.
-    pub fn prepare_native_ready_v3(&mut self,provider:PalwBondKeyV2,row:&kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,ready:&kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialReadyV3,bundle:&PalwHeldMaterialBundleV1,authority:kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1)->Result<Hash64,String> {
-        if row.terms.root!=ready.session || row.consent!=ready.consent || row.terms.native_session.is_none() || row.native_binding.is_some() || !ready.providers.contains(&provider) || bundle.claim!=ready.binding.claim || row.terms.max_material_bytes>self.max_contract_bytes {return Err("provider prospective session or exact ready differs".into())}
-        let mut candidate=self.store.clone();
-        candidate.admit_held(row.consent,&ready.binding.manifest,row.terms.max_material_bytes,self.total_capacity,std::slice::from_ref(bundle),|id|(id==bundle.claim).then_some(authority)).map_err(|e|e.to_string())?;
-        self.publish(candidate)?;Ok(ready.id())
+    pub fn prepare_native_ready_v3(
+        &mut self,
+        provider: PalwBondKeyV2,
+        row: &kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialReadyV3,
+        bundle: &PalwHeldMaterialBundleV1,
+        authority: kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1,
+    ) -> Result<Hash64, String> {
+        if row.terms.root != ready.session
+            || row.consent != ready.consent
+            || row.terms.native_session.is_none()
+            || row.native_binding.is_some()
+            || !ready.providers.contains(&provider)
+            || bundle.claim != ready.binding.claim
+            || row.terms.max_material_bytes > self.max_contract_bytes
+        {
+            return Err("provider prospective session or exact ready differs".into());
+        }
+        let mut candidate = self.store.clone();
+        candidate
+            .admit_held(
+                row.consent,
+                &ready.binding.manifest,
+                row.terms.max_material_bytes,
+                self.total_capacity,
+                std::slice::from_ref(bundle),
+                |id| (id == bundle.claim).then_some(authority),
+            )
+            .map_err(|e| e.to_string())?;
+        self.publish(candidate)?;
+        Ok(ready.id())
     }
     pub fn prepare_material(
         &mut self,

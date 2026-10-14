@@ -6138,11 +6138,14 @@ try_from!(item: &protowire::GetPalwMonetaryMaterialResponseMessage, RpcResult<ka
 });
 #[cfg(test)]
 mod monetary_material_grpc_tests {
- use super::*;
- #[test]
- fn monetary_cursor_and_fragment_table_are_exact() {
-  let q=kaspa_rpc_core::GetPalwMonetaryMaterialRequest {block_hash:"ab".repeat(64),row:8,offset:123,limit_bytes:1024};
-  let wire:protowire::GetPalwMonetaryMaterialRequestMessage=(&q).into();let back:kaspa_rpc_core::GetPalwMonetaryMaterialRequest=(&wire).try_into().unwrap();assert_eq!((back.row,back.offset,back.limit_bytes),(8,123,1024));
-  let fragment=protowire::RpcPalwMonetaryAuxFragment {table:256,..Default::default()};assert!(kaspa_rpc_core::RpcPalwMonetaryAuxFragment::try_from(&fragment).is_err());
- }
+    use super::*;
+    #[test]
+    fn monetary_cursor_and_fragment_table_are_exact() {
+        let q = kaspa_rpc_core::GetPalwMonetaryMaterialRequest { block_hash: "ab".repeat(64), row: 8, offset: 123, limit_bytes: 1024 };
+        let wire: protowire::GetPalwMonetaryMaterialRequestMessage = (&q).into();
+        let back: kaspa_rpc_core::GetPalwMonetaryMaterialRequest = (&wire).try_into().unwrap();
+        assert_eq!((back.row, back.offset, back.limit_bytes), (8, 123, 1024));
+        let fragment = protowire::RpcPalwMonetaryAuxFragment { table: 256, ..Default::default() };
+        assert!(kaspa_rpc_core::RpcPalwMonetaryAuxFragment::try_from(&fragment).is_err());
+    }
 }

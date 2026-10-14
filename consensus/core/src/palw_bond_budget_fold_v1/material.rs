@@ -281,9 +281,10 @@ impl TransitionBuilder<'_> {
             if let PalwDeltaEntryV2::KernelRouteRow { table, old, new, .. } = entry
                 && *table == crate::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_TABLE_V1
             {
-                for bytes in [old,new].into_iter().flatten() {
-                    let row: crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1 = borsh::from_slice(bytes)
-                        .map_err(|_|PalwStateV2Error::CarriageInconsistent("monetary material retirement row does not decode".into()))?;
+                for bytes in [old, new].into_iter().flatten() {
+                    let row: crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1 = borsh::from_slice(bytes).map_err(|_| {
+                        PalwStateV2Error::CarriageInconsistent("monetary material retirement row does not decode".into())
+                    })?;
                     roots.extend(self.state.monetary_material_scope_v1(&row));
                 }
             }

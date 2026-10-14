@@ -193,10 +193,10 @@ mod palw_bond_budget_fold_v1;
 mod palw_adapter_class_fold_v1;
 // RFC-0010: the permissionless Panel's (V3) production fold — a child module, so it reads the builder and writes the tables only
 // through their one writers.
-#[path = "palw_panel_source_fee_fold_v2.rs"]
-mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_lifetime_fold_v2.rs"]
 mod palw_panel_lifetime_fold_v2;
+#[path = "palw_panel_source_fee_fold_v2.rs"]
+mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
 mod palw_panel_v3_fold_v1;
 pub use palw_panel_v3_fold_v1::{
@@ -12525,7 +12525,7 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
-    monetary_native_ready: BTreeMap<Hash64,(Hash64,crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
+    monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
@@ -13854,17 +13854,33 @@ fn apply_palw_transition_v7_inner(
     let mut builder =
         TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
 
-    // Prospective custody is authenticated against the pre-object parent. A
-    // same-block enrollment/replacement never authorizes this block's capture.
+    // Prospective custody is authenticated against the pre-object parent. A same-block
+    // enrollment/replacement never authorizes this block's capture. A carriage that does not
+    // authenticate under THIS parent (a merged blue captured against its own, different prior
+    // view; a consumed or replaced session) records nothing: its attempt then meets
+    // `plan_native_ready`'s refusal and is skipped like any refused own/merged attempt. It never
+    // fails the merging block's whole transition, which a third party's blue could otherwise force.
     if params.monetary_material_at_v1(ctx.daa_score).is_some() {
         for bytes in extras.exec_v2_origin_headers.values() {
-            let header:crate::header::Header=borsh::from_slice(bytes).map_err(|_|PalwStateV2Error::ExecV2Refused("native ready origin header malformed".into()))?;
-            if crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
-                let ready=crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment).map_err(PalwStateV2Error::ExecV2Refused)?;
-                let a=&ready.base.attempt;
-                let anchor=crate::palw_attempt_v2::execution_anchor_v3(a.network_domain,crate::hashing::header::pre_pow_hash_64(&header),a.class_id,&a.executor_bond,header.nonce);
-                ready.verify_prior(parent,anchor,header.daa_score,|key,message,sig,context|crate::palw_attempt_material_v3::verify_ready_signature_v3(key,message,sig,context)).map_err(PalwStateV2Error::ExecV2Refused)?;
-                builder.monetary_native_ready.insert(ready.ready.binding.claim,(ready.ready.session,ready.ready.binding));
+            let Ok(header) = borsh::from_slice::<crate::header::Header>(bytes) else { continue };
+            if !crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                continue;
+            }
+            let Ok(ready) = crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)
+            else {
+                continue;
+            };
+            let a = &ready.base.attempt;
+            let anchor = crate::palw_attempt_v2::execution_anchor_v3(
+                a.network_domain,
+                crate::hashing::header::pre_pow_hash_64(&header),
+                a.class_id,
+                &a.executor_bond,
+                header.nonce,
+            );
+            if ready.verify_prior(parent, anchor, header.daa_score, crate::palw_attempt_material_v3::verify_ready_signature_v3).is_ok()
+            {
+                builder.monetary_native_ready.insert(ready.ready.binding.claim, (ready.ready.session, ready.ready.binding));
             }
         }
     }
@@ -17420,8 +17436,10 @@ fn apply_audit_receipt_batch_v1(
         return Err(PalwStateV2Error::AuditReceiptRefused { auditor: *auditor, why });
     }
     for entry in entries {
-        if crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, &entry.claim_id, ctx.daa_score).is_err()
-            || !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry) {
+        if crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, &entry.claim_id, ctx.daa_score)
+            .is_err()
+            || !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry)
+        {
             continue;
         }
         let claim = builder.state.claims.get(&entry.claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(entry.claim_id))?;
@@ -20772,8 +20790,10 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
-    let monetary_ready=palw_monetary_material_fold_v1::plan_native_ready(builder,ctx,claim_id)?;
-    if monetary_ready.is_none() {builder.state.require_native_monetary_material_scope_v1(builder.params,claim_id,&claim)?;}
+    let monetary_ready = palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)?;
+    if monetary_ready.is_none() {
+        builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
+    }
     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
     let claim = match &budget_plan {
@@ -20783,7 +20803,9 @@ fn apply_attempt(
         None => claim,
     };
     let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
-    if let Some(row)=&monetary_ready {palw_monetary_material_fold_v1::bind_native_ready(builder,row);}
+    if let Some(row) = &monetary_ready {
+        palw_monetary_material_fold_v1::bind_native_ready(builder, row);
+    }
     builder.reserve_for_claim(&claim)?;
     if let Some(contract) = consumer_plan {
         builder.commit_paid_consumer_v1(claim_id, contract)?;
@@ -24777,4 +24799,4 @@ mod native_resource_inventory_v1;
 
 #[path = "palw_native_resource_v1/private/wire_carriage.rs"]
 mod native_wire_carriage_v1;
-pub(crate) use native_wire_carriage_v1::{scan_carriage_native_wire_v1,restore_index_native_shape_v1};
+pub(crate) use native_wire_carriage_v1::{restore_index_native_shape_v1, scan_carriage_native_wire_v1};

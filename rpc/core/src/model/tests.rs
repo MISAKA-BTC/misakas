@@ -3245,6 +3245,41 @@ mod mockery {
     }
     test!(GetPalwRewardVestingResponse);
 
+    impl Mock for GetPalwMonetaryMaterialRequest {
+        fn mock() -> Self {
+            Self { block_hash: mock_hex(), row: mock(), offset: mock(), limit_bytes: mock() }
+        }
+    }
+    test!(GetPalwMonetaryMaterialRequest);
+
+    impl Mock for RpcPalwMonetaryAuxFragment {
+        fn mock() -> Self {
+            Self { row: mock(), table: 120, key: vec![7; 64], row_bytes: mock(), offset: mock(), bytes: vec![1, 2, 3] }
+        }
+    }
+    test!(RpcPalwMonetaryAuxFragment);
+
+    impl Mock for GetPalwMonetaryMaterialResponse {
+        fn mock() -> Self {
+            Self {
+                available: mock(),
+                reason: mock_hex(),
+                header: mock(),
+                parent_header: mock(),
+                state_preimage: vec![9; 17],
+                fork_choice_opening: Vec::new(),
+                aux_root: mock_hex(),
+                total_rows: mock(),
+                start_row: mock(),
+                start_offset: mock(),
+                next_row: mock(),
+                next_offset: mock(),
+                fragments: mock(),
+            }
+        }
+    }
+    test!(GetPalwMonetaryMaterialResponse);
+
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {
             RpcPalwModelLifecycle {

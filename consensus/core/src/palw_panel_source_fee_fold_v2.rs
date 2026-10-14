@@ -68,7 +68,8 @@ pub(super) fn fund_panel_sources_v2(
                 continue;
             }
             if let Some(consent) = crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(&builder.state, builder.params, id, claim)
-                .map_err(PalwStateV2Error::KernelRouteRefused)? {
+                .map_err(PalwStateV2Error::KernelRouteRefused)?
+            {
                 if consent.terms.liability_until_daa > target.terms.hold_until {
                     return Err(refuse("the funded source hold does not cover its signed absolute Panel consumer liability"));
                 }

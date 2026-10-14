@@ -13,16 +13,15 @@ pub(super) fn apply_object(
             .iter()
             .any(|entry| matches!(entry, PalwDeltaEntryV2::Class { key, old: None, new: Some(_) } if key == class_id))
     })?;
-    let check_receipt = |id: &Hash64| {
-        crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, id, ctx.daa_score)
-    };
+    let check_receipt =
+        |id: &Hash64| crate::palw_panel_lifetime_v2::require_panel_receipt_time_v2(&builder.state, builder.params, id, ctx.daa_score);
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
         | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
         | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => check_receipt(claim)?,
         PalwConsensusObjectV2::ShardReceiptLicensed { part } => check_receipt(&part.claim)?,
         PalwConsensusObjectV2::TirShardReceiptLicensed { part } => check_receipt(&part.claim)?,
-        _ => {},
+        _ => {}
     }
     match object {
         // ---- RFC-0010: a certified epoch output (tag 120): queued; the V3 stage verifies it against the branch and drops it if

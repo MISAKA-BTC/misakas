@@ -8089,17 +8089,25 @@ impl VirtualStateProcessor {
         let Some(admission) = self.palw_admission_params_v2.as_ref() else {
             return Err("an attempt-lane block on a network with no V2 admission params".to_string());
         };
-        let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).map_err(|e| e.to_string())?;
-        let native_ready=if kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
-            if state_params.monetary_material_at_v1(header.daa_score).is_none() {return Err("PAV3 native custody form below its monetary fence".into())}
-            let ready=kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)?;
-            let anchor=self.palw_execution_anchor_v1(header,&ready.base.attempt);
-            ready.verify_prior(state,anchor,header.daa_score,Self::verify_mldsa87_with_context_bool)?;
-            Some((ready.class_ticket(anchor),ready))
-        } else {
-            if state_params.monetary_material_at_v1(header.daa_score).is_some() {return Err("new native work requires the owned signed PAV3 custody form".into())}
-            None
-        };
+        let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
+            .map_err(|e| e.to_string())?;
+        let native_ready =
+            if kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                if state_params.monetary_material_at_v1(header.daa_score).is_none() {
+                    return Err("PAV3 native custody form below its monetary fence".into());
+                }
+                let ready = kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(
+                    &header.palw_commitment,
+                )?;
+                let anchor = self.palw_execution_anchor_v1(header, &ready.base.attempt);
+                ready.verify_prior(state, anchor, header.daa_score, Self::verify_mldsa87_with_context_bool)?;
+                Some((ready.class_ticket(anchor), ready))
+            } else {
+                if state_params.monetary_material_at_v1(header.daa_score).is_some() {
+                    return Err("new native work requires the owned signed PAV3 custody form".into());
+                }
+                None
+            };
         // **The FULL admission, because the stateful half alone verifies no signature.**
         //
         // `check_palw_attempt_admission_v2` takes no verifier and cannot: its item 2 compares the
@@ -8146,7 +8154,7 @@ impl VirtualStateProcessor {
             // Lane bind-deadlock: item 8 waived for a binder's re-check only.
             {
                 let mut fences = self.palw_epoch_budget_fences_at(point.daa_score);
-                fences.native_material_ticket_v3=native_ready.as_ref().map(|(ticket,_)|*ticket);
+                fences.native_material_ticket_v3 = native_ready.as_ref().map(|(ticket, _)| *ticket);
                 fences.exposure_ceiling_waived = waive_ceiling;
                 fences
             },
@@ -9499,17 +9507,30 @@ impl VirtualStateProcessor {
 
 impl VirtualStateProcessor {
     pub(crate) fn palw_monetary_material_release_delta_v1(
-        &self, root: Hash64, consent: Hash64, tail: Hash64, block: BlockHash,
+        &self,
+        root: Hash64,
+        consent: Hash64,
+        tail: Hash64,
+        block: BlockHash,
     ) -> Result<bool, String> {
         let (_, delta) = self.palw_state_v2_store.read().delta_of(block).map_err(|e| e.to_string())?;
-        if delta.point.block != block { return Err("material release delta substitutes its carrying block".into()); }
+        if delta.point.block != block {
+            return Err("material release delta substitutes its carrying block".into());
+        }
         for entry in &delta.entries {
-            if let kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table: 120, key, old: Some(bytes), new: None } = entry
+            if let kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow {
+                table: 120,
+                key,
+                old: Some(bytes),
+                new: None,
+            } = entry
                 && key.as_slice() == root.as_byte_slice()
             {
                 let row: kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1 =
                     borsh::from_slice(bytes).map_err(|e| e.to_string())?;
-                if row.terms.root == root && row.consent == consent && row.tail_block == Some(tail) { return Ok(true); }
+                if row.terms.root == root && row.consent == consent && row.tail_block == Some(tail) {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)

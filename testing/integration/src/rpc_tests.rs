@@ -1205,6 +1205,29 @@ async fn sanity_test() {
                     assert!(!read.available && !read.native.available && read.exec_rows.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwMonetaryMaterial => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // RFC-0008 monetary material (op 242): an out-of-range page bound or a malformed block is an error before any
+                    // state is read; a well-formed read on a network without the kernel auxiliary commitment answers
+                    // `available: false` with no fragments, never a partial authenticated page.
+                    for limit_bytes in [0, 1023, 1_048_577] {
+                        let bad = GetPalwMonetaryMaterialRequest { limit_bytes, ..Default::default() };
+                        assert!(rpc_client.get_palw_monetary_material_call(None, bad).await.is_err());
+                    }
+                    let bad_block =
+                        GetPalwMonetaryMaterialRequest { block_hash: "zz".to_string(), limit_bytes: 4096, ..Default::default() };
+                    assert!(rpc_client.get_palw_monetary_material_call(None, bad_block).await.is_err());
+                    let read = rpc_client
+                        .get_palw_monetary_material_call(
+                            None,
+                            GetPalwMonetaryMaterialRequest { limit_bytes: 4096, ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.fragments.is_empty() && read.header.is_none());
+                })
+            }
             KaspadPayloadOps::GetPalwExecV2Status => {
                 let rpc_client = client.clone();
                 tst!(op, {

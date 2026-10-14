@@ -339,7 +339,12 @@ impl StateLayer0 {
             palw_attempt_v2: kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
                 .then(|| kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).ok())
                 .flatten(),
-            palw_material_v3: kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id).then(|| kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment).ok()).flatten(),
+            palw_material_v3: kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+                .then(|| {
+                    kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)
+                        .ok()
+                })
+                .flatten(),
             palw_spend_v3: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
                 && !kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment))
             .then(|| kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok())
@@ -433,10 +438,18 @@ impl StateLayer0 {
                 // and timestamp to the position; they just buy nothing.
                 let anchor =
                     execution_anchor_v3(attempt.network_domain, self.pre_pow_hash_64, attempt.class_id, &attempt.executor_bond, nonce);
-                let priced = match &self.palw_material_v3 { Some(wrapper) => {
-                    if wrapper.ready.binding.execution_key != execution_commitment_v3(attempt,anchor) { return Err(PowLayer0Error::PalwCommitmentMalformed {algo_id:self.pow_algo_id,reason:"ready capture does not bind this execution anchor".into()}); }
-                    wrapper.priced_execution(anchor)
-                }, None => execution_commitment_v3(attempt,anchor) };
+                let priced = match &self.palw_material_v3 {
+                    Some(wrapper) => {
+                        if wrapper.ready.binding.execution_key != execution_commitment_v3(attempt, anchor) {
+                            return Err(PowLayer0Error::PalwCommitmentMalformed {
+                                algo_id: self.pow_algo_id,
+                                reason: "ready capture does not bind this execution anchor".into(),
+                            });
+                        }
+                        wrapper.priced_execution(anchor)
+                    }
+                    None => execution_commitment_v3(attempt, anchor),
+                };
                 let tag = l1_tag_v2(priced);
                 buf[..PALW_ATTEMPT_V2_L1_TAG_BYTES].copy_from_slice(&tag);
                 Ok(PALW_ATTEMPT_V2_L1_TAG_BYTES)

@@ -832,7 +832,7 @@ pub fn palw_attempt_from_execution_v1(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 
     /// **One execution covers exactly `2^k` nonces — asserted as the boundary, in both
     /// directions** (ADR-0071 Decision 2, invariant 3).
@@ -951,7 +951,7 @@ mod tests {
     const TS: u64 = 1_700_000_000;
     const NONCE: u64 = 7;
 
-    fn attempt() -> PalwAttemptUnsignedV2 {
+    pub(crate) fn attempt() -> PalwAttemptUnsignedV2 {
         let bond = op(1);
         let class = Hash64::from_u64_word(0xC1);
         PalwAttemptUnsignedV2 {
@@ -973,7 +973,7 @@ mod tests {
         }
     }
 
-    fn envelope(a: PalwAttemptUnsignedV2) -> PalwAttemptEnvelopeV2 {
+    pub(crate) fn envelope(a: PalwAttemptUnsignedV2) -> PalwAttemptEnvelopeV2 {
         PalwAttemptEnvelopeV2 { attempt: a, signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }
     }
 

@@ -396,10 +396,19 @@ pub(crate) fn palw_carriage_stateless_v1(
         // solve attack this function's own doc describes. Which id is a lane at this height
         // is not asked again here; the gate above already refused the closed one by id.
         algo_id if is_palw_attempt_algo_id(algo_id) => {
-            kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
-                .map_err(|e| e.to_string())
-                .and_then(|envelope| {
-                    envelope
+            // A `PAV3` carriage reaches this arm only where `palw_monetary_material_v1` is in force (the
+            // fenced shape gate above refused it below the fence, as the live build does). Its executor
+            // seal over every provider signature is checked HERE, statelessly, for the same reason the
+            // attempt signature is below: those bytes are outside the Layer-0 tag but inside the block
+            // identity. Roster/key membership remains the stateful admission's question.
+            if kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)?
+                    .verify_seal(|key, message, sig, context| {
+                    kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                })?;
+            }
+            kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).and_then(|envelope| {
+                envelope
                             // **The LANE's version, not the compiled-in one** (SA-3). The fenced
                             // shape gate 45 lines above already took it; this call taking
                             // `PALW_ATTEMPT_V2_VERSION` instead made the fence a no-op on the
@@ -414,57 +423,57 @@ pub(crate) fn palw_carriage_stateless_v1(
                                 header.nonce,
                             )
                             .map_err(|e| e.to_string())?;
-                    // **The signature, on the RELAY path** (launch blockers §5).
-                    //
-                    // It was verified only on the chain walk, and the signature sits OUTSIDE
-                    // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
-                    // digest hashes the raw carrier bytes. So anyone could take a solved block, write
-                    // arbitrary bytes of the right length into `signature`, and mint an unbounded number
-                    // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
-                    // work — a byte flip and a re-hash each. They never became chain, which is why the
-                    // chain-walk check was thought sufficient; they did not need to, because the cost of
-                    // making one was zero and the cost of carrying one was everybody else's.
-                    //
-                    // Checkable here because the attempt carries its OWN key: whether that key is the
-                    // named bond's is admission item 2's stateful question, but whether the carrier
-                    // authored this attempt with the key it claims needs no state at all.
-                    envelope
-                        .validate_signature_v2(|key, message, sig, context| {
-                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
-                        })
-                        .map_err(|e| e.to_string())?;
-                    // **ADR-0072 Decision 8, asked where its own harm lives** (mainnet audit
-                    // 2026-09-06, C-1). D8's evidence is a header-stage fact — one unpinned field
-                    // "gave 4,096 distinct tickets and 4,096 distinct Layer-0 tags" — and a Layer-0
-                    // tag under `bits` is a block, a relayed header and a counted difficulty row.
-                    // The pin was placed at the composed admission entry point, which runs in the
-                    // virtual processor and only for a chain candidate, where an unbacked attempt is
-                    // `StatusDisqualifiedFromChain`: not an invalidity, and the row stays. Both of
-                    // the pin's inputs are available here — `state_params` is a network constant and
-                    // the retention pin is an equality against the header's OWN declared DAA score,
-                    // which `pre_pow_validation` validates separately, so a wrong score kills the
-                    // block there rather than making this pin wrong.
-                    //
-                    // And ADR-0071 Decision 2's ceiling, which that ADR says is "a rule" and which
-                    // no rule ever charged: one template may not claim more executions than a
-                    // producer could run against it.
-                    if let Some(state_params) = header_pins {
-                        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_da_pins_v1(
-                            state_params,
-                            &envelope.attempt,
-                            header.daa_score,
-                        )
-                        .map_err(|e| e.to_string())?;
-                        if !kaspa_consensus_core::palw_attempt_v2::palw_attempt_bucket_admits_v1(header.nonce) {
-                            return Err(kaspa_consensus_core::palw_attempt_v2::PalwAttemptV2Error::NonceBucketAboveCeiling {
-                                bucket: kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
-                                ceiling: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_MAX_NONCE_BUCKET_V1,
-                            }
-                            .to_string());
+                // **The signature, on the RELAY path** (launch blockers §5).
+                //
+                // It was verified only on the chain walk, and the signature sits OUTSIDE
+                // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
+                // digest hashes the raw carrier bytes. So anyone could take a solved block, write
+                // arbitrary bytes of the right length into `signature`, and mint an unbounded number
+                // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
+                // work — a byte flip and a re-hash each. They never became chain, which is why the
+                // chain-walk check was thought sufficient; they did not need to, because the cost of
+                // making one was zero and the cost of carrying one was everybody else's.
+                //
+                // Checkable here because the attempt carries its OWN key: whether that key is the
+                // named bond's is admission item 2's stateful question, but whether the carrier
+                // authored this attempt with the key it claims needs no state at all.
+                envelope
+                    .validate_signature_v2(|key, message, sig, context| {
+                        kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                    })
+                    .map_err(|e| e.to_string())?;
+                // **ADR-0072 Decision 8, asked where its own harm lives** (mainnet audit
+                // 2026-09-06, C-1). D8's evidence is a header-stage fact — one unpinned field
+                // "gave 4,096 distinct tickets and 4,096 distinct Layer-0 tags" — and a Layer-0
+                // tag under `bits` is a block, a relayed header and a counted difficulty row.
+                // The pin was placed at the composed admission entry point, which runs in the
+                // virtual processor and only for a chain candidate, where an unbacked attempt is
+                // `StatusDisqualifiedFromChain`: not an invalidity, and the row stays. Both of
+                // the pin's inputs are available here — `state_params` is a network constant and
+                // the retention pin is an equality against the header's OWN declared DAA score,
+                // which `pre_pow_validation` validates separately, so a wrong score kills the
+                // block there rather than making this pin wrong.
+                //
+                // And ADR-0071 Decision 2's ceiling, which that ADR says is "a rule" and which
+                // no rule ever charged: one template may not claim more executions than a
+                // producer could run against it.
+                if let Some(state_params) = header_pins {
+                    kaspa_consensus_core::palw_admission_v2::check_palw_attempt_da_pins_v1(
+                        state_params,
+                        &envelope.attempt,
+                        header.daa_score,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if !kaspa_consensus_core::palw_attempt_v2::palw_attempt_bucket_admits_v1(header.nonce) {
+                        return Err(kaspa_consensus_core::palw_attempt_v2::PalwAttemptV2Error::NonceBucketAboveCeiling {
+                            bucket: kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
+                            ceiling: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_MAX_NONCE_BUCKET_V1,
                         }
+                        .to_string());
                     }
-                    Ok(())
-                })
+                }
+                Ok(())
+            })
         }
         POW_ALGO_ID_PALW_RECEIPT_V3 => {
             kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)

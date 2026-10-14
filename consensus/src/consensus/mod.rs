@@ -1411,7 +1411,14 @@ impl ConsensusApi for Consensus {
         )
     }
 
-    fn palw_native_material_provider_authority_v3(&self,checkpoint:BlockHash,header:&Header,ready:&kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3)->Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3,String> {self.virtual_processor.palw_native_material_provider_authority_v3_impl(checkpoint,header,ready)}
+    fn palw_native_material_provider_authority_v3(
+        &self,
+        checkpoint: BlockHash,
+        header: &Header,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        self.virtual_processor.palw_native_material_provider_authority_v3_impl(checkpoint, header, ready)
+    }
     fn palw_monetary_material_covenants_v1(
         &self,
     ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
@@ -1526,8 +1533,13 @@ impl ConsensusApi for Consensus {
         Ok(true)
     }
 
-    fn palw_monetary_aux_page_v1(&self, block: BlockHash, row: u64, offset: u64, limit: usize)
-        -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+    fn palw_monetary_aux_page_v1(
+        &self,
+        block: BlockHash,
+        row: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
         self.virtual_processor.palw_monetary_aux_page_v1_impl(block, row, offset, limit)
     }
 

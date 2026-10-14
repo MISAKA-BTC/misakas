@@ -210,7 +210,10 @@ pub(super) fn ensure_route_header(builder: &mut TransitionBuilder<'_>, ctx: &Pal
 
 /// **The ledger the block's kernel moves run on**: the route's header created on first use (under the interim policy the processor
 /// resolved), the ledger rebuilt from the rows, the block begun.
-pub(super) fn load_ledger(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
+pub(super) fn load_ledger(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwStateV2Error> {
     load_ledger_with_projection_v9(builder, ctx, None, true)
 }
 
@@ -935,7 +938,11 @@ pub(super) fn apply_kernel_route_object_v1(
 }
 
 pub(super) fn apply_kernel_route_object_authorized_v2(
-    builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, bytes: &[u8], signer: &PalwBondKeyV2, paid_enrollment: bool,
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    bytes: &[u8],
+    signer: &PalwBondKeyV2,
+    paid_enrollment: bool,
 ) -> Result<(), PalwStateV2Error> {
     if builder.extras.kernel_route.is_none() {
         return Err(refused("palw_probabilistic_constraints_v1 is not in force at this block"));
@@ -950,19 +957,32 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
     }
     if !paid_enrollment {
         let job = match &object {
-            KernelRouteObjectV1::CommitClaim { claim, .. } | KernelRouteObjectV1::CommitSegmentedClaim { claim, .. } => Some(claim.job_id),
+            KernelRouteObjectV1::CommitClaim { claim, .. } | KernelRouteObjectV1::CommitSegmentedClaim { claim, .. } => {
+                Some(claim.job_id)
+            }
             KernelRouteObjectV1::CommitPipelineClaim { claim, .. } => Some(claim.job_id),
             KernelRouteObjectV1::CommitClaimSalted { commit, .. } => Some(match commit {
-                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. } | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
+                misaka_palw_kernel::route::SaltedCommitV1::Claim { claim, .. }
+                | misaka_palw_kernel::route::SaltedCommitV1::Segmented { claim, .. } => claim.job_id,
                 misaka_palw_kernel::route::SaltedCommitV1::Pipeline { claim, .. } => claim.job_id,
                 misaka_palw_kernel::route::SaltedCommitV1::Spec { claim } => claim.job_id(),
             }),
-            KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } } => Some(claim.job_id()),
+            KernelRouteObjectV1::Spec { object: misaka_palw_kernel::spec::SpecObjectV1::CommitClaim { claim } } => {
+                Some(claim.job_id())
+            }
             _ => None,
         };
         if let (Some(job), Some(route)) = (job, builder.state.kernel_route.as_ref()) {
-            for ((table, _), bytes) in route.aux.range((crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2, Vec::new())..(crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2 + 1, Vec::new())) {
-                if *table == crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2 && borsh::from_slice::<misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2>(bytes).map_err(|e|refused(e.to_string()))?.base_job == job {
+            for ((table, _), bytes) in route.aux.range(
+                (crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2, Vec::new())
+                    ..(crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2 + 1, Vec::new()),
+            ) {
+                if *table == crate::palw_claim_challenge_v2::PAID_CLAIM_JOBS_V2
+                    && borsh::from_slice::<misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2>(bytes)
+                        .map_err(|e| refused(e.to_string()))?
+                        .base_job
+                        == job
+                {
                     return Err(refused("an enrolled prospective V2 job requires its producer's signed V2 reveal"));
                 }
             }
@@ -1328,7 +1348,12 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             let reward = ledger.job_escrows.get(&row.job_id).map_or(0, |escrow| escrow.amount);
             match builder.plan_kernel_claim_budget_v1(ctx, *signer, Hash64::from_bytes(row.class_binding_id), reward) {
                 Ok(Some(plan)) => {
-                    builder.state.require_kernel_monetary_material_scope_v1(builder.params, Hash64::from_bytes(*claim), row, ctx.daa_score)?;
+                    builder.state.require_kernel_monetary_material_scope_v1(
+                        builder.params,
+                        Hash64::from_bytes(*claim),
+                        row,
+                        ctx.daa_score,
+                    )?;
                     builder.commit_bond_budget_v1(ctx, super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(claim), plan)?;
                     builder.hold_kernel_income_v1(ctx, Hash64::from_bytes(*claim), row.liability_until.unwrap_or(ctx.daa_score))?;
                 }
@@ -1451,7 +1476,7 @@ pub(super) fn apply_kernel_receipt_v1(
     receipt: &PalwConstraintReceiptV1,
     signature: &[u8],
 ) -> Result<(), PalwStateV2Error> {
-    if builder.state.kernel_route.as_ref().is_some_and(|r|r.paid_claim_for_base_v2(&receipt.claim_id).ok().flatten().is_some()) {
+    if builder.state.kernel_route.as_ref().is_some_and(|r| r.paid_claim_for_base_v2(&receipt.claim_id).ok().flatten().is_some()) {
         return Err(refused("a V1 receipt cannot cover a paid V2 verification identity"));
     }
 

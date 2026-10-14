@@ -529,9 +529,15 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
         let claim = self.builder.state.claims.get(id)?;
         self.builder.params.panel_lifetime_v2_at(claim.accepted_daa)?;
         match crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(&self.builder.state, self.builder.params, id, claim) {
-            Ok(Some(row)) if row.total_paused_daa <= row.terms.maximum_pause_daa
-                && self.engine.claim(id).is_some_and(|record| record.claim.immutable_fields.as_bytes() == row.terms.immutable_fields)
-                => Some((row.terms.service_until_daa, row.terms.maximum_retries)),
+            Ok(Some(row))
+                if row.total_paused_daa <= row.terms.maximum_pause_daa
+                    && self
+                        .engine
+                        .claim(id)
+                        .is_some_and(|record| record.claim.immutable_fields.as_bytes() == row.terms.immutable_fields) =>
+            {
+                Some((row.terms.service_until_daa, row.terms.maximum_retries))
+            }
             // Missing/corrupt authority is no permission to draw another window.
             _ => Some((0, 0)),
         }
@@ -919,12 +925,13 @@ fn admission_of(
     match crate::palw_panel_lifetime_v2::panel_lifetime_claim_v2(&builder.state, builder.params, claim_id, claim) {
         Ok(Some(row)) => {
             let fields = panel_admitted_claim_v1(&builder.state, *claim_id, 1)
-                .map_err(|_| "the signed Panel claim has no immutable admission fields")?.immutable_fields;
+                .map_err(|_| "the signed Panel claim has no immutable admission fields")?
+                .immutable_fields;
             if fields.as_bytes() != row.terms.immutable_fields {
                 return Err("the signed Panel lifetime substitutes immutable admission fields");
             }
         }
-        Ok(None) => {},
+        Ok(None) => {}
         Err(_) => return Err("the claim has no matching prospective signed Panel lifetime"),
     }
     if claim.work_id.is_none_or(|work| work == Hash64::default()) {

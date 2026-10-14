@@ -488,7 +488,14 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Coherent signed service terms, recovery state and native payment/tail
     /// authority. An unavailable view cannot discharge a provider obligation.
-    fn palw_native_material_provider_authority_v3(&self,_checkpoint:BlockHash,_header:&Header,_ready:&crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3)->Result<crate::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3,String> {Err("native material provider authority unavailable".into())}
+    fn palw_native_material_provider_authority_v3(
+        &self,
+        _checkpoint: BlockHash,
+        _header: &Header,
+        _ready: &crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<crate::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        Err("native material provider authority unavailable".into())
+    }
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())
     }
@@ -509,8 +516,13 @@ pub trait ConsensusApi: Send + Sync {
         Err("monetary material unused-offer witnesses are unavailable".into())
     }
 
-    fn palw_monetary_aux_page_v1(&self, _block: BlockHash, _row: u64, _offset: u64, _limit: usize)
-        -> Result<crate::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+    fn palw_monetary_aux_page_v1(
+        &self,
+        _block: BlockHash,
+        _row: u64,
+        _offset: u64,
+        _limit: usize,
+    ) -> Result<crate::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
         Err("authenticated monetary pages are unavailable".into())
     }
 

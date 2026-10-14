@@ -701,7 +701,10 @@ impl PalwHeaderFormFenceV1 {
 
 /// Which owned form a header's carriage is, if any (`None`: a form the live build knows, judged as it judges it at every height).
 pub fn palw_header_form_owner_v1(algo_id: u8, palw_commitment: &[u8]) -> Option<PalwHeaderFormFenceV1> {
-    if is_palw_attempt_algo_id(algo_id) && crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(palw_commitment) { return Some(PalwHeaderFormFenceV1::NativeMaterialV3); }
+    if is_palw_attempt_algo_id(algo_id) && crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(palw_commitment)
+    {
+        return Some(PalwHeaderFormFenceV1::NativeMaterialV3);
+    }
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 && crate::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(palw_commitment) {
         return Some(PalwHeaderFormFenceV1::ReceiptSpendV4);
     }
@@ -737,7 +740,7 @@ impl crate::config::params::Params {
         PalwHeaderFormFencesV1 {
             receipt_spend_v4: self.palw_receipt_spend_v4_fence(),
             exec_payload_v2: self.palw_exec_payload_v2_fence(),
-            native_material_v3: self.palw_monetary_material_v1.as_ref().map(|f|f.activation),
+            native_material_v3: self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
         }
     }
 }
@@ -810,9 +813,11 @@ pub fn check_palw_commitment_shape_with_forms_at(
         // anyway; failing HERE names the shape defect (wrong magic, truncated body, zero pwu…)
         // instead of a digest mismatch.
         let envelope = if form == Some(PalwHeaderFormFenceV1::NativeMaterialV3) {
-            crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(palw_commitment).map(|e|e.base)
-        } else {crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment).map_err(|e|e.to_string())}
-            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
+            crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(palw_commitment).map(|e| e.base)
+        } else {
+            crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment).map_err(|e| e.to_string())
+        }
+        .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
         return envelope
             .validate_shape_v2_at_version(lane.attempt_version())
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });

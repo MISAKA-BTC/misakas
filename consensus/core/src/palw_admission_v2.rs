@@ -1092,12 +1092,14 @@ where
         &envelope.attempt.executor_bond,
         nonce,
     );
-    let floor=palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery);
-    if let Some(ticket)=budget_fences.native_material_ticket_v3 {
-        let target=palw_effective_class_target_v1(state,state_params,&envelope.attempt.class_id,floor)?;
-        if ticket>target {return Err(PalwAdmissionV2Error::ClassTicketAboveTarget {class_id:envelope.attempt.class_id,ticket,target})}
+    let floor = palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery);
+    if let Some(ticket) = budget_fences.native_material_ticket_v3 {
+        let target = palw_effective_class_target_v1(state, state_params, &envelope.attempt.class_id, floor)?;
+        if ticket > target {
+            return Err(PalwAdmissionV2Error::ClassTicketAboveTarget { class_id: envelope.attempt.class_id, ticket, target });
+        }
     } else {
-        check_palw_class_lottery_v4(state,state_params,&envelope.attempt,execution_anchor,floor)?;
+        check_palw_class_lottery_v4(state, state_params, &envelope.attempt, execution_anchor, floor)?;
     }
     Ok(attempt_id)
 }

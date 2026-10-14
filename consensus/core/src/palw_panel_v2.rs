@@ -785,7 +785,7 @@ pub fn palw_panel_anchor_execution_v1(network_domain: Hash64, header: &crate::he
     if !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
         return None;
     }
-    let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).ok()?;
+    let envelope = crate::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).ok()?;
     let attempt = &envelope.attempt;
     let execution_anchor = crate::palw_attempt_v2::execution_anchor_v3(
         network_domain,

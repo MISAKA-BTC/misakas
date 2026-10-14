@@ -1849,15 +1849,23 @@ impl PalwStateParamsV2 {
 }
 
 impl PalwStateParamsV2 {
-    pub fn monetary_material_from_v1(&self) -> Option<u64> { self.monetary_material.as_ref().map(|m|m.from_daa) }
-    pub fn with_monetary_material(mut self, mirror: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>) -> Self { self.monetary_material = mirror; self }
+    pub fn monetary_material_from_v1(&self) -> Option<u64> {
+        self.monetary_material.as_ref().map(|m| m.from_daa)
+    }
+    pub fn with_monetary_material(mut self, mirror: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>) -> Self {
+        self.monetary_material = mirror;
+        self
+    }
     pub fn monetary_material_at_v1(&self, daa: u64) -> Option<&crate::palw_monetary_material_v1::PalwMonetaryMaterialPolicyV1> {
         self.monetary_material.as_ref().filter(|m| daa >= m.from_daa && self.material_income_active_at(daa)).map(|m| &m.policy)
     }
 }
 
 impl crate::palw_state_v2::PalwStateParamsV2 {
-    pub fn with_panel_lifetime_v2(mut self, mirror: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>) -> Self { self.panel_lifetime_v2 = mirror; self }
+    pub fn with_panel_lifetime_v2(mut self, mirror: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>) -> Self {
+        self.panel_lifetime_v2 = mirror;
+        self
+    }
     pub fn panel_lifetime_v2_at(&self, daa: u64) -> Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2> {
         self.panel_lifetime_v2.filter(|m| daa >= m.from_daa)
     }
@@ -1869,7 +1877,7 @@ impl PalwStateParamsV2 {
         self
     }
     pub fn claim_challenge_v2_at(&self, daa: u64) -> Option<crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2> {
-        self.palw_claim_challenge_v2.filter(|f| f.activation != crate::config::params::ForkActivation::never()
-            && f.activation.is_active(daa))
+        self.palw_claim_challenge_v2
+            .filter(|f| f.activation != crate::config::params::ForkActivation::never() && f.activation.is_active(daa))
     }
 }
