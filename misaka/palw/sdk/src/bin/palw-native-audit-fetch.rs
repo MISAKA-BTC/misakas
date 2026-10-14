@@ -32,11 +32,19 @@ fn run() -> Result<(), String> {
     let genesis = get("--genesis")?;
     let operator = get("--operator-id")?;
     let database = get("--node-database-id")?;
-    let owning_params_sha = get("--own-params-sha256")?;
-    let owning_params_file = PathBuf::from(get("--own-params-snapshot34")?);
-    let owning_params_root: Hash64 = get("--own-params-snapshot-root")?.parse().map_err(|e| format!("own snapshot root: {e}"))?;
     let out = PathBuf::from(get("--out")?);
     drop(get);
+    // Owning ruleset: an isolated calibration34 snapshot (all three pins together),
+    // or — with none of them — the shipped preset named by --network.
+    let owning_params_sha = args.remove("--own-params-sha256");
+    let owning_params_file = args.remove("--own-params-snapshot34").map(PathBuf::from);
+    let owning_params_root = args
+        .remove("--own-params-snapshot-root")
+        .map(|v| v.parse::<Hash64>().map_err(|e| format!("own snapshot root: {e}")))
+        .transpose()?;
+    if [owning_params_sha.is_some(), owning_params_file.is_some(), owning_params_root.is_some()].iter().filter(|v| **v).count() % 3 != 0 {
+        return Err("--own-params-snapshot34, --own-params-snapshot-root and --own-params-sha256 go together".into());
+    }
     let redemption = match args.remove("--redemption").as_deref() {
         None | Some("false") => false,
         Some("true") => true,
@@ -63,21 +71,22 @@ fn run() -> Result<(), String> {
         || max_blocks > 65536
         || timeout == 0
         || timeout > 60
-        || owning_params_sha.len() != 64
         || operator.is_empty()
         || database.is_empty()
     {
         return Err("bounded fetch profile/fresh output required".into());
     }
-    let profile_sha = misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&owning_params_sha)?;
     let network_id: kaspa_consensus_core::network::NetworkId = network.parse().map_err(|e| format!("own network: {e}"))?;
     let base: kaspa_consensus_core::config::params::Params = network_id.into();
-    let owning = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
-        &base,
-        &owning_params_file,
-        owning_params_root.as_bytes(),
-        profile_sha,
-    )?;
+    let owning = match (&owning_params_file, owning_params_root, &owning_params_sha) {
+        (Some(file), Some(root), Some(sha)) => misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
+            &base,
+            file,
+            root.as_bytes(),
+            misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(sha)?,
+        )?,
+        _ => misaka_palw_sdk::native_params_v34::OwnedNativeParametersV34::shipped_preset(base),
+    };
     if owning.parameters().genesis.hash.to_string() != genesis || owning.parameters().net.to_string() != network {
         return Err("predeclared owning snapshot derives another network/genesis".into());
     }
@@ -311,7 +320,7 @@ fn run() -> Result<(), String> {
         }
     }
     let report = serde_json::json!({"schema":"misaka.palw.public-native-anchor-collection.v32","rpc":endpoint,
-        "network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"own_params_sha256":owning_params_sha,"own_params_snapshot_root":owning_params_root.to_string(),
+        "network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"own_params_sha256":owning_params_sha,"own_params_snapshot_root":owning_params_root.map(|v| v.to_string()),
         "node_consensus_params_id":status.consensus_params_id,"node_consensus_schedule_id":status.consensus_schedule_id,
         "measurement_final_only":!owning.rfc02_qualified(),
         "qualified_native_profile":owning.rfc02_qualified(),"calibration_receipts_are_not_A6_or_A8_evidence":!owning.rfc02_qualified(),

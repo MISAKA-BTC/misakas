@@ -45,6 +45,11 @@ pub fn load_own_native_parameters_v34(
     Ok(OwnedNativeParametersV34 { parameters, snapshot: pinned_root, sha256 })
 }
 impl OwnedNativeParametersV34 {
+    /// A shipped preset as the owning ruleset (no snapshot). Only such a network
+    /// can ever carry a qualified Final; today every preset leaves Final27 absent.
+    pub fn shipped_preset(parameters: Params) -> Self {
+        Self { parameters, snapshot: [0; 64], sha256: [0; 32] }
+    }
     /// Refuse a node whose announced identity (`getPalwNodeStatus`: handshake fingerprint, fence
     /// schedule id, genesis) differs from this auditor's own reconstruction — another network,
     /// another snapshot, or one changed policy value. Raw node flags are never trusted instead.

@@ -61,8 +61,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     for name in ("stage", "scope", "stage-result", "run-plan-sha256", "audit-result", "node-database", "operator-id",
                  "genesis", "network", "rpc", "palw-class", "palw-class-sha256", "audit-fetch", "audit-fetch-sha256",
-                 "own-params-snapshot34", "own-params-snapshot-root", "own-params-sha256", "work-dir", "evidence-root"):
+                 "work-dir", "evidence-root"):
         ap.add_argument(f"--{name}", required=True)
+    # Isolated calibration34 owning snapshot (all three) or none: the shipped preset.
+    for name in ("own-params-snapshot34", "own-params-snapshot-root", "own-params-sha256"):
+        ap.add_argument(f"--{name}")
     ap.add_argument("--timeout-seconds", type=int, default=600)
     a = ap.parse_args()
     if a.stage not in ("final", "redemption"):
@@ -80,12 +83,17 @@ def main() -> int:
     job, child, parent, start = (hex128(ptr.get(k)) for k in ("job", "final_child", "final_selected_parent", "provenance_start"))
     fetch = pinned_exe(a.audit_fetch, a.audit_fetch_sha256)
     klass = pinned_exe(a.palw_class, a.palw_class_sha256)
-    own = ["--own-params-snapshot34", a.own_params_snapshot34, "--own-params-snapshot-root", a.own_params_snapshot_root]
+    pins = (a.own_params_snapshot34, a.own_params_snapshot_root, a.own_params_sha256)
+    if any(pins) and not all(pins):
+        raise ValueError("own snapshot pins go together")
+    own = ["--own-params-snapshot34", pins[0], "--own-params-snapshot-root", pins[1]] if all(pins) else []
+    own_sha_fetch = ["--own-params-sha256", pins[2]] if all(pins) else []
+    own_sha_class = ["--own-params-snapshot-sha256", pins[2]] if all(pins) else []
     collected = work / "collected"
     argv = [fetch, "--rpc", a.rpc, "--pinned-child", child, "--pinned-selected-parent", parent,
             "--pinned-provenance-start", start, "--job", job, "--network", a.network, "--genesis", a.genesis,
-            "--operator-id", a.operator_id, "--node-database-id", a.node_database, "--own-params-sha256",
-            a.own_params_sha256, *own, "--out", str(collected), "--timeout-seconds", "60"]
+            "--operator-id", a.operator_id, "--node-database-id", a.node_database, *own_sha_fetch,
+            *own, "--out", str(collected), "--timeout-seconds", "60"]
     redemption = a.stage == "redemption"
     if redemption:
         post = hex128(ptr.get("post_header"))
@@ -100,7 +108,7 @@ def main() -> int:
             or collection.get("pinned_child_on_own_node_selected_chain") is not True):
         raise ValueError("own-node collection differs from the predeclared network/genesis/chain")
     report_path = work / "final-audit.json"
-    argv = [klass, "audit-native-final32", "--network", a.network, *own, "--own-params-snapshot-sha256", a.own_params_sha256,
+    argv = [klass, "audit-native-final32", "--network", a.network, *own, *own_sha_class,
             "--child-header-json", str(collected / "child-header.json"),
             "--selected-parent-header-json", str(collected / "selected-parent-header.json"),
             "--pinned-child", child, "--pinned-selected-parent", parent, "--job", job,
