@@ -390,7 +390,7 @@ impl HistorySelectionFaultV8 {
         Ok(out)
     }
 }
-fn source_point(o: &FlatOperandV5, dtype: DType, shape: &[usize], index: u64) -> Result<i128, DismissalV1> {
+pub(crate) fn source_point(o: &FlatOperandV5, dtype: DType, shape: &[usize], index: u64) -> Result<i128, DismissalV1> {
     let root = o.node.as_ref().ok_or_else(|| na("missing history source node"))?.commitment;
     let dims: Vec<_> = shape.iter().map(|n| *n as u64).collect();
     if shape.iter().product::<usize>() >= 64 {
