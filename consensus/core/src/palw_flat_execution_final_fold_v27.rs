@@ -362,6 +362,20 @@ impl PalwChainStateV2 {
         id: Digest,
     ) -> Result<crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27, String> {
         use crate::palw_native_audit_v27::*;
+        // Text29 Finals live under their own namespaced keys in the same tables;
+        // they are extracted by the Text29 fold's own independent row reader.
+        if !rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&id))) && rows.contains_key(&(EXECUTION_JOB_TABLE_V11, key(&(29u8, 0u8, id))))
+        {
+            let record = super::text29::audit_record_from_rows_v29(
+                rows,
+                network_domain,
+                daa,
+                (state_root, ledger_root, aux_root),
+                payouts,
+                id,
+            )?;
+            return CheckedNativeExecutionAuditViewV27::from_native_rows(record);
+        }
         let raw = rows.get(&(EXECUTION_JOB_TABLE_V11, key(&id))).ok_or("native audit original job absent")?;
         let row = decode_native_execution_job_v11(raw)?;
         if row.header.job_id != id {

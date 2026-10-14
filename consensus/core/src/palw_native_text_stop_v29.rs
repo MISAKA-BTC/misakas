@@ -336,6 +336,14 @@ pub struct NativeTextSettlementV29 {
     pub burned: u64,
     pub proof: Digest,
 }
+impl NativeTextSettlementV29 {
+    /// Root of the exact terminal money split. A producer Final credit queue
+    /// binds it through the shared unique-credit identity (`native_final_credit_queue_v27`),
+    /// so audit32 / redemption33 verify Text29 credits with the same verifier as v11.
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/text-terminal-settlement/v29", self)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeTextBookV29 {
     funded: NativeTextFundingV29,

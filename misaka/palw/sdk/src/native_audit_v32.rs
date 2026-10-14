@@ -85,7 +85,9 @@ pub fn verify_native_execution_audit_v32<'a>(
         || !execution_fence.activation.is_active(parent.daa_score)
         || record.network_domain != domain
         || record.original_final_policy != final_fence.policy.root()
-        || record.namespace != 11
+        // 11 = original funded v11 Final; 29 = Text29 producer Final (same shared
+        // unique credit identity, extracted by the Text29 fold's own row reader).
+        || !matches!(record.namespace, 11 | 29)
     {
         return Err("native32 trusted original network/active execution/Final policy differs".into());
     }

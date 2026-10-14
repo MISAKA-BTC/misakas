@@ -1246,10 +1246,17 @@ fn own(
     builder.write_kernel_row(EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key, Some(key(&(next + 1))));
     Ok(())
 }
-fn terminal_queue(h: &JobHeader, producer: bool) -> Hash64 {
+/// A producer Final credit uses the shared unique original-credit queue identity
+/// (job, funding, exact settlement, payout), so the independent audit32 /
+/// redemption33 verifiers need no Text29-private row to recompute it. A requester
+/// refund keeps its own Text29 key; neither key can collide with a pooled payout.
+fn terminal_queue(h: &JobHeader, s: &NativeTextSettlementV29) -> Hash64 {
+    if s.producer > 0 {
+        return crate::palw_native_audit_v27::native_final_credit_queue_v27(h.job, h.funding, s.root(), h.producer_payout);
+    }
     let mut id = object_id(
         b"misaka-palw/native/text-exact-original-credit-queue/v29",
-        &(h.job, h.funding, h.maximum, producer, if producer { h.producer_payout } else { h.requester_payout }),
+        &(h.job, h.funding, h.maximum, false, h.requester_payout),
     );
     id[0] = crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_PAYOUT_KEY_PREFIX_V1;
     Hash64::from_bytes(id)
@@ -1264,7 +1271,7 @@ fn settle(
     finder: Option<&PalwBondKeyV2>,
 ) -> Result<(), PalwStateV2Error> {
     let r = builder.state.kernel_route.as_ref().unwrap();
-    let queue = terminal_queue(h, s.producer > 0);
+    let queue = terminal_queue(h, s);
     let (root, mut subject): (Digest, QuotaSubjectSummaryV11) = r
         .aux_row(EXECUTION_QUOTA_TABLE_V11, &quota_key(2, &h.job))
         .ok_or_else(|| refused("text29 original settlement subject absent"))?;
@@ -1873,7 +1880,7 @@ fn collect_terminal(
         .ok_or_else(|| refused("text29 collection immutable original credit receipt absent"))?;
     if !matches!(b.terminal(), NativeTextTerminalV29::Final | NativeTextTerminalV29::Convicted | NativeTextTerminalV29::Refunded)
         || credited != s
-        || queue != terminal_queue(&h, s.producer > 0)
+        || queue != terminal_queue(&h, &s)
         || b.escrow() != 0
         || ctx.daa_score <= f.deadline
         || b.claim().is_some_and(|c| ctx.daa_score <= c.retained_until)
@@ -2075,4 +2082,133 @@ fn collect_terminal(
     builder.note_kernel_bond(&h.requester);
     builder.note_kernel_bond(&h.producer);
     Ok(())
+}
+/// Independent audit extraction of one genuine Text29 producer Final from
+/// authenticated original rows only (the audit32 full aux opening or the live
+/// store). The result uses the shared v27 audit record with `namespace = 29`;
+/// its payout queue is the shared unique credit identity, so redemption33
+/// verifies delivery with no producer/Panel private state and no Text29 row DTO.
+pub(super) fn audit_record_from_rows_v29(
+    rows: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    network_domain: Digest,
+    daa: u64,
+    roots: (Digest, Digest, Digest),
+    payouts: &std::collections::BTreeMap<Hash64, PalwPayoutV2>,
+    id: Digest,
+) -> Result<crate::palw_native_audit_v27::NativeExecutionAuditRecordV27, String> {
+    use crate::palw_native_audit_v27::{NativeAuditRowV27, NativeExecutionAuditRecordV27};
+    fn row<'a>(
+        rows: &'a std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+        table: u8,
+        k: &[u8],
+        cap: usize,
+    ) -> Result<&'a Vec<u8>, String> {
+        let raw = rows.get(&(table, k.to_vec())).ok_or("text29 audit original row absent")?;
+        if raw.len() > cap {
+            return Err("text29 audit original row cap".into());
+        }
+        Ok(raw)
+    }
+    let job_key = k(0, &id);
+    let h: JobHeader = borsh::from_slice(row(rows, EXECUTION_JOB_TABLE_V11, &job_key, 8192)?)
+        .map_err(|_| "text29 audit original header grammar")?;
+    let book_key = k(1, &id);
+    let raw = row(rows, EXECUTION_JOB_TABLE_V11, &book_key, TEXT_STOP_BOOK_BYTES_V29)?;
+    if h.job != id || raw.len() != h.book_bytes as usize {
+        return Err("text29 audit original header/book namespace differs".into());
+    }
+    let b = NativeTextBookV29::restore(raw, h.funding, h.book)?;
+    let class_key = k(0, &h.class);
+    let c: ClassHeader = borsh::from_slice(row(rows, EXECUTION_CLASS_TABLE_V11, &class_key, 2048)?)
+        .map_err(|_| "text29 audit original class grammar")?;
+    let f = b.funding();
+    let claim = b.claim().ok_or("text29 audit Final lacks claim")?;
+    let s = b.settlement().ok_or("text29 audit Final lacks settlement")?;
+    let credit_key = k(0, &id);
+    let (credited, queue, established): (NativeTextSettlementV29, Hash64, u64) =
+        borsh::from_slice(row(rows, EXECUTION_CREDIT_TABLE_V11, &credit_key, 1024)?).map_err(|_| "text29 audit credit grammar")?;
+    let nonce_key = key(&f.request.requester_operator);
+    let raw = row(rows, EXECUTION_REQUEST_INDEX_TABLE_V11, &nonce_key, 72)?;
+    if raw.len() != 72 {
+        return Err("text29 audit fixed nonce row".into());
+    }
+    let nonce: NativeRequesterNonceRowV11 = borsh::from_slice(raw).map_err(|_| "text29 audit nonce grammar")?;
+    if c.class.id() != h.class
+        || f.id() != id
+        || f.request.class != h.class
+        || b.terminal() != NativeTextTerminalV29::Final
+        || h.terminal != NativeTextTerminalV29::Final
+        || b.escrow() != 0
+        || credited != *s
+        || s.terminal != NativeTextTerminalV29::Final
+        || s.claim != Some(claim.root())
+        || s.producer == 0
+        || s.producer != s.escrow_debit
+        || s.requester != 0
+        || s.actual_collected_slash != 0
+        || s.finder_credit != 0
+        || s.burned != 0
+        || queue != terminal_queue(&h, s)
+        || established < claim.challenge_end
+        || nonce.operator != f.request.requester_operator
+        || nonce.next_nonce <= canonical_nonce_v11(&f.request.nonce)?
+        || f.request.requester_operator == f.request.producer_operator
+        || f.maximum.final_policy27 == [0; 64]
+    {
+        return Err("text29 audit Final/nonce/original debit/single credit agreement differs".into());
+    }
+    let mut audit_rows = Vec::new();
+    for (table, kk) in [
+        (EXECUTION_CLASS_TABLE_V11, class_key),
+        (EXECUTION_JOB_TABLE_V11, job_key),
+        (EXECUTION_JOB_TABLE_V11, book_key),
+        (EXECUTION_CREDIT_TABLE_V11, credit_key),
+        (EXECUTION_REQUEST_INDEX_TABLE_V11, nonce_key),
+    ] {
+        let bytes = rows.get(&(table, kk.clone())).ok_or("text29 audit original row missing")?.clone();
+        audit_rows.push(NativeAuditRowV27 { table, key: kk, bytes });
+    }
+    let (state_root, ledger_root, aux_root) = roots;
+    Ok(NativeExecutionAuditRecordV27 {
+        version: 27,
+        namespace: 29,
+        network_domain,
+        daa,
+        state_root,
+        ledger_root,
+        aux_root,
+        class: h.class,
+        source: c.class.source_binding,
+        program: c.class.original_program,
+        real_parameter: c.class.real_parameter,
+        inventory: c.class.inventory,
+        job: id,
+        funding: f.root(),
+        original_escrow_debit: s.escrow_debit,
+        original_escrow_receipt: f.escrow_debit,
+        original_consent: f.consent,
+        original_final_policy: f.maximum.final_policy27,
+        original_final_basis: f.maximum.final_basis27,
+        maximum_scope: f.maximum.maximum_scope25,
+        maximum_resource: f.maximum.maximum_resource29,
+        actual_scope: claim.actual_scope25,
+        actual_resource: claim.actual_resource29,
+        claim: claim.root(),
+        vector: claim.vector,
+        trace: claim.trace,
+        output: claim.generated_root,
+        terminal_book: b.root(),
+        settlement: s.root(),
+        credit: object_id(b"misaka-palw/native/audit-single-credit/v29", &(s, queue, established)),
+        producer_credit: s.producer,
+        requester_operator: f.request.requester_operator,
+        producer_operator: f.request.producer_operator,
+        consumed_nonce: f.request.nonce,
+        next_nonce: nonce.next_nonce,
+        established_daa: established,
+        payout_payload: h.producer_payout.as_bytes(),
+        payout_queue: queue.as_bytes(),
+        observed_queue_amount: payouts.get(&queue).filter(|p| p.payload == h.producer_payout).map(|p| p.amount),
+        rows: audit_rows,
+    })
 }
