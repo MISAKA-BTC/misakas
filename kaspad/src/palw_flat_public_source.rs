@@ -147,6 +147,26 @@ impl SharedClaimCacheGcV1 {
     }
 }
 
+/// A producer's projection written before its carrier is built. Dropped without `keep`, the
+/// files are removed: no accepted claim exists, so no native lease would ever retire them.
+pub(crate) struct UnpublishedProjectionV1(Option<PathBuf>);
+impl UnpublishedProjectionV1 {
+    pub(crate) fn new(dir: &Path, claim: Hash64) -> Self {
+        Self(Some(path_v1(dir, claim)))
+    }
+    pub(crate) fn keep(&mut self) {
+        self.0 = None;
+    }
+}
+impl Drop for UnpublishedProjectionV1 {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path.with_extension("flat-public.partial"));
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 struct PartialV1(Option<PathBuf>);
 impl Drop for PartialV1 {
     fn drop(&mut self) {
@@ -174,6 +194,19 @@ mod tests {
         assert!(!path_v1(directory.path(), claim).with_extension("flat-public.partial").exists());
         assert!(path_v1(directory.path(), other).exists(), "only the literal expired claim is retired");
         assert!(gc_shared_claim_v1(directory.path(), claim, 200, 201).unwrap(), "a repeated GC after a lost ACK is a no-op");
+    }
+    #[test]
+    fn an_unbuilt_carrier_leaves_no_orphan_projection_but_a_built_one_keeps_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (refused, built) = (Hash64::from_u64_word(9), Hash64::from_u64_word(10));
+        std::fs::write(path_v1(directory.path(), refused), b"projection").unwrap();
+        std::fs::write(path_v1(directory.path(), built), b"projection").unwrap();
+        drop(UnpublishedProjectionV1::new(directory.path(), refused));
+        let mut kept = UnpublishedProjectionV1::new(directory.path(), built);
+        kept.keep();
+        drop(kept);
+        assert!(!path_v1(directory.path(), refused).exists());
+        assert!(path_v1(directory.path(), built).exists());
     }
     #[test]
     fn projected_path_is_literal_claim_scoped_not_private_state_scoped() {

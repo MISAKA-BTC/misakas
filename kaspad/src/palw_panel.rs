@@ -7796,6 +7796,11 @@ impl PalwPanelService {
         } else {
             (run, None)
         };
+        // Until this carrier is built, the projection is not yet anyone's custody: a refusal
+        // below removes it instead of leaving an orphan no accepted lease will ever retire.
+        let mut unpublished_projection = original_header
+            .as_ref()
+            .map(|_| crate::palw_flat_public_source::UnpublishedProjectionV1::new(&self.config.retention_dir, claim_id));
         let material = palw_fp_capture_encode_v1(&job, &ids, &run.outcome.material);
 
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
@@ -7917,6 +7922,9 @@ impl PalwPanelService {
         let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe).compute_mass)
             .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
         let tx = build(fee)?;
+        if let Some(projection) = unpublished_projection.as_mut() {
+            projection.keep();
+        }
         Ok((tx, claim_id, material))
     }
 
