@@ -21,10 +21,52 @@
 - [RFC-0014](rfc/0014-panel-independent-fraud-prosecution.md) と [RFC-0015](rfc/0015-panel-free-permissionless-verification.md): Panel 非依存の訴追と Panel=0。
 - 有効化判断の照合先: [全面有効化の readiness matrix](design/palw/activation-readiness-matrix.md)。
 
-> **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。」**
-> *Probabilistic Detection. Public Localization. Deterministic Adjudication. Economic Deterrence.*
+> **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
+> *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
+>
+> 2026-10-14改定前の標語は「…決定論的に裁き、経済的に不正を抑止する。」（*Economic Deterrence*）であった。§0の改定で置き換える。
 
 ---
+
+## 0. 最終Goal — 2026-10-14改定（ユーザー決定）
+
+> **MISAKAの最終Goalは、モデルを非公開にしておくことが経済的に不利になる仕組みを成立させることである。
+> 非公開での不正を不可能にすること（不正の完全排除）は目標にしない。**
+
+この節は本書の他の節と下位の全文書に優先する。§2・§4・§6と下位文書のうち、検出確率の下限の証明や「不正の期待利益が負」を
+最終条件・有効化gateとする記述は、この節に従って読む。
+
+1. **経済Goal。** モデルを共有して外部minerのbond参加を増やしたモデルが、非公開のまま自己資本だけで採掘するモデルより、
+   モデル全体として多くの配分を得る構造を実現する（現行はモデル別coinbase配分、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)）。
+   chainはモデルが共有されたかを判定せず、実際に拘束されたbond資本だけを読む。非公開への直接のペナルティは課さず、
+   公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。
+2. **共有されたモデルの不正は客観的に裁ける。** 登録モデルが1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、
+   そのモデルのclaimの不正は、claim固有の公開・認証済み証拠から局所化し、客観的なcourtで立証してslashできる。これを制度要件とする（§3、
+   [ADR-0173](adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)）。
+3. **非公開モデルの不正は有界化する残余リスクである。** 誰にもモデルが共有されず実効的な検出確率が0（`p = 0`）になる場合、
+   不正の排除は保証しない。これは有効化を止める安全性gateではなく、bond単位のBlock / Reward / Final Weight上限、共通拘束期間、
+   Final前の払い出し禁止で被害を有界化する残余リスクとして扱う（[ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)）。
+   上限は正直なminerにも不正なminerにも同じに適用する。
+4. **検出確率と期待利益は評価指標である。** 検出確率の下限の証明と「不正の期待利益が負」は、最終条件・有効化gateにしない。
+   測定・導出して報告する評価指標とし、未知の値はUNKNOWNと表示する。根拠のない検出確率の仮定、検査対象外の演算を検査済みと表示すること、
+   検査されていないのに検査されたと扱うことの禁止（§2・§4）は維持する。
+5. **達成条件は二段で評価する。**
+   - **(a) モデル全体:** 非公開のときと共有して外部bondを集めたときで、モデルの総bond・配分割合・経済規模がどれだけ変わるか。
+   - **(b) 所有者個人:** 元の所有者自身の取り分が共有で増えるか。モデル内の配分、自己資本を追加してbondを増やす場合との資本コスト・期待収益の差を含める。
+     自己資本の追加でモデルのbondを増やすことは禁止しないが、評価には含める。
+
+   モデル全体の伸びと所有者個人の伸びを混同しない。
+
+   例: 他モデルのbondが合計900M BILI（1モデル）、モデルAの自己bondが100M BILIで、共有により外部bond 200M BILIが参加した場合。
+
+   | | 非公開 | 共有後 | 倍率 |
+   |---|---|---|---|
+   | モデルAの総bond（自己100M + 外部） | 100M | 300M | 3倍 |
+   | 配分割合（比例、α = 1） | 10.0% | 25.0% | 2.5倍 |
+   | 配分割合（現行の暫定 α = 1.5） | 3.6% | 16.1% | 4.5倍 |
+
+   非公開のままでは、この差分の配分を得られない。これが目標とする「非公開の経済的な不利」である。
+   ただし表はモデル全体の配分であり、所有者個人の収益が同じ倍率で増えることは意味しない（(b)で別に測る）。
 
 ## 1. 不可侵原則
 
@@ -97,6 +139,8 @@ MISAKAはこの問題を、少数の検査に必要な費用と、不正が発�
 
 **不正による最大利益よりも、検出確率を考慮した期待処罰額が十分に大きくなること。**
 
+**2026-10-14改定（§0）:** この抑止条件は最終条件・有効化gateではなく、測定・報告する評価指標とする。成立しない範囲（とくに非公開モデルの`p = 0`）は、bond単位の上限で被害を有界化する残余リスクとして扱う。以下の量の算出と、下の禁止事項は維持する。
+
 ここでいう検出確率は、数学的な検査の検出率だけで評価してはならない。次の確率もすべて含めて評価する。
 
 - 適格な正直な検証者が実際に検査する確率
@@ -142,10 +186,10 @@ Panelがいなくても裁けることと、誰も検査しなくても必ず不
 以下が揃わないclass・kernel・verification plan・task・contextは、登録候補として保持できても、有用計算の報酬やconsensus work weightを与えてはならない。
 
 1. 全ての報酬対象計算関係に対する検証被覆。
-2. 承認済みの確率的健全性とgrinding耐性。
+2. 承認済みの検査器の健全性とgrinding耐性（検出確率の下限の証明は要件にしない、§0）。
 3. 公開・認証済みmaterialの可用性。
-4. 1人の適格なPanel外検証者による有界な不正局所化と客観的裁定。
-5. 不正による最大利益と整合する、徴収可能な担保・処罰。
+4. モデルを入手できた1人の適格な検証者（正しいPanel）による有界な不正局所化と客観的裁定（§0-2）。
+5. 不正が立証された場合の徴収可能な担保・処罰と、bond単位のBlock / Reward / Final Weight上限による被害の有界化（2026-10-14改定。期待利益が負であることは要件にしない、§0）。
 6. 正直な検証者が期限内に参加できるだけの資源・費用・検証インセンティブ。
 7. 異議申立て、DA/default、Final、reorgの整合性。
 
@@ -153,16 +197,17 @@ Panelがいなくても裁けることと、誰も検査しなくても必ず不
 
 MISAKAは、巨大な有用計算を全員で再実行して正しさを保証するチェーンではない。
 
-MISAKAは、次の3つによって、計算費用よりも検証費用が重くなり得る有用計算を持続可能な合意資源にするチェーンである。
+MISAKAは、次の4つによって、計算費用よりも検証費用が重くなり得る有用計算を持続可能な合意資源にするチェーンである。
 
 - 確率的な部分検証によって不正を発見する。
 - 発見した不正を公開証拠から決定論的に裁く。
-- その検出確率と客観的処罰を経済設計に組み込む。
+- 立証された不正をslashし、残る被害をbond単位の上限で有界化する。
+- モデルを共有してbondを集めた方が、非公開より多くの配分を得る経済構造にする（§0）。
 
-そして、**MISAKAの安全性は、Panelの人数や誰かの正直さではなく、検証の健全性、不正追及の公開性、裁定の客観性、経済的責任によって定義される。**
+そして、**MISAKAの安全性は、Panelの人数や誰かの正直さではなく、検証の健全性、不正追及の公開性、裁定の客観性、bond単位の被害上限によって定義される。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
 
-> **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、経済的に不正を抑止する。」**
-> *Probabilistic Detection. Public Localization. Deterministic Adjudication. Economic Deterrence.*
+> **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
+> *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
 
 ---
 
@@ -177,6 +222,8 @@ This appendix records where the principle already decides open work. It is a poi
   - its collateral covers the maximum gain divided by that probability.
 
   Where that is unaffordable, aggregated checks (Freivalds/GKR-style) are required, not a lower assumed detection rate.
+
+  **Amended 2026-10-14 (§0):** the detection-probability bound and the collateral-covers-gain/p condition are no longer gates for earning. They are measured and reported (UNKNOWN when unknown). The gate is the per-bond Block / Reward / Final Weight caps, objective court and slash for any model shared with at least one honest verifier, and the two-stage closure-disadvantage evaluation. `p = 0` for a closed model is a bounded residual risk.
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.
 - **§3's "no escape to economic Final"** is enforced by the bounded demand/proof/grace deadlines of the kernel route and OPV.
 - **Condition 7 of §6 (reorg consistency)** is why the fork-choice decision (ADR-0178) is a prerequisite of the full-activation release.

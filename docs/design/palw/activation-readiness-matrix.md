@@ -264,7 +264,7 @@ Publication is the means by which other miners can join; equal capital is treate
   profit, below the individual caps.
 - Large-capital concentration, including adversarial capital, is accepted as residual risk. Inflating small capital
   (double counting, epoch-edge moves, key or claim splitting) stays forbidden.
-- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. Reports split "honest
+- **`p = 0` compute-skipping is a separate, unresolved safety gate.** The curve is never its evidence. **Amended 2026-10-14 (PRINCIPLES §0): no longer a gate — a residual risk bounded by the per-bond Block / Reward / Final Weight caps.** Reports split "honest
   verifiers function" from "every owner closes, p = 0".
 - Unchanged: Q/B/R/F individual caps, the total budget, distinct capital and the common hold. Block issuance, beacon, Final
   weight and fork choice are not scaled by bond aggregation.
@@ -333,6 +333,15 @@ Recorded in [rfc-adr-review-resolution-2026-10-12.md](rfc-adr-review-resolution-
 - **Proposals (undecided):** Panel=1 interim mode with bounded replacement and positive-evidence Final; ADR-0176 rolling Bond/time ledger;
   Miner+Panel claim-bond aggregation with a 1.3–2× coefficient (its relation to the interim α = 1.5 curve, the Panel-bond inclusion and the
   block-opportunity scope are recorded as open, not silently adopted). Acceptance tests B01–M01 and C01–C18 are specified, not run.
+
+## 3k. Final goal: closure is uneconomic, fraud is bounded not eliminated (user, 2026-10-14)
+
+`docs/PRINCIPLES.md` §0. MISAKA's final goal is that keeping a model closed is economically worse; eliminating fraud is not a goal.
+- PESG conditions 2 (proven detection lower bound) and 4 (negative attack EV) are reported metrics, not activation gates. Counter-example A no longer blocks by itself; B and C still do.
+- If a model is shared with even one party who can stand up a correct Panel, its fraud is localized from claim evidence, convicted in objective court and slashed. That is required.
+- A closed model's `p = 0` is a residual risk bounded by ADR-0176's per-bond caps, the common hold and no payout before Final.
+- Acceptance adds ADR-0177's two-stage evaluation: (a) the model's total bond / allocation share / scale, closed vs shared; (b) whether the original owner's own share rises, including the self-funding alternative.
+- The allocation curve is not changed here: the interim α = 1.5 (§3g) and the 2026-10-12 `S_m · μ(S_m)` proposal (§3j) stay as they are.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)
 
