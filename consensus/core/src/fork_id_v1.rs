@@ -799,6 +799,33 @@ mod tests {
             "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
             // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
             // unapproved probe terms (its values only ride along).
+            // RFC07 signed paid claims / absolute Panel lifetime and RFC08 monetary material: unapproved probe policies whose
+            // values only ride along (validation refuses every real activation; the probe does not validate).
+            "palw_claim_challenge_v2" => {
+                params.palw_claim_challenge_v2 =
+                    Some(crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2::unapproved_probe_at(at))
+            }
+            "palw_panel_lifetime_v2" => {
+                params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
+            }
+            "palw_monetary_material_v1" => {
+                params.palw_monetary_material_v1 = Some(crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1 {
+                    activation: at,
+                    policy: crate::palw_monetary_material_v1::PalwMonetaryMaterialPolicyV1 {
+                        version: 1,
+                        max_contracts: 16,
+                        max_contracts_per_provider: 8,
+                        max_bytes_per_contract: 1_000_000,
+                        max_bytes_per_provider: 8_000_000,
+                        minimum_collateral_sompi: 1,
+                        minimum_fee_sompi: 1,
+                        window_daa: 280,
+                        response_window_daa: 64,
+                        max_enrollment_daa: 100,
+                        cost_report_root: Hash64::from_bytes([0xF4; 64]),
+                    },
+                })
+            }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
             "palw_paid_consumer_lifecycle_v1" => {

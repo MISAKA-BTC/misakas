@@ -406,6 +406,11 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // (A2U finding #1: an isolation-time refusal of bytes an older build tolerates is a split). The fence, the signature and ADR-0177
         // D3's rules are the acceptance walk's and the fold's, which DROP it; the block stands.
         PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => Ok(()),
+        // RFC-0008 monetary material (tags 240-242): ride at every height with no isolation-time shape check, exactly like tag 140 —
+        // the fence, signatures and capacity rules are the acceptance walk's and the fold's (A2U: an isolation refusal is a split).
+        PalwConsensusObjectV2::MonetaryMaterialEnrolledV1 { .. }
+        | PalwConsensusObjectV2::MonetaryMaterialReplacedV1 { .. }
+        | PalwConsensusObjectV2::MonetaryMaterialActionV1 { .. } => Ok(()),
         PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => Ok(()),
         PalwConsensusObjectV2::SignedRegistrationV1 { signature, registration, .. } => {
             if signature.is_empty() {
@@ -2203,6 +2208,26 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "palw_bond_budget_v1",
         "BUDGET × RFC-8 / RFC-12 monetary lifecycle (codex final; R6781-F)",
         false,
+    ),
+    // 2026-10-15: each monetary schema step that gates its own state writes, named by its own fence (the row above records the
+    // shared root block). Below each fence no row is written and every root is unchanged.
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "bond budget table 9 reporter income v2 rows and their payout-queue provenance" },
+        "palw_reporter_income_v2",
+        "RFC-8 / RFC-12 reporter income v2",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "bond budget table 7 root-exact material income v3 rows (physical payment plus W holds)" },
+        "palw_material_income_v3",
+        "RFC-8 root-exact material income v3",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "bond budget table 8 immutable paid native consumer service/dispute/material contracts" },
+        "palw_paid_consumer_lifecycle_v1",
+        "RFC-8 paid consumer lifecycle",
+        true,
     ),
     a2_row(
         PalwA2SlotV1::StateEncoding {

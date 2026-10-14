@@ -52,7 +52,7 @@ use misaka_palw_remote::attempt::{AttemptExecutor, AttemptParams, AttemptSigner,
 use misaka_palw_remote::checkpoint::Checkpoint;
 use misaka_palw_remote::miner::{
     BlockObservation, BlockState, BlockTracker, MinerConfig, MinerHalt, MinerState, NodeTemplate, RemoteNode, StepOutcome,
-    publish_block, step,
+    publish_block, step_with_custody,
 };
 use misaka_palw_remote::relay::Reply;
 use misaka_palw_remote::template::{TemplatePolicy, producer_facts_from_wire_v1};
@@ -786,7 +786,11 @@ fn main() {
         if let Some(t) = refs.iter().find_map(|r| r.fetch_template().ok()) {
             cfg_step.attempt.class_target = t.facts.class_target;
         }
-        let outcome = step(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw);
+        // RFC-0008 PAV3: where this build's compiled params put the native custody form in force, this binary (no provider
+        // exchange) holds by name rather than drawing a PAV2 attempt every peer refuses.
+        let custody_in_force =
+            |daa: u64| params.palw_monetary_material_v1.as_ref().is_some_and(|fence| fence.activation.is_active(daa));
+        let outcome = step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, None);
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
         }

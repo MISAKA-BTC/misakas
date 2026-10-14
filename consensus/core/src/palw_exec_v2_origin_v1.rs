@@ -88,6 +88,11 @@ fn decode_attempt(mut bytes: &[u8]) -> std::io::Result<crate::palw_attempt_v2::P
     use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_WIRE_MAGIC, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2};
     use borsh::BorshDeserialize;
     let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed EXEC original attempt");
+    // A PAV3 native custody carriage (never a legacy claim: it exists only past `palw_monetary_material_v1`) is bounded at
+    // `PALW_ATTEMPT_MATERIAL_MAX_BYTES_V3` before Borsh allocates; its signed base attempt is the original identity.
+    if crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(bytes) {
+        return crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(bytes).map(|e| e.base).map_err(|_| bad());
+    }
     bytes = bytes.strip_prefix(&PALW_ATTEMPT_V2_WIRE_MAGIC).ok_or_else(bad)?;
     fn byte_vec(bytes: &mut &[u8]) -> std::io::Result<Vec<u8>> {
         let len = u32::deserialize(bytes)? as usize;

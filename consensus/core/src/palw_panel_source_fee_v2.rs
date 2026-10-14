@@ -94,7 +94,8 @@ pub fn panel_source_target_v2(
     if source.source_final_slack_daa < floor {
         return Err("source Final slack does not cover its claim/court/grace".into());
     }
-    let seal_start = context.commitment_position.checked_add(context.policy.anchor_delay_slots).ok_or("Panel source start overflow")?;
+    let seal_start =
+        context.commitment_position.checked_add(context.policy.anchor_delay_slots).ok_or("Panel source start overflow")?;
     let seal_end = seal_start.checked_add(context.policy.beacon_window_slots).ok_or("Panel source seal overflow")?;
     let reveal_end = seal_end.checked_add(context.policy.beacon_window_slots).ok_or("Panel source reveal overflow")?;
     let final_by = reveal_end.checked_add(source.source_final_slack_daa).ok_or("Panel source Final overflow")?;
@@ -238,5 +239,30 @@ mod tests {
         let mut wrong = context;
         wrong.subject_kind = misaka_palw_challenge::SubjectKindV1::ClaimVerification;
         assert!(panel_source_target_v2(&source, wrong, &request, &panel, 200, &ledger).is_err());
+    }
+}
+
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Restore/IBD consistency of aux table 112: every row is keyed by exactly its 64-byte source context, decodes, re-binds the
+    /// frozen epoch snapshot, source/fee targets and named monetary sponsor through the same reader admission and payment use, and
+    /// was authorized no later than the carried state's own point. A substituted, future or orphaned authority refuses the import
+    /// rather than later steering paid beacon material. Absent kernel route or an empty table: nothing to check, roots unchanged.
+    pub fn assert_panel_source_fee_consistency_v2(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        let refuse =
+            |why: String| crate::palw_state_v2::PalwStateV2Error::CarriageInconsistent(format!("Panel source sponsor: {why}"));
+        let Some(route) = self.kernel_route() else { return Ok(()) };
+        let now = self.last_point().map(|p| p.daa_score).unwrap_or(0);
+        for ((table, key), _) in &route.aux {
+            if *table != PALW_PANEL_SOURCE_FEE_AUTHORITY_TABLE_V2 {
+                continue;
+            }
+            let context: Digest =
+                key.as_slice().try_into().map_err(|_| refuse("authority key is not a 64-byte source context".into()))?;
+            let authority = route.panel_source_fee_authority_v2(&context).map_err(&refuse)?;
+            if authority.authorized_daa > now {
+                return Err(refuse("authority is dated after the carried state's own point".into()));
+            }
+        }
+        Ok(())
     }
 }
