@@ -10,6 +10,7 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
+        PrivateNativeCustodySpecV3, create_private_integration_core_with_native_custody_v3,
         create_private_integration_core_with_runtime, export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3,
         export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
         private_native_settlement_params_v1, private_paid_claim_params_v3, private_probe_manifest,
@@ -22,6 +23,10 @@ population-v1 additionally requires --private-probe-bonds=N (actual funded regis
 Read-only mode: --print-private-probe-profile
 Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1 or paid-v3 only)
 Offline actual paid Program work: --private-probe-paid-request=FILE --private-probe-export-paid-work=FRESH_DIRECTORY
+paid-v3 node mode, RFC-0008 PAV3 loopback native custody (unverified, unapproved mechanics):
+  --private-probe-native-provider-keys=SEED_FILE@TXID:INDEX,SEED_FILE@TXID:INDEX[,...] (fixture seats, >=2 operators)
+  --private-probe-native-provider-listen=127.0.0.1:PORT (serve them to other private nodes; omit to serve this producer)
+  --private-probe-native-exchange=127.0.0.1:PORT (this node's producer seals through that provider service)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -61,6 +66,9 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-export-bootstrap"
                         | "--private-probe-paid-request"
                         | "--private-probe-export-paid-work"
+                        | "--private-probe-native-provider-keys"
+                        | "--private-probe-native-provider-listen"
+                        | "--private-probe-native-exchange"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -98,6 +106,14 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
     let paid_request = flags.values.remove("--private-probe-paid-request");
     let paid_output = flags.values.remove("--private-probe-export-paid-work");
+    let native = PrivateNativeCustodySpecV3::parse(
+        flags.values.remove("--private-probe-native-provider-keys").as_deref(),
+        flags.values.remove("--private-probe-native-provider-listen").as_deref(),
+        flags.values.remove("--private-probe-native-exchange").as_deref(),
+    )?;
+    if native.is_some() && (profile != "paid-v3" || flags.print || bootstrap.is_some() || paid_output.is_some()) {
+        return Err("the PAV3 native custody options are paid-v3 node mode only".into());
+    }
     if !flags.values.is_empty() {
         return Err("unconsumed private option".into());
     }
@@ -173,7 +189,10 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .filter(|n| *n > 0)
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
-    let (core, rpc) = create_private_integration_core_with_runtime(&runtime, &args, budget, config)?;
+    let (core, rpc) = match native {
+        Some(native) => create_private_integration_core_with_native_custody_v3(&runtime, &args, budget, config, native)?,
+        None => create_private_integration_core_with_runtime(&runtime, &args, budget, config)?,
+    };
     Arc::new(kaspa_core::signals::Signals::new(&core)).init();
     // Rpc service does not outlive shutdown's Core reference accounting.
     drop(rpc);

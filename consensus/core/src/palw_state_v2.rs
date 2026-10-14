@@ -195,6 +195,9 @@ mod palw_adapter_class_fold_v1;
 // through their one writers.
 #[path = "palw_panel_lifetime_fold_v2.rs"]
 mod palw_panel_lifetime_fold_v2;
+// RFC07/RFC08 signed economic contracts (inner 67–69, aux 125–127), each past its own dormant fence.
+#[path = "palw_econ_contracts_fold_v1.rs"]
+mod palw_econ_contracts_fold_v1;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
@@ -1847,6 +1850,9 @@ pub struct PalwStateParamsV2 {
     material_income_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
+    /// RFC07/RFC08 economic contracts (`crate::palw_econ_contracts_v1`): the three dormant fences' mirror, synchronized with Params.
+    #[borsh(skip)]
+    pub(crate) econ_contracts_v1: crate::palw_econ_contracts_v1::PalwEconContractsMirrorV1,
     #[borsh(skip)]
     paid_consumer_lifecycle: Option<crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleMirrorV1>,
     /// **Lane PA: `Params::palw_audit_1004_v1`'s height**, mirrored by `Params::sync_palw_audit_1004_v1` (the folds that carry the
@@ -3837,9 +3843,24 @@ pub fn palw_rcore_deadline_v1(
         // **RFC-0010 × G14 (SHARD): a V3 S2 licence owes no deadline while an accusation is pending** — its gate is an uncharged
         // expiry that would close the accusation neutrally. Dormant: no engine exists on any shipped chain.
         PalwClaimPhaseV2::ReceiptLicensed { .. } if state.palw_v3_s2_licence_held_v1(claim_id, claim) => None,
+        // **X3 (REQ-X3-5, `palw_claim_hard_deadline_v1`): reaching the deadline alone never Finals a claim an eligible pursuit still
+        // holds** — for a claim accepted past the fence, ANY open DA session (a non-seat's too) holds its Final until that session
+        // resolves on its own deadline; the session's close re-derives this row. `false` for every claim below the fence.
+        PalwClaimPhaseV2::ReceiptLicensed { .. }
+            if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(params, claim)
+                && da.is_some_and(|record| record.open_sessions() > 0) =>
+        {
+            None
+        }
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
             // §4-quater V4: the one licensed Final floor, `max(L + wc, H)` past the fence.
             let mut floor = palw_claim_final_floor_v1(state, params, claim_id, claim, licensed_daa)?;
+            // **X3 (REQ-X3-2): `effective = min(proposed, hard)`** — the claim's hard deadline, fixed at acceptance, caps the proposed
+            // challenge deadline. `None` (unchanged) for a claim accepted below the fence.
+            floor = crate::palw_ruling_fences_v1::palw_claim_effective_deadline_v1(
+                floor,
+                crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim),
+            );
             // M4, Q-5's gate: an S2 licence not yet raised to 2 waits out both supplementary doors
             // (`max(L + wc, B* + W_r(c) + 1, H, last)` — the receipt deadline reads the claim's `W_r(c)`).
             if palw_rcore_licence_awaits_replay_v1(claim)
@@ -14639,7 +14660,10 @@ fn rearm_after_challenger_side_close(
             if builder.extras.offence_attribution_active
                 && builder.extras.held_context_ladder.is_some()
                 && builder.state.class_is_held_v1(&claim.class_id)
-                && licensed_daa < ctx.daa_score =>
+                && licensed_daa < ctx.daa_score
+                // X3 (REQ-X3-3): no window re-grant for a claim accepted past `palw_claim_hard_deadline_v1` — this re-arm stays
+                // the OLD rule for the claims below it.
+                && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(builder.params, claim) =>
         {
             let mut moved = claim.clone();
             moved.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };

@@ -124,3 +124,105 @@ pub(crate) async fn snapshot(ctx: &Ctx, ledger_root: &str, aux_root: &str, out: 
     }
     Ok(())
 }
+
+/// Export the canonical PALW state carriage the pinned block's header commits (op 243) — the `--carriage` file offline
+/// `palw-class panel-lifetime-v2` restores — and print the ADR-0043 root to give it as `--state-root`. Every page is held to the
+/// pinned header, a contiguous cursor and the exact page length; the whole carriage must decode canonically, restore through the
+/// same `into_state_v3` the offline CLI runs, be the parent's post-state, and commit exactly the pinned header's root, and (when
+/// given) equal the caller's `--state-root`; any mismatch writes nothing. The file is created exclusively and synced.
+pub(crate) async fn carriage(ctx: &Ctx, block: &str, state_root: Option<&str>, out: &std::path::Path) -> CliResult {
+    use kaspa_consensus_core::palw_state_carriage_rpc_v1::*;
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    use std::io::Write;
+    let hash =
+        |value: &str, name| Hash64::from_str(value).map_err(|_| CliError::new(exit::CONFIG, format!("{name} must be a 64-byte hash")));
+    let pinned = hash(block, "block")?;
+    let expected = state_root.map(|root| hash(root, "state-root")).transpose()?;
+    let bad = |why: String| CliError::new(exit::GENERIC, format!("state carriage: {why}"));
+    let nv = crate::wallet::connect(ctx).await?;
+    let limit = PALW_CARRIAGE_RPC_MAX_PAGE_BYTES_V1;
+    let mut assembler: Option<PalwStateCarriageAssemblerV1> = None;
+    loop {
+        let offset = assembler.as_ref().map_or(0, |a| a.cursor());
+        let response = nv
+            .client
+            .get_palw_state_carriage(kaspa_rpc_core::GetPalwStateCarriageRequest {
+                block_hash: pinned.to_string(),
+                offset,
+                limit_bytes: limit as u32,
+            })
+            .await
+            .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwStateCarriage: {e}")))?;
+        if !response.available {
+            return Err(CliError::new(exit::NOT_READY, format!("the node serves no carriage for {pinned}: {}", response.reason)));
+        }
+        let header = |h: Option<&kaspa_rpc_core::RpcHeader>, name: &str| {
+            kaspa_consensus_core::header::Header::try_from(h.ok_or_else(|| bad(format!("the page omits the {name}")))?)
+                .map_err(|e| bad(format!("{name}: {e}")))
+        };
+        let page = PalwStateCarriagePageV1 {
+            header: header(response.header.as_ref(), "header")?,
+            parent_header: header(response.parent_header.as_ref(), "parent header")?,
+            fork_choice: if response.fork_choice_opening.is_empty() {
+                None
+            } else {
+                Some(borsh::from_slice(&response.fork_choice_opening).map_err(|e| bad(format!("fork-choice opening: {e}")))?)
+            },
+            state_root: response.state_root.parse::<Hash64>().map_err(|e| bad(format!("served state root: {e}")))?,
+            total_bytes: response.total_bytes,
+            offset: response.offset,
+            bytes: response.bytes,
+        };
+        // Exact page lengths: a node that trickles one byte per page cannot stretch the bounded download.
+        let expected_len = (page.total_bytes.saturating_sub(offset)).min(limit as u64);
+        if page.bytes.len() as u64 != expected_len {
+            return Err(bad(format!("a page carries {} bytes where {expected_len} are due", page.bytes.len())));
+        }
+        if assembler.is_none() {
+            assembler = Some(PalwStateCarriageAssemblerV1::new(pinned, &page, PALW_CARRIAGE_RPC_MAX_TOTAL_BYTES_V1).map_err(bad)?);
+        }
+        let a = assembler.as_mut().ok_or_else(|| bad("the carriage assembler is missing".into()))?;
+        a.push(&page).map_err(bad)?;
+        if a.is_complete() {
+            break;
+        }
+    }
+    let verified = assembler.ok_or_else(|| bad("no page was assembled".into()))?.finish(&nv.params).map_err(bad)?;
+    if let Some(expected) = expected
+        && expected != verified.state_root
+    {
+        return Err(bad(format!(
+            "the pinned header's state has ADR-0043 root {}, not the caller's --state-root {expected}",
+            verified.state_root
+        )));
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(out)
+        .map_err(|e| CliError::new(exit::CONFIG, format!("{}: {e}", out.display())))?;
+    file.write_all(&verified.carriage)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", out.display())))?;
+    let report = serde_json::json!({
+        "schema":"misaka.palw.state-carriage.export.v1",
+        "out":out.display().to_string(), "bytes":verified.carriage.len(),
+        "block":pinned.to_string(), "parent":verified.parent.to_string(), "parentDaa":verified.parent_daa,
+        "stateRoot":verified.state_root.to_string(), "committedRoot":verified.committed_root.to_string(),
+        "verification":"pinned-header-committed-root",
+    });
+    if ctx.output == OutputFormat::Json {
+        println!("{report}");
+    } else {
+        println!(
+            "wrote {} ({} bytes): post-state of {} (DAA {})",
+            out.display(),
+            verified.carriage.len(),
+            verified.parent,
+            verified.parent_daa
+        );
+        println!("state root (--state-root)  {}", verified.state_root);
+        println!("committed by {pinned}  {}", verified.committed_root);
+    }
+    Ok(())
+}

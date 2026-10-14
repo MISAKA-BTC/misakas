@@ -10,6 +10,7 @@ REAFFIRM: --bond TXID:INDEX --claim HEX
 SIGN: --bond TXID:INDEX --draft KERNEL_OBJECT --key-file SEED
 INSPECT: --claim HEX or --authorization HEX
 The state root must be authenticated from your selected chain. No future claim hash is needed.
+`misaka model source carriage --block HASH --out FILE` exports a carriage verified against a pinned header and prints its root.
 AUTHORIZE/REAFFIRM write unsigned inner66/65 drafts; SIGN writes the native outer object for misaka palw submit-object.
 A public compiled policy that is not approved remains unavailable; this CLI does not override it.";
 fn take(f: &mut BTreeMap<String, String>, k: &str) -> Result<String, String> {

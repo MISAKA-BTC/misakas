@@ -2056,7 +2056,9 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         if let Some(since) = paused_since {
-            if credit_pause {
+            // X3 (REQ-X3-3): no DA pause credit for a claim accepted past `palw_claim_hard_deadline_v1` — its deadlines are fixed at
+            // acceptance; the credit stays the OLD rule for the claims below it.
+            if credit_pause && !crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim) {
                 let resumed = crate::palw_da_rcore_v1::palw_da_resume_claim_v1(&claim, since, now_daa);
                 if resumed != claim {
                     self.write_claim(claim_id, Some(resumed));
@@ -2069,7 +2071,10 @@ impl<'a> TransitionBuilder<'a> {
             && ((matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
                 && palw_rcore_licence_awaits_replay_v1(&claim)
                 && self.state.panel_v3.as_ref().is_some_and(|engine| engine.claim_rows().contains_key(&claim_id)))
-                || self.state.palw_v2_expiry_hold_applies_v1(self.params, &claim_id, &claim))
+                || self.state.palw_v2_expiry_hold_applies_v1(self.params, &claim_id, &claim)
+                // X3 (REQ-X3-5): any session held this claim's Final (DL-1's X3 row); the last close re-derives it.
+                || (matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+                    && crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, &claim)))
         {
             // …and the last session on a lane-A claim the part-C hold reaches (SHARD): the same re-derivation.
             // RFC-0010 × G14 (SHARD): the last session on a V3 S2 licence closed — DL-1 re-derives its deadline (none while a court
@@ -2107,6 +2112,10 @@ impl<'a> TransitionBuilder<'a> {
             return;
         }
         let Some(claim) = self.state.claims.get(&claim_id) else { return };
+        // X3 (REQ-X3-3): no horizon credit for a claim accepted past `palw_claim_hard_deadline_v1` (the OLD rule below it).
+        if crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(self.params, claim) {
+            return;
+        }
         // A `Provisional` claim (redrawn) still names its old panel until the next bind replaces it;
         // there is no horizon to credit until then.
         if !matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }) {

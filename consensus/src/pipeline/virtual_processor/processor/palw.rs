@@ -5485,6 +5485,18 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelLifetimeV2 => {
                     "a prospective Panel lifetime consent is refused: palw_panel_lifetime_v2 is not in force at this block".into()
                 }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::VerifierPayV1 => {
+                    "a drawn-check attestation is refused: palw_verifier_pay_v1 is not in force at this block".into()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelVerificationGateV1 => {
+                    "a model verification attestation is refused: palw_model_verification_gate_v1 is not in force at this block".into()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::HorizonExtensionV1 => {
+                    "a horizon extension consent is refused: palw_horizon_extension_v1 is not in force at this block".into()
+                }
+                kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::MinimumPriceV1 => {
+                    "a minimum-price contract is refused: palw_minimum_price_v1 is not in force at this block".into()
+                }
                 kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelFreeV1 => {
                     "a class registration under a verification mode is refused: palw_panel_free_v1 is not in force at this block (RFC-0015)"
                         .to_string()
@@ -5526,6 +5538,21 @@ impl VirtualStateProcessor {
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::PanelLifetimeV2 => {
                 self.palw_state_params_v2.as_ref().is_some_and(|p| p.panel_lifetime_v2_at(daa_score).is_some())
+            }
+            // M*-49's drawn-check attestation (inner 39): the verifier-pay fence (the kernel route's own was checked above).
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::VerifierPayV1 => self
+                .palw_verifier_pay_v1
+                .is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score)),
+            // RFC07/RFC08 economic contracts (inner 67–69): the mirrored dormant fences.
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::ModelVerificationGateV1 => self
+                .palw_state_params_v2
+                .as_ref()
+                .is_some_and(|p| p.econ_contracts_v1().model_verification_gate_at(daa_score).is_some()),
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::HorizonExtensionV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.econ_contracts_v1().horizon_extension_at(daa_score).is_some())
+            }
+            kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::MinimumPriceV1 => {
+                self.palw_state_params_v2.as_ref().is_some_and(|p| p.econ_contracts_v1().minimum_price_at(daa_score).is_some())
             }
             kaspa_consensus_core::palw_lifecycle_objects_v2::PalwKernelInnerFenceV1::BeaconSourceFeeV1 => {
                 self.palw_beacon_source_fee_v1.is_some_and(|f| {

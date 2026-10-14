@@ -449,6 +449,9 @@ pub(super) fn apply_dispute_reserved_v1(
     if now > record.hard_deadline_daa {
         return Err(refused("the claim's hard deadline has passed: no data-availability session could still open on it"));
     }
+    // **X3 (REQ-X3-4 / REQ-T12-3, `palw_claim_hard_deadline_v1`)**: on a claim accepted past the fence a reservation (the legacy
+    // route's pursuit) starts only at or before the claim's open cutoff and only if `start + B_remaining <= hard`. `Ok` below it.
+    crate::palw_ruling_fences_v1::palw_claim_pursuit_may_start_v1(builder.params, &claim, now).map_err(refused)?;
     if record.knows(&reserver) {
         return Err(refused("this bond has reserved the claim before: one reservation per bond per claim over the claim's life"));
     }
@@ -583,8 +586,25 @@ pub(super) fn apply_dispute_released_v1(
 
 /// **The lapse** (step 2, right after the DA sweep, in the fold and the pre-object base): every claim whose hard deadline is behind
 /// this block loses its live reservations, in `(hard_deadline, claim)` order.
+///
+/// **X3 (REQ-X3-5, `palw_claim_hard_deadline_v1`)**: on a claim accepted past the fence the deadline alone does not end an UNRESOLVED
+/// pursuit — a reservation whose DA session is still open stays live (the claim held) until that session resolves on its own
+/// deadline, and lapses at the first sweep after it; the reservations with nothing open lapse as before. The entries kept are stepped
+/// over in `(hard_deadline, claim)` order (`skip_past`), so the order of every other lapse is the order it was. Below the fence no
+/// entry is ever kept and the walk is the one it was.
 pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    while let Some(&(deadline, claim_id)) = builder.state.legacy_dispute_deadlines.iter().next() {
+    let mut skip_past: Option<(u64, Hash64)> = None;
+    loop {
+        let next = match skip_past {
+            None => builder.state.legacy_dispute_deadlines.iter().next().copied(),
+            Some(kept) => builder
+                .state
+                .legacy_dispute_deadlines
+                .range((std::ops::Bound::Excluded(kept), std::ops::Bound::Unbounded))
+                .next()
+                .copied(),
+        };
+        let Some((deadline, claim_id)) = next else { break };
         if deadline >= ctx.daa_score {
             break;
         }
@@ -593,6 +613,22 @@ pub(super) fn sweep_legacy_disputes(builder: &mut TransitionBuilder<'_>, ctx: &P
         if live.is_empty() {
             // Unreachable: the index holds exactly the records that hold. Dropped rather than looped on.
             builder.state.legacy_dispute_deadlines.remove(&(deadline, claim_id));
+            continue;
+        }
+        let x3 = builder
+            .state
+            .claims
+            .get(&claim_id)
+            .is_some_and(|claim| crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(builder.params, claim));
+        if x3 {
+            let (pending, lapse): (Vec<PalwBondKeyV2>, Vec<PalwBondKeyV2>) =
+                live.into_iter().partition(|reserver| builder.state.da_sessions.contains_key(&(claim_id, *reserver)));
+            if !lapse.is_empty() {
+                builder.legacy_dispute_dismiss_v1(claim_id, &lapse, ctx.daa_score)?;
+            }
+            if !pending.is_empty() {
+                skip_past = Some((deadline, claim_id));
+            }
             continue;
         }
         builder.legacy_dispute_dismiss_v1(claim_id, &live, ctx.daa_score)?;

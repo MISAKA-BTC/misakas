@@ -991,8 +991,11 @@ pub trait RpcApi: Sync + Send + AnySync {
     async fn get_palw_monetary_material(&self, request: GetPalwMonetaryMaterialRequest) -> RpcResult<GetPalwMonetaryMaterialResponse> {
         self.get_palw_monetary_material_call(None, request).await
     }
-    async fn get_palw_monetary_material_call(&self, connection: Option<&DynRpcConnection>, request: GetPalwMonetaryMaterialRequest)
-        -> RpcResult<GetPalwMonetaryMaterialResponse> {
+    async fn get_palw_monetary_material_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwMonetaryMaterialRequest,
+    ) -> RpcResult<GetPalwMonetaryMaterialResponse> {
         let _ = (connection, request);
         Ok(GetPalwMonetaryMaterialResponse { reason: "authenticated monetary material RPC unavailable".into(), ..Default::default() })
     }

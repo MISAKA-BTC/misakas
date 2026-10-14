@@ -1698,11 +1698,20 @@ pub enum PalwKernelInnerFenceV1 {
     BeaconSourceFeeV1,
     ClaimChallengeV2,
     PanelLifetimeV2,
+    /// `Params::palw_verifier_pay_v1` (M\*-49): a drawn slot holder's attestation (inner 39, G14R's reserved slot).
+    VerifierPayV1,
+    /// `Params::palw_model_verification_gate_v1` (R7-ECON): the model-epoch verification attestation (inner 67); the gate extends
+    /// `palw_model_bond_allocation_v1`, which its validation requires at or below it.
+    ModelVerificationGateV1,
+    /// `Params::palw_horizon_extension_v1` (R8-WINDOW): one party's consent to a dependency horizon extension (inner 68).
+    HorizonExtensionV1,
+    /// `Params::palw_minimum_price_v1` (R8-ECON): one party's signature on a minimum-price contract (inner 69).
+    MinimumPriceV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 12] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -1711,6 +1720,10 @@ impl PalwKernelInnerFenceV1 {
         Self::BeaconSourceFeeV1,
         Self::ClaimChallengeV2,
         Self::PanelLifetimeV2,
+        Self::VerifierPayV1,
+        Self::ModelVerificationGateV1,
+        Self::HorizonExtensionV1,
+        Self::MinimumPriceV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1723,6 +1736,10 @@ impl PalwKernelInnerFenceV1 {
             Self::BeaconSourceFeeV1 => "palw_beacon_source_fee_v1",
             Self::ClaimChallengeV2 => "palw_claim_challenge_v2",
             Self::PanelLifetimeV2 => "palw_panel_lifetime_v2",
+            Self::VerifierPayV1 => "palw_verifier_pay_v1",
+            Self::ModelVerificationGateV1 => "palw_model_verification_gate_v1",
+            Self::HorizonExtensionV1 => "palw_horizon_extension_v1",
+            Self::MinimumPriceV1 => "palw_minimum_price_v1",
         }
     }
 }
@@ -1799,6 +1816,10 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::OptInBeaconSource { .. } => Some(PalwKernelInnerFenceV1::BeaconSourceOptInV1),
         K::PaidClaimV2 { .. } => Some(PalwKernelInnerFenceV1::ClaimChallengeV2),
         K::EnrollPanelConsumerLifetimeV2 { .. } | K::AuthorizePanelLifetimeV2 { .. } => Some(PalwKernelInnerFenceV1::PanelLifetimeV2),
+        K::AttestDrawnCheckV1 { .. } => Some(PalwKernelInnerFenceV1::VerifierPayV1),
+        K::AttestModelVerificationV1 { .. } => Some(PalwKernelInnerFenceV1::ModelVerificationGateV1),
+        K::ConsentHorizonExtensionV1 { .. } => Some(PalwKernelInnerFenceV1::HorizonExtensionV1),
+        K::SignMinimumPriceContractV1 { .. } => Some(PalwKernelInnerFenceV1::MinimumPriceV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -1872,6 +1893,10 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (64, "PaidClaimV2", Some(PalwKernelInnerFenceV1::ClaimChallengeV2)),
     (65, "EnrollPanelConsumerLifetimeV2", Some(PalwKernelInnerFenceV1::PanelLifetimeV2)),
     (66, "AuthorizePanelLifetimeV2", Some(PalwKernelInnerFenceV1::PanelLifetimeV2)),
+    (39, "AttestDrawnCheckV1", Some(PalwKernelInnerFenceV1::VerifierPayV1)),
+    (67, "AttestModelVerificationV1", Some(PalwKernelInnerFenceV1::ModelVerificationGateV1)),
+    (68, "ConsentHorizonExtensionV1", Some(PalwKernelInnerFenceV1::HorizonExtensionV1)),
+    (69, "SignMinimumPriceContractV1", Some(PalwKernelInnerFenceV1::MinimumPriceV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2143,7 +2168,7 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC-0002 P0 protected candidate refutation (RFC02-T)",
         true,
     ),
-    // 38/39 are G14R's verifier pay (reserved, not yet used).
+    // 38/39 are G14R's verifier pay: 39 `AttestDrawnCheckV1` landed 2026-10-15 (row below); 38 stays reserved.
     // codex RFC-7 (lane R6781): the per-attempt beacon source opt-in under its own dormant fence (codex used 21; renumbered).
     a2_row(
         PalwA2SlotV1::KernelInner { lo: 40, hi: 40 },
@@ -2165,6 +2190,35 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     ),
     a2_row(PalwA2SlotV1::KernelInner { lo:64,hi:64 }, "palw_claim_challenge_v2", "RFC07 prospective signed paid ClaimVerification", true),
     a2_row(PalwA2SlotV1::KernelInner { lo:65,hi:66 }, "palw_panel_lifetime_v2", "RFC07 signed absolute Panel consumer lifetime", true),
+    // 2026-10-15 (R7-ECON / R8-WINDOW / R8-ECON): G14R's reserved verifier-pay slot 39 (38 stays reserved), and 67–69 inside the
+    // RFC07 reservation 64–73 (70–73 stay unallocated). Each is consumer-owned past its own dormant fence.
+    a2_row(PalwA2SlotV1::KernelInner { lo: 39, hi: 39 }, "palw_verifier_pay_v1", "G14R M*-49 drawn-check attestation", true),
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 67, hi: 67 },
+        "palw_model_verification_gate_v1",
+        "RFC07 R7-ECON model-epoch verification attestation (extends palw_model_bond_allocation_v1)",
+        true,
+    ),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 68, hi: 68 }, "palw_horizon_extension_v1", "RFC08 R8-WINDOW consented horizon extension", true),
+    a2_row(PalwA2SlotV1::KernelInner { lo: 69, hi: 69 }, "palw_minimum_price_v1", "RFC08 R8-ECON minimum-price contract", true),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux125 model-epoch verification tallies (drawn slots, verdicts, sampled claim)" },
+        "palw_model_verification_gate_v1",
+        "RFC07 R7-ECON verification-attestation gate",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux126 consented horizon extensions; kernel claim liability and EXEC income hold lengthened" },
+        "palw_horizon_extension_v1",
+        "RFC08 R8-WINDOW consented horizon extension",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding { what: "kernel route aux127 minimum-price contracts and their job index" },
+        "palw_minimum_price_v1",
+        "RFC08 R8-ECON minimum-price contract",
+        true,
+    ),
     a2_row(PalwA2SlotV1::StateEncoding { what:"kernel route aux113-119,122-124: paid class/job/producer authority, future locks, receipts, lifetime counter/evidence/review scopes/rounds/Final projections" }, "palw_claim_challenge_v2", "RFC07 all-target paid claim authority", true),
     a2_row(PalwA2SlotV1::StateEncoding { what:"kernel route aux121 signed absolute Panel consumer lifetime" }, "palw_panel_lifetime_v2", "RFC07 signed absolute consumer lifetime", true),
     a2_row(PalwA2SlotV1::StateEncoding { what: "kernel route aux120 signed monetary material covenants, pending physical payment and finalized tail anchors" }, "palw_monetary_material_v1", "RFC08 monetary material", true),
@@ -2466,6 +2520,40 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         },
         "palw_model_immutable_v1",
         "ADR-0175 immutable registrations (pre)",
+        true,
+    ),
+    // 2026-10-15: the dormant rules of the user's 2026-10-12 rulings (`crate::palw_ruling_fences_v1`; register X3, N4, D2). No new
+    // object kind, no wire change and no new state row: each rule keys on the CLAIM's acceptance DAA (readiness: the class's
+    // registration DAA), so below its fence — on every live state — every verdict, write and root is the live build's.
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "X3: DL-1's licensed Final deadline min(proposed, hard) and its open-session hold; no held-decoy re-arm, DA pause \
+                   credit, staged-court or model-window retention extension; the pursuit start budget at a reservation (tag 154) and \
+                   a named-leaf dissection; the lapse sweep keeps a reservation whose DA session is still open",
+        },
+        "palw_claim_hard_deadline_v1",
+        "register X3 (ruling 2026-10-12)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12FoldPastFence {
+            tags: &[12],
+            what: "a FreePromptCommitted whose job is PanelDa or FP Job V5 (non-public evidence) is refused at the claim gate \
+                   (N4_NONPUBLIC_EVIDENCE) for a claim accepted past the fence",
+        },
+        "palw_public_evidence_reward_v1",
+        "register N4 (ruling 2026-10-12)",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::Int12FoldPastFence {
+            tags: &[38, 44, 47, 50, 62, 88, 90, 93],
+            what: "for a claim accepted past the fence: a held StepLeaf DA demand (44) refused, and a dissection at a named leaf \
+                   (38, 62, 88, 90: the producer's root claim would carry model operands) not opened; a readiness proof (47, 50, \
+                   93) refused for a class registered past it",
+        },
+        "palw_court_model_scope_v1",
+        "register D2 / ADR-0177 D2 (ruling 2026-10-12)",
         true,
     ),
 ];

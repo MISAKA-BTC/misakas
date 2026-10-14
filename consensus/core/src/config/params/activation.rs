@@ -15,7 +15,7 @@ impl Params {
 
     /// `palw_claim_hard_deadline_v1` is in force at `daa_score` (register X3).
     pub fn palw_claim_hard_deadline_v1_active_at(&self, daa_score: u64) -> bool {
-        self.palw_claim_hard_deadline_v1.is_some_and(|f| f.is_active(daa_score))
+        self.palw_claim_hard_deadline_v1.is_some_and(|f| f.activation.is_active(daa_score))
     }
 
     /// Whether a claim accepted at `accepted_daa` is under F-E. `false` on every shipped preset.

@@ -168,6 +168,7 @@ impl PalwStateParamsV2 {
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             monetary_material: None,
+            econ_contracts_v1: Default::default(),
             paid_consumer_lifecycle: None,
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,

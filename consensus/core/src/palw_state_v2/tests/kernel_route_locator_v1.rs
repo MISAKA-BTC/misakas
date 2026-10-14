@@ -72,7 +72,8 @@ fn kernel_route_locator_walks_every_optional_block_before_the_kernel_route() {
         last_probe_end: Some(9),
     })
     .unwrap();
-    let budgets = borsh::to_vec(&PalwEpochBudgetsV2 { epoch_index: 3, budget_blocks: [(h64(4), 5u64)].into_iter().collect() }).unwrap();
+    let budgets =
+        borsh::to_vec(&PalwEpochBudgetsV2 { epoch_index: 3, budget_blocks: [(h64(4), 5u64)].into_iter().collect() }).unwrap();
     for with_budgets in [false, true] {
         for leading in 0..=17usize {
             for (tir, floor_on) in [(false, false), (true, false), (false, true), (true, true)] {

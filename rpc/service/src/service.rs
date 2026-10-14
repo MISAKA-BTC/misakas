@@ -3585,6 +3585,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     .fork_choice
                     .map(|opening| borsh::to_vec(&opening).expect("fixed fork-choice opening serializes"))
                     .unwrap_or_default(),
+                kernel_route_offset: page.kernel_route_offset,
                 aux_root: page.aux_root.to_string(),
                 total_rows: page.total_rows,
                 start_row: page.start_row,
@@ -3603,6 +3604,41 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                         bytes: f.bytes,
                     })
                     .collect(),
+            }),
+        }
+    }
+
+    async fn get_palw_state_carriage_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwStateCarriageRequest,
+    ) -> RpcResult<GetPalwStateCarriageResponse> {
+        if !(1024..=1_048_576).contains(&request.limit_bytes) {
+            return Err(RpcError::General("carriage page limitBytes must be 1024..1048576".into()));
+        }
+        let named = if request.block_hash.trim().is_empty() { None } else { Some(parse_hash64(&request.block_hash, "blockHash")?) };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let block = match named {
+            Some(block) => block,
+            None => session.async_get_sink().await,
+        };
+        let served =
+            session.spawn_blocking(move |c| c.palw_state_carriage_page_v1(block, request.offset, request.limit_bytes as usize)).await;
+        match served {
+            Err(reason) => Ok(GetPalwStateCarriageResponse { reason, ..Default::default() }),
+            Ok(page) => Ok(GetPalwStateCarriageResponse {
+                available: true,
+                reason: String::new(),
+                header: Some(RpcHeader::from(&page.header)),
+                parent_header: Some(RpcHeader::from(&page.parent_header)),
+                fork_choice_opening: page
+                    .fork_choice
+                    .map(|opening| borsh::to_vec(&opening).expect("fixed fork-choice opening serializes"))
+                    .unwrap_or_default(),
+                state_root: page.state_root.to_string(),
+                total_bytes: page.total_bytes,
+                offset: page.offset,
+                bytes: page.bytes,
             }),
         }
     }

@@ -810,6 +810,8 @@ pub(super) fn apply_object(
             palw_tir_shard_fold_v1::apply_part_v1(builder, ctx, part)?;
         }
         PalwConsensusObjectV2::TirSeatReadinessProved { bond, class_id, shard, span, proof, signature: _ } => {
+            // D2 (`palw_court_model_scope_v1`): no plaintext model leaves for a class registered past the fence.
+            check_readiness_model_scope_v1(builder, ctx, class_id)?;
             palw_tir_shard_fold_v1::apply_readiness_v1(builder, ctx, bond, class_id, *shard, *span, proof)?;
         }
         // **ADR-0100 Decision 4: a class's shard plan.** The registrant's signature is the
@@ -2210,9 +2212,11 @@ pub(super) fn apply_object(
             if builder.extras.readiness_v2_active {
                 return Err(PalwStateV2Error::ReadinessV1Superseded(*class_id));
             }
+            check_readiness_model_scope_v1(builder, ctx, class_id)?;
             builder.apply_seat_readiness(ctx, bond, class_id, *span, opening)?;
         }
         PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id, span, proof, signature: _ } => {
+            check_readiness_model_scope_v1(builder, ctx, class_id)?;
             builder.apply_seat_readiness_v2(ctx, bond, class_id, *span, proof)?;
         }
         PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
@@ -3099,6 +3103,21 @@ pub(super) fn apply_object(
                     },
                 );
             }
+            // **N4 (REQ-N4-1, `palw_public_evidence_reward_v1`)**: past the fence a free-prompt claim whose required evidence cannot be
+            // public — `PanelDa` prompt ids, FP Job V5 images / source ids — takes no new reward or Final weight, so it is not taken
+            // at all (as G14-for-rewards refuses a class off the onboarded path). Evaluation claims (above) earn nothing and are not
+            // asked. Below the fence `None`, and a claim accepted before it keeps its old ruleset to its end (REQ-N4-2).
+            if let Some(why) = crate::palw_ruling_fences_v1::palw_public_evidence_reward_refusal_v1(
+                builder.params,
+                ctx.daa_score,
+                public_job.as_deref(),
+            ) {
+                return Err(PalwStateV2Error::ClassNotRewardable {
+                    class: *class_id,
+                    code: crate::palw_ruling_fences_v1::PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1,
+                    why: why.to_string(),
+                });
+            }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
@@ -3429,4 +3448,18 @@ pub(super) fn apply_object(
         }
     }
     Ok(())
+}
+
+/// **D2 on seat readiness (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: `SeatReadinessLeaves` publishes ~16 plaintext
+/// artifact leaves per (class, bond, span) as a seat condition. Past the fence a class REGISTERED at/after it — all of whose claims are
+/// new — takes no readiness proof (a Panel that cannot seat is a non-fraud, uncharged non-acceptance: REQ-T6-2); a class registered
+/// before keeps its readiness for the old claims that seat through it. `Ok` below the fence (every shipped chain).
+fn check_readiness_model_scope_v1(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    class_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    let registered = builder.state.class(class_id).map(|class| class.registered_daa);
+    crate::palw_ruling_fences_v1::palw_court_model_scope_admits_readiness_v1(builder.params, ctx.daa_score, registered)
+        .map_err(|why| PalwStateV2Error::ReadinessProofRefused(why.to_string()))
 }

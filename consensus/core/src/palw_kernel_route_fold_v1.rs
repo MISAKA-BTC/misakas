@@ -988,6 +988,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
             }
         }
     }
+    // RFC08 R8-ECON (`palw_minimum_price_v1`): a job a minimum-price contract names admits only its contracted worker's claim, inside
+    // the contract's acceptance deadline and still funded. Below the fence nothing is read.
+    super::palw_econ_contracts_fold_v1::minimum_price_commit_gate_v1(builder, ctx, &object)?;
     // RFC-0002 P0 (RFC02-T): past `palw_model_refutation_seal_v1` a candidate refutation is only a sealed reveal (inner 37); the frozen
     // unsealed refutations pay whoever is included first — an equivalent re-encoding of an honest finder's proof — so they are refused
     // by name before any court, fee or row.
@@ -1013,6 +1016,16 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         }
         KernelRouteObjectV1::EnrollPanelConsumerLifetimeV2 { terms } => {
             return super::palw_panel_lifetime_fold_v2::enroll(builder, ctx, signer, terms);
+        }
+        // RFC07/RFC08 signed economic contracts (inner 67–69): consumer-owned, each past its own dormant fence.
+        KernelRouteObjectV1::AttestModelVerificationV1 { attestation } => {
+            return super::palw_econ_contracts_fold_v1::attest_model_verification_v1(builder, ctx, signer, attestation);
+        }
+        KernelRouteObjectV1::ConsentHorizonExtensionV1 { terms } => {
+            return super::palw_econ_contracts_fold_v1::consent_horizon_extension_v1(builder, ctx, signer, terms);
+        }
+        KernelRouteObjectV1::SignMinimumPriceContractV1 { contract } => {
+            return super::palw_econ_contracts_fold_v1::sign_minimum_price_contract_v1(builder, ctx, signer, contract);
         }
         KernelRouteObjectV1::FundPanelBeaconSourceFeeV2 { epoch, terms } => {
             return super::palw_panel_source_fee_fold_v2::fund_panel_sources_v2(builder, ctx, signer, *epoch, terms);

@@ -1228,6 +1228,25 @@ async fn sanity_test() {
                     assert!(!read.available && read.fragments.is_empty() && read.header.is_none());
                 })
             }
+            KaspadPayloadOps::GetPalwStateCarriage => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Op 243: an out-of-range page bound or a malformed block is an error before any state is read; a well-formed
+                    // read on a network without PALW V2 state answers `available: false` with no bytes and no header.
+                    for limit_bytes in [0, 1023, 1_048_577] {
+                        let bad = GetPalwStateCarriageRequest { limit_bytes, ..Default::default() };
+                        assert!(rpc_client.get_palw_state_carriage_call(None, bad).await.is_err());
+                    }
+                    let bad_block =
+                        GetPalwStateCarriageRequest { block_hash: "zz".to_string(), limit_bytes: 4096, ..Default::default() };
+                    assert!(rpc_client.get_palw_state_carriage_call(None, bad_block).await.is_err());
+                    let read = rpc_client
+                        .get_palw_state_carriage_call(None, GetPalwStateCarriageRequest { limit_bytes: 4096, ..Default::default() })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.bytes.is_empty() && read.header.is_none() && read.total_bytes == 0);
+                })
+            }
             KaspadPayloadOps::GetPalwExecV2Status => {
                 let rpc_client = client.clone();
                 tst!(op, {

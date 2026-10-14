@@ -52,11 +52,49 @@ def validate_factory_manifest(bootstrap, profile):
         raise ValueError('complete-v1 requires its exact original bootstrap manifest')
 
 
-def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1'):
+NATIVE_PROVIDER_KIND = 'rfc08-pav3-loopback-native-provider-v1'
+NATIVE_PROVIDER_HOST, NATIVE_EXCHANGE_CLIENT = 'B', 'A'
+NATIVE_EXECUTOR_SEAT, NATIVE_PROVIDER_SEATS = 0, (1, 2)
+
+
+def native_provider_config(fixture, bootstrap, listen):
+    """RFC-0008 PAV3 loopback provider wiring (2026-10-15; unverified source, unapproved mechanics).
+
+    Node B hosts a provider service over fixture seats 1 and 2 (distinct card operators, neither the executor's seat 0)
+    on one loopback socket; node A's producer seals PAV3 custody carriages through it. The node binary refuses any
+    other seat/key/operator relation itself; this only names the wiring. It applies to non-floor classes past
+    palw_monetary_material_v1 with an enrolled native session: the BASE floor producer this drill runs stays PAV2,
+    so requesting it measures nothing about native custody by itself.
+    """
+    seats = bootstrap.get('seats') or []
+    if len(seats) <= max(NATIVE_PROVIDER_SEATS):
+        raise ValueError('the PAV3 loopback provider needs two provider seats beside the executor seat')
+    keys, bonds = [], []
+    for index in NATIVE_PROVIDER_SEATS:
+        seat = seats[index]
+        key = str(fixture / seat['keyFile'])
+        if ',' in key or '@' in key or not str(seat['bond']).count(':') == 1:
+            raise ValueError('a provider seat key path or bond cannot be named unambiguously')
+        keys.append('%s@%s' % (key, seat['bond']))
+        bonds.append(seat['bond'])
+    if seats[NATIVE_EXECUTOR_SEAT]['bond'] in bonds or len(set(bonds)) != len(bonds):
+        raise ValueError('provider seats must be distinct from each other and from the executor seat')
+    host_argv = ['--private-probe-native-provider-keys=' + ','.join(keys), '--private-probe-native-provider-listen=' + listen]
+    client_argv = ['--private-probe-native-exchange=' + listen]
+    return dict(kind=NATIVE_PROVIDER_KIND, host=NATIVE_PROVIDER_HOST, exchangeClient=NATIVE_EXCHANGE_CLIENT,
+        listen=listen, executorSeat=NATIVE_EXECUTOR_SEAT, providerSeats=list(NATIVE_PROVIDER_SEATS), providerBonds=bonds,
+        hostArgv=host_argv, clientArgv=client_argv,
+        appliesTo='non-floor classes past palw_monetary_material_v1; the BASE floor producer stays PAV2',
+        unverifiedSource=True, nativeCustodyMeasured=False, releaseApproval=False)
+
+
+def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1', native_provider=False):
     validate_factory_manifest(bootstrap, profile)
+    if native_provider and profile != 'paid-v3':
+        raise ValueError('the PAV3 loopback native provider is a paid-v3 profile option only')
     reservations, endpoints = [], []
     try:
-        for _ in range(15):
+        for _ in range(16 if native_provider else 15):
             listener = socket.socket()
             listener.bind(('127.0.0.1', 0))
             reservations.append(listener)
@@ -78,9 +116,17 @@ def plan_for(binary, salt, fixture, bootstrap, timeout, profile='complete-v1'):
             if role == 'A':
                 argv.extend(['--palw-produce', '--palw-producer-class=' + bootstrap['floorClass']])
             nodes[role] = dict(p2p=p2p, grpc=grpc, wrpc=wrpc, borsh=borsh, eth='http://' + eth, argv=argv)
-        return dict(schemaVersion=1, kind='rfc12-private-registration-binding-only', nodes=nodes, privateProfile=profile,
+        plan = dict(schemaVersion=1, kind='rfc12-private-registration-binding-only', nodes=nodes, privateProfile=profile,
             scenario_timeout_s=timeout, probe_timeout_s=15, command_timeout_s=60,
             fullRfc12SecurityApproval=False, release100kMeasured=False)
+        if profile == 'paid-v3':
+            # Named for every paid-v3 plan; None unless explicitly requested, so the default paid-v3 run is unchanged.
+            provider = native_provider_config(fixture, bootstrap, endpoints[15]) if native_provider else None
+            if provider:
+                nodes[provider['host']]['argv'].extend(provider['hostArgv'])
+                nodes[provider['exchangeClient']]['argv'].extend(provider['clientArgv'])
+            plan['nativeCustodyProvider'] = provider
+        return plan
     finally:
         for listener in reservations:
             listener.close()
@@ -268,6 +314,8 @@ def main():
     parser.add_argument('--out', required=True)
     parser.add_argument('--timeout', type=int, default=240)
     parser.add_argument('--factory-timeout', type=int, default=60)
+    parser.add_argument('--native-loopback-provider', action='store_true',
+        help='paid-v3 only: host the RFC-0008 PAV3 loopback provider (seats 1,2) on B for A\'s producer; unverified source')
     parser.add_argument('--complete-check', action='store_true', help='also wait actual binding maturity and carry/verify the exhaustive code-fixture check')
     parser.add_argument('--maximum-binding-reservation-sompi', type=int, help='required with --complete-check; fixed before node launch')
     parser.add_argument('--maximum-complete-check-fee-sompi', type=int, help='required with --complete-check; fixed before node launch')
@@ -283,6 +331,7 @@ def main():
     result = dict(status='FAIL', artifactDirectory=str(root), resourceLimits=limits, resourceLimitsMet=False,
         maximumCarrierFeeSompi=args.maximum_carrier_fee_sompi, nativeRegistrationBindingMeasured=False,
         coldReopenMeasured=False, privateProfile=args.private_profile,
+        nativeLoopbackProviderRequested=args.native_loopback_provider, nativeCustodyMeasured=False,
         completeCheckRequested=args.complete_check, maximumBindingReservationSompi=args.maximum_binding_reservation_sompi,
         maximumCompleteCheckFeeSompi=args.maximum_complete_check_fee_sompi, totalWorkflowTimeoutSeconds=args.timeout,
         completeCheckMeasured=False, matureUsefulWorkMeasured=False, prunedIbdMeasured=False,
@@ -300,7 +349,8 @@ def main():
             complete.costs_before_nodes(bootstrap, args.maximum_binding_reservation_sompi, args.maximum_complete_check_fee_sompi)
         elif args.maximum_binding_reservation_sompi is not None or args.maximum_complete_check_fee_sompi is not None:
             raise ValueError('separate complete-check bond caps require --complete-check')
-        plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout, args.private_profile)
+        plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout, args.private_profile,
+            args.native_loopback_provider)
         (root / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
         drill = FiniteBootstrapDrill(plan, root, sampler, {})
         drill.workflow_deadline = time.monotonic() + args.timeout

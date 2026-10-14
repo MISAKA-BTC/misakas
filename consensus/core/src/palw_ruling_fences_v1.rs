@@ -209,7 +209,9 @@ pub fn palw_claim_pursuit_may_start_v1(params: &PalwStateParamsV2, claim: &PalwC
         return Err("X3: the claim's open cutoff has passed; no new pursuit starts (palw_claim_hard_deadline_v1)");
     }
     if start.saturating_add(palw_claim_pursuit_budget_v1(params, &policy)) > deadlines.hard_deadline_daa {
-        return Err("X3: start + B_remaining exceeds the claim's hard deadline; the pursuit could not finish (palw_claim_hard_deadline_v1)");
+        return Err(
+            "X3: start + B_remaining exceeds the claim's hard deadline; the pursuit could not finish (palw_claim_hard_deadline_v1)",
+        );
     }
     Ok(())
 }

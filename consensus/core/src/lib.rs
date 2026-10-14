@@ -503,6 +503,8 @@ pub mod palw_optimistic_licence_v2;
 /// The OPV ↔ PALW Work Beacon startup cycle, closed: the complete-check bootstrap, derived OPV eligibility, the effective bits of a
 /// passed attempt, and the dependency graph (`docs/design/palw/opv-beacon-bootstrap.md`) — dormant with the kernel route's fences.
 pub mod palw_opv_bootstrap_v1;
+/// N3 (REQ-N3-1/2/3): the Work Beacon's independent bootstrap, apart from the ordinary Beacon and Panel=0 — dormant.
+pub mod palw_beacon_bootstrap_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;
@@ -887,6 +889,8 @@ pub mod palw_flat_model_vector_v9;
 pub mod palw_tokenizer_owned_court_v1;
 
 pub mod palw_monetary_material_v1;
+/// RFC07 R7-ECON / RFC08 R8-WINDOW / R8-ECON signed economic contracts (inner 67–69, aux 125–127; 2026-10-15). Dormant.
+pub mod palw_econ_contracts_v1;
 
 pub mod palw_claim_challenge_v2;
 pub mod palw_claim_interactive_v3;

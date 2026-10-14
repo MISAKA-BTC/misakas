@@ -826,6 +826,21 @@ mod tests {
                     },
                 })
             }
+            // RFC07/RFC08 signed economic contracts: unapproved probe policies whose values only ride along (validation refuses every
+            // real activation; the probe does not validate), mirrored into the V2 bundle.
+            "palw_model_verification_gate_v1" => {
+                params.palw_model_verification_gate_v1 =
+                    Some(crate::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
+            "palw_horizon_extension_v1" => {
+                params.palw_horizon_extension_v1 = Some(crate::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
+            "palw_minimum_price_v1" => {
+                params.palw_minimum_price_v1 = Some(crate::palw_econ_contracts_v1::PalwMinimumPriceFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
             "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
             "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
             "palw_paid_consumer_lifecycle_v1" => {
@@ -882,7 +897,10 @@ mod tests {
             // The three fences of the 2026-10-12 rulings: bare heights, refused when armed by `validate_palw_v2`.
             "palw_court_model_scope_v1" => params.palw_court_model_scope_v1 = Some(at),
             "palw_public_evidence_reward_v1" => params.palw_public_evidence_reward_v1 = Some(at),
-            "palw_claim_hard_deadline_v1" => params.palw_claim_hard_deadline_v1 = Some(at),
+            "palw_claim_hard_deadline_v1" => {
+                params.palw_claim_hard_deadline_v1 =
+                    Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at))
+            }
             // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
             // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
             "palw_dns_retirement_v1" => {

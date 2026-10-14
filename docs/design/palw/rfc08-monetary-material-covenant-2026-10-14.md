@@ -91,3 +91,45 @@ controls, valid full typed model/provider fixtures, independent crash/reorg/prun
 consumers and actual economics. Unsupported codecs and missing economic/liveness
 approval are failures to close acceptance, not PASS by refusal. This checkpoint does
 not claim the original goal or all-model acceptance is complete.
+
+## 2026-10-15 note: in-node PAV3 exchange and private loopback provider (unverified source)
+
+Lead default B, pending user review. Nothing below has been compiled, tested by cargo or
+run on a node; it is source only.
+
+- **Producer side** (`kaspad/src/palw_native_custody_v3.rs`, `palw_producer.rs`). Past
+  `palw_monetary_material_v1`, for every class but the BASE floor, the in-node producer
+  reads the canonical prior session from its own coherent tip
+  (`ConsensusApi::palw_native_session_v3`, the one `select_native_session_v3` rule, at the
+  template's selected parent) and refuses a roster with fewer than two distinct provider
+  operators or one containing the executor's operator. Both draws are priced on a
+  provisional PAV3 envelope: `priced_execution` reads session, consent, roster and the
+  immutable execution, never the manifest or a signature, so the typed bundle is built
+  only for a won draw. The sealed carriage's priced execution is re-checked equal before
+  publication. On a win: authority from `palw_native_material_provider_authority_v3`, the
+  actual bundle from the producer's own capture and resolved backend
+  (`PalwHeldMaterialBundleV1::from_capture`), `draft_native_ready_v3`, every roster
+  signature through a `NativeReadyExchangeV3` transport, each verified against the
+  registered roster key, then `producer_assemble_native_ready_v3` and the executor seal.
+  Without a configured exchange (every ordinary kaspad; no Args flag sets one) the
+  producer keeps `PALW_PRODUCER_NATIVE_CUSTODY_HOLD`. Riders still hold under the fence.
+- **Loopback provider** (`kaspad/src/private_integration/native_provider.rs`,
+  feature `private-integration-config`, paid-v3 profile only). Provider bonds are fixture
+  seat seeds named `SEED@TXID:INDEX`; each must be the salt's card key for that bond, at
+  least two distinct card operators are required, and on a producing node none may be its
+  producer's bond, key or operator. Each bond has a `DurableMonetaryMaterialProviderV1`
+  store (plus an authority index for reopen) under `<appdir>/<network>/palw-native-provider-v3`.
+  Per request the service obtains authority from its own Consensus API, re-derives the
+  prompt from the anchor, rebuilds the bundle itself, refuses a differing manifest,
+  checks the registered key, publishes durably and only then signs `Ready::id`.
+  Transport: in-process, or one framed borsh request per loopback TCP connection
+  (`--private-probe-native-provider-keys/-listen`, `--private-probe-native-exchange`).
+- **Paid-v3 factory** additionally arms `palw_panel_lifetime_v2` (structural probe values)
+  and `palw_paid_consumer_lifecycle_v1` (1,000/3,000/2,000 DAA mechanics-only spans) from
+  DAA 0, with mirrors checked and both made dormant in the validation copy; the public
+  validator refuses both whenever armed.
+
+Remaining: a non-loopback, authenticated provider transport; native session enrollment
+in the drill (the bootstrap's floor producer is exempt, so `--native-loopback-provider`
+measures nothing about custody by itself); provider GC wiring; compile, unit and drill
+execution of all of the above.

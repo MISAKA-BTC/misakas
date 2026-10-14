@@ -11,6 +11,7 @@ pub struct MonetaryMaterialProofPagerV1 {
     pinned: Hash64,
     aux_root: Hash64,
     state_preimage: Vec<u8>,
+    kernel_route_offset: u64,
     total_rows: u64,
     row: u64,
     offset: u64,
@@ -79,12 +80,19 @@ impl MonetaryMaterialProofPagerV1 {
                 }
             }
         }
-        // Require the exact Some-only kernel-route block, not an arbitrary
-        // occurrence of a free hash in the committed scalar/root preimage.
+        // The aux root is read from the ONE window the preimage's own grammar places the Some-only kernel-route block at
+        // (`PalwChainStateV2::kernel_route_offset_of_preimage_v1`): a pure function of the bytes just authenticated against the
+        // pinned header, so a serving node can neither choose the window nor plant another one (a label search could be steered:
+        // with no kernel-route block, ANY later occurrence would have been read as the aux root). The node's carried offset is a
+        // cross-check only — a version-1 peer carries 0 (none) and is still held to the derived offset.
         let label = b"kernel-route/v1";
-        let blocks: Vec<_> = page.state_preimage.windows(label.len() + 128).filter(|bytes| &bytes[..label.len()] == label).collect();
-        if blocks.len() != 1 || &blocks[0][label.len() + 64..] != page.aux_root.as_byte_slice() {
-            return Err("monetary auxiliary root is absent or ambiguous in the committed kernel-route block".into());
+        let at = kaspa_consensus_core::palw_state_v2::PalwChainStateV2::kernel_route_offset_of_preimage_v1(&page.state_preimage)?
+            .ok_or("monetary proof's committed state has no kernel-route block")?;
+        if page.kernel_route_offset != 0 && page.kernel_route_offset != at as u64 {
+            return Err("monetary proof names a kernel-route offset its committed preimage does not place there".into());
+        }
+        if page.state_preimage[at + label.len() + 64..at + label.len() + 128] != *page.aux_root.as_byte_slice() {
+            return Err("monetary auxiliary root differs from the committed kernel-route block".into());
         }
         let mut hash = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/kernel-route/aux-root/v1").to_state();
         hash.update(&page.total_rows.to_le_bytes());
@@ -92,6 +100,7 @@ impl MonetaryMaterialProofPagerV1 {
             pinned,
             aux_root: page.aux_root,
             state_preimage: page.state_preimage.clone(),
+            kernel_route_offset: page.kernel_route_offset,
             total_rows: page.total_rows,
             row: 0,
             offset: 0,
@@ -113,6 +122,7 @@ impl MonetaryMaterialProofPagerV1 {
         if kaspa_consensus_core::hashing::header::hash(&page.header) != self.pinned
             || page.aux_root != self.aux_root
             || page.state_preimage != self.state_preimage
+            || page.kernel_route_offset != self.kernel_route_offset
             || page.total_rows != self.total_rows
             || (page.start_row, page.start_offset) != self.cursor()
             || page.fragments.len() > PALW_MONETARY_RPC_MAX_FRAGMENTS_V1
@@ -262,6 +272,7 @@ pub async fn fetch_monetary_material_contracts_v1(
             } else {
                 Some(borsh::from_slice(&response.fork_choice_opening).map_err(|e| e.to_string())?)
             },
+            kernel_route_offset: response.kernel_route_offset,
             aux_root: response.aux_root.parse::<Hash64>().map_err(|e| e.to_string())?,
             total_rows: response.total_rows,
             start_row: response.start_row,

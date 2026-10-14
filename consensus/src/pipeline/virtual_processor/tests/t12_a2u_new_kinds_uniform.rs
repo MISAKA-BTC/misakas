@@ -247,9 +247,24 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
                 params.palw_typed_roots_v1 = Some(at)
             }
             PalwKernelInnerFenceV1::ModelRefutationSealV1 => params.palw_model_refutation_seal_v1 = Some(at),
+            PalwKernelInnerFenceV1::VerifierPayV1 => params.palw_verifier_pay_v1 = Some(at),
+            // RFC07/RFC08 signed economic contracts (inner 67–69): unapproved probe policies, mirrored below.
+            PalwKernelInnerFenceV1::ModelVerificationGateV1 => {
+                params.palw_model_verification_gate_v1 =
+                    Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1::unapproved_probe_at(at))
+            }
+            PalwKernelInnerFenceV1::HorizonExtensionV1 => {
+                params.palw_horizon_extension_v1 =
+                    Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1::unapproved_probe_at(at))
+            }
+            PalwKernelInnerFenceV1::MinimumPriceV1 => {
+                params.palw_minimum_price_v1 =
+                    Some(kaspa_consensus_core::palw_econ_contracts_v1::PalwMinimumPriceFenceV1::unapproved_probe_at(at))
+            }
         }
     }
     params.sync_palw_claim_challenge_v2();
+    params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();
     // Every other fence a LANDED row of the central table names (formulas, state encodings, the live build's kinds judged anew):
     // a row that lands with a fence this harness does not arm fails here, so node C judges every block with it far above.
@@ -275,7 +290,10 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_exec_payload_v2"
             | "palw_model_refutation_seal_v1"
             | "palw_class_semantics_v1"
-            | "palw_staged_public_court_v1" => {} // armed above, through their enums
+            | "palw_staged_public_court_v1"
+            | "palw_model_verification_gate_v1"
+            | "palw_horizon_extension_v1"
+            | "palw_minimum_price_v1" => {} // armed above, through their enums
             // Armed at or below `at` with the monetary material kinds above; never moved later.
             "palw_reporter_income_v2" | "palw_material_income_v3" => {
                 params.palw_reporter_income_v2.get_or_insert(at);
@@ -297,6 +315,15 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             }
             "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
+            // The 2026-10-12 rulings' rules (register X3, N4, D2): bare heights and X3's unapproved probe policy, mirrored onto the
+            // V2 bundle the fold reads. Each keys on a claim's acceptance DAA, so far above the chain they judge nothing here.
+            "palw_court_model_scope_v1" | "palw_public_evidence_reward_v1" | "palw_claim_hard_deadline_v1" => {
+                params.palw_court_model_scope_v1 = Some(at);
+                params.palw_public_evidence_reward_v1 = Some(at);
+                params.palw_claim_hard_deadline_v1 =
+                    Some(kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at));
+                params.sync_palw_2026_10_12_ruling_fences_v1();
+            }
             // ADR-0175 needs model lines at or below it (`validate_palw_model_immutable_v1`); artifact root ownership is t12's.
             // testnet-12 runs model lines from genesis: never move them (a later height would disarm the live registry below it).
             "palw_model_immutable_v1" => {

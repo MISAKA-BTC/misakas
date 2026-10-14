@@ -1459,6 +1459,30 @@ impl TransitionBuilder<'_> {
         self.bind_material_income_root_v1(now, root, id)
     }
 
+    /// **RFC08 R8-WINDOW (`palw_horizon_extension_v1`)**: a consented dependency horizon extension holds the executor's EXEC income
+    /// through the same longer horizon. The hold only lengthens (its release is `max(old, until + W)`); its funded maximum, its
+    /// payments and every other leg are unchanged. Nothing to extend (no engine, the issuer's own cancelled hold, a zero hold): `Ok`.
+    pub(super) fn extend_exec_income_hold_v1(
+        &mut self,
+        root: Hash64,
+        bond: PalwBondKeyV2,
+        now: u64,
+        until: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(now) else { return Ok(()) };
+        let id = native_income_id_v1(root, &bond, 2);
+        let Some(row) = self.state.bond_budget.as_ref().and_then(|b| b.claim_row(&id)).copied() else { return Ok(()) };
+        if row.reserved.reward_sompi == 0 {
+            return Ok(());
+        }
+        let capital = self.state.bonds.get(&bond).map_or(0, |b| b.collateral);
+        self.bond_budget_op(|budget, _, j| {
+            budget.hold_native_income_v1(&mirror.policy, capital, id, bond, row.accepted_daa, until, row.reserved.reward_sompi, &[], false, j)
+        })
+        .expect("the engine holding the row exists")
+        .map_err(|why| budget_refused(bond, why))
+    }
+
     /// Kernel carriers create no reward block or consensus weight. Their one
     /// standalone fee is Q/R-reserved before the trusted consumer commits it.
     pub(super) fn plan_kernel_claim_budget_v1(

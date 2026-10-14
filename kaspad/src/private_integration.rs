@@ -36,6 +36,8 @@ mod paid_claim_factory;
 pub use paid_claim_factory::private_paid_claim_params_v3;
 mod paid_bootstrap;
 pub use paid_bootstrap::export_private_paid_bootstrap_v3;
+mod native_provider;
+pub use native_provider::PrivateNativeCustodySpecV3;
 
 pub const PRIVATE_PROBE_MARKER_V1: &str = "rfc12-private-probe-v1.json";
 
@@ -187,6 +189,17 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
     if let Some(fence) = config.params.palw_claim_challenge_v2.filter(|f| f.activation.is_active(0)) {
         manifest["paidClaimPrivatePolicy"] = serde_json::json!(true);
         manifest["paidClaimMaximumRounds"] = serde_json::json!(fence.policy.maximum_rounds);
+        // 2026-10-15: the mechanics-only Panel lifetime and paid consumer lifecycle the paid-v3 factory arms beside PAV3.
+        if let Some(lifetime) = config.params.palw_panel_lifetime_v2.filter(|f| f.activation.is_active(0)) {
+            manifest["paidPanelLifetimePolicyId"] = serde_json::json!(lifetime.policy.id().to_string());
+        }
+        if let Some(consumer) = config.params.palw_paid_consumer_lifecycle_v1.as_ref().filter(|f| f.activation.is_active(0)) {
+            manifest["paidConsumerLifecyclePolicy"] = serde_json::json!({
+                "digest": consumer.policy.digest().to_string(), "serviceSpanDaa": consumer.policy.service_span_daa,
+                "disputeTailDaa": consumer.policy.dispute_tail_daa, "materialTailDaa": consumer.policy.material_tail_daa,
+                "approved": false,
+            });
+        }
     }
     manifest
 }
@@ -339,7 +352,31 @@ pub fn create_private_integration_core_with_runtime(
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     prepare_private_integration_probe(args, &config)?;
     kaspa_core::warn!("RFC12 PRIVATE INTEGRATION PROBE: injected test policy; release/soundness evidence remains unapproved");
-    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config)))
+    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), None))
+}
+
+/// The paid-v3 private node with the RFC-0008 PAV3 loopback native custody wiring (unverified source): a provider service
+/// over fixture provider bonds and/or the exchange this node's producer seals through. The spec is checked against the
+/// salted fixture and the producer's own key/bond/operator before any service or DB opens.
+pub fn create_private_integration_core_with_native_custody_v3(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: PrivateNativeCustodySpecV3,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if !config.params.palw_claim_challenge_v2.is_some_and(|f| f.activation.is_active(0))
+        || config.params.palw_monetary_material_v1.is_none()
+    {
+        return Err("the private PAV3 native custody wiring belongs to the paid-v3 profile only".into());
+    }
+    native.check_fixture(&config, args)?;
+    prepare_private_integration_probe(args, &config)?;
+    kaspa_core::warn!(
+        "RFC12 PRIVATE INTEGRATION PROBE: injected test policy and a PAV3 loopback native custody exchange; release/soundness \
+         evidence remains unapproved"
+    );
+    Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), Some(native.into_hook())))
 }
 
 /// Validate and pin ownership before Runtime opens a log or any node service.

@@ -820,6 +820,20 @@ enum SourceCmd {
         #[arg(long, value_name = "FILE")]
         out: std::path::PathBuf,
     },
+    /// Write the canonical PALW state carriage the pinned block's header commits (op 243; the selected parent's post-state) — the
+    /// `--carriage` file offline `palw-class panel-lifetime-v2` restores — and print its state root for `--state-root`. The
+    /// assembled carriage must restore to exactly the pinned header's committed root; any mismatch writes nothing.
+    Carriage {
+        /// The pinned block, from the caller's authenticated selected chain.
+        #[arg(long, value_name = "BLOCK_HASH")]
+        block: String,
+        /// Optional ADR-0043 state root the caller already holds; refused unless the carriage restores to it.
+        #[arg(long, value_name = "ROOT")]
+        state_root: Option<String>,
+        /// New file (refused if it exists).
+        #[arg(long, value_name = "FILE")]
+        out: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -3330,6 +3344,9 @@ async fn run_cli() -> std::process::ExitCode {
         }
         Command::Model(ModelCmd::Source(SourceCmd::Snapshot { ledger_root, aux_root, out })) => {
             Box::pin(async move { operator::model_source::snapshot(ctx, &ledger_root, &aux_root, &out).await })
+        }
+        Command::Model(ModelCmd::Source(SourceCmd::Carriage { block, state_root, out })) => {
+            Box::pin(async move { operator::model_source::carriage(ctx, &block, state_root.as_deref(), &out).await })
         }
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => Box::pin(async move {
             match profile(&args) {

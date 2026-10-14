@@ -5,7 +5,8 @@ use super::*;
 impl Params {
     /// **The three fences of the 2026-10-12 rulings** (register §3): `palw_court_model_scope_v1` (D2), `palw_public_evidence_reward_v1`
     /// (N4) and `palw_claim_hard_deadline_v1` (X3). Each is refused when armed at a real height until its rule is built and verified;
-    /// `None` and `Some(never())` pass.
+    /// `None` and `Some(never())` pass. The rules exist as dormant, unverified source (`crate::palw_ruling_fences_v1`, 2026-10-15);
+    /// the refusal stays until they are verified and the user approves the X3 policy values.
     pub fn validate_palw_2026_10_12_ruling_fences_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         for (fence, why) in [
             (
@@ -17,7 +18,7 @@ impl Params {
                 "palw_public_evidence_reward_v1 cannot be armed: its rule (register N4, ruling 2026-10-12) is not built and verified yet",
             ),
             (
-                self.palw_claim_hard_deadline_v1,
+                self.palw_claim_hard_deadline_v1.map(|f| f.activation),
                 "palw_claim_hard_deadline_v1 cannot be armed: its rule (register X3, ruling 2026-10-12) is not built and verified yet",
             ),
         ] {
@@ -37,7 +38,8 @@ impl Params {
                 "palw_court_model_scope_v1 needs palw_legacy_held_da_v2 in force at or below it (its StepLeaf half)",
             ));
         }
-        Ok(())
+        // The mirrors the fold reads (`crate::palw_ruling_fences_v1`) agree with the fences; an X3 policy is structurally sound.
+        self.validate_palw_2026_10_12_ruling_mirrors_v1()
     }
 
     /// **The model-specific court window's prerequisite** (`palw_model_court_window`, the DAA-3,600 flag day): the
@@ -178,6 +180,10 @@ impl Params {
         self.validate_palw_panel_lifetime_v2()?;
         self.validate_palw_claim_challenge_v2()?;
         self.validate_palw_monetary_material_v1()?;
+        // RFC07/RFC08 signed economic contracts (`crate::palw_econ_contracts_v1`): each refused when armed.
+        self.validate_palw_model_verification_gate_v1()?;
+        self.validate_palw_horizon_extension_v1()?;
+        self.validate_palw_minimum_price_v1()?;
         self.validate_palw_paid_consumer_lifecycle_v1()?;
         self.validate_palw_model_bond_allocation_v1()?;
         // **ADR-0032's amended reporter share** (`crate::palw_reporter_share_v2`): refused when armed.

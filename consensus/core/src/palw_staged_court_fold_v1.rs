@@ -286,6 +286,14 @@ pub(super) fn open(
         .envelope;
         let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
         let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
+        // X3 (REQ-X3-3, `palw_claim_hard_deadline_v1`): a claim accepted past the fence has its deadlines fixed at acceptance — a
+        // paid stage that would move its retention (and with it the hard deadline: `hard.max(new)` below) is refused, before any
+        // write. Below the fence the extension is the OLD rule, unchanged.
+        if extended_terms.material_until_daa > extended_claim.trace_retention_daa
+            && crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(b.params, &extended_claim)
+        {
+            return Err(stage_refused(seed.claim, "X3: a paid stage cannot extend a claim's deadlines fixed at acceptance"));
+        }
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
         let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
             &extended_claim,
@@ -375,6 +383,14 @@ pub(super) fn open(
         .map_err(|e| stage_refused(seed.claim, e))?;
         let extended_terms = contract.terms.extend_paid_work_v1(ctx.daa_score, plan).map_err(|e| stage_refused(seed.claim, e))?;
         let mut extended_claim = b.state.claim(&seed.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(seed.claim))?;
+        // X3 (REQ-X3-3, `palw_claim_hard_deadline_v1`): a claim accepted past the fence has its deadlines fixed at acceptance — a
+        // paid stage that would move its retention (and with it the hard deadline: `hard.max(new)` below) is refused, before any
+        // write. Below the fence the extension is the OLD rule, unchanged.
+        if extended_terms.material_until_daa > extended_claim.trace_retention_daa
+            && crate::palw_ruling_fences_v1::palw_claim_x3_governs_v1(b.params, &extended_claim)
+        {
+            return Err(stage_refused(seed.claim, "X3: a paid stage cannot extend a claim's deadlines fixed at acceptance"));
+        }
         extended_claim.trace_retention_daa = extended_claim.trace_retention_daa.max(extended_terms.material_until_daa);
         let hard = crate::palw_legacy_public_filer_v1::palw_dispute_hard_deadline_v1(
             &extended_claim,

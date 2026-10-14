@@ -84,7 +84,7 @@ pub const TAG_SEAL_MODEL_REFUTATION_V4: u8 = 36;
 /// The reveal of a sealed refutation (kind, target, salt, exact proof bytes).
 pub const TAG_REVEAL_MODEL_REFUTATION_V4: u8 = 37;
 // 16–18 are K2S's (K2-TIR-v4); 21–37 are RFC-02's (conformance classes, model artifact binding / conformance, model refutation
-// seal v4) on the integration line, 38/39 are G14R's verifier pay (reserved, not yet used); registry
+// seal v4) on the integration line, 38/39 are G14R's verifier pay (39 `AttestDrawnCheckV1` landed 2026-10-15; 38 reserved); registry
 // `remaining-rfc-integration-matrix.md` §2.
 // 41–60: RFC-0002 codex final (`codex/rfc02-review-completion`): protected flat candidate v6 (41–44), complete-scope mixed
 // candidate v7 (45–52), ordinary-point mixed candidate v9 (53–60). Codex numbered them 36–55 on its branch; 36/37 are

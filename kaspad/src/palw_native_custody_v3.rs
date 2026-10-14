@@ -122,7 +122,10 @@ pub fn palw_native_roster_refusal_v3(executor_operator: Hash64, operators: &[(Pa
 /// The one-scope manifest the DRAW is priced with: the session's root and codec and this exact execution, with unit
 /// placeholders for the bundle's bytes/units/content. `priced_execution` reads none of those, so the ticket is the final
 /// envelope's ticket (re-checked after assembly); the placeholder is never signed or published.
-pub fn palw_native_draw_manifest_v3(row: &PalwMonetaryMaterialRowV1, attempt: &PalwAttemptUnsignedV2) -> Result<PalwMaterialManifestV1, String> {
+pub fn palw_native_draw_manifest_v3(
+    row: &PalwMonetaryMaterialRowV1,
+    attempt: &PalwAttemptUnsignedV2,
+) -> Result<PalwMaterialManifestV1, String> {
     let session = row.terms.native_session.as_ref().ok_or("row carries no prospective native session")?;
     Ok(PalwMaterialManifestV1 {
         root: row.terms.root,
@@ -233,9 +236,13 @@ pub fn palw_native_check_signatures_v3(
     }
     let id = ready.id();
     for provider in &ready.providers {
-        let key = provider_keys.iter().find(|(p, _)| p == provider).map(|(_, key)| key).ok_or("a roster provider has no registered key")?;
+        let key =
+            provider_keys.iter().find(|(p, _)| p == provider).map(|(_, key)| key).ok_or("a roster provider has no registered key")?;
         if !verify_ready_signature_v3(key, id.as_byte_slice(), &signatures[provider], PALW_MATERIAL_READY_CONTEXT_V3) {
-            return Err(format!("provider {}:{} returned a Ready signature that does not verify", provider.0.transaction_id, provider.0.index));
+            return Err(format!(
+                "provider {}:{} returned a Ready signature that does not verify",
+                provider.0.transaction_id, provider.0.index
+            ));
         }
     }
     Ok(())
