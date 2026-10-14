@@ -42,6 +42,14 @@ fn run() -> Result<(), String> {
         Some("true") => true,
         _ => return Err("--redemption requires literal true or false".into()),
     };
+    // Optional spend35: the payee's own spending transaction (local file) plus the
+    // chain block that accepted it; acceptance ids come from the node and are
+    // authenticated later by palw-class against the pinned headers only.
+    let spend_chain = args.remove("--spend-chain-block").map(|v| v.parse::<Hash64>().map_err(|e| format!("spend chain: {e}"))).transpose()?;
+    let spend_tx = args.remove("--spend-tx-json").map(PathBuf::from);
+    if spend_chain.is_some() != spend_tx.is_some() || (spend_chain.is_some() && !redemption) {
+        return Err("spend35 needs --spend-chain-block, --spend-tx-json and --redemption true together".into());
+    }
     let max_blocks = args.remove("--max-blocks").map(|s| s.parse::<usize>().map_err(|e| e.to_string())).transpose()?.unwrap_or(512);
     let timeout = args.remove("--timeout-seconds").map(|s| s.parse::<u64>().map_err(|e| e.to_string())).transpose()?.unwrap_or(30);
     if !args.is_empty()
@@ -183,6 +191,50 @@ fn run() -> Result<(), String> {
         let raw = audit.native_coinbase_proof.as_ref().ok_or("node omitted actual validated coinbase inclusion proof")?;
         misaka_palw_sdk::native_redemption_v33::decode_coinbase_proof_v33(raw)?;
         keep(&out, "native-coinbase-proof33.borsh", raw, &mut total, &mut evidence)?;
+    }
+    if let (Some(chain_hash), Some(tx_path)) = (spend_chain, spend_tx.as_ref()) {
+        let raw = misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(tx_path, 8 << 20)?;
+        let spend: kaspa_consensus_core::tx::Transaction = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+        let (chain_block, chain_parent, accepted) = runtime.block_on(async {
+            let chain_block = tokio::time::timeout(Duration::from_secs(timeout), client.get_block(chain_hash, false))
+                .await
+                .map_err(|_| "spend chain timeout".to_string())?
+                .map_err(|e| e.to_string())?;
+            let parent_hash =
+                chain_block.verbose_data.as_ref().ok_or("spend chain block omits selected parent")?.selected_parent_hash;
+            let chain_parent = tokio::time::timeout(Duration::from_secs(timeout), client.get_block(parent_hash, false))
+                .await
+                .map_err(|_| "spend selected-parent timeout".to_string())?
+                .map_err(|e| e.to_string())?;
+            let chain = tokio::time::timeout(Duration::from_secs(timeout), client.get_virtual_chain_from_block(parent_hash, true, None))
+                .await
+                .map_err(|_| "spend acceptance timeout".to_string())?
+                .map_err(|e| e.to_string())?;
+            let accepted = chain
+                .accepted_transaction_ids
+                .into_iter()
+                .find(|a| a.accepting_block_hash == chain_hash)
+                .ok_or("node reports no acceptance for the requested spend chain block")?
+                .accepted_transaction_ids;
+            Ok::<_, String>((chain_block, chain_parent, accepted))
+        })?;
+        let chain_header = Header::try_from(&chain_block.header).map_err(|e| e.to_string())?;
+        let parent_header = Header::try_from(&chain_parent.header).map_err(|e| e.to_string())?;
+        let proof = kaspa_consensus_core::palw_native_spend_v35::prove_native_accepted_spend_v35(
+            chain_hash,
+            kaspa_consensus_core::hashing::header::hash(&parent_header),
+            accepted,
+            spend,
+        )?;
+        keep(&out, "spend-chain-header.json", &serde_json::to_vec(&chain_header).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
+        keep(
+            &out,
+            "spend-selected-parent-header.json",
+            &serde_json::to_vec(&parent_header).map_err(|e| e.to_string())?,
+            &mut total,
+            &mut evidence,
+        )?;
+        keep(&out, "native-accepted-spend35.json", &serde_json::to_vec(&proof).map_err(|e| e.to_string())?, &mut total, &mut evidence)?;
     }
     keep(&out, "aux-proof32.borsh", &aux, &mut total, &mut evidence)?;
     keep(&out, "payout-proof32.borsh", &payouts, &mut total, &mut evidence)?;

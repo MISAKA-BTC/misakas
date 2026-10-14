@@ -89,6 +89,7 @@ pub mod native_audit_v32;
 pub mod native_params_v34;
 pub mod native_payload_v29;
 pub mod native_redemption_v33;
+pub mod native_spend_v35;
 /// Same native derivation for full25 / first-EOS29 maximum contracts.
 pub mod native_text_v29;
 /// G14 onboarding P0: the signed registration envelope (tag 108), the conformance evidence object (tag 109) and the fresh verifier

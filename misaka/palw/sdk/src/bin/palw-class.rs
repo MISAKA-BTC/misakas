@@ -57,7 +57,9 @@ USAGE:
                          --pinned-child <128hex> --pinned-selected-parent <128hex> --job <128hex>
                          --aux-proof32 <file> --payout-proof32 <file> --out <fresh.json> [--raw-record-borsh <file>] [--fork-opening-borsh <file>]
                          [--coinbase-proof33-borsh <file> --post-header-json <file> --pinned-post-header <128hex>
-                          --post-payout-proof32 <file> --payout-output-index N [--post-fork-opening-borsh <file>]]
+                          --post-payout-proof32 <file> --payout-output-index N [--post-fork-opening-borsh <file>]
+                         [--accepted-spend35-json <file> --spend-chain-header-json <file> --pinned-spend-chain <128hex>
+                          --spend-selected-parent-header-json <file> --pinned-spend-selected-parent <128hex>]]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
@@ -771,6 +773,11 @@ fn run(args: &[String]) -> Result<(), String> {
             let post_payout = take_flag(&mut args, "--post-payout-proof32");
             let delivery_index = take_flag(&mut args, "--payout-output-index");
             let post_fork_path = take_flag(&mut args, "--post-fork-opening-borsh");
+            let spend_path = take_flag(&mut args, "--accepted-spend35-json");
+            let spend_chain_path = take_flag(&mut args, "--spend-chain-header-json");
+            let spend_chain_pin = take_flag(&mut args, "--pinned-spend-chain");
+            let spend_parent_path = take_flag(&mut args, "--spend-selected-parent-header-json");
+            let spend_parent_pin = take_flag(&mut args, "--pinned-spend-selected-parent");
             let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh diagnostic report required")?);
             if !args.is_empty() || output.exists() {
                 return Err("audit32 exact options/fresh report required".into());
@@ -824,19 +831,50 @@ fn run(args: &[String]) -> Result<(), String> {
                     output_index,
                 )?;
                 let credit = delivered.delivery();
+                // spend35: the exact original outpoint consumed by a transaction ACCEPTED into an
+                // independently pinned chain block (implies maturity, prior unspentness and spend).
+                let spend = if let Some(path) = spend_path.as_ref() {
+                    let proof = misaka_palw_sdk::native_spend_v35::read_accepted_spend_proof_v35(std::path::Path::new(path))?;
+                    let chain = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(
+                        spend_chain_path.as_deref().ok_or("--spend-chain-header-json required for spend35")?,
+                    ))?;
+                    let parent = misaka_palw_sdk::native_audit_io_v32::read_header_v32(std::path::Path::new(
+                        spend_parent_path.as_deref().ok_or("--spend-selected-parent-header-json required for spend35")?,
+                    ))?;
+                    let checked = misaka_palw_sdk::native_spend_v35::verify_native_credit_spend_v35(
+                        &delivered,
+                        &child,
+                        &proof,
+                        &chain,
+                        pin(spend_chain_pin.clone(), "--pinned-spend-chain")?,
+                        &parent,
+                        pin(spend_parent_pin.clone(), "--pinned-spend-selected-parent")?,
+                        &view.params,
+                    )?;
+                    let s = checked.spend();
+                    serde_json::json!({"schema":"misaka.palw.pinned-original-credit-accepted-spend.v35","proof_root":hex(&checked.root()),
+                        "spend_transaction":s.spend().to_string(),"accepting_chain_block":s.chain_block().to_string(),
+                        "accepting_chain_daa":s.chain_daa(),"payment_daa":s.payment_daa(),
+                        "accepted_spend_of_original_outpoint_verified":true,"utxo_maturity_verified":true,"spend_verified":true})
+                } else {
+                    serde_json::Value::Null
+                };
+                let spent = !spend.is_null();
                 serde_json::json!({"schema":"misaka.palw.pinned-original-credit-delivery.v33","proof_root":hex(&delivered.root()),
                     "payment_block":hex(&credit.block().as_bytes()),"post_header":hex(&delivered.post_header().as_bytes()),
                     "outpoint":format!("{}:{}",credit.outpoint().transaction_id,credit.outpoint().index),"amount":credit.amount(),
                     "original_job":hex(&credit.job()),"original_credit":hex(&credit.credit()),"payload":hex(&credit.payload()),
                     "before_state":hex(&credit.before_state().as_bytes()),"after_state":hex(&credit.after_state().as_bytes()),
                     "real_coinbase_inclusion_and_original_queue_consumption_verified":true,
-                    "utxo_maturity_verified":false,"current_unspentness_verified":false,"spend_verified":false,"A6_or_A8_credit":false})
+                    "accepted_spend":spend,"utxo_maturity_verified":spent,"current_unspentness_verified":false,"spend_verified":spent,
+                    "A6_or_A8_credit":false})
             } else {
                 if post_path.is_some()
                     || post_pin.is_some()
                     || post_payout.is_some()
                     || delivery_index.is_some()
                     || post_fork_path.is_some()
+                    || spend_path.is_some()
                 {
                     return Err("delivery33 options require --coinbase-proof33-borsh".into());
                 }
@@ -856,7 +894,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 "qualified_native_profile":checked.rfc02_qualified(),"own_snapshot_root":own_snapshot.map(|v|hex(&v)),
                 "calibration_receipts_are_not_A6_or_A8_evidence":!checked.rfc02_qualified(),
                 "pinned_headers_and_original_rows_verified":true,"chain_selection_and_validation":"external-independent-pins-required",
-                "coinbase_delivery":delivery,"utxo_redemption_verified":false,"A6_or_A8_credit":false});
+                "utxo_redemption_verified":delivery.get("spend_verified").and_then(|v| v.as_bool()).unwrap_or(false),
+                "coinbase_delivery":delivery,"A6_or_A8_credit":false});
             use std::io::Write;
             std::fs::OpenOptions::new()
                 .write(true)
