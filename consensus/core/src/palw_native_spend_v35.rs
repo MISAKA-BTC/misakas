@@ -107,7 +107,7 @@ pub fn verify_native_accepted_spend_v35(
         || crate::hashing::header::hash(chain) != pinned_chain
         || crate::hashing::header::hash(selected_parent) != pinned_selected_parent
         || crate::hashing::header::hash(payment) != redemption.block()
-        || !chain.parents_by_level.first().is_some_and(|parents| parents.contains(&pinned_selected_parent))
+        || !chain.parents_by_level.get(0).is_some_and(|parents| parents.contains(&pinned_selected_parent))
         || proof.accepted_ids.is_empty()
         || proof.accepted_ids.len() > NATIVE_SPEND_MAX_ACCEPTED_IDS_V35
     {

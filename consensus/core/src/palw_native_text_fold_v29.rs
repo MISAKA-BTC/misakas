@@ -1954,25 +1954,60 @@ fn collect_terminal(
     if source_row.plan_root != q.source.root() || source_row.original_consent_root != f.consent {
         return Err(refused("text29 collection original source consent/quote differs"));
     }
-    let mut shard = quota_shard(builder, p, &epoch, palw_kernel_bond_id_v1(signer), id)?;
+    // The producer's same-interval source retirement and the caller's collection
+    // shard must share ONE global row lineage: the caller shard is rebuilt from the
+    // retired source shard's rows, so neither write can overwrite the other.
+    let same_interval = epoch.network_interval == f.admitted_interval;
     let mut producer_source = None;
-    if !source_row.retired {
-        if epoch.network_interval == f.admitted_interval {
-            let base = quota_shard(builder, p, &epoch, f.request.producer, id)?;
-            let mut src = source_shard_from_rows(
-                p,
-                &q.source,
-                &base.global_row(),
-                &base.actor_row(),
-                base.subject_row().ok_or_else(|| refused("text29 collection original subject absent"))?,
-                Some((&source_row, &source_root)),
-            )?;
-            src.retire(&p.quota, &epoch, &q.source, &terminal).map_err(refused)?;
-            producer_source = Some(src);
-        } else {
-            retire_expired_source_v16(&mut shard, &p.quota, &epoch, &q.source, &source_row, &source_root, &terminal)
-                .map_err(refused)?;
+    let mut source_retired = source_row.root();
+    if !source_row.retired && same_interval {
+        let base = quota_shard(builder, p, &epoch, f.request.producer, id)?;
+        let mut src = source_shard_from_rows(
+            p,
+            &q.source,
+            &base.global_row(),
+            &base.actor_row(),
+            base.subject_row().ok_or_else(|| refused("text29 collection original subject absent"))?,
+            Some((&source_row, &source_root)),
+        )?;
+        src.retire(&p.quota, &epoch, &q.source, &terminal).map_err(refused)?;
+        source_retired = src.source_row().ok_or_else(|| refused("text29 collection retired source row absent"))?.root();
+        producer_source = Some(src);
+    }
+    let actor = palw_kernel_bond_id_v1(signer);
+    let mut shard = match &producer_source {
+        Some(src) => {
+            let g = src.global_row().clone();
+            let producer_row = src.producer_row().clone();
+            let state_actor =
+                read_rooted::<QuotaActorRowV11>(r, quota_key(1, &actor), QUOTA_SELECTED_ACTOR_ROW_BYTES_V11 as usize)?;
+            let a = if producer_row.actor == actor {
+                Some((producer_row.root(), producer_row))
+            } else {
+                state_actor
+            };
+            let subject =
+                read_rooted::<QuotaSubjectSummaryV11>(r, quota_key(2, &id), QUOTA_SELECTED_SUBJECT_ROW_BYTES_V11 as usize)?;
+            CheckedQuotaShardV11::from_native_rows(
+                &p.quota,
+                &g,
+                &g.root(),
+                actor,
+                id,
+                None,
+                a.as_ref().map(|(root, row)| (row, root)),
+                subject.as_ref().map(|(root, row)| (row, root)),
+                None,
+            )
+            .map_err(refused)?
         }
+        None => quota_shard(builder, p, &epoch, actor, id)?,
+    };
+    if !source_row.retired && !same_interval {
+        source_retired =
+            retire_expired_source_v16(&mut shard, &p.quota, &epoch, &q.source, &source_row, &source_root, &terminal)
+                .map_err(refused)?
+                .root();
     }
     // Joint original queue30 + physical22 retirement, exactly once.
     let (qlease_root, mut qlease): (Digest, NativeQueueLeaseV30) = r
@@ -2047,7 +2082,12 @@ fn collect_terminal(
     builder.write_kernel_row(
         EXECUTION_CREDIT_TABLE_V11,
         k(4, &id),
-        Some(key(&(b.root(), object_id(b"misaka-palw/native/text-collected-credit/v29", &(&s, queue, established)), ctx.daa_score))),
+        Some(key(&(
+            b.root(),
+            object_id(b"misaka-palw/native/text-collected-credit/v29", &(&s, queue, established)),
+            source_retired,
+            ctx.daa_score,
+        ))),
     );
     for owner in &owners {
         builder.write_kernel_row(EXECUTION_QUOTA_TABLE_V11, key(&(29u8, id, *owner)), None);
