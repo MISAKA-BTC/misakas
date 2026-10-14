@@ -2259,6 +2259,8 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // ---- header carriage forms and coinbase trailers ----
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 7, magic: *b"PFS4" }, "palw_receipt_spend_v4", "RFC-0009 V4 receipt carriage", true),
     a2_row(PalwA2SlotV1::HeaderForm { algo_id: 10, magic: *b"PXE2" }, "palw_exec_payload_v2", "X8R EXEC envelope", true),
+    a2_row(PalwA2SlotV1::HeaderForm { algo_id: 6, magic: *b"PAV3" }, "palw_monetary_material_v1", "signed native custody capture", true),
+    a2_row(PalwA2SlotV1::HeaderForm { algo_id: 9, magic: *b"PAV3" }, "palw_monetary_material_v1", "signed native custody capture execution lane", true),
     a2_row(PalwA2SlotV1::CoinbaseTrailer { magic: *b"PXA2" }, "palw_exec_payload_v2", "X8R anchor trailer", false),
     a2_row(
         PalwA2SlotV1::Int12Inner { key: "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1" },
@@ -4720,9 +4722,9 @@ pub(crate) mod tests {
             (165, 0x868504c5edc94377),
             (166, 0x1d9abdb5bb45bba5),
             (167, 0x38f4084b1c64b5bb),
-            (240, 0x1e3927497888f406),
-            (241, 0xea3ca0815325dc6e),
-            (242, 0x4755be04217925fc),
+            (240, 0x8ea49ad6543fd3f7),
+            (241, 0xa639b5230cf04abf),
+            (242, 0xd29d0349b76c136f),
             (131, 0xf970df6a8bdc323c),
         ];
 

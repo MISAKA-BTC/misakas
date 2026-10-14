@@ -149,6 +149,7 @@ pub enum KaspadPayloadOps {
     GetPalwFraudFilerStatus,
     GetPalwPanelV3Status,
     GetPalwExecV2Status,
+                GetPalwMonetaryMaterial,
     GetPalwRewardVesting,
     GetPalwKernelClaim,
     GetPalwKernelRows,

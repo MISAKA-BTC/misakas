@@ -28,6 +28,7 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Self {
         Self {
             params,
+            monetary_native_ready: BTreeMap::new(),
             state: parent.clone(),
             entries: Vec::new(),
             registration_index: None,

@@ -12525,6 +12525,7 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    monetary_native_ready: BTreeMap<Hash64,(Hash64,crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
@@ -13853,6 +13854,20 @@ fn apply_palw_transition_v7_inner(
     let mut builder =
         TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
 
+    // Prospective custody is authenticated against the pre-object parent. A
+    // same-block enrollment/replacement never authorizes this block's capture.
+    if params.monetary_material_at_v1(ctx.daa_score).is_some() {
+        for bytes in extras.exec_v2_origin_headers.values() {
+            let header:crate::header::Header=borsh::from_slice(bytes).map_err(|_|PalwStateV2Error::ExecV2Refused("native ready origin header malformed".into()))?;
+            if crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+                let ready=crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment).map_err(PalwStateV2Error::ExecV2Refused)?;
+                let a=&ready.base.attempt;
+                let anchor=crate::palw_attempt_v2::execution_anchor_v3(a.network_domain,crate::hashing::header::pre_pow_hash_64(&header),a.class_id,&a.executor_bond,header.nonce);
+                ready.verify_prior(parent,anchor,header.daa_score,|key,message,sig,context|crate::palw_attempt_material_v3::verify_ready_signature_v3(key,message,sig,context)).map_err(PalwStateV2Error::ExecV2Refused)?;
+                builder.monetary_native_ready.insert(ready.ready.binding.claim,(ready.ready.session,ready.ready.binding));
+            }
+        }
+    }
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
     //     NEXT one, and clearing after would erase it. Every node applying this block clears the
@@ -20757,7 +20772,8 @@ fn apply_attempt(
     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
-    builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
+    let monetary_ready=palw_monetary_material_fold_v1::plan_native_ready(builder,ctx,claim_id)?;
+    if monetary_ready.is_none() {builder.state.require_native_monetary_material_scope_v1(builder.params,claim_id,&claim)?;}
     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
     let budget_plan = builder.plan_attempt_budget_v1(ctx, &claim, &attempt.artifact_root, origin.rider, origin.budget_block_units)?;
     let claim = match &budget_plan {
@@ -20767,6 +20783,7 @@ fn apply_attempt(
         None => claim,
     };
     let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
+    if let Some(row)=&monetary_ready {palw_monetary_material_fold_v1::bind_native_ready(builder,row);}
     builder.reserve_for_claim(&claim)?;
     if let Some(contract) = consumer_plan {
         builder.commit_paid_consumer_v1(claim_id, contract)?;

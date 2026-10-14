@@ -49,15 +49,18 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     if config.private_population.is_some() || config.params.skip_proof_of_work {
         return Err("paid private work requires a real PoW private chain without synthetic population".into());
     }
-    let mut bytes = Vec::new();
-    std::fs::File::open(request_file)
-        .map_err(|e| e.to_string())?
-        .take((256 * 1024 * 1024 + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > 256 * 1024 * 1024 {
-        return Err("paid work request exceeds fixed file bound".into());
+    let mut file = std::fs::File::open(request_file).map_err(|e| e.to_string())?;
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    if length > 64 * 1024 * 1024 {
+        return Err("paid work request exceeds 64 MiB private frame bound".into());
     }
+    let mut bytes = vec![0; length as usize];
+    file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+    let mut trailing = [0];
+    if file.read(&mut trailing).map_err(|e| e.to_string())? != 0 {
+        return Err("paid work request changed length during bounded read".into());
+    }
+    preflight_request_v3(&bytes)?;
     let request: PrivatePaidProgramRequestV3 = borsh::from_slice(&bytes).map_err(|e| e.to_string())?;
     if request.version != 3 {
         return Err("unknown private paid work contract".into());
@@ -116,4 +119,111 @@ pub fn export_private_paid_program_work_v3(config: &Config, request_file: &Path,
     write_new(&output.join("manifest.json"), &serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?)?;
     std::fs::File::open(output).and_then(|d| d.sync_all()).map_err(|e| format!("paid work directory sync: {e}"))?;
     Ok(manifest)
+}
+
+/// Exact schema walk before Borsh allocates any request-owned collection. Each
+/// row uses the native codec scanner, including nested class/program and aux
+/// rows. This bounds restoration; root membership and execution workspace are
+/// checked separately after restoration by the pinned route and producer.
+fn preflight_request_v3(bytes: &[u8]) -> Result<(), String> {
+    use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteHeaderV1;
+    use kaspa_consensus_core::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, preflight_kernel_served_row_v1};
+    use std::io::Read;
+    fn blob<'a>(r: &mut &'a [u8], cap: usize) -> Result<&'a [u8], String> {
+        let mut word = [0; 4];
+        r.read_exact(&mut word).map_err(|e| e.to_string())?;
+        let n = u32::from_le_bytes(word) as usize;
+        if n > cap || n > r.len() {
+            return Err("private request field exceeds exact frame/cap".into());
+        }
+        let (value, tail) = r.split_at(n);
+        *r = tail;
+        Ok(value)
+    }
+    fn take<'a>(r: &mut &'a [u8], n: usize) -> Result<&'a [u8], String> {
+        if n > r.len() {
+            return Err("truncated private request".into());
+        }
+        let (value, tail) = r.split_at(n);
+        *r = tail;
+        Ok(value)
+    }
+    fn word(r: &mut &[u8]) -> Result<usize, String> {
+        Ok(u32::from_le_bytes(take(r, 4)?.try_into().unwrap()) as usize)
+    }
+    let mut r = bytes;
+    if take(&mut r, 2)? != 3u16.to_le_bytes() {
+        return Err("unknown private request version".into());
+    }
+    let header = blob(&mut r, 1024 * 1024)?;
+    let mut scan = NativeWireReaderV1::new(header, header.len() as u64);
+    let shape = PalwKernelRouteHeaderV1::scan_native_wire_v1(&mut scan).map_err(|e| e.to_string())?;
+    if scan.remaining() != 0 {
+        return Err("private route header has trailing codec bytes".into());
+    }
+    let mut heap = u128::from(shape.heap) + bytes.len() as u128;
+    let count = word(&mut r)?;
+    if count > 65_536 {
+        return Err("private request row count exceeds 65536".into());
+    }
+    // One request Vec tuple and one native BTree node plus Vec metadata/key
+    // copies. Row-specific decoding allocations are added by its exact scanner.
+    heap += count as u128 * 512;
+    for _ in 0..count {
+        let table = take(&mut r, 1)?[0];
+        let key = blob(&mut r, 137)?;
+        let row = blob(&mut r, 32 * 1024 * 1024)?;
+        let shape = preflight_kernel_served_row_v1(table, key, row).map_err(|e| e.to_string())?;
+        heap = heap
+            .checked_add(u128::from(shape.heap) + 2 * (key.len() + row.len()) as u128)
+            .ok_or("private decode heap arithmetic overflow")?;
+        if heap > 256 * 1024 * 1024 {
+            return Err("private restored request exceeds 256 MiB decode workspace".into());
+        }
+    }
+    take(&mut r, 7 * 64 + 8 + 4)?; // roots, job/class/enrollment terms, anchor, card
+    let tensors = word(&mut r)?;
+    if tensors > 16_384 {
+        return Err("private artifact map exceeds 16384 instances".into());
+    }
+    let mut previous = None;
+    for _ in 0..tensors {
+        let param = u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap());
+        let layer = match take(&mut r, 1)?[0] {
+            0 => None,
+            1 => Some(u16::from_le_bytes(take(&mut r, 2)?.try_into().unwrap())),
+            _ => return Err("private artifact has invalid option tag".into()),
+        };
+        if previous.is_some_and(|p| p >= (param, layer)) {
+            return Err("private artifact keys are not strictly canonical".into());
+        }
+        previous = Some((param, layer));
+        let dtype = misaka_palw_kernel::plan::dtype_of_tag(take(&mut r, 1)?[0]).ok_or("unknown tensor dtype")?;
+        let rank = word(&mut r)?;
+        if rank > 12 {
+            return Err("private tensor rank exceeds 12".into());
+        }
+        let mut elements = 1u128;
+        for _ in 0..rank {
+            let d = u64::from_le_bytes(take(&mut r, 8)?.try_into().unwrap());
+            if d == 0 {
+                return Err("private tensor has zero axis".into());
+            }
+            elements = elements.checked_mul(u128::from(d)).ok_or("private tensor shape overflow")?;
+        }
+        let data = blob(&mut r, 32 * 1024 * 1024)?;
+        if elements.checked_mul(dtype.width() as u128) != Some(data.len() as u128) {
+            return Err("private tensor shape/dtype does not match exact data bytes".into());
+        }
+        heap = heap
+            .checked_add(elements.checked_mul(16).ok_or("private tensor decoded heap overflow")? + data.len() as u128 + 512)
+            .ok_or("private tensor aggregate heap overflow")?;
+        if heap > 256 * 1024 * 1024 {
+            return Err("private artifact and restored rows exceed 256 MiB decode workspace".into());
+        }
+    }
+    if !r.is_empty() {
+        return Err("private request has trailing bytes".into());
+    }
+    Ok(())
 }

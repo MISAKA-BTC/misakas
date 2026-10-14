@@ -892,3 +892,7 @@ pub mod palw_claim_interactive_v3;
 pub mod palw_material_capacity_v1;
 
 pub mod palw_monetary_material_evidence_v1;
+
+pub mod palw_monetary_material_rpc_v1;
+
+pub mod palw_attempt_material_v3;

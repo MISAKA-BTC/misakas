@@ -400,6 +400,7 @@ impl ConsensusSessionOwned {
         self.consensus.palw_material_income_hold_until_v1(claim)
     }
 
+    pub fn palw_native_material_provider_authority_v3(&self,checkpoint:BlockHash,header:&kaspa_consensus_core::header::Header,ready:&kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3)->Result<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3,String> {self.consensus.palw_native_material_provider_authority_v3(checkpoint,header,ready)}
     pub fn palw_monetary_material_covenants_v1(
         &self,
     ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
@@ -418,6 +419,11 @@ impl ConsensusSessionOwned {
 
     pub fn palw_monetary_material_unused_offer_finalized_v1(&self, root: Hash64, enrollment_until: u64) -> Result<bool, String> {
         self.consensus.palw_monetary_material_unused_offer_finalized_v1(root, enrollment_until)
+    }
+
+    pub fn palw_monetary_aux_page_v1(&self, block: BlockHash, row: u64, offset: u64, limit: usize)
+        -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+        self.consensus.palw_monetary_aux_page_v1(block, row, offset, limit)
     }
 
     pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {

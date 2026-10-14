@@ -232,9 +232,9 @@ impl DbPalwStateV2Store {
             .with_canonical_work_daa(self.canonical_work_daa)
     }
 
-    /// If the stored schema is not this build's, delete rows and tip TOGETHER and stamp the new
-    /// version — directly, not batched, because a store that stamped without clearing (or cleared
-    /// without stamping) would vouch for rows it no longer understands.
+    /// If the stored schema is not this build's, retire derived rows, tip and
+    /// servable snapshot in one synchronous batch with the new version. A partial
+    /// clear or a schema stamp published before its commit cannot authorize reads.
     pub fn reindex_if_stale(&mut self) -> StoreResult<()> {
         let stored = match self.schema.read() {
             Ok(v) => Some(v),
@@ -244,13 +244,29 @@ impl DbPalwStateV2Store {
         if stored == Some(PALW_STATE_V2_STORE_SCHEMA_VERSION) {
             return Ok(());
         }
-        self.deltas.delete_all(DirectDbWriter::new(&self.db))?;
-        self.clear_legacy_answer_history(&mut DirectDbWriter::new(&self.db), None)?;
-        match self.tip.remove(DirectDbWriter::new(&self.db)) {
-            Ok(()) | Err(StoreError::KeyNotFound(_)) => {}
-            Err(e) => return Err(e),
-        }
-        self.schema.write(DirectDbWriter::new(&self.db), &PALW_STATE_V2_STORE_SCHEMA_VERSION)
+        let mut batch = WriteBatch::default();
+        self.deltas.delete_all(BatchDbWriter::new(&mut batch))?;
+        self.clear_legacy_answer_history(&mut BatchDbWriter::new(&mut batch), None)?;
+        let (first, last) = rocksdb::PrefixRange(DatabaseStorePrefixes::PalwNativeSnapshotInventoryV1.as_ref()).into_bounds();
+        batch.delete_range(first.expect("native inventory prefix start"), last.expect("native inventory prefix end"));
+        let mut next_tip = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Tip.into());
+        next_tip.remove(BatchDbWriter::new(&mut batch))?;
+        let mut next_snapshot = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwPruningPointState.into());
+        next_snapshot.remove(BatchDbWriter::new(&mut batch))?;
+        let mut next_schema = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwStateV2Schema.into());
+        next_schema.write(BatchDbWriter::new(&mut batch), &PALW_STATE_V2_STORE_SCHEMA_VERSION)?;
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options)?;
+        self.tip.invalidate_cache();
+        self.pruning_snapshot.invalidate_cache();
+        self.schema.invalidate_cache();
+        self.tip = next_tip;
+        self.pruning_snapshot = next_snapshot;
+        self.schema = next_schema;
+        *self.tip_cache.lock() = None;
+        *self.pruning_snapshot_cache.lock() = None;
+        Ok(())
     }
 
     // --- deltas ---
@@ -905,17 +921,34 @@ mod tests {
         let mut batch = WriteBatch::default();
         store.insert_delta_batch(&mut batch, c1.block, child.state_root(), &delta).unwrap();
         store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        store.set_pruning_snapshot_batch(&mut batch, c1.block, &child).unwrap();
         db.write(batch).unwrap();
+        assert!(store.load_tip(&p).unwrap().is_some(), "prime the positive decoded cache before retirement");
+        assert!(store.pruning_snapshot_record().unwrap().is_some());
 
         // Simulate an old layout: stamp a different version, then reopen.
         let mut schema_item: CachedDbItem<u32> = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwStateV2Schema.into());
         schema_item.write(DirectDbWriter::new(&db), &(PALW_STATE_V2_STORE_SCHEMA_VERSION - 1)).unwrap();
 
-        let mut restarted = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        let mut restarted = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        assert!(restarted.load_tip(&p).unwrap().is_some());
+        assert!(restarted.load_pruning_snapshot_carriage_cached(&p, c1.block).unwrap().is_some());
+        let sharing_old_caches = restarted.clone();
         restarted.reindex_if_stale().unwrap();
         assert!(!restarted.has_delta(c1.block).unwrap(), "stale rows are discarded");
         assert!(restarted.tip_record().unwrap().is_none(), "and the tip goes with them — both or neither");
+        assert!(restarted.pruning_snapshot_record().unwrap().is_none(), "an obsolete servable snapshot cannot survive the new schema");
         assert_eq!(restarted.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+        assert!(restarted.tip_cache.lock().is_none());
+        assert!(restarted.pruning_snapshot_cache.lock().is_none());
+        assert!(sharing_old_caches.tip_record().unwrap().is_none());
+        assert!(sharing_old_caches.pruning_snapshot_record().unwrap().is_none());
+        assert_eq!(sharing_old_caches.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+        let mut cold = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        cold.reindex_if_stale().unwrap();
+        assert!(!cold.has_delta(c1.block).unwrap());
+        assert!(cold.tip_record().unwrap().is_none());
+        assert!(cold.pruning_snapshot_record().unwrap().is_none());
     }
 
     /// **ADR-0152 T80: a datadir written at another PALW state version is refused by name** — before

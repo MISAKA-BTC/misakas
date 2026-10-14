@@ -58,6 +58,26 @@ fn check_enrollment(
     {
         return Err(refused("monetary material terms are substituted, unsigned-risk, unordered or outside capacity"));
     }
+    if let Some(session) = &t.native_session {
+        if session.version != 3
+            || session.job_policy != crate::palw_attempt_material_v3::native_job_policy_v3()
+            || session.one_claim_cap != 1
+            || session.admit_from_daa > session.admit_until_daa
+            || session.admit_until_daa > t.enrollment_until_daa
+            || session.max_units == 0
+            || session.max_units as usize > crate::palw_material_capacity_v1::PALW_MATERIAL_MAX_UNITS_V1
+            || t.material_manifest.is_some()
+            || t.exec_plan_root.is_some()
+            || !t.dependencies.is_empty()
+        {
+            return Err(refused("prospective native session policy/capacity is substituted"));
+        }
+        let class = builder.state.class(&session.class_id).ok_or_else(|| refused("prospective native class absent"))?;
+        let executor = active(builder, &session.executor)?;
+        if class.artifact_root != session.artifact_root || executor.operator_id != session.operator {
+            return Err(refused("prospective class/operator binding differs"));
+        }
+    }
     let route = builder.state.kernel_route();
     if let Some(manifest) = &t.material_manifest {
         if manifest.root != t.root {
@@ -98,6 +118,7 @@ fn check_enrollment(
         if offer.collateral_sompi < p.minimum_collateral_sompi
             || offer.prepaid_fee_sompi < p.minimum_fee_sompi
             || provider.operator_id == sponsor.operator_id
+            || t.native_session.as_ref().is_some_and(|session| session.operator == provider.operator_id)
             || !operators.insert(provider.operator_id)
             || t.dependencies.iter().any(|id| {
                 route
@@ -217,6 +238,7 @@ pub(super) fn enroll(
         sequence: 0,
         accepted_daa: ctx.daa_score,
         root_seen: false,
+        native_binding: None,
         providers: providers(e, ctx.daa_score),
         challenges: Vec::new(),
         last_tail_until: None,
@@ -623,7 +645,8 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                 provider.fee_queued = true;
             }
         }
-        row.root_seen |= builder.state.claims.contains_key(&row.terms.root)
+        row.root_seen |= row.native_binding.is_some()
+            || builder.state.claims.contains_key(&row.terms.root)
             || builder.state.kernel_route().and_then(|r| r.kernel_claim_row_v1(&row.terms.root)).is_some();
         let failed: Vec<_> =
             row.challenges.iter().filter(|c| !c.answered && ctx.daa_score > c.deadline_daa).map(|c| c.provider).collect();
@@ -648,7 +671,11 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
             None => {
                 if row.tail_block.is_none()
                     && (row.root_seen || ctx.daa_score > row.terms.enrollment_until_daa)
-                    && builder.state.claims.get(&row.terms.root).is_none_or(|c| c.phase.is_terminal())
+                    && builder
+                        .state
+                        .claims
+                        .get(&row.native_binding.as_ref().map(|b| b.claim).unwrap_or(row.terms.root))
+                        .is_none_or(|c| c.phase.is_terminal())
                     && builder.state.kernel_route().and_then(|r| r.kernel_claim_row_v1(&row.terms.root)).is_none_or(|c| {
                         matches!(
                             c.life.state,
@@ -802,6 +829,7 @@ mod tests {
                 policy: p.id(),
                 max_material_bytes: 100,
                 material_manifest: None,
+                native_session: None,
                 window_daa: 436,
                 enrollment_until_daa: 100,
                 payment_relative_until_finality: true,
@@ -979,4 +1007,28 @@ fn capture_queue_entitlements(builder: &mut TransitionBuilder<'_>) -> Result<(),
         }
     }
     Ok(())
+}
+
+pub(super) fn plan_native_ready(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+) -> Result<Option<PalwMonetaryMaterialRowV1>, PalwStateV2Error> {
+    if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
+        return Ok(None);
+    }
+    let (session, binding) = builder
+        .monetary_native_ready
+        .get(&claim)
+        .ok_or_else(|| refused("new native work has no authenticated prior-session Ready"))?;
+    let mut row = builder.state.monetary_material_row_v1(*session).ok_or_else(|| refused("native ready session disappeared"))?;
+    if row.native_binding.is_some() || !row.healthy(&builder.state) {
+        return Err(refused("native ready session consumed or providers defaulted"));
+    }
+    row.native_binding = Some(binding.clone());
+    row.root_seen = true;
+    Ok(Some(row))
+}
+pub(super) fn bind_native_ready(builder: &mut TransitionBuilder<'_>, row: &PalwMonetaryMaterialRowV1) {
+    write(builder, row.terms.root, Some(row));
 }

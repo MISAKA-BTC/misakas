@@ -6117,3 +6117,32 @@ mod reward_vesting_v2_tests {
         assert!(GetPalwRewardVestingResponse::try_from(&wire).is_err());
     }
 }
+
+from!(item: &kaspa_rpc_core::GetPalwMonetaryMaterialRequest, protowire::GetPalwMonetaryMaterialRequestMessage, {
+ Self {block_hash:item.block_hash.clone(),row:item.row,offset:item.offset,limit_bytes:item.limit_bytes}
+});
+try_from!(item: &protowire::GetPalwMonetaryMaterialRequestMessage, kaspa_rpc_core::GetPalwMonetaryMaterialRequest, {
+ Self {block_hash:item.block_hash.clone(),row:item.row,offset:item.offset,limit_bytes:item.limit_bytes}
+});
+from!(item: &kaspa_rpc_core::RpcPalwMonetaryAuxFragment, protowire::RpcPalwMonetaryAuxFragment, {
+ Self {row:item.row,table:u32::from(item.table),key:item.key.clone(),row_bytes:item.row_bytes,offset:item.offset,bytes:item.bytes.clone()}
+});
+try_from!(item: &protowire::RpcPalwMonetaryAuxFragment, kaspa_rpc_core::RpcPalwMonetaryAuxFragment, {
+ Self {row:item.row,table:u8::try_from(item.table).map_err(|_|kaspa_rpc_core::RpcError::General("monetary fragment table outside byte range".into()))?,key:item.key.clone(),row_bytes:item.row_bytes,offset:item.offset,bytes:item.bytes.clone()}
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwMonetaryMaterialResponse>, protowire::GetPalwMonetaryMaterialResponseMessage, {
+ Self {available:item.available,reason:item.reason.clone(),header:item.header.as_ref().map(Into::into),parent_header:item.parent_header.as_ref().map(Into::into),state_preimage:item.state_preimage.clone(),fork_choice_opening:item.fork_choice_opening.clone(),aux_root:item.aux_root.clone(),total_rows:item.total_rows,start_row:item.start_row,start_offset:item.start_offset,next_row:item.next_row,next_offset:item.next_offset,fragments:item.fragments.iter().map(Into::into).collect(),error:None}
+});
+try_from!(item: &protowire::GetPalwMonetaryMaterialResponseMessage, RpcResult<kaspa_rpc_core::GetPalwMonetaryMaterialResponse>, {
+ Self {available:item.available,reason:item.reason.clone(),header:item.header.as_ref().map(kaspa_rpc_core::RpcHeader::try_from).transpose()?,parent_header:item.parent_header.as_ref().map(kaspa_rpc_core::RpcHeader::try_from).transpose()?,state_preimage:item.state_preimage.clone(),fork_choice_opening:item.fork_choice_opening.clone(),aux_root:item.aux_root.clone(),total_rows:item.total_rows,start_row:item.start_row,start_offset:item.start_offset,next_row:item.next_row,next_offset:item.next_offset,fragments:item.fragments.iter().map(TryInto::try_into).collect::<Result<_,_>>()?}
+});
+#[cfg(test)]
+mod monetary_material_grpc_tests {
+ use super::*;
+ #[test]
+ fn monetary_cursor_and_fragment_table_are_exact() {
+  let q=kaspa_rpc_core::GetPalwMonetaryMaterialRequest {block_hash:"ab".repeat(64),row:8,offset:123,limit_bytes:1024};
+  let wire:protowire::GetPalwMonetaryMaterialRequestMessage=(&q).into();let back:kaspa_rpc_core::GetPalwMonetaryMaterialRequest=(&wire).try_into().unwrap();assert_eq!((back.row,back.offset,back.limit_bytes),(8,123,1024));
+  let fragment=protowire::RpcPalwMonetaryAuxFragment {table:256,..Default::default()};assert!(kaspa_rpc_core::RpcPalwMonetaryAuxFragment::try_from(&fragment).is_err());
+ }
+}

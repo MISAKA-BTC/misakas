@@ -3011,7 +3011,7 @@ impl VirtualStateProcessor {
         }
         // The block is on the selected chain, so its attempt decoded and was admitted at the header
         // and the chain walk; an envelope that does not decode here cannot have made a claim either.
-        let Ok(envelope) = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) else {
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment) else {
             return 0;
         };
         let own = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
@@ -6081,7 +6081,7 @@ impl VirtualStateProcessor {
                 .headers_store
                 .get_header(carrier)
                 .ok()
-                .and_then(|h| kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&h.palw_commitment).ok())
+                .and_then(|h| kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&h.palw_commitment).ok())
                 .is_some_and(|e| self.palw_state_params_v2.as_ref().is_some_and(|p| e.attempt.class_id == p.base_class_id()));
             if is_floor {
                 return kaspa_consensus_core::config::params::palw_overlay_escrow_carve_at_v1(
@@ -7023,6 +7023,7 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
         kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
+            native_material_ticket_v3: None,
             boundary_budget_active: self.palw_epoch_boundary_budget.is_some_and(|fence| fence.is_active(daa_score)),
             budget_release_active: self.palw_epoch_budget_release_at(daa_score),
             // ADR-0137: the block's W₀ where the work target is in force; the block's subsidy is
@@ -8077,7 +8078,6 @@ impl VirtualStateProcessor {
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
         waive_ceiling: bool,
     ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
-        use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
         // ADR-0072 SA-4: EITHER attempt id. Which one is a lane at this height was already decided
         // by the header processor and the pruning-proof gate, both of which refuse the closed side
         // by id; asking again here would be a second spelling of one rule. What this must NOT do is
@@ -8089,7 +8089,17 @@ impl VirtualStateProcessor {
         let Some(admission) = self.palw_admission_params_v2.as_ref() else {
             return Err("an attempt-lane block on a network with no V2 admission params".to_string());
         };
-        let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).map_err(|e| e.to_string())?;
+        let envelope = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment).map_err(|e| e.to_string())?;
+        let native_ready=if kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::is_carriage(&header.palw_commitment) {
+            if state_params.monetary_material_at_v1(header.daa_score).is_none() {return Err("PAV3 native custody form below its monetary fence".into())}
+            let ready=kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3::decode_wire(&header.palw_commitment)?;
+            let anchor=self.palw_execution_anchor_v1(header,&ready.base.attempt);
+            ready.verify_prior(state,anchor,header.daa_score,Self::verify_mldsa87_with_context_bool)?;
+            Some((ready.class_ticket(anchor),ready))
+        } else {
+            if state_params.monetary_material_at_v1(header.daa_score).is_some() {return Err("new native work requires the owned signed PAV3 custody form".into())}
+            None
+        };
         // **The FULL admission, because the stateful half alone verifies no signature.**
         //
         // `check_palw_attempt_admission_v2` takes no verifier and cannot: its item 2 compares the
@@ -8136,6 +8146,7 @@ impl VirtualStateProcessor {
             // Lane bind-deadlock: item 8 waived for a binder's re-check only.
             {
                 let mut fences = self.palw_epoch_budget_fences_at(point.daa_score);
+                fences.native_material_ticket_v3=native_ready.as_ref().map(|(ticket,_)|*ticket);
                 fences.exposure_ceiling_waived = waive_ceiling;
                 fences
             },
@@ -8768,7 +8779,7 @@ impl VirtualStateProcessor {
     pub(super) fn palw_own_attempt_class_of_header_v1(header: &Header) -> Option<kaspa_hashes::Hash64> {
         kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
             .then(|| {
-                kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+                kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
                     .ok()
                     .map(|envelope| envelope.attempt.class_id)
             })

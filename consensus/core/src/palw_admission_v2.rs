@@ -66,6 +66,8 @@ pub struct PalwAdmissionParamsV2 {
 /// different consensus verdict, so the call boundary must make the distinction explicit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwEpochBudgetFencesV1 {
+    /// Authenticated owned-form ticket; None preserves legacy PAV2 lottery.
+    pub native_material_ticket_v3: Option<u128>,
     /// `Params::palw_epoch_boundary_budget` at the candidate block's DAA.
     pub boundary_budget_active: bool,
     /// `Params::palw_epoch_budget_release` at the candidate block's DAA.
@@ -1090,13 +1092,13 @@ where
         &envelope.attempt.executor_bond,
         nonce,
     );
-    check_palw_class_lottery_v4(
-        state,
-        state_params,
-        &envelope.attempt,
-        execution_anchor,
-        palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
-    )?;
+    let floor=palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery);
+    if let Some(ticket)=budget_fences.native_material_ticket_v3 {
+        let target=palw_effective_class_target_v1(state,state_params,&envelope.attempt.class_id,floor)?;
+        if ticket>target {return Err(PalwAdmissionV2Error::ClassTicketAboveTarget {class_id:envelope.attempt.class_id,ticket,target})}
+    } else {
+        check_palw_class_lottery_v4(state,state_params,&envelope.attempt,execution_anchor,floor)?;
+    }
     Ok(attempt_id)
 }
 

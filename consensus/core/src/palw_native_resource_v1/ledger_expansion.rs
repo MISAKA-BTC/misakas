@@ -400,3 +400,20 @@ mod tests {
         assert!(matches!(inventory_ledger_expansion_v1(&rows, false), Err(NativeCoverageV1::Unsupported { .. })));
     }
 }
+
+/// Exact allocation-free codec preflight for a row in an authenticated kernel
+/// row/aux response. This is a decode-shape bound only: callers still verify the
+/// served state/header roots and use inventory_ledger_expansion_v1 before cold
+/// program/gate reconstruction. A parsed row cannot establish chain authority.
+pub fn preflight_kernel_served_row_v1(table: u8, key: &[u8], bytes: &[u8]) -> io::Result<NativeWireShapeV1> {
+    let mut reader = NativeWireReaderV1::new(bytes, bytes.len() as u64);
+    let shape = if table < 32 {
+        scan_ledger_row_v1(table, &mut reader)?
+    } else {
+        super::wire_kernel_aux::scan_native_aux_row_v1(table, key.len() as u64, key.first().copied().unwrap_or(0), &mut reader)?
+    };
+    if reader.remaining() != 0 {
+        return Err(wire::wire_bad("served kernel row has trailing codec bytes"));
+    }
+    Ok(shape)
+}

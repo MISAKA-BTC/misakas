@@ -221,6 +221,43 @@ pub struct PalwHeldMaterialBundleV1 {
     pub units: Vec<(PalwHeldMissingV1, PalwHeldDisclosureV1)>,
 }
 impl PalwHeldMaterialBundleV1 {
+    /// The actual backend codec constructs every consumer unit before signing
+    /// Ready. Neither RAM estimates nor model labels substitute for its bytes.
+    pub fn from_capture(
+        claim:Hash64,backend:&dyn crate::palw_backend::PalwExecutionBackendV1,
+        capture:&[u8],prompt:&[u32],roots:crate::palw_backend::PalwClaimRootsV1,
+        work_leaves:u64,authority:PalwMaterialNativeAuthorityV1,max_bytes:u64,
+    )->Result<Self,PalwMaterialCapacityErrorV1> {
+        use PalwMaterialCapacityErrorV1 as E;
+        let first=crate::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(backend,capture,prompt,roots,work_leaves,PalwHeldMissingV1::StepLeaf{leaf:0},authority.form,||Err("first leaf must carry the binding".into())).map_err(E::Authentication)?;
+        let binding=first.0;
+        if binding.committed_execution_root!=roots.execution_root || binding.step_leaf_count==0 {return Err(E::Substitution)}
+        let mut missing=Vec::new();
+        let tiles=if crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(authority.form,&binding.shape_profile)==crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 {crate::palw_prompt_ids_v1::prompt_ids_tile_count_v1(u64::from(binding.job_context.declared_prefill_tokens)).ok_or(E::Capacity)?}else{0};
+        for tile in 0..tiles {missing.push(PalwHeldMissingV1::PromptIdsTile{tile:tile.try_into().map_err(|_|E::Capacity)?});}
+        for checkpoint in 0..binding.checkpoint_count {
+            let covered=crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1(&binding.shape_profile,checkpoint,binding.checkpoint_profile.checkpoint_interval).ok_or(E::Incomplete)?;
+            let positions=crate::palw_context_ladder::palw_checkpoint_positions_at_v1(&binding.shape_profile,&binding.job_context,covered);
+            let chunks=crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile,positions).ok_or(E::Incomplete)?;
+            if (missing.len() as u64).checked_add(chunks).is_none_or(|n|n>PALW_MATERIAL_MAX_UNITS_V1 as u64){return Err(E::Capacity)}
+            for chunk in 0..chunks {missing.push(PalwHeldMissingV1::StateChunk{checkpoint,chunk:chunk.try_into().map_err(|_|E::Capacity)?});}
+        }
+        if (missing.len() as u64).checked_add(binding.step_leaf_count).is_none_or(|n|n>PALW_MATERIAL_MAX_UNITS_V1 as u64){return Err(E::Capacity)}
+        for leaf in 0..binding.step_leaf_count {missing.push(PalwHeldMissingV1::StepLeaf{leaf});}
+        let range=crate::palw_held_da_v1::PALW_HELD_DA_MAX_RANGE_LEAVES_V1;
+        for first in (0..binding.step_leaf_count).step_by(range as usize) {missing.push(PalwHeldMissingV1::StepRange{first,count:binding.step_leaf_count.saturating_sub(first).min(u64::from(range)) as u32});}
+        if missing.len()>PALW_MATERIAL_MAX_UNITS_V1 {return Err(E::Capacity)}
+        let mut bundle=Self{claim,binding:Box::new(binding.clone()),units:Vec::new()};
+        let mut retained=borsh::object_length(&bundle).map_err(|_|E::Capacity)? as u64;
+        for missing in missing {
+            let (actual,disclosure)=crate::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(backend,capture,prompt,roots,work_leaves,missing,authority.form,||Ok(binding.clone())).map_err(E::Authentication)?;
+            if actual!=binding {return Err(E::Substitution)}
+            retained=retained.checked_add(borsh::object_length(&(missing,&disclosure)).map_err(|_|E::Capacity)? as u64).ok_or(E::Capacity)?;
+            if retained>max_bytes{return Err(E::Capacity)}
+            bundle.units.push((missing,disclosure));
+        }
+        bundle.verify(authority,max_bytes)?;Ok(bundle)
+    }
     /// Counts every committed prompt tile, checkpoint chunk and step evidence;
     /// ranges additionally cover all step hashes in canonical 1024-leaf blocks.
     /// Unique in-range units with these exact cardinalities prove coverage.
@@ -245,7 +282,9 @@ impl PalwHeldMaterialBundleV1 {
             crate::palw_prompt_ids_v1::prompt_ids_tile_count_v1(u64::from(b.job_context.declared_prefill_tokens))
                 .ok_or_else(|| E::Unsupported("prompt tile layout".into()))?
         } else {
-            return Err(E::Unsupported("flat prompt has no authenticated tile service".into()));
+            // Flat native prompts are carried/authenticated in complete leaf evidence;
+            // their consumer has no PromptIdsTile demand.
+            0
         };
         let mut chunks = 0u64;
         if b.checkpoint_count as usize > PALW_MATERIAL_MAX_UNITS_V1 {

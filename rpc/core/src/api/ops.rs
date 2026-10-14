@@ -320,6 +320,8 @@ pub enum RpcApiOps {
     GetPalwExecV2Status = 240,
     /// Complete native / slice / kernel-fee vesting observation (RFC6/8/12).
     GetPalwRewardVesting = 241,
+    /// Authenticated paginated monetary material auxiliary snapshot.
+    GetPalwMonetaryMaterial = 242,
 }
 
 impl RpcApiOps {

@@ -95,8 +95,17 @@ impl DbPalwClassCarriageStore {
         if stored == PALW_CLASS_CARRIAGE_SCHEMA_VERSION {
             return Ok(());
         }
-        self.access.delete_all(DirectDbWriter::new(&self.db))?;
-        self.schema.write(DirectDbWriter::new(&self.db), &PALW_CLASS_CARRIAGE_SCHEMA_VERSION)
+        let mut batch = rocksdb::WriteBatch::default();
+        self.access.delete_all(BatchDbWriter::new(&mut batch))?;
+        // The replacement cache remains private until rows and schema commit.
+        let mut next_schema = CachedDbItem::new(self.db.clone(), DatabaseStorePrefixes::PalwClassCarriagesSchema.into());
+        next_schema.write(BatchDbWriter::new(&mut batch), &PALW_CLASS_CARRIAGE_SCHEMA_VERSION)?;
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(true);
+        self.db.write_opt(batch, &options)?;
+        self.schema.invalidate_cache();
+        self.schema = next_schema;
+        Ok(())
     }
 
     /// The declaration the chain accepted for `class_id`, if this node saw it.
@@ -128,6 +137,29 @@ impl DbPalwClassCarriageStore {
 mod tests {
     use super::*;
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+
+    #[test]
+    fn obsolete_declaration_rows_and_shared_schema_cache_retire_together() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let id = Hash64::from_u64_word(1);
+        let mut original = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+        original.reindex_if_stale().unwrap();
+        original
+            .insert(id, PalwClassCarriageRecord { registered_daa: 0, artifact_root: Hash64::from_u64_word(2), carriage: vec![3, 4] })
+            .unwrap();
+        let mut old_schema = CachedDbItem::new(db.clone(), DatabaseStorePrefixes::PalwClassCarriagesSchema.into());
+        old_schema.write(DirectDbWriter::new(&db), &(PALW_CLASS_CARRIAGE_SCHEMA_VERSION - 1)).unwrap();
+        let mut reopened = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16));
+        assert!(reopened.get(id).is_some());
+        assert_eq!(reopened.schema.read().unwrap(), PALW_CLASS_CARRIAGE_SCHEMA_VERSION - 1);
+        let shared = reopened.clone();
+        reopened.reindex_if_stale().unwrap();
+        assert!(shared.get(id).is_none());
+        assert_eq!(shared.schema.read().unwrap(), PALW_CLASS_CARRIAGE_SCHEMA_VERSION);
+        let mut cold = DbPalwClassCarriageStore::new(db, CachePolicy::Count(16));
+        cold.reindex_if_stale().unwrap();
+        assert!(cold.get(id).is_none());
+    }
 
     #[test]
     fn genesis_batch_carriage_is_not_visible_before_commit_and_survives_fresh_cache() {

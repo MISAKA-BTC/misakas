@@ -826,6 +826,7 @@ async fn x8_g14_native_signed_monetary_covenant_funds_exact_fee_once_and_recover
             policy: policy.id(),
             max_material_bytes: 1_000,
             material_manifest: None,
+            native_session: None,
             window_daa: policy.window_daa,
             enrollment_until_daa: net.daa() + 100,
             payment_relative_until_finality: true,

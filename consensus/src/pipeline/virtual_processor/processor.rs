@@ -2556,7 +2556,7 @@ impl VirtualStateProcessor {
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
                                         let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects);
-                                        if state_params.exec_v2_active_at(point.daa_score) {
+                                        if state_params.exec_v2_active_at(point.daa_score) || state_params.monetary_material_at_v1(point.daa_score).is_some() {
                                             if attempt.is_some()
                                                 && let Ok(bytes) = borsh::to_vec(header.as_ref())
                                             {
@@ -3752,7 +3752,7 @@ impl VirtualStateProcessor {
             if unentitled.contains(member) {
                 continue;
             }
-            let attempt = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+            let attempt = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
                 .ok()
                 .is_some_and(|e| e.attempt.class_id != params.base_class_id());
             let receipt = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {

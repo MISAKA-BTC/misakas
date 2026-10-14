@@ -3425,3 +3425,35 @@ message GetPalwRewardVestingResponseMessage {
   string reporterAwardedSompiOfQuery = 16;
   RPCError error = 1000;
 }
+
+// RPC 242: complete flat aux commitment, bounded fragments; partial pages are not authority.
+message GetPalwMonetaryMaterialRequestMessage {
+ string blockHash=1;
+ uint64 row=2;
+ uint64 offset=3;
+ uint32 limitBytes=4;
+}
+message RpcPalwMonetaryAuxFragment {
+ uint64 row=1;
+ uint32 table=2;
+ bytes key=3;
+ uint64 rowBytes=4;
+ uint64 offset=5;
+ bytes bytes=6;
+}
+message GetPalwMonetaryMaterialResponseMessage {
+ bool available=1;
+ string reason=2;
+ RpcBlockHeader header=3;
+ RpcBlockHeader parentHeader=4;
+ bytes statePreimage=5;
+ bytes forkChoiceOpening=6;
+ string auxRoot=7;
+ uint64 totalRows=8;
+ uint64 startRow=9;
+ uint64 startOffset=10;
+ uint64 nextRow=11;
+ uint64 nextOffset=12;
+ repeated RpcPalwMonetaryAuxFragment fragments=13;
+ RPCError error=1000;
+}

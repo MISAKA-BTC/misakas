@@ -81,9 +81,10 @@ pub struct PalwMonetaryMaterialTermsV1 {
     pub nonce: Hash64,
     pub policy: Hash64,
     pub max_material_bytes: u64,
-    material_manifest: None,
     /// Complete canonical bytes for the original and every continuation.
     pub material_manifest: Option<crate::palw_material_capacity_v1::PalwMaterialManifestV1>,
+    /// Prospective native session; exact kernel contracts keep None.
+    pub native_session: Option<crate::palw_attempt_material_v3::PalwNativeMaterialSessionV3>,
     pub window_daa: u64,
     pub enrollment_until_daa: u64,
     /// Pending rights and queues have no expiry. The provider explicitly accepts
@@ -193,7 +194,7 @@ pub enum PalwMonetaryMaterialActionV1 {
         dependency: Hash64,
         provider: PalwBondKeyV2,
         missing: crate::palw_held_da_v1::PalwHeldMissingV1,
-        binding: Box<crate::palw_step::PalwStepBindingV2>,
+        binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
         valid_until_daa: u64,
     },
     HeldAnswer {
@@ -249,7 +250,7 @@ pub struct PalwMonetaryMaterialChallengeV1 {
     pub deadline_daa: u64,
     pub answered: bool,
     pub native_missing: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
-    pub native_binding: Option<Box<crate::palw_step::PalwStepBindingV2>>,
+    pub native_binding: Option<Box<crate::palw_step_leg::PalwStepBindingV2>>,
     pub segment_part: Option<u32>,
 }
 /// A validated native queue drain, not a kernel FeePaid promise. Transaction
@@ -275,6 +276,7 @@ pub struct PalwMonetaryMaterialRowV1 {
     pub sequence: u64,
     pub accepted_daa: u64,
     pub root_seen: bool,
+    pub native_binding: Option<crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3>,
     pub providers: Vec<PalwMonetaryMaterialProviderV1>,
     pub challenges: Vec<PalwMonetaryMaterialChallengeV1>,
     /// Maximum real payment tail observed. A later unpaid right resets only the
@@ -321,14 +323,19 @@ impl PalwChainStateV2 {
         root: Hash64,
         claim: &crate::palw_state_v2::PalwClaimStateV2,
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
-        self.require_monetary_material_enrollment_v1(params, root, claim.accepted_daa, None)?;
         if params.monetary_material_at_v1(claim.accepted_daa).is_none() {
             return Ok(());
         }
-        let row = self.monetary_material_row_v1(root).ok_or_else(|| {
-            crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("native material has no signed capacity manifest".into())
-        })?;
-        let scope = row.terms.material_manifest.as_ref().and_then(|m| m.scope(root)).ok_or_else(|| {
+        let row = self
+            .monetary_material_rows_v1()
+            .into_iter()
+            .find(|r| r.native_binding.as_ref().is_some_and(|b| b.claim == root))
+            .or_else(|| self.monetary_material_row_v1(root))
+            .ok_or_else(|| {
+                crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("native material has no signed capacity manifest".into())
+            })?;
+        let manifest = row.native_binding.as_ref().map(|b| &b.manifest).or(row.terms.material_manifest.as_ref());
+        let scope = manifest.and_then(|m| m.scope(root)).ok_or_else(|| {
             crate::palw_state_v2::PalwStateV2Error::ExecV2Refused(
                 "native material full codec capacity is unsupported or unenrolled".into(),
             )
@@ -434,6 +441,9 @@ impl PalwChainStateV2 {
     pub fn monetary_material_scope_v1(&self, row: &PalwMonetaryMaterialRowV1) -> std::collections::BTreeSet<Hash64> {
         let mut scope: std::collections::BTreeSet<_> =
             std::iter::once(row.terms.root).chain(row.terms.dependencies.iter().copied()).collect();
+        if let Some(binding) = &row.native_binding {
+            scope.insert(binding.claim);
+        }
         if let Some(work) = self.exec_v2_root_v1(&row.terms.root).filter(|w| Some(w.plan_root) == row.terms.exec_plan_root) {
             scope.insert(work.prefix_claim);
             for ((root, _), slice) in &self.exec_v2_state_v1().slices {
@@ -574,6 +584,7 @@ mod tests {
                 policy: Hash64::from_bytes([4; 64]),
                 max_material_bytes: 100,
                 material_manifest: None,
+                native_session: None,
                 window_daa: 436,
                 enrollment_until_daa: 1000,
                 payment_relative_until_finality: true,

@@ -354,7 +354,7 @@ impl ConsensusStorage {
                 // `accepted_daa`, never against a block's.
                 .with_canonical_work_daa(params.palw_canonical_work_daa());
             if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!("[palw-state-v2-store] could not check the record layout version: {err}; leaving existing rows");
+                panic!("[palw-state-v2-store] durable record-layout initialization failed; refusing consensus startup: {err}");
             }
             Arc::new(RwLock::new(store))
         };
@@ -364,7 +364,7 @@ impl ConsensusStorage {
                 PolicyBuilder::new().max_items(256).untracked().build(),
             );
             if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!("[palw-class-carriage] could not check the record layout version: {err}; leaving existing rows");
+                panic!("[palw-class-carriage] durable declaration-layout initialization failed; refusing consensus startup: {err}");
             }
             Arc::new(RwLock::new(store))
         };
