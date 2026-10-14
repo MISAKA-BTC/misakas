@@ -893,6 +893,9 @@ fn run(args: &[String]) -> Result<(), String> {
                 "requester_operator":hex(&record.requester_operator),"producer_operator":hex(&record.producer_operator),
                 "qualified_native_profile":checked.rfc02_qualified(),"own_snapshot_root":own_snapshot.map(|v|hex(&v)),
                 "calibration_receipts_are_not_A6_or_A8_evidence":!checked.rfc02_qualified(),
+                // A measurement Final (isolated calibration34 devnet) is never A6/A8 pass evidence;
+                // acceptance_cohort.py counts only "qualified-final" receipts for the final/redemption stages.
+                "final_receipt_class":if checked.rfc02_qualified() { "qualified-final" } else { "measurement-final" },
                 "pinned_headers_and_original_rows_verified":true,"chain_selection_and_validation":"external-independent-pins-required",
                 "utxo_redemption_verified":delivery.get("spend_verified").and_then(|v| v.as_bool()).unwrap_or(false),
                 "coinbase_delivery":delivery,"A6_or_A8_credit":false});

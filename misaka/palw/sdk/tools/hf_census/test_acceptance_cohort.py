@@ -16,6 +16,7 @@ class Acceptance(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / "chain.json").write_text('{}\n')
         self.evidence = {"path": "chain.json", "sha256": ac.digest(self.root / "chain.json")}
+        self.receipt = self.native_receipt("qualified.json", qualified=True)
         self.doc = {"schema": ac.SCHEMA, "population": "D_all", "design": "SRS_WITHOUT_REPLACEMENT",
                     "N": 10000, "n": 32, "target_share": .90, "required_stages": list(ac.STAGES),
                     "frame_complete": True, "members": [{"id": f"o/{i}", "repository": f"o/{i}",
@@ -29,6 +30,16 @@ class Acceptance(unittest.TestCase):
              "queue_start": 0, "queue_end": 0, "unaccounted_drops": 0, "evidence": self.evidence}
             for start in (0, 100)]}
 
+    def native_receipt(self, name, qualified, spend=True):
+        doc = {"schema": ac.NATIVE_AUDIT_SCHEMA, "job": "ab" * 64, "pinned_headers_and_original_rows_verified": True,
+               "qualified_native_profile": qualified, "calibration_receipts_are_not_A6_or_A8_evidence": not qualified,
+               "final_receipt_class": "qualified-final" if qualified else "measurement-final",
+               "utxo_redemption_verified": spend,
+               "coinbase_delivery": {"real_coinbase_inclusion_and_original_queue_consumption_verified": True,
+                                     "accepted_spend": {"accepted_spend_of_original_outpoint_verified": True} if spend else None}}
+        (self.root / name).write_text(json.dumps(doc))
+        return {"path": name, "sha256": ac.digest(self.root / name)}
+
     def save(self):
         self.cohort.write_text(json.dumps(self.doc))
         self.panel.write_text(json.dumps(self.windows))
@@ -39,7 +50,9 @@ class Acceptance(unittest.TestCase):
             rows.append({"id": m["id"], "cohort_sha256": ac.digest(self.cohort), "scope": scope,
                          "source_declared_context_max": 32768, "real_size": True, "full_advertised_task": True,
                          "active_shipping_kernel": True, "public_chain": True,
-                         "stages": {s: {"status": "PASS", "scope": copy.deepcopy(scope), "evidence": self.evidence} for s in ac.STAGES}})
+                         "stages": {s: {"status": "PASS", "scope": copy.deepcopy(scope),
+                                        "evidence": self.receipt if s in ("final", "redemption") else self.evidence}
+                                    for s in ac.STAGES}})
         self.observations.write_text("".join(json.dumps(r) + "\n" for r in rows))
         return rows
 
@@ -52,6 +65,18 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(r["A6_satisfied"])
         self.assertFalse(r["A8_satisfied"])
         self.assertGreaterEqual(r["rates"]["final_capable"]["lb95"], .90)
+
+    def test_measurement_final_and_unspent_delivery_do_not_count(self):
+        rows = self.save()
+        rows[0]["stages"]["final"]["evidence"] = self.native_receipt("calibration.json", qualified=False)
+        rows[1]["stages"]["redemption"]["evidence"] = self.native_receipt("unspent.json", qualified=True, spend=False)
+        rows[2]["stages"]["final"]["evidence"] = self.evidence
+        self.observations.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        r = self.result()
+        self.assertEqual(r["rates"]["final_capable"]["successes"], 29)
+        self.assertEqual(r["residual_table"].get("MEASUREMENT_FINAL_ONLY"), 1)
+        self.assertEqual(r["residual_table"].get("REDEMPTION_NOT_SPEND_VERIFIED"), 1)
+        self.assertEqual(r["residual_table"].get("UNAUTHENTICATED_NATIVE_RECEIPT"), 1)
 
     def test_missing_rows_are_failure_not_smaller_denominator(self):
         rows = self.save()

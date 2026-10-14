@@ -109,6 +109,38 @@ def evidence_ok(e: dict, base: Path) -> bool:
     return path.is_file() and digest(path) == sha
 
 
+NATIVE_AUDIT_SCHEMA = "misaka.palw.pinned-native-final-audit.v32"
+
+
+def native_receipt(stage: str, e: dict, base: Path) -> str | None:
+    """Return None when a ``final``/``redemption`` PASS carries a genuine
+    qualified receipt, else the blocking reason. The evidence must be the
+    ``palw-class audit-native-final32`` report itself (hash-pinned above).
+    A measurement Final from an isolated calibration34 devnet is retained as a
+    named failure, never promoted to A6/A8 pass evidence.
+    """
+    try:
+        doc = json.loads((base / Path(e["path"])).read_text())
+    except (OSError, ValueError, KeyError, TypeError):
+        return "UNREADABLE_NATIVE_RECEIPT"
+    if (not isinstance(doc, dict) or doc.get("schema") != NATIVE_AUDIT_SCHEMA
+            or doc.get("pinned_headers_and_original_rows_verified") is not True
+            or not isinstance(doc.get("job"), str) or len(doc["job"]) != 128):
+        return "UNAUTHENTICATED_NATIVE_RECEIPT"
+    if (doc.get("qualified_native_profile") is not True or doc.get("final_receipt_class") != "qualified-final"
+            or doc.get("calibration_receipts_are_not_A6_or_A8_evidence") is not False):
+        return "MEASUREMENT_FINAL_ONLY"
+    if stage == "redemption":
+        delivery = doc.get("coinbase_delivery")
+        if (not isinstance(delivery, dict)
+                or delivery.get("real_coinbase_inclusion_and_original_queue_consumption_verified") is not True
+                or not isinstance(delivery.get("accepted_spend"), dict)
+                or delivery["accepted_spend"].get("accepted_spend_of_original_outpoint_verified") is not True
+                or doc.get("utxo_redemption_verified") is not True):
+            return "REDEMPTION_NOT_SPEND_VERIFIED"
+    return None
+
+
 def panel_ok(panel: dict, base: Path) -> bool:
     windows = panel.get("windows")
     rule = panel.get("minimum_independent_operators")
@@ -157,6 +189,11 @@ def outcome(member: dict, row: dict | None, base: Path, cohort_sha: str) -> dict
         if status == "PASS" and (e.get("scope") != scope or not evidence_ok(e.get("evidence", {}), base)):
             status = "FAIL"
             e = {"blocking": "MISSING_OR_MISMATCHED_EVIDENCE"}
+        if status == "PASS" and stage in ("final", "redemption"):
+            why = native_receipt(stage, e["evidence"], base)
+            if why is not None:
+                status = "FAIL"
+                e = {"blocking": why}
         result["stages"][stage] = status
         if status != "PASS" and first is None:
             first = e.get("blocking") or f"{stage}:{status}"
