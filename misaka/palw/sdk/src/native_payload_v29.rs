@@ -117,6 +117,171 @@ pub fn prepare_text_post_v29(
     record.evidence.check_structure(&record.segment_roots)?;
     text(31, record)
 }
+/// Raw exact-grammar carrier for actions whose native body is not a borsh record
+/// (fixed digests, paged/reply parts). Native consensus re-reads every byte.
+fn text_raw(action: u8, body: Vec<u8>) -> Result<PreparedNativePayloadV29, String> {
+    let object = K::FundedExecutionV11 { action, body };
+    if object.encoded_len() > object.max_encoded_bytes() {
+        return Err("text29 raw action exceeds explicitly selected native carrier".into());
+    }
+    Ok(PreparedNativePayloadV29 { object })
+}
+/// Action 33: own one paid proof (or a discovery ticket) on a Challengeable job.
+pub fn prepare_text_own_v29(record: &NativeTextOwnV29) -> Result<PreparedNativePayloadV29, String> {
+    if record.version != 29 || record.job == [0; 64] || record.filing_bytes as usize > TEXT_STOP_MAX_FILING_BYTES_V29 {
+        return Err("text29 owner record fields".into());
+    }
+    if record.discovery != (record.proof_root == [0; 64] && record.seal_root == [0; 64]) {
+        return Err("text29 discovery carries no proof hashes; a sealed proof carries both".into());
+    }
+    let p = text(TEXT_OWN_ACTION_V29, record)?;
+    match p.object() {
+        K::FundedExecutionV11 { body, .. } if body.len() == 263 => Ok(p),
+        _ => Err("text29 owner exact 263-byte grammar".into()),
+    }
+}
+/// The whole paid filing a sealed owner reveals: `salt || u32 len || filing`.
+/// Returns the file, its proof root and the seal root that `prepare_text_own_v29` binds.
+pub fn native_paged_file_v29(
+    namespace: u16,
+    job: &Digest,
+    claim: &Digest,
+    actor: &Digest,
+    maximum_contract: &Digest,
+    salt: &Digest,
+    filing: &[u8],
+) -> Result<(Vec<u8>, Digest, Digest), String> {
+    use kaspa_consensus_core::palw_native_paged_proof_v29::{paged_proof_root_v29, paged_proof_seal_v29};
+    if filing.is_empty() || filing.len() + 68 > TEXT_STOP_MAX_FILING_BYTES_V29 {
+        return Err("paged29 filing extent".into());
+    }
+    let mut file = Vec::with_capacity(68 + filing.len());
+    file.extend_from_slice(salt);
+    file.extend_from_slice(&(filing.len() as u32).to_le_bytes());
+    file.extend_from_slice(filing);
+    let proof = paged_proof_root_v29(&file);
+    let seal = paged_proof_seal_v29(&namespace, job, claim, actor, maximum_contract, &proof, salt);
+    Ok((file, proof, seal))
+}
+/// Action 32: the exact 32-KiB parts of one paid file. The last part's assembly
+/// reveals it; there is no separate reveal action (34 is closed).
+pub fn prepare_paged_parts_v29(job: &Digest, seal: &Digest, owner: &Digest, file: &[u8]) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    let count = file.len().div_ceil(TEXT_STOP_PART_BYTES_V29);
+    if file.is_empty() || count > TEXT_STOP_MAX_PARTS_V29 as usize {
+        return Err("paged29 part count".into());
+    }
+    file.chunks(TEXT_STOP_PART_BYTES_V29)
+        .enumerate()
+        .map(|(index, bytes)| {
+            let mut raw = Vec::with_capacity(202 + bytes.len());
+            raw.extend_from_slice(&29u16.to_le_bytes());
+            raw.extend_from_slice(job);
+            raw.extend_from_slice(seal);
+            raw.extend_from_slice(owner);
+            raw.extend_from_slice(&(index as u16).to_le_bytes());
+            raw.extend_from_slice(&(count as u16).to_le_bytes());
+            raw.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            raw.extend_from_slice(bytes);
+            kaspa_consensus_core::palw_native_paged_proof_v29::borrowed_native_paged_part_v29(&raw)
+                .ok_or("paged29 part self-check")?;
+            text_raw(TEXT_PAGE_ACTION_V29, raw)
+        })
+        .collect()
+}
+/// Action 35: close (cancel an uncommitted Funded job, or Final after every liability).
+pub fn prepare_text_close_v29(job: &Digest) -> Result<PreparedNativePayloadV29, String> {
+    text_raw(TEXT_CLOSE_ACTION_V29, job.to_vec())
+}
+/// Action 36: one public (or paid-owner) request for an original unit.
+pub fn prepare_text_request_v29(
+    request: &kaspa_consensus_core::palw_native_trace_da_v29::NativePublicRequestV29,
+) -> Result<PreparedNativePayloadV29, String> {
+    if request.version != 29 || request.slot >= 2 {
+        return Err("text29 public request version/slot".into());
+    }
+    let p = text(TEXT_REQUEST_ACTION_V29, request)?;
+    match p.object() {
+        K::FundedExecutionV11 { body, .. } if (132..=256).contains(&body.len()) => Ok(p),
+        _ => Err("text29 public request bounded grammar".into()),
+    }
+}
+/// Action 37: the producer's reply pages (at most four 32-KiB parts) for one pending unit.
+pub fn prepare_text_reply_parts_v29(pending: &Digest, reply: &[u8]) -> Result<Vec<PreparedNativePayloadV29>, String> {
+    use kaspa_consensus_core::palw_native_reply_parts_v29::{borrowed_native_reply_part_v29, native_reply_group_v29};
+    let count = reply.len().div_ceil(32 << 10);
+    if reply.is_empty() || count > 4 {
+        return Err("text29 reply extent".into());
+    }
+    let group = native_reply_group_v29(*pending, reply);
+    reply
+        .chunks(32 << 10)
+        .enumerate()
+        .map(|(index, bytes)| {
+            let mut raw = Vec::with_capacity(143 + bytes.len());
+            raw.extend_from_slice(&29u16.to_le_bytes());
+            raw.push(0);
+            raw.extend_from_slice(pending);
+            raw.extend_from_slice(&group);
+            raw.extend_from_slice(&(index as u16).to_le_bytes());
+            raw.extend_from_slice(&(count as u16).to_le_bytes());
+            raw.extend_from_slice(&(reply.len() as u32).to_le_bytes());
+            raw.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            raw.extend_from_slice(bytes);
+            borrowed_native_reply_part_v29(&raw).ok_or("text29 reply part self-check")?;
+            text_raw(TEXT_ANSWER_ACTION_V29, raw)
+        })
+        .collect()
+}
+/// Action 38: adjudicate one unanswered public request after its deadline.
+pub fn prepare_text_default_v29(pending: &Digest) -> Result<PreparedNativePayloadV29, String> {
+    text_raw(TEXT_DEFAULT_ACTION_V29, pending.to_vec())
+}
+/// Action 39: convert an owned discovery ticket into a sealed paid proof.
+pub fn prepare_text_discovery_v29(
+    job: &Digest,
+    ticket: &Digest,
+    proof_root: &Digest,
+    seal_root: &Digest,
+    total_bytes: u32,
+    count: u16,
+) -> Result<PreparedNativePayloadV29, String> {
+    if count == 0 || count > TEXT_STOP_MAX_PARTS_V29 || (total_bytes as usize).div_ceil(TEXT_STOP_PART_BYTES_V29) != count as usize {
+        return Err("text29 discovery conversion extent".into());
+    }
+    let mut raw = Vec::with_capacity(262);
+    for d in [job, ticket, proof_root, seal_root] {
+        raw.extend_from_slice(d);
+    }
+    raw.extend_from_slice(&total_bytes.to_le_bytes());
+    raw.extend_from_slice(&count.to_le_bytes());
+    text_raw(TEXT_DISCOVERY_ACTION_V29, raw)
+}
+/// Action 40 collection kinds: 0 retire one expired paid owner, 1 collect the
+/// next public cache of a job, 2 retire a genuinely terminal job.
+pub enum NativeTextCollectV29 {
+    Owner { job: Digest, owner: Digest },
+    PublicCache { job: Digest },
+    Terminal { job: Digest },
+}
+pub fn prepare_text_collect_v29(kind: &NativeTextCollectV29) -> Result<PreparedNativePayloadV29, String> {
+    let mut raw = Vec::with_capacity(129);
+    match kind {
+        NativeTextCollectV29::Owner { job, owner } => {
+            raw.push(0);
+            raw.extend_from_slice(job);
+            raw.extend_from_slice(owner);
+        }
+        NativeTextCollectV29::PublicCache { job } => {
+            raw.push(1);
+            raw.extend_from_slice(job);
+        }
+        NativeTextCollectV29::Terminal { job } => {
+            raw.push(2);
+            raw.extend_from_slice(job);
+        }
+    }
+    text_raw(TEXT_COLLECT_ACTION_V29, raw)
+}
 pub fn prepare_stage_bundle_v28(
     bundle: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28,
 ) -> Result<PreparedNativePayloadV29, String> {
