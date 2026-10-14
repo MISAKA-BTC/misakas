@@ -182,3 +182,5 @@ pub mod flat_seal9;
 pub mod claim_paid_v2;
 pub mod claim_interactive_v3;
 pub mod panel_lifetime_v2;
+/// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
+pub mod econ_contracts_v1;

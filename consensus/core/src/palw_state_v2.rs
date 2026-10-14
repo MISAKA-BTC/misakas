@@ -1865,6 +1865,16 @@ pub struct PalwStateParamsV2 {
     /// names its height.
     #[borsh(skip)]
     legacy_public_filer_from_daa: Option<u64>,
+    /// **The 2026-10-12 rulings' fences** (`crate::palw_ruling_fences_v1`), mirrored by
+    /// `Params::sync_palw_2026_10_12_ruling_fences_v1`: D2's `palw_court_model_scope_v1` height, N4's
+    /// `palw_public_evidence_reward_v1` height and X3's `palw_claim_hard_deadline_v1` height with its policy. `None` on every
+    /// shipped preset, and validation refuses every armed one.
+    #[borsh(skip)]
+    court_model_scope_from_daa: Option<u64>,
+    #[borsh(skip)]
+    public_evidence_reward_from_daa: Option<u64>,
+    #[borsh(skip)]
+    claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**

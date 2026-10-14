@@ -2,6 +2,7 @@
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
 #![cfg(test)]
 
+mod kernel_route_locator_v1;
 mod public_filer_targeting_v1;
 mod reward_gate_genesis;
 mod terminal_carriage_v1;

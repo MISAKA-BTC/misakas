@@ -500,6 +500,28 @@ pub trait ConsensusApi: Send + Sync {
         Err("monetary material covenant reads are unavailable".into())
     }
 
+    /// RFC-0008 PAV3 producer read: the canonical prior native session for `attempt` at `daa`
+    /// (`palw_attempt_material_v3::select_native_session_v3`, the one rule `verify_prior` re-runs) over the coherent tip
+    /// state, with each uncharged roster provider's registered operator, and the selected-parent point it was read at.
+    /// `Ok((point, None))`: no eligible session there. An unavailable or moving view is an error, never an empty roster.
+    #[allow(clippy::type_complexity)]
+    fn palw_native_session_v3(
+        &self,
+        _attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+        _daa: u64,
+    ) -> Result<
+        (
+            BlockHash,
+            Option<(
+                crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+                Vec<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>,
+            )>,
+        ),
+        String,
+    > {
+        Err("native session reads are unavailable".into())
+    }
+
     /// Physical GC authority requires the accepted release itself (as well as
     /// its payment tail) to survive every admitted selected-chain reorg.
     fn palw_monetary_material_release_finalized_v1(
@@ -524,6 +546,16 @@ pub trait ConsensusApi: Send + Sync {
         _limit: usize,
     ) -> Result<crate::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
         Err("authenticated monetary pages are unavailable".into())
+    }
+
+    /// Op 243: one bounded page of the canonical carriage of the PALW state `block`'s header commits.
+    fn palw_state_carriage_page_v1(
+        &self,
+        _block: BlockHash,
+        _offset: u64,
+        _limit: usize,
+    ) -> Result<crate::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        Err("PALW state carriage pages are unavailable".into())
     }
 
     /// **ADR-0080 design A: one side's declared court close, mid-assembly.**

@@ -322,6 +322,9 @@ pub enum RpcApiOps {
     GetPalwRewardVesting = 241,
     /// Authenticated paginated monetary material auxiliary snapshot.
     GetPalwMonetaryMaterial = 242,
+    /// Read-only: bounded byte pages of the canonical `PalwStateCarriageV2` of the PALW state a pinned header commits (its selected
+    /// parent's post-state), for offline `palw-class panel-lifetime-v2 --carriage`. Appended at the tail.
+    GetPalwStateCarriage = 243,
 }
 
 impl RpcApiOps {

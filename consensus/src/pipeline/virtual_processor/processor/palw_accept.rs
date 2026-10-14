@@ -2331,7 +2331,9 @@ impl VirtualStateProcessor {
         if self.palw_committed_root_v1(&state) != header.palw_state_root {
             return Err("monetary proof reconstructed state disagrees with pinned header".into());
         }
-        let preimage = state.state_root_preimage();
+        let (preimage, kernel_route_offset) = state.state_root_preimage_located_v1();
+        let kernel_route_offset =
+            kernel_route_offset.ok_or("authenticated monetary RPC needs the kernel auxiliary commitment")? as u64;
         let fork_choice = if state.state_root() != header.palw_state_root { PalwForkChoiceOpeningV1::of(&state) } else { None };
         let (aux_root, total_rows, next_row, next_offset, fragments) = monetary_aux_fragments_v1(&state, row, offset, limit)?;
         let (import_after, stable_after) = self.pruning_import_status().map_err(|e| e.to_string())?;
@@ -2343,6 +2345,7 @@ impl VirtualStateProcessor {
             parent_header: (*parent_header).clone(),
             state_preimage: preimage,
             fork_choice,
+            kernel_route_offset,
             aux_root,
             total_rows,
             start_row: row,
@@ -2350,6 +2353,61 @@ impl VirtualStateProcessor {
             next_row,
             next_offset,
             fragments,
+        })
+    }
+
+    /// Op 243: one bounded byte page of the canonical `PalwStateCarriageV2` encoding of the state the pinned header commits — its
+    /// selected parent's post-state, exactly as `palw_state_proof_v1_impl` and `palw_monetary_aux_page_v1_impl` serve it, refused
+    /// unless it reconstructs to the header's committed root, refused while a pruning import is incomplete or changes generation
+    /// under the read. Read-only. A page is never authority: the client assembles every page, decodes, restores through
+    /// `into_state_v3` and compares the restored state's committed root with the pinned header's
+    /// (`palw_state_carriage_rpc_v1::PalwStateCarriageAssemblerV1`). Each page re-encodes the carriage (no cache: the lag bound
+    /// and the 512 MiB cap bound the work).
+    pub(crate) fn palw_state_carriage_page_v1_impl(
+        &self,
+        block: BlockHash,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        use kaspa_consensus_core::{palw_fork_choice_commitment_v1::PalwForkChoiceOpeningV1, palw_state_carriage_rpc_v1::*};
+        if !(PALW_CARRIAGE_RPC_MIN_PAGE_BYTES_V1..=PALW_CARRIAGE_RPC_MAX_PAGE_BYTES_V1).contains(&limit) {
+            return Err("carriage page byte limit outside 1024..1048576".into());
+        }
+        if self.palw_state_params_v2.is_none() {
+            return Err("this network has no PALW V2 state".into());
+        }
+        let (import_before, stable_before) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_before || import_before.active.is_some() {
+            return Err("carriage import is incomplete".into());
+        }
+        let header = self.headers_store.get_header(block).map_err(|e| e.to_string())?;
+        kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, block).map_err(|e| e.to_string())?;
+        let sink_daa = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0);
+        if header.daa_score.saturating_add(PALW_STATE_PROOF_MAX_LAG_DAA) < sink_daa {
+            return Err("carriage checkpoint is too old; pin a newer block".into());
+        }
+        let parent = self.ghostdag_store.get_selected_parent(block).map_err(|e| e.to_string())?;
+        let parent_header = self.headers_store.get_header(parent).map_err(|e| e.to_string())?;
+        let (_at, state) = self.palw_v2_state_at(parent).ok_or_else(|| format!("carriage parent state {parent} is unavailable"))?;
+        if self.palw_committed_root_v1(&state) != header.palw_state_root {
+            return Err("carriage reconstructed state disagrees with pinned header".into());
+        }
+        let state_root = state.state_root();
+        let fork_choice = if state_root != header.palw_state_root { PalwForkChoiceOpeningV1::of(&state) } else { None };
+        let carriage = palw_state_carriage_bytes_v1(&state)?;
+        let bytes = palw_state_carriage_window_v1(&carriage, offset, limit)?;
+        let (import_after, stable_after) = self.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable_after || import_after.active.is_some() || import_before.epoch != import_after.epoch {
+            return Err("carriage changed import generation".into());
+        }
+        Ok(PalwStateCarriagePageV1 {
+            header: (*header).clone(),
+            parent_header: (*parent_header).clone(),
+            fork_choice,
+            state_root,
+            total_bytes: carriage.len() as u64,
+            offset,
+            bytes,
         })
     }
 

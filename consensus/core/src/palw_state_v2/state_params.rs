@@ -172,6 +172,9 @@ impl PalwStateParamsV2 {
             audit_1004_from_daa: None,
             reporter_share_v2_from_daa: None,
             legacy_public_filer_from_daa: None,
+            court_model_scope_from_daa: None,
+            public_evidence_reward_from_daa: None,
+            claim_hard_deadline_v1: None,
         })
     }
 
@@ -601,6 +604,46 @@ impl PalwStateParamsV2 {
     /// **Is the legacy route's public filer in force at `daa_score`?** `false` on every shipped preset.
     pub fn legacy_public_filer_active_at(&self, daa_score: u64) -> bool {
         self.legacy_public_filer_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **The 2026-10-12 rulings' mirrors** (`crate::palw_ruling_fences_v1`) — written by
+    /// `Params::sync_palw_2026_10_12_ruling_fences_v1` and by nothing else (and by fixtures, which is how a test arms them);
+    /// `None` where a fence is not armed.
+    pub fn with_court_model_scope_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.court_model_scope_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_court_model_scope_v1`'s height, if the network arms it (the mirror; register D2).
+    pub fn court_model_scope_from_daa(&self) -> Option<u64> {
+        self.court_model_scope_from_daa
+    }
+
+    /// N4's mirror (see [`Self::with_court_model_scope_from_daa`]).
+    pub fn with_public_evidence_reward_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.public_evidence_reward_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_public_evidence_reward_v1`'s height, if the network arms it (the mirror; register N4).
+    pub fn public_evidence_reward_from_daa(&self) -> Option<u64> {
+        self.public_evidence_reward_from_daa
+    }
+
+    /// **Is N4 in force for a claim accepted at `daa_score`?** `false` on every shipped preset.
+    pub fn public_evidence_reward_active_at(&self, daa_score: u64) -> bool {
+        self.public_evidence_reward_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// X3's mirror (see [`Self::with_court_model_scope_from_daa`]).
+    pub fn with_claim_hard_deadline_v1(mut self, mirror: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1>) -> Self {
+        self.claim_hard_deadline_v1 = mirror;
+        self
+    }
+
+    /// `Params::palw_claim_hard_deadline_v1`'s height and policy, if the network arms it (the mirror; register X3).
+    pub fn claim_hard_deadline_v1(&self) -> Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineMirrorV1> {
+        self.claim_hard_deadline_v1
     }
 
     /// **RFC-0010: the permissionless Panel's mirror** — written by `Params::sync_palw_permissionless_panel_v1` and by nothing else

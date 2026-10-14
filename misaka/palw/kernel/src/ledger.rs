@@ -1396,6 +1396,17 @@ impl KernelLedgerV1 {
             | KernelRouteObjectV1::AuthorizePanelLifetimeV2 { .. } => {
                 return Err(KernelRefusalV1::rule(name, "Panel sponsor authority must be derived by the native consumer"));
             }
+            // RFC07/RFC08 economic contracts (inner 67–69): consumer-owned, each past its own dormant fence.
+            KernelRouteObjectV1::AttestModelVerificationV1 { .. }
+            | KernelRouteObjectV1::ConsentHorizonExtensionV1 { .. }
+            | KernelRouteObjectV1::SignMinimumPriceContractV1 { .. } => {
+                return Err(KernelRefusalV1::rule(name, "economic contracts must be interpreted by the authenticated native consumer"));
+            }
+            // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
+            // exists, so the attestation is refused by its own rule.
+            KernelRouteObjectV1::AttestDrawnCheckV1 { verifier, claim } => {
+                out.extend(self.attest_drawn_v1(claim, verifier)?);
+            }
             KernelRouteObjectV1::FundBeaconSourceFee { terms } => {
                 self.fund_beacon_source_fee(*terms, &mut out).map_err(|why| KernelRefusalV1::rule(name, why))?;
             }
@@ -1527,6 +1538,7 @@ impl KernelLedgerV1 {
             }
             O::FundBeaconSourceFee { terms } | O::FundPanelBeaconSourceFeeV2 { terms, .. } => Some((terms.sponsor, "sponsor")),
             O::SealProof { accuser, .. } => Some((*accuser, "accuser")),
+            O::AttestDrawnCheckV1 { verifier, .. } => Some((*verifier, "verifier")),
             O::Spec { object } => object.named_actor(),
             _ => None,
         };

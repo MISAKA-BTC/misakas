@@ -77,6 +77,9 @@ pub struct GetPalwMonetaryMaterialResponse {
     pub parent_header: Option<RpcHeader>,
     pub state_preimage: Vec<u8>,
     pub fork_choice_opening: Vec<u8>,
+    /// Version 2: where the serving node's writer began the `kernel-route/v1` block in `state_preimage` (0 = not carried, a
+    /// version-1 peer). Never trusted: the client derives the offset from the authenticated preimage and compares.
+    pub kernel_route_offset: u64,
     pub aux_root: String,
     pub total_rows: u64,
     pub start_row: u64,
@@ -87,13 +90,14 @@ pub struct GetPalwMonetaryMaterialResponse {
 }
 impl Serializer for GetPalwMonetaryMaterialResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.reason, writer)?;
         store!(Option<RpcHeader>, &self.header, writer)?;
         store!(Option<RpcHeader>, &self.parent_header, writer)?;
         store!(Vec<u8>, &self.state_preimage, writer)?;
         store!(Vec<u8>, &self.fork_choice_opening, writer)?;
+        store!(u64, &self.kernel_route_offset, writer)?;
         store!(String, &self.aux_root, writer)?;
         store!(u64, &self.total_rows, writer)?;
         store!(u64, &self.start_row, writer)?;
@@ -106,7 +110,8 @@ impl Serializer for GetPalwMonetaryMaterialResponse {
 }
 impl Deserializer for GetPalwMonetaryMaterialResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        if load!(u16, reader)? != 1 {
+        let version = load!(u16, reader)?;
+        if !(1..=2).contains(&version) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported monetary proof response version"));
         }
         Ok(Self {
@@ -116,6 +121,7 @@ impl Deserializer for GetPalwMonetaryMaterialResponse {
             parent_header: load!(Option<RpcHeader>, reader)?,
             state_preimage: load!(Vec<u8>, reader)?,
             fork_choice_opening: load!(Vec<u8>, reader)?,
+            kernel_route_offset: if version >= 2 { load!(u64, reader)? } else { 0 },
             aux_root: load!(String, reader)?,
             total_rows: load!(u64, reader)?,
             start_row: load!(u64, reader)?,

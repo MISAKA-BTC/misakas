@@ -21,6 +21,10 @@ pub struct PalwMonetaryAuxPageV1 {
     pub parent_header: Header,
     pub state_preimage: Vec<u8>,
     pub fork_choice: Option<PalwForkChoiceOpeningV1>,
+    /// Where the serving node's writer began the `kernel-route/v1` block in `state_preimage`
+    /// (`PalwChainStateV2::state_root_preimage_located_v1`). Never trusted: the client derives the offset from the authenticated
+    /// preimage alone (`PalwChainStateV2::kernel_route_offset_of_preimage_v1`) and refuses any page that names another.
+    pub kernel_route_offset: u64,
     pub aux_root: Hash64,
     pub total_rows: u64,
     pub start_row: u64,

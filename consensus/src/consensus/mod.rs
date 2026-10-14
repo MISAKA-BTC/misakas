@@ -1450,6 +1450,65 @@ impl ConsensusApi for Consensus {
         Ok(state.monetary_material_rows_v1())
     }
 
+    /// RFC-0008 PAV3: the same coherent tip read as [`Self::palw_monetary_material_covenants_v1`], with the canonical session
+    /// selected by the ONE rule `verify_prior` re-runs and the rows/bonds taken from that single state snapshot.
+    fn palw_native_session_v3(
+        &self,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+        daa: u64,
+    ) -> Result<
+        (
+            BlockHash,
+            Option<(
+                kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+                Vec<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, kaspa_hashes::Hash64)>,
+            )>,
+        ),
+        String,
+    > {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Err("native session requires ConsensusV2".into());
+        };
+        let before = self.lkg_virtual_state.load();
+        let (import, stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !stable || import.active.is_some() {
+            return Err("native session view has an incomplete import".into());
+        }
+        let (point, state) = self
+            .virtual_processor
+            .palw_v2_reader_state(&bundle.state)
+            .map_err(|e| e.to_string())?
+            .ok_or("native session state is missing")?;
+        let after = self.lkg_virtual_state.load();
+        let (after_import, after_stable) = self.virtual_processor.pruning_import_status().map_err(|e| e.to_string())?;
+        if !after_stable
+            || after_import.active.is_some()
+            || import.epoch != after_import.epoch
+            || point != after.ghostdag_data.selected_parent
+            || before.ghostdag_data.selected_parent != point
+        {
+            return Err("native session view changed generation or returned an old tip".into());
+        }
+        state.assert_monetary_material_consistency_v1(&bundle.state).map_err(|e| e.to_string())?;
+        let operator_of = |provider: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| state.bond(provider).map(|b| b.operator_id);
+        let Some(row) = kaspa_consensus_core::palw_attempt_material_v3::select_native_session_v3(
+            state.monetary_material_rows_v1(),
+            attempt,
+            daa,
+            operator_of,
+        ) else {
+            return Ok((point, None));
+        };
+        let operators = row
+            .providers
+            .iter()
+            .filter(|p| !p.charged)
+            .map(|p| operator_of(&p.provider).map(|operator| (p.provider, operator)).ok_or("native session provider bond absent"))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((point, Some((row, operators))))
+    }
+
     fn palw_monetary_material_release_finalized_v1(
         &self,
         root: kaspa_hashes::Hash64,
@@ -1541,6 +1600,15 @@ impl ConsensusApi for Consensus {
         limit: usize,
     ) -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
         self.virtual_processor.palw_monetary_aux_page_v1_impl(block, row, offset, limit)
+    }
+
+    fn palw_state_carriage_page_v1(
+        &self,
+        block: BlockHash,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        self.virtual_processor.palw_state_carriage_page_v1_impl(block, offset, limit)
     }
 
     /// ADR-0080 design A, on the node: the materialized tip, then the row itself. The tip read is

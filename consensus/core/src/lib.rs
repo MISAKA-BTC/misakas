@@ -590,6 +590,8 @@ pub mod palw_root_activation_v1;
 /// module exposes no crediting API at all (`FINALIZED_WITHOUT_REPLAY` is untypable).
 pub mod palw_routing;
 pub mod palw_rule_manifest_v1;
+/// The rules of the user's 2026-10-12 rulings (register X3, N4, D2): three dormant fences, refused when armed.
+pub mod palw_ruling_fences_v1;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.
@@ -894,5 +896,8 @@ pub mod palw_material_capacity_v1;
 pub mod palw_monetary_material_evidence_v1;
 
 pub mod palw_monetary_material_rpc_v1;
+
+/// Op 243: the canonical carriage of a pinned header's PALW state, in bounded pages, and its client assembler.
+pub mod palw_state_carriage_rpc_v1;
 
 pub mod palw_attempt_material_v3;

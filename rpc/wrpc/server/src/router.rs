@@ -123,6 +123,7 @@ impl Router {
                 GetPalwExecV2Status,
                 GetPalwRewardVesting,
                 GetPalwMonetaryMaterial,
+                GetPalwStateCarriage,
                 GetPalwKernelClaim,
                 GetPalwKernelRows,
                 GetPalwKernelFinals,

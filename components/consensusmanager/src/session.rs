@@ -413,6 +413,24 @@ impl ConsensusSessionOwned {
     ) -> Result<Vec<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         self.consensus.palw_monetary_material_covenants_v1()
     }
+    /// RFC-0008 PAV3 producer read (see the trait): the canonical prior session, its operators and the point read at.
+    #[allow(clippy::type_complexity)]
+    pub fn palw_native_session_v3(
+        &self,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+        daa: u64,
+    ) -> Result<
+        (
+            BlockHash,
+            Option<(
+                kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+                Vec<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Hash64)>,
+            )>,
+        ),
+        String,
+    > {
+        self.consensus.palw_native_session_v3(attempt, daa)
+    }
 
     pub fn palw_monetary_material_release_finalized_v1(
         &self,
@@ -436,6 +454,15 @@ impl ConsensusSessionOwned {
         limit: usize,
     ) -> Result<kaspa_consensus_core::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
         self.consensus.palw_monetary_aux_page_v1(block, row, offset, limit)
+    }
+
+    pub fn palw_state_carriage_page_v1(
+        &self,
+        block: BlockHash,
+        offset: u64,
+        limit: usize,
+    ) -> Result<kaspa_consensus_core::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        self.consensus.palw_state_carriage_page_v1(block, offset, limit)
     }
 
     pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {

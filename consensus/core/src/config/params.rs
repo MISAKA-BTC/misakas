@@ -3105,7 +3105,9 @@ pub struct Params {
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/mainnet-spec-register-2026-10-12.md).
-    pub palw_claim_hard_deadline_v1: Option<ForkActivation>,
+    /// The value carries X3's policy (`T_prepare`, `T_observe`, `T_resolve` and the `B_*` start-budget terms with no existing
+    /// source — [`crate::palw_ruling_fences_v1`]), hashed Some-only by its id beside the height; no value is approved.
+    pub palw_claim_hard_deadline_v1: Option<crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1>,
 
     /// **RFC-0001 §2.6 stage 2b: inherited prefix leaves** ([`crate::palw_fp_prefix_v1`]). Past this height a free-prompt claim may be
     /// FP job version 12: a prefix-state job whose first `k` prefill positions' step leaves are bound to a JOB-INDEPENDENT prefix
@@ -12844,6 +12846,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_reporter_share_v2();
     // The legacy route's public filer (lane LG14-A), likewise.
     params.sync_palw_legacy_public_filer_v1();
+    // The 2026-10-12 rulings' fences (X3, N4, D2), likewise.
+    params.sync_palw_2026_10_12_ruling_fences_v1();
     // RFC-0001 §2.10's adapter class listing, likewise.
     params.sync_palw_adapter_class_v1();
     // ADR-0096's decode constraint, likewise.

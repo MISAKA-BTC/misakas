@@ -3268,6 +3268,7 @@ mod mockery {
                 parent_header: mock(),
                 state_preimage: vec![9; 17],
                 fork_choice_opening: Vec::new(),
+                kernel_route_offset: mock(),
                 aux_root: mock_hex(),
                 total_rows: mock(),
                 start_row: mock(),
@@ -3279,6 +3280,30 @@ mod mockery {
         }
     }
     test!(GetPalwMonetaryMaterialResponse);
+
+    impl Mock for GetPalwStateCarriageRequest {
+        fn mock() -> Self {
+            Self { block_hash: mock_hex(), offset: mock(), limit_bytes: mock() }
+        }
+    }
+    test!(GetPalwStateCarriageRequest);
+
+    impl Mock for GetPalwStateCarriageResponse {
+        fn mock() -> Self {
+            Self {
+                available: mock(),
+                reason: mock_hex(),
+                header: mock(),
+                parent_header: mock(),
+                fork_choice_opening: vec![3; 5],
+                state_root: mock_hex(),
+                total_bytes: mock(),
+                offset: mock(),
+                bytes: vec![1, 2, 3, 4],
+            }
+        }
+    }
+    test!(GetPalwStateCarriageResponse);
 
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {

@@ -123,6 +123,15 @@ pub const TAG_FUND_PANEL_BEACON_SOURCE_FEE_V2: u8 = 63;
 pub const TAG_PAID_CLAIM_V2: u8 = 64;
 pub const TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2: u8 = 65;
 pub const TAG_AUTHORIZE_PANEL_LIFETIME_V2: u8 = 66;
+/// G14R's reserved verifier-pay slot 39 (M\*-49, `palw_verifier_pay_v1`): a drawn slot holder's attestation of one claim's check.
+pub const TAG_ATTEST_DRAWN_CHECK_V1: u8 = 39;
+// 67–69: RFC07/RFC08 signed economic contracts (2026-10-15, inside the RFC07 reservation 64–73; consumer-owned, each past its own
+// dormant fence): the model-epoch verification attestation, the consented horizon extension and the minimum-price contract.
+pub const TAG_ATTEST_MODEL_VERIFICATION_V1: u8 = 67;
+pub const TAG_CONSENT_HORIZON_EXTENSION_V1: u8 = 68;
+pub const TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1: u8 = 69;
+/// version, tag, verifier, claim.
+pub const MAX_ATTEST_DRAWN_CHECK_BYTES_V1: usize = 1 + 1 + 64 + 64;
 pub const MAX_FUND_PANEL_BEACON_SOURCE_FEE_BYTES_V2: usize = 288;
 pub const MAX_FUND_BEACON_SOURCE_FEE_BYTES_V1: usize = 256;
 pub const MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1: usize = 448;
@@ -611,6 +620,15 @@ pub enum KernelRouteObjectV1 {
     PaidClaimV2 { object: crate::claim_paid_v2::PaidClaimObjectV2 } = 64,
     EnrollPanelConsumerLifetimeV2 { terms: crate::panel_lifetime_v2::PanelConsumerLifetimeTermsV2 } = 65,
     AuthorizePanelLifetimeV2 { authorization:crate::panel_lifetime_v2::PanelLifetimeAuthorizationV2 } = 66,
+    /// **M\*-49 (`palw_verifier_pay_v1`, G14R's reserved 39)**: a drawn slot holder attests its check of `claim`; the ledger pays its
+    /// unpaid slots `check_fee` out of the poster's escrow before the attestation deadline. Signed by `verifier`.
+    AttestDrawnCheckV1 { verifier: Digest, claim: Digest } = 39,
+    /// RFC07 R7-ECON: a drawn verifier's attestation for a model-epoch verification tally (consumer-owned).
+    AttestModelVerificationV1 { attestation: crate::econ_contracts_v1::ModelVerificationAttestationV1 } = 67,
+    /// RFC08 R8-WINDOW: one affected party's consent to a live dependency horizon extension (consumer-owned).
+    ConsentHorizonExtensionV1 { terms: crate::econ_contracts_v1::HorizonExtensionTermsV1 } = 68,
+    /// RFC08 R8-ECON: one party's signature on a worker/poster minimum-price contract (consumer-owned).
+    SignMinimumPriceContractV1 { contract: crate::econ_contracts_v1::MinimumPriceContractTermsV1 } = 69,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -760,6 +778,10 @@ impl KernelRouteObjectV1 {
             Self::PaidClaimV2 { .. } => TAG_PAID_CLAIM_V2,
             Self::EnrollPanelConsumerLifetimeV2 { .. } => TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2,
             Self::AuthorizePanelLifetimeV2 { .. } => TAG_AUTHORIZE_PANEL_LIFETIME_V2,
+            Self::AttestDrawnCheckV1 { .. } => TAG_ATTEST_DRAWN_CHECK_V1,
+            Self::AttestModelVerificationV1 { .. } => TAG_ATTEST_MODEL_VERIFICATION_V1,
+            Self::ConsentHorizonExtensionV1 { .. } => TAG_CONSENT_HORIZON_EXTENSION_V1,
+            Self::SignMinimumPriceContractV1 { .. } => TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1,
             Self::OptInPaidBeaconSource { .. } => TAG_OPT_IN_PAID_BEACON_SOURCE_V1,
             Self::CommitSegmentedClaim { .. } => TAG_COMMIT_SEGMENTED_CLAIM_V1,
             Self::PostTiledJob { .. } => TAG_POST_TILED_JOB_V1,
@@ -1012,6 +1034,10 @@ pub const fn name_of_tag(tag: u8) -> &'static str {
         TAG_PAID_CLAIM_V2 => "PaidClaimV2",
         TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2 => "EnrollPanelConsumerLifetimeV2",
         TAG_AUTHORIZE_PANEL_LIFETIME_V2 => "AuthorizePanelLifetimeV2",
+        TAG_ATTEST_DRAWN_CHECK_V1 => "AttestDrawnCheckV1",
+        TAG_ATTEST_MODEL_VERIFICATION_V1 => "AttestModelVerificationV1",
+        TAG_CONSENT_HORIZON_EXTENSION_V1 => "ConsentHorizonExtensionV1",
+        TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1 => "SignMinimumPriceContractV1",
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => "OptInPaidBeaconSource",
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => "CommitSegmentedClaim",
         TAG_POST_TILED_JOB_V1 => "PostTiledJob",
@@ -1078,6 +1104,10 @@ pub const fn max_encoded_bytes_of_tag(tag: u8) -> Option<usize> {
         TAG_PAID_CLAIM_V2 => 256 << 20,
         TAG_ENROLL_PANEL_CONSUMER_LIFETIME_V2 => 4096,
         TAG_AUTHORIZE_PANEL_LIFETIME_V2 => 4096,
+        TAG_ATTEST_DRAWN_CHECK_V1 => MAX_ATTEST_DRAWN_CHECK_BYTES_V1,
+        TAG_ATTEST_MODEL_VERIFICATION_V1 | TAG_CONSENT_HORIZON_EXTENSION_V1 | TAG_SIGN_MINIMUM_PRICE_CONTRACT_V1 => {
+            crate::econ_contracts_v1::MAX_ECON_CONTRACT_OBJECT_BYTES_V1
+        }
         TAG_OPT_IN_PAID_BEACON_SOURCE_V1 => MAX_OPT_IN_PAID_BEACON_SOURCE_BYTES_V1,
         TAG_COMMIT_SEGMENTED_CLAIM_V1 => MAX_COMMIT_SEGMENTED_CLAIM_BYTES_V1,
         TAG_POST_TILED_JOB_V1 => MAX_POST_TILED_JOB_BYTES_V1,
