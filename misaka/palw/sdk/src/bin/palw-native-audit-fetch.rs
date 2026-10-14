@@ -56,13 +56,7 @@ fn run() -> Result<(), String> {
     {
         return Err("bounded fetch profile/fresh output required".into());
     }
-    if !owning_params_sha.bytes().all(|v| v.is_ascii_hexdigit()) {
-        return Err("own profile exact SHA256 required".into());
-    }
-    let mut profile_sha = [0u8; 32];
-    for (i, b) in profile_sha.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&owning_params_sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
-    }
+    let profile_sha = misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(&owning_params_sha)?;
     let network_id: kaspa_consensus_core::network::NetworkId = network.parse().map_err(|e| format!("own network: {e}"))?;
     let base: kaspa_consensus_core::config::params::Params = network_id.into();
     let owning = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
@@ -136,6 +130,10 @@ fn run() -> Result<(), String> {
     {
         return Err("node returned another network/genesis/immutable anchor/collection or unavailable validated audit".into());
     }
+    // Uniform mixing refusal: the node's own announced fingerprint/schedule/genesis must be exactly
+    // this auditor's reconstruction from the same pinned snapshot (another network, snapshot or
+    // policy value refuses here, before any opening is retained).
+    owning.check_node_identity(&status.consensus_params_id, &status.consensus_schedule_id, &status.genesis_hash)?;
     let child = Header::try_from(&child_block.header).map_err(|e| e.to_string())?;
     let parent = Header::try_from(&parent_block.header).map_err(|e| e.to_string())?;
     if kaspa_consensus_core::hashing::header::hash(&child) != block
@@ -219,6 +217,8 @@ fn run() -> Result<(), String> {
     }
     let report = serde_json::json!({"schema":"misaka.palw.public-native-anchor-collection.v32","rpc":endpoint,
         "network":network,"genesis":genesis,"operator_id":operator,"node_database":database,"own_params_sha256":owning_params_sha,"own_params_snapshot_root":owning_params_root.to_string(),
+        "node_consensus_params_id":status.consensus_params_id,"node_consensus_schedule_id":status.consensus_schedule_id,
+        "measurement_final_only":!owning.rfc02_qualified(),
         "qualified_native_profile":owning.rfc02_qualified(),"calibration_receipts_are_not_A6_or_A8_evidence":!owning.rfc02_qualified(),
         "pinned_child":block.to_string(),"pinned_selected_parent":parent_pin.to_string(),"original_job":job.to_string(),"coinbase_delivery_proof_requested":redemption,
         "provenance_start":from.to_string(),"complete_requested_provenance_retained":reached,"artifacts":evidence,

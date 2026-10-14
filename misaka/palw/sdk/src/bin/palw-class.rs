@@ -263,14 +263,9 @@ fn apply_own_native_params_v34(args: &mut Vec<String>, base: &mut Params) -> Res
     if let Some(file) = file {
         let root: kaspa_hashes::Hash64 =
             root.ok_or("--own-params-snapshot-root required")?.parse().map_err(|e| format!("snapshot root: {e}"))?;
-        let sha = sha.ok_or("--own-params-snapshot-sha256 required")?;
-        if sha.len() != 64 || !sha.bytes().all(|v| v.is_ascii_hexdigit()) {
-            return Err("own snapshot exact SHA256 required".into());
-        }
-        let mut hash = [0; 32];
-        for (i, b) in hash.iter_mut().enumerate() {
-            *b = u8::from_str_radix(&sha[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
-        }
+        let hash = misaka_palw_sdk::native_params_v34::parse_sha256_hex_v34(
+            &sha.ok_or("--own-params-snapshot-sha256 required")?,
+        )?;
         let owned = misaka_palw_sdk::native_params_v34::load_own_native_parameters_v34(
             base,
             std::path::Path::new(&file),

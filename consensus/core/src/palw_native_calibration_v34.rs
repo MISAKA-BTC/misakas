@@ -169,6 +169,42 @@ impl NativeCalibrationSnapshotV34 {
         Ok(out)
     }
 }
+/// **The one owning factory** shared by the daemon (`--palw-native-calibration-snapshot`) and
+/// every auditor/signer (`native_params_v34`). Canonical bounded decode, the explicit root pin,
+/// the pinned owning devnet base, and the measurement-only purpose are checked here once, so the
+/// node and the audit CLI cannot diverge on what a snapshot means. A qualified purpose is refused:
+/// an isolated calibration receipt is a measurement Final, never A6/A8 pass evidence.
+pub fn load_isolated_native_calibration_v34(base: &Params, raw: &[u8], pinned_root: Digest) -> Result<Params, String> {
+    let snapshot = NativeCalibrationSnapshotV34::from_bytes(raw)?;
+    let out = snapshot.apply(base, pinned_root)?;
+    if out.native_final_is_qualified_v34() || !out.has_isolated_native_calibration_v34() {
+        return Err("isolated owning profile cannot grant qualified RFC02 receipts".into());
+    }
+    Ok(out)
+}
+/// Uniform mixing refusal: a node's announced identity (its handshake fingerprint, fence schedule
+/// id and genesis, as `getPalwNodeStatus` reports them) must equal the auditor's own reconstruction.
+/// A different network, genesis, snapshot or any single owning policy value differs in at least one.
+pub fn check_same_owning_ruleset_v34(
+    own: &Params,
+    reported_params_id: &str,
+    reported_schedule_id: &str,
+    reported_genesis: &str,
+) -> Result<(), String> {
+    if own.consensus_params_id().to_string() != reported_params_id
+        || own.consensus_schedule_id().to_string() != reported_schedule_id
+        || own.genesis.hash.to_string() != reported_genesis
+    {
+        return Err(format!(
+            "node runs another owning ruleset: params {reported_params_id} schedule {reported_schedule_id} genesis {reported_genesis}, \
+             own {} {} {}",
+            own.consensus_params_id(),
+            own.consensus_schedule_id(),
+            own.genesis.hash
+        ));
+    }
+    Ok(())
+}
 fn payload(base: &GenesisBlock, isolation: Digest) -> Result<Vec<u8>, String> {
     if isolation == [0; 64] || base.coinbase_payload.len() > 4096 {
         return Err("native calibration34 isolation/base payload cap".into());
@@ -351,6 +387,19 @@ mod tests {
         let mut qualified = wire.clone();
         qualified.final_policy.purpose = NativeFinalPurposeV34::Qualified;
         assert!(qualified.apply(&base, qualified.root()).is_err());
+        // The shared loader is the same factory, and the mixing check refuses every other identity.
+        let loaded = load_isolated_native_calibration_v34(&base, &bytes, wire.root()).unwrap();
+        assert_eq!(loaded.consensus_params_id(), p.consensus_params_id());
+        let (id, sched, gen) =
+            (p.consensus_params_id().to_string(), p.consensus_schedule_id().to_string(), p.genesis.hash.to_string());
+        assert!(check_same_owning_ruleset_v34(&loaded, &id, &sched, &gen).is_ok());
+        assert!(check_same_owning_ruleset_v34(&loaded, &base.consensus_params_id().to_string(), &sched, &gen).is_err());
+        assert!(check_same_owning_ruleset_v34(&loaded, &id, &sched, &base.genesis.hash.to_string()).is_err());
+        let mut other_policy = wire.clone();
+        other_policy.final_policy.finder_profit_margin_sompi += 1;
+        if let Ok(q) = other_policy.apply(&base, other_policy.root()) {
+            assert!(check_same_owning_ruleset_v34(&q, &id, &sched, &gen).is_err());
+        }
     }
     #[test]
     fn truncated_or_oversized_snapshot_does_not_decode_or_arm() {

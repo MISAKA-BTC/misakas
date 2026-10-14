@@ -2,7 +2,9 @@
 //! predeclared/hash-pinned; calibration receipts cannot become A6/A8 credit.
 use kaspa_consensus_core::{
     config::params::Params,
-    palw_native_calibration_v34::{NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34, NativeCalibrationSnapshotV34},
+    palw_native_calibration_v34::{
+        NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34, check_same_owning_ruleset_v34, load_isolated_native_calibration_v34,
+    },
 };
 use misaka_palw_kernel::hash::Digest;
 use sha2::{Digest as _, Sha256};
@@ -39,10 +41,25 @@ pub fn load_own_native_parameters_v34(
     if sha256 != pinned_sha256 {
         return Err("own native34 profile differs from predeclared whole-file SHA256".into());
     }
-    let snapshot = NativeCalibrationSnapshotV34::from_bytes(&raw)?;
-    let parameters = snapshot.apply(base, pinned_root)?;
-    if parameters.native_final_is_qualified_v34() || !parameters.has_isolated_native_calibration_v34() {
-        return Err("isolated owning profile cannot grant qualified RFC02 receipts".into());
-    }
+    let parameters = load_isolated_native_calibration_v34(base, &raw, pinned_root)?;
     Ok(OwnedNativeParametersV34 { parameters, snapshot: pinned_root, sha256 })
+}
+impl OwnedNativeParametersV34 {
+    /// Refuse a node whose announced identity (`getPalwNodeStatus`: handshake fingerprint, fence
+    /// schedule id, genesis) differs from this auditor's own reconstruction — another network,
+    /// another snapshot, or one changed policy value. Raw node flags are never trusted instead.
+    pub fn check_node_identity(&self, params_id: &str, schedule_id: &str, genesis: &str) -> Result<(), String> {
+        check_same_owning_ruleset_v34(&self.parameters, params_id, schedule_id, genesis)
+    }
+}
+/// Parse an exact 64-hex SHA256 pin without slicing past a short/odd input.
+pub fn parse_sha256_hex_v34(raw: &str) -> Result<[u8; 32], String> {
+    if raw.len() != 64 || !raw.bytes().all(|v| v.is_ascii_hexdigit()) {
+        return Err("own profile exact SHA256 (64 hex) required".into());
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&raw[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }

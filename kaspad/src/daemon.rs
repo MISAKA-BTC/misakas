@@ -681,6 +681,15 @@ pub(crate) fn create_core_with_runtime_inner(
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+    // RFC-0002 native calibration34: an isolated measurement devnet says so beside its fingerprint.
+    // Its receipts are measurement Finals only — never A6/A8 pass evidence (`native_final_is_qualified_v34`).
+    if config.params.has_isolated_native_calibration_v34() {
+        warn!(
+            "PALW native calibration34: isolated measurement devnet (genesis {}, schedule {}); Final receipts here are NOT A6/A8 evidence",
+            config.params.genesis.hash,
+            config.params.consensus_schedule_id()
+        );
+    }
     // A drill crossing the post-launch release's flag day (`--palw-drill-fence-at`) says which fences
     // it set, beside the fingerprint they moved.
     for line in crate::palw_drill::palw_drill_fence_lines_v1(&config) {

@@ -1550,9 +1550,7 @@ impl Args {
         }
 
         if let Some(path) = &self.palw_native_calibration_snapshot {
-            use kaspa_consensus_core::palw_native_calibration_v34::{
-                NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34, NativeCalibrationSnapshotV34,
-            };
+            use kaspa_consensus_core::palw_native_calibration_v34::NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34;
             use std::io::Read;
             if self.network().network_type() != NetworkType::Devnet
                 || self.override_params_file.is_some()
@@ -1581,10 +1579,15 @@ impl Args {
             file.take(NATIVE_CALIBRATION_SNAPSHOT_MAX_BYTES_V34 as u64 + 1)
                 .read_to_end(&mut bytes)
                 .unwrap_or_else(|e| panic!("native calibration34 bounded snapshot read: {e}"));
-            let snapshot = NativeCalibrationSnapshotV34::from_bytes(&bytes)
-                .unwrap_or_else(|e| panic!("native calibration34 snapshot framing: {e}"));
-            config.params =
-                snapshot.apply(&config.params, pin.as_bytes()).unwrap_or_else(|e| panic!("native calibration34 owning snapshot: {e}"));
+            // The SAME owning factory the auditor/signer CLIs use (`native_params_v34`): a node and
+            // its auditor cannot read one snapshot two ways. Peers with another snapshot announce
+            // another `consensus_params_id`/genesis and the handshake refuses them.
+            config.params = kaspa_consensus_core::palw_native_calibration_v34::load_isolated_native_calibration_v34(
+                &config.params,
+                &bytes,
+                pin.as_bytes(),
+            )
+            .unwrap_or_else(|e| panic!("native calibration34 owning snapshot: {e}"));
         } else if self.palw_native_calibration_root.is_some() {
             panic!("native calibration34 root supplied without its snapshot");
         }
