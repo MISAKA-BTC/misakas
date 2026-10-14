@@ -92,6 +92,8 @@ mod palw_operator_da;
 
 #[path = "palw_artifact_inventory.rs"]
 mod artifact_inventory;
+#[path = "palw_flat_source_responder.rs"]
+mod flat_source_responder;
 /// Lane LG14-A (RFC-0014 §6): the common fraud filer — any carrying bond's pursuit, as a non-seat, of a claim its own replay refutes:
 /// a dispute reservation, then reserved DA demands that localize the first divergent step to a terminal the fold adjudicates (node
 /// policy; a clean no-op below `palw_legacy_public_filer_v1`, which no shipped preset arms).
@@ -7778,16 +7780,17 @@ impl PalwPanelService {
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
                 .map_err(|e| format!("the run does not assemble into a commitment: {e}"))?;
         let claim_id = fp_claim_id_v3(&commitment);
-        let run = if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
+        let (run, original_header) = if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa) {
             let directory = self.config.retention_dir.clone();
             let (_, projected) = offload(_backend, move |backend| {
                 crate::palw_flat_public_source::retain_v1(&directory, claim_id, backend, &run.outcome.material)?;
-                Ok::<_, String>(run)
+                let header = backend.public_execution_binding_header_v1(&run.outcome.material)?;
+                Ok::<_, String>((run, Some(header)))
             })
             .await?;
             projected?
         } else {
-            run
+            (run, None)
         };
         let material = palw_fp_capture_encode_v1(&job, &ids, &run.outcome.material);
 
@@ -7798,6 +7801,41 @@ impl PalwPanelService {
         };
         let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        let public_pledge = if let Some(header) = &original_header {
+            match session.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone())? {
+                Some((_snapshot, quote)) => {
+                    use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
+                    let accept_until_daa = quote.plan.terms.open_until_daa;
+                    if accept_until_daa <= current_daa {
+                        return Err("original public claim quote has expired before publication".into());
+                    }
+                    let mut pledge = PalwHistoryCustodyPledgeV1 {
+                        version: 1,
+                        claim: claim_id,
+                        producer: PalwBondKeyV2(bond),
+                        execution_root: commitment.execution_root,
+                        job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment),
+                        cu_ruleset_id: shape.job_context.cu_ruleset_id,
+                        resource_plan_id: quote.resource_plan_id,
+                        maximum_records: quote.maximum_records,
+                        maximum_custodians: quote.maximum_custodians,
+                        accept_until_daa,
+                        material_until_daa: accept_until_daa
+                            .checked_add(quote.material_span_daa)
+                            .ok_or("original public claim material horizon overflow")?,
+                        signature: Vec::new(),
+                    };
+                    pledge.signature = self
+                        .sign(pledge.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1)
+                        .ok_or("producer cannot sign original public custody pledge")?;
+                    pledge.check_v1()?;
+                    Some(pledge)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         // **ADR-0148: the fold's own price, asked of this node's own state**, with the ids the
         // carrier holds (none: a canonical payload carries no prompt). Past the ADR-0145 bundle the
         // ledger prices compute and the leaves rule no longer says whether the claim earns; below
@@ -7832,6 +7870,22 @@ impl PalwPanelService {
         // because the fee is the only field the second build changes and the mass does not move
         // with it.
         let build = |fee: u64| {
+            if let Some(pledge) = &public_pledge {
+                return key.build_fp_commitment_tx_original_public_v1(
+                    &self.consensus_config.params,
+                    current_daa,
+                    network_domain,
+                    self.config.prompt_ids_form,
+                    commitment.clone(),
+                    carried.clone(),
+                    price,
+                    pledge,
+                    original_header.as_ref().ok_or("original public pledge lost its immutable header")?,
+                    funding_outpoint,
+                    funding,
+                    fee,
+                );
+            }
             key.build_fp_commitment_tx_under_params_v1(
                 &self.consensus_config.params,
                 current_daa,
@@ -8472,6 +8526,7 @@ impl PalwPanelService {
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
         let mut public_prefix_response_cursor = None;
         let mut public_selected_response_cursor = None;
+        let mut public_flat_response_book = flat_source_responder::FlatSourceBookV1::default();
         let mut artifact_inventory_book = artifact_inventory::ArtifactInventoryBookV1::default();
         let mut public_prefix_cache_gc = public_prefix::PrefixCacheGcV1::default();
         // The DAA each queued item is due by, where one is computable — what the priority lane orders
@@ -10889,6 +10944,19 @@ impl PalwPanelService {
                 .await
             {
                 debug!("[{PALW_PANEL}] selected public response remains pending: {why}");
+            }
+            if let Err(why) = self
+                .public_flat_answer_tick_v1(
+                    &session,
+                    bond_key,
+                    &mut public_flat_response_book,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await
+            {
+                debug!("[{PALW_PANEL}] Flat public response remains pending: {why}");
             }
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);

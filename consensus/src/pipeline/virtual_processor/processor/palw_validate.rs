@@ -3745,6 +3745,10 @@ impl VirtualStateProcessor {
                                             | stage::PalwConstraintStreamActionV1::SelectedEventDemand { .. }
                                             | stage::PalwConstraintStreamActionV1::SelectedEventAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceAnswer(_)
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceCollect
                                             | stage::PalwConstraintStreamActionV1::HistoryRecovery { .. },
                                             Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
                                                 bundle,
@@ -3755,6 +3759,7 @@ impl VirtualStateProcessor {
                                 let until = if matches!(
                                     movement.action,
                                     stage::PalwConstraintStreamActionV1::PrefixPublicCollect { .. }
+                                        | stage::PalwConstraintStreamActionV1::FlatSourceCollect
                                         | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. }
                                         | stage::PalwConstraintStreamActionV1::HistoryRecovery {
                                             action:
@@ -3772,6 +3777,15 @@ impl VirtualStateProcessor {
                                             stage::PalwConstraintStreamActionV1::SelectedEventDemand { .. }
                                             | stage::PalwConstraintStreamActionV1::SelectedEventAnswer(_)
                                             | stage::PalwConstraintStreamActionV1::SelectedEventCollect { .. },
+                                            Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
+                                                bundle,
+                                            )),
+                                        ) => bundle.plan.id_v1(bundle.claim),
+                                        (
+                                            stage::PalwConstraintStreamActionV1::FlatSourceOpen { .. }
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceAnswer(_)
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceNominate { .. }
+                                            | stage::PalwConstraintStreamActionV1::FlatSourceCollect,
                                             Some(kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1::OwnerBundle(
                                                 bundle,
                                             )),

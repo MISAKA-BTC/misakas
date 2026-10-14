@@ -449,7 +449,10 @@ pub struct PalwOwnedStagedBundleV1 {
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
     >,
     pub flat_context: Option<crate::palw_staged_court_state_v1::PalwSharedCourtV1<PalwSelectedSourceContextV1>>,
-    pub history_recovery: std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
+    pub history_recovery: std::collections::BTreeMap<
+        Hash64,
+        crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
+    >,
     pub active: Option<u8>,
     pub opened: Vec<PalwStagedOpenedFamilyV1>,
 }
@@ -485,7 +488,10 @@ pub struct PalwStagedBundleCheckpointV1 {
     pub flat: Option<
         crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1>,
     >,
-    pub history_recovery: std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
+    pub history_recovery: std::collections::BTreeMap<
+        Hash64,
+        crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_history_custody_v1::PalwHistoryRecoveryV1>,
+    >,
     pub active_checkpoint: Option<PalwStagedFamilyCheckpointV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -594,6 +600,7 @@ impl PalwOwnedStagedBundleV1 {
                     old.bundle_id,
                     old.respond_until_daa,
                     old.collect_until_daa,
+                    old.minimum_response_span_daa,
                     &old.custodians,
                 ) == (
                     new.claim,
@@ -602,6 +609,7 @@ impl PalwOwnedStagedBundleV1 {
                     new.bundle_id,
                     new.respond_until_daa,
                     new.collect_until_daa,
+                    new.minimum_response_span_daa,
                     &new.custodians,
                 ) => {}
             (None, None) => {}
@@ -641,6 +649,11 @@ impl PalwOwnedStagedBundleV1 {
                     != (self.claim, self.owner, self.reserved_daa, self.plan.id_v1(self.claim))
                     || selected.requests.len() > crate::palw_selected_event_source_v1::PALW_SELECTED_EVENT_MAX_REQUESTS_V1
                     || selected.custodians.contains(&self.owner)
+                    || selected.minimum_response_span_daa == 0
+                    || selected
+                        .reserved_daa
+                        .checked_add(selected.minimum_response_span_daa)
+                        .is_none_or(|until| until > selected.respond_until_daa)
                     || selected.collect_until_daa > self.plan.terms.collect_until_daa
                     || context.binding.committed_execution_root != self.execution_root
                 {
@@ -685,9 +698,22 @@ impl PalwOwnedStagedBundleV1 {
             stage.row.0.check(&PalwStagedCourtKeyV1::Owner(self.claim, self.owner))?;
             let seed = &stage.context.seed;
             seed.check(90_000)?;
+            let (row_terms, row_reserved, row_seed) = match &stage.row.0 {
+                PalwStagedCourtRowV1::Constraint(row) => (row.terms, row.reserved_daa, row.seed_id()),
+                PalwStagedCourtRowV1::Tokenizer(row) => (row.terms, row.reserved_daa, row.seed_id()),
+                PalwStagedCourtRowV1::Prefix(row) => (row.terms, row.reserved_daa, row.seed_id()),
+                PalwStagedCourtRowV1::PublicPrefix(row) => (row.terms, row.reserved_daa, row.seed_id()),
+                _ => return Err("bundle retains an untyped or recursive child".into()),
+            };
             if stage.row.family_v1() != Some(self.plan.stages[index].family)
                 || (seed.claim, seed.reserver, seed.reserved_daa) != (self.claim, self.owner, self.reserved_daa)
+                || row_reserved != self.reserved_daa
+                || row_terms != self.plan.stages[index].terms
+                || row_seed.as_byte_slice() != seed.signing_message().as_slice()
                 || stage.context.binding.committed_execution_root != seed.binding.committed_execution_root
+                || stage.context.binding.committed_execution_root != self.execution_root
+                || seed.resolved_binding_v1(stage.context.job.class_id, Some(&stage.context.binding.shape_profile))?
+                    != *stage.context.binding
                 || seed.job.as_deref().is_some_and(|j| j != stage.context.job.as_ref())
             {
                 return Err("opened family changes signed original context or required stage".into());
@@ -703,6 +729,60 @@ impl PalwOwnedStagedBundleV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prerequisite_source_and_intake_are_allocated_before_original_child_opening() {
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let semantic = crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(128, 2, config.prices)
+            .unwrap()
+            .court_envelope(19, config.prices)
+            .unwrap();
+        let acquisition = staged_context_resource_plan_v1(256, semantic, config).unwrap();
+        let intake = PalwTokenizerInventoryPlanV1::derive_v1(128, config).unwrap();
+        let plan = PalwStagedBundlePlanV1::derive_with_acquisitions_v1(
+            100,
+            vec![
+                (PalwStagedFamilyV1::Constraint, semantic, Some(acquisition)),
+                (PalwStagedFamilyV1::Tokenizer, semantic, Some(acquisition)),
+            ],
+            Some(intake.clone()),
+            config,
+        )
+        .unwrap();
+        let intake_until = 100 + config.acquisition_daa + intake.envelope.inclusion_daa;
+        assert_eq!(plan.inventory_until_v1().unwrap(), Some(intake_until));
+        assert_eq!(plan.stages[0].terms.open_until_daa, intake_until + config.acquisition_daa + acquisition.inclusion_daa);
+        assert_eq!(plan.stages[0].terms.stream_until_daa, plan.stages[0].terms.open_until_daa + semantic.inclusion_daa);
+        assert_eq!(
+            plan.stages[1].terms.open_until_daa,
+            plan.stages[0].terms.stream_until_daa + config.acquisition_daa + acquisition.inclusion_daa
+        );
+        assert_eq!(
+            plan.terms.plan.maximum_moves,
+            semantic.maximum_moves * 2 + acquisition.maximum_moves * 2 + intake.envelope.maximum_moves
+        );
+        assert_eq!(
+            plan.preseed_source_until_v1(PalwStagedFamilyV1::Constraint, config).unwrap(),
+            plan.stages[0].terms.open_until_daa - config.prices.inclusion_margin_daa * 2
+        );
+    }
+    #[test]
+    fn owner_raw_intake_authenticates_original_length_prefix_and_keyed_hash_at_eof() {
+        let config = PalwStagedPublicCourtConfigV1::network_v1();
+        let bytes = b"{\"model\":{\"vocab\":{\"x\":0}}}";
+        let plan = PalwTokenizerInventoryPlanV1::derive_v1(bytes.len() as u64, config).unwrap();
+        let root = crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(bytes);
+        let mut intake = PalwTokenizerInventoryV1::new_v1(&plan, root, 1, 10_000);
+        intake.part_v1(100, 0, bytes, &plan).unwrap();
+        intake.finish_v1(101, &plan).unwrap();
+        assert!(intake.sealed && intake.length_fault_v1());
+        assert!(intake.finish_v1(102, &plan).is_err());
+        let mut incomplete = PalwTokenizerInventoryV1::new_v1(&plan, root, bytes.len() as u64, 10_000);
+        incomplete.part_v1(100, 0, &bytes[..bytes.len() - 1], &plan).unwrap();
+        assert!(incomplete.finish_v1(101, &plan).is_err());
+        let mut substituted = PalwTokenizerInventoryV1::new_v1(&plan, Hash64::from_u64_word(888), 1, 10_000);
+        substituted.part_v1(100, 0, bytes, &plan).unwrap();
+        assert!(substituted.finish_v1(101, &plan).is_err());
+    }
     #[test]
     fn required_family_sum_freezes_later_windows_and_rejects_overflow_and_duplicates() {
         let config = PalwStagedPublicCourtConfigV1::network_v1();

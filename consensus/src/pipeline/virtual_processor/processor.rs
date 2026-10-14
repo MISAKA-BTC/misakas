@@ -3114,10 +3114,28 @@ impl VirtualStateProcessor {
         palw_v2_staged: Option<(kaspa_hashes::Hash64, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2)>,
     ) {
         let mut batch = WriteBatch::default();
+        // Pruning -> PALW matches pruning/import lock order. A long-running
+        // candidate must recheck irreversible ancestry at its actual commit.
+        let public_pruning_guard = palw_v2_staged.as_ref().filter(|(_, delta)| {
+            delta.entries.iter().any(|entry| matches!(entry,
+                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtSeed { .. }
+                | kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { .. }
+            ))
+        }).map(|_| self.pruning_point_store.read());
+        let archive_public_material = public_pruning_guard.as_ref().is_some_and(|guard| {
+            let pruning = guard.pruning_point().expect("native public archive pruning point");
+            let pruning_daa = self.headers_store.get_daa_score(pruning).expect("native public archive pruning clock");
+            let candidate_daa = palw_v2_staged.as_ref().expect("public archive candidate").1.point.daa_score;
+            candidate_daa >= pruning_daa || self.reachability_service.try_is_chain_ancestor_of(current, pruning)
+                .unwrap_or(false)
+        });
+        // Native archive/lease GC must not race a prepared but uncommitted union.
+        // Hold the same store exclusion through the atomic DB commit below.
+        let mut palw_archive_guard = palw_v2_staged.as_ref().map(|_| self.palw_state_v2_store.write());
         if let Some((state_root, delta)) = palw_v2_staged {
-            let mut store = self.palw_state_v2_store.write();
+            let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
             store.insert_delta_batch(&mut batch, current, state_root, &delta).unwrap();
-            if delta.entries.iter().any(|entry| match entry {
+            if archive_public_material && delta.entries.iter().any(|entry| match entry {
                 kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { old, .. } => old.public_prefix_checkpoint_v1().is_some(),
                 _ => false,
             }) {
@@ -3138,8 +3156,10 @@ impl VirtualStateProcessor {
                 // bytes are retained under their native head, independent of body pruning.
                 store.archive_prefix_movements_batch_v1(&mut batch, &delta, &movements).unwrap();
             }
-            store.archive_recovered_prefix_history_batch_v1(&mut batch, &delta).unwrap();
-            store.archive_staged_cache_leases_batch_v1(&mut batch, &delta).unwrap();
+            if archive_public_material {
+                store.archive_recovered_prefix_history_batch_v1(&mut batch, &delta).unwrap();
+                store.archive_staged_cache_leases_batch_v1(&mut batch, &delta).unwrap();
+            }
         }
         if let Some(mut staged) = evm_staged {
             // §12: in a mode that keeps no long-term EVM state history (`head`), drop
@@ -3253,6 +3273,8 @@ impl VirtualStateProcessor {
         self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
+        drop(palw_archive_guard);
+        drop(public_pruning_guard);
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(write_guard);
     }
@@ -6258,23 +6280,24 @@ impl VirtualStateProcessor {
         // so what becomes durable is a function of what was verified, and a caller cannot store a
         // snapshot under a root it did not compute. The peer's bytes never reach the database.
         let mut batch = WriteBatch::default();
-        {
-            let mut store = self.palw_state_v2_store.write();
-            store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
-            // The same state, also as this node's servable snapshot. Without it a node that just
-            // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
-            // its own pruning point next advances — so the fix would not propagate past the first
-            // hop, and a young network would have exactly one node able to serve.
-            store
-                .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
-                .expect("writing the verified PALW pruning snapshot cannot fail");
-        }
+        let mut store = self.palw_state_v2_store.write();
+        store.set_tip_batch(&mut batch, pruning_point, &state).expect("writing the verified PALW tip cannot fail");
+        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state)
+            .expect("restoring verified PALW material leases cannot fail");
+        // The same state, also as this node's servable snapshot. Without it a node that just
+        // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
+        // its own pruning point next advances — so the fix would not propagate past the first
+        // hop, and a young network would have exactly one node able to serve.
+        store
+            .set_pruning_snapshot_batch(&mut batch, pruning_point, &state)
+            .expect("writing the verified PALW pruning snapshot cannot fail");
         // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
         pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.db.write(batch).unwrap();
         drop(pruning_meta_write);
+        drop(store);
         Ok(())
     }
 

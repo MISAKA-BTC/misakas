@@ -119,17 +119,44 @@ impl DbPalwStateV2Store {
     /// Atomic with the state tip. No wire request or local manifest can install a
     /// lease, and a reverted acceptance cannot shorten another fork's retention.
     pub fn archive_staged_cache_leases_batch_v1(&self, batch: &mut WriteBatch, delta: &PalwStateDeltaV2) -> StoreResult<()> {
+        self.archive_staged_cache_lease_rows_batch_v1(
+            batch,
+            delta.entries.iter().filter_map(|entry| match entry {
+                PalwDeltaEntryV2::StagedCourtSeed { key, new: Some(row), .. } => Some((*key, row)),
+                _ => None,
+            }),
+        )
+    }
+    /// Only the native importer of an authenticated pruning snapshot calls this.
+    /// Restore canonical live holds atomically with its tip before any local GC;
+    /// no historical-block replay or peer-supplied lease certificate is needed.
+    pub fn archive_staged_cache_leases_state_batch_v1(
+        &self,
+        batch: &mut WriteBatch,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> StoreResult<()> {
+        self.archive_staged_cache_lease_rows_batch_v1(batch, state.staged_cache_lease_rows_v1())
+    }
+    fn archive_staged_cache_lease_rows_batch_v1<'a>(
+        &self,
+        batch: &mut WriteBatch,
+        rows: impl Iterator<
+            Item = (
+                kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+                &'a kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtRowV1,
+            ),
+        >,
+    ) -> StoreResult<()> {
         let mut leases = std::collections::BTreeMap::<Hash64, PalwStagedCacheLeaseV1>::new();
         let mut shared = std::collections::BTreeMap::<Hash64, PalwSharedClaimCacheLeaseV1>::new();
-        for entry in &delta.entries {
-            let PalwDeltaEntryV2::StagedCourtSeed { key, new: Some(row), .. } = entry else { continue };
+        for (key, row) in rows {
             use kaspa_consensus_core::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
             let claim_horizon = match (key, row) {
                 (PalwStagedCourtKeyV1::Claim(claim), PalwStagedCourtRowV1::Claim(contract)) => {
-                    Some((*claim, contract.terms.material_until_daa))
+                    Some((claim, contract.terms.material_until_daa))
                 }
                 (PalwStagedCourtKeyV1::Claim(claim), PalwStagedCourtRowV1::ClaimBundle(contract)) => {
-                    Some((*claim, contract.plan.terms.material_until_daa.max(contract.history_custody.pledge.material_until_daa)))
+                    Some((claim, contract.plan.terms.material_until_daa.max(contract.history_custody.pledge.material_until_daa)))
                 }
                 _ => None,
             };
@@ -633,6 +660,41 @@ mod tests {
         assert!(!store.acknowledge_shared_claim_cache_gc_v1(late, 300).unwrap());
         assert!(store.acknowledge_shared_claim_cache_gc_v1(late, 301).unwrap());
         assert!(store.acknowledge_shared_claim_cache_gc_v1(late, 301).unwrap());
+    }
+    #[test]
+    fn verified_state_row_restoration_creates_preseed_hold_without_shortening_an_accepted_fork() {
+        use kaspa_consensus_core::palw_staged_court_state_v1::{
+            PalwStagedClaimContractV1, PalwStagedCourtKeyV1, PalwStagedCourtRowV1,
+        };
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(64));
+        let terms = kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
+            .claim_terms(100, 4, 32)
+            .unwrap();
+        let claim = Hash64::from_u64_word(1);
+        let row = PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+            terms,
+            producer: record(8).movement.reserver,
+            panel: Default::default(),
+            prefix_custody: None,
+        });
+        let mut batch = WriteBatch::default();
+        store
+            .archive_staged_cache_lease_rows_batch_v1(&mut batch, std::iter::once((PalwStagedCourtKeyV1::Claim(claim), &row)))
+            .unwrap();
+        db.write(batch).unwrap();
+        let initial = store.shared_claim_cache_lease_v1(claim).unwrap().unwrap();
+        assert_eq!(initial.material_until_daa, terms.material_until_daa);
+        assert!(store.staged_cache_gc_candidates_v1(u64::MAX, None, 64).unwrap().0.is_empty());
+        let fork = PalwSharedClaimCacheLeaseV1 { material_until_daa: terms.material_until_daa + 100, ..initial };
+        save_shared(&store, [fork]);
+        let mut batch = WriteBatch::default();
+        store
+            .archive_staged_cache_lease_rows_batch_v1(&mut batch, std::iter::once((PalwStagedCourtKeyV1::Claim(claim), &row)))
+            .unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.shared_claim_cache_lease_v1(claim).unwrap(), Some(fork));
+        // Storage primitive only; native imported-state authentication is separate.
     }
     #[test]
     fn shared_cache_gc_bounds_all_scanned_rows_including_missing_metadata() {

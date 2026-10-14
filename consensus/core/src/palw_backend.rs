@@ -502,6 +502,15 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Ok(false)
     }
 
+    /// Original public commitment metadata only. Implementations must never manufacture a
+    /// legacy binding for another scheme or deserialize the following private capture tensors.
+    fn public_execution_binding_header_v1(
+        &self,
+        _material: &[u8],
+    ) -> Result<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
+        Err("this backend has no original public binding header exporter".into())
+    }
+
     fn disclose_selected_event_v1(
         &self,
         _material: &[u8],

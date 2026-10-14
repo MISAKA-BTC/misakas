@@ -38,7 +38,7 @@ impl PalwOwnedConstraintStreamV1 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_with_authenticated_flat_pin_v1(
         seed: &PalwConstraintStreamSeedV1,
-        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         root: Hash64,
         terms: PalwRenderingClaimTermsV1,
         now: u64,
@@ -50,6 +50,7 @@ impl PalwOwnedConstraintStreamV1 {
         binding: &crate::palw_step_leg::PalwStepBindingV2,
         pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
     ) -> Result<Self, String> {
+        let job = &original.job;
         seed.check(maximum)?;
         if seed.resolved_binding_v1(job.class_id, Some(&binding.shape_profile))? != *binding
             || seed.job.as_deref().is_some_and(|original| original != job)
@@ -70,7 +71,7 @@ impl PalwOwnedConstraintStreamV1 {
             return Err("flat semantic court has no full prepaid work budget".into());
         }
         let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "flat seed digest width")?);
-        let court = PalwConstraintStreamCourtV1::new_from_flat_pin_with_seed_context_v1(
+        let court = PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
             seed.claim,
             seed.reserver,
             seed.reserved_daa,
@@ -81,6 +82,7 @@ impl PalwOwnedConstraintStreamV1 {
             seed.witness,
             seed.eog_count,
             &seed.eog_opening,
+            original,
             Some(seed_id),
         )?;
         let row = Self {

@@ -176,6 +176,20 @@ pub(super) fn tiled_plan_maximum_v1(
         .map_err(|e| e.to_string())?;
     check_trace_event_disclosure_v1(target.trace_root, target.execution_root, 0, 0, initial, binding.step_leaf_count)
         .map_err(|e| e.to_string())?;
+    authenticated_ids_plan_v1(target, job, binding, generated_token_ids, own_ids, table)
+}
+
+/// Only call with IDs authenticated by an original trace opening or native Flat EOF.
+pub(super) fn authenticated_ids_plan_v1(
+    target: &PalwOffenceTargetV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    generated_token_ids: &[u32],
+    own_ids: &[u32],
+    table: Arc<PalwTokenTableV1>,
+) -> Result<Option<TiledPlanV1>, String> {
+    kaspa_consensus_core::palw_offence_attribution_v1::palw_constrained_job_target_v1(target, binding, job)
+        .map_err(|e| e.to_string())?;
     if table.vocab() != binding.shape_profile.vocab_size {
         return Err("the held token table has another vocabulary width".into());
     }
@@ -184,7 +198,7 @@ pub(super) fn tiled_plan_maximum_v1(
     let mut same_prefix = true;
     for (position, &committed) in generated_token_ids.iter().enumerate() {
         if committed >= binding.shape_profile.vocab_size {
-            return Err("the committed token is past the vocabulary".into());
+            return Ok(Some(TiledPlanV1 {position:position as u32,committed,witness:None,beat_lane:None}));
         }
         if let Some(next) = mask.admit(&state, committed) {
             if same_prefix

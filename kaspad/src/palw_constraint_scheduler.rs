@@ -7,13 +7,85 @@ pub(super) fn nominate_v1(
     job: &PalwFreePromptJobV3,
     initial: &PalwTraceEventDisclosureV1,
     own_ids: &[u32],
-    table: Arc<PalwTokenTableV1>,
+    table: Arc<dyn PalwPublicTokenTableSourceV1>,
     ledger: &Arc<PalwMemoryLedgerV1>,
 ) -> Result<Option<TiledPlanV1>, String> {
-    let _scratch = reserve_v1(target, job, std::slice::from_ref(initial), 0, &table, ledger)?;
-    super::constraint::tiled_plan_maximum_v1(target, job, initial, own_ids, table)
+    let PalwTraceEventDisclosureV1::Tiled { binding, generated_token_ids, .. } = initial else { return Ok(None) };
+    kaspa_consensus_core::palw_step_refute::check_trace_event_disclosure_v1(
+        target.trace_root,
+        target.execution_root,
+        0,
+        0,
+        initial,
+        binding.step_leaf_count,
+    )
+    .map_err(|e| e.to_string())?;
+    nominate_authenticated_ids_v1(target, job, binding, generated_token_ids, own_ids, table, ledger)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn nominate_authenticated_ids_v1(
+    target: &PalwOffenceTargetV1,
+    job: &PalwFreePromptJobV3,
+    binding: &PalwStepBindingV2,
+    ids: &[u32],
+    own: &[u32],
+    table: Arc<dyn PalwPublicTokenTableSourceV1>,
+    ledger: &Arc<PalwMemoryLedgerV1>,
+) -> Result<Option<TiledPlanV1>, String> {
+    use kaspa_consensus_core::palw_decode_constraint_v1::constraint_start_state_v1;
+    palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
+    let _scratch = reserve_v1(target, job, &[], (ids.len() as u64 + own.len() as u64) * 4, table.as_ref(), ledger)?;
+    if palw_fp_constraint_table_root_v1(job) != Some(table.root_v1())
+        || job.tokenizer_id != table.tokenizer_id_v1()
+        || table.vocab_v1() != binding.shape_profile.vocab_size
+    {
+        return Err("streaming Constraint mask changes immutable root/tokenizer/vocabulary".into());
+    }
+    let grammar = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_constraint_of_bytes_v1(
+        kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_tail_v1(job)
+            .ok_or("streaming mask lacks original constraint")?,
+    )
+    .map_err(|e| e.to_string())?;
+    let eog = table.eog_ids_v1()?;
+    let admit = |state: &kaspa_consensus_core::palw_decode_constraint_v1::PalwConstraintStateV1, id: u32| {
+        if eog.binary_search(&id).is_ok() { Ok(None) } else { table.admit_v1(&grammar, state, id) }
+    };
+    let mut state = constraint_start_state_v1(&grammar);
+    let mut same = true;
+    for (position, &committed) in ids.iter().enumerate() {
+        if committed >= table.vocab_v1() {
+            return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness: None, beat_lane: None }));
+        }
+        if let Some(next) = admit(&state, committed)? {
+            if same
+                && let Some(&own) = own.get(position)
+                && own != committed
+                && own < table.vocab_v1()
+                && admit(&state, own)?.is_some()
+            {
+                return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness: None, beat_lane: Some(own) }));
+            }
+            same &= own.get(position) == Some(&committed);
+            state = next;
+        } else {
+            let mut witness = None;
+            for id in 0..table.vocab_v1() {
+                if admit(&state, id)?.is_some() {
+                    witness = Some(id);
+                    break;
+                }
+            }
+            if Some(&committed) == eog.first() && witness.is_none() && position + 1 == ids.len() {
+                return Ok(None);
+            }
+            return Ok(Some(TiledPlanV1 { position: position as u32, committed, witness, beat_lane: None }));
+        }
+    }
+    Ok(None)
 }
 use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryReservationKeyV1, PalwMemoryReservationV1};
+use kaspa_consensus_core::palw_public_token_table_v1::PalwPublicTokenTableSourceV1;
 use kaspa_consensus_core::{
     Hash64,
     palw_constraint_stream_carriage_v1::{
@@ -297,8 +369,9 @@ struct Pending {
 pub(super) struct ConstraintSchedulerV1 {
     seed: PalwConstraintStreamSeedV1,
     seed_id: Hash64,
+    position: u32,
     terms: PalwRenderingClaimTermsV1,
-    table: Arc<PalwTokenTableV1>,
+    table: Arc<dyn PalwPublicTokenTableSourceV1>,
     eog: Vec<u32>,
     court: PalwConstraintStreamCourtV1,
     moves: u64,
@@ -311,7 +384,7 @@ fn reserve_v1(
     job: &PalwFreePromptJobV3,
     events: &[PalwTraceEventDisclosureV1],
     extra_bytes: u64,
-    table: &PalwTokenTableV1,
+    table: &dyn PalwPublicTokenTableSourceV1,
     ledger: &Arc<PalwMemoryLedgerV1>,
 ) -> Result<Arc<PalwMemoryReservationV1>, String> {
     let encoded = (borsh::object_length(job).map_err(|e| e.to_string())? as u64)
@@ -320,8 +393,8 @@ fn reserve_v1(
         .ok_or("constraint public copy bound overflow")?;
     let bytes = encoded
         .checked_mul(8)
-        .and_then(|n| n.checked_add((table.entries.len() as u64).checked_mul(256)?))
-        .and_then(|n| n.checked_add((table.eog_token_ids.len() as u64).checked_mul(32)?))
+        .and_then(|n| n.checked_add((table.vocab_v1() as usize as u64).checked_mul(256)?))
+        .and_then(|n| n.checked_add((table.eog_count_v1() as usize as u64).checked_mul(32)?))
         .and_then(|n| n.checked_add(1_048_576))
         .ok_or("constraint public scratch bound overflow")?;
     Ok(Arc::new(
@@ -409,16 +482,8 @@ fn pin_v1(
     Ok((binding.clone(), pin))
 }
 
-fn opening_v1(table: &PalwTokenTableV1, id: u32) -> Result<PalwStepOpeningV1, String> {
-    let count = table.entries.len() as u64 + 1;
-    step_opening_from_leaf_source_capped_v1(count, u64::from(id), PALW_TOKEN_TABLE_MAX_LEAVES_V1, |index| {
-        if index == table.entries.len() as u64 {
-            table_eog_leaf_hash_v1(&table.eog_token_ids)
-        } else {
-            table_leaf_hash_v1(index as u32, table.entries[index as usize].as_deref())
-        }
-    })
-    .map_err(|e| e.to_string())
+fn opening_v1(table: &dyn PalwPublicTokenTableSourceV1, id: u32) -> Result<PalwStepOpeningV1, String> {
+    table.checked_opening_v1(id)
 }
 
 impl ConstraintSchedulerV1 {
@@ -428,7 +493,7 @@ impl ConstraintSchedulerV1 {
         job: &PalwFreePromptJobV3,
         plan: TiledPlanV1,
         events: &[PalwTraceEventDisclosureV1],
-        table: Arc<PalwTokenTableV1>,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
         progress: &PalwStagedOwnedProgressV1,
         maximum_leaves: u64,
         ledger: &Arc<PalwMemoryLedgerV1>,
@@ -445,14 +510,14 @@ impl ConstraintSchedulerV1 {
         {
             return Err("constraint owner/acceptance/collection clock is not admissible".into());
         }
-        let reservation = reserve_v1(target, job, events, 0, &table, ledger)?;
+        let reservation = reserve_v1(target, job, events, 0, table.as_ref(), ledger)?;
         let (binding, pin) = pin_v1(target, job, plan, events, maximum_leaves)?;
-        if table.tokenizer_id != job.tokenizer_id || table.vocab() != binding.shape_profile.vocab_size {
+        if table.tokenizer_id_v1() != job.tokenizer_id || table.vocab_v1() != binding.shape_profile.vocab_size {
             return Err("constraint holding changes registered tokenizer/vocabulary".into());
         }
         let root = palw_fp_constraint_table_root_v1(job).ok_or("job names no constraint table")?;
-        let eog_opening = opening_v1(&table, table.vocab())?;
-        if step_opening_root_capped_v1(table.entries.len() as u64 + 1, &eog_opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+        let eog_opening = opening_v1(table.as_ref(), table.vocab_v1())?;
+        if step_opening_root_capped_v1(table.vocab_v1() as usize as u64 + 1, &eog_opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
             .map_err(|e| e.to_string())?
             != root
         {
@@ -463,9 +528,9 @@ impl ConstraintSchedulerV1 {
                 return Err("constraint table differs from immutable registered semantics".into());
             }
         }
-        let mut eog = table.eog_token_ids.clone();
+        let mut eog = table.eog_ids_v1()?;
         eog.sort_unstable();
-        if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab()) {
+        if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab_v1()) {
             return Err("constraint EOG holding is not a canonical bounded set".into());
         }
         let court = PalwConstraintStreamCourtV1::new(
@@ -516,7 +581,18 @@ impl ConstraintSchedulerV1 {
         if progress.seed_id.is_some_and(|id| id != seed_id) {
             return Err("accepted constraint seed differs; replacement is forbidden".into());
         }
-        Ok(Self { seed, seed_id, terms: progress.terms, table, eog, court, moves: 1, pending: None, _reservation: reservation })
+        Ok(Self {
+            seed,
+            seed_id,
+            position: plan.position,
+            terms: progress.terms,
+            table,
+            eog,
+            court,
+            moves: 1,
+            pending: None,
+            _reservation: reservation,
+        })
     }
 
     /// An accepted seed is read from the rooted public archive, not nominated again after
@@ -530,7 +606,8 @@ impl ConstraintSchedulerV1 {
         source_id: Hash64,
         answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         witness: Option<u32>,
-        table: Arc<PalwTokenTableV1>,
+        original: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
         progress: &PalwStagedOwnedProgressV1,
         ledger: &Arc<PalwMemoryLedgerV1>,
     ) -> Result<Self, String> {
@@ -546,25 +623,25 @@ impl ConstraintSchedulerV1 {
             return Err("flat constraint opening changes paid owner/source/original clock".into());
         }
         let extra = borsh::object_length(binding).map_err(|e| e.to_string())? as u64;
-        let reservation = reserve_v1(target, job, &[], extra, &table, ledger)?;
+        let reservation = reserve_v1(target, job, &[], extra, table.as_ref(), ledger)?;
         palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
-        if table.tokenizer_id != job.tokenizer_id || table.vocab() != binding.shape_profile.vocab_size {
+        if table.tokenizer_id_v1() != job.tokenizer_id || table.vocab_v1() != binding.shape_profile.vocab_size {
             return Err("flat constraint table differs from original registered tokenizer/vocabulary".into());
         }
         let root = palw_fp_constraint_table_root_v1(job).ok_or("flat constraint job lacks immutable table root")?;
-        let eog_opening = opening_v1(&table, table.vocab())?;
-        if step_opening_root_capped_v1(table.entries.len() as u64 + 1, &eog_opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+        let eog_opening = opening_v1(table.as_ref(), table.vocab_v1())?;
+        if step_opening_root_capped_v1(table.vocab_v1() as usize as u64 + 1, &eog_opening, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
             .map_err(|e| e.to_string())?
             != root
         {
             return Err("flat constraint EOG holding differs from original table commitment".into());
         }
-        let mut eog = table.eog_token_ids.clone();
+        let mut eog = table.eog_ids_v1()?;
         eog.sort_unstable();
-        if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab()) {
+        if eog.is_empty() || eog.windows(2).any(|w| w[0] >= w[1]) || eog.last().is_some_and(|id| *id >= table.vocab_v1()) {
             return Err("flat constraint EOG holding is not a canonical set".into());
         }
-        let court = PalwConstraintStreamCourtV1::new_from_flat_pin_v1(
+        let court = PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
             target.claim_id,
             progress.reserver,
             progress.reserved_daa,
@@ -575,6 +652,8 @@ impl ConstraintSchedulerV1 {
             witness,
             eog.len() as u32,
             &eog_opening,
+            original,
+            None,
         )?;
         let empty = || PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: Vec::new() };
         let mut seed = PalwConstraintStreamSeedV1 {
@@ -618,7 +697,18 @@ impl ConstraintSchedulerV1 {
             return Err("flat semantic seed exceeds original fixed signed carrier".into());
         }
         let seed_id = Hash64::from_bytes(seed.signing_message().try_into().map_err(|_| "flat semantic seed digest width")?);
-        Ok(Self { seed, seed_id, terms: progress.terms, table, eog, court, moves: 1, pending: None, _reservation: reservation })
+        Ok(Self {
+            seed,
+            seed_id,
+            position: pin.position_v1(),
+            terms: progress.terms,
+            table,
+            eog,
+            court,
+            moves: 1,
+            pending: None,
+            _reservation: reservation,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -627,12 +717,12 @@ impl ConstraintSchedulerV1 {
         job: &PalwFreePromptJobV3,
         binding: &PalwStepBindingV2,
         seed: &PalwConstraintStreamSeedV1,
-        table: Arc<PalwTokenTableV1>,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
         progress: &PalwStagedOwnedProgressV1,
         maximum_leaves: u64,
         ledger: &Arc<PalwMemoryLedgerV1>,
     ) -> Result<Self, String> {
-        Self::reopen_with_flat_v1(target, job, binding, seed, None, table, progress, maximum_leaves, ledger)
+        Self::reopen_with_flat_v1(target, job, binding, seed, None, None, table, progress, maximum_leaves, ledger)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -642,7 +732,8 @@ impl ConstraintSchedulerV1 {
         binding: &PalwStepBindingV2,
         seed: &PalwConstraintStreamSeedV1,
         flat: Option<&kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>,
-        table: Arc<PalwTokenTableV1>,
+        original: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+        table: Arc<dyn PalwPublicTokenTableSourceV1>,
         progress: &PalwStagedOwnedProgressV1,
         maximum_leaves: u64,
         ledger: &Arc<PalwMemoryLedgerV1>,
@@ -667,35 +758,48 @@ impl ConstraintSchedulerV1 {
             return Err("public constraint archive changes admitted seed/owner/job/clock".into());
         }
         let extra = borsh::object_length(&(binding, seed)).map_err(|e| e.to_string())? as u64;
-        let reservation = reserve_v1(target, job, &[], extra, &table, ledger)?;
+        let reservation = reserve_v1(target, job, &[], extra, table.as_ref(), ledger)?;
         seed.check(90_000)?;
         palw_constrained_job_target_v1(target, binding, job).map_err(|e| e.to_string())?;
         if seed.resolved_binding_v1(target.class_id, Some(&binding.shape_profile))? != *binding
-            || table.tokenizer_id != job.tokenizer_id
-            || table.vocab() != binding.shape_profile.vocab_size
+            || table.tokenizer_id_v1() != job.tokenizer_id
+            || table.vocab_v1() != binding.shape_profile.vocab_size
         {
             return Err("archived constraint binding differs from accepted immutable class/holding".into());
         }
         let root = palw_fp_constraint_table_root_v1(job).ok_or("original job has no table root")?;
-        let actual_eog = opening_v1(&table, table.vocab())?;
+        let actual_eog = opening_v1(table.as_ref(), table.vocab_v1())?;
         if actual_eog != seed.eog_opening
-            || step_opening_root_capped_v1(table.entries.len() as u64 + 1, &actual_eog, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
+            || step_opening_root_capped_v1(table.vocab_v1() as usize as u64 + 1, &actual_eog, PALW_TOKEN_TABLE_MAX_LEAVES_V1)
                 .map_err(|e| e.to_string())?
                 != root
         {
             return Err("archive/table EOG opening changes original authenticated table".into());
         }
-        let mut eog = table.eog_token_ids.clone();
+        let mut eog = table.eog_ids_v1()?;
         eog.sort_unstable();
         if eog.len() != seed.eog_count as usize
             || eog.windows(2).any(|w| w[0] >= w[1])
             || eog.is_empty()
-            || eog.last().is_some_and(|id| *id >= table.vocab())
+            || eog.last().is_some_and(|id| *id >= table.vocab_v1())
         {
             return Err("archived EOG count differs from authenticated holding".into());
         }
         let court = if let Some(flat) = flat {
-            seed.court_from_authenticated_flat_pin_v1(target.execution_root, job, binding, flat)?
+            PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
+                target.claim_id,
+                seed.reserver,
+                seed.reserved_daa,
+                target.execution_root,
+                binding,
+                job,
+                flat,
+                seed.witness,
+                seed.eog_count,
+                &seed.eog_opening,
+                original.ok_or("Flat archive lost its native original commitment")?,
+                Some(seed_id),
+            )?
         } else {
             PalwConstraintStreamCourtV1::new(
                 target.claim_id,
@@ -714,6 +818,7 @@ impl ConstraintSchedulerV1 {
         Ok(Self {
             seed: seed.clone(),
             seed_id,
+            position: flat.map_or(seed.pin.position, |pin| pin.position_v1()),
             terms: progress.terms,
             table,
             eog,
@@ -755,17 +860,18 @@ impl ConstraintSchedulerV1 {
         } else if phase == PalwConstraintStreamPhaseV1::Complete {
             return Err("completed constraint requires accepted certificate, not more semantic work".into());
         } else if let Some((id, present, length, offset)) = before.rendering {
-            let bytes =
-                self.table.entries.get(id as usize).ok_or("rendering ID outside immutable vocabulary")?.as_deref().unwrap_or_default();
-            if present != self.table.entries[id as usize].is_some() || length as usize != bytes.len() {
+            let actual = self.table.entry_length_v1(id)?;
+            if present != actual.is_some() || length != actual.unwrap_or(0) || offset > length {
                 return Err("rendering declaration changes immutable table leaf".into());
             }
-            let rest = bytes.get(offset as usize..).ok_or("rendering cursor exceeds authenticated operand")?;
-            if rest.is_empty() {
+            if offset == length {
                 self.court.finish_rendering()?;
                 PalwConstraintStreamActionV1::RenderingFinish
             } else {
-                let bytes = rest[..rest.len().min(PALW_RENDERING_STREAM_PART_BYTES_V1)].to_vec();
+                let bytes = self.table.read_part_v1(id, offset, PALW_RENDERING_STREAM_PART_BYTES_V1 as u32)?;
+                if bytes.len() != (length - offset).min(PALW_RENDERING_STREAM_PART_BYTES_V1 as u32) as usize {
+                    return Err("public rendering read changes exact native part length".into());
+                }
                 self.court.push_rendering(local, offset, &bytes)?;
                 PalwConstraintStreamActionV1::RenderingPart { offset, bytes }
             }
@@ -775,11 +881,10 @@ impl ConstraintSchedulerV1 {
                 self.court.finish_eog_token(local)?;
                 PalwConstraintStreamActionV1::EogTokenFinish
             } else {
-                let entry = self.table.entries.get(id as usize).ok_or("next rendering outside vocabulary")?;
+                let entry = self.table.entry_length_v1(id)?;
                 let present = entry.is_some();
-                let length =
-                    u32::try_from(entry.as_ref().map_or(0, Vec::len)).map_err(|_| "rendering exceeds original length format")?;
-                let opening = opening_v1(&self.table, id)?;
+                let length = entry.unwrap_or(0);
+                let opening = opening_v1(self.table.as_ref(), id)?;
                 self.court.begin_rendering(local, id, present, length, &opening)?;
                 self.moves += 1;
                 return Ok(Pending {
@@ -880,9 +985,9 @@ impl ConstraintSchedulerV1 {
         match cursor.phase {
             PalwConstraintStreamPhaseV1::Eog => 0,
             PalwConstraintStreamPhaseV1::Prefix(p) => u64::from(p) + 1,
-            PalwConstraintStreamPhaseV1::Committed => u64::from(self.seed.pin.position) + 1,
-            PalwConstraintStreamPhaseV1::Auxiliary => u64::from(self.seed.pin.position) + 2,
-            PalwConstraintStreamPhaseV1::Complete => u64::from(self.seed.pin.position) + 3,
+            PalwConstraintStreamPhaseV1::Committed => u64::from(self.position) + 1,
+            PalwConstraintStreamPhaseV1::Auxiliary => u64::from(self.position) + 2,
+            PalwConstraintStreamPhaseV1::Complete => u64::from(self.position) + 3,
             _ => u64::MAX,
         }
     }

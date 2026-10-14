@@ -158,6 +158,9 @@ pub enum PalwConstraintStreamActionV1 {
     },
     HistoryRecovery {
         stage_seed: Hash64,
+        request_head: Hash64,
+        sequence: u64,
+        demand_opened_daa: u64,
         action: crate::palw_history_custody_v1::PalwHistoryRecoveryActionV1,
     },
     FlatSourceOpen {
@@ -400,6 +403,27 @@ impl PalwConstraintStreamLeafV1 {
     }
 }
 impl PalwConstraintStreamMoveV1 {
+    /// Bind every signed part to the accepted backwards cursor and demand. A
+    /// previously signed part must not become valid for the next record's slot.
+    pub fn check_history_scope_v1(&self, recovery: &crate::palw_history_custody_v1::PalwHistoryRecoveryV1) -> Result<(), String> {
+        let PalwConstraintStreamActionV1::HistoryRecovery { stage_seed, request_head, sequence, demand_opened_daa, action } =
+            &self.action
+        else {
+            return Err("not a history recovery carriage".into());
+        };
+        let request = recovery.remaining_request_v1().ok_or("history traversal has already reached genesis")?;
+        let opened = if matches!(action, crate::palw_history_custody_v1::PalwHistoryRecoveryActionV1::Demand) {
+            0
+        } else {
+            recovery.demand.as_ref().ok_or("history answer has no accepted literal demand")?.opened_daa
+        };
+        if (self.claim, self.reserver, self.reserved_daa, *stage_seed, *request_head, *sequence, *demand_opened_daa)
+            != (request.claim, request.owner, request.reserved_daa, request.seed_id, request.head, request.sequence, opened)
+        {
+            return Err("signed history carriage substitutes current record head, sequence or original demand clock".into());
+        }
+        Ok(())
+    }
     /// Only this typed Answer changes signature authority. Every historic/owned action
     /// remains owner-signed, including public-source Demand and local prefix continuation.
     pub fn authorization_bond_v1(&self) -> PalwBondKeyV2 {
@@ -591,6 +615,73 @@ mod tests {
             action: PalwConstraintStreamActionV1::RenderingPart { offset: 0, bytes: vec![b'a'] },
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }
+    }
+    #[test]
+    fn signed_history_parts_bind_exact_current_record_and_accepted_demand_before_buffer_mutation() {
+        use crate::palw_history_custody_v1::{PalwHistoryRecoveryActionV1 as Action, PalwHistoryRecoveryV1};
+        let mut carrier = movement();
+        let stage = Hash64::from_u64_word(50);
+        let head = Hash64::from_u64_word(51);
+        let signer = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(52), 0));
+        let request = crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1 {
+            claim: carrier.claim,
+            owner: carrier.reserver,
+            reserved_daa: carrier.reserved_daa,
+            seed_id: stage,
+            head,
+            sequence: 2,
+            material_until_daa: 1000,
+        };
+        let mut recovery = PalwHistoryRecoveryV1::new_v1(request, 50, 900, 950, 10, 1, [signer].into_iter().collect()).unwrap();
+        carrier.phase = PalwConstraintStreamPhaseV1::PrefixCourt;
+        carrier.action = PalwConstraintStreamActionV1::HistoryRecovery {
+            stage_seed: stage,
+            request_head: head,
+            sequence: 2,
+            demand_opened_daa: 0,
+            action: Action::Demand,
+        };
+        carrier.check_history_scope_v1(&recovery).unwrap();
+        recovery.apply_v1(&Action::Demand, 50).unwrap();
+        carrier.action = PalwConstraintStreamActionV1::HistoryRecovery {
+            stage_seed: stage,
+            request_head: head,
+            sequence: 2,
+            demand_opened_daa: 50,
+            action: Action::Begin { answerer: signer, total_bytes: 1 },
+        };
+        carrier.check_history_scope_v1(&recovery).unwrap();
+        let original_message = carrier.signing_message();
+        for field in 0..3 {
+            let mut stale = carrier.clone();
+            let PalwConstraintStreamActionV1::HistoryRecovery { request_head, sequence, demand_opened_daa, .. } = &mut stale.action
+            else {
+                unreachable!()
+            };
+            match field {
+                0 => *request_head = Hash64::from_u64_word(99),
+                1 => *sequence -= 1,
+                _ => *demand_opened_daa += 1,
+            }
+            assert_ne!(stale.signing_message(), original_message);
+            assert!(stale.check_history_scope_v1(&recovery).is_err());
+            assert!(recovery.demand.as_ref().unwrap().buffers.is_empty());
+        }
+        let mut next = recovery.clone();
+        next.remaining_sequence = 1;
+        next.remaining_head = Hash64::from_u64_word(53);
+        let next_demand = next.demand.as_mut().unwrap();
+        next_demand.request.sequence = 1;
+        next_demand.request.head = next.remaining_head;
+        assert!(carrier.check_history_scope_v1(&next).is_err(), "old same-offset signed Begin cannot poison the next record slot");
+        let shared: crate::palw_staged_court_state_v1::PalwSharedCourtV1<_> = Box::new(recovery.clone()).into();
+        assert_eq!(borsh::to_vec(&shared).unwrap(), borsh::to_vec(&recovery).unwrap(), "COW is transparent on the rooted wire");
+        let mut branch = shared.clone();
+        assert!(std::ptr::eq(shared.as_ref(), branch.as_ref()));
+        branch.apply_v1(&Action::Begin { answerer: signer, total_bytes: 1 }, 51).unwrap();
+        assert!(!std::ptr::eq(shared.as_ref(), branch.as_ref()));
+        assert!(shared.demand.as_ref().unwrap().buffers.is_empty());
+        assert_eq!(branch.demand.as_ref().unwrap().buffers.len(), 1);
     }
     #[test]
     fn public_prefix_answer_signer_is_typed_and_every_literal_identity_is_signed() {

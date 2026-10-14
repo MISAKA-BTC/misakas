@@ -185,6 +185,9 @@ pub(super) fn recover_pages_v1(
 ) -> Result<bool, String> {
     page_recovery::recover_v1(consensus, target, binding, job, progress, maximum_leaves, directory, |_| Ok(None))
 }
+pub(super) fn needs_native_recovery_v1(directory: &std::path::Path, seed: Hash64) -> bool {
+    page_recovery::needs_native_recovery_v1(directory, seed)
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn recover_pages_with_public_pull_v1(

@@ -792,6 +792,10 @@ impl PalwExecutionBackendV1 for Base0Backend {
         crate::flat_public_source::write_flat_public_source_v1(material, out)
     }
 
+    fn public_execution_binding_header_v1(&self,material:&[u8])->Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,String> {
+        crate::flat_public_source::original_public_binding_header_v1(material)
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see

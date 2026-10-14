@@ -6,7 +6,7 @@ use crate::Hash64;
 use crate::palw_decode_constraint_v1::{PalwConstraintStateV1, PalwDecodeConstraintV1, constraint_start_state_v1};
 use crate::palw_eog_stream_v1::PalwEogStreamV1;
 use crate::palw_fp_constraint_job_v1::{palw_fp_constraint_shape_v1, palw_fp_constraint_table_root_v1};
-use crate::palw_freeprompt_v3::{PalwFreePromptJobV3, fp_job_id_v3};
+use crate::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3, fp_claim_id_v3, fp_job_id_v3};
 use crate::palw_rendering_stream_v1::PalwRenderingStreamV1;
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step_leg::{PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, verify_binding_v1};
@@ -58,6 +58,8 @@ pub struct PalwConstraintStreamCourtV1 {
     prefix_state: PalwConstraintStateV1,
     rendering: Option<PalwRenderingStreamV1>,
     convicted: bool,
+    terminal_stop: Option<PalwFpStopReasonV3>,
+    output_fault_position: Option<u32>,
 }
 
 /// Journal checkpoint excludes immutable grammar/binding/generated IDs. These bytes may be
@@ -73,6 +75,7 @@ pub struct PalwConstraintStreamCheckpointV1 {
     prefix_state: PalwConstraintStateV1,
     rendering: Option<PalwRenderingStreamV1>,
     convicted: bool,
+    output_fault_position: Option<u32>,
 }
 
 impl PalwConstraintStreamCourtV1 {
@@ -87,6 +90,7 @@ impl PalwConstraintStreamCourtV1 {
             prefix_state: self.prefix_state.clone(),
             rendering: self.rendering.clone(),
             convicted: self.convicted,
+            output_fault_position: self.output_fault_position,
         }
     }
     pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwConstraintStreamCheckpointV1) -> Result<(), String> {
@@ -99,7 +103,10 @@ impl PalwConstraintStreamCourtV1 {
         if let Some(rendering) = &cp.rendering {
             rendering.check()?;
         }
-        if cp.eog_members.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS + 2 || cp.eog_members.windows(2).any(|w| w[0] >= w[1]) {
+        if cp.eog_members.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS + 2
+            || cp.eog_members.windows(2).any(|w| w[0] >= w[1])
+            || cp.output_fault_position.is_some_and(|position| position as usize >= self.generated.len())
+        {
             return Err("journal checkpoint exceeds bounded EOG membership".into());
         }
         self.witness = cp.witness;
@@ -110,6 +117,7 @@ impl PalwConstraintStreamCourtV1 {
         self.prefix_state = cp.prefix_state.clone();
         self.rendering = cp.rendering.clone();
         self.convicted = cp.convicted;
+        self.output_fault_position = cp.output_fault_position;
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
@@ -220,6 +228,7 @@ impl PalwConstraintStreamCourtV1 {
             eog_opening,
             signed_context,
             &borsh::to_vec(pin).map_err(|e| e.to_string())?,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -263,14 +272,96 @@ impl PalwConstraintStreamCourtV1 {
         eog_opening: &PalwStepOpeningV1,
         signed_context: Option<Hash64>,
     ) -> Result<Self, String> {
+        Self::flat_selection_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            signed_context,
+            None,
+        )
+    }
+    /// The caller must supply the native retained ORIGINAL commitment, not a stop reason
+    /// asserted by the challenger. Its exact claim identity binds the terminal predicate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_flat_pin_with_original_stop_context_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        original: &PalwFreePromptCommitmentV3,
+        signed_context: Option<Hash64>,
+    ) -> Result<Self, String> {
+        if fp_claim_id_v3(original) != claim_id
+            || original.job != *job
+            || original.execution_root != expected_root
+            || original.decode_tokens_executed != binding.job_context.exact_decode_tokens
+            || original.decode_tokens_executed == 0
+            || original.decode_tokens_executed > job.decode_token_limit
+            || match original.stop_reason {
+                PalwFpStopReasonV3::ExactBudgetReached => original.decode_tokens_executed != job.decode_token_limit,
+                PalwFpStopReasonV3::EndOfGeneration => original.decode_tokens_executed >= job.decode_token_limit,
+            }
+        {
+            return Err("terminal Flat predicate changes native original claim/count/stop facts".into());
+        }
+        Self::flat_selection_v1(
+            claim_id,
+            owner,
+            reserved_daa,
+            expected_root,
+            binding,
+            job,
+            pin,
+            witness,
+            eog_count,
+            eog_opening,
+            signed_context,
+            Some(original.stop_reason),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn flat_selection_v1(
+        claim_id: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        expected_root: Hash64,
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        pin: &crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1,
+        witness: Option<u32>,
+        eog_count: u32,
+        eog_opening: &PalwStepOpeningV1,
+        signed_context: Option<Hash64>,
+        original_stop: Option<PalwFpStopReasonV3>,
+    ) -> Result<Self, String> {
         if !pin.matches_binding_v1(binding) {
             return Err("flat semantic pin does not preserve the original claim/job/scheme".into());
         }
-        let committed = pin.committed_id_v1().ok_or("flat terminal stop needs its separate authenticated predicate")?;
-        let value = pin.committed_value_v1().ok_or("out-of-vocabulary flat token needs the output-validity predicate")?;
+        let terminal = pin.position_v1() as usize == pin.generated_ids_v1().len();
+        if terminal && original_stop.is_none() {
+            return Err("terminal Flat predicate requires native original stop facts".into());
+        }
+        let committed = pin.committed_id_v1();
+        let value = pin.committed_value_v1();
+        if committed.is_some_and(|id| id < binding.shape_profile.vocab_size) && value.is_none() {
+            return Err("in-vocabulary Flat selection lacks its authenticated scalar".into());
+        }
         let beat = pin.beat_v1();
         let sampling = job.sampling_v2();
-        let beats = beat.is_some_and(|(id, b)| {
+        let beats = beat.zip(committed.zip(value)).is_some_and(|((id, b), (committed, value))| {
             crate::palw_decode_select_v2::decode_lane_beats_v2(
                 sampling.lane_key(b, pin.position_v1(), id as usize),
                 id as usize,
@@ -294,6 +385,7 @@ impl PalwConstraintStreamCourtV1 {
             eog_opening,
             signed_context,
             &borsh::to_vec(pin).map_err(|e| e.to_string())?,
+            if terminal { original_stop } else { None },
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -313,6 +405,7 @@ impl PalwConstraintStreamCourtV1 {
         eog_opening: &PalwStepOpeningV1,
         signed_context: Option<Hash64>,
         canonical_pin: &[u8],
+        terminal_stop: Option<PalwFpStopReasonV3>,
     ) -> Result<Self, String> {
         verify_binding_v1(binding).map_err(|e| e.to_string())?;
         if binding.committed_execution_root != expected_root
@@ -320,7 +413,7 @@ impl PalwConstraintStreamCourtV1 {
             || fp_job_id_v3(job) != binding.job_context.job_id
             || generated.len() != binding.job_context.exact_decode_tokens as usize
             || generated.len() > crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
-            || generated.get(position as usize).is_none_or(|id| *id >= binding.shape_profile.vocab_size)
+            || (generated.get(position as usize).is_none() && !(position as usize == generated.len() && terminal_stop.is_some()))
             || witness.is_some_and(|id| id >= binding.shape_profile.vocab_size)
             || beat.is_some_and(|id| id >= binding.shape_profile.vocab_size)
         {
@@ -345,7 +438,18 @@ impl PalwConstraintStreamCourtV1 {
         let mut relevant = generated.to_vec();
         relevant.extend(witness);
         relevant.extend(beat);
-        let eog = PalwEogStreamV1::new(context, table_root, binding.shape_profile.vocab_size, eog_count, &relevant, eog_opening)?;
+        // An original selected ID outside the registered vocabulary cannot be output by
+        // the same selection kernel. No rendering, EOG membership or logit is required.
+        let invalid = if terminal_stop.is_some() {
+            generated.iter().position(|id| *id >= binding.shape_profile.vocab_size).map(|p| p as u32)
+        } else {
+            generated.get(position as usize).filter(|id| **id >= binding.shape_profile.vocab_size).map(|_| position)
+        };
+        let eog = if invalid.is_some() {
+            None
+        } else {
+            Some(PalwEogStreamV1::new(context, table_root, binding.shape_profile.vocab_size, eog_count, &relevant, eog_opening)?)
+        };
         let prefix_state = constraint_start_state_v1(&constraint);
         Ok(Self {
             claim_id,
@@ -362,13 +466,15 @@ impl PalwConstraintStreamCourtV1 {
             witness,
             beat,
             beats,
-            phase: PalwConstraintStreamPhaseV1::Eog,
-            eog: Some(eog),
+            phase: if invalid.is_some() { PalwConstraintStreamPhaseV1::Complete } else { PalwConstraintStreamPhaseV1::Eog },
+            eog,
             lowest_eog: None,
             eog_members: Vec::new(),
             prefix_state,
             rendering: None,
-            convicted: false,
+            convicted: invalid.is_some(),
+            terminal_stop,
+            output_fault_position: invalid,
         })
     }
     pub fn seed_id(&self) -> Hash64 {
@@ -400,6 +506,17 @@ impl PalwConstraintStreamCourtV1 {
         self.lowest_eog = Some(authenticated.lowest);
         self.eog_members = authenticated.relevant_members;
         self.eog = None;
+        if let Some(stop) = self.terminal_stop {
+            // The ORIGINAL constrained decoder stops only after committing its lowest
+            // EOG or the budget. A prior EOG is the existing post-stop mismatch arm.
+            let prior_stop = self.generated.iter().take(self.generated.len().saturating_sub(1)).position(|id| self.is_eog(*id));
+            let premature = stop == PalwFpStopReasonV3::EndOfGeneration && self.generated.last().copied() != self.lowest_eog;
+            self.output_fault_position =
+                prior_stop.map(|p| p as u32).or_else(|| premature.then_some(self.generated.len().saturating_sub(1) as u32));
+            self.convicted = self.output_fault_position.is_some();
+            self.phase = PalwConstraintStreamPhaseV1::Complete;
+            return Ok(());
+        }
         self.phase = if self.position == 0 { PalwConstraintStreamPhaseV1::Committed } else { PalwConstraintStreamPhaseV1::Prefix(0) };
         Ok(())
     }
@@ -510,6 +627,7 @@ impl PalwConstraintStreamCourtV1 {
         if self.phase != PalwConstraintStreamPhaseV1::Complete || self.rendering.is_some() {
             return Err("stream court is incomplete".into());
         }
+        let position = self.output_fault_position.unwrap_or(self.position);
         Ok(self.convicted.then_some(PalwConstraintStreamFaultV1 {
             claim_id: self.claim_id,
             reservation_owner: self.owner,
@@ -517,8 +635,8 @@ impl PalwConstraintStreamCourtV1 {
             execution_root: self.root,
             job_id: self.job_id,
             seed_id: self.context,
-            position: self.position,
-            fault: PalwStepFaultV1::DecodeTokenMismatch { position: self.position },
+            position,
+            fault: PalwStepFaultV1::DecodeTokenMismatch { position },
         }))
     }
 }

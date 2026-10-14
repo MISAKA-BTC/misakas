@@ -1183,11 +1183,68 @@ pub trait ConsensusApi: Send + Sync {
         Err("tokenizer artifact inventory reader unavailable".into())
     }
 
+    fn palw_staged_flat_source_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedFlatProgressV1>, String> {
+        Err("staged Flat authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_flat_pin_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _source: crate::Hash64,
+        _answerer: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>, String> {
+        Err("staged Flat authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_resolved_public_context_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3)>, String> {
+        Err("staged resolved original public context reader unavailable".into())
+    }
+
+    fn palw_staged_original_commitment_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
+        Err("staged original commitment reader unavailable".into())
+    }
+
+    fn palw_staged_history_recovery_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _seed: crate::Hash64,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedHistoryRecoveryProgressV1>, String> {
+        Err("staged public history reader unavailable".into())
+    }
+
+    fn palw_history_response_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>,
+    ) -> Result<crate::palw_staged_court_state_v1::PalwStagedHistoryDutyPageV1, String> {
+        Err("staged public history reader unavailable".into())
+    }
+
     fn palw_staged_public_context_v1(
         &self,
         _claim: crate::Hash64,
     ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
         Err("staged original public context reader unavailable".into())
+    }
+
+    fn palw_staged_flat_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (Vec<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>),
+        String,
+    > {
+        Err("staged Flat indexed duty reader unavailable".into())
     }
 
     fn palw_staged_selected_duties_v1(
@@ -1271,6 +1328,16 @@ pub trait ConsensusApi: Send + Sync {
         _lease: crate::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
     ) -> Result<bool, String> {
         Err("native shared claim cache lease acknowledgement unavailable".into())
+    }
+
+    /// Producer preflight from native authenticated class/inventory state. The
+    /// caller cannot choose custody, ladder, admission time or resource ceilings.
+    fn palw_staged_preclaim_quote_v1(
+        &self,
+        _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _header: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    ) -> Result<Option<(crate::BlockHash, crate::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>, String> {
+        Err("native authenticated staged preclaim quote unavailable".into())
     }
 
     fn palw_prefix_page_write_v1(

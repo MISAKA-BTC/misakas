@@ -2468,11 +2468,82 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_tokenizer_artifact_inventory_v1_impl(class, opener)
     }
 
+    fn palw_staged_flat_source_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFlatProgressV1>, String> {
+        self.virtual_processor.palw_staged_flat_source_v1_impl(key)
+    }
+
+    fn palw_staged_flat_pin_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        source: kaspa_consensus_core::Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>, String> {
+        self.virtual_processor.palw_staged_flat_pin_v1_impl(key, source, answerer)
+    }
+
+    fn palw_staged_resolved_public_context_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        self.virtual_processor.palw_staged_resolved_public_context_v1_impl(claim)
+    }
+
+    fn palw_staged_original_commitment_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
+        self.virtual_processor.palw_staged_original_commitment_v1_impl(claim)
+    }
+
+    fn palw_staged_history_recovery_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedHistoryRecoveryProgressV1>, String> {
+        self.virtual_processor.palw_staged_history_recovery_v1_impl(key, seed)
+    }
+
+    fn palw_history_response_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(
+            u64,
+            kaspa_consensus_core::Hash64,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+            kaspa_consensus_core::Hash64,
+        )>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedHistoryDutyPageV1, String> {
+        self.virtual_processor.palw_history_response_duties_v1_impl(signer, after)
+    }
+
     fn palw_staged_public_context_v1(
         &self,
         claim: kaspa_consensus_core::Hash64,
     ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
         self.virtual_processor.palw_staged_public_context_v1_impl(claim)
+    }
+
+    fn palw_staged_flat_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+        ),
+        String,
+    > {
+        self.virtual_processor.palw_staged_flat_duties_v1_impl(signer, after)
     }
 
     fn palw_staged_selected_duties_v1(
@@ -2565,6 +2636,17 @@ impl ConsensusApi for Consensus {
         lease: kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
     ) -> Result<bool, String> {
         self.virtual_processor.palw_shared_claim_cache_gc_ack_v1_impl(lease)
+    }
+
+    fn palw_staged_preclaim_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    ) -> Result<
+        Option<(kaspa_consensus_core::BlockHash, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
+        String,
+    > {
+        self.virtual_processor.palw_staged_preclaim_quote_v1_impl(original, header)
     }
 
     fn palw_terminal_progress_v1(

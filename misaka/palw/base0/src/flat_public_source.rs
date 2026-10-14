@@ -336,6 +336,16 @@ impl PalwOriginalCaptureReaderV1 for BorrowedCaptureV1<'_> {
 /// logits/IDs are copied in 16KiB chunks; no whole matrix decode/clone and no execution occurs.
 /// The original keyed EOF is checked before the caller atomically publishes the sidecar.
 pub fn write_flat_public_source_v1(material: &[u8], out: &mut dyn Write) -> Result<bool, String> {
+    let binding = capture_binding_v1(material)?;
+    if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1() {
+        return Ok(false);
+    }
+    let mut reader = Base0FlatPublicSourceV1::open_v1(Arc::new(BorrowedCaptureV1(material)), &binding)?;
+    while !reader.index_v1()? {}
+    write_projected_v1(&binding, &mut reader, out)
+}
+
+fn capture_binding_v1(material: &[u8]) -> Result<PalwStepBindingV2, String> {
     use borsh::BorshDeserialize;
     let body = if let Some(body) = material.strip_prefix(b"MSKFPMV2") {
         if body.get(..2) != Some(&2u16.to_le_bytes()) {
@@ -348,12 +358,26 @@ pub fn write_flat_public_source_v1(material: &[u8], out: &mut dyn Write) -> Resu
     // This is the already executed local capture. Deserialize only its public binding header,
     // never the matrix/checkpoint vectors following it.
     let binding = PalwStepBindingV2::deserialize_reader(&mut &body[..]).map_err(|e| format!("original capture binding: {e}"))?;
-    if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1() {
-        return Ok(false);
-    }
-    let mut reader = Base0FlatPublicSourceV1::open_v1(Arc::new(BorrowedCaptureV1(material)), &binding)?;
-    while !reader.index_v1()? {}
-    out.write_all(&public_header_v1(&binding)).map_err(|e| e.to_string())?;
+    verify_binding_v1(&binding).map_err(|e| e.to_string())?;
+    Ok(binding)
+}
+
+pub fn original_public_binding_header_v1(
+    material: &[u8],
+) -> Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
+    use kaspa_consensus_core::palw_public_binding_v1::{PalwPublicExecutionBindingHeaderV1, PalwPublicLegacyBindingHeaderV1};
+    let binding = capture_binding_v1(material)?;
+    let header = PalwPublicExecutionBindingHeaderV1::Legacy(PalwPublicLegacyBindingHeaderV1::of_binding_v1(&binding));
+    header.check_wire_v1()?;
+    Ok(header)
+}
+
+fn write_projected_v1(
+    binding: &PalwStepBindingV2,
+    reader: &mut Base0FlatPublicSourceV1<'_>,
+    out: &mut dyn Write,
+) -> Result<bool, String> {
+    out.write_all(&public_header_v1(binding)).map_err(|e| e.to_string())?;
     let mut hash = blake2b_simd::Params::new()
         .hash_length(64)
         .key(kaspa_consensus_core::palw_step_refute::PALW_BASE0_DOMAIN_LOGITS_TRACE)

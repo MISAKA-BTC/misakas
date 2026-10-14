@@ -159,6 +159,12 @@ impl PalwStagedCourtRowV1 {
                 c.history_custody.check_v1(&c.claim.panel)?;
                 if c.history_custody.pledge.claim != *claim
                     || c.history_custody.pledge.material_until_daa < c.claim.terms.material_until_daa
+                    || c.claim.terms != c.plan.terms
+                    || c.history_custody.producer != c.claim.producer
+                    || c.original_binding.execution_root_v1() != c.history_custody.pledge.execution_root
+                    || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(c.original_binding.job_context_v1())
+                        != c.history_custody.pledge.job_identity
+                    || c.original_binding.job_context_v1().cu_ruleset_id != c.history_custody.pledge.cu_ruleset_id
                 {
                     return Err("bundle contract substitutes original pledge claim or retention promise".into());
                 }
@@ -187,7 +193,7 @@ pub enum PalwStagedCheckpointV1 {
 impl PalwStagedCheckpointV1 {
     pub fn history_recoveries_v1(
         &self,
-    ) -> Option<&std::collections::BTreeMap<Hash64, crate::palw_history_custody_v1::PalwHistoryRecoveryV1>> {
+    ) -> Option<&std::collections::BTreeMap<Hash64, PalwSharedCourtV1<crate::palw_history_custody_v1::PalwHistoryRecoveryV1>>> {
         match self {
             Self::Bundle(cp) => Some(&cp.history_recovery),
             _ => None,
@@ -195,7 +201,7 @@ impl PalwStagedCheckpointV1 {
     }
     pub fn history_recovery_for_seed_v1(&self, seed: Hash64) -> Option<&crate::palw_history_custody_v1::PalwHistoryRecoveryV1> {
         match self {
-            Self::Bundle(cp) => cp.history_recovery.get(&seed),
+            Self::Bundle(cp) => cp.history_recovery.get(&seed).map(|row| row.as_ref()),
             _ => None,
         }
     }
@@ -248,6 +254,76 @@ pub struct PalwStagedPublicContextV1 {
     pub job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedHistoryDutyPageV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub keys: Vec<(Hash64, PalwBondKeyV2, Hash64)>,
+    pub next: Option<(u64, Hash64, PalwBondKeyV2, Hash64)>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStagedHistoryRecoveryProgressV1 {
+    pub snapshot_block: crate::BlockHash,
+    pub now_daa: u64,
+    pub bundle_id: Hash64,
+    pub terms: crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1,
+    pub initial: crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    pub response_span_daa: u64,
+    pub maximum_custodians: u64,
+    pub session: Option<PalwSharedCourtV1<crate::palw_history_custody_v1::PalwHistoryRecoveryV1>>,
+}
+/// Authenticated native snapshot only. No prospective custody set or protected
+/// buffer is cloned. A missing session is not an admitted response obligation.
+pub fn palw_staged_history_recovery_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    key: (Hash64, PalwBondKeyV2),
+    seed: Hash64,
+) -> Result<Option<PalwStagedHistoryRecoveryProgressV1>, String> {
+    let point = state.last_point().ok_or("history recovery has no accepted snapshot")?;
+    let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = state.staged_owned_row_v1(key.0, key.1) else { return Ok(None) };
+    if point.daa_score < bundle.plan.terms.accepted_daa || point.daa_score >= bundle.plan.terms.material_until_daa {
+        return Ok(None);
+    }
+    let contract = state.staged_bundle_contract_v1(key.0).ok_or("history owner lost original signed custody contract")?;
+    let Some(PalwStagedCourtRowV1::PublicPrefix(prefix)) = bundle.seed_row_v1(seed) else { return Ok(None) };
+    let session = bundle.history_recovery.get(&seed);
+    let initial = match session {
+        Some(row) => row.initial.clone(),
+        None => {
+            let (sequence, head) = prefix.history_cursor_v1();
+            if sequence == 0 {
+                return Ok(None);
+            }
+            if sequence > contract.history_custody.maximum_records {
+                return Err("history cursor exceeds original signed resource capacity".into());
+            }
+            crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1 {
+                claim: key.0,
+                owner: key.1,
+                reserved_daa: bundle.reserved_daa,
+                seed_id: seed,
+                head,
+                sequence,
+                material_until_daa: prefix.terms.material_until_daa,
+            }
+        }
+    };
+    if (initial.claim, initial.owner, initial.reserved_daa, initial.seed_id, initial.material_until_daa)
+        != (key.0, key.1, bundle.reserved_daa, seed, prefix.terms.material_until_daa)
+    {
+        return Err("history snapshot substitutes the original paid literal stage".into());
+    }
+    Ok(Some(PalwStagedHistoryRecoveryProgressV1 {
+        snapshot_block: point.block,
+        now_daa: point.daa_score,
+        bundle_id: bundle.plan.id_v1(bundle.claim),
+        terms: bundle.plan.terms,
+        initial,
+        response_span_daa: contract.config.acquisition_daa,
+        maximum_custodians: contract.history_custody.maximum_custodians,
+        session: session.cloned(),
+    }))
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwStagedFlatProgressV1 {
     pub snapshot_block: crate::BlockHash,
     pub now_daa: u64,
@@ -296,6 +372,30 @@ pub fn palw_staged_public_context_v1(
     let original = state.staged_original_job_v1(claim)?.ok_or("public context lost accepted original FP job")?;
     Ok(Some(PalwStagedPublicContextV1 { binding: contract.original_binding.clone(), job: original.job }))
 }
+/// Hydrate only the original native-admitted public header, within its paid material horizon.
+/// This accessor supplies no new admission, owner, reservation or prosecution clock.
+pub fn palw_staged_resolved_public_context_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+) -> Result<Option<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3)>, String> {
+    let Some(original) = palw_staged_public_context_v1(state, claim)? else { return Ok(None) };
+    let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = original.binding else {
+        return Ok(None);
+    };
+    let profile =
+        state.fp_work_profile_of(&original.job.class_id).ok_or("original public context lacks authenticated registered profile")?;
+    let binding = header.resolve_v1(profile, header.committed_execution_root, u64::MAX)?;
+    Ok(Some((binding, original.job)))
+}
+pub fn palw_staged_original_commitment_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+) -> Result<Option<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
+    if palw_staged_public_context_v1(state, claim)?.is_none() {
+        return Ok(None);
+    }
+    state.staged_original_job_v1(claim)
+}
 /// The caller supplies an authenticated accepted state. The session is prospective
 /// until its first native-checked demand; it does not authorize a new owner frame.
 pub fn palw_staged_selected_events_v1(
@@ -335,14 +435,18 @@ pub fn palw_staged_selected_events_v1(
             if !custody.public_qualified_v1() {
                 return Err("selected source original custody is unqualified".into());
             }
-            let custodians = custody.expected_panel.into_iter().chain([contract.producer]).collect();
-            crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1::new_v1(
+            let custodians: std::collections::BTreeSet<_> = custody.expected_panel.into_iter().chain([contract.producer]).collect();
+            crate::palw_selected_event_source_v1::PalwSelectedEventSessionV1::new_with_span_v1(
                 key.0,
                 key.1,
                 bundle.reserved_daa,
                 bundle.plan.id_v1(key.0),
                 respond,
                 stage.terms.collect_until_daa,
+                crate::palw_selected_event_source_v1::selected_event_response_span_v1(
+                    custodians.len() as u64,
+                    bundle_contract.config,
+                )?,
                 custodians,
             )?
         }

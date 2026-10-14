@@ -127,6 +127,7 @@ impl PalwFlatConstraintPinV1 {
     }
     pub fn matches_binding_v1(&self, binding: &PalwStepBindingV2) -> bool {
         binding.shape_profile.logits_scheme_id == flat_logits_scheme_id_v1()
+            && binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Int32
             && binding.committed_execution_root == self.binding_root
             && binding.job_context.context_hash() == self.job_context
             && binding.full_logits_trace_root == self.logits_root
@@ -154,7 +155,9 @@ impl PalwFlatConstraintStreamV1 {
         prices: PalwRenderingResourcePricesV1,
     ) -> Result<Self, String> {
         verify_binding_v1(binding).map_err(|e| e.to_string())?;
-        if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1() {
+        if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1()
+            || binding.shape_profile.lane != crate::palw_step::PalwStepLaneV1::Int32
+        {
             return Err("flat acquisition cannot reinterpret a registered tiled or floating scheme".into());
         }
         Self::new_inner(
@@ -378,7 +381,13 @@ impl PalwFlatConstraintStreamV1 {
                 self.beat_lane = *beat;
                 self.committed_lane =
                     self.authenticated_ids.as_ref().and_then(|ids| ids.get(*position as usize)).copied().filter(|id| *id < self.vocab);
-                self.restart_pass(1);
+                // These predicates use authenticated IDs only, never a selected logit. Keep
+                // the first exact original EOF; a second pass cannot add authentication.
+                if self.committed_lane.is_none() && beat.is_none() {
+                    self.cursor = PalwFlatConstraintCursorV1::Complete;
+                } else {
+                    self.restart_pass(1);
+                }
             }
             _ => return Err("flat action changes exact original stream cursor".into()),
         }
@@ -666,8 +675,12 @@ impl PalwFlatConstraintSourceSessionV1 {
             .unwrap_or(&self.template)
             .cursor_v1();
         Ok(if cursor == PalwFlatConstraintCursorV1::Nominate && self.nomination.is_some() {
-            if self.template.decode == 0 {
-                PalwFlatConstraintCursorV1::Finish { pass: 1 }
+            let (position, beat) = self.nomination.expect("checked");
+            let row = self.slots.get(signer).and_then(Option::as_ref).expect("authenticated EOF cursor");
+            if beat.is_none()
+                && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
+            {
+                PalwFlatConstraintCursorV1::Complete
             } else {
                 PalwFlatConstraintCursorV1::RowBegin { pass: 1, row: 0 }
             }
@@ -694,6 +707,15 @@ impl PalwFlatConstraintSourceSessionV1 {
             row.movement_v1(self.source_id, &PalwFlatConstraintActionV1::Nominate { position, beat })?;
         }
         row.movement_v1(self.source_id, &answer.action)?;
+        if row.cursor_v1() == PalwFlatConstraintCursorV1::Nominate {
+            if let Some((position, beat)) = self.nomination {
+                if beat.is_none()
+                    && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
+                {
+                    row.movement_v1(self.source_id, &PalwFlatConstraintActionV1::Nominate { position, beat })?;
+                }
+            }
+        }
         if self.authenticated.is_none() && row.authenticated_generated_ids_v1().is_ok() {
             self.authenticated = Some(answer.answerer);
         }
@@ -737,6 +759,18 @@ impl PalwFlatConstraintSourceSessionV1 {
     pub fn collection_due_daa_v1(&self) -> u64 {
         if self.template.deferred && self.nomination.is_none() { self.nomination_until_daa } else { self.respond_until_daa }
     }
+    /// Opening does not move either paid clock. Every mandatory first pass must still
+    /// have the already-priced conservative pass/index/inclusion span to reach EOF.
+    pub fn check_open_window_v1(&self, now: u64) -> Result<(), String> {
+        let span = self.respond_until_daa.checked_sub(self.nomination_until_daa).ok_or("Flat first-pass clock underflow")?;
+        if now < self.reserved_daa
+            || now >= self.nomination_until_daa
+            || now.checked_add(span).is_none_or(|end| end > self.nomination_until_daa)
+        {
+            return Err("Flat source opened too late for its original paid first EOF window".into());
+        }
+        Ok(())
+    }
     pub fn nominate_v1(
         &mut self,
         now: u64,
@@ -759,6 +793,16 @@ impl PalwFlatConstraintSourceSessionV1 {
         {
             return Err("Flat owner nomination changes authenticated IDs, paid clock or repeats selection".into());
         }
+        let signer = self.authenticated.expect("checked");
+        let row = self.slots.get(&signer).and_then(Option::as_ref).expect("authenticated first EOF locator");
+        if beat.is_none()
+            && row.authenticated_ids.as_ref().and_then(|ids| ids.get(position as usize)).is_none_or(|id| *id >= row.vocab)
+        {
+            let mut row = row.clone();
+            row.movement_v1(self.source_id, &PalwFlatConstraintActionV1::Nominate { position, beat })?;
+            self.slots.insert(signer, Some(row));
+            self.ready = Some(signer);
+        }
         self.nomination = Some((position, beat));
         Ok(())
     }
@@ -779,7 +823,7 @@ impl PalwFlatConstraintSourceSessionV1 {
                     if self.template.deferred && self.nomination.is_none() {
                         row.authenticated_ids.is_none()
                     } else {
-                        row.cursor_v1() != PalwFlatConstraintCursorV1::Complete
+                        self.slot_cursor_v1(key).map_or(true, |cursor| cursor != PalwFlatConstraintCursorV1::Complete)
                     }
                 })
             })
@@ -918,6 +962,178 @@ mod tests {
             },
             PalwFlatConstraintCursorV1::Finish { .. } => PalwFlatConstraintActionV1::Finish,
             _ => panic!("no movement after complete"),
+        }
+    }
+
+    #[test]
+    fn first_original_eof_nominates_invalid_id_without_another_logit_pass_or_false_da() {
+        let (mut binding, mut source, position) = fixture();
+        source.generated_token_ids[position as usize] = binding.shape_profile.vocab_size;
+        binding.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(
+            &binding.job_context,
+            &source.logits_rows,
+            &source.generated_token_ids,
+        );
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        let (owner, producer, panel) = (key(111), key(112), key(113));
+        let mut session = PalwFlatConstraintSourceSessionV1::new_deferred_v1(
+            Hash64::from_u64_word(114),
+            owner,
+            10,
+            Hash64::from_u64_word(115),
+            producer,
+            [producer, panel].into_iter().collect(),
+            &binding,
+            100_000,
+            100_100,
+            prices(),
+        )
+        .unwrap();
+        let last_open = session.nomination_until_daa - (session.respond_until_daa - session.nomination_until_daa);
+        session.check_open_window_v1(last_open).unwrap();
+        assert!(session.check_open_window_v1(last_open + 1).is_err());
+        for signer in [producer, panel] {
+            while session.slot_cursor_v1(&signer).unwrap() != PalwFlatConstraintCursorV1::Nominate {
+                let cursor = session.slot_cursor_v1(&signer).unwrap();
+                session
+                    .answer_v1(
+                        20,
+                        &PalwFlatConstraintSourceAnswerV1 {
+                            answerer: signer,
+                            source_id: session.source_id,
+                            cursor,
+                            action: source_action(cursor, &source),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        session.nominate_v1(20, owner, session.source_id, position, None).unwrap();
+        let session: PalwFlatConstraintSourceSessionV1 = borsh::from_slice(&borsh::to_vec(&session).unwrap()).unwrap();
+        let pin = session.authenticated_pin_v1(&session.ready_signer_v1().unwrap()).unwrap();
+        assert_eq!(pin.committed_id_v1(), Some(binding.shape_profile.vocab_size));
+        assert!(pin.committed_value_v1().is_none());
+        assert!(!session.has_response_duty_v1(&panel));
+        let mut session = session;
+        assert!(session.collect_v1(session.respond_until_daa).unwrap().is_empty());
+    }
+
+    #[test]
+    fn invalid_original_id_and_terminal_stop_bridge_to_real_bounded_decode_faults() {
+        use crate::palw_constraint_stream_court_v1::{PalwConstraintStreamCourtV1, PalwConstraintStreamPhaseV1};
+        use crate::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
+        let (mut binding, mut proof) = crate::palw_decode_constraint_v1::tests::public_flat_constrained_case_for_tests_v1(false);
+        let owner = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(116), 0));
+        let context = Hash64::from_u64_word(117);
+        let original_ids = proof.pin.generated_token_ids.clone();
+        proof.pin.generated_token_ids[proof.position as usize] = binding.shape_profile.vocab_size;
+        binding.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(
+            &binding.job_context,
+            &proof.pin.logits_rows,
+            &proof.pin.generated_token_ids,
+        );
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        let mut stream = PalwFlatConstraintStreamV1::new_deferred_v1(context, &binding, prices()).unwrap();
+        while stream.cursor_v1() != PalwFlatConstraintCursorV1::Nominate {
+            stream.movement_v1(context, &next(&stream, &proof.pin)).unwrap();
+        }
+        stream.movement_v1(context, &PalwFlatConstraintActionV1::Nominate { position: proof.position, beat: None }).unwrap();
+        let pin = stream.authenticated_pin_v1().unwrap();
+        let row = PalwConstraintStreamCourtV1::new_from_flat_pin_v1(
+            Hash64::from_u64_word(118),
+            owner,
+            10,
+            binding.committed_execution_root,
+            &binding,
+            &proof.job,
+            &pin,
+            None,
+            proof.eog.ids.len() as u32,
+            &proof.eog.opening,
+        )
+        .unwrap();
+        assert_eq!(row.phase(), PalwConstraintStreamPhaseV1::Complete);
+        assert_eq!(row.fault().unwrap().unwrap().position, proof.position);
+
+        for ends_in_eog in [false, true] {
+            proof.pin.generated_token_ids = original_ids.clone();
+            if ends_in_eog {
+                *proof.pin.generated_token_ids.last_mut().unwrap() = proof.eog.ids[0];
+            }
+            binding.full_logits_trace_root = crate::palw_step_refute::base0_logits_trace_root_v1(
+                &binding.job_context,
+                &proof.pin.logits_rows,
+                &proof.pin.generated_token_ids,
+            );
+            crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+            let mut stream = PalwFlatConstraintStreamV1::new_deferred_v1(context, &binding, prices()).unwrap();
+            while stream.cursor_v1() != PalwFlatConstraintCursorV1::Nominate {
+                stream.movement_v1(context, &next(&stream, &proof.pin)).unwrap();
+            }
+            stream
+                .movement_v1(
+                    context,
+                    &PalwFlatConstraintActionV1::Nominate { position: binding.job_context.exact_decode_tokens, beat: None },
+                )
+                .unwrap();
+            let pin = stream.authenticated_pin_v1().unwrap();
+            assert!(
+                PalwConstraintStreamCourtV1::new_from_flat_pin_v1(
+                    Hash64::from_u64_word(118),
+                    owner,
+                    10,
+                    binding.committed_execution_root,
+                    &binding,
+                    &proof.job,
+                    &pin,
+                    None,
+                    proof.eog.ids.len() as u32,
+                    &proof.eog.opening,
+                )
+                .is_err(),
+                "terminal stop facts are never supplied by a caller-only pin"
+            );
+            let original = PalwFreePromptCommitmentV3 {
+                job: proof.job.clone(),
+                trace_root: binding.full_logits_trace_root,
+                output_root: Hash64::default(),
+                schedule_root: Hash64::default(),
+                execution_root: binding.committed_execution_root,
+                decode_tokens_executed: binding.job_context.exact_decode_tokens,
+                stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+                work_leaves: binding.step_leaf_count,
+                trace_manifest_root: Hash64::default(),
+                trace_chunk_count: 1,
+                trace_retention_daa: 100_000,
+            };
+            let make = |original: &PalwFreePromptCommitmentV3| {
+                PalwConstraintStreamCourtV1::new_from_flat_pin_with_original_stop_context_v1(
+                    fp_claim_id_v3(&original),
+                    owner,
+                    10,
+                    binding.committed_execution_root,
+                    &binding,
+                    &proof.job,
+                    &pin,
+                    None,
+                    proof.eog.ids.len() as u32,
+                    &proof.eog.opening,
+                    original,
+                    None,
+                )
+            };
+            let mut row = make(&original).unwrap();
+            assert!(row.fault().is_err());
+            row.push_eog(row.seed_id(), 0, &proof.eog.ids).unwrap();
+            row.finish_eog().unwrap();
+            let cp = row.checkpoint_v1();
+            let mut restored = make(&original).unwrap();
+            restored.restore_checkpoint_v1(&cp).unwrap();
+            assert_eq!(restored.fault().unwrap().is_some(), !ends_in_eog);
+            let mut wrong = original;
+            wrong.stop_reason = PalwFpStopReasonV3::ExactBudgetReached;
+            assert!(make(&wrong).is_err());
         }
     }
 

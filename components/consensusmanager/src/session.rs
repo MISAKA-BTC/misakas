@@ -305,11 +305,82 @@ impl ConsensusSessionOwned {
         self.consensus.palw_tokenizer_artifact_inventory_v1(class, opener)
     }
 
+    pub fn palw_staged_flat_source_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedFlatProgressV1>, String> {
+        self.consensus.palw_staged_flat_source_v1(key)
+    }
+
+    pub fn palw_staged_flat_pin_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        source: kaspa_consensus_core::Hash64,
+        answerer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>, String> {
+        self.consensus.palw_staged_flat_pin_v1(key, source, answerer)
+    }
+
+    pub fn palw_staged_resolved_public_context_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<
+        Option<(
+            kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        )>,
+        String,
+    > {
+        self.consensus.palw_staged_resolved_public_context_v1(claim)
+    }
+
+    pub fn palw_staged_original_commitment_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
+        self.consensus.palw_staged_original_commitment_v1(claim)
+    }
+
+    pub fn palw_staged_history_recovery_v1(
+        &self,
+        key: (kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2),
+        seed: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedHistoryRecoveryProgressV1>, String> {
+        self.consensus.palw_staged_history_recovery_v1(key, seed)
+    }
+
+    pub fn palw_history_response_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(
+            u64,
+            kaspa_consensus_core::Hash64,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+            kaspa_consensus_core::Hash64,
+        )>,
+    ) -> Result<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedHistoryDutyPageV1, String> {
+        self.consensus.palw_history_response_duties_v1(signer, after)
+    }
+
     pub fn palw_staged_public_context_v1(
         &self,
         claim: kaspa_consensus_core::Hash64,
     ) -> Result<Option<kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
         self.consensus.palw_staged_public_context_v1(claim)
+    }
+
+    pub fn palw_staged_flat_duties_v1(
+        &self,
+        signer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        after: Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (
+            Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+            Option<(u64, kaspa_consensus_core::Hash64, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>,
+        ),
+        String,
+    > {
+        self.consensus.palw_staged_flat_duties_v1(signer, after)
     }
 
     pub fn palw_staged_selected_duties_v1(
@@ -402,6 +473,17 @@ impl ConsensusSessionOwned {
         lease: kaspa_consensus_core::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
     ) -> Result<bool, String> {
         self.consensus.palw_shared_claim_cache_gc_ack_v1(lease)
+    }
+
+    pub fn palw_staged_preclaim_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    ) -> Result<
+        Option<(kaspa_consensus_core::BlockHash, kaspa_consensus_core::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>,
+        String,
+    > {
+        self.consensus.palw_staged_preclaim_quote_v1(original, header)
     }
 
     /// Read accepted terminal progress under the same owned consensus session as filer work.

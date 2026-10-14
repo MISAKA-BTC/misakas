@@ -335,6 +335,7 @@ pub mod palw_fork_choice_rule_e_v1;
 pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_constraint_job_v1;
+pub mod palw_public_token_table_v1;
 /// RFC-0001 §2.5: the decode constraint's second subset and automaton bounds; dormant behind `palw_fp_constraint_v2`.
 pub mod palw_fp_constraint_v2;
 pub mod palw_fp_devnet_v3;
@@ -879,6 +880,7 @@ pub mod palw_flat_constraint_stream_v1;
 pub mod palw_selected_event_source_v1;
 pub mod palw_tokenizer_artifact_inventory_v1;
 pub mod palw_public_binding_v1;
+pub mod palw_staged_preclaim_v1;
 
 pub mod palw_tokenizer_table_stream_v1;
 

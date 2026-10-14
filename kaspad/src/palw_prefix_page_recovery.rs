@@ -30,9 +30,19 @@ struct Replay {
     records: Records,
     pending: Option<PalwPrefixPublicPendingV1>,
     touched: Instant,
+    native_needed: bool,
     _ticket: crate::palw_memory_ledger::PalwMemoryReservationV1,
 }
 static REPLAYS: OnceLock<Mutex<Vec<Replay>>> = OnceLock::new();
+/// A bounded process-local scheduling hint, never evidence of a DA fault. Restart
+/// repeats rooted replay; only an accepted native demand/deadline authorizes collection.
+pub(super) fn needs_native_recovery_v1(directory: &Path, seed: Hash64) -> bool {
+    let Ok(directory) = fs::canonicalize(directory.join(format!("history-{seed}"))) else { return false };
+    REPLAYS
+        .get()
+        .and_then(|workers| workers.lock().ok())
+        .is_some_and(|workers| workers.iter().any(|worker| worker.directory == directory && worker.native_needed))
+}
 fn parent(left: Hash64, right: Hash64) -> Hash64 {
     let mut hash = blake2b_simd::Params::new().hash_length(64).key(b"PALW/node/public-history-index/v1").to_state();
     hash.update(left.as_byte_slice());
@@ -328,6 +338,7 @@ pub(super) fn recover_v1(
             records,
             pending: None,
             touched: Instant::now(),
+            native_needed: false,
             _ticket: ticket,
         });
     }
@@ -355,6 +366,7 @@ pub(super) fn recover_v1(
                         }
                     };
                     let Some(row) = row else {
+                        replay.native_needed = true;
                         return Ok(false);
                     };
                     row.authenticates_request_v1(&wanted)?;
@@ -423,6 +435,7 @@ pub(super) fn recover_v1(
                 },
             };
             let Some(record) = record else {
+                replay.native_needed = true;
                 return Ok(false);
             };
             record.authenticates_request_v1(&wanted)?;

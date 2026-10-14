@@ -57,6 +57,9 @@ created at claim admission before any seed and unioned across all accepted owner
 seeds/forks. Per-seed GC ACK cannot retire shared metadata. Native pages visit at
 most64 expiry rows, use only strict irreversible-pruning-point expiry, and ACK
 the exact current union. Metadata bytes are included in the resource quote.
+Accepted archive/lease writers now retain native store exclusion through the
+actual atomic DB commit, not merely until batch preparation; GC ACK cannot
+interleave between preparing an extended union and persisting its expiry index.
 Actual file unlink still needs the complete admission-clock/finality proof that
 no later accepted lease can invalidate a prior shared deletion authorization;
 rechecking a page and rejecting a stale ACK alone cannot undo a file deletion.

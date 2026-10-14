@@ -2082,6 +2082,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         crate::flat_public_source::write_flat_public_source_v1(material, out)
     }
 
+    fn public_execution_binding_header_v1(&self,material:&[u8])->Result<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,String> {
+        crate::flat_public_source::original_public_binding_header_v1(material)
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
         let binding = retention.binding().clone();

@@ -32,7 +32,7 @@ pub(super) fn request_v1(
         return Err("selected actor is outside original paid acquisition/collection horizon".into());
     }
     if let Some(coordinate) = coordinates.iter().find(|c| !session.requests.contains_key(c)) {
-        if now >= session.respond_until_daa {
+        if !session.can_demand_at_v1(now) {
             return Err("selected original demand never landed before its immutable response deadline".into());
         }
         return Ok(SelectedEventScheduleV1::Demand(PalwSelectedEventDemandV1 { coordinate: *coordinate }));

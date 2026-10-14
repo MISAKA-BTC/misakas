@@ -589,7 +589,7 @@ fn independently_voided_public_claim_keeps_paid_material_without_a_second_collec
 
 #[test]
 fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes() {
-    let (state, p, mut extras, seed) = seed_state(5);
+    let (mut state, p, mut extras, seed) = seed_state(5);
     extras.model_registry = Some(crate::palw_model_registry_v1::PalwModelRegistryFoldV1 {
         globals: crate::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1,
         span_daa: 100,
@@ -601,6 +601,48 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     });
     let commit: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 = borsh::from_slice(&state.fp_public_jobs[&seed.claim]).unwrap();
     let live = state.claim(&seed.claim).unwrap().clone();
+    let header = crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(
+        crate::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1::of_binding_v1(&seed.binding),
+    );
+    extras.public_original_bindings.insert(seed.claim, header.clone());
+    let maximum_custodians = state.staged_maximum_custodians_v1(live.class_id, live.accepted_daa, &p, &extras).unwrap();
+    let quote = state
+        .staged_preclaim_quote_v1(
+            &commit,
+            &header,
+            live.accepted_daa,
+            maximum_custodians,
+            1 << 32,
+            extras.staged_public_court.unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+    state.bonds.get_mut(&live.bond).unwrap().pubkey = keypair.verification_key.as_ref().to_vec();
+    let mut pledge = crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1 {
+        version: 1,
+        claim: seed.claim,
+        producer: live.bond,
+        execution_root: live.execution_root,
+        job_identity: live.job_identity,
+        cu_ruleset_id: seed.binding.job_context.cu_ruleset_id,
+        resource_plan_id: quote.resource_plan_id,
+        maximum_records: quote.maximum_records,
+        maximum_custodians: quote.maximum_custodians,
+        accept_until_daa: live.accepted_daa + 10,
+        material_until_daa: quote.plan.terms.material_until_daa,
+        signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+    };
+    pledge.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        pledge.pledge_id_v1().as_byte_slice(),
+        crate::palw_history_custody_v1::PALW_HISTORY_PLEDGE_CONTEXT_V1,
+        [0; 32],
+    )
+    .unwrap()
+    .as_ref()
+    .to_vec();
+    extras.history_custody_pledges.insert(seed.claim, pledge.clone());
     let builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
     let mut admitted = live.clone();
     let contract = builder.prepare_staged_claim_with_job_v1(seed.claim, &mut admitted, Some(&commit)).unwrap().unwrap();
@@ -634,6 +676,28 @@ fn prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflo
     assert!(admitted.trace_retention_daa >= contract.terms.material_until_daa);
     assert_eq!(builder.state.state_root(), state.state_root());
     assert!(builder.entries.is_empty());
+    for bad in 0..4 {
+        let mut altered = extras.clone();
+        match bad {
+            0 => {
+                altered.public_original_bindings.remove(&seed.claim);
+            }
+            1 => {
+                altered.history_custody_pledges.remove(&seed.claim);
+            }
+            2 => {
+                altered.history_custody_pledges.get_mut(&seed.claim).unwrap().signature[0] ^= 1;
+            }
+            _ => {
+                altered.history_custody_pledges.get_mut(&seed.claim).unwrap().resource_plan_id = h64(123456);
+            }
+        }
+        let negative = TransitionBuilder::new(&state, &p, false, false, false, true, &altered);
+        let mut unchanged = live.clone();
+        assert!(negative.prepare_staged_claim_with_job_v1(seed.claim, &mut unchanged, Some(&commit)).is_err());
+        assert_eq!(unchanged, live);
+        assert!(negative.entries.is_empty());
+    }
     extras.staged_public_court.as_mut().unwrap().prices.rent_per_parser_step = u64::MAX;
     let rejected = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
     let mut unchanged = live.clone();
@@ -724,6 +788,109 @@ fn public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal
     builder.state.staged_prefix_responders.remove(&first);
     builder.state.staged_prefix_responders.insert((first.0, first.1 - 1, first.2, first.3));
     assert!(builder.state.staged_public_prefix_duties_after_v1(first.0, 100, None, 64).is_err(), "stale index is not authority");
+}
+
+#[test]
+fn flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journals() {
+    use crate::palw_staged_bundle_v1::*;
+    let (state, p, extras, claim, _) = state();
+    let config = extras.staged_public_court.unwrap();
+    let (binding, accusation) = crate::palw_decode_constraint_v1::tests::public_flat_constrained_case_for_tests_v1(false);
+    let semantic =
+        crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1::derive(4095, binding.shape_profile.vocab_size, config.prices)
+            .unwrap();
+    let source_quote = crate::palw_flat_constraint_stream_v1::flat_constraint_source_resource_plan_v1(
+        binding.job_context.exact_decode_tokens,
+        binding.shape_profile.vocab_size,
+        borsh::object_length(&binding.shape_profile).unwrap() as u64,
+        2,
+        binding.step_leaf_count,
+        config.prices,
+    )
+    .unwrap();
+    let acquisition = staged_context_resource_plan_v1(borsh::object_length(&binding.shape_profile).unwrap() as u64, semantic, config)
+        .unwrap()
+        .checked_sum_v1(source_quote)
+        .unwrap();
+    let plan = PalwStagedBundlePlanV1::derive_with_acquisitions_v1(
+        100,
+        vec![(PalwStagedFamilyV1::Constraint, semantic, Some(acquisition))],
+        None,
+        config,
+    )
+    .unwrap();
+    let respond = plan.preseed_source_until_v1(PalwStagedFamilyV1::Constraint, config).unwrap();
+    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+    for n in 100..=164 {
+        let owner = bond(n);
+        let session = crate::palw_flat_constraint_stream_v1::PalwFlatConstraintSourceSessionV1::new_deferred_v1(
+            claim,
+            owner,
+            100,
+            plan.id_v1(claim),
+            producer(),
+            [producer(), bond(8)].into_iter().collect(),
+            &binding,
+            respond,
+            plan.stages[0].terms.collect_until_daa,
+            config.prices,
+        )
+        .unwrap();
+        let row = PalwOwnedStagedBundleV1 {
+            claim,
+            owner,
+            reserved_daa: 100,
+            execution_root: binding.committed_execution_root,
+            plan: plan.clone(),
+            inventory: None,
+            selected: None,
+            selected_context: None,
+            flat: Some(Box::new(session).into()),
+            flat_context: Some(
+                Box::new(PalwSelectedSourceContextV1 { binding: Box::new(binding.clone()), job: Box::new(accusation.job.clone()) })
+                    .into(),
+            ),
+            history_recovery: Default::default(),
+            active: None,
+            opened: vec![],
+        };
+        row.check_v1().unwrap();
+        builder.write_staged_row_v1(
+            PalwStagedCourtKeyV1::Owner(claim, owner),
+            Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(row).into())),
+        );
+    }
+    let indexed = builder.state.staged_flat_responders.clone();
+    assert_eq!(indexed.len(), 130);
+    let (first, next) = builder.state.staged_flat_duties_after_v1(producer(), 100, None, usize::MAX).unwrap();
+    assert_eq!(first.len(), 64);
+    assert!(next.is_some());
+    let (last, done) = builder.state.staged_flat_duties_after_v1(producer(), 100, next, 64).unwrap();
+    assert_eq!(last.len(), 1);
+    assert!(done.is_none());
+    assert!(builder.state.staged_flat_duties_after_v1(bond(999), 100, None, 64).unwrap().0.is_empty());
+    assert!(builder.state.staged_flat_duties_after_v1(producer(), 101, None, 64).is_err());
+    assert!(builder.state.staged_flat_duties_after_v1(producer(), 100, None, 0).is_err());
+    let root = builder.state.state_root();
+    builder.state.staged_flat_responders.clear();
+    assert_eq!(builder.state.state_root(), root);
+    palw_staged_court_fold_v1::rebuild_indices(&mut builder.state);
+    assert_eq!(builder.state.staged_flat_responders, indexed);
+    let mut replayed = state.clone();
+    for entry in &builder.entries {
+        apply_delta_entry(&mut replayed, entry, false).unwrap();
+    }
+    assert_eq!(replayed.state_root(), root);
+    assert_eq!(replayed.staged_flat_responders, indexed);
+    for entry in builder.entries.iter().rev() {
+        apply_delta_entry(&mut replayed, entry, true).unwrap();
+    }
+    assert_eq!(replayed.state_root(), state.state_root());
+    assert_eq!(replayed.staged_flat_responders, state.staged_flat_responders);
+    let original = *indexed.first().unwrap();
+    builder.state.staged_flat_responders.remove(&original);
+    builder.state.staged_flat_responders.insert((original.0, original.1 - 1, original.2, original.3));
+    assert!(builder.state.staged_flat_duties_after_v1(original.0, 100, None, 64).is_err());
 }
 
 #[test]

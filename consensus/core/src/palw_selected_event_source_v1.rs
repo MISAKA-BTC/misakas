@@ -9,7 +9,19 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PALW_SELECTED_EVENT_MAX_REQUESTS_V1: usize = 2;
+/// Original row-zero IDs, then at most two selected position tiles.
+pub const PALW_SELECTED_EVENT_MAX_REQUESTS_V1: usize = 3;
+
+pub fn selected_event_response_span_v1(
+    custodians: u64,
+    config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1,
+) -> Result<u64, String> {
+    custodians
+        .checked_add(2)
+        .and_then(|n| n.checked_mul(config.prices.inclusion_margin_daa))
+        .and_then(|n| n.checked_add(config.acquisition_daa))
+        .ok_or_else(|| "selected response preparation/inclusion span overflow".into())
+}
 pub const PALW_SELECTED_EVENT_MAX_BYTES_V1: usize = 65_536;
 pub const PALW_SELECTED_EVENT_CARRIER_MAX_V1: usize = 90_000;
 
@@ -67,22 +79,26 @@ pub fn selected_event_resource_plan_v1(
         return Err("selected source quote has no bounded original vocabulary/decode/custody".into());
     }
     let n = |x: u128| u64::try_from(x).map_err(|_| "selected source resource quote overflow".to_string());
-    let moves = 2u64.checked_mul(u64::from(maximum_custodians) + 2).ok_or("selected source move quote overflow")?;
+    let moves = (PALW_SELECTED_EVENT_MAX_REQUESTS_V1 as u64)
+        .checked_mul(u64::from(maximum_custodians) + 2)
+        .ok_or("selected source move quote overflow")?;
     let bytes = n(u128::from(moves) * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128)?;
     let work = n(u128::from(moves) * (u128::from(decode) * u128::from(vocab) * 16 + u128::from(profile_bytes) * 16 + 64 * 256))?;
-    let row =
-        n(2 * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128 + u128::from(profile_bytes) + u128::from(maximum_custodians) * 1024 + 8192)?;
+    let row = n(PALW_SELECTED_EVENT_MAX_REQUESTS_V1 as u128 * PALW_SELECTED_EVENT_CARRIER_MAX_V1 as u128
+        + u128::from(profile_bytes)
+        + u128::from(maximum_custodians) * 1280
+        + 8192)?;
     let retained = n(u128::from(bytes) + u128::from(row) * u128::from(moves))?;
     Ok(crate::palw_rendering_resources_v1::PalwRenderingResourcePlanV1 {
         prefix_tokens: 0,
         vocab,
         maximum_stream_bytes: retained,
-        maximum_stream_leaves: 2,
+        maximum_stream_leaves: PALW_SELECTED_EVENT_MAX_REQUESTS_V1 as u64,
         maximum_eog_bytes: 0,
         maximum_moves: moves,
         maximum_parser_steps: work,
         maximum_blake_blocks: n(u128::from(work).div_ceil(64))?,
-        inclusion_daa: n(u128::from(moves) * u128::from(config.prices.inclusion_margin_daa))?,
+        inclusion_daa: n(u128::from(moves) * u128::from(config.prices.inclusion_margin_daa) + u128::from(config.acquisition_daa) * 2)?,
         rent_sompi: n(u128::from(retained) * u128::from(config.prices.rent_per_stream_byte)
             + u128::from(work) * u128::from(config.prices.rent_per_parser_step)
             + u128::from(row) * u128::from(config.prices.rent_per_row_byte))?,
@@ -306,6 +322,7 @@ pub struct PalwSelectedEventSessionV1 {
     pub bundle_id: Hash64,
     pub respond_until_daa: u64,
     pub collect_until_daa: u64,
+    pub minimum_response_span_daa: u64,
     pub custodians: BTreeSet<PalwBondKeyV2>,
     pub requests: BTreeMap<PalwSelectedEventCoordinateV1, PalwSelectedEventRequestV1>,
 }
@@ -319,20 +336,49 @@ impl PalwSelectedEventSessionV1 {
         collect_until_daa: u64,
         custodians: BTreeSet<PalwBondKeyV2>,
     ) -> Result<Self, String> {
+        Self::new_with_span_v1(claim, owner, reserved_daa, bundle_id, respond_until_daa, collect_until_daa, 1, custodians)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_span_v1(
+        claim: Hash64,
+        owner: PalwBondKeyV2,
+        reserved_daa: u64,
+        bundle_id: Hash64,
+        respond_until_daa: u64,
+        collect_until_daa: u64,
+        minimum_response_span_daa: u64,
+        custodians: BTreeSet<PalwBondKeyV2>,
+    ) -> Result<Self, String> {
         if custodians.is_empty()
             || custodians.contains(&owner)
             || reserved_daa >= respond_until_daa
             || respond_until_daa > collect_until_daa
+            || minimum_response_span_daa == 0
+            || reserved_daa.checked_add(minimum_response_span_daa).is_none_or(|until| until > respond_until_daa)
         {
             return Err("selected source needs literal outside owner, signed custody and original clock".into());
         }
-        Ok(Self { claim, owner, reserved_daa, bundle_id, respond_until_daa, collect_until_daa, custodians, requests: BTreeMap::new() })
+        Ok(Self {
+            claim,
+            owner,
+            reserved_daa,
+            bundle_id,
+            respond_until_daa,
+            collect_until_daa,
+            minimum_response_span_daa,
+            custodians,
+            requests: BTreeMap::new(),
+        })
+    }
+    pub fn can_demand_at_v1(&self, now: u64) -> bool {
+        now >= self.reserved_daa
+            && now < self.respond_until_daa
+            && now.checked_add(self.minimum_response_span_daa).is_some_and(|until| until <= self.respond_until_daa)
     }
     pub fn demand_v1(&mut self, now: u64, binding: &PalwStepBindingV2, demand: &PalwSelectedEventDemandV1) -> Result<(), String> {
         let c = demand.coordinate;
         let tiles = u64::from(binding.shape_profile.vocab_size).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
-        if now < self.reserved_daa
-            || now >= self.respond_until_daa
+        if !self.can_demand_at_v1(now)
             || c.row >= binding.job_context.exact_decode_tokens
             || u64::from(c.tile) >= tiles
             || binding.shape_profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
@@ -349,6 +395,7 @@ impl PalwSelectedEventSessionV1 {
             c,
             self.respond_until_daa,
             self.collect_until_daa,
+            self.minimum_response_span_daa,
             &self.custodians,
         ))
         .map_err(|e| e.to_string())?;
@@ -419,6 +466,39 @@ impl PalwSelectedEventSessionV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn original_response_span_rejects_last_moment_demands_without_extending_clock() {
+        let key = |n| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(n), 0));
+        let session = PalwSelectedEventSessionV1::new_with_span_v1(
+            Hash64::from_u64_word(1),
+            key(9),
+            5,
+            Hash64::from_u64_word(2),
+            30,
+            40,
+            10,
+            BTreeSet::from([key(3)]),
+        )
+        .unwrap();
+        assert!(session.can_demand_at_v1(20));
+        assert!(!session.can_demand_at_v1(21));
+        assert!(!session.can_demand_at_v1(29));
+        assert!(!session.can_demand_at_v1(4));
+        assert_eq!((session.respond_until_daa, session.collect_until_daa), (30, 40));
+        assert!(
+            PalwSelectedEventSessionV1::new_with_span_v1(
+                Hash64::from_u64_word(1),
+                key(9),
+                5,
+                Hash64::from_u64_word(2),
+                30,
+                40,
+                26,
+                BTreeSet::from([key(3)]),
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn selected_source_decoder_rejects_unpaid_vector_before_allocation() {
         assert!(borsh::from_slice::<PalwSelectedTiledEventV1>(&u32::MAX.to_le_bytes()).is_err());

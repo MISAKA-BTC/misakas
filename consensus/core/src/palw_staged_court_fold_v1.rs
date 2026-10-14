@@ -2,6 +2,80 @@
 use super::*;
 use crate::palw_staged_court_state_v1::*;
 impl PalwChainStateV2 {
+    /// Native verified-state import only. No rooted row or dynamic material is
+    /// cloned, and this iterator is not an anonymous request-facing reader.
+    pub fn staged_cache_lease_rows_v1(&self) -> impl Iterator<Item = (PalwStagedCourtKeyV1, &PalwStagedCourtRowV1)> {
+        self.staged_courts.iter().map(|(key, row)| (*key, row))
+    }
+    pub fn staged_required_families_v1(&self, original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3) -> bool {
+        self.class_semantics.get(&original.job.class_id).is_some_and(|semantics| {
+            original.job.is_prefix_state() || original.job.is_constraint() || semantics.raw_tokenizer_bytes.is_some()
+        })
+    }
+    /// Native admitted upper bound, including the producer but not the optional
+    /// outside owner. It never depends on how many seats have answered yet.
+    pub fn staged_maximum_custodians_v1(
+        &self,
+        class_id: Hash64,
+        now: u64,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<u64, PalwStateV2Error> {
+        let flat = if params.panel_v3_rule_at(now) {
+            u64::from(params.panel_v3().ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
+        } else {
+            u64::from(extras.model_registry.as_ref().map_or(u16::MAX, |r| r.globals.seat_count))
+        };
+        let mut maximum = flat;
+        if extras.shard_licensing.is_some() {
+            maximum = maximum.max(
+                flat.checked_mul(u64::from(crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_MAX_SHARDS_V1))
+                    .ok_or(PalwStateV2Error::Overflow("prospective source shard custodians"))?,
+            );
+        }
+        if params.tir_shard_active_at(now) && self.tir_classes.contains_key(&class_id) {
+            maximum = maximum.max(u64::from(misaka_palw_panel::MAX_STRATIFIED_SEATS_V1));
+        }
+        maximum.checked_add(1).ok_or(PalwStateV2Error::Overflow("prospective source custodians"))
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn staged_preclaim_quote_v1(
+        &self,
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: &crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+        quote_daa: u64,
+        maximum_custodians: u64,
+        maximum_leaves: u64,
+        config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1,
+    ) -> Result<Option<crate::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1>, String> {
+        if !self.staged_required_families_v1(original) {
+            return Ok(None);
+        }
+        let geometry = crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1 {
+            class_id: original.job.class_id,
+            producer: PalwBondKeyV2(original.job.executor_bond),
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
+            accepted_daa: quote_daa,
+        };
+        let semantics =
+            self.class_semantics.get(&geometry.class_id).ok_or("preclaim quote has no immutable admitted class semantics")?;
+        let profile = self
+            .fp_work_profiles
+            .get(&geometry.class_id)
+            .ok_or("TIR or missing profile needs its distinct native quote projection")?;
+        crate::palw_staged_preclaim_v1::staged_preclaim_quote_v1(
+            &geometry,
+            original,
+            header,
+            profile,
+            semantics,
+            self.staged_tokenizer_inventory_v1(semantics.tokenizer_id),
+            maximum_custodians,
+            maximum_leaves,
+            config,
+        )
+    }
     pub(super) fn staged_retirement_floor_v1(&self, claim: &Hash64, ordinary: u64) -> u64 {
         if self.claims.get(claim).is_some_and(|c| c.phase.is_terminal()) {
             self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary)
@@ -224,6 +298,44 @@ impl PalwChainStateV2 {
         }
         Ok((page, None))
     }
+    /// Authenticated snapshot only; each page reads at most 64 indexed duties.
+    pub fn staged_flat_duties_after_v1(
+        &self,
+        signer: PalwBondKeyV2,
+        now: u64,
+        after: Option<(u64, Hash64, PalwBondKeyV2)>,
+        limit: usize,
+    ) -> Result<(Vec<(Hash64, PalwBondKeyV2)>, Option<(u64, Hash64, PalwBondKeyV2)>), String> {
+        use std::ops::Bound;
+        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
+            return Err("Flat duty page changes accepted clock or finite capacity".into());
+        }
+        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
+        let lower = match after {
+            Some((at, claim, owner)) if at >= first_live => Bound::Excluded((signer, at, claim, owner)),
+            _ => Bound::Included((signer, first_live, ZERO_HASH64, PALW_BOND_KEY_V2_MIN)),
+        };
+        let cap = limit.min(64);
+        let mut page = Vec::new();
+        let mut cursor = None;
+        for (_, at, claim, owner) in
+            self.staged_flat_responders.range((lower, Bound::Unbounded)).take_while(|(bond, _, _, _)| *bond == signer).take(cap + 1)
+        {
+            if page.len() == cap {
+                return Ok((page, cursor));
+            }
+            let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = self.staged_owned_row_v1(*claim, *owner) else {
+                return Err("Flat response index has no paid frame".into());
+            };
+            let source = bundle.flat.as_ref().ok_or("Flat index has no frozen public source")?;
+            if !source.has_response_duty_v1(&signer) || source.response_deadline_v1(&signer) != Some(*at) {
+                return Err("Flat response index changes literal phase or original deadline".into());
+            }
+            page.push((*claim, *owner));
+            cursor = Some((*at, *claim, *owner));
+        }
+        Ok((page, None))
+    }
     pub fn staged_bond_exit_held_v1(&self, bond: &PalwBondKeyV2, now: u64) -> bool {
         now.checked_add(1).is_some_and(|after| {
             self.staged_holds
@@ -232,28 +344,55 @@ impl PalwChainStateV2 {
                 .is_some_and(|(held, _, _)| held == bond)
         })
     }
+    pub fn staged_history_duties_after_v1(
+        &self,
+        signer: PalwBondKeyV2,
+        now: u64,
+        after: Option<(u64, Hash64, PalwBondKeyV2, Hash64)>,
+        limit: usize,
+    ) -> Result<(Vec<(Hash64, PalwBondKeyV2, Hash64)>, Option<(u64, Hash64, PalwBondKeyV2, Hash64)>), String> {
+        use std::ops::Bound;
+        if self.last_point().is_none_or(|p| p.daa_score != now) || limit == 0 {
+            return Err("history duty page changes accepted clock or finite capacity".into());
+        }
+        let Some(first_live) = now.checked_add(1) else { return Ok((Vec::new(), None)) };
+        let lower = match after {
+            Some((at, claim, owner, seed)) if at >= first_live => Bound::Excluded((signer, at, claim, owner, seed)),
+            _ => Bound::Included((signer, first_live, ZERO_HASH64, PALW_BOND_KEY_V2_MIN, ZERO_HASH64)),
+        };
+        let cap = limit.min(64);
+        let mut page = Vec::new();
+        let mut cursor = None;
+        for (_, at, claim, owner, seed) in self
+            .staged_history_responders
+            .range((lower, Bound::Unbounded))
+            .take_while(|(bond, _, _, _, _)| *bond == signer)
+            .take(cap + 1)
+        {
+            if page.len() == cap {
+                return Ok((page, cursor));
+            }
+            let Some(PalwStagedCourtRowV1::OwnerBundle(bundle)) = self.staged_owned_row_v1(*claim, *owner) else {
+                return Err("history response index has no paid owner frame".into());
+            };
+            let recovery = bundle.history_recovery.get(seed).ok_or("history index has no literal rooted stage cursor")?;
+            if recovery.default.is_some()
+                || !recovery.custodians.contains(&signer)
+                || recovery.demand.as_ref().is_none_or(|d| d.answer_until_daa != *at)
+            {
+                return Err("history response index differs from exact original obligation".into());
+            }
+            page.push((*claim, *owner, *seed));
+            cursor = Some((*at, *claim, *owner, *seed));
+        }
+        Ok((page, None))
+    }
 }
 impl TransitionBuilder<'_> {
     fn maximum_prefix_custodian_slots_v1(&self, claim: &PalwClaimStateV2) -> Result<usize, PalwStateV2Error> {
-        let flat = if self.params.panel_v3_rule_at(claim.accepted_daa) {
-            u64::from(self.params.panel_v3().ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?.policy.seat_count)
-        } else {
-            // The old fold does not otherwise carry its Panel bundle. Without a
-            // resolved registry mirror, use the full native u16 seat format.
-            u64::from(self.extras.model_registry.as_ref().map_or(u16::MAX, |r| r.globals.seat_count))
-        };
-        let mut maximum = flat;
-        if self.extras.shard_licensing.is_some() {
-            maximum = maximum.max(
-                flat.checked_mul(u64::from(crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_MAX_SHARDS_V1))
-                    .ok_or(PalwStateV2Error::Overflow("prospective prefix shard custodians"))?,
-            );
-        }
-        if self.params.tir_shard_active_at(claim.accepted_daa) && self.state.tir_classes.contains_key(&claim.class_id) {
-            maximum = maximum.max(u64::from(misaka_palw_panel::MAX_STRATIFIED_SEATS_V1));
-        }
-        usize::try_from(maximum.checked_add(2).ok_or(PalwStateV2Error::Overflow("prospective prefix custodians"))?)
-            .map_err(|_| PalwStateV2Error::Overflow("prospective prefix platform slots"))
+        let maximum = self.state.staged_maximum_custodians_v1(claim.class_id, claim.accepted_daa, self.params, self.extras)?;
+        usize::try_from(maximum.checked_add(1).ok_or(PalwStateV2Error::Overflow("prospective owner slot"))?)
+            .map_err(|_| PalwStateV2Error::Overflow("prospective platform slots"))
     }
     /// Pure preflight: checked clocks are established before even an attempt's first write.
     pub(super) fn prepare_staged_claim_v1(
@@ -271,39 +410,20 @@ impl TransitionBuilder<'_> {
         let Some(config) = self.extras.staged_public_court else {
             return Ok(None);
         };
+        if let Some(original) = public_job.filter(|original| self.state.staged_required_families_v1(original)) {
+            return self.prepare_required_bundle_v1(claim_id, claim, original, config);
+        }
         let vocab = self.state.fp_work_profiles.get(&claim.class_id).map(|p| p.vocab_size).unwrap_or((1 << 22) - 1);
         // The authenticated class profile narrows vocabulary. The existing generated-position
         // format caps every other claim independently of a producer's asserted prompt/rendering size.
         let mut terms = config.claim_terms(claim.accepted_daa, 4095, vocab).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        use crate::palw_staged_bundle_v1::PalwStagedFamilyV1 as Family;
-        let mut families = Vec::new();
-        if public_job.is_some_and(|j| j.job.is_constraint()) {
-            families.push((Family::Constraint, terms.plan));
-        }
         if let Some(registered) = self.state.class_semantics.get(&claim.class_id)
             && let (Some(raw), Some(bound)) = (registered.raw_tokenizer_bytes, registered.tokenizer_key_events)
         {
-            let (raw, bound) = if public_job.is_some() {
-                let inventory = self.state.staged_tokenizer_inventory_v1(registered.tokenizer_id).ok_or_else(|| {
-                    stage_refused(
-                        claim_id,
-                        "prospective claim needs accepted exact registered raw EOF inventory before resource admission",
-                    )
-                })?;
-                if inventory.completed_daa > claim.accepted_daa {
-                    return Err(stage_refused(claim_id, "raw inventory is from after this claim acceptance"));
-                }
-                (inventory.actual_bytes, inventory.key_event_upper_bound_v1())
-            } else {
-                (raw, bound)
-            };
             let tokenizer =
                 crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(raw, bound, config.prices)
                     .and_then(|p| p.court_envelope(vocab, config.prices))
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            if public_job.is_some() {
-                families.push((Family::Tokenizer, tokenizer));
-            }
             terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
                 claim.accepted_daa,
                 terms.plan.cover(tokenizer),
@@ -313,294 +433,135 @@ impl TransitionBuilder<'_> {
             )
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
-        if let Some(public_job) = public_job.filter(|j| j.job.is_prefix_state()) {
-            let job = &public_job.job;
-            if let (Some(profile), Some(relation)) = (
-                self.state.fp_work_profiles.get(&claim.class_id),
-                self.state.class_semantics.get(&claim.class_id).and_then(|s| s.prefix_state_relation),
-            ) {
-                let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(job)
-                    .map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))?;
-                let ladder = self.state.class_step_ladder_v1(
-                    &claim.class_id,
-                    self.extras
-                        .held_context_ladder
-                        .or(self.extras.shard_court_ladder)
-                        .ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
-                );
-                // Authenticated class + accepted job counts establish the complete prefix
-                // envelope before any liability/material row can become spendable.
-                let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(
-                    profile,
-                    job.prompt_tokens,
-                    public_job.decode_tokens_executed,
-                    ladder,
-                )
-                .map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))?;
-                let prefix = crate::palw_prefix_resources_v1::PalwPrefixResourcePlanV1::derive(
-                    profile,
-                    relation,
-                    named.prefix_tokens,
-                    leaves,
-                    90_000,
-                    config.prices,
-                )
-                .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                let complete = crate::palw_prefix_public_source_v1::PalwPrefixPublicAcquisitionPlanV1::derive(
-                    prefix,
-                    self.maximum_prefix_custodian_slots_v1(claim)?,
-                    config.prices,
-                    borsh::object_length(profile.as_ref()).map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))? as u64,
-                )
-                .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                families.push((Family::PublicPrefix, complete.envelope));
-                terms = crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1::derive(
-                    claim.accepted_daa,
-                    terms.plan.cover(complete.envelope),
-                    config.acquisition_daa,
-                    config.collection_daa,
-                    config.reorg_retention_daa,
-                )
-                .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-        }
-        families.sort_by_key(|(family, _)| *family);
-        let mut history_contract = None;
-        let bundle = if !families.is_empty() {
-            let profile = self
-                .state
-                .fp_work_profiles
-                .get(&claim.class_id)
-                .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("bundle has no authenticated class profile".into()))?;
-            let profile_bytes =
-                borsh::object_length(profile.as_ref()).map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))? as u64;
-            let original_header = self
-                .extras
-                .public_original_bindings
-                .get(&claim_id)
-                .ok_or_else(|| stage_refused(claim_id, "prospective claim lacks original authenticated public binding header"))?;
-            original_header.check_wire_v1().map_err(|e| stage_refused(claim_id, e))?;
-            if original_header.execution_root_v1() != claim.execution_root
-                || original_header.job_context_v1().shape_profile_id != claim.class_id
-                || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(original_header.job_context_v1()) != claim.job_identity
-            {
-                return Err(stage_refused(claim_id, "original published binding substitutes claim job or execution"));
-            }
-            let ladder = self.state.class_step_ladder_v1(
-                &claim.class_id,
-                self.extras.held_context_ladder.or(self.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
-            );
-            let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(header) = original_header else {
-                return Err(stage_refused(
-                    claim_id,
-                    "TIR binding requires its distinct typed semantic court, never a legacy conversion",
-                ));
-            };
-            let binding = header.resolve_v1(profile, claim.execution_root, ladder).map_err(|e| stage_refused(claim_id, e))?;
-            crate::palw_legacy_held_da_v2::palw_legacy_fp_job_check_v2(
-                &binding,
-                &public_job.expect("required family has accepted FP job").job,
-            )
-            .map_err(|e| stage_refused(claim_id, e.to_string()))?;
-            let mut acquisitions = Vec::new();
-            let maximum_custodians = u64::try_from(self.maximum_prefix_custodian_slots_v1(claim)? - 1)
-                .map_err(|_| PalwStateV2Error::Overflow("admitted history custodians"))?;
-            let maximum_records = families.iter().try_fold(0u64, |sum, (_, p)| {
-                sum.checked_add(p.maximum_moves).ok_or(PalwStateV2Error::Overflow("admitted original history records"))
-            })?;
-            let pledge = self
-                .extras
-                .history_custody_pledges
-                .get(&claim_id)
-                .ok_or_else(|| {
-                    stage_refused(
-                        claim_id,
-                        "prospective required-family claim lacks its original transaction-local signed history pledge",
-                    )
-                })?
-                .clone();
-            pledge.check_v1().map_err(|e| stage_refused(claim_id, e))?;
-            let producer = self.state.bond(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
-            pledge
-                .validate_signature_v1(&producer.pubkey, crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1)
-                .map_err(|e| stage_refused(claim_id, e))?;
-            let semantics = self
-                .state
-                .class_semantics
-                .get(&claim.class_id)
-                .ok_or_else(|| stage_refused(claim_id, "required-family immutable semantics absent"))?;
-            if (
-                pledge.claim,
-                pledge.producer,
-                pledge.execution_root,
-                pledge.job_identity,
-                pledge.cu_ruleset_id,
-                pledge.maximum_records,
-                pledge.maximum_custodians,
-            ) != (
-                claim_id,
-                claim.bond,
-                claim.execution_root,
-                claim.job_identity,
-                semantics.cu_ruleset_id,
-                maximum_records,
-                maximum_custodians,
-            ) || claim.accepted_daa >= pledge.accept_until_daa
-            {
-                return Err(stage_refused(
-                    claim_id,
-                    "original pledge substitutes native geometry, claim, job, ruleset or admission clock",
-                ));
-            }
-            let recovery = crate::palw_history_custody_v1::history_recovery_resource_plan_with_wait_v1(
-                maximum_records,
-                usize::try_from(maximum_custodians).map_err(|_| PalwStateV2Error::Overflow("history platform custodians"))?,
-                config.acquisition_daa,
-                config.prices,
-            )
-            .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            for (family, plan) in families {
-                let plan = if family == Family::PublicPrefix {
-                    plan.checked_sum_v1(recovery).map_err(PalwStateV2Error::CarriageInconsistent)?
-                } else {
-                    plan
-                };
-                let mut acquisition = crate::palw_staged_bundle_v1::staged_context_resource_plan_v1(profile_bytes, plan, config)
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                if family == Family::Constraint && profile.logits_scheme_id == crate::palw_step_refute::tiled_logits_scheme_id_v1() {
-                    let selected = crate::palw_selected_event_source_v1::selected_event_resource_plan_v1(
-                        vocab,
-                        public_job.expect("required constraint has public job").decode_tokens_executed,
-                        profile_bytes,
-                        u32::try_from(self.maximum_prefix_custodian_slots_v1(claim)? - 1)
-                            .map_err(|_| PalwStateV2Error::Overflow("selected source custodian count"))?,
-                        config,
-                    )
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                    acquisition = acquisition.checked_sum_v1(selected).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                } else if family == Family::Constraint {
-                    let public = public_job.expect("required constraint has public job");
-                    let ladder = self.state.class_step_ladder_v1(
-                        &claim.class_id,
-                        self.extras
-                            .held_context_ladder
-                            .or(self.extras.shard_court_ladder)
-                            .ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
-                    );
-                    let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(
-                        profile,
-                        public.job.prompt_tokens,
-                        public.decode_tokens_executed,
-                        ladder,
-                    )
-                    .map_err(|e| PalwStateV2Error::CarriageInconsistent(e.to_string()))?;
-                    let flat = crate::palw_flat_constraint_stream_v1::flat_constraint_source_resource_plan_v1(
-                        public_job.expect("required constraint has public job").decode_tokens_executed,
-                        vocab,
-                        profile_bytes,
-                        u32::try_from(maximum_custodians).map_err(|_| PalwStateV2Error::Overflow("flat native custodians"))?,
-                        leaves,
-                        config.prices,
-                    )
-                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
-                    acquisition = acquisition.checked_sum_v1(flat).map_err(PalwStateV2Error::CarriageInconsistent)?;
-                }
-                acquisitions.push((family, plan, Some(acquisition)));
-            }
-            let inventory = semantics
-                .raw_tokenizer_bytes
-                .map(|_| {
-                    let certificate = self
-                        .state
-                        .staged_tokenizer_inventory_v1(semantics.tokenizer_id)
-                        .ok_or_else(|| stage_refused(claim_id, "raw inventory fact absent"))?;
-                    crate::palw_staged_bundle_v1::PalwTokenizerInventoryPlanV1::derive_v1(certificate.actual_bytes, config)
-                        .map_err(PalwStateV2Error::CarriageInconsistent)
-                })
-                .transpose()?;
-            let plan = crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1::derive_with_acquisitions_v1(
-                claim.accepted_daa,
-                acquisitions,
-                inventory,
-                config,
-            )
-            .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            let mut committed_families = Vec::new();
-            for stage in &plan.stages {
-                committed_families.push((
-                    stage.family,
-                    match stage.acquisition {
-                        Some(acquisition) => {
-                            stage.terms.plan.checked_sum_v1(acquisition).map_err(PalwStateV2Error::CarriageInconsistent)?
-                        }
-                        None => stage.terms.plan,
-                    },
-                ));
-            }
-            if let Some(inventory) = &plan.inventory {
-                committed_families[0].1 =
-                    committed_families[0].1.checked_sum_v1(inventory.envelope).map_err(PalwStateV2Error::CarriageInconsistent)?;
-            }
-            let resource_id = crate::palw_tokenizer_artifact_inventory_v1::palw_inventory_resource_plan_id_v1(
-                semantics,
-                self.state.staged_tokenizer_inventory_v1(semantics.tokenizer_id),
-                &committed_families,
-                maximum_custodians,
-                config,
-            )
-            .map_err(PalwStateV2Error::CarriageInconsistent)?;
-            if resource_id != pledge.resource_plan_id || plan.terms.material_until_daa > pledge.material_until_daa {
-                return Err(stage_refused(
-                    claim_id,
-                    "original signed pledge does not cover authenticated EOF family SUM and native retention horizon",
-                ));
-            }
-            history_contract = Some(crate::palw_history_custody_v1::PalwHistoryCustodyContractV1 {
-                custody: crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
-                    claim.execution_root,
-                    claim.job_identity,
-                    semantics.cu_ruleset_id,
-                    &plan.terms,
-                ),
-                producer: claim.bond,
-                maximum_records,
-                maximum_custodians,
-                pledge,
-            });
-            Some(plan)
-        } else {
-            None
-        };
-        if let Some(bundle) = &bundle {
-            terms = bundle.terms;
-        }
         terms
             .plan
             .rent_sompi
             .checked_add(terms.plan.deposit_sompi)
             .ok_or(PalwStateV2Error::Overflow("prospective complete court funding"))?;
         claim.trace_retention_daa = claim.trace_retention_daa.max(terms.material_until_daa);
-        let prefix_custody = public_job.and_then(|commit| {
-            self.state.class_semantics.get(&claim.class_id).map(|registered| {
-                crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
-                    claim.execution_root,
-                    crate::palw_fp_execution_v3::palw_fp_job_pin_v1(commit),
-                    registered.cu_ruleset_id,
-                    &terms,
+        Ok(Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+            terms,
+            producer: claim.bond,
+            panel: BTreeSet::new(),
+            prefix_custody: None,
+        })))
+    }
+    fn prepare_required_bundle_v1(
+        &self,
+        claim_id: Hash64,
+        claim: &mut PalwClaimStateV2,
+        original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        config: crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1,
+    ) -> Result<Option<PalwStagedCourtRowV1>, PalwStateV2Error> {
+        let header = self
+            .extras
+            .public_original_bindings
+            .get(&claim_id)
+            .ok_or_else(|| stage_refused(claim_id, "prospective claim lacks its transaction-local original public binding"))?;
+        let maximum_custodians =
+            self.state.staged_maximum_custodians_v1(claim.class_id, claim.accepted_daa, self.params, self.extras)?;
+        let ladder = self.state.class_step_ladder_v1(
+            &claim.class_id,
+            self.extras.held_context_ladder.or(self.extras.shard_court_ladder).ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?,
+        );
+        let quote = self
+            .state
+            .staged_preclaim_quote_v1(original, header, claim.accepted_daa, maximum_custodians, ladder, config)
+            .map_err(|e| stage_refused(claim_id, e))?;
+        let Some(quote) = quote else {
+            // No staged semantic family is claimed by this descriptor. This is
+            // not a certificate covering the remaining ordinary FP predicates.
+            let terms = config
+                .claim_terms(
+                    claim.accepted_daa,
+                    4095,
+                    self.state
+                        .fp_work_profiles
+                        .get(&claim.class_id)
+                        .ok_or_else(|| stage_refused(claim_id, "missing native profile"))?
+                        .vocab_size,
                 )
-            })
-        });
-        let contract = PalwStagedClaimContractV1 { terms, producer: claim.bond, panel: BTreeSet::new(), prefix_custody };
-        Ok(Some(match bundle {
-            Some(plan) => PalwStagedCourtRowV1::ClaimBundle(Box::new(crate::palw_staged_bundle_v1::PalwStagedBundleContractV1 {
-                claim: contract,
-                plan,
-                config,
-                history_custody: history_contract.expect("required family pledge checked before claim write"),
-                original_binding: self.extras.public_original_bindings[&claim_id].clone(),
-            })),
-            None => PalwStagedCourtRowV1::Claim(contract),
-        }))
+                .map_err(|e| stage_refused(claim_id, e))?;
+            claim.trace_retention_daa = claim.trace_retention_daa.max(terms.material_until_daa);
+            return Ok(Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 {
+                terms,
+                producer: claim.bond,
+                panel: BTreeSet::new(),
+                prefix_custody: None,
+            })));
+        };
+        let semantics = self
+            .state
+            .class_semantics
+            .get(&claim.class_id)
+            .ok_or_else(|| stage_refused(claim_id, "required family immutable semantics absent"))?;
+        let pledge = self
+            .extras
+            .history_custody_pledges
+            .get(&claim_id)
+            .ok_or_else(|| {
+                stage_refused(claim_id, "required-family claim lacks its transaction-local original signed history pledge")
+            })?
+            .clone();
+        pledge.check_v1().map_err(|e| stage_refused(claim_id, e))?;
+        let producer = self.state.bond(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
+        pledge
+            .validate_signature_v1(&producer.pubkey, crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1)
+            .map_err(|e| stage_refused(claim_id, e))?;
+        if (
+            pledge.claim,
+            pledge.producer,
+            pledge.execution_root,
+            pledge.job_identity,
+            pledge.cu_ruleset_id,
+            pledge.resource_plan_id,
+            pledge.maximum_records,
+            pledge.maximum_custodians,
+        ) != (
+            claim_id,
+            claim.bond,
+            claim.execution_root,
+            claim.job_identity,
+            semantics.cu_ruleset_id,
+            quote.resource_plan_id,
+            quote.maximum_records,
+            quote.maximum_custodians,
+        ) || claim.accepted_daa >= pledge.accept_until_daa
+            || quote.plan.terms.material_until_daa > pledge.material_until_daa
+        {
+            return Err(stage_refused(claim_id, "original pledge changes native EOF, family SUM, identity, capacity or paid horizon"));
+        }
+        let terms = quote.plan.terms;
+        terms
+            .plan
+            .rent_sompi
+            .checked_add(terms.plan.deposit_sompi)
+            .ok_or(PalwStateV2Error::Overflow("prospective complete court funding"))?;
+        let custody = crate::palw_prefix_custody_v1::PalwPrefixCustodyContractV1::new(
+            claim.execution_root,
+            claim.job_identity,
+            semantics.cu_ruleset_id,
+            &terms,
+        );
+        claim.trace_retention_daa = claim.trace_retention_daa.max(terms.material_until_daa);
+        Ok(Some(PalwStagedCourtRowV1::ClaimBundle(Box::new(crate::palw_staged_bundle_v1::PalwStagedBundleContractV1 {
+            claim: PalwStagedClaimContractV1 {
+                terms,
+                producer: claim.bond,
+                panel: BTreeSet::new(),
+                prefix_custody: Some(custody.clone()),
+            },
+            plan: quote.plan,
+            config,
+            original_binding: header.clone(),
+            history_custody: crate::palw_history_custody_v1::PalwHistoryCustodyContractV1 {
+                custody,
+                producer: claim.bond,
+                maximum_records: quote.maximum_records,
+                maximum_custodians: quote.maximum_custodians,
+                pledge,
+            },
+        }))))
     }
     pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) {
         let old = match &new {
@@ -1101,7 +1062,7 @@ pub(super) fn open(
         let exits = vec![contract.terms.bond_exit_after_daa; contract.panel.len()];
         let row = crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1::admit_with_authenticated_flat_pin_v1(
             seed,
-            &original.job,
+            &original,
             target.execution_root,
             contract.terms,
             ctx.daa_score,
@@ -1471,7 +1432,7 @@ fn history_control_v1(
         b.write_staged_row_v1(claim_key, Some(PalwStagedCourtRowV1::ClaimBundle(contract)));
         return Ok(());
     }
-    let Action::HistoryRecovery { stage_seed, action } = &movement.action else {
+    let Action::HistoryRecovery { stage_seed, action, .. } = &movement.action else {
         return Err(stage_refused(movement.claim, "not a history custody action"));
     };
     let owner_key = PalwStagedCourtKeyV1::Owner(movement.claim, movement.reserver);
@@ -1485,6 +1446,7 @@ fn history_control_v1(
     {
         return Err(stage_refused(movement.claim, "history recovery changes original paid frame or horizon"));
     }
+    let old_index = history_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()));
     let old = PalwStagedCourtRowV1::OwnerBundle(bundle.clone()).checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
     if !bundle.history_recovery.contains_key(stage_seed) {
         if !matches!(action, PalwHistoryRecoveryActionV1::Demand) {
@@ -1516,9 +1478,10 @@ fn history_control_v1(
             contract.history_custody.current_signed_custodians_v1(),
         )
         .map_err(|e| stage_refused(movement.claim, e))?;
-        bundle.history_recovery.insert(*stage_seed, recovery);
+        bundle.history_recovery.insert(*stage_seed, Box::new(recovery).into());
     }
     let recovery = bundle.history_recovery.get_mut(stage_seed).expect("inserted bounded literal seed");
+    movement.check_history_scope_v1(recovery).map_err(|e| stage_refused(movement.claim, e))?;
     let effect = recovery.apply_v1(action, ctx.daa_score).map_err(|e| stage_refused(movement.claim, e))?;
     if let PalwHistoryRecoveryEffectV1::Default(default) = effect {
         let claim = b.state.claim(&movement.claim).cloned().ok_or(PalwStateV2Error::MissingClaim(movement.claim))?;
@@ -1527,7 +1490,9 @@ fn history_control_v1(
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
+    let new_index = history_response_index_rows_v1(&row);
     b.state.staged_courts.insert(owner_key, row);
+    update_history_response_indices_v1(&mut b.state, old_index, new_index);
     b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: (movement.claim, movement.reserver), old, new });
     Ok(())
 }
@@ -1752,7 +1717,7 @@ fn flat_control_v1(
         return Err(stage_refused(movement.claim, "flat source changes literal paid original owner, seed or clock"));
     }
     let old = PalwStagedCourtRowV1::OwnerBundle(bundle.clone()).checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
-    let old_index = selected_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()));
+    let old_index = flat_response_index_rows_v1(&PalwStagedCourtRowV1::OwnerBundle(bundle.clone()));
     let initial = bundle.flat.is_none();
     if let Action::FlatSourceOpen { binding } = &movement.action {
         let next = bundle.active.map_or(0, |n| n as usize + 1);
@@ -1834,6 +1799,10 @@ fn flat_control_v1(
             config.prices,
         )
         .map_err(|e| stage_refused(movement.claim, e))?;
+        // The first pass has the same conservative work/index envelope as the
+        // reserved second pass. A late owner cannot manufacture a default by
+        // opening immediately before the first immutable response deadline.
+        source.check_open_window_v1(ctx.daa_score).map_err(|e| stage_refused(movement.claim, e))?;
         bundle.flat = Some(Box::new(source).into());
         bundle.flat_context = Some(
             Box::new(crate::palw_staged_bundle_v1::PalwSelectedSourceContextV1 {
@@ -1873,9 +1842,9 @@ fn flat_control_v1(
         b.write_staged_row_v1(key, Some(row));
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
-        let new_index = selected_response_index_rows_v1(&row);
+        let new_index = flat_response_index_rows_v1(&row);
         b.state.staged_courts.insert(key, row);
-        update_selected_response_indices_v1(&mut b.state, old_index, new_index);
+        update_flat_response_indices_v1(&mut b.state, old_index, new_index);
         b.entries.push(PalwDeltaEntryV2::StagedCourtMove { key: (movement.claim, movement.reserver), old, new });
     }
     Ok(())
@@ -2110,6 +2079,12 @@ pub(super) fn update_indices(
     new: Option<&PalwStagedCourtRowV1>,
 ) {
     if let Some(row) = old {
+        for entry in history_response_index_rows_v1(row) {
+            state.staged_history_responders.remove(&entry);
+        }
+        for entry in flat_response_index_rows_v1(row) {
+            state.staged_flat_responders.remove(&entry);
+        }
         for entry in selected_response_index_rows_v1(row) {
             state.staged_selected_responders.remove(&entry);
         }
@@ -2130,6 +2105,8 @@ pub(super) fn update_indices(
         }
     }
     if let Some(row) = new {
+        state.staged_history_responders.extend(history_response_index_rows_v1(row));
+        state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
         state.staged_prefix_responders.extend(response_index_rows(row));
         let (due, holds) = index_rows(key, row);
@@ -2151,7 +2128,11 @@ pub(super) fn rebuild_indices(state: &mut PalwChainStateV2) {
     state.staged_inventory_by_owner.clear();
     state.staged_prefix_responders.clear();
     state.staged_selected_responders.clear();
+    state.staged_flat_responders.clear();
+    state.staged_history_responders.clear();
     for (key, row) in &state.staged_courts {
+        state.staged_history_responders.extend(history_response_index_rows_v1(row));
+        state.staged_flat_responders.extend(flat_response_index_rows_v1(row));
         state.staged_selected_responders.extend(selected_response_index_rows_v1(row));
         let (due, holds) = index_rows(*key, row);
         state.staged_prefix_responders.extend(response_index_rows(row));
@@ -2175,6 +2156,49 @@ pub(super) fn selected_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec
         .filter(|signer| selected.requests.values().any(|r| !r.collected && !r.answered.contains(signer)))
         .map(|signer| (*signer, selected.respond_until_daa, bundle.claim, bundle.owner))
         .collect()
+}
+pub(super) fn flat_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)> {
+    let PalwStagedCourtRowV1::OwnerBundle(bundle) = row else { return Vec::new() };
+    let Some(flat) = &bundle.flat else { return Vec::new() };
+    flat.custodians
+        .iter()
+        .filter(|key| flat.has_response_duty_v1(key))
+        .filter_map(|key| flat.response_deadline_v1(key).map(|at| (*key, at, bundle.claim, bundle.owner)))
+        .collect()
+}
+pub(super) fn history_response_index_rows_v1(row: &PalwStagedCourtRowV1) -> Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64)> {
+    let PalwStagedCourtRowV1::OwnerBundle(bundle) = row else { return Vec::new() };
+    bundle
+        .history_recovery
+        .iter()
+        .flat_map(|(seed, recovery)| {
+            let demand = recovery.demand.as_ref().filter(|_| recovery.default.is_none());
+            recovery
+                .custodians
+                .iter()
+                .filter_map(move |signer| demand.map(|d| (*signer, d.answer_until_daa, bundle.claim, bundle.owner, *seed)))
+        })
+        .collect()
+}
+pub(super) fn update_history_response_indices_v1(
+    state: &mut PalwChainStateV2,
+    old: Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64)>,
+    new: Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64)>,
+) {
+    for entry in old {
+        state.staged_history_responders.remove(&entry);
+    }
+    state.staged_history_responders.extend(new);
+}
+pub(super) fn update_flat_response_indices_v1(
+    state: &mut PalwChainStateV2,
+    old: Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+    new: Vec<(PalwBondKeyV2, u64, Hash64, PalwBondKeyV2)>,
+) {
+    for entry in old {
+        state.staged_flat_responders.remove(&entry);
+    }
+    state.staged_flat_responders.extend(new);
 }
 pub(super) fn update_selected_response_indices_v1(
     state: &mut PalwChainStateV2,
