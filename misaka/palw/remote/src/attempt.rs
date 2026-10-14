@@ -164,6 +164,122 @@ pub fn mount_attempt(
     Ok(Some(MountedAttempt { header, attempt_id, attempt, material: executed.material, nonce_bucket }))
 }
 
+/// **RFC-0008 PAV3: what a remote miner supplies past `palw_monetary_material_v1`.** Every answer must come from an AUTHENTICATED
+/// view (op 242 pages finished by `MonetaryMaterialProofPagerV1` plus the proven bond table); a forecast or an unauthenticated RPC row
+/// cannot select a session, because the fold re-selects with the same canonical rule and refuses a substitute.
+pub trait NativeCustodyV3 {
+    /// The canonical session for `attempt` at `daa` (`select_native_session_v3` over the authenticated rows/bonds), or `None`.
+    fn session(
+        &self,
+        attempt: &PalwAttemptUnsignedV2,
+        daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>;
+    /// The complete one-scope manifest of this capture's typed bundle (the exact bytes/units/content each provider will rebuild).
+    fn manifest(
+        &mut self,
+        session: &kaspa_consensus_core::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+        attempt: &PalwAttemptUnsignedV2,
+        material: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialManifestV1, String>;
+    /// Every roster provider's signature over `Ready::id`, each given only after that provider durably published the bundle it rebuilt
+    /// from `material` (`native_ready_v3::provider_sign_native_ready_v3`). Called only after both draws are won.
+    fn collect(
+        &mut self,
+        ready: &kaspa_consensus_core::palw_attempt_material_v3::PalwNativeMaterialReadyV3,
+        material: &[u8],
+    ) -> Result<std::collections::BTreeMap<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Vec<u8>>, String>;
+    /// The executor's seal (same key as the attempt signature) over `message` under `context`.
+    fn seal(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String>;
+}
+
+/// [`mount_attempt`] in the owned PAV3 custody form. The class and network draws price `priced_execution` (session, consent and roster,
+/// never signatures), so they are decided BEFORE any provider is asked; providers and the seal are requested only after both are won.
+/// A missing session, manifest or roster signature mounts nothing — never a PAV2 fallback the chain refuses past the fence.
+#[allow(clippy::too_many_arguments)]
+pub fn mount_native_attempt_v3(
+    template: &AcceptedTemplate,
+    template_header: &Header,
+    params: &AttemptParams,
+    facts_pwu: u64,
+    min_trace_retention_daa: u64,
+    artifact_root: Hash64,
+    class_id: Hash64,
+    cursor: &mut Option<(Hash64, u64)>,
+    executor: &mut dyn AttemptExecutor,
+    signer: &dyn AttemptSigner,
+    custody: &mut dyn NativeCustodyV3,
+    network_draw: &dyn Fn(&Header, u64, bool) -> bool,
+) -> Result<Option<MountedAttempt>, AttemptError> {
+    use kaspa_consensus_core::palw_attempt_material_v3::{PalwAttemptMaterialEnvelopeV3, draft_native_ready_v3};
+    if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(template_header.pow_algo_id) {
+        return Err(AttemptError::NotAnAttemptLane(template_header.pow_algo_id));
+    }
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(template_header);
+    let nonce_bucket = match *cursor {
+        Some((at, next)) if at == pre_pow && next < (1u64 << (64 - PALW_TICKET_NONCE_BUCKET_LOG2)) => next,
+        _ => 0,
+    };
+    *cursor = Some((pre_pow, nonce_bucket + 1));
+    let nonce = nonce_bucket << PALW_TICKET_NONCE_BUCKET_LOG2;
+    let anchor = palw_job_anchor_v1(params.network_domain, pre_pow, class_id, &params.bond, nonce_bucket);
+    let executed = executor.execute(anchor).map_err(AttemptError::Executor)?;
+    let facts = PalwAttemptChainFactsV1 {
+        class_id,
+        artifact_root,
+        pwu: facts_pwu,
+        min_trace_retention_daa,
+        witness_chunks: params.witness_chunks,
+        operator_id: params.operator_id,
+    };
+    let attempt = palw_attempt_from_execution_v1(
+        params.network_domain,
+        pre_pow,
+        template_header.timestamp,
+        nonce,
+        params.bond,
+        signer.public_key(),
+        &facts,
+        &executed.execution,
+        template_header.daa_score,
+    );
+    let session = custody
+        .session(&attempt, template_header.daa_score)
+        .ok_or_else(|| AttemptError::Executor("no eligible prior signed native custody session".into()))?;
+    let manifest = custody.manifest(&session, &attempt, &executed.material).map_err(AttemptError::Executor)?;
+    let ready = draft_native_ready_v3(&session, &attempt, anchor, manifest).map_err(AttemptError::Executor)?;
+    let dummy = vec![0u8; params.signature_len];
+    let provisional = PalwAttemptMaterialEnvelopeV3 {
+        version: 3,
+        base: PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: dummy.clone() },
+        ready: ready.clone(),
+        provider_signatures: vec![dummy.clone(); ready.providers.len()],
+        seal: dummy,
+    };
+    if provisional.class_ticket(anchor) > params.class_target {
+        return Ok(None);
+    }
+    let mut probe = template_header.clone();
+    probe.nonce = nonce;
+    probe.palw_commitment = provisional.encode_wire();
+    if !network_draw(&probe, nonce, params.single_lottery) {
+        return Ok(None);
+    }
+    let attempt_id = attempt_id_v2(&attempt);
+    let signature = signer.sign_attempt(&attempt, &attempt_id).map_err(AttemptError::Signer)?;
+    let signatures = custody.collect(&ready, &executed.material).map_err(AttemptError::Executor)?;
+    let base = PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature };
+    let envelope = crate::native_ready_v3::producer_assemble_native_ready_v3(base, ready, &signatures, |message, context| {
+        custody.seal(message, context)
+    })
+    .map_err(AttemptError::Signer)?;
+    let mut header = template_header.clone();
+    header.nonce = nonce;
+    header.palw_commitment = envelope.encode_wire();
+    header.finalize();
+    let _ = template;
+    Ok(Some(MountedAttempt { header, attempt_id, attempt, material: executed.material, nonce_bucket }))
+}
+
 /// The check made after the (possibly long) inference and before the block leaves: a fresh quorum must still stand on the template's chain
 /// point and within its freshness bound.
 pub fn ready_to_publish(

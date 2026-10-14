@@ -304,10 +304,15 @@ pub fn monetary_service_fee_history_next_v1(previous: Hash64, income: Hash64, am
 }
 impl PalwMonetaryMaterialRowV1 {
     pub fn healthy(&self, state: &PalwChainStateV2) -> bool {
+        self.healthy_with(|provider| state.bond(provider).map(|bond| bond.operator_id))
+    }
+    /// [`Self::healthy`] over any authenticated bond view (a remote producer's proven bond
+    /// table), so the producer and consensus select with one predicate.
+    pub fn healthy_with(&self, operator_of: impl Fn(&PalwBondKeyV2) -> Option<Hash64>) -> bool {
         let mut operators = std::collections::BTreeSet::new();
         for offer in self.providers.iter().filter(|p| !p.charged) {
-            if let Some(bond) = state.bond(&offer.provider) {
-                operators.insert(bond.operator_id);
+            if let Some(operator) = operator_of(&offer.provider) {
+                operators.insert(operator);
             }
         }
         operators.len() >= 2

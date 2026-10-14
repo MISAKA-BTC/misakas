@@ -1636,6 +1636,23 @@ impl PalwProducerService {
         if !template_declares_an_attempt_lane(template.block.header.pow_algo_id) {
             return Err(format!("this network declares algo {} — not a ConsensusV2 lane", template.block.header.pow_algo_id));
         }
+        // **RFC-0008 PAV3: past `palw_monetary_material_v1` the chain admits new native work only in the owned signed custody
+        // form** — the canonical prior session's provider Ready signatures and this executor's seal. This in-node producer holds no
+        // provider exchange (the producer/provider adapters are `misaka_palw_remote::native_ready_v3`; their transport is an
+        // operator integration), so it says so and holds instead of drawing a PAV2 attempt every peer refuses. Below the fence —
+        // every shipped preset — this is unreachable and production is byte-identical.
+        if self
+            .consensus_config
+            .params
+            .palw_monetary_material_v1
+            .as_ref()
+            .is_some_and(|fence| fence.activation.is_active(template.block.header.daa_score))
+        {
+            return Err(format!(
+                "{PALW_PRODUCER_NATIVE_CUSTODY_HOLD}: new native work at DAA {} needs a PAV3 provider exchange this node does not run",
+                template.block.header.daa_score
+            ));
+        }
         // The job is the TEMPLATE's AND the bucket's. See `base0_rc_job_anchor_v1` for why it is
         // not the challenge's, and `PALW_TICKET_NONCE_BUCKET_LOG2` for what a bucket is.
         //
@@ -2098,6 +2115,9 @@ impl AsyncService for PalwProducerService {
 
 /// What a producer says when the exit signal cut a draw or a submit short.
 pub(crate) const PALW_PRODUCER_EXITING: &str = "stopping: the node is shutting down";
+
+/// What a producer says when the chain requires the PAV3 native custody form and this node runs no provider exchange.
+pub(crate) const PALW_PRODUCER_NATIVE_CUSTODY_HOLD: &str = "holding: the native custody form (PAV3) is in force";
 
 /// **`fut`, or `None` the moment the exit signal fires** (testnet-12 lifecycle audit T12-049).
 ///

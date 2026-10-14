@@ -197,16 +197,10 @@ impl PalwAttemptMaterialEnvelopeV3 {
         let a = &self.base.attempt;
         // The canonical oldest-key eligible session fixes the roster before work;
         // choosing another funded session cannot buy another draw for that work.
-        let selected = state
-            .monetary_material_rows_v1()
-            .into_iter()
-            .filter(|row| {
-                row.native_binding.is_none()
-                    && row.terms.native_session.as_ref().is_some_and(|s| s.matches(a, daa))
-                    && row.healthy(state)
-            })
-            .min_by_key(|row| row.terms.root)
-            .ok_or("no eligible prior signed native session")?;
+        let selected = select_native_session_v3(state.monetary_material_rows_v1(), a, daa, |provider| {
+            state.bond(provider).map(|bond| bond.operator_id)
+        })
+        .ok_or("no eligible prior signed native session")?;
         if selected.terms.root != self.ready.session
             || selected.consent != self.ready.consent
             || selected.providers.iter().filter(|p| !p.charged).map(|p| p.provider).collect::<Vec<_>>() != self.ready.providers
@@ -236,6 +230,57 @@ impl PalwAttemptMaterialEnvelopeV3 {
         Ok(())
     }
 }
+/// The canonical oldest-key eligible prior session for this attempt at `daa`: unbound, matching
+/// the exact class/artifact/executor/operator/policy and admission interval, with at least two
+/// distinct uncharged provider operators. Consensus (`verify_prior`) and a producer holding an
+/// authenticated row/bond view call this one function, so a producer cannot be steered to a
+/// session the fold would refuse, and choosing another funded session buys no extra draw.
+pub fn select_native_session_v3(
+    rows: impl IntoIterator<Item = crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>,
+    attempt: &PalwAttemptUnsignedV2,
+    daa: u64,
+    operator_of: impl Fn(&PalwBondKeyV2) -> Option<Hash64>,
+) -> Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1> {
+    rows.into_iter()
+        .filter(|row| {
+            row.native_binding.is_none()
+                && row.terms.native_session.as_ref().is_some_and(|s| s.matches(attempt, daa))
+                && row.healthy_with(&operator_of)
+        })
+        .min_by_key(|row| row.terms.root)
+}
+
+/// The Ready a producer asks the selected session's providers to sign, derived only from the
+/// authenticated row and the producer's own signed attempt/manifest. The roster is the row's
+/// uncharged providers in key order — exactly what `verify_prior` compares.
+pub fn draft_native_ready_v3(
+    row: &crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+    attempt: &PalwAttemptUnsignedV2,
+    anchor: Hash64,
+    manifest: PalwMaterialManifestV1,
+) -> Result<PalwNativeMaterialReadyV3, String> {
+    let session = row.terms.native_session.as_ref().ok_or("row carries no prospective native session")?;
+    if row.native_binding.is_some() || manifest.root != row.terms.root || manifest.scopes.len() != 1 {
+        return Err("native session consumed or manifest root/scope differs".into());
+    }
+    let scope = &manifest.scopes[0];
+    if scope.claim != attempt_id_v2(attempt)
+        || scope.commitment != attempt.execution_root
+        || scope.codec != session.codec
+        || scope.units > session.max_units
+    {
+        return Err("native ready manifest does not describe this exact execution".into());
+    }
+    manifest.validate(row.terms.max_material_bytes).map_err(|e| e.to_string())?;
+    Ok(PalwNativeMaterialReadyV3 {
+        version: 3,
+        session: row.terms.root,
+        consent: row.consent,
+        binding: PalwNativeMaterialBindingV3 { claim: scope.claim, execution_key: execution_commitment_v3(attempt, anchor), manifest },
+        providers: row.providers.iter().filter(|p| !p.charged).map(|p| p.provider).collect(),
+    })
+}
+
 /// Explicit parser for the two native header forms. Old decode_wire accepts
 /// only PAV2; owned-form callers use this function after their fence check.
 pub fn native_attempt_base_v3(bytes: &[u8]) -> Result<PalwAttemptEnvelopeV2, String> {

@@ -66,3 +66,5 @@ pub(crate) fn put_len(state: &mut blake2b_simd::State, bytes: &[u8]) {
 pub mod monetary_material;
 
 pub mod monetary_material_rpc;
+
+pub mod native_ready_v3;
