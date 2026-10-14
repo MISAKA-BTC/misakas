@@ -298,6 +298,7 @@ ADR-0177 2026-10-12改定のモデル配分（Miner＋Panelの適格claim bond�
 5. **market fee（2026-10-11ユーザー判断）:** v1ではmarket feeを`R_max`に含めない。ただし期待手数料収入（fee利得）は経済安全性・抑止条件の計算に含める。fee額そのものの上限を証明したとはしない。（設計監査「追加受入条件と政策判断」の「market feeとissuanceの合計を`R_max`に含め、約定前にfee最大額を予約する」という記述は、[readiness matrix](../design/palw/activation-readiness-matrix.md)に記録されたこのユーザー判断と矛盾するため、v1については本項で置き換える。）
 6. **予算window `W_budget`（ADR-0176 D4）:** 400 DAAはdrill暫定値である（2026-10-11）。条件は対象profileが`L <= W_budget`とslot上限を満たすこと。長いG14 staged経路へそのまま適用しない。RFC12のwork量`W`とは別物である。本番値: **value: USER DECISION REQUIRED**（推奨: 400 DAA、上記条件付き。理由: ユーザーがdrill用に採用した値であり、それより長い経路には別の値が必要）。
 7. **allocation freeze:** retained EXEC rootがleadを名指しした後、riderによるescrow再配分を拒否する（§15.7）。
+8. **状態（2026-10-15、lead記録）: closed-as-provisional。** R8-BUDGETの仕様は次の値を**drill暫定（ユーザー判断10-11）、本番値はcensus/実測待ち**として閉じる: 予算window `W_budget` = 400 DAA（対象profileが`L <= W_budget`とslot上限を満たす場合のみ。長いG14 staged経路には適用しない）。fee-only Roundは`B_max`の外で、資本比例の独立`ExecutionCap`に従う（比率の値は未決）。v1のmarket feeは`R_max`の外。presetは変えず、fenceは武装しない。
 
 ### R8-WINDOW — 依存claimの責任・material・post-Final
 

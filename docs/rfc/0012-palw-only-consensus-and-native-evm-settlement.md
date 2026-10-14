@@ -508,6 +508,13 @@ Mechanics results and private-process acceptance are not independent review or e
    | `legacy_evidence_horizon_daa` | ≥ the DNS `evidence_window_blocks` it preserves | recommended **10,080** (DERIVED from `evidence_window_blocks`) |
 
    The 2026-10-11 values were adopted for the **drill only**; they are not production values and do not arm anything.
+
+   **Status (2026-10-15, lead record): closed-as-provisional.** The specification of R12-SETTLE is closed with these
+   values marked **drill-provisional (user ruling 10-11), production values pending census/measurement**:
+   D = 3; W = 6,331,093,440 pwu (revisit with the census); operator concentration 400 ‰; class concentration
+   1000 ‰ for now, re-evaluated at 600 ‰ once at least three REAL classes have mature work;
+   maturity = `max(accepted + 5,400 DAA, the later retirement/liability deadline)`, so any longer G14 deadline
+   lengthens maturity; legacy DNS evidence horizon 10,080 DAA. No preset carries them and no fence is armed.
 7. Remaining: census of operators/classes/pwu per window, native court-extension and pruned-provenance paths,
    private-fork attack evidence (validation-only).
 
