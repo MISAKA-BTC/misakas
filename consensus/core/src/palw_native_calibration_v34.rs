@@ -62,6 +62,9 @@ pub struct NativeCalibrationSnapshotV34 {
     pub stage: Option<NativeStagePoliciesV28>,
     pub final_policy: NativeFinalPolicyV27,
     pub panel: NativePanelFreeSettingsV34,
+    /// Arms the typed window class (§II.14.60, `palw_window_class_v37`) at genesis on this
+    /// isolated devnet only. Trailing fixed byte; no public preset can carry it.
+    pub window_class_v37: bool,
 }
 impl NativeCalibrationSnapshotV34 {
     pub fn root(&self) -> Digest {
@@ -126,7 +129,8 @@ impl NativeCalibrationSnapshotV34 {
             economics: read(&mut r)?,
             carrier: read(&mut r)?,
         };
-        let out = Self { version, isolation, base_params, base_schedule, funded, stage, final_policy, panel };
+        let window_class_v37 = read(&mut r)?;
+        let out = Self { version, isolation, base_params, base_schedule, funded, stage, final_policy, panel, window_class_v37 };
         if r.position() as usize != raw.len() || borsh::to_vec(&out).map_err(|e| e.to_string())? != raw {
             return Err("native calibration34 noncanonical/trailing snapshot bytes".into());
         }
@@ -145,6 +149,7 @@ impl NativeCalibrationSnapshotV34 {
             || base.palw_stage_execution_v28.is_some()
             || base.palw_probabilistic_constraints_v1.is_some()
             || base.palw_panel_free_v1.is_some()
+            || base.palw_window_class_v37.is_some()
         {
             return Err("native calibration34 owning base/snapshot pin differs or base already overrides native rules".into());
         }
@@ -164,6 +169,7 @@ impl NativeCalibrationSnapshotV34 {
             activation: ForkActivation::always(),
             policies: policies.clone(),
         });
+        out.palw_window_class_v37 = self.window_class_v37.then(ForkActivation::always);
         out.validate_isolated_native_calibration_v34()?;
         out.validate_palw_v2().map_err(|e| format!("native calibration34 ordinary owning ruleset invalid: {e:?}"))?;
         Ok(out)
@@ -192,6 +198,7 @@ pub fn local_validation_snapshot_v34(
     physical_service: Digest,
     calibrations: Vec<crate::palw_native_final_v27::NativeFinalCalibrationV27>,
     with_stage28: bool,
+    with_window37: bool,
 ) -> Result<NativeCalibrationSnapshotV34, String> {
     if base.net.network_type != NetworkType::Devnet {
         return Err("local validation preset is devnet-only".into());
@@ -240,6 +247,7 @@ pub fn local_validation_snapshot_v34(
             economics: panel.economics,
             carrier: panel.carrier,
         },
+        window_class_v37: with_window37,
     };
     snapshot.apply(base, snapshot.root())?;
     Ok(snapshot)
@@ -330,6 +338,7 @@ impl Params {
         original.palw_stage_execution_v28 = base.palw_stage_execution_v28.clone();
         original.palw_panel_free_v1 = base.palw_panel_free_v1.clone();
         original.palw_probabilistic_constraints_v1 = base.palw_probabilistic_constraints_v1;
+        original.palw_window_class_v37 = base.palw_window_class_v37;
         if *version != 34
             || *isolation == [0; 64]
             || *measurement_manifest == [0; 64]
@@ -345,6 +354,7 @@ impl Params {
             || f.activation != ForkActivation::always()
             || self.palw_probabilistic_constraints_v1 != Some(ForkActivation::always())
             || self.palw_stage_execution_v14.is_some()
+            || self.palw_window_class_v37.is_some_and(|w| w != ForkActivation::always())
         {
             return Err("native calibration34 must be the distinct pinned devnet genesis and dedicated new-contract purpose".into());
         }
@@ -439,6 +449,7 @@ mod tests {
                 economics: panel.economics,
                 carrier: panel.carrier,
             },
+            window_class_v37: false,
         }
     }
     #[test]

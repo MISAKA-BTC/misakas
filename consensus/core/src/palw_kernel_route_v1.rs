@@ -195,6 +195,9 @@ pub struct PalwKernelRouteExtrasV1 {
     /// (`None` below it and on every network): candidate refutations only as sealed reveals (inner 36 / 37), the unsealed 23 / 27 / 32
     /// refused by name.
     pub model_refutation_seal: Option<u64>,
+    /// **RFC-0002 §II.14.60: `Params::palw_window_class_v37`'s activation DAA, where that fence is in force at the block**
+    /// (`None` below it and on every preset). Funded action 45 folds only with it (and Final27).
+    pub window_class_v37: Option<u64>,
 }
 
 /// What the processor hands the fold for the OPV mode (RFC-0015): the network's policy and the two restrictions of the DERIVED

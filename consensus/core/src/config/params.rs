@@ -3014,6 +3014,11 @@ pub struct Params {
     /// are refused by name. **Dormant**: `None` on every preset, Some-only hashed, collapsed from `Some(never())`, refused when armed
     /// ([`Self::validate_palw_model_refutation_seal_v1`]).
     pub palw_model_refutation_seal_v1: Option<ForkActivation>,
+    /// **RFC-0002 §II.14.60: typed window class v37** (funded action 45: a Text29-sourced class adopting
+    /// `LengthContractV36` with a `WindowGraphV37`). **Dormant**: `None` on every preset, Some-only hashed, collapsed from
+    /// `Some(never())`, refused when armed except on an isolated calibration34 devnet
+    /// ([`Self::validate_palw_window_class_v37`]). Below it action 45 rides unjudged.
+    pub palw_window_class_v37: Option<ForkActivation>,
     /// Per-attempt source reservation, inner 40 (codex RFC-7; renumbered from 21 at the merge). Independent, None on every preset, Some-only fingerprints.
     /// Every real activation is refused until funded fees, timing/resource bounds and source security approval are complete.
     pub palw_beacon_source_opt_in_v1: Option<crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
@@ -5918,6 +5923,7 @@ impl Params {
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
             palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
+            palw_window_class_v37: self.palw_window_class_v37,
             palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1: self.palw_beacon_source_fee_v1,
             palw_panel_free_v1: self.palw_panel_free_v1.clone(),
@@ -7044,6 +7050,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -7366,6 +7373,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -7670,6 +7678,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,
@@ -13136,6 +13145,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
     palw_model_refutation_seal_v1: None,
+    palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
     palw_beacon_source_fee_v1: None,
     palw_panel_free_v1: None,

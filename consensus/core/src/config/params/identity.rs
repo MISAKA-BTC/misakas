@@ -533,6 +533,9 @@ impl Params {
         if self.palw_model_refutation_seal_v1 == Some(ForkActivation::never()) {
             self.palw_model_refutation_seal_v1 = None;
         }
+        if self.palw_window_class_v37 == Some(ForkActivation::never()) {
+            self.palw_window_class_v37 = None;
+        }
         if self.palw_beacon_source_opt_in_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_beacon_source_opt_in_v1 = None;
         }
@@ -1027,6 +1030,7 @@ impl Params {
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
+            palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1,
             palw_panel_free_v1,
@@ -1329,6 +1333,7 @@ impl Params {
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
             ("palw_verifier_pay_v1", *palw_verifier_pay_v1),
             ("palw_model_refutation_seal_v1", *palw_model_refutation_seal_v1),
+            ("palw_window_class_v37", *palw_window_class_v37),
             ("palw_beacon_source_opt_in_v1", palw_beacon_source_opt_in_v1.map(|f| f.activation)),
             ("palw_beacon_source_fee_v1", palw_beacon_source_fee_v1.map(|f| f.activation)),
             ("palw_panel_free_v1", palw_panel_free_v1.as_ref().map(|fence| fence.activation)),
@@ -1650,6 +1655,10 @@ impl Params {
         }
         if let Some(at) = self.palw_model_refutation_seal_v1 {
             h.write(b"palw_model_refutation_seal_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_window_class_v37 {
+            h.write(b"palw_window_class_v37");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = self.palw_beacon_source_opt_in_v1 {
@@ -2456,6 +2465,7 @@ impl Params {
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
+            palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1,
             palw_panel_free_v1,
@@ -3273,6 +3283,9 @@ impl Params {
         if let Some(activation) = palw_model_refutation_seal_v1.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_window_class_v37.as_mut() {
+            fork(activation, visit);
+        }
         if let Some(fence) = palw_beacon_source_opt_in_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -3836,6 +3849,7 @@ impl Params {
             palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1,
             palw_model_refutation_seal_v1,
+            palw_window_class_v37,
             palw_beacon_source_opt_in_v1,
             palw_beacon_source_fee_v1,
             palw_panel_free_v1,
@@ -4719,6 +4733,10 @@ impl Params {
         }
         if let Some(activation) = palw_model_refutation_seal_v1 {
             h.write(b"palw_model_refutation_seal_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_window_class_v37 {
+            h.write(b"palw_window_class_v37");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_beacon_source_opt_in_v1 {

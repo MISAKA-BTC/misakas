@@ -2335,3 +2335,44 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         }
     }
 }
+/// Funded action 45 (`palw_window_class_v37`): register a typed window class that
+/// adopts `LengthContractV36` with a complete `WindowGraphV37`, sourced from one
+/// registered Text29 class. Registration only — no job, reward or Final right.
+pub(super) fn register_window37(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV11,
+    body: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_window_class_v37::*;
+    if builder.extras.kernel_route.as_ref().and_then(|e| e.window_class_v37).is_none_or(|at| ctx.daa_score < at) {
+        return Ok(()); // below its own fence: unjudged, no state effect
+    }
+    let text_class: Digest =
+        body.get(2..66).ok_or_else(|| refused("window37 class Text29 source prefix absent"))?.try_into().unwrap();
+    if body.len() > WINDOW_CLASS_MAX_BODY_BYTES_V37 || !paid_restore(builder, ctx, signer, p, Some(text_class), body.len())? {
+        return Ok(());
+    }
+    let wire = NativeWindowClassRegisterV37::from_bytes(body).map_err(refused)?;
+    let (h, _, program) = class(builder, text_class)?;
+    let record = wire.derive(&h.class, program.history_bound).map_err(refused)?;
+    let id = record.id();
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let catalog_key = key(&(37u8, 2u8, *signer));
+    let mut ids: Vec<Digest> = r
+        .aux
+        .get(&(EXECUTION_CLASS_TABLE_V11, catalog_key.clone()))
+        .filter(|raw| raw.len() <= 4 + 8 * 64)
+        .and_then(|raw| borsh::from_slice(raw).ok())
+        .unwrap_or_default();
+    if ids.len() >= 8 || r.aux.contains_key(&(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 0u8, id)))) {
+        return Err(refused("window37 class already registered or finite owner catalogue full"));
+    }
+    ids.push(id);
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 0u8, id)), Some(key(&(record, *signer, ctx.daa_score))));
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, key(&(37u8, 1u8, id)), Some(body.to_vec()));
+    builder.write_kernel_row(EXECUTION_CLASS_TABLE_V11, catalog_key, Some(key(&ids)));
+    builder.note_kernel_bond(signer);
+    Ok(())
+}

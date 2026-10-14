@@ -3500,3 +3500,30 @@ No build/test/node run; nothing armed; public presets unchanged.
 Remaining code (design-scale): complete typed v8 graph (HistAppend continuity, KV/state
 binding) and its class version adopting contract 36; RFC03 patch/audio typed stage contracts
 and fence. Everything else listed is validation-phase work.
+
+### Typed window graph v37 and mempool alignment (Claude, 2026-10-15, third pass) — unverified source checkpoint
+
+- **Kernel** `flat_window37`: `WindowGraphV37` (append/KV binding, state continuity,
+  selection bound to a continuity-built history), derived `WindowGraphScopeV37`, bounded
+  `WindowFaultV37` + `verify_window_fault_v37`, ordinary `check_window_step_v37`;
+  `flat_history8::source_point` is now crate-visible. Tests: `tests/flat_window37.rs`.
+- **Consensus** `palw_window_class_v37`: dormant Params fence `palw_window_class_v37` wired
+  through params (field, clone, 4 presets `None`), identity (normalize, 3 destructures, fence
+  list, both hashes, fork visit), `fork_id_v1` probe, `validate_palw_v2`; calibration34
+  snapshot gained a trailing `window_class_v37` flag (arms it at genesis on the isolated devnet
+  only; `palw-class native-calibration34 --window37 true`). Funded action 45
+  `text29::register_window37`; extras `window_class_v37`; processor pre-gate and fold early
+  return share one predicate; route decoder ceiling 44→45. SDK `prepare_window_class_v37`,
+  `native-payload --kind window-class37`. Tests: core unit test in the module; the node
+  below-fence test now also sends action 45.
+- **Mempool alignment (checked, no change needed).** For an unjudged object the mempool
+  never rejects: (a) `native_carrier_candidate_v22` recognizes only actions 8/15/32/37 (and
+  stage 8/26/32) and, below Final27, `native_carriage_for_template_snapshot_v22` has no queue
+  policy, so `qualify` returns `None` for 32/37 and the carrier is admitted as an ordinary
+  lifecycle carrier without the protected reserve; (b) the ordinary path's per-object check
+  (`palw_kernel_route_object_is_signed`) now returns `Ok` for unjudged objects, exactly as block
+  validation does. Garbage bodies fail the 29-version prefix of the metadata borrowers and are
+  never candidates. Hence mempool, template and block validation agree.
+
+Remaining (job lane): Text window jobs (fund/commit/court with `WindowFaultV37` and the v8
+selection court) are the next class-version step; validation owns every measurement.

@@ -61,7 +61,7 @@ USAGE:
                          [--accepted-spend35-json <file> --spend-chain-header-json <file> --pinned-spend-chain <128hex>
                           --spend-selected-parent-header-json <file> --pinned-spend-selected-parent <128hex>]]
     palw-class native-calibration34 --network devnet --purpose <measurement|local-qualified> --isolation <128hex>
-                         --measurement-manifest <128hex> --physical-service <128hex> --calibrations-json <file> [--stage28 true] --out <fresh>
+                         --measurement-manifest <128hex> --physical-service <128hex> --calibrations-json <file> [--stage28 true] [--window37 true] --out <fresh>
     palw-class audit-native-lifecycle32 --stage <register|seat> --network <own-ruleset> --child-header-json <file>
                          --selected-parent-header-json <file> --pinned-child <128hex> --pinned-selected-parent <128hex>
                          --id <128hex> --aux-proof32 <file> --out <fresh.json> [own-params-snapshot34 pins]
@@ -71,7 +71,7 @@ USAGE:
     palw-class native-parts --kind <text-pages29|text-reply29> --file <bytes> --out <fresh-dir> --network <id> --key-file <seed> --bond <txid:index>
                          (--job <128hex> --seal <128hex> --owner <128hex> | --pending <128hex>) [own-params-snapshot34 pins]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|text-own29|text-close29|
-                         text-request29|text-default29|text-discovery29|text-collect29|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
+                         text-request29|text-default29|text-discovery29|text-collect29|window-class37|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
                          [--initial-sequence N --initial-now-daa N --initial-interval-end N --initial-expires-daa N]
@@ -949,6 +949,11 @@ fn run(args: &[String]) -> Result<(), String> {
                 Some("true") => true,
                 _ => return Err("--stage28 requires literal true or false".into()),
             };
+            let window37 = match take_flag(&mut args, "--window37").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                _ => return Err("--window37 requires literal true or false".into()),
+            };
             let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh snapshot required")?);
             if !args.is_empty() || output.exists() {
                 return Err("native-calibration34 exact options/fresh output required".into());
@@ -961,6 +966,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 service,
                 calibrations,
                 stage,
+                window37,
             )?;
             let bytes = borsh::to_vec(&snapshot).map_err(|e| e.to_string())?;
             use sha2::Digest as _;

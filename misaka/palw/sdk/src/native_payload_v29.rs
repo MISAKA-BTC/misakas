@@ -282,6 +282,22 @@ pub fn prepare_text_collect_v29(kind: &NativeTextCollectV29) -> Result<PreparedN
     }
     text_raw(TEXT_COLLECT_ACTION_V29, raw)
 }
+/// Funded action 45 (§II.14.60): typed window class adopting LengthContractV36 with a
+/// complete WindowGraphV37. Native re-derives every field from the Text29 class; this
+/// preparation only rejects an obviously inconsistent body before signing.
+pub fn prepare_window_class_v37(
+    record: &kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37,
+) -> Result<PreparedNativePayloadV29, String> {
+    record.graph.validate()?;
+    if record.version != 37 || record.length.program_root != record.graph.program_root {
+        return Err("window37 class version/program binding".into());
+    }
+    let body = borsh::to_vec(record).map_err(|e| e.to_string())?;
+    if body.len() > kaspa_consensus_core::palw_window_class_v37::WINDOW_CLASS_MAX_BODY_BYTES_V37 {
+        return Err("window37 class body cap".into());
+    }
+    text_raw(kaspa_consensus_core::palw_window_class_v37::TEXT_WINDOW_CLASS_ACTION_V37, body)
+}
 pub fn prepare_stage_bundle_v28(
     bundle: &kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28,
 ) -> Result<PreparedNativePayloadV29, String> {
@@ -547,6 +563,9 @@ pub fn decode_native_payload_v29(
             };
             prepare_text_collect_v29(&kind)
         }
+        "window-class37" => prepare_window_class_v37(
+            &kaspa_consensus_core::palw_window_class_v37::NativeWindowClassRegisterV37::from_bytes(raw)?,
+        ),
         "stage-bundle28" => {
             let b = kaspa_consensus_core::palw_flat_stage_v28::NativeStageSourceBundleV28::from_bytes(raw)?;
             prepare_stage_bundle_v28(&b)

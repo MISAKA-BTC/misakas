@@ -66,6 +66,11 @@ pub struct WindowGraphScopeV37 {
     /// Ordinary verifier re-hash per position across all appends (bytes).
     pub continuity_hash_bytes_per_position: u128,
 }
+impl WindowGraphScopeV37 {
+    pub fn root(&self) -> Digest {
+        object_id(b"misaka-palw/kernel/window-graph-scope/v37", self)
+    }
+}
 fn na(s: &str) -> DismissalV1 {
     DismissalV1::NotAuthentic(s.into())
 }

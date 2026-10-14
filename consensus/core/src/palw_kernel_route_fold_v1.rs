@@ -930,9 +930,13 @@ pub(super) fn apply_kernel_route_object_v1(
     // Funded actions 25..=40 below Final27 (native_final absent) are opaque: validation did not check
     // their signature, so they must have ZERO state effect — no bond, budget, row or fee read/write.
     // Mirrors `palw_native_action_unjudged_at_v1` in the processor exactly.
-    if builder.extras.kernel_route.as_ref().is_some_and(|e| e.native_final.is_none())
-        && bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
-        && bytes.get(2).is_some_and(|a| (25..=40).contains(a))
+    if bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
+        && builder.extras.kernel_route.as_ref().is_some_and(|e| match bytes.get(2) {
+            Some(25..=40) => e.native_final.is_none(),
+            // Typed window class (§II.14.60): its own fence AND Final27.
+            Some(45) => e.native_final.is_none() || e.window_class_v37.is_none_or(|at| ctx.daa_score < at),
+            _ => false,
+        })
     {
         return Ok(());
     }

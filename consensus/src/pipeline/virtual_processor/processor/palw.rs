@@ -5304,6 +5304,11 @@ impl VirtualStateProcessor {
                     }
                 }
                 Some(25..=40) => self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa) && final27(),
+                Some(45) => {
+                    self.palw_kernel_inner_fence_at(PalwKernelInnerFenceV1::FundedExecutionV11, daa)
+                        && final27()
+                        && self.palw_window_class_v37.is_some_and(active)
+                }
                 Some(action @ 41..=44) => {
                     if !final27() {
                         return Some(false);
@@ -5349,9 +5354,15 @@ impl VirtualStateProcessor {
             .as_ref()
             .is_some_and(|f| f.activation != ForkActivation::never() && f.activation.is_active(daa))
             && self.palw_kernel_opv_at(daa);
-        !final27
-            && bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
-            && bytes.get(2).is_some_and(|a| (25..=40).contains(a))
+        let window37 = self.palw_window_class_v37.is_some_and(|f| f != ForkActivation::never() && f.is_active(daa));
+        bytes.get(1).copied() == Some(misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11)
+            && match bytes.get(2) {
+                Some(25..=40) => !final27,
+                // Typed window class (§II.14.60): unjudged below its own fence or below Final27,
+                // mirroring the fold's `window_class_v37`/`native_final` early return exactly.
+                Some(45) => !final27 || !window37,
+                _ => false,
+            }
     }
 
     pub(super) fn palw_kernel_route_object_is_signed(
@@ -6978,6 +6989,10 @@ impl VirtualStateProcessor {
                 // RFC-0002 P0 (RFC02-T): the protected candidate refutation's dormant fence, where it is in force at this block.
                 model_refutation_seal: self
                     .palw_model_refutation_seal_v1
+                    .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
+                    .map(|f| f.daa_score()),
+                window_class_v37: self
+                    .palw_window_class_v37
                     .filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never() && f.is_active(daa_score))
                     .map(|f| f.daa_score()),
             }

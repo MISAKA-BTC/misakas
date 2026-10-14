@@ -4530,3 +4530,34 @@ Text29/Stage28 classes keep their v1/v28 meanings. Still open: the complete type
 **Real-checkpoint chain stages.** Register (class bound to a mature unrefuted source with its
 derived maxima) and seat (job funded with the producer's original consent — the Panel-free
 lane's seat) are re-derived from the same verified full aux opening as Final and redemption.
+
+### II.14.60 Typed window graph v37 and the window class (2026-10-15)
+
+> **Change marker — 2026-10-15 (RFC text amended; unverified source checkpoint).**
+> New dormant fence `palw_window_class_v37` (absent on every preset, Some-only hashed,
+> `Some(never())` collapsed, refused when armed except `always()` on an isolated
+> calibration34 devnet). No release height.
+
+`flat_history8` proves only the selection over an authenticated history image and leaves
+that image's continuity open. **`WindowGraphV37`** closes it for a whole program:
+
+1. **KV/state binding (append).** For every declared history (a layer's K, V or recurrent
+   state image) and every position `p`, the newest row of the image at `p`
+   (`H_p = min(p+1, window)`) equals that position's committed writer-node output.
+2. **State continuity.** Every older row of the image at `p` equals the image at `p-1`,
+   shifted by exactly one row once `p ≥ window`. A reset, skipped, duplicated or reordered
+   row is a two-point counterexample (`WindowFaultV37`: `Append` or `Continuity{slot}`) whose
+   points authenticate against the claim's segment roots; its filing/court bounds derive from
+   the graph (`scope`), never from a declaration.
+3. **Selection binding.** The v8 selection plan's `graph_root` is the outer graph's root and
+   its source must be one of these continuity-bound histories (same node, dtype, row shape).
+
+**Window class v37** (funded action 45) registers a class from one registered Text29 class:
+its `LengthContractV36` must use the `Window8` rule whose plan is the graph's selection plan,
+with the same program root and maximum positions; native re-derives the record (program, real
+PC, inventory, length/graph/scope roots) from the authenticated Text29 class and the program's
+frozen header. Registration creates no job, reward, consensus weight or Final right; the window
+job lane (fund/commit/court using `WindowFaultV37` and the v8 selection court) is the next
+class-version step. **A-2:** below `palw_window_class_v37` (or below Final27) action 45 is
+neither rejected nor applied — validation passes it unjudged and the fold returns before any read
+or write, with the identical predicate. The route decoder's funded action ceiling becomes 45.

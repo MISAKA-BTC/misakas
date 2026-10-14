@@ -782,6 +782,7 @@ pub(super) fn apply(
         crate::palw_native_text_stop_v29::TEXT_REGISTER_ACTION_V29..=crate::palw_native_text_stop_v29::TEXT_COLLECT_ACTION_V29 => {
             text29::apply(builder, ctx, signer, &p, action, body)
         }
+        crate::palw_window_class_v37::TEXT_WINDOW_CLASS_ACTION_V37 => text29::register_window37(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_COMMIT_V11 => commit(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_CLOSE_V11 => close(builder, ctx, signer, &p, body),
         EXECUTION_ACTION_SEAL_V11 => court::seal(builder, ctx, signer, &p, body),

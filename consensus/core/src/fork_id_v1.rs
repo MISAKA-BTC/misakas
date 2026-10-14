@@ -788,6 +788,8 @@ mod tests {
             "palw_fork_choice_commitment_v1" => params.palw_fork_choice_commitment_v1 = Some(at),
             "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
             "palw_model_refutation_seal_v1" => params.palw_model_refutation_seal_v1 = Some(at),
+            // RFC-0002 §II.14.60 typed window class (funded action 45): refused when armed by `validate_palw_v2`.
+            "palw_window_class_v37" => params.palw_window_class_v37 = Some(at),
             // codex RFC-7's per-attempt beacon source opt-in (inner 40): refused when armed by `validate_palw_v2`, which the probe does not run.
             "palw_beacon_source_opt_in_v1" => {
                 params.palw_beacon_source_opt_in_v1 =

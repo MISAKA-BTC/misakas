@@ -148,7 +148,8 @@ async fn native_final27_actions_below_their_fence_are_neither_rejected_nor_appli
     };
     let before = native(&net);
     let bonds_before = net.chain.tip_state().1.bond(&net.bond(0)).map(|b| b.collateral);
-    for action in 25u8..=40 {
+    // 25..=40 are Final27-gated; 45 is the typed window class (§II.14.60), gated by its own fence too.
+    for action in (25u8..=40).chain([45u8]) {
         let mut object = net.route(0, &K::FundedExecutionV11 { action, body: vec![action; 300] });
         if action % 2 == 1 {
             let Obj::KernelRouteV1 { signature, .. } = &mut object else { unreachable!() };

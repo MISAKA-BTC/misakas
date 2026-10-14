@@ -693,7 +693,7 @@ impl std::error::Error for KernelRefusalV1 {}
 pub struct BorrowedNativeActionV1<'a> {pub tag:u8,pub action:u8,pub body:&'a [u8]}
 pub fn borrowed_native_action_v1(bytes:&[u8])->Result<Option<BorrowedNativeActionV1<'_>>,KernelRefusalV1>{
     let Some(tag)=bytes.get(1).copied() else{return Ok(None);};
-    let (cap,last)=match tag{TAG_FUNDED_EXECUTION_V11=>(MAX_FUNDED_EXECUTION_BYTES_V11,44),TAG_STAGE_EXECUTION_V14=>(MAX_STAGE_EXECUTION_BYTES_V14,33),_=>return Ok(None)};
+    let (cap,last)=match tag{TAG_FUNDED_EXECUTION_V11=>(MAX_FUNDED_EXECUTION_BYTES_V11,45),TAG_STAGE_EXECUTION_V14=>(MAX_STAGE_EXECUTION_BYTES_V14,33),_=>return Ok(None)};
     let bad=|why:&str|KernelRefusalV1::new("NativeAction",RefusalKindV1::Malformed,why);
     if bytes.first()!=Some(&KERNEL_ROUTE_VERSION_V1)||bytes.len()>cap{return Err(bad("native route version/byte cap"));}
     let action=*bytes.get(2).ok_or_else(||bad("native action absent"))?;
@@ -840,7 +840,8 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_FUNDED_EXECUTION_V11 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated funded action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 44)
+            // 45 = typed window class v37 (RFC02 §II.14.60), judged only past its own fence.
+            if rest.get(1).is_none_or(|a| *a > 45)
                 || rest.get(1).is_some_and(|a| matches!(*a,41..=44)) && bytes.len()>(32<<10)+79
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
