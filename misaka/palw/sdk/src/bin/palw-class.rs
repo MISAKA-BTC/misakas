@@ -60,6 +60,8 @@ USAGE:
                           --post-payout-proof32 <file> --payout-output-index N [--post-fork-opening-borsh <file>]
                          [--accepted-spend35-json <file> --spend-chain-header-json <file> --pinned-spend-chain <128hex>
                           --spend-selected-parent-header-json <file> --pinned-spend-selected-parent <128hex>]]
+    palw-class native-calibration34 --network devnet --purpose <measurement|local-qualified> --isolation <128hex>
+                         --measurement-manifest <128hex> --physical-service <128hex> --calibrations-json <file> [--stage28 true] --out <fresh>
     palw-class audit-master-composite32 --network <own-ruleset> --child-header-json <file> --selected-parent-header-json <file>
                          --pinned-child <128hex> --pinned-selected-parent <128hex> --master <128hex> --jobs <hex,hex,...>
                          --aux-proof32 <file> --outputs <file> --generated-json <file> --out <fresh.json> [own-params-snapshot34 pins]
@@ -902,6 +904,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 // A measurement Final (isolated calibration34 devnet) is never A6/A8 pass evidence;
                 // acceptance_cohort.py counts only "qualified-final" receipts for the final/redemption stages.
                 "final_receipt_class":if checked.rfc02_qualified() { "qualified-final" } else { "measurement-final" },
+                "local_qualified_validation_network":view.params.native_final_is_local_qualified_v34(),
                 "pinned_headers_and_original_rows_verified":true,"chain_selection_and_validation":"external-independent-pins-required",
                 "utxo_redemption_verified":delivery.get("spend_verified").and_then(|v| v.as_bool()).unwrap_or(false),
                 "coinbase_delivery":delivery,"A6_or_A8_credit":false});
@@ -914,6 +917,66 @@ fn run(args: &[String]) -> Result<(), String> {
                 .write_all(serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?.as_bytes())
                 .map_err(|e| e.to_string())?;
             println!("{report}");
+            Ok(())
+        }
+        "native-calibration34" => {
+            // Writes the LOCAL devnet/calibration-only snapshot (never a public preset).
+            let view = network_view(network.as_deref().ok_or("--network devnet required")?)?;
+            let purpose = match take_flag(&mut args, "--purpose").as_deref() {
+                Some("measurement") => kaspa_consensus_core::palw_native_calibration_v34::LocalNativePurposeV34::Measurement,
+                Some("local-qualified") => kaspa_consensus_core::palw_native_calibration_v34::LocalNativePurposeV34::LocalQualified,
+                _ => return Err("--purpose measurement|local-qualified required".into()),
+            };
+            let digest = |name: &str, args: &mut Vec<String>| -> Result<[u8; 64], String> {
+                let v: kaspa_hashes::Hash64 =
+                    take_flag(args, name).ok_or_else(|| format!("{name} required"))?.parse().map_err(|e| format!("{name}: {e}"))?;
+                Ok(v.as_bytes())
+            };
+            let isolation = digest("--isolation", &mut args)?;
+            let manifest = digest("--measurement-manifest", &mut args)?;
+            let service = digest("--physical-service", &mut args)?;
+            let calibrations = misaka_palw_sdk::native_params_v34::parse_calibrations_json_v34(
+                &misaka_palw_sdk::native_audit_io_v32::read_bounded_file_v32(
+                    std::path::Path::new(&take_flag(&mut args, "--calibrations-json").ok_or("--calibrations-json required")?),
+                    1 << 20,
+                )?,
+            )?;
+            let stage = match take_flag(&mut args, "--stage28").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                _ => return Err("--stage28 requires literal true or false".into()),
+            };
+            let output = PathBuf::from(take_flag(&mut args, "--out").ok_or("--out fresh snapshot required")?);
+            if !args.is_empty() || output.exists() {
+                return Err("native-calibration34 exact options/fresh output required".into());
+            }
+            let snapshot = kaspa_consensus_core::palw_native_calibration_v34::local_validation_snapshot_v34(
+                &view.params,
+                purpose,
+                isolation,
+                manifest,
+                service,
+                calibrations,
+                stage,
+            )?;
+            let bytes = borsh::to_vec(&snapshot).map_err(|e| e.to_string())?;
+            use sha2::Digest as _;
+            let sha: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output)
+                .map_err(|e| e.to_string())?
+                .write_all(&bytes)
+                .map_err(|e| e.to_string())?;
+            let hex = misaka_palw_sdk::runtime_pack::commit::hex;
+            println!(
+                "{}",
+                serde_json::json!({"schema":"misaka.palw.local-native-calibration-snapshot.v34","root":hex(&snapshot.root()),
+                    "sha256":hex(&sha),"purpose":if purpose == kaspa_consensus_core::palw_native_calibration_v34::LocalNativePurposeV34::LocalQualified {"local-qualified"} else {"measurement"},
+                    "public_preset":false,"release_height":serde_json::Value::Null})
+            );
             Ok(())
         }
         "audit-master-composite32" => {

@@ -169,6 +169,81 @@ impl NativeCalibrationSnapshotV34 {
         Ok(out)
     }
 }
+/// Which isolated purpose a LOCAL validation preset carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalNativePurposeV34 {
+    /// Measurement Final only; never A6/A8 pass evidence.
+    Measurement,
+    /// Lead default 2026-10-15 (pending user review): local qualified-validation devnet.
+    LocalQualified,
+}
+/// **The LOCAL devnet/calibration-only preset** (not public, not t12/mainnet, no release
+/// height). Builds a canonical snapshot from the shipped devnet base and the original
+/// probe policies, binding every calibration record supplied by the validation phase.
+/// It is loadable ONLY through `load_isolated_native_calibration_v34` (the daemon's
+/// `--palw-native-calibration-snapshot` and the auditors), and only on its own distinct
+/// genesis. Public presets are unchanged. The returned snapshot is self-checked by `apply`.
+#[allow(clippy::too_many_arguments)]
+pub fn local_validation_snapshot_v34(
+    base: &Params,
+    purpose: LocalNativePurposeV34,
+    isolation: Digest,
+    measurement_manifest: Digest,
+    physical_service: Digest,
+    calibrations: Vec<crate::palw_native_final_v27::NativeFinalCalibrationV27>,
+    with_stage28: bool,
+) -> Result<NativeCalibrationSnapshotV34, String> {
+    if base.net.network_type != NetworkType::Devnet {
+        return Err("local validation preset is devnet-only".into());
+    }
+    let genesis = isolated_native_genesis_v34(&base.genesis, isolation)?;
+    let domain = crate::palw_attempt_v2::palw_network_domain_v2_for(base.net.to_string().as_bytes(), Some(genesis.hash)).as_bytes();
+    let funded =
+        crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(ForkActivation::always(), domain).policies;
+    let mut final_policy =
+        crate::palw_native_final_v27::PalwNativeFinalFenceV27::unapproved_probe_at(ForkActivation::always(), domain).policy;
+    final_policy.purpose = match purpose {
+        LocalNativePurposeV34::Measurement => {
+            NativeFinalPurposeV34::IsolatedCalibration { version: 34, isolation, base_genesis: base.genesis.hash, measurement_manifest }
+        }
+        LocalNativePurposeV34::LocalQualified => NativeFinalPurposeV34::LocalQualifiedValidation {
+            version: 34,
+            isolation,
+            base_genesis: base.genesis.hash,
+            measurement_manifest,
+        },
+    };
+    let mut calibrations = calibrations;
+    calibrations.sort_by_key(|c| c.profile);
+    final_policy.calibrations = calibrations;
+    let stage = with_stage28.then(|| {
+        let mut s = crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(ForkActivation::always(), domain).policies;
+        s.execution = funded.clone();
+        s.final_policy = final_policy.root();
+        s.physical_service = physical_service;
+        s
+    });
+    let panel = PalwPanelFreeFenceV1::at(ForkActivation::always());
+    let snapshot = NativeCalibrationSnapshotV34 {
+        version: 34,
+        isolation,
+        base_params: base.consensus_params_id(),
+        base_schedule: base.consensus_schedule_id(),
+        funded,
+        stage,
+        final_policy,
+        panel: NativePanelFreeSettingsV34 {
+            denied_classes: vec![],
+            min_effective_bits: panel.min_effective_bits,
+            window: panel.window,
+            budgets: panel.budgets,
+            economics: panel.economics,
+            carrier: panel.carrier,
+        },
+    };
+    snapshot.apply(base, snapshot.root())?;
+    Ok(snapshot)
+}
 /// **The one owning factory** shared by the daemon (`--palw-native-calibration-snapshot`) and
 /// every auditor/signer (`native_params_v34`). Canonical bounded decode, the explicit root pin,
 /// the pinned owning devnet base, and the measurement-only purpose are checked here once, so the
@@ -177,8 +252,12 @@ impl NativeCalibrationSnapshotV34 {
 pub fn load_isolated_native_calibration_v34(base: &Params, raw: &[u8], pinned_root: Digest) -> Result<Params, String> {
     let snapshot = NativeCalibrationSnapshotV34::from_bytes(raw)?;
     let out = snapshot.apply(base, pinned_root)?;
-    if out.native_final_is_qualified_v34() || !out.has_isolated_native_calibration_v34() {
-        return Err("isolated owning profile cannot grant qualified RFC02 receipts".into());
+    // A public `Qualified` purpose can never enter through this path; the LOCAL
+    // qualified-validation purpose can, and only on its distinct isolated genesis.
+    if !out.has_isolated_native_calibration_v34()
+        || out.palw_native_final_v27.as_ref().is_some_and(|f| f.policy.purpose == NativeFinalPurposeV34::Qualified)
+    {
+        return Err("isolated owning profile cannot carry the public Qualified purpose".into());
     }
     Ok(out)
 }
@@ -231,16 +310,18 @@ impl Params {
         self.palw_native_final_v27.as_ref().is_some_and(|f| f.policy.purpose.is_qualified())
     }
     pub fn has_isolated_native_calibration_v34(&self) -> bool {
-        self.palw_native_final_v27
-            .as_ref()
-            .is_some_and(|f| matches!(f.policy.purpose, NativeFinalPurposeV34::IsolatedCalibration { .. }))
+        self.palw_native_final_v27.as_ref().is_some_and(|f| f.policy.purpose.isolation_binding().is_some())
+    }
+    /// A LOCAL validation devnet whose Finals are judged under Qualified conditions.
+    pub fn native_final_is_local_qualified_v34(&self) -> bool {
+        self.palw_native_final_v27.as_ref().is_some_and(|f| f.policy.purpose.is_local_qualified_validation())
     }
     pub fn validate_isolated_native_calibration_v34(&self) -> Result<(), String> {
         let f = self.palw_native_final_v27.as_ref().ok_or("native calibration34 Final policy absent")?;
-        let NativeFinalPurposeV34::IsolatedCalibration { version, isolation, base_genesis, measurement_manifest } = &f.policy.purpose
-        else {
+        let Some((version, isolation, base_genesis, measurement_manifest)) = f.policy.purpose.isolation_binding() else {
             return Err("native calibration34 dedicated purpose absent".into());
         };
+        let (version, isolation, base_genesis, measurement_manifest) = (&version, &isolation, &base_genesis, &measurement_manifest);
         let base = crate::config::params::devnet_shipped_params();
         let mut original = self.clone();
         original.genesis = base.genesis.clone();
@@ -387,6 +468,25 @@ mod tests {
         let mut qualified = wire.clone();
         qualified.final_policy.purpose = NativeFinalPurposeV34::Qualified;
         assert!(qualified.apply(&base, qualified.root()).is_err());
+        // The LOCAL qualified-validation purpose loads only with its isolated binding.
+        let mut local = wire.clone();
+        local.final_policy.purpose = NativeFinalPurposeV34::LocalQualifiedValidation {
+            version: 34,
+            isolation: [7; 64],
+            base_genesis: base.genesis.hash,
+            measurement_manifest: [9; 64],
+        };
+        let lp = local.apply(&base, local.root()).unwrap();
+        assert!(lp.native_final_is_qualified_v34() && lp.native_final_is_local_qualified_v34());
+        assert_ne!(lp.genesis.hash, base.genesis.hash);
+        let mut wrong = local.clone();
+        wrong.final_policy.purpose = NativeFinalPurposeV34::LocalQualifiedValidation {
+            version: 34,
+            isolation: [8; 64],
+            base_genesis: base.genesis.hash,
+            measurement_manifest: [9; 64],
+        };
+        assert!(wrong.apply(&base, wrong.root()).is_err(), "purpose isolation must equal the snapshot's genesis isolation");
         // The shared loader is the same factory, and the mixing check refuses every other identity.
         let loaded = load_isolated_native_calibration_v34(&base, &bytes, wire.root()).unwrap();
         assert_eq!(loaded.consensus_params_id(), p.consensus_params_id());

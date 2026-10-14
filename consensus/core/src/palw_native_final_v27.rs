@@ -74,10 +74,35 @@ pub enum NativeFinalPurposeV34 {
         base_genesis: crate::Hash64,
         measurement_manifest: Digest,
     },
+    /// LOCAL validation only (lead default 2026-10-15, pending user review): the same
+    /// isolated devnet binding as `IsolatedCalibration`, but its Finals are evaluated under
+    /// the Qualified conditions (independent node evidence and Final root required), so the
+    /// validation phase can produce qualified receipts. Constructible only through the v34
+    /// calibration snapshot on a distinct devnet genesis — never a public preset, t12 or mainnet,
+    /// never a release height.
+    LocalQualifiedValidation {
+        version: u16,
+        isolation: Digest,
+        base_genesis: crate::Hash64,
+        measurement_manifest: Digest,
+    },
 }
 impl NativeFinalPurposeV34 {
     pub fn is_qualified(&self) -> bool {
-        matches!(self, Self::Qualified)
+        matches!(self, Self::Qualified | Self::LocalQualifiedValidation { .. })
+    }
+    pub fn is_local_qualified_validation(&self) -> bool {
+        matches!(self, Self::LocalQualifiedValidation { .. })
+    }
+    /// `(version, isolation, base_genesis, measurement_manifest)` of either isolated purpose.
+    pub fn isolation_binding(&self) -> Option<(u16, Digest, crate::Hash64, Digest)> {
+        match self {
+            Self::Qualified => None,
+            Self::IsolatedCalibration { version, isolation, base_genesis, measurement_manifest }
+            | Self::LocalQualifiedValidation { version, isolation, base_genesis, measurement_manifest } => {
+                Some((*version, *isolation, *base_genesis, *measurement_manifest))
+            }
+        }
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -127,6 +152,11 @@ impl NativeFinalPolicyV27 {
                 || self.calibrations.iter().any(|c| c.independent_node_ready || c.independent_native_final_root != [0; 64])
             {
                 return Err("native calibration34 cannot contain a fabricated prior Final or a qualification flag".into());
+            }
+        }
+        if let NativeFinalPurposeV34::LocalQualifiedValidation { version, isolation, measurement_manifest, .. } = &self.purpose {
+            if *version != 34 || *isolation == [0; 64] || *measurement_manifest == [0; 64] {
+                return Err("native local qualified validation34 requires its isolated devnet binding".into());
             }
         }
         if self.version != 27

@@ -68,3 +68,51 @@ pub fn parse_sha256_hex_v34(raw: &str) -> Result<[u8; 32], String> {
     }
     Ok(out)
 }
+
+/// Parse the validation phase's measured calibration records (JSON array). Every
+/// digest is exact 128-hex; every number a u64; every readiness flag explicit.
+/// Values are measurements to be bound into a LOCAL snapshot, never defaults.
+pub fn parse_calibrations_json_v34(
+    raw: &[u8],
+) -> Result<Vec<kaspa_consensus_core::palw_native_final_v27::NativeFinalCalibrationV27>, String> {
+    let doc: serde_json::Value = serde_json::from_slice(raw).map_err(|e| e.to_string())?;
+    let items = doc.as_array().ok_or("calibrations JSON array required")?;
+    if items.is_empty() || items.len() > 128 {
+        return Err("1..=128 calibration records required".into());
+    }
+    let digest = |v: &serde_json::Value, k: &str| -> Result<Digest, String> {
+        let h: kaspa_hashes::Hash64 =
+            v.get(k).and_then(|x| x.as_str()).ok_or_else(|| format!("{k} 128-hex required"))?.parse().map_err(|e| format!("{k}: {e}"))?;
+        Ok(h.as_bytes())
+    };
+    let num = |v: &serde_json::Value, k: &str| -> Result<u64, String> { v.get(k).and_then(|x| x.as_u64()).ok_or_else(|| format!("{k} u64 required")) };
+    let flag = |v: &serde_json::Value, k: &str| -> Result<bool, String> { v.get(k).and_then(|x| x.as_bool()).ok_or_else(|| format!("{k} bool required")) };
+    items
+        .iter()
+        .map(|v| {
+            Ok(kaspa_consensus_core::palw_native_final_v27::NativeFinalCalibrationV27 {
+                profile: digest(v, "profile")?,
+                maximum_reference_bytes: num(v, "maximum_reference_bytes")?,
+                maximum_court_bytes: num(v, "maximum_court_bytes")?,
+                maximum_court_work: num(v, "maximum_court_work")?,
+                maximum_court_scratch: num(v, "maximum_court_scratch")?,
+                whole_claim_detection_numerator: num(v, "whole_claim_detection_numerator")?,
+                whole_claim_detection_denominator: num(v, "whole_claim_detection_denominator")?,
+                measured_cold_reference_daa: num(v, "measured_cold_reference_daa")?,
+                measured_sequential_discovery_daa: num(v, "measured_sequential_discovery_daa")?,
+                measured_prove_before_seal_daa: num(v, "measured_prove_before_seal_daa")?,
+                measured_proof_delivery_daa: num(v, "measured_proof_delivery_daa")?,
+                restart_reorg_margin_daa: num(v, "restart_reorg_margin_daa")?,
+                measurement_root: digest(v, "measurement_root")?,
+                source_availability_root: digest(v, "source_availability_root")?,
+                whole_claim_detection_root: digest(v, "whole_claim_detection_root")?,
+                real_delivery_service_root: digest(v, "real_delivery_service_root")?,
+                independent_native_final_root: digest(v, "independent_native_final_root")?,
+                original_source_ready: flag(v, "original_source_ready")?,
+                whole_claim_detector_ready: flag(v, "whole_claim_detector_ready")?,
+                actual_delivery_ready: flag(v, "actual_delivery_ready")?,
+                independent_node_ready: flag(v, "independent_node_ready")?,
+            })
+        })
+        .collect()
+}
