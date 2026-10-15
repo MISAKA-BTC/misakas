@@ -42,7 +42,7 @@ pub struct PrivateKernelPaidWorkSpecV4 {
     #[serde(skip)]
     _owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
-fn bounded_funding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+pub(super) fn bounded_funding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     struct Visitor;
     impl<'de> serde::de::Visitor<'de> for Visitor {
         type Value = Vec<String>;
@@ -63,7 +63,7 @@ fn bounded_funding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>
     }
     d.deserialize_seq(Visitor)
 }
-fn regular(path: &Path) -> Result<(), String> {
+pub(super) fn regular(path: &Path) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("kernel paid paths must be absolute".into());
     }
@@ -78,12 +78,12 @@ fn regular(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn hash(raw: &str) -> Result<Hash64, String> {
+pub(super) fn hash(raw: &str) -> Result<Hash64, String> {
     let mut bytes = [0u8; 64];
     faster_hex::hex_decode(raw.as_bytes(), &mut bytes).map_err(|e| e.to_string())?;
     Ok(Hash64::from_bytes(bytes))
 }
-fn seed(path: &Path) -> Result<[u8; 32], String> {
+pub(super) fn seed(path: &Path) -> Result<[u8; 32], String> {
     regular(path)?;
     #[cfg(unix)]
     {
@@ -98,7 +98,7 @@ fn seed(path: &Path) -> Result<[u8; 32], String> {
     faster_hex::hex_decode(text.as_bytes(), &mut result).map_err(|e| e.to_string())?;
     Ok(result)
 }
-fn read_bounded(
+pub(super) fn read_bounded(
     path: &Path,
     cap: u64,
 ) -> Result<(Vec<u8>, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
@@ -119,7 +119,7 @@ fn read_bounded(
     }
     Ok((bytes, lease))
 }
-fn owned_dir(path: &Path) -> Result<(), String> {
+pub(super) fn owned_dir(path: &Path) -> Result<(), String> {
     for parent in path.ancestors().skip(1) {
         if fs::symlink_metadata(parent).map_err(|e| e.to_string())?.file_type().is_symlink() {
             return Err("kernel paid outbox traverses a symlink".into());
@@ -164,7 +164,7 @@ fn publish_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::remove_file(temporary).map_err(|e| e.to_string())?;
     fs::File::open(path.parent().ok_or("outbox parent absent")?).and_then(|f| f.sync_all()).map_err(|e| e.to_string())
 }
-fn publish_borsh<T: borsh::BorshSerialize>(path: &Path, value: &T, cap: u64) -> Result<(), String> {
+pub(super) fn publish_borsh<T: borsh::BorshSerialize>(path: &Path, value: &T, cap: u64) -> Result<(), String> {
     let n = borsh::object_length(value).map_err(|e| e.to_string())? as u64;
     if n > cap {
         return Err("kernel paid durable record exceeds explicit input/outbox cap".into());

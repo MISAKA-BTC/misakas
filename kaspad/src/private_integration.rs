@@ -46,6 +46,8 @@ pub(crate) mod recovery_ack_carrier_v4;
 mod recovery_observation_v4;
 mod kernel_paid_producer_v4;
 pub use kernel_paid_producer_v4::PrivateKernelPaidWorkSpecV4;
+mod kernel_paid_checker_v4;
+pub use kernel_paid_checker_v4::PrivateKernelPaidCheckSpecV4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
 
 pub fn parse_private_recovery_provider_roster_v4(
@@ -465,7 +467,17 @@ pub fn create_private_integration_core_with_native_custody_v4(
     ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
-    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, None)
+    create_private_native_custody_v4_inner(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        Some(native),
+        ack_fees,
+        recovery_providers,
+        None,
+        None,
+    )
 }
 
 /// Explicit all-target kernel producer entry. Its input and limits are supplied
@@ -484,7 +496,37 @@ pub fn create_private_integration_core_with_kernel_paid_work_v4(
     if !args.palw_produce {
         return Err("the explicit kernel paid-work consumer requires this node's configured producer key/bond".into());
     }
-    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, Some(work))
+    create_private_native_custody_v4_inner(
+        runtime,
+        args,
+        fd_total_budget,
+        config,
+        Some(native),
+        ack_fees,
+        recovery_providers,
+        Some(work),
+        None,
+    )
+}
+
+/// Explicit checker identity, provider endpoint and fee funding are supplied in
+/// its own specification. A checker-only node needs no producer exchange/key.
+#[allow(clippy::too_many_arguments)]
+pub fn create_private_integration_core_with_kernel_paid_consumers_v4(
+    runtime: &Runtime,
+    args: &Args,
+    fd_total_budget: i32,
+    config: Config,
+    native: Option<PrivateNativeCustodySpecV3>,
+    ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
+    recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    work: Option<PrivateKernelPaidWorkSpecV4>,
+    checker: Option<PrivateKernelPaidCheckSpecV4>,
+) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
+    if work.is_some() && (!args.palw_produce || native.is_none()) {
+        return Err("kernel paid work requires the configured producer and authenticated custody exchange".into());
+    }
+    create_private_native_custody_v4_inner(runtime, args, fd_total_budget, config, native, ack_fees, recovery_providers, work, checker)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -493,14 +535,24 @@ fn create_private_native_custody_v4_inner(
     args: &Args,
     fd_total_budget: i32,
     config: Config,
-    native: PrivateNativeCustodySpecV3,
+    native: Option<PrivateNativeCustodySpecV3>,
     ack_fees: Option<PrivateRecoveryAckFeeSpecV4>,
     recovery_providers: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
     kernel_work: Option<PrivateKernelPaidWorkSpecV4>,
+    kernel_checker: Option<PrivateKernelPaidCheckSpecV4>,
 ) -> Result<(Arc<Core>, Arc<RpcCoreService>), String> {
     paid_v4_factory::validate_private_paid_claim_relations_v4(&config.params)?;
-    native.check_fixture(&config, args)?;
-    if native.providers.is_empty() != ack_fees.is_none() {
+    if let Some(native) = &native {
+        native.check_fixture(&config, args)?;
+    } else if kernel_checker.is_none()
+        || kernel_work.is_some()
+        || ack_fees.is_some()
+        || !recovery_providers.is_empty()
+        || args.palw_produce
+    {
+        return Err("checker-only construction requires its own checker specification and no producer/custody funding".into());
+    }
+    if native.as_ref().is_some_and(|n| !n.providers.is_empty()) != ack_fees.is_some() {
         return Err(
             "a paid-v4 hosted provider service requires its own explicit recovery ACK fee payer; an exchange-only node does not"
                 .into(),
@@ -514,20 +566,26 @@ fn create_private_native_custody_v4_inner(
     }
     prepare_private_integration_probe(args, &config)?;
     kaspa_core::warn!("RFC12 PRIVATE paid-v4: compact/recovery mechanics; acceptance, soundness and economic approval pending");
-    let hook = match ack_fees {
-        Some(fees) => native.into_hook_with_service_v4(Box::new(move |service, ctx| fees.start(service, ctx))),
-        None => native.into_hook(),
+    let hook: crate::palw_native_custody_v3::PalwNativeCustodyHookV3 = match (native, ack_fees) {
+        (Some(native), Some(fees)) => native.into_hook_with_service_v4(Box::new(move |service, ctx| fees.start(service, ctx))),
+        (Some(native), None) => native.into_hook(),
+        (None, None) => Box::new(|_| Ok(None)),
+        (None, Some(_)) => return Err("recovery ACK funding requires a hosted custody provider".into()),
     };
     let hook = Box::new(move |mut ctx: crate::palw_native_custody_v3::PalwNativeCustodyContextV3| {
         ctx.recovery_provider_roster_v4 = recovery_providers;
         // Prepare from this node's actual manager/config/key before the hook
         // consumes the context. An uploaded file supplies work, not authority.
         let producer = kernel_work.map(|work| work.prepare(&ctx)).transpose()?;
+        let checker = kernel_checker.map(|checker| checker.prepare(&ctx)).transpose()?;
         recovery_observation_v4::start(&ctx)?;
         let exchange = hook(ctx)?;
         if let Some(producer) = producer {
             producer
                 .start(exchange.as_ref().ok_or("kernel paid work requires an explicit authenticated provider exchange")?.clone())?;
+        }
+        if let Some(checker) = checker {
+            checker.start()?;
         }
         Ok(exchange)
     });

@@ -10,8 +10,8 @@ use kaspad_lib::{
     args::Args,
     daemon::{DESIRED_DAEMON_SOFT_FD_LIMIT, MINIMUM_DAEMON_SOFT_FD_LIMIT, Runtime},
     private_integration::{
-        PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
-        create_private_integration_core_with_kernel_paid_work_v4, create_private_integration_core_with_native_custody_v3,
+        PrivateKernelPaidCheckSpecV4, PrivateKernelPaidWorkSpecV4, PrivateNativeCustodySpecV3, PrivateRecoveryAckFeeSpecV4,
+        create_private_integration_core_with_kernel_paid_consumers_v4, create_private_integration_core_with_native_custody_v3,
         create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
         export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
         export_private_paid_program_work_v3, prepare_private_integration_probe, private_complete_check_params_v1,
@@ -39,6 +39,8 @@ paid-v4 hosted providers additionally require an explicit ACK carrier fee payer:
   --private-probe-native-recovery-providers=TXID:INDEX,TXID:INDEX[,...] (v4 producing custody nodes; sorted distinct 2..8)
   --private-probe-kernel-paid-work=ABSOLUTE_JSON (explicit all-target producer work, owned outbox,
     separate producer carrier payer/funding and input/material/workspace/fee limits; never native acceptance by itself)
+  --private-probe-kernel-paid-check=ABSOLUTE_JSON (explicit assigned checker bond/key, provider endpoint,
+    acquisition limits and separate receipt payer/funding; checker-only mode needs no producer exchange)
 Node mode additionally needs explicit loopback P2P/gRPC/wRPC listeners, absolute owned --appdir,
 --nodnsseed --outpeers=0 --disable-upnp. Ordinary node flags are parsed by the shipped Args parser.
 The manifest exposes exact policy/monetary identity and releaseApproval=false; it does not prove
@@ -87,6 +89,7 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-recovery-ack-fee-cap"
                         | "--private-probe-native-recovery-providers"
                         | "--private-probe-kernel-paid-work"
+                        | "--private-probe-kernel-paid-check"
                 ) {
                     return Err(format!("unknown private option {name}"));
                 }
@@ -154,6 +157,19 @@ fn run(raw: Vec<String>) -> Result<(), String> {
                 return Err("kernel paid-work specification path must be absolute".into());
             }
             PrivateKernelPaidWorkSpecV4::read(path)
+        })
+        .transpose()?;
+    let kernel_checker_file = flags.values.remove("--private-probe-kernel-paid-check");
+    if kernel_checker_file.is_some() && (profile != "paid-v4" || flags.print || bootstrap.is_some() || paid_output.is_some()) {
+        return Err("kernel checker options require explicit paid-v4 node mode".into());
+    }
+    let kernel_checker = kernel_checker_file
+        .map(|file| {
+            let path = Path::new(&file);
+            if !path.is_absolute() {
+                return Err("kernel checker specification path must be absolute".into());
+            }
+            PrivateKernelPaidCheckSpecV4::read(path)
         })
         .transpose()?;
     if !recovery_providers.is_empty()
@@ -247,8 +263,8 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         .filter(|n| *n > 0)
         .ok_or("private file descriptor budget exhausted")?;
     let runtime = Runtime::from_args(&args);
-    let (core, rpc) = match native {
-        Some(native) if kernel_work.is_some() => create_private_integration_core_with_kernel_paid_work_v4(
+    let (core, rpc) = if kernel_work.is_some() || kernel_checker.is_some() {
+        create_private_integration_core_with_kernel_paid_consumers_v4(
             &runtime,
             &args,
             budget,
@@ -256,19 +272,23 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             native,
             ack_fees,
             recovery_providers,
-            kernel_work.ok_or("kernel paid-work specification disappeared before construction")?,
-        )?,
-        Some(native) if profile == "paid-v4" => create_private_integration_core_with_native_custody_v4(
-            &runtime,
-            &args,
-            budget,
-            config,
-            native,
-            ack_fees,
-            recovery_providers,
-        )?,
-        Some(native) => create_private_integration_core_with_native_custody_v3(&runtime, &args, budget, config, native)?,
-        None => create_private_integration_core_with_runtime(&runtime, &args, budget, config)?,
+            kernel_work,
+            kernel_checker,
+        )?
+    } else {
+        match native {
+            Some(native) if profile == "paid-v4" => create_private_integration_core_with_native_custody_v4(
+                &runtime,
+                &args,
+                budget,
+                config,
+                native,
+                ack_fees,
+                recovery_providers,
+            )?,
+            Some(native) => create_private_integration_core_with_native_custody_v3(&runtime, &args, budget, config, native)?,
+            None => create_private_integration_core_with_runtime(&runtime, &args, budget, config)?,
+        }
     };
     Arc::new(kaspa_core::signals::Signals::new(&core)).init();
     // Rpc service does not outlive shutdown's Core reference accounting.

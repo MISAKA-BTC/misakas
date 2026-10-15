@@ -104,6 +104,44 @@ impl VerifiedPaidClaimSourcesV2 {
         session.finish().map_err(refused)?;
         Ok(result)
     }
+    /// Direct-check V4 compatibility with actual provider acquisition. The old
+    /// canonical opening and empty-payload audit-record root remain separately
+    /// authenticated; neither is a producer validity argument or a seat vote.
+    pub fn verify_compact_using_provider_v4(
+        &self,
+        canonical_opening: &PaidClaimMaterialWireV2,
+        proof: &NativeCompactProofV4,
+        policy: &PalwClaimCompactPolicyV4,
+        limits: super::provider_reader_v4::ProviderReaderLimitsV4,
+        fetch: impl FnMut(u8, u32) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>, String>,
+    ) -> Result<super::provider_reader_v4::ProviderCheckedResultV4, Refusal> {
+        policy.validate().map_err(refused)?;
+        let registration = self.compact_registration_v4()?;
+        let round = self.round.as_ref().ok_or_else(|| refused("provider compact check needs native round"))?;
+        let binding = self
+            .route
+            .paid_compact_proof_binding_v4(round.enrollment, round.round)
+            .map_err(refused)?
+            .ok_or_else(|| refused("direct-check audit record root has not been included"))?;
+        if proof.root() != binding.proof_root {
+            return Err(refused("direct-check audit record is not the signed producer root"));
+        }
+        let session = std::rc::Rc::new(
+            CompactVerificationSessionV4::verifier(
+                &registration,
+                self.check.seed(),
+                policy.maximum_stream_words,
+                policy.maximum_proof_bytes,
+                proof,
+            )
+            .map_err(refused)?,
+        );
+        let check =
+            self.check.bind_compact_opening_v4(canonical_opening, &registration, session.clone(), Some(proof)).map_err(refused)?;
+        let result = self.check_provider_v4(canonical_opening, &check, limits, fetch)?;
+        session.finish().map_err(refused)?;
+        Ok(result)
+    }
     pub fn compact_proof_binding_object_v4(&self, proof: &NativeCompactProofV4) -> Result<KernelRouteObjectV1, Refusal> {
         let registration = self.compact_registration_v4()?;
         if proof.version != 4 || proof.plan != registration.plan.id() || proof.seed != self.check.seed() {

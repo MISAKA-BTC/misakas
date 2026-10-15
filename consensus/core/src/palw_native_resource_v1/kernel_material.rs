@@ -307,6 +307,20 @@ fn layout(
     Ok(())
 }
 
+/// One of the assembler's two independently live greedy layout constructions.
+/// Keep the private layout implementation beside its actual type inventory.
+pub(super) fn assembly_layout_requests_v4(
+    q: &mut TirNativeRequestsV1,
+    program: &misaka_palw_tir::program::TirProgramV1,
+    positions: u64,
+) -> Result<(), NativeCoverageV1> {
+    q.add_v1(
+        misaka_palw_kernel::scope::native_material_mask_requests_v4(program)
+            .ok_or_else(|| bad("actual assembly material-mask workspace overflows"))?,
+    )?;
+    layout(q, &program.blocks, &program.schedule, program.history_bound, positions, true)
+}
+
 fn selected_material_requests(ledger: &misaka_palw_kernel::ledger::KernelLedgerV1, claim: &Digest) -> Result<u64, NativeCoverageV1> {
     use misaka_palw_kernel::{
         ledger::ClaimBodyV1,
