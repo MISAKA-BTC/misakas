@@ -7,8 +7,9 @@ pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
 pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 mod demand;
 mod restore;
-pub use restore::restore_native_carriage_v1;
+mod restore_workspace;
 mod retained;
+pub use restore::restore_native_carriage_v1;
 pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
 mod transition;
 pub use retained::{
@@ -23,7 +24,11 @@ pub type NativeStateCarriageV1 = NativeRetainedV1<crate::palw_state_v2::PalwStat
 mod generated;
 mod inventory;
 mod kernel_ledger;
+mod kernel_material;
 mod kernel_salted;
+pub use kernel_material::{
+    native_kernel_parameter_auth_requests_v4, native_kernel_position_auth_requests_v4, native_kernel_segment_auth_requests_v4,
+};
 mod ledger_expansion;
 mod tir;
 pub use demand::reserve_native_requests_v1;
@@ -42,8 +47,8 @@ mod wire_kernel_aux;
 mod wire_manual_tests;
 pub use demand::{
     NativeDemandCheckerV1, NativeDemandLeaseV1, admit_native_receive_v1, arm_native_logical_limits_v1,
-    native_logical_admission_enabled_v1, reserve_native_install_in_database_v1, reserve_native_install_v1, reserve_native_snapshot_v1,
-    reserve_native_wire_v1,
+    native_declared_logical_limits_v1, native_logical_admission_enabled_v1, reserve_native_install_in_database_v1,
+    reserve_native_install_v1, reserve_native_snapshot_v1, reserve_native_wire_v1,
 };
 pub use wire::{
     NativeWirePreflightV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, NativeWireValuePreflightV1,

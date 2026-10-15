@@ -980,3 +980,6 @@ pub mod palw_material_recovery_observation_v4;
 pub mod palw_material_session_enrollment_v4;
 
 pub mod palw_prospective_kernel_material_v4;
+
+pub mod palw_kernel_parameter_material_v4;
+pub mod palw_kernel_material_context_v4;

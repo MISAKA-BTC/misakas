@@ -53,16 +53,20 @@ fn restore_with_reservation_v1(
 ) -> Result<NativeChainStateV1, NativeStateMutationErrorV1> {
     let mut lease = None;
     let mut codec_lease = None;
+    let mut consistency_lease = None;
     // The encoded-frame ticket ends only after the actual byte Vec is dropped;
     // the distinct native ticket follows the restored state.
     let mut canonical = Vec::new();
     if enabled {
         let bytes = borsh::object_length(&carriage).map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
+        let consistency =
+            super::restore_workspace::native_restore_consistency_requests_v1(&carriage).map_err(NativeDecodeErrorV1::Resource)?;
         let heap = carriage.native_heap_v1("existing direct carriage ownership");
         let requests = heap
             .bytes()
             .ok_or(NativeDecodeErrorV1::Resource(heap))?
             .checked_add(bytes as u64)
+            .and_then(|n| n.checked_add(consistency))
             .and_then(|n| n.checked_add(std::mem::size_of::<NativeChainStateV1>() as u64))
             .ok_or_else(|| {
                 NativeDecodeErrorV1::Resource(NativeCoverageV1::overflow::<PalwStateCarriageV2>("direct restore intake"))
@@ -72,6 +76,7 @@ fn restore_with_reservation_v1(
             NativeDecodeErrorV1::Resource(restore_fault_v1("enabled direct restore requires a live reservation owner"))
         })?;
         codec_lease = Some(ticket.split_memory_v1(bytes as u64).map_err(NativeDecodeErrorV1::Resource)?);
+        consistency_lease = Some(ticket.split_memory_v1(consistency).map_err(NativeDecodeErrorV1::Resource)?);
         canonical.try_reserve_exact(bytes).map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
         carriage.serialize(&mut canonical).map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
         if canonical.len() != bytes {
@@ -88,6 +93,7 @@ fn restore_with_reservation_v1(
     })?;
     drop(canonical);
     drop(codec_lease);
+    drop(consistency_lease);
     Ok(NativeRetainedV1::from_owner_reserved_v1(state, lease))
 }
 

@@ -426,6 +426,7 @@ pub mod all_target_bootstrap;
 pub mod cli;
 pub mod private_bootstrap;
 pub mod producer_resources;
+pub mod provider_handoff_v4;
 
 /// Portable public material for the all-target CLI verifier. Every value is
 /// authenticated by the mathematical verifier against the anchored commitments.

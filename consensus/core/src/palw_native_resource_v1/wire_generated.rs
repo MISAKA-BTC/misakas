@@ -2616,6 +2616,27 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwVerificationTypeV1 {
 wire_struct!(crate::palw_issuance_slots_v1::PalwIssuanceBucketV1; u64, u64);
 wire_struct!(crate::palw_json_key_set_v1::PalwJsonKeyCompactProofV1; u64, crate::Hash64, [u8; 64], Vec<crate::Hash64>);
 wire_struct!(crate::palw_json_key_set_v1::PalwJsonKeySetV1; crate::Hash64, u64);
+wire_struct!(crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4; u16, crate::palw_kernel_route_v1::PalwKernelRouteStateV1, crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4, Vec<u8>, Vec<u8>, u64, crate::Hash64);
+impl NativeWireScanV1 for crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<misaka_palw_kernel::merkle::TensorOpeningV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<misaka_palw_kernel::merkle3::LeafOpeningV3 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4; u16, u16, Option<u16>, u64, crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4);
+wire_struct!(crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4; u32, u32, Vec<u8>);
 wire_struct!(crate::palw_kernel_route_v1::KernelAssignmentV1; Vec<crate::palw_kernel_route_v1::KernelSeatV1>, [u8;64], [u8;64], [u8;64], u64, u8);
 wire_struct!(crate::palw_kernel_route_v1::KernelSeatV1; crate::palw_state_v2::PalwBondKeyV2, [u8;64], misaka_palw_kernel::verify::ScopeV1);
 wire_struct!(crate::palw_kernel_route_v1::PalwKernelChunkGroupV1; crate::palw_kernel_route_v1::PalwKernelChunkTargetV1, u8, u64, u64, u64, BTreeMap<u8, Vec<u8>>);
@@ -2775,6 +2796,10 @@ impl NativeWireScanV1 for crate::palw_material_capacity_v1::PalwMaterialCodecV1 
                 Ok(sum)
             }
             2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            3 => {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
@@ -3741,6 +3766,38 @@ wire_struct!(crate::palw_prefix_public_source_v1::PalwPrefixPublicSourceV1; crat
 wire_struct!(crate::palw_prefix_source_stream_v1::PalwPrefixSourceRangeV1; u32, u32, u32, u64, u64, u64);
 wire_struct!(crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1; crate::palw_step_leg::PalwStepOpeningV1, crate::palw_step_leg::PalwStepTileLeafV1);
 wire_struct!(crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1; u32, u32, Vec<u32>, crate::palw_step_leg::PalwStepOpeningV1);
+impl NativeWireScanV1 for crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum=sum.merge(<crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4; u16, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, crate::palw_state_v2::PalwBondKeyV2, Vec<crate::palw_state_v2::PalwBondKeyV2>, misaka_palw_kernel::route::SaltedCommitV1, [u8;64], crate::palw_material_capacity_v1::PalwMaterialManifestV1);
+wire_struct!(crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4; crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4, Vec<u8>, crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4);
+wire_struct!(crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4; crate::Hash64, Vec<(u8, u32, Vec<u8>)>);
 wire_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; crate::palw_state_v2::PalwBondKeyV2, u64, u64, u64, bool);
 wire_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; u64, u64, u64, bool);
 wire_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; Option<u64>, Option<u64>, Vec<crate::palw_state_v2::PalwBondKeyV2>, Vec<(crate::Hash64, Vec<(u8, u32)>)>);
@@ -9831,6 +9888,7 @@ wire_struct!(misaka_palw_kernel::spec::memory::MemoryLineV1; Vec<[u8;64]>, [u8;6
 wire_struct!(misaka_palw_kernel::spec::memory::MemoryRootV1; [u8;64], [u8;64], Vec<misaka_palw_kernel::spec::memory::MemorySlotV1>, [u8;64], u32);
 wire_struct!(misaka_palw_kernel::spec::memory::MemorySlotV1; (u16, Option<u16>), (u16, Option<u16>));
 wire_struct!(misaka_palw_kernel::spec::memory::StepCommitV1; misaka_palw_kernel::evidence::VerificationEvidenceV1, Vec<Vec<Vec<[u8;64]>>>);
+wire_struct!(misaka_palw_kernel::spec::retrieval::EntryResponseV1; misaka_palw_kernel::spec::retrieval::RetrievalItemV1, Vec<[u8;64]>);
 impl NativeWireScanV1 for misaka_palw_kernel::spec::retrieval::IndexV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -9844,6 +9902,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::spec::retrieval::IndexV1 {
     }
 }
 wire_struct!(misaka_palw_kernel::spec::retrieval::RetrievalClaimV1; [u8;64], [u8;64], Vec<misaka_palw_kernel::spec::retrieval::RetrievedV1>);
+wire_struct!(misaka_palw_kernel::spec::retrieval::RetrievalItemV1; Vec<i32>, Vec<u32>);
 wire_struct!(misaka_palw_kernel::spec::retrieval::RetrievalJobV1; [u8;64], Vec<i32>, [u8;64]);
 wire_struct!(misaka_palw_kernel::spec::retrieval::RetrievalRootV1; [u8;64], misaka_palw_kernel::spec::retrieval::SnapshotV1, misaka_palw_kernel::spec::retrieval::IndexV1, misaka_palw_kernel::spec::retrieval::RetrievalRuleV1);
 impl NativeWireScanV1 for misaka_palw_kernel::spec::retrieval::RetrievalRuleV1 {
@@ -9861,6 +9920,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::spec::retrieval::RetrievalRuleV1 {
     }
 }
 wire_struct!(misaka_palw_kernel::spec::retrieval::RetrievedV1; u64, i64, [u8;64], [u8;64]);
+wire_struct!(misaka_palw_kernel::spec::retrieval::SliceResponseV1; Vec<misaka_palw_kernel::spec::retrieval::RetrievalItemV1>, Vec<Vec<[u8;64]>>);
 wire_struct!(misaka_palw_kernel::spec::retrieval::SnapshotV1; u64, u16, u16, u32, [u8;64]);
 wire_struct!(misaka_palw_kernel::trace::ParamCommitmentsV1; BTreeMap<(u16, Option<u16>), [u8;64]>);
 wire_struct!(misaka_palw_kernel::verifier_pay::VerifierPayPolicyV1; u64, u64, u8, u64, u64, u8);

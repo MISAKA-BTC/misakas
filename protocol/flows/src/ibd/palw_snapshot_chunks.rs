@@ -147,7 +147,9 @@ impl IbdFlow {
         }
         let (snapshot, native_lease) = kaspa_consensusmanager::spawn_blocking(move || receiver.decode_snapshot_with_native_lease())
             .await
-            .map_err(|_| ProtocolError::Other("PALW snapshot decoding task failed"))?
+            // A cancelled/panicked local worker has not judged the authenticated
+            // bytes. Keep this retryable without charging or rejecting a peer.
+            .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW snapshot decoding worker stopped: {why}")))?
             .map_err(snapshot_failure)?;
         self.native_palw_receive_lease_v1 = native_lease;
         // Declarations were length checked and filtered during streaming decode. Native
