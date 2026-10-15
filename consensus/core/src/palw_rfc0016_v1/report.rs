@@ -46,6 +46,12 @@ pub struct PalwModelReportRowV1 {
     pub real_gap_daa: Option<u64>,
     /// DAA this epoch during which the floor was Idle — the clock carried by the floor and the heartbeat (consensus-derived, aux 135).
     pub heartbeat_dependent_daa: Option<u64>,
+    /// **V9 (user decision 2026-10-15), measured SEPARATELY:** of the model's claims that ended this epoch, the share a verifier
+    /// actually CHECKED (a verdict, a court or a proven fault — not a timeout)…
+    pub checked_share_permille: Option<u32>,
+    /// …and the share that COMPLETED verification within its deadline (`Final`). A checked claim voided by a court is checked but not
+    /// completed; a timeout is neither.
+    pub completed_within_deadline_permille: Option<u32>,
     /// Elastic capacity per span and the shortfall, where the capacity fence reads them.
     pub capacity_per_span: Option<u128>,
     pub capacity_shortfall_per_span: Option<u128>,
@@ -124,6 +130,49 @@ pub fn palw_rfc0016_report_json_with_clock_v1(
     }
 }
 
+/// **V9: how an ended claim counts** toward `checked_share` and the within-deadline completion rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwVerificationOutcomeV1 {
+    /// Checked and completed within its deadline (`Final`).
+    CheckedCompleted,
+    /// Checked but not completed (a court, a proven fault, a forfeiture).
+    CheckedNotCompleted,
+    /// Never checked: its deadline passed without a verdict (a timeout, no capable panel, unavailable verifiers, …).
+    NotChecked,
+}
+
+/// **V9: the outcome of a claim phase** — `None` while the claim is live. Unknown future void reasons count as `NotChecked` (the
+/// conservative side: a reason not known to carry a verdict never raises `checked_share`).
+pub fn palw_rfc0016_verification_outcome_v1(phase: &crate::palw_state_v2::PalwClaimPhaseV2) -> Option<PalwVerificationOutcomeV1> {
+    use crate::palw_state_v2::{PalwClaimPhaseV2, PalwVoidReasonV2};
+    match phase {
+        PalwClaimPhaseV2::Final { .. } => Some(PalwVerificationOutcomeV1::CheckedCompleted),
+        PalwClaimPhaseV2::Voided { reason, .. } => Some(match reason {
+            PalwVoidReasonV2::CourtFraud
+            | PalwVoidReasonV2::CourtDefault
+            | PalwVoidReasonV2::CourtHeldVerdict
+            | PalwVoidReasonV2::ProducerWithholding
+            | PalwVoidReasonV2::AggregateForfeit
+            | PalwVoidReasonV2::WorkSliceProvenFalse
+            | PalwVoidReasonV2::WorkSliceDefaulted => PalwVerificationOutcomeV1::CheckedNotCompleted,
+            _ => PalwVerificationOutcomeV1::NotChecked,
+        }),
+        _ => None,
+    }
+}
+
+/// **V9: `(checked_share, completed_within_deadline)` in permille** over `outcomes` (`None` with no ended claim: UNKNOWN, never 0 or
+/// 1000).
+pub fn palw_rfc0016_verification_shares_v1(outcomes: &[PalwVerificationOutcomeV1]) -> (Option<u32>, Option<u32>) {
+    if outcomes.is_empty() {
+        return (None, None);
+    }
+    let n = outcomes.len() as u64;
+    let checked = outcomes.iter().filter(|o| !matches!(o, PalwVerificationOutcomeV1::NotChecked)).count() as u64;
+    let completed = outcomes.iter().filter(|o| matches!(o, PalwVerificationOutcomeV1::CheckedCompleted)).count() as u64;
+    (Some((checked * 1_000 / n) as u32), Some((completed * 1_000 / n) as u32))
+}
+
 /// What a before/after comparison may claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwReportClaimV1 {
@@ -181,7 +230,8 @@ pub fn palw_rfc0016_report_json_v1(
                     "\"targets\":{{\"pPpm\":{},\"rightsIssued\":\"{}\"}},",
                     "\"outcomes\":{{\"physicalBlocks\":\"{}\",\"rightsConsumed\":\"{}\",\"rightsUnused\":\"{}\",\"finals\":{},",
                     "\"payoutCoinbaseSompi\":{},\"payoutEscrowSompi\":{},\"queueLen\":\"{}\",\"queueWaitMeanDaa\":{},",
-                    "\"queueWaitMaxDaa\":{},\"realGapDaa\":{},\"heartbeatDependentDaa\":{}}},",
+                    "\"queueWaitMaxDaa\":{},\"realGapDaa\":{},\"heartbeatDependentDaa\":{},",
+                    "\"checkedSharePermille\":{},\"completedWithinDeadlinePermille\":{}}},",
                     "\"nodeLocal\":{{\"refusedForCapacity\":{},\"refusedForRights\":{}}}}}"
                 ),
                 r.model,
@@ -199,6 +249,8 @@ pub fn palw_rfc0016_report_json_v1(
                 json_opt(r.queue_wait_max_daa),
                 json_opt(r.real_gap_daa),
                 json_opt(r.heartbeat_dependent_daa),
+                json_opt(r.checked_share_permille),
+                json_opt(r.completed_within_deadline_permille),
                 json_opt(r.refused_for_capacity),
                 json_opt(r.refused_for_rights),
             )
@@ -235,6 +287,24 @@ mod tests {
             payout_coinbase_sompi: Some(payout),
             ..Default::default()
         }
+    }
+
+    /// V9: `checked_share` and the within-deadline completion are measured apart (a court void is checked, not completed).
+    #[test]
+    fn v9_checked_share_and_completion_are_separate() {
+        use PalwVerificationOutcomeV1::*;
+        assert_eq!(palw_rfc0016_verification_shares_v1(&[]), (None, None), "UNKNOWN, never a number");
+        let (checked, completed) =
+            palw_rfc0016_verification_shares_v1(&[CheckedCompleted, CheckedNotCompleted, NotChecked, CheckedCompleted]);
+        assert_eq!((checked, completed), (Some(750), Some(500)));
+        let final_phase = crate::palw_state_v2::PalwClaimPhaseV2::Final { final_daa: 1 };
+        assert_eq!(palw_rfc0016_verification_outcome_v1(&final_phase), Some(CheckedCompleted));
+        let timeout = crate::palw_state_v2::PalwClaimPhaseV2::Voided {
+            voided_daa: 1,
+            reason: crate::palw_state_v2::PalwVoidReasonV2::BindTimeout,
+        };
+        assert_eq!(palw_rfc0016_verification_outcome_v1(&timeout), Some(NotChecked));
+        assert_eq!(palw_rfc0016_verification_outcome_v1(&crate::palw_state_v2::PalwClaimPhaseV2::Provisional), None);
     }
 
     /// V5: the epoch clock is a DAA count with the measured wall-clock span; nothing asserts 24 h.

@@ -264,6 +264,9 @@ def summarize(lines, manifest, bounds):
             "rights_issued": int(row["targets"].get("rightsIssued") or 0),
             "queue_wait_max_daa": o.get("queueWaitMaxDaa"),
             "heartbeat_dependent_daa": o.get("heartbeatDependentDaa"),
+            # V9 (2026-10-15): measured SEPARATELY — the share actually checked, and the share completed within its deadline.
+            "checked_share_permille": o.get("checkedSharePermille"),
+            "completed_within_deadline_permille": o.get("completedWithinDeadlinePermille"),
             "node_local (not consensus)": row.get("nodeLocal"),
         }
     tot = sum(m["physical_blocks"] for m in models.values()) or 1

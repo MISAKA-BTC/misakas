@@ -736,6 +736,21 @@ pub fn palw_rfc0016_model_report_v1(
             *slot = slot.saturating_add(1);
         }
     }
+    // V9 (user decision 2026-10-15): checked share and within-deadline completion, apart, over the claims that ended this epoch.
+    let mut ended: BTreeMap<Hash64, Vec<crate::palw_rfc0016_v1::report::PalwVerificationOutcomeV1>> = BTreeMap::new();
+    for claim in state.claims.values() {
+        let ended_daa = match claim.phase {
+            PalwClaimPhaseV2::Final { final_daa } => final_daa,
+            PalwClaimPhaseV2::Voided { voided_daa, .. } => voided_daa,
+            _ => continue,
+        };
+        if ended_daa < epoch.start_daa {
+            continue;
+        }
+        if let Some(outcome) = crate::palw_rfc0016_v1::report::palw_rfc0016_verification_outcome_v1(&claim.phase) {
+            ended.entry(palw_rfc0016_model_of_v1(state, ownership, &claim.class_id)).or_default().push(outcome);
+        }
+    }
     let mut classes_of: BTreeMap<Hash64, Vec<Hash64>> = BTreeMap::new();
     for class_id in state.model_lifecycles.keys() {
         classes_of.entry(palw_rfc0016_model_of_v1(state, ownership, class_id)).or_default().push(*class_id);
@@ -780,6 +795,10 @@ pub fn palw_rfc0016_model_report_v1(
                 &model,
             ));
             let classes = classes_of.get(&model).cloned().unwrap_or_default();
+            let (checked_share_permille, completed_within_deadline_permille) =
+                crate::palw_rfc0016_v1::report::palw_rfc0016_verification_shares_v1(
+                    ended.get(&model).map_or(&[][..], |v| v.as_slice()),
+                );
             let observed = |kind| classes.iter().map(|c| palw_rfc0016_observed_v1(c, kind)).sum::<u64>();
             PalwModelReportRowV1 {
                 model,
@@ -798,6 +817,8 @@ pub fn palw_rfc0016_model_report_v1(
                 queue_wait_max_daa: (armed && dequeued > 0).then_some(wait_max),
                 real_gap_daa: real_gap,
                 heartbeat_dependent_daa: armed.then_some(heartbeat_dependent),
+                checked_share_permille,
+                completed_within_deadline_permille,
                 capacity_per_span: None,
                 capacity_shortfall_per_span: None,
                 queue_len: classes.iter().map(|c| state.rfc0016_queue_v1(c).len() as u64).sum(),

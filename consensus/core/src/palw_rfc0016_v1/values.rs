@@ -123,6 +123,10 @@ pub const PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1: u64 = 720;
 /// **V5: the 30-day average's nominal window, in DAA** — 30 calibration epochs (21,600 DAA); a DAA count, not a wall-clock month.
 pub const PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1: u64 = 30 * PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1;
 
+/// **V9: the verifier share's calibration baseline** — 20 % (200 ‰), inside ADR-0132 C's 10–30 % clamp which the slope never leaves.
+/// A split of the SAME claim pay: no new issuance pays verifiers.
+pub const PALW_RFC0016_VERIFIER_SHARE_BASE_CALIBRATION_PERMILLE_V1: u32 = 200;
+
 /// **The calibration starting set** (user decisions 2026-10-15). The decided terms are the named constants above (and, as their
 /// decisions land, V3 / V5 / V8 / V9's); the terms the user left to measurement (`L_queue`, `T_queue`, `h`, `γ`, `u*`, the OPV check
 /// supply) are PROBES the harness sweeps — never decided values. An isolated calibration network runs this set unless its build
@@ -144,7 +148,7 @@ pub const PALW_RFC0016_CALIBRATION_START_V1: PalwRfc0016ValuesV1 = PalwRfc0016Va
     queue_len_per_class: 8,
     queue_ttl_daa: 720,
     quote_margin_h: 2,
-    verifier_share_base_permille: 200,
+    verifier_share_base_permille: PALW_RFC0016_VERIFIER_SHARE_BASE_CALIBRATION_PERMILLE_V1,
     verifier_slope_gamma_permille: 100,
     verifier_util_target_permille: 700,
     opv_checks_per_claim_permille: 500,
