@@ -26,6 +26,13 @@ pub const SOURCE_UPLOAD_MAX_PARTS_V39: usize = SOURCE_UPLOAD_MAX_BYTES_V39.div_c
 pub trait NativeOriginalSourceArchiveV39 {
     fn source(&self, id: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String>;
     fn class(&self, id: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String>;
+    /// The exact stored consent row 27 of a job collected by action 53. The
+    /// auditor authenticates it against the immutable collection record
+    /// (consent root, byte length and stored-body digest); none is authority.
+    fn consent(&self, job: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String> {
+        let _ = (job, maximum);
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

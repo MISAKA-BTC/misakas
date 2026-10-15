@@ -630,6 +630,7 @@ pub mod native_master_witness_v1;
 
 pub mod native_receipt_cas_v1;
 
+pub mod native_archive_v39;
 pub mod native_audit_io_v39;
 pub mod native_tensor_store_v39;
 pub mod native_trace_archive_v39;

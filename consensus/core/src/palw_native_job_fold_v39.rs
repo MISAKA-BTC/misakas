@@ -773,6 +773,9 @@ pub(super) fn apply(
 }
 #[path = "palw_native_collect_fold_v39.rs"]
 pub(super) mod collect;
+#[path = "palw_native_job_audit_fold_v39.rs"]
+mod audit;
+pub(super) use audit::audit_policies_v39;
 
 #[path = "palw_native_protected_fold_v39.rs"]
 mod protected;

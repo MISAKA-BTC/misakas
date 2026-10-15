@@ -114,6 +114,10 @@ name = "palw-native-snapshot39"
 path = "src/bin/palw-native-snapshot39.rs"
 
 [[bin]]
+name = "palw-native-final-audit39"
+path = "src/bin/palw-native-final-audit39.rs"
+
+[[bin]]
 name = "palw-native-receipt-live39"
 path = "src/bin/palw-native-receipt-live39.rs"
 required-features = ["native-rpc"]
