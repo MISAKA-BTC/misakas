@@ -311,9 +311,12 @@ impl PalwOwnedPublicPrefixCourtV1 {
         // more response span of inclusion delay, so the signed deadline carries that slack.
         // `demand_v1` re-checks it against the ACCEPTING block's clock: every custodian still
         // gets at least the full span, and the deadline never exceeds two spans or the stream.
+        // Aligned to the span so an owner rebuilding its unsent demand on every poll signs the
+        // SAME carrier for a whole span (no fee spent on a replacement that would be refused).
+        let aligned = now - now % span.max(1);
         let deadline = span
             .checked_mul(2)
-            .and_then(|n| now.checked_add(n))
+            .and_then(|n| aligned.checked_add(n))
             .ok_or("public prefix deadline overflow")?
             .min(self.terms.stream_until_daa);
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/prefix-public/cursor/v1").to_state();

@@ -495,3 +495,42 @@ HFP1 envelope (needs a preclaim-quote RPC); Valid-seat history custody grant
 issuance (policy decision: opting a seat into history liability); orphan Flat
 sidecars of never-accepted claims; quantitative population/per-block move and
 queue RAM bounds (analysis, possibly a fenced consensus cap needing a decision).
+
+### Static audit fixes, 2026-10-15 (unverified source only)
+
+A read-only static audit of the outside-verifier route against the latest source
+found compile-level and route-breaking defects; these are now repaired in source
+(still not built or run):
+
+- Compile-level: the HFP1 builder's staged ML-DSA verifier is exported; the Flat
+  responder wraps its capture range in `Arc`; the history actor logs through
+  `kaspa_core`; a base0 test imports `PalwStepCoordinateV1` from `palw_step`.
+- PublicPrefix demand: the signed deadline is checked at the accepting clock
+  (at least one full response span from acceptance, at most the derivation's
+  span-aligned two-span bound) instead of exact equality with the owner's
+  snapshot clock, which no carrier could ever meet. No remaining horizon is "no
+  demand", not an error that blocks the owner's other readers.
+- Staged source defaults (selected/Flat/history): the producer's claim-level
+  leg and DA record run only when the producer is itself in the literal unpaid
+  set; signers who stayed silent beside an answering producer bear only their
+  covering charge. Previously total producer withholding could never be charged
+  (role check error) and an answering producer could be charged.
+- After the staged fence, plain FP carriers (no required family, evaluation,
+  tensor, external producers) stay in the accepted set; only an HFP1 carrier is
+  replaced by its original view and must authenticate its pledge. The fold still
+  refuses a required-family claim without its pledge.
+- Required-family claims carry their commitment job pin even before
+  `palw_offence_attribution` stamps it (refused if a different pin is present).
+- Outside owner: paid-authority comparison uses the active stage's seed/terms;
+  the legacy queue sweep leaves staged-round items alone; the FP input projection
+  opens HFP1; stage reads tolerate a newer accepted tip.
+- Queue rounds: public prefix answers `MAX-20` (was shared with the replay
+  filer's `MAX-6`); history grants `MAX-21`.
+- History custody grants: a native grant-duty reader and a seat tick that signs
+  a grant for its own already credited Valid receipt on a required-family claim.
+  This makes every such Valid seat a literal history custodian (liable to the
+  once-only history DA default); flagged for the user as a policy point.
+
+Left as found (not route-breaking): an alternative uncalled FP extraction helper
+(`palw_fp_objects_from_accepted_txs_by_class_and_history_v1`) and an uncalled
+`recover_pages_v1` wrapper.
