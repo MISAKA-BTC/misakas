@@ -135,6 +135,10 @@ def validate_plan(cohort: dict, plan: dict, cohort_sha: str) -> None:
     if plan.get("receipt_window_command") is not None:
         from native_receipt_window_driver_v1 import validate_contract
         validate_contract(plan["receipt_window_contract"])
+        from native_node_provenance_v1 import validate_specs
+        validate_specs(plan["receipt_window_command"]["independent_audits"])
+        for audit in plan["receipt_window_command"]["independent_audits"]:
+            validate_receipt_verifier(audit.get("receipt_proof_verifier"), plan["network"])
     for entry in members:
         stages = entry.get("stages", {})
         if set(stages) - set(ac.STAGES):
@@ -174,7 +178,7 @@ def inspect_audit_pair(path: Path, root: Path, scope: dict, stage: str, run_sha:
     pair = read_json(path)
     if pair.get("schema") != AUDIT_PAIR_SCHEMA or len(pair.get("exports", [])) != 2:
         return False, "TWO_INDEPENDENT_EXPORTS_REQUIRED"
-    anchors, operators, databases = [], set(), set()
+    anchors, operators, databases, local_profiles = [], set(), set(), []
     for entry in pair["exports"]:
         if not ac.evidence_ok(entry, root):
             return False, "NATIVE_EXPORT_MISSING_OR_MUTATED"
@@ -208,11 +212,57 @@ def inspect_audit_pair(path: Path, root: Path, scope: dict, stage: str, run_sha:
                 or not all(anchor[k] for k in ("single_credit", "redemption_transaction", "redemption_utxo"))):
             return False, "INDEPENDENT_UTXO_REDEMPTION_NOT_AUTHENTICATED"
         anchors.append(anchor)
+        local_profiles.append(audit.get("local_qualified_validation_network") is True)
         operators.add(entry["operator_id"])
         databases.add(entry["node_database"])
     if len(operators) != 2 or len(databases) != 2 or anchors[0] != anchors[1]:
         return False, "INDEPENDENT_NATIVE_REPLAYS_DISAGREE"
+    if local_profiles[0] != local_profiles[1]:
+        return False, "INDEPENDENT_NATIVE_PROFILE_CLASSIFICATION_DISAGREES"
+    if local_profiles[0]:
+        return False, "LOCAL_QUALIFIED_VALIDATION_ONLY"
     return True, "PASS"
+
+
+def validate_receipt_verifier(spec: dict, network: str) -> None:
+    if (not isinstance(spec, dict) or not isinstance(spec.get("argv"), list) or not spec["argv"]
+            or not Path(spec["argv"][0]).is_absolute()
+            or type(spec.get("timeout_seconds")) is not int or not 1 <= spec["timeout_seconds"] <= 43200
+            or not isinstance(spec.get("executable_sha256"), str) or len(spec["executable_sha256"]) != 64):
+        raise ValueError("fresh pinned offline receipt proof verifier required for each independent exporter")
+    argv = spec["argv"]
+    for flag, expected in (("--network", network), ("--contract", "{receipt_window_contract}"),
+                           ("--points", "{receipt_points}"), ("--evidence-root", "{evidence_root}"),
+                           ("--out", "{receipt_proof_result}")):
+        if argv.count(flag) != 1 or argv.index(flag)+1 >= len(argv) or argv[argv.index(flag)+1] != expected:
+            raise ValueError("offline receipt verifier must consume original contract/own proof transcript and fresh output")
+
+
+def recheck_receipt_proof_pair(pair: Path, root: Path, specs: list, contract_path: Path) -> list:
+    """Runner executes the proof verifier itself: exported JSON cannot authorize PASS."""
+    exports = read_json(pair).get("exports", [])
+    if len(exports) != 2 or len(specs) != 2:
+        raise ValueError("two independently collected receipt transcripts required")
+    verified = []
+    for index, (entry, owner) in enumerate(zip(exports, specs)):
+        if not ac.evidence_ok(entry, root):
+            raise ValueError("receipt exporter artifact mutated")
+        audit = read_json(relative_file(root, entry["path"]))
+        points = audit.get("receipt_points_evidence", {})
+        if not ac.evidence_ok(points, root) or points not in audit.get("chain_objects", []):
+            raise ValueError("complete independently collected native proof transcript missing")
+        spec = owner["receipt_proof_verifier"]
+        validate_receipt_verifier(spec, owner["network"])
+        output = root / f"receipt-proof-rechecked-{index}.json"
+        if output.exists():
+            raise ValueError("producer pre-created independent proof recheck output")
+        context = {"receipt_window_contract": str(contract_path.resolve()), "evidence_root": str(root.resolve()),
+                   "receipt_points": str(relative_file(root, points["path"])), "receipt_proof_result": str(output.resolve())}
+        code, _, error = run_command(spec, context, root / f"receipt-proof-rechecked-{index}.log")
+        if code or error or not output.is_file() or read_json(output) != audit.get("receipt_proof_result"):
+            raise ValueError(error or "fresh offline native proof recheck differs from exporter JSON")
+        verified.append({"path": str(output.relative_to(root)), "sha256": ac.digest(output)})
+    return verified
 
 
 def inspect_receipt_audit_pair(path: Path, root: Path, contract: dict, run_sha: str) -> dict:
@@ -250,7 +300,7 @@ def inspect_receipt_audit_pair(path: Path, root: Path, contract: dict, run_sha: 
                 or len(report.get("windows", [])) != 2 or len(report.get("cumulative_accounting", [])) < 3):
             raise ValueError("BOOL_ONLY_RECEIPT_REPORT_IS_NOT_PROOF")
         panel = audit.get("receipt_windows", {})
-        if (not ac.panel_ok(panel, root) or panel.get("schema") != "misaka.rfc02.proof-derived-receipt-panel.v1"
+        if (not ac.panel_ok(panel, root, allow_local_validation=True) or panel.get("schema") != "misaka.rfc02.proof-derived-receipt-panel.v1"
                 or panel.get("contract_root") != report.get("contract_root")
                 or any(panel.get(k) != contract.get(k) or report.get(k) != contract.get(k)
                        for k in ("cohort_sha256", "original_model_roots", "receipt_window_daa", "minimum_independent_operators"))):
@@ -491,17 +541,21 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
                     good, why = inspect_result(result, out, member, scope, stage, run_sha, audit_path) if not code and not error else (False, error or "COMMAND_FAILED")
                 except (OSError, ValueError) as e:
                     code, elapsed, good, why = -1, 0, False, f"COMMAND_START_FAILED:{type(e).__name__}"
-                record.update(status="PASS" if good else "FAIL", blocking=why, returncode=code, elapsed_seconds=elapsed)
+                local_only = why == "LOCAL_QUALIFIED_VALIDATION_ONLY"
+                if local_only:
+                    row["local_qualified_validation_network"] = True
+                record.update(status="LOCAL_VALIDATION" if local_only else "PASS" if good else "FAIL", blocking=why, returncode=code, elapsed_seconds=elapsed)
                 if result.is_file() and result.stat().st_size <= MAX_JSON:
                     record["evidence"] = {"path": str(result.relative_to(out)), "sha256": ac.digest(result)}
-                blocked = not good
+                blocked = not (good or local_only)
             row["stages"][stage] = record
         # Detect source mutation even if a successful tool ignored input pins.
         if pins and not source_pins_ok(member):
             row["stages"]["source"].update(status="FAIL", blocking="SOURCE_MUTATED_DURING_RUN")
             blocked = True
-        if all(row["stages"][s]["status"] == "PASS" for s in ac.STAGES[:ac.STAGES.index("register") + 1]):
-            row.update(full_advertised_task=True, real_size=True, active_shipping_kernel=True, public_chain=True)
+        if all(row["stages"][s]["status"] in {"PASS", "LOCAL_VALIDATION"} for s in ac.STAGES[:ac.STAGES.index("register") + 1]):
+            public = row.get("local_qualified_validation_network") is not True
+            row.update(full_advertised_task=True, real_size=True, active_shipping_kernel=public, public_chain=public)
         rows.append(row)
         with (out / "observations.jsonl").open("a") as f:
             f.write(json.dumps(row, allow_nan=False) + "\n")
@@ -513,6 +567,9 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
             spec = plan["receipt_window_command"]
             validate_auditors(spec.get("independent_audits"), plan)
             contract = plan["receipt_window_contract"]
+            from native_node_provenance_v1 import collect, same_processes
+            provenance_before_path = out / "receipt-node-provenance-before.json"
+            provenance_before = collect(spec["independent_audits"], provenance_before_path)
             contract_path = out / "receipt-window-contract.json"
             ac.write(contract_path, contract)
             ctx = {"evidence_root": str(out.resolve()), "result": str(candidate.resolve()),
@@ -528,10 +585,25 @@ def run(cohort_path: Path, plan_path: Path, committed_plan_sha: str, out: Path) 
                 raise ValueError(error or "original pointer-only native receipt driver failed")
             pair, _ = execute_audit_pair(spec["independent_audits"],
                 {**ctx, "stage_result": str(candidate.resolve())}, out, "receipt-windows", out)
+            rechecks = recheck_receipt_proof_pair(pair, out, spec["independent_audits"], contract_path)
             panel_doc = inspect_receipt_audit_pair(pair, out, contract, run_sha)
+            provenance_after_path = out / "receipt-node-provenance-after.json"
+            provenance_after = collect(spec["independent_audits"], provenance_after_path)
+            if not same_processes(provenance_before, provenance_after):
+                raise ValueError("independent local replay processes/databases changed during original receipt measurement")
+            panel_doc["local_node_provenance"] = [{"path": str(p.relative_to(out)), "sha256": ac.digest(p)}
+                                                   for p in (provenance_before_path, provenance_after_path)]
+            panel_doc["local_qualified_validation_only"] = True
+            panel_doc["public_operator_independence_proven"] = False
+            panel_doc["fresh_independent_proof_rechecks"] = rechecks
             panel = out / "receipt-windows.json"
             ac.write(panel, panel_doc)
-            window_status = {"status": "PASS", "audit_pair_sha256": ac.digest(pair)}
+            local_only = panel_doc.get("local_qualified_validation_network") is True
+            window_status = {"status": "LOCAL_VALIDATION" if local_only else "PASS",
+                             "blocking": "LOCAL_QUALIFIED_VALIDATION_ONLY" if local_only else "PASS",
+                             "audit_pair_sha256": ac.digest(pair), "proof_rechecks": rechecks}
+            if local_only:
+                panel = None  # Retain measured local panel; never count it as public A6/A8.
         except (OSError, ValueError, KeyError, TypeError) as e:
             window_status = {"status": "FAIL", "blocking": str(e)}
     report = ac.report(cohort_path, out / "observations.jsonl", out, panel)

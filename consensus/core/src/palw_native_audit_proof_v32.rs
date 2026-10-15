@@ -436,3 +436,22 @@ pub fn derive_native_lifecycle_anchor_v32(
     };
     Ok(CheckedNativeLifecycleAnchorV32 { anchor, state: auxiliary.state, aux_root: auxiliary.root })
 }
+
+/// Complete-model identity/receipt projected only from the privately verified
+/// original aux opening. A producer DTO cannot mint this checked wrapper.
+pub struct CheckedNativeMasterExecutionV32 {
+    record:crate::palw_flat_stage_v28::NativeMasterExecutionRecordV32,
+    state:Hash64,auxiliary:Hash64,
+}
+impl CheckedNativeMasterExecutionV32 {
+    pub fn record(&self)->&crate::palw_flat_stage_v28::NativeMasterExecutionRecordV32{&self.record}
+    pub fn state(&self)->Hash64{self.state}
+    pub fn auxiliary_root(&self)->Hash64{self.auxiliary}
+}
+pub fn derive_native_master_execution_record_v32(auxiliary:&VerifiedNativeAuxRowsV32<'_>,parameters:&crate::config::params::Params,daa:u64,master:[u8;64],jobs:&[[u8;64]],outputs:&[Vec<misaka_palw_tir::Tensor>],generated:&[u32])->Result<CheckedNativeMasterExecutionV32,String>{
+    let p=&parameters.palw_stage_execution_v28.as_ref().filter(|f|f.activation.is_active(daa)).ok_or("master32 receipt original Stage28 fence inactive")?.policies;
+    let mut rows=std::collections::BTreeMap::new();
+    for(k,v)in auxiliary.rows{let key:(u8,Vec<u8>)=borsh::from_slice(k).map_err(|_|"master32 receipt exact original aux key")?;if rows.insert(key,v.clone()).is_some(){return Err("master32 receipt duplicate original aux row".into());}}
+    let record=PalwChainStateV2::native_master_execution_record_from_rows_v32(&rows,p,master,jobs,outputs,generated)?;
+    Ok(CheckedNativeMasterExecutionV32{record,state:auxiliary.state,auxiliary:auxiliary.root})
+}

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 const HEADER_BYTES: u64 = 64 << 20;
 const MAX_ALIGNMENT: u64 = 65_536;
 mod gguf_set;
+mod palwq36;
 use gguf_set::GgufSet;
 
 pub fn is_gguf_checkpoint(path: &Path) -> bool {
@@ -83,6 +84,7 @@ pub fn source_dir(path: &Path) -> &Path {
 enum RawSource {
     Ordinary(Checkpoint),
     Gguf(Box<GgufSet>),
+    PalwQ36(Box<palwq36::PalwQ36>),
 }
 
 /// A producer-side source for the public frontend. GGUF dimensions reverse into row-major shapes;
@@ -96,7 +98,9 @@ impl FrontendSource {
     }
     pub fn open(path: &Path, pack: &FrontendPack) -> Result<Self> {
         let selected = checkpoint_path(path)?;
-        let raw = if is_gguf_checkpoint(&selected) {
+        let raw = if selected.extension().is_some_and(|x| x == "palwq36") {
+            RawSource::PalwQ36(Box::new(palwq36::PalwQ36::open(&selected)?))
+        } else if is_gguf_checkpoint(&selected) {
             // Registry lookup computes storage extent only. The binding's pinned local key selects
             // the decoder. Unknown types can supply a self-tested block descriptor and public ID.
             let mut registry = QuantRegistry::builtin().clone();
@@ -121,6 +125,7 @@ impl FrontendSource {
         match &self.raw {
             RawSource::Ordinary(c) => c.files.iter().map(|f| f.path.clone()).collect(),
             RawSource::Gguf(set) => set.inputs(),
+            RawSource::PalwQ36(source) => source.files(),
         }
     }
 
@@ -156,6 +161,16 @@ impl FrontendSource {
                 }
             }
         }
+        if let RawSource::PalwQ36(source) = &self.raw {
+            let Value::Object(native) = &source.config else {
+                return Err(bad("FRONTEND_PALWQ361: native config"));
+            };
+            for (key, value) in native {
+                if config.insert(key.clone(), value.clone()).is_some() {
+                    return Err(bad(format!("FRONTEND_PALWQ361: sidecar duplicates {key}")));
+                }
+            }
+        }
         Ok(Value::Object(config))
     }
 }
@@ -185,6 +200,7 @@ impl TensorSource for FrontendSource {
         match &self.raw {
             RawSource::Ordinary(c) => c.names(),
             RawSource::Gguf(set) => set.tensors.keys().cloned().collect(),
+            RawSource::PalwQ36(source) => source.names(),
         }
     }
     fn shape(&self, name: &str) -> Option<Vec<usize>> {
@@ -193,6 +209,7 @@ impl TensorSource for FrontendSource {
     fn metadata(&self, name: &str) -> Option<TensorMeta> {
         match &self.raw {
             RawSource::Ordinary(c) => c.metadata(name),
+            RawSource::PalwQ36(source) => source.metadata(name),
             RawSource::Gguf(set) => {
                 let t = set.parts[*set.tensors.get(name)?].tensors.get(name)?;
                 let (elems, bytes) = t.ty.block()?;
@@ -214,6 +231,7 @@ impl TensorSource for FrontendSource {
     fn read_slice(&self, name: &str, range: Range<u64>) -> Result<Vec<u8>> {
         match &self.raw {
             RawSource::Ordinary(c) => c.read_slice(name, range),
+            RawSource::PalwQ36(source) => source.read_slice(name, range),
             RawSource::Gguf(set) => {
                 let part = set.tensors.get(name).ok_or_else(|| bad(format!("FRONTEND_BINDING: no tensor {name}")))?;
                 set.parts[*part].read_range(name, range)
@@ -221,8 +239,10 @@ impl TensorSource for FrontendSource {
         }
     }
     fn validate_snapshot(&self) -> Result<()> {
-        if let RawSource::Gguf(set) = &self.raw {
-            set.validate_snapshot()?;
+        match &self.raw {
+            RawSource::Gguf(set) => set.validate_snapshot()?,
+            RawSource::PalwQ36(source) => source.validate_snapshot()?,
+            RawSource::Ordinary(_) => {}
         }
         Ok(())
     }

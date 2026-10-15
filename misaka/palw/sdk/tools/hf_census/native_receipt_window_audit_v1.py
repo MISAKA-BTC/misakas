@@ -95,7 +95,8 @@ def audit(a, result: dict, work: Path, out: Path) -> int:
     # window; neither a self-reference nor a producer-authored receipt is accepted.
     proof_evidence = {"path": str(report_path.resolve().relative_to(evidence)), "sha256": ac.digest(report_path)}
     panel = {k: report[k] for k in ("cohort_sha256", "original_model_roots", "receipt_window_daa", "minimum_independent_operators")}
-    panel.update(schema="misaka.rfc02.proof-derived-receipt-panel.v1", contract_root=report["contract_root"],
+    panel.update(schema="misaka.rfc02.proof-derived-receipt-panel.v1",
+        local_qualified_validation_network=report.get("local_qualified_validation_network") is True, contract_root=report["contract_root"],
         contract_sha256=ac.digest(contract_path), windows=[{**w, "evidence": proof_evidence} for w in report["windows"]])
     objects.extend([proof_evidence, {"path": str(transcript.resolve().relative_to(evidence)), "sha256": ac.digest(transcript)},
                     {"path": result["contract"], "sha256": ac.digest(contract_path)}])
@@ -103,10 +104,12 @@ def audit(a, result: dict, work: Path, out: Path) -> int:
         "operator_id": a.operator_id, "node_database": a.node_database, "genesis": a.genesis, "network": a.network,
         "canonical_blocks_verified": True, "anchor_from_validated_consensus_database": True,
         "qualified_native_profile": True, "isolated_calibration": False,
+        "local_qualified_validation_network": report.get("local_qualified_validation_network") is True,
         "intended_claims_and_queue_accounting_verified": True, "receipt_windows": panel,
         # Compare proof results without per-auditor filenames; all state roots,
         # operators, accepted original claims and cumulative counters must agree.
-        "receipt_proof_result": report, "receipt_proof_evidence": proof_evidence, "chain_objects": objects,
+        "receipt_proof_result": report, "receipt_proof_evidence": proof_evidence,
+        "receipt_points_evidence": {"path": str(transcript.resolve().relative_to(evidence)), "sha256": ac.digest(transcript)}, "chain_objects": objects,
         "node_consensus_params_id": collection["node_consensus_params_id"]}
     ac.write(out, doc)
     return 0

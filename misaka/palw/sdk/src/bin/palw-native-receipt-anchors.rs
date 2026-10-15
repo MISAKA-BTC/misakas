@@ -37,7 +37,7 @@ fn run()->Result<(),String>{
                 if !verbose.is_chain_block||child_hash!=info.sink||!child.parents_by_level.get(0).is_some_and(|p|p.contains(&verbose.selected_parent_hash))||kaspa_consensus_core::hashing::header::hash(&ph)!=verbose.selected_parent_hash{return Err("native receipt clock selected-chain pointers differ".to_string());}
                 Ok::<_,String>((child_hash,verbose.selected_parent_hash,ph.daa_score))
             }).await.map_err(|_|"native receipt clock RPC timeout".to_string())??;
-            if result.2<=start{first=Some(result.0);}else if first.is_none(){return Err("observer began after original first receipt window".into());}
+            if result.2<start{first=Some(result.0);}else if first.is_none(){return Err("observer began after original first receipt window".into());}
             if result.2>=end{let first=first.ok_or("receipt start anchor absent")?;
                 break Ok(serde_json::json!({"start_child":first.to_string(),"end_child":result.0.to_string(),"end_selected_parent":result.1.to_string(),"provenance_start":first.to_string()}));}
             tokio::time::sleep(Duration::from_millis(250)).await;

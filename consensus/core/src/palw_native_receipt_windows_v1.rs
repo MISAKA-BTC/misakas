@@ -15,7 +15,7 @@ use std::collections::{BTreeMap,BTreeSet};
 pub const MAX_RECEIPT_WINDOW_JOBS_V1:usize=512;
 #[derive(Clone,Debug,PartialEq,Eq,BorshSerialize)]
 pub struct NativeReceiptJobV1 {
-    pub namespace:u16,pub job:Digest,pub class:Digest,pub source:Digest,pub inventory:Digest,
+    pub namespace:u16,pub complete_model:bool,pub job:Digest,pub class:Digest,pub source:Digest,pub inventory:Digest,
     pub real_parameter:Digest,pub funding:Digest,pub consent:Digest,pub maximum_contract:Digest,
     pub maximum_scope:Digest,pub maximum_resource:Digest,pub queue_plan:Digest,pub queue_policy:Digest,
     pub source_plan:Digest,pub physical_service:Digest,pub requester_operator:Digest,pub producer_operator:Digest,
@@ -28,15 +28,26 @@ pub struct NativeReceiptQueueV1 {
     pub root:Digest,pub physical_root:Digest,pub policy:Digest,pub service:Digest,
     pub live:u32,pub packets:u32,pub owned_bytes:u64,pub jobs:Vec<Digest>,
 }
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize)]
+pub struct NativeReceiptFinalV1 {
+    pub funding:Digest,pub claim:Digest,pub credit:Digest,pub established_daa:u64,pub producer_credit:u64,
+}
+#[derive(Clone)]
 pub struct CheckedNativeReceiptSnapshotV1 {
     state:Hash64,aux:Hash64,daa:u64,queue:NativeReceiptQueueV1,
-    jobs:BTreeMap<Digest,NativeReceiptJobV1>,finals:BTreeMap<Digest,crate::palw_native_audit_v27::NativeExecutionAuditRecordV27>,
+    jobs:BTreeMap<Digest,NativeReceiptJobV1>,finals:BTreeMap<Digest,NativeReceiptFinalV1>,
 }
 impl CheckedNativeReceiptSnapshotV1 {
     pub fn daa(&self)->u64{self.daa}
     pub fn queue(&self)->&NativeReceiptQueueV1{&self.queue}
     pub fn jobs(&self)->&BTreeMap<Digest,NativeReceiptJobV1>{&self.jobs}
-    pub fn finals(&self)->&BTreeMap<Digest,crate::palw_native_audit_v27::NativeExecutionAuditRecordV27>{&self.finals}
+    pub fn finals(&self)->&BTreeMap<Digest,NativeReceiptFinalV1>{&self.finals}
+    /// Conservative local memory accounting, never a consensus resource grant.
+    pub fn metadata_bytes(&self)->usize{
+        self.jobs.len().saturating_mul(std::mem::size_of::<NativeReceiptJobV1>()+128)
+            .saturating_add(self.finals.len().saturating_mul(std::mem::size_of::<NativeReceiptFinalV1>()+128))
+            .saturating_add(self.queue.jobs.len().saturating_mul(64)).saturating_add(1024)
+    }
     pub fn root(&self)->Digest{object_id(b"misaka-palw/audit/receipt-snapshot/v1",&(self.state,self.aux,self.daa,&self.queue,&self.jobs,&self.finals))}
 }
 fn decode<T:BorshDeserialize>(rows:&BTreeMap<(u8,Vec<u8>),Vec<u8>>,key:Vec<u8>,cap:usize)->Result<T,String>{
@@ -70,7 +81,7 @@ pub fn derive_native_receipt_snapshot_v1(aux:&VerifiedNativeAuxRowsV32<'_>,payou
         let(jroot,journal):(Digest,NativePagedLeaseJournalV29)=decode(&rows,borsh::to_vec(&(29u8,*job,22u8)).unwrap(),2048)?;
         if root!=*lease_root||lease.root()!=root||lease.retired||lease.job!=*job||lease.original_funding!=*funding
             ||lease.original_policy!=policy.root()||lease.packets!=packets||lease.owned_bytes!=owned
-            ||jroot!=journal.root()||journal.job!=*job||journal.funding!=*funding||journal.service!=g.service
+            ||jroot!=journal.root()||journal.version!=29||!matches!(journal.namespace,28|29)||journal.job!=*job||journal.funding!=*funding||journal.service!=g.service
             ||journal.lease.root()!=journal.lease_root||journal.lease_root!=lease.original_physical_lease
             ||journal.lease.retired||journal.lease.original_job!=*job||journal.lease.original_consent!=lease.original_consent {
             return Err("receipt window queue/physical/original consent lineage differs".into());}
@@ -96,13 +107,16 @@ pub fn derive_native_receipt_snapshot_v1(aux:&VerifiedNativeAuxRowsV32<'_>,payou
             let audit=derive_native_execution_audit_from_proofs_v32(aux,payouts,params,daa,id)?;
             if audit.record().funding!=observation.funding||Some(audit.record().claim)!=observation.claim {
                 return Err("receipt window Final differs from original accepted claim".into());}
-            finals.insert(id,audit.record().clone());
+            let f=audit.record();
+            finals.insert(id,NativeReceiptFinalV1{funding:f.funding,claim:f.claim,credit:f.credit,established_daa:f.established_daa,producer_credit:f.producer_credit});
         }
         jobs.insert(id,observation);
     }
     for id in &queued {let j=jobs.get(id).ok_or("receipt window live original absent")?;
         let(_,lease):(Digest,NativeQueueLeaseV30)=decode(&rows,borsh::to_vec(&(30u8,*id,1u8)).unwrap(),1024)?;
-        if lease.original_funding!=j.funding||lease.original_consent!=j.consent||lease.original_plan!=j.queue_plan {
+        let(_,physical):(Digest,NativePagedLeaseJournalV29)=decode(&rows,borsh::to_vec(&(29u8,*id,22u8)).unwrap(),2048)?;
+        if lease.original_funding!=j.funding||lease.original_consent!=j.consent||lease.original_plan!=j.queue_plan
+            ||physical.namespace!=j.namespace||physical.maximum!=j.maximum_contract {
             return Err("receipt window live original max/Fund/queue rebind".into());}}
     Ok(CheckedNativeReceiptSnapshotV1{state:aux.state_root(),aux:aux.root(),daa,
         queue:NativeReceiptQueueV1{root:gr,physical_root:pr,policy:policy.root(),service:g.service,live:g.live,packets:g.packets,owned_bytes:g.owned_bytes,jobs:queued},jobs,finals})

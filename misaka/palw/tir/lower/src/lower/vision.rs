@@ -61,6 +61,13 @@ pub enum VisionOut {
     Merger { out: usize },
     /// LLaVA: the rows (CLS dropped) through the projector to `out` columns.
     Projector { out: usize, act: Act },
+    /// Explicit new Pixtral/Mistral3 profile: RMS -> channel-major unfold -> learned merge -> MLP.
+    PixtralProjectorV38 { out: usize, act: Act, merge: u32, norm_eps: f64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VisionMathProfileV38 {
+    PixtralV38,
 }
 
 /// The schema an adapter of kind `vision` instantiates (`VISION_FROM_SPEC_V1`).
@@ -70,6 +77,9 @@ pub const VISION_SPEC_SCHEMA_V1: &str = "misaka.palw.vision-spec.v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisionSpec {
     pub architecture: String,
+    /// Opt-in only; absent profiles preserve every existing V1 conversion choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math_profile: Option<VisionMathProfileV38>,
     /// The canonical input size (before any downscale) and the downscale ratio.
     pub h: u32,
     pub w: u32,
@@ -112,6 +122,15 @@ pub struct VisionSpec {
 }
 
 impl VisionSpec {
+    pub fn is_pixtral_v38(&self) -> bool {
+        self.math_profile == Some(VisionMathProfileV38::PixtralV38)
+    }
+    fn affine_bias(&self) -> bool {
+        !self.is_pixtral_v38()
+    }
+    fn linear_bias<'a>(&self, name: &'a str) -> Option<&'a str> {
+        self.affine_bias().then_some(name)
+    }
     pub fn grid(&self) -> (u32, u32) {
         (self.h / self.downscale / self.patch, self.w / self.downscale / self.patch)
     }
@@ -137,6 +156,7 @@ impl VisionSpec {
             VisionOut::ClipPooled { .. } | VisionOut::SiglipHead | VisionOut::Classify { .. } => 1,
             VisionOut::Merger { .. } => self.patches() / (self.merge * self.merge) as usize,
             VisionOut::Projector { .. } => self.patches(),
+            VisionOut::PixtralProjectorV38 { merge, .. } => self.patches() / (merge as usize * merge as usize),
         }
     }
     pub fn out_width(&self) -> usize {
@@ -144,7 +164,7 @@ impl VisionSpec {
             VisionOut::ClipPooled { proj } => proj.unwrap_or(self.d),
             VisionOut::Classify { labels } => labels,
             VisionOut::SiglipHead | VisionOut::Rows => self.d,
-            VisionOut::Merger { out } | VisionOut::Projector { out, .. } => out,
+            VisionOut::Merger { out } | VisionOut::Projector { out, .. } | VisionOut::PixtralProjectorV38 { out, .. } => out,
         }
     }
 }
@@ -184,6 +204,47 @@ impl VisionSpec {
             || self.w > 1 << 14
         {
             return Err(bad("a zero or oversized patch, downscale, merge, temporal size or input".into()));
+        }
+        if self.is_pixtral_v38() {
+            if self.patch > self.h || self.patch > self.w || self.downscale != 1 || self.temporal != 1 || self.merge != 1 {
+                return Err(bad("PixtralV38 patch/grid multiplication bound".into()));
+            }
+            if self.heads > 64 {
+                return Err(bad("PixtralV38 exceeds explicit head-shard expansion budget64".into()));
+            }
+            let rows = self.rows() as u64;
+            if rows.checked_mul(rows).is_none_or(|n| n > tir::types::MAX_ELEMENTS) {
+                return Err(bad("PixtralV38 one-head score matrix exceeds canonical element cap".into()));
+            }
+            if !self.rms
+                || !self.swiglu
+                || !self.pre_norm
+                || self.cls
+                || self.learned_pos
+                || self.pos_interp.is_some()
+                || self.patch_bias
+                || self.temporal != 1
+                || self.merge != 1
+                || self.window.is_some()
+                || self.head_dim() % 4 != 0
+                || self.eps != 1e-5
+                || self.rope_theta.is_none()
+            {
+                return Err(bad("PixtralV38 exact bias-free RMS/axial/row-major tower contract differs".into()));
+            }
+            match self.out {
+                VisionOut::PixtralProjectorV38 { out, merge, norm_eps, .. }
+                    if out > 0
+                        && merge > 0
+                        && merge <= 16
+                        && self.grid().0 % merge == 0
+                        && self.grid().1 % merge == 0
+                        && norm_eps > 0.0
+                        && norm_eps.is_finite() => {}
+                _ => return Err(bad("PixtralV38 projector/merge/profile differs".into())),
+            }
+        } else if matches!(self.out, VisionOut::PixtralProjectorV38 { .. }) {
+            return Err(bad("Pixtral projector needs explicit math profile V38".into()));
         }
         if self.run > self.layers {
             return Err(bad(format!("{} layers run of {}", self.run, self.layers)));
@@ -308,6 +369,7 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
             let (mean, std) = mean_std.unwrap_or((OPENAI_MEAN, OPENAI_STD));
             VisionSpec {
                 architecture: arch.clone(),
+                math_profile: None,
                 h: image,
                 w: image,
                 downscale: 1,
@@ -371,6 +433,7 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
             let (mean, std) = mean_std.unwrap_or(([0.5; 3], [0.5; 3]));
             VisionSpec {
                 architecture: arch.clone(),
+                math_profile: None,
                 h: image,
                 w: image,
                 downscale: 1,
@@ -450,6 +513,7 @@ pub fn parse_vision_rust(config: &str, size: Option<(u32, u32)>, mean_std: Optio
             let (mean, std) = mean_std.unwrap_or((OPENAI_MEAN, OPENAI_STD));
             VisionSpec {
                 architecture: arch.clone(),
+                math_profile: None,
                 h,
                 w,
                 downscale: 1,
@@ -545,7 +609,7 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
         v.push(("pos".into(), vec![rows, d], false, Src::t(n("pos")?).reshape(vec![rows, d])));
     }
     if s.pre_norm {
-        norm(&mut v, "pre_norm", "pre_norm", d, true, false)?;
+        norm(&mut v, "pre_norm", "pre_norm", d, !s.is_pixtral_v38(), false)?;
     }
     // layers
     let bias_norm = !s.rms;
@@ -559,16 +623,16 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
         }
     } else {
         for k in ["attn.q", "attn.k", "attn.v"] {
-            lin(&mut v, k, k, d, d, true, true)?;
+            lin(&mut v, k, k, d, d, s.affine_bias(), true)?;
         }
     }
-    lin(&mut v, "attn.o", "attn.o", d, d, true, true)?;
+    lin(&mut v, "attn.o", "attn.o", d, d, s.affine_bias(), true)?;
     norm(&mut v, "norm2", "norm2", d, bias_norm, true)?;
     if s.swiglu {
-        lin(&mut v, "mlp.gate", "mlp.gate", s.inter, d, true, true)?;
+        lin(&mut v, "mlp.gate", "mlp.gate", s.inter, d, s.affine_bias(), true)?;
     }
-    lin(&mut v, "mlp.up", "mlp.up", s.inter, d, true, true)?;
-    lin(&mut v, "mlp.down", "mlp.down", d, s.inter, true, true)?;
+    lin(&mut v, "mlp.up", "mlp.up", s.inter, d, s.affine_bias(), true)?;
+    lin(&mut v, "mlp.down", "mlp.down", d, s.inter, s.affine_bias(), true)?;
     // post
     match &s.out {
         VisionOut::Rows => norm(&mut v, "post_norm", "post_norm", d, true, false)?,
@@ -606,6 +670,12 @@ fn param_table(s: &VisionSpec) -> Result<Vec<(String, Vec<usize>, bool, Src)>> {
             lin(&mut v, "proj.up", "proj.up", *out, d, true, false)?;
             lin(&mut v, "proj.down", "proj.down", *out, *out, true, false)?;
         }
+        VisionOut::PixtralProjectorV38 { out, merge, .. } => {
+            norm(&mut v, "projector.norm", "projector.norm", d, false, false)?;
+            lin(&mut v, "patch_merger", "patch_merger", d, d * (*merge as usize) * (*merge as usize), false, false)?;
+            lin(&mut v, "proj.up", "proj.up", *out, d, false, false)?;
+            lin(&mut v, "proj.down", "proj.down", *out, *out, false, false)?;
+        }
     }
     Ok(v)
 }
@@ -620,6 +690,8 @@ pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
         .map(|(n, sh, pl, _)| ParamDecl { name: n.clone(), shape: sh.clone(), per_layer: *pl, init: Init::Normal(0.1) })
         .collect();
     let post_names: std::collections::BTreeSet<&str> = [
+        "projector.norm.gain",
+        "patch_merger.w",
         "post_norm.gain",
         "post_norm.bias",
         "proj.w",
@@ -792,6 +864,11 @@ pub fn rope_2d(s: &VisionSpec) -> Option<(Vec<f64>, Vec<f64>)> {
     let dh = s.head_dim();
     let spatial = dh / 2;
     let inv: Vec<f64> = (0..spatial).step_by(2).map(|i| 1.0 / crate::detmath::powf(theta, i as f64 / spatial as f64)).collect();
+    let inv_w: Vec<f64> = if s.is_pixtral_v38() {
+        (0..spatial).step_by(2).map(|i| 1.0 / crate::detmath::powf(theta, (2 * i + 2) as f64 / dh as f64)).collect()
+    } else {
+        inv.clone()
+    };
     let mut coords = patch_coords(s);
     if let Some((perm, _, _)) = window_tables(s) {
         coords = perm.iter().map(|p| coords[*p as usize]).collect();
@@ -799,7 +876,7 @@ pub fn rope_2d(s: &VisionSpec) -> Option<(Vec<f64>, Vec<f64>)> {
     let (mut c, mut sn) = (Vec::with_capacity(coords.len() * dh), Vec::with_capacity(coords.len() * dh));
     for (h, w) in coords {
         let mut ang: Vec<f64> = inv.iter().map(|f| h as f64 * (*f as f32) as f64).collect();
-        ang.extend(inv.iter().map(|f| w as f64 * (*f as f32) as f64));
+        ang.extend(inv_w.iter().map(|f| w as f64 * (*f as f32) as f64));
         let half = ang.clone();
         ang.extend(half);
         c.extend(ang.iter().map(|a| crate::detmath::cos_f32(*a as f32) as f64));
@@ -938,8 +1015,9 @@ pub fn float_forward(
         (0..out).map(|o| bias.map_or(0.0, |b| b[o]) + (0..inp).map(|i| w[o * inp + i] * x[i]).sum::<f64>()).collect()
     };
     if s.pre_norm {
-        let (g, b) = (p("pre_norm.gain", None)?, p("pre_norm.bias", None)?);
-        x = x.iter().map(|r| ln(r, &g, Some(&b), s.eps, false)).collect();
+        let g = p("pre_norm.gain", None)?;
+        let bias = if s.is_pixtral_v38() { None } else { Some(p("pre_norm.bias", None)?) };
+        x = x.iter().map(|r| ln(r, &g, bias.as_deref(), s.eps, s.is_pixtral_v38())).collect();
         observe("pre.pre_norm".into(), &x);
     }
     let (heads, dh, l_rows) = (s.heads, s.head_dim(), s.rows());
@@ -958,7 +1036,11 @@ pub fn float_forward(
             let b = if bias { Some(p(&format!("{name}.b"), ly)?) } else { None };
             Ok(x.iter().map(|r| lin(r, &w, b.as_deref(), out)).collect())
         };
-        let (mut q, mut k, v) = (proj("attn.q", &n1, d, true)?, proj("attn.k", &n1, d, true)?, proj("attn.v", &n1, d, true)?);
+        let (mut q, mut k, v) = (
+            proj("attn.q", &n1, d, s.affine_bias())?,
+            proj("attn.k", &n1, d, s.affine_bias())?,
+            proj("attn.v", &n1, d, s.affine_bias())?,
+        );
         observe(format!("{pre}attn.q"), &q);
         observe(format!("{pre}attn.k"), &k);
         observe(format!("{pre}attn.v"), &v);
@@ -996,7 +1078,7 @@ pub fn float_forward(
             }
         }
         observe(format!("{pre}attn.ctx"), &ctx);
-        let o = proj("attn.o", &ctx, d, true)?;
+        let o = proj("attn.o", &ctx, d, s.affine_bias())?;
         observe(format!("{pre}attn.o"), &o);
         let r1: Vec<Vec<f64>> = x.iter().zip(&o).map(|(a, b)| a.iter().zip(b).map(|(a, b)| a + b).collect()).collect();
         observe(format!("{pre}resid.mix"), &r1);
@@ -1006,9 +1088,9 @@ pub fn float_forward(
         observe(format!("{pre}norm2"), &n2);
         let act = |z: f64| crate::float_ref::act(s.act, z as f32) as f64;
         let hidden: Vec<Vec<f64>> = if s.swiglu {
-            let gate = proj("mlp.gate", &n2, s.inter, true)?;
+            let gate = proj("mlp.gate", &n2, s.inter, s.affine_bias())?;
             observe(format!("{pre}mlp.gate"), &gate);
-            let up = proj("mlp.up", &n2, s.inter, true)?;
+            let up = proj("mlp.up", &n2, s.inter, s.affine_bias())?;
             observe(format!("{pre}mlp.up"), &up);
             let ga: Vec<Vec<f64>> = gate.iter().map(|r| r.iter().map(|z| act(*z)).collect()).collect();
             observe(format!("{pre}mlp.gate_act"), &ga);
@@ -1016,13 +1098,13 @@ pub fn float_forward(
             observe(format!("{pre}mlp.prod"), &prod);
             prod
         } else {
-            let up = proj("mlp.up", &n2, s.inter, true)?;
+            let up = proj("mlp.up", &n2, s.inter, s.affine_bias())?;
             observe(format!("{pre}mlp.up"), &up);
             let a: Vec<Vec<f64>> = up.iter().map(|r| r.iter().map(|z| act(*z)).collect()).collect();
             observe(format!("{pre}mlp.act"), &a);
             a
         };
-        let down = proj("mlp.down", &hidden, d, true)?;
+        let down = proj("mlp.down", &hidden, d, s.affine_bias())?;
         observe(format!("{pre}mlp.down"), &down);
         x = r1.iter().zip(&down).map(|(a, b)| a.iter().zip(b).map(|(a, b)| a + b).collect()).collect();
         observe(format!("{pre}resid.ffn"), &x);
@@ -1106,6 +1188,39 @@ pub fn float_forward(
                 down = inv.iter().map(|u| down[*u as usize].clone()).collect();
             }
             down
+        }
+        VisionOut::PixtralProjectorV38 { out, act, merge, norm_eps } => {
+            let gain = p("projector.norm.gain", None)?;
+            let normalized = x.iter().map(|r| ln(r, &gain, None, *norm_eps, true)).collect::<Vec<_>>();
+            observe("post.projector.norm".into(), &normalized);
+            let (gh, gw) = s.grid();
+            let m = *merge as usize;
+            let (gh, gw) = (gh as usize, gw as usize);
+            let mut grouped = Vec::with_capacity((gh / m) * (gw / m));
+            for gy in 0..gh / m {
+                for gx in 0..gw / m {
+                    let mut row = Vec::with_capacity(d * m * m);
+                    for channel in 0..d {
+                        for dy in 0..m {
+                            for dx in 0..m {
+                                row.push(normalized[(gy * m + dy) * gw + gx * m + dx][channel]);
+                            }
+                        }
+                    }
+                    grouped.push(row);
+                }
+            }
+            observe("post.patch_merger.in".into(), &grouped);
+            let merge_weight = p("patch_merger.w", None)?;
+            let merged = grouped.iter().map(|r| lin(r, &merge_weight, None, d)).collect::<Vec<_>>();
+            observe("post.patch_merger".into(), &merged);
+            let up_weight = p("proj.up.w", None)?;
+            let up = merged.iter().map(|r| lin(r, &up_weight, None, *out)).collect::<Vec<_>>();
+            observe("post.proj.up".into(), &up);
+            let activated = up.iter().map(|r| r.iter().map(|v| gelu(*act, *v)).collect::<Vec<_>>()).collect::<Vec<_>>();
+            observe("post.proj.act".into(), &activated);
+            let down_weight = p("proj.down.w", None)?;
+            activated.iter().map(|r| lin(r, &down_weight, None, *out)).collect()
         }
         VisionOut::Projector { out, act } => {
             let rows = &x[usize::from(s.cls)..];
@@ -1274,6 +1389,84 @@ fn idx_param(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &Lb, name: &str, v: 
     let n = v.len();
     let p = decl(b, cx, lb, name, DType::Idx, &[n], false, Arc::new(move |_| Ok(IntTensor::idx(vec![n], v.clone()))))?;
     Ok(b.clamp(p, 0, bound.max(1) as i64 - 1, DType::Idx))
+}
+
+/// Mistral3's channel-major `F.unfold`, expressed only as rank<=4 layout primitives.
+/// Input rows are row-major patches; each grouped row orders channel, dy, dx.
+pub fn pixtral_unfold_v38(b: &mut BlockBuilder<'_>, input: tir::Ref, gh: u32, gw: u32, width: u32, merge: u32) -> Result<tir::Ref> {
+    if merge == 0 || merge > 16 || gh == 0 || gw == 0 || width == 0 || gh % merge != 0 || gw % merge != 0 {
+        return Err(LowerError::bad("PixtralV38 unfold geometry"));
+    }
+    let cells = (gh as u64)
+        .checked_mul(gw as u64)
+        .and_then(|n| n.checked_mul(width as u64))
+        .ok_or_else(|| LowerError::bad("PixtralV38 unfold product overflow"))?;
+    if cells > tir::types::MAX_ELEMENTS || b.shape(input) != vec![tir::Dim::Fixed(gh * gw), tir::Dim::Fixed(width)] {
+        return Err(LowerError::bad("PixtralV38 unfold exact source shape/element bound"));
+    }
+    let groups = (gh / merge) * (gw / merge);
+    let r = b.reshape_fixed(input, &[gh, gw / merge, merge, width]);
+    let r = b.transpose(r, &[0, 1, 3, 2]);
+    let r = b.reshape_fixed(r, &[gh / merge, merge, (gw / merge) * width * merge]);
+    let r = b.transpose(r, &[0, 2, 1]);
+    let r = b.reshape_fixed(r, &[groups, width, merge, merge]);
+    let r = b.transpose(r, &[0, 1, 3, 2]);
+    Ok(b.reshape_fixed(r, &[groups, width * merge * merge]))
+}
+
+/// Per-head score matrices preserve every reduction order without constructing H*L*L.
+/// The new profile owns the distinct graph/work/commitment identity and retains all heads.
+fn pixtral_attention_context_v38(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &Lb,
+    q: &Val,
+    k: &Val,
+    v: &Val,
+    heads: u32,
+    rows: u32,
+    head_dim: u32,
+) -> Result<Val> {
+    let (q_key, k_key, scale) = (q.key.clone(), k.key.clone(), 1.0 / (head_dim as f64).sqrt());
+    let (score_m, score_s) = decl_ms(
+        b,
+        cx,
+        lb,
+        "attn.score",
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&q_key)? * c.scale(&k_key)? * scale * (1u64 << LOGIT_Q) as f64])),
+    )?;
+    let context_key = site_key("attn.ctx");
+    let (value_key, target_key) = (v.key.clone(), context_key.clone());
+    let (ctx_m, ctx_s) = decl_ms(
+        b,
+        cx,
+        lb,
+        "attn.ctx",
+        1,
+        Arc::new(move |c| Ok(vec![c.scale(&value_key)? / (1u64 << 24) as f64 / c.scale(&target_key)?])),
+    )?;
+    let mut contexts = Vec::with_capacity(heads as usize);
+    for head in 0..heads {
+        let qh = b.slice(q.r, 0, head, 1);
+        let kh = b.slice(k.r, 0, head, 1);
+        let vh = b.slice(v.r, 0, head, 1);
+        let kt = b.transpose(kh, &[0, 2, 1]);
+        let scores = b.matmul(qh, kt, DType::I64);
+        let logits = narrow(b, scores, score_m, score_s, None, DType::I32);
+        let probabilities = softmax_rows(b, logits, 1, rows, head_dim);
+        let weighted = b.matmul(probabilities, vh, DType::I64);
+        let ctx = narrow(b, weighted, ctx_m, ctx_s, None, DType::I16);
+        b.commit(ctx);
+        contexts.push(ctx);
+    }
+    while contexts.len() > 1 {
+        contexts = contexts.chunks(8).map(|part| if part.len() == 1 { part[0] } else { b.concat(part, 0) }).collect();
+    }
+    let all = *contexts.first().ok_or_else(|| LowerError::bad("PixtralV38 no heads"))?;
+    let rows_first = b.transpose(all, &[1, 0, 2]);
+    let flat = b.reshape_fixed(rows_first, &[rows, heads * head_dim]);
+    Ok(rows_val(flat, DType::I16, context_key, (heads * head_dim) as usize, "attn.ctx"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1496,7 +1689,17 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 if resid_commit_needed(l as u32, d, pl_us) {
                     b.commit(e.r);
                 }
-                e = norm_rows_kind(&mut b, cx, &mut lb, &e, NormKind::Layer, s.eps, "pre_norm", true, &resid_want())?;
+                e = norm_rows_kind(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &e,
+                    if s.is_pixtral_v38() { NormKind::Rms } else { NormKind::Layer },
+                    s.eps,
+                    "pre_norm",
+                    !s.is_pixtral_v38(),
+                    &resid_want(),
+                )?;
                 note_resid(cx, &lb, &e);
             }
             let e = ensure_node(&mut b, &e);
@@ -1515,8 +1718,16 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
             let rope = rope_2d(s);
             let mut qkv = Vec::new();
             for name in ["attn.q", "attn.k", "attn.v"] {
-                let v =
-                    linear_rows(&mut b, cx, &mut lb, &n1, &format!("{name}.w"), Some(&format!("{name}.b")), name, &codes_want(name))?;
+                let v = linear_rows(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &n1,
+                    &format!("{name}.w"),
+                    s.linear_bias(&format!("{name}.b")),
+                    name,
+                    &codes_want(name),
+                )?;
                 let r = b.reshape_fixed(v.r, &[l as u32, h, dh]);
                 let r = b.transpose(r, &[1, 0, 2]);
                 qkv.push(Val { r, ..v });
@@ -1563,54 +1774,67 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 }
             }
             let (q, k, v) = (qkv[0].clone(), qkv[1].clone(), qkv[2].clone());
-            let kt = b.transpose(k.r, &[0, 2, 1]);
-            let sc = b.matmul(q.r, kt, DType::I64);
-            let (kq, kk, scale) = (q.key.clone(), k.key.clone(), 1.0 / (dh as f64).sqrt());
-            let (m, sh) = decl_ms(
-                &mut b,
-                cx,
-                &lb,
-                "attn.score",
-                1,
-                Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
-            )?;
-            let mut logits = narrow(&mut b, sc, m, sh, None, DType::I32);
-            if windowed {
-                let (_, wins, _) = window_tables(s).ok_or_else(|| LowerError::eval("internal: windowed without windows"))?;
-                let nw = wins.iter().max().map_or(1, |m| *m as usize + 1);
-                let wi = idx_param(&mut b, cx, &lb, "attn.window_ids", wins, nw)?;
-                let wr = b.reshape_fixed(wi, &[l as u32, 1]);
-                let wc = b.reshape_fixed(wi, &[1, l as u32]);
-                let same = b.compare(wr, wc, tir::Cmp::Eq);
-                let neg = b.c(DType::I32, i32::MIN as i128);
-                logits = b.select(same, logits, neg, DType::I32);
-            }
-            let pmat = softmax_rows(&mut b, logits, h, l as u32, dh);
-            let o = b.matmul(pmat, v.r, DType::I64);
-            let ck = site_key("attn.ctx");
-            let (kv, kc) = (v.key.clone(), ck.clone());
-            let (m, sh) = decl_ms(
-                &mut b,
-                cx,
-                &lb,
-                "attn.ctx",
-                1,
-                Arc::new(move |c| Ok(vec![c.scale(&kv)? / (1u64 << 24) as f64 / c.scale(&kc)?])),
-            )?;
-            let ctx = narrow(&mut b, o, m, sh, None, DType::I16);
-            b.commit(ctx);
-            let ctx = b.transpose(ctx, &[1, 0, 2]);
-            let ctx = b.reshape_fixed(ctx, &[l as u32, h * dh]);
-            let ctxv = rows_val(ctx, DType::I16, ck, d, "attn.ctx");
-            let att = linear_rows(&mut b, cx, &mut lb, &ctxv, "attn.o.w", Some("attn.o.b"), "attn.o", &resid_want())?;
+            let ctxv = if s.is_pixtral_v38() {
+                pixtral_attention_context_v38(&mut b, cx, &lb, &q, &k, &v, h, l as u32, dh)?
+            } else {
+                let kt = b.transpose(k.r, &[0, 2, 1]);
+                let sc = b.matmul(q.r, kt, DType::I64);
+                let (kq, kk, scale) = (q.key.clone(), k.key.clone(), 1.0 / (dh as f64).sqrt());
+                let (m, sh) = decl_ms(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "attn.score",
+                    1,
+                    Arc::new(move |c| Ok(vec![c.scale(&kq)? * c.scale(&kk)? * scale * (1u64 << LOGIT_Q) as f64])),
+                )?;
+                let mut logits = narrow(&mut b, sc, m, sh, None, DType::I32);
+                if windowed {
+                    let (_, wins, _) = window_tables(s).ok_or_else(|| LowerError::eval("internal: windowed without windows"))?;
+                    let nw = wins.iter().max().map_or(1, |m| *m as usize + 1);
+                    let wi = idx_param(&mut b, cx, &lb, "attn.window_ids", wins, nw)?;
+                    let wr = b.reshape_fixed(wi, &[l as u32, 1]);
+                    let wc = b.reshape_fixed(wi, &[1, l as u32]);
+                    let same = b.compare(wr, wc, tir::Cmp::Eq);
+                    let neg = b.c(DType::I32, i32::MIN as i128);
+                    logits = b.select(same, logits, neg, DType::I32);
+                }
+                let pmat = softmax_rows(&mut b, logits, h, l as u32, dh);
+                let o = b.matmul(pmat, v.r, DType::I64);
+                let ck = site_key("attn.ctx");
+                let (kv, kc) = (v.key.clone(), ck.clone());
+                let (m, sh) = decl_ms(
+                    &mut b,
+                    cx,
+                    &lb,
+                    "attn.ctx",
+                    1,
+                    Arc::new(move |c| Ok(vec![c.scale(&kv)? / (1u64 << 24) as f64 / c.scale(&kc)?])),
+                )?;
+                let ctx = narrow(&mut b, o, m, sh, None, DType::I16);
+                b.commit(ctx);
+                let ctx = b.transpose(ctx, &[1, 0, 2]);
+                let ctx = b.reshape_fixed(ctx, &[l as u32, h * dh]);
+                rows_val(ctx, DType::I16, ck, d, "attn.ctx")
+            };
+            let att = linear_rows(&mut b, cx, &mut lb, &ctxv, "attn.o.w", s.linear_bias("attn.o.b"), "attn.o", &resid_want())?;
             let r1 = add_rows(&mut b, cx, &lb, &x, &att, "resid.mix")?;
             b.commit(r1.r);
             let n2 = norm_rows_kind(&mut b, cx, &mut lb, &r1, kind, s.eps, "norm2", !s.rms, &codes_want("norm2"))?;
             let hidden = if s.swiglu {
-                let gate =
-                    linear_rows(&mut b, cx, &mut lb, &n2, "mlp.gate.w", Some("mlp.gate.b"), "mlp.gate", &codes_want("mlp.gate"))?;
+                let gate = linear_rows(
+                    &mut b,
+                    cx,
+                    &mut lb,
+                    &n2,
+                    "mlp.gate.w",
+                    s.linear_bias("mlp.gate.b"),
+                    "mlp.gate",
+                    &codes_want("mlp.gate"),
+                )?;
                 let ga = lower_table_named(&mut b, cx, &mut lb, &gate, TableFn::Act(s.act), "mlp.gate_act")?;
-                let up = linear_rows(&mut b, cx, &mut lb, &n2, "mlp.up.w", Some("mlp.up.b"), "mlp.up", &codes_want("mlp.up"))?;
+                let up =
+                    linear_rows(&mut b, cx, &mut lb, &n2, "mlp.up.w", s.linear_bias("mlp.up.b"), "mlp.up", &codes_want("mlp.up"))?;
                 let prod = b.mul(ga.r, up.r, DType::I32);
                 let pk = site_key("mlp.prod");
                 let (ka, ku, kp) = (ga.key.clone(), up.key.clone(), pk.clone());
@@ -1626,10 +1850,12 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 b.commit(r);
                 rows_val(r, DType::I16, pk, s.inter, "mlp.prod")
             } else {
-                let up = linear_rows(&mut b, cx, &mut lb, &n2, "mlp.up.w", Some("mlp.up.b"), "mlp.up", &codes_want("mlp.up"))?;
+                let up =
+                    linear_rows(&mut b, cx, &mut lb, &n2, "mlp.up.w", s.linear_bias("mlp.up.b"), "mlp.up", &codes_want("mlp.up"))?;
                 lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(s.act), "mlp.act")?
             };
-            let down = linear_rows(&mut b, cx, &mut lb, &hidden, "mlp.down.w", Some("mlp.down.b"), "mlp.down", &resid_want())?;
+            let down =
+                linear_rows(&mut b, cx, &mut lb, &hidden, "mlp.down.w", s.linear_bias("mlp.down.b"), "mlp.down", &resid_want())?;
             let r2 = add_rows(&mut b, cx, &lb, &r1, &down, "resid.ffn")?;
             note_site(cx, tb, &r2);
             Ok((b.finish(&[r2.r]), None))
@@ -1820,6 +2046,45 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                         }
                         None => down,
                     }
+                }
+                VisionOut::PixtralProjectorV38 { merge, norm_eps, act, .. } => {
+                    let n = norm_rows_kind(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &x,
+                        NormKind::Rms,
+                        *norm_eps,
+                        "projector.norm",
+                        false,
+                        &codes_want("projector.norm"),
+                    )?;
+                    let (gh, gw) = s.grid();
+                    let m = *merge;
+                    let r = pixtral_unfold_v38(&mut b, n.r, gh, gw, d as u32, m)?;
+                    let grouped = Val { r, len: d * (m * m) as usize, site: "patch_merger.in".into(), ..n };
+                    let merged = linear_rows(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &grouped,
+                        "patch_merger.w",
+                        None,
+                        "patch_merger",
+                        &codes_want("patch_merger"),
+                    )?;
+                    let up = linear_rows(&mut b, cx, &mut lb, &merged, "proj.up.w", None, "proj.up", &codes_want("proj.up"))?;
+                    let activated = lower_table_named(&mut b, cx, &mut lb, &up, TableFn::Act(*act), "proj.act")?;
+                    linear_rows(
+                        &mut b,
+                        cx,
+                        &mut lb,
+                        &activated,
+                        "proj.down.w",
+                        None,
+                        "out",
+                        &Want { dt: DType::I32, key: ok.clone() },
+                    )?
                 }
                 VisionOut::Projector { act, .. } => {
                     let rows = b.slice(x.r, 0, u32::from(s.cls), s.patches() as u32);

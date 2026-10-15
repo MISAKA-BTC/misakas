@@ -27,10 +27,24 @@ MODELS = {
     "moe-35b-a3b": ("Misakachain/Qwen3.6-35B-A3B-PALW-runtime",) * 2,
 }
 RIGHTS = ["block_production", "coinbase", "final_weight"]
+MASTER_PIN_FIELDS = ("native_class_set", "complete_source", "manifest", "complete_inventory", "program_set",
+                     "real_parameter_set", "maximum_scope_set", "maximum_resource_set")
 
 
 def hex_string(value: object, digits: int) -> bool:
     return isinstance(value, str) and len(value) == digits and all(c in "0123456789abcdef" for c in value)
+
+
+def expected_identity(model: dict) -> dict | None:
+    master = model.get("native_master_pin")
+    if master is not None:
+        if (not isinstance(master, dict) or set(master) != {"namespace", *MASTER_PIN_FIELDS}
+                or master.get("namespace") != 32 or any(not hex_string(master.get(k), 128) for k in MASTER_PIN_FIELDS)):
+            return None
+        return master
+    artifact = model.get("complete_artifact_pin") or {}
+    fields = ("native_class", "native_source", "program_root", "inventory_root", "real_parameter_root")
+    return {k: artifact[k] for k in fields} if all(hex_string(artifact.get(k), 128) for k in fields) else None
 
 
 def validate_target(doc: dict) -> dict[str, dict]:
@@ -124,8 +138,7 @@ def validate_inputs(target: dict, cohort: dict, plan: dict, cohort_sha: str) -> 
         artifact = model.get("complete_artifact_pin")
         if (not isinstance(model.get("runtime_variant"), str) or not model["runtime_variant"]
                 or not isinstance(artifact, dict) or not hex_string(artifact.get("sha256"), 64)
-                or any(not hex_string(artifact.get(k), 128)
-                       for k in ("inventory_root", "real_parameter_root", "program_root", "native_class", "native_source"))):
+                or expected_identity(model) is None):
             raise ValueError("exact runtime variant and canonical artifact/native identity must be committed before measurement")
         # The generated canonical artifact is local; publisher LFS metadata alone
         # neither authenticates it nor establishes conversion equivalence.
@@ -144,12 +157,11 @@ def launch_outcome(target: dict, records: list[dict], observations: list[dict], 
     members = []
     for key, model in models.items():
         record, row = by_id[key], observed[key]
-        artifact = model.get("complete_artifact_pin") or {}
         native = row.get("launch_native_anchor", {})
         # Filled below from the two fresh independent native replay exports;
         # producer-supplied stage status is never the anchor source.
-        identities = ("native_class", "native_source", "program_root", "inventory_root", "real_parameter_root")
-        exact = all(hex_string(artifact.get(k), 128) and native.get(k) == artifact[k] for k in identities)
+        expected = expected_identity(model)
+        exact = expected is not None and native == expected
         stages = record.get("stages", {})
         passed = (record.get("final_capable") is True and exact
                   and all(stages.get(s) == "PASS" for s in ac.STAGES))
@@ -169,12 +181,15 @@ def proof_derived_identity(audit: dict, root: Path) -> dict | None:
         return None
     report = runner.read_json(runner.relative_file(root, evidence["path"]))
     anchor = audit.get("validated_anchor", {})
+    if report.get("namespace") == 32:
+        return proof_derived_master_binding(audit, report, root)
     # Native28 is a component, not a complete-model Final. A new complete
     # Master32 exporter needs its own explicit verifier/schema before admission.
     if (report.get("schema") != ac.NATIVE_AUDIT_SCHEMA or report.get("namespace") != 29
             or report.get("pinned_headers_and_original_rows_verified") is not True
             or report.get("qualified_native_profile") is not True
             or report.get("final_receipt_class") != "qualified-final"
+            or report.get("local_qualified_validation_network") is not False
             or report.get("utxo_redemption_verified") is not True
             or any(report.get(k) != anchor.get(k) for k in ("class", "source", "job"))):
         return None
@@ -184,6 +199,55 @@ def proof_derived_identity(audit: dict, root: Path) -> dict | None:
     if any(not hex_string(v, 128) for v in identity.values()) or audit.get("complete_model_identity") != identity:
         return None
     return identity
+
+
+def proof_derived_master_binding(audit: dict, report: dict, root: Path) -> dict | None:
+    binding_evidence = audit.get("complete_model_binding_evidence", {})
+    if (not ac.evidence_ok(binding_evidence, root) or binding_evidence not in audit.get("chain_objects", [])
+            or runner.read_json(runner.relative_file(root, binding_evidence["path"])) != report
+            or report.get("schema") != "misaka.palw.pinned-native-master-execution-audit.v32"
+            or report.get("namespace") != 32 or report.get("pinned_headers_and_original_rows_verified") is not True
+            or report.get("all_original_component_finals_and_credits_verified") is not True
+            or report.get("qualified_native_profile") is not True or report.get("final_receipt_class") != "qualified-final"
+            or report.get("local_qualified_validation_network") is not False or report.get("master_mints_extra_credit") is not False):
+        return None
+    binding = report.get("complete_model_binding")
+    if (not isinstance(binding, dict) or set(binding) != {"namespace", *MASTER_PIN_FIELDS}
+            or binding.get("namespace") != 32 or any(not hex_string(binding.get(k), 128) for k in MASTER_PIN_FIELDS)
+            or audit.get("complete_model_binding") != binding):
+        return None
+    components = report.get("components", [])
+    receipts = audit.get("component_redemption_evidence", [])
+    if not 1 <= len(components) <= 64 or len(receipts) != len(components):
+        return None
+    jobs, credits = set(), set()
+    for stage, (component, evidence) in enumerate(zip(components, receipts)):
+        if (component.get("stage") != stage or component.get("job") in jobs or component.get("single_credit") in credits
+                or not ac.evidence_ok(evidence, root) or evidence not in audit.get("chain_objects", [])):
+            return None
+        receipt = runner.read_json(runner.relative_file(root, evidence["path"]))
+        mapping = {"class": "class", "source": "source", "job": "job", "program_root": "program",
+                   "inventory": "inventory", "real_parameter_root": "real_parameter", "original_funding": "original_funding",
+                   "initial_consent": "initial_consent", "original_maximum_scope": "maximum_scope",
+                   "original_maximum_resource": "maximum_resource", "claim": "claim", "final_book": "final_book",
+                   "single_credit": "single_credit", "requester_operator": "requester_operator", "producer_operator": "producer_operator"}
+        if (receipt.get("schema") != ac.NATIVE_AUDIT_SCHEMA or receipt.get("namespace") != 28
+                or receipt.get("pinned_headers_and_original_rows_verified") is not True
+                or receipt.get("qualified_native_profile") is not True or receipt.get("final_receipt_class") != "qualified-final"
+                or receipt.get("local_qualified_validation_network") is not False
+                or receipt.get("network") != report.get("network") or receipt.get("genesis") != report.get("genesis")
+                or receipt.get("utxo_redemption_verified") is not True
+                or any(not hex_string(component.get(v), 128) or receipt.get(k) != component[v] for k, v in mapping.items())
+                or type(component.get("reward")) is not int or component["reward"] <= 0
+                or receipt.get("producer_credit") != component["reward"]):
+            return None
+        delivery = receipt.get("coinbase_delivery", {})
+        if (delivery.get("real_coinbase_inclusion_and_original_queue_consumption_verified") is not True
+                or delivery.get("accepted_spend", {}).get("accepted_spend_of_original_outpoint_verified") is not True):
+            return None
+        jobs.add(component["job"])
+        credits.add(component["single_credit"])
+    return binding
 
 
 def run(target_file: Path, target_sha: str, cohort_file: Path, plan_file: Path, plan_sha: str, out: Path) -> dict:

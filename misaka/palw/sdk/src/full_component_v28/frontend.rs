@@ -17,6 +17,7 @@ use misaka_palw_tir_lower::{
     weights::{Tensor, TensorMeta, TensorSource},
 };
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
@@ -68,6 +69,9 @@ pub struct StageFrontend {
     /// Direct canonical mode's declarative source imports; no graph/compiler metadata is required.
     #[serde(default)]
     pub source_bindings: serde_json::Value,
+    /// Explicit source-backed mathematical compiler; never an already converted artifact.
+    pub vision38: Option<super::vision38::VisionFrontendV38>,
+    pub decoder38: Option<super::decoder38::DecoderFrontendV38>,
     /// Optional independent compiler output. If supplied it must equal the declarative output.
     #[serde(default)]
     pub canonical_v2: String,
@@ -275,7 +279,7 @@ struct TensorDirectory {
     directory: PathBuf,
     stage: u16,
 }
-fn tensor_name(stage: u16, param: u16, layer: Option<u16>) -> String {
+pub(super) fn tensor_name(stage: u16, param: u16, layer: Option<u16>) -> String {
     format!("stage-{stage}-param-{param}-layer-{}.bin", layer.map(|v| v.to_string()).unwrap_or("global".into()))
 }
 impl crate::tir_stream::PalwTirRangeSourceV1 for TensorDirectory {
@@ -400,6 +404,8 @@ pub fn compile_complete_frontend_v28(
     let tokenizer = misaka_palw_tir_lower::artifact::tokenizer_id_of(&bytes(&tokenizer_path, 64 << 20)?);
     let mut programs = Vec::new();
     let mut compiled = Vec::new();
+    let mut vision_prepared = Vec::new();
+    let mut decoder_prepared = Vec::new();
     let mut raw_sources = Vec::new();
     let mut selected_names = Vec::new();
     let mut available = BTreeSet::new();
@@ -425,12 +431,27 @@ pub fn compile_complete_frontend_v28(
             compiler_inputs.push((path.clone(), sha, cap));
             Some(TirProgramV2::decode_canonical(&bytes(&path, cap)?).map_err(|e| e.to_string())?)
         };
-        let semantics = s
-            .semantics
-            .clone()
-            .or_else(|| canonical.as_ref().map(StageSemanticsV28::of_program))
-            .ok_or("COMPLETE_FRONTEND_STAGE_SEMANTICS_REQUIRED")?;
-        let pack = if !s.frontend_pack.is_empty() {
+        let semantics = s.semantics.clone().or_else(|| canonical.as_ref().map(StageSemanticsV28::of_program));
+        let mathematical = s.vision38.is_some() || s.decoder38.is_some();
+        if s.vision38.is_some() && s.decoder38.is_some() {
+            return Err("COMPLETE_FRONTEND_AMBIGUOUS_MATH_COMPILER".into());
+        }
+        if !mathematical && semantics.is_none() {
+            return Err("COMPLETE_FRONTEND_STAGE_SEMANTICS_REQUIRED".into());
+        }
+        if mathematical
+            && (!s.frontend_pack.is_empty()
+                || canonical.is_some()
+                || s.semantics.is_some()
+                || !s.source_bindings.is_null()
+                || !s.config_pointer.is_empty())
+        {
+            return Err("COMPLETE_FRONTEND_AMBIGUOUS_VISION38_SOURCE_COMPILER".into());
+        }
+        let pack = if mathematical {
+            FrontendPack::parse(&serde_json::json!({"format":misaka_palw_tir_lower::frontend_pack::FORMAT,"id":"explicit-source-backed-pixtral38",
+            "scope":{"task":plan.original.advertised_task,"completeness":"full","components":plan.original.components.iter().filter(|c|c.stages.contains(&(i as u16))).map(|c|&c.name).collect::<Vec<_>>()},"program":null,"bindings":[]}).to_string()).map_err(|e|e.to_string())?
+        } else if !s.frontend_pack.is_empty() {
             if !s.source_bindings.is_null() {
                 return Err("COMPLETE_FRONTEND_AMBIGUOUS_DIRECT_IMPORT".into());
             }
@@ -504,15 +525,71 @@ pub fn compile_complete_frontend_v28(
             consumed.insert(format!("{}::{name}", s.checkpoint));
         }
         let subset = Subset { source: &source, names: names.clone() };
-        let stage = pack.compile_stage_v28(&config, &subset, &semantics, plan.block_bytes).map_err(|e| e.to_string())?;
-        let program = stage.program().clone();
+        let (program, stage, vision, decoder, read_names) = if let Some(profile) = &s.vision38 {
+            let path = relative(&package, &profile.statistics_file)?;
+            let sha = decode::<32>(&profile.statistics_sha256)?;
+            if hash(&path, 64 << 20)? != sha {
+                return Err("COMPLETE_FRONTEND_VISION38_CALIBRATION_PIN_DIFFERS".into());
+            }
+            compiler_inputs.push((path.clone(), sha, 64 << 20));
+            let stats = bytes(&path, 64 << 20)?;
+            let prepared = super::vision38::PreparedVisionV38::prepare(
+                &config,
+                profile,
+                std::str::from_utf8(&stats).map_err(|e| e.to_string())?,
+            )?;
+            (prepared.program.clone(), None, Some(prepared), None, s.tensor_names.clone())
+        } else if let Some(profile) = &s.decoder38 {
+            if profile.original_context != plan.original.original_contexts[i] {
+                return Err("COMPLETE_FRONTEND_DECODER_ORIGINAL_CONTEXT_DIFFERS".into());
+            }
+            let path = relative(&package, &profile.statistics_file)?;
+            let sha = decode::<32>(&profile.statistics_sha256)?;
+            if hash(&path, 64 << 20)? != sha {
+                return Err("COMPLETE_FRONTEND_DECODER38_CALIBRATION_PIN_DIFFERS".into());
+            }
+            compiler_inputs.push((path.clone(), sha, 64 << 20));
+            let stats = bytes(&path, 64 << 20)?;
+            let prepared = super::decoder38::PreparedDecoderV38::prepare(
+                &config,
+                profile,
+                std::str::from_utf8(&stats).map_err(|e| e.to_string())?,
+            )?;
+            if let Some(image) = &profile.image_rows {
+                let upstream = image.upstream_stage as usize;
+                if upstream >= i
+                    || !matches!(plan.pipeline.stages[i].bind.as_slice(),[BindingDescription::StageFinal{stage}] if *stage as usize==upstream)
+                {
+                    return Err("COMPLETE_FRONTEND_DECODER38_IMAGE_NOT_BOUND_TO_ORIGINAL_PRIOR_STAGE".into());
+                }
+                let source: &TirProgramV2 = &programs[upstream];
+                let value = &source.blocks[source.schedule.post as usize].nodes[source.output.node() as usize].out;
+                if !matches!(source.output, misaka_palw_tir::program_v2::OutputDecl::Final { .. })
+                    || value.dtype != misaka_palw_tir::DType::I32
+                    || value.shape != vec![misaka_palw_tir::Dim::Fixed(image.rows), misaka_palw_tir::Dim::Fixed(image.width)]
+                {
+                    return Err("COMPLETE_FRONTEND_DECODER38_IMAGE_OUTPUT_SHAPE_OR_KIND_DIFFERS".into());
+                }
+            }
+            (prepared.program.clone(), None, None, Some(prepared), s.tensor_names.clone())
+        } else {
+            let stage = pack
+                .compile_stage_v28(
+                    &config,
+                    &subset,
+                    semantics.as_ref().ok_or("COMPLETE_FRONTEND_STAGE_SEMANTICS_REQUIRED")?,
+                    plan.block_bytes,
+                )
+                .map_err(|e| e.to_string())?;
+            (stage.program().clone(), Some(stage), None, None, Vec::from_iter(names.iter().cloned()))
+        };
         if canonical.as_ref().is_some_and(|p| p != &program) {
             return Err("COMPLETE_FRONTEND_INDEPENDENT_CANONICAL_PROGRAM_DIFFERS".into());
         }
         if plan.original.original_contexts[i] == 0 || program.history_bound < plan.original.original_contexts[i] {
             return Err("COMPLETE_FRONTEND_ORIGINAL_CONTEXT_NOT_LOWERED".into());
         }
-        provenance.push(serde_json::json!({"stage":i,"frontend_pack":s.frontend_pack,"frontend_hash":pack.hash(),"config_file":s.config_file,"config_pointer":s.config_pointer,"source_tensor_names":stage.source_names(),"original_context_max":plan.original.original_contexts[i]}));
+        provenance.push(serde_json::json!({"stage":i,"frontend_pack":s.frontend_pack,"frontend_hash":pack.hash(),"config_file":s.config_file,"config_pointer":s.config_pointer,"source_tensor_names":read_names,"original_context_max":plan.original.original_contexts[i]}));
         misaka_palw_tir::interval_v2::analyze_ranges_v2(&program).map_err(|e| format!("COMPLETE_FRONTEND_RANGE_ADMISSION: {e}"))?;
         let mut input_raw = 0u128;
         let mut input_reference = 0u128;
@@ -552,6 +629,8 @@ pub fn compile_complete_frontend_v28(
         }
         programs.push(program);
         compiled.push(stage);
+        vision_prepared.push(vision);
+        decoder_prepared.push(decoder);
         raw_sources.push(source);
         selected_names.push(names);
     }
@@ -592,7 +671,7 @@ pub fn compile_complete_frontend_v28(
         return Err("COMPLETE_FRONTEND_UNUSED_INERT_CONFIG_FILE".into());
     }
     fn weight_file(path: &str) -> bool {
-        path.ends_with(".safetensors") || path.ends_with(".gguf") || path.ends_with(".bin")
+        path.ends_with(".safetensors") || path.ends_with(".gguf") || path.ends_with(".bin") || path.ends_with(".palwq36")
     }
     if pin_names.iter().any(|name| weight_file(name) && !acquired_checkpoint_files.contains(name)) {
         return Err("COMPLETE_FRONTEND_PINNED_WEIGHT_SHARD_WAS_NOT_ACQUIRED".into());
@@ -768,7 +847,45 @@ pub fn compile_complete_frontend_v28(
         .write(true)
         .open(output.join("weight-import.jsonl"))
         .map_err(|e| e.to_string())?;
+    let mut materialised_scales = vec![None; programs.len()];
     for (i, p) in programs.iter().enumerate() {
+        if let Some(prepared) = &vision_prepared[i] {
+            let selector = &plan.stages[i].checkpoint;
+            let checkpoint = if selector == "." { source_directory.clone() } else { relative(&source_directory, selector)? };
+            let report = prepared.write_tensors(
+                &checkpoint,
+                &selected_names[i],
+                &tensor_dir,
+                i as u16,
+                plan.block_bytes,
+                plan.maximum_file_bytes,
+            )?;
+            materialised_scales[i] = report["output_scale"].as_f64();
+            serde_json::to_writer(&mut import_log, &report).map_err(|e| e.to_string())?;
+            import_log.write_all(b"\n").map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(prepared) = &decoder_prepared[i] {
+            if let Some(image) = plan.stages[i].decoder38.as_ref().and_then(|p| p.image_rows.as_ref()) {
+                if materialised_scales[image.upstream_stage as usize] != Some(2f64.powi(-(image.q as i32))) {
+                    return Err("COMPLETE_FRONTEND_DECODER38_UPSTREAM_IMAGE_UNIT_DIFFERS".into());
+                }
+            }
+            let selector = &plan.stages[i].checkpoint;
+            let checkpoint = if selector == "." { source_directory.clone() } else { relative(&source_directory, selector)? };
+            let report = prepared.write_tensors(
+                &checkpoint,
+                &selected_names[i],
+                &tensor_dir,
+                i as u16,
+                plan.block_bytes,
+                plan.maximum_file_bytes,
+            )?;
+            materialised_scales[i] = report["output_scale"].as_f64();
+            serde_json::to_writer(&mut import_log, &report).map_err(|e| e.to_string())?;
+            import_log.write_all(b"\n").map_err(|e| e.to_string())?;
+            continue;
+        }
         let subset = Subset { source: &raw_sources[i], names: selected_names[i].clone() };
         let view = misaka_palw_tir_artifact::v2::param_view_v2(p);
         for (j, layers) in misaka_palw_tir_artifact::param_instances_v1(&view).iter().enumerate() {
@@ -777,6 +894,8 @@ pub fn compile_complete_frontend_v28(
                 let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).map_err(|e| e.to_string())?;
                 let wanted = p.params[j].shape.iter().map(|v| *v as u64).product::<u64>() * p.params[j].dtype.width() as u64;
                 let imported = compiled[i]
+                    .as_ref()
+                    .ok_or("COMPLETE_FRONTEND_MISSING_TYPED_PRODUCER")?
                     .write_tensor(&subset, j as u16, *l, &mut TensorWriter { file: &mut file, remaining: wanted }, plan.block_bytes)
                     .map_err(|e| e.to_string())?;
                 serde_json::to_writer(&mut import_log, &serde_json::json!({"stage":i,"parameter":j,"layer":l,"import":imported}))

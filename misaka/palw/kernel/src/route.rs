@@ -768,7 +768,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
             } else {
                 MAX_STAGE_EXECUTION_BYTES_V14
             },
-            36,
+            37,
         ),
         _ => return Ok(None),
     };
@@ -777,6 +777,9 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
         return Err(bad("native route version/byte cap"));
     }
     let action = *bytes.get(2).ok_or_else(|| bad("native action absent"))?;
+    if tag == TAG_STAGE_EXECUTION_V14 && action == 37 && bytes.len() != 71 {
+        return Err(bad("Master32 collection requires exactly the original master id"));
+    }
     if tag == TAG_FUNDED_EXECUTION_V11 && matches!(action, 41..=44) && bytes.len() > (32 << 10) + 79 {
         return Err(bad("initial31 complete bounded wire packet cap"));
     }
@@ -942,7 +945,8 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 36)
+            if rest.get(1).is_none_or(|a| *a > 37)
+                || rest.get(1) == Some(&37) && bytes.len() != 71
                 || rest.get(1).is_some_and(|a| *a <= 33) && bytes.len() > MAX_STAGE_EXECUTION_BYTES_V14
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
@@ -1252,6 +1256,13 @@ mod tests {
         oversized[3..7].copy_from_slice(&size.to_le_bytes());
         assert!(borrowed_native_action_v1(&oversized).is_err());
         assert!(KernelRouteObjectV1::decode(&oversized).is_err());
+        let collect = KernelRouteObjectV1::StageExecutionV14 { action: 37, body: vec![7; 64] }.encode();
+        assert!(borrowed_native_action_v1(&collect).is_ok());
+        assert!(KernelRouteObjectV1::decode(&collect).is_ok());
+        let mut unknown = collect;
+        unknown[2] = 38;
+        assert!(borrowed_native_action_v1(&unknown).is_err());
+        assert!(KernelRouteObjectV1::decode(&unknown).is_err());
     }
     #[test]
     fn native_action_borrowed_frame_has_exact_count_and_preserves_old_owned_bytes() {

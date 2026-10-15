@@ -115,6 +115,7 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
         "own_seal_and_public_da_verified": ok,
         "anchor_from_validated_consensus_database": True,
         "qualified_native_profile": qualified,
+        "local_qualified_validation_network": report.get("local_qualified_validation_network") is True,
         "isolated_calibration": not qualified,
         "chain_objects": objects,
         "validated_anchor": {
@@ -130,6 +131,28 @@ def lifecycle(a, scope: dict, ptr: dict, work: Path, out: Path) -> int:
     with out.open("x") as f:
         json.dump(doc, f, indent=2)
     return 0
+
+
+def complete_model_identity(report: dict) -> dict | None:
+    """Identity from the freshly executed offline proof verifier only.
+
+    A Stage28 component never stands in for its complete original model. Master32
+    needs its own checked composite report; until that adapter exists it remains
+    explicitly unproven, including when one component has a genuine Final.
+    """
+    if (report.get("schema") != "misaka.palw.pinned-native-final-audit.v32"
+            or report.get("namespace") != 29
+            or report.get("pinned_headers_and_original_rows_verified") is not True):
+        return None
+    fields = {"native_class": "class", "native_source": "source", "program_root": "program_root",
+              "inventory_root": "inventory", "real_parameter_root": "real_parameter_root"}
+    identity = {}
+    for key, source in fields.items():
+        value = hex128(report.get(source))
+        if value == "0" * 128:
+            raise ValueError("offline complete-model identity has a zero original root")
+        identity[key] = value
+    return identity
 
 
 def main() -> int:
@@ -214,6 +237,7 @@ def main() -> int:
                  "--pinned-spend-selected-parent", hex128(ptr.get("spend_selected_parent"))]
     run(argv, work / "audit.log", a.timeout_seconds)
     report = json.loads(report_path.read_text())
+    identity = complete_model_identity(report)
     delivery = report.get("coinbase_delivery") or {}
     spend = delivery.get("accepted_spend") or {}
     qualified = report.get("qualified_native_profile") is True and report.get("final_receipt_class") == "qualified-final"
@@ -241,12 +265,16 @@ def main() -> int:
         "own_seal_and_public_da_verified": final_ok,
         "anchor_from_validated_consensus_database": True,
         "qualified_native_profile": qualified,
+        "local_qualified_validation_network": report.get("local_qualified_validation_network") is True,
         "isolated_calibration": not qualified,
         "final_authenticated": final_ok,
         "court_window_closed": final_ok,
         "redemption_authenticated": redemption and redeemed,
         "single_credit_verified": redemption and redeemed,
         "utxo_spend_verified": redemption and redeemed,
+        "complete_model_identity": identity,
+        "complete_model_identity_status": "PROOF_DERIVED_TEXT29" if identity else "NOT_PROVEN_COMPLETE_MODEL",
+        "complete_model_identity_evidence": {"path": str(report_path.resolve().relative_to(evidence_root)), "sha256": sha256(report_path)},
         "chain_objects": objects,
         "validated_anchor": {
             "network": a.network, "genesis": a.genesis, "anchor_block": child,

@@ -636,6 +636,26 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         112 if k.len() == 2 && k[0] == 28 && k[1] == 4 => {
             <crate::palw_flat_stage_v28::NativeStagePoliciesV28 as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
+        // Explicit Master32 original before-Fund/actual projection records.
+        112 if k.len() == 66 && k[0] == 28 && k[1] == 32 => <(
+            (u16,[u8;64],u16,[u8;64],[u8;64],[u8;64],[u8;64]),
+            ([u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],[u8;64],u32),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 3 => <(
+            (u16,[u8;64],u16,[u8;64],[u8;64],[u8;64],[u8;64],[u8;64]),
+            (crate::palw_state_v2::PalwBondKeyV2,crate::palw_state_v2::PalwBondKeyV2,u64),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 4 => <Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 5 => <(
+            (u16,[u8;64],[u8;64],[u8;64]),
+            (u16,[u8;64],[u8;64],[u8;64],[u8;64],(u32,u32,u32),u32,Vec<[u8;64]>),
+            (Vec<u32>,[u8;64],u64),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 6 => <(u16,[u8;64],Vec<[u8;64]>,Vec<[u8;64]>,Option<[u8;64]>,bool) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        112 if k.len() == 66 && k[0] == 32 && k[1] == 7 => <(
+            (u16,[u8;64],[u8;64],[u8;64],crate::palw_state_v2::PalwBondKeyV2,[u8;64],[u8;64],[u8;64],Vec<[u8;64]>),
+            (u16,[u8;64],Vec<[u8;64]>,Vec<[u8;64]>,Option<[u8;64]>,bool),
+        ) as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         112 if k.len() == 66 && k[0] == 32 && k[1] == 0 => <(
             (u16, [u8; 64], crate::palw_state_v2::PalwBondKeyV2, [u8; 64], [u8; 64], [u8; 64]),
             ([u8; 64], [u8; 64], u64, u32, Vec<[u8; 64]>, Vec<[u8; 64]>),

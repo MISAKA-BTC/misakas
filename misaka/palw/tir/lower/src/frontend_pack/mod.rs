@@ -96,6 +96,7 @@ pub fn compiler_digest() -> String {
         include_str!("descriptor.rs"),
         include_str!("source.rs"),
         include_str!("source/gguf_set.rs"),
+        include_str!("source/palwq36.rs"),
         include_str!("../gguf.rs"),
         include_str!("../artifact.rs"),
         include_str!("../quantfmt/mod.rs"),

@@ -47,6 +47,7 @@ pack!(
     "qwen3-5-vision",
     "qwen3-5-vision-in-vlm",
     "llava-vision",
+    "pixtral-mistral3-vision38",
     "resnet",
     "convnext",
     "mobilenet-v2",

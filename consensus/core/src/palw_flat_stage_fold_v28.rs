@@ -187,7 +187,7 @@ fn settle_conviction(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,
     builder.cancel_native_recipient_v1(crate::Hash64::from_bytes(h.id),h.producer,14);builder.bond_budget_close_v1(&crate::Hash64::from_bytes(object_id(b"misaka-palw/native/stage-original-fixed-budget/v28",&h.id)),ctx.daa_score);
     data.book=bytes(book);h.producer_reserved=0;write_job(builder,h,data,book);builder.write_kernel_row(STAGE_TABLE_V14,key(14,&h.id),Some(bytes(&(s,queue,h.requester_payout))));builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(2u8,h.id)),Some(bytes(&(subject.row_root(),subject))));
     if refutes_source {let source=class.source();let fact=crate::palw_flat_stage_v14::NativeStageNegativeSourceFactV14{version:14,relation:source.relation_root(),source:source.id(),source_program:source.program_root(),parameters:source.parameters().root(),inventory:source.inventory_root(),proof:s.proof,established_daa:ctx.daa_score,reporter:*signer};builder.write_kernel_row(STAGE_TABLE_V14,crate::palw_flat_stage_v14::stage_key_v14(14,&fact.relation),Some(bytes(&fact)));}
-    Ok(())
+    master32::note_abort(builder,h,book)?;Ok(())
 }
 fn paid_status(builder:&TransitionBuilder<'_>,id:Digest)->Result<crate::palw_native_paged_proof_v29::NativePagedJobStatusV29,PalwStateV2Error>{let raw=builder.state.kernel_route.as_ref().unwrap().aux.get(&(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(29u8,id,0u8)))).ok_or_else(||refused("stage28 original paid status absent"))?;if raw.len()>2048{return Err(refused("stage28 original paid status cap"));}let(root,status):(Digest,crate::palw_native_paged_proof_v29::NativePagedJobStatusV29)=borsh::from_slice(raw).map_err(|_|refused("stage28 paid status grammar"))?;if status.root()!=root||status.namespace!=28||status.job!=id{return Err(refused("stage28 original paid status root differs"));}Ok(status)}
 fn write_paged(builder:&mut TransitionBuilder<'_>,p:&crate::palw_native_paged_quota_v29::NativePagedQuotaProjectionV29){let table=crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11;let g=p.global();let a=p.actor();let mut actor=vec![1];actor.extend_from_slice(&a.actor);builder.write_kernel_row(table,vec![0],Some(bytes(&(g.root(),g))));builder.write_kernel_row(table,actor,Some(bytes(&(a.root(),a))));builder.write_kernel_row(table,bytes(&(29u8,p.status().job,0u8)),Some(bytes(&(p.status().root(),p.status()))));if let Some(s)=p.seal(){builder.write_kernel_row(table,bytes(&(29u8,s.job,s.id())),Some(bytes(&(s.root(),s))));}}
@@ -261,7 +261,7 @@ fn settle_plain(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,p:&Na
     deactivate_paid_status(builder,h.id)?;
     if producer{builder.pay_native_recipient_v1(crate::Hash64::from_bytes(h.id),h.producer,14,ctx.daa_score,s.producer_credit,queue,false)?;}else{builder.cancel_native_recipient_v1(crate::Hash64::from_bytes(h.id),h.producer,14);}
     builder.write_payout(queue,Some(PalwPayoutV2{payload:if producer{h.producer_payout}else{h.requester_payout},amount:if producer{s.producer_credit}else{s.requester_credit}}));builder.bond_budget_close_v1(&crate::Hash64::from_bytes(object_id(b"misaka-palw/native/stage-original-fixed-budget/v28",&h.id)),ctx.daa_score);
-    data.book=bytes(book);h.producer_reserved=0;write_job(builder,h,data,book);builder.write_kernel_row(STAGE_TABLE_V14,key(14,&h.id),Some(bytes(&(s,queue,if producer{h.producer_payout}else{h.requester_payout}))));builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(2u8,h.id)),Some(bytes(&(subject.row_root(),subject))));Ok(())
+    data.book=bytes(book);h.producer_reserved=0;write_job(builder,h,data,book);builder.write_kernel_row(STAGE_TABLE_V14,key(14,&h.id),Some(bytes(&(s,queue,if producer{h.producer_payout}else{h.requester_payout}))));builder.write_kernel_row(crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11,bytes(&(2u8,h.id)),Some(bytes(&(subject.row_root(),subject))));master32::note_abort(builder,h,book)?;Ok(())
 }
 fn finalize(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
     let id=body.try_into().map_err(|_|refused("stage28 terminal exact original job"))?;let mut h=original_header(builder,id)?;let(s,c)=original_extents(builder,h.class)?;
@@ -280,7 +280,8 @@ fn finalize(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&P
     let conditions=maximum.conditions();if conditions.policy_root()!=book.final_policy_root()||conditions.basis_root()!=book.final_basis_root(){return Err(refused("stage28 trusted original numerical/detection/source/delivery conditions differ"));}
     let queue=settlement_queue(&h,true);let conditions_root=object_id(b"misaka-palw/native/stage-original-independent-Final-conditions/v28",&(conditions.policy_root(),conditions.basis_root(),conditions.complete_path_daa(),h.original,book.claim(),h.contract.root()));
     let outcome=book.finalize(&NativeStageFinalV28{job:id,original:h.original,claim:book.claim().unwrap(),consent:h.consent,contract:h.contract.root(),final_policy:conditions.policy_root(),final_basis:conditions.basis_root(),physical:p.physical_service,producer_operator:book.producer_operator(),established:ctx.daa_score,pending_units:0,retained_owners:0,source_original:quote.root(),original_source_closed:true,original_source_equivalent:true,original_trace_closed:true,actual_escrow:book.reward(),actual_producer_credit:book.reward(),producer_queue:queue.as_bytes(),original_native_conditions:conditions_root}).map_err(refused)?;
-    settle_plain(builder,ctx,p,&mut h,&mut data,&book,&plan,&outcome)
+    settle_plain(builder,ctx,p,&mut h,&mut data,&book,&plan,&outcome)?;
+    master32::note_final(builder,&h,&book)
 }
 
 fn collect_terminal(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,p:&NativeStagePoliciesV28,body:&[u8])->Result<(),PalwStateV2Error>{
@@ -290,6 +291,7 @@ fn collect_terminal(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,s
     let(class,actual,plan,book,_data)=restore_job(builder,p,&h)?;let _=class;let _=actual;
     if !matches!(book.terminal(),StageTerminalV28::Final|StageTerminalV28::Refunded|StageTerminalV28::Convicted)||ctx.daa_score<=book.deadline(){return Err(refused("stage28 collection lacks genuine original expired terminal"));}
     source28::quiescent(builder,&h,ctx.daa_score)?;
+    master32::check_collect(builder,&h,&book)?;
     let r=builder.state.kernel_route.as_ref().unwrap();let table=crate::palw_flat_execution_v11::EXECUTION_QUOTA_TABLE_V11;
     let owners:Vec<Digest>=read(r,19,&id,4+4*64).unwrap_or_default();if owners.len()>4{return Err(refused("stage28 original owner lifetime catalogue differs"));}
     for owner in &owners{let own=r.native_paged_seal_original_v29(id,*owner).ok_or_else(||refused("stage28 archived owner absent"))?;let raw=r.aux.get(&(table,bytes(&(26u8,id,*owner)))).ok_or_else(||refused("stage28 original caller retirement absent"))?;let(root,caller):(Digest,StageSourceCallerRowV26)=borsh::from_slice(raw).map_err(|_|refused("stage28 caller retirement grammar"))?;if !own.retired||own.original_funding!=h.original||ctx.daa_score<=own.horizon||caller.root()!=root||!caller.retired||caller.owner!=*owner||caller.original_paid!=own.original_paid_receipt||caller.remaining!=Default::default(){return Err(refused("stage28 original owner/source/cache liability remains retained"));}}
@@ -310,7 +312,8 @@ fn collect_terminal(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,s
     // Only genuine expired quota, cached payloads and catalogue slots disappear.
     super::super::palw_flat_execution_fold_v11::write_shard(builder,&shard,id);builder.write_kernel_row(table,bytes(&(2u8,id)),None);builder.write_kernel_row(table,bytes(&(22u8,0u8)),Some(bytes(&(physical.root(),physical))));builder.write_kernel_row(table,bytes(&(30u8,0u8)),Some(bytes(&(global.root(),global))));builder.write_kernel_row(STAGE_TABLE_V14,key(12,&h.requester),Some(bytes(&requester_ids)));builder.write_kernel_row(STAGE_TABLE_V14,key(13,&h.producer),Some(bytes(&producer_ids)));builder.write_kernel_row(STAGE_TABLE_V14,key(20,&id),Some(bytes(&(h.original,book.root(),book.class(),book.source(),book.claim(),settlement,h.contract.root()))));
     for owner in owners{builder.write_kernel_row(table,bytes(&(29u8,id,owner)),None);builder.write_kernel_row(table,bytes(&(26u8,id,owner)),None);}
-    for k in [bytes(&(16u8,id)),bytes(&(16u8,id,1u8)),bytes(&(26u8,id,0u8)),bytes(&(29u8,id,0u8)),bytes(&(29u8,id,1u8)),bytes(&(29u8,id,3u8)),bytes(&(29u8,id,22u8)),bytes(&(29u8,id,23u8)),bytes(&(22u8,id,2u8)),bytes(&(30u8,id,1u8)),bytes(&(30u8,id,2u8))]{builder.write_kernel_row(table,k,None);}for kind in [5,6,16,18,19]{builder.write_kernel_row(STAGE_TABLE_V14,key(kind,&id),None);}builder.note_kernel_bond(&h.requester);builder.note_kernel_bond(&h.producer);Ok(())
+    for k in [bytes(&(16u8,id)),bytes(&(16u8,id,1u8)),bytes(&(26u8,id,0u8)),bytes(&(29u8,id,0u8)),bytes(&(29u8,id,1u8)),bytes(&(29u8,id,3u8)),bytes(&(29u8,id,22u8)),bytes(&(29u8,id,23u8)),bytes(&(22u8,id,2u8)),bytes(&(30u8,id,1u8)),bytes(&(30u8,id,2u8))]{builder.write_kernel_row(table,k,None);}for kind in [5,6,16,18,19]{builder.write_kernel_row(STAGE_TABLE_V14,key(kind,&id),None);}
+    master32::collect_material(builder,id);builder.note_kernel_bond(&h.requester);builder.note_kernel_bond(&h.producer);Ok(())
 }
 /// Called only by the common new paged handler AFTER persisted original Part,
 /// Assembly and Court debits and the exact paid proof/salt hash verification.
@@ -327,7 +330,7 @@ pub(super) fn reveal_paged_v28(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlock
     let mut refutes_source=false;
     match filing.kind {
         0=>{
-            let trace=StageTraceV14::from_bytes(&data.trace,master32::actual_positions(builder.state.kernel_route.as_ref().unwrap(),h.id,h.positions)?).map_err(refused)?;
+            let trace=StageTraceV14::from_invocation_bytes_v32(&data.trace,master32::actual_positions(builder.state.kernel_route.as_ref().unwrap(),h.id,h.positions)?).map_err(refused)?;
             if master32::binding(builder.state.kernel_route.as_ref().unwrap(),h.id)?.is_some(){
                 master32::verify_computation(builder,&p,&h,&book,&class,&data,filing.body)?;
             }else{
@@ -375,8 +378,8 @@ fn register(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&P
     ids.push(id);let h=ClassHeader{version:28,id,bundle:manifest.root(),source:source.id(),policy:p.root(),scope:class.maximum_scope().root(),resource:class.maximum_resources().root(),bytes:body.len() as u32,owner:*signer};builder.write_kernel_row(STAGE_TABLE_V14,key(2,&id),Some(bytes(&h)));builder.write_kernel_row(STAGE_TABLE_V14,key(3,&id),Some(bytes(&body.to_vec())));builder.write_kernel_row(STAGE_TABLE_V14,key(8,signer),Some(bytes(&ids)));builder.note_kernel_bond(signer);Ok(())
 }
 pub(super) fn apply(builder:&mut TransitionBuilder<'_>,ctx:&PalwBlockContextV2,signer:&PalwBondKeyV2,action:u8,body:&[u8])->Result<(),PalwStateV2Error>{
-    if !(19..=36).contains(&action){return Err(refused("unknown stage28 action before bounded body decode"));}let p=policy(builder,ctx)?;
-    let result=match action {19=>bind(builder,ctx,signer,&p,body),20=>register(builder,ctx,signer,&p,body),21=>accept(builder,ctx,signer,&p,body),22=>fund(builder,ctx,signer,&p,body),23=>commit(builder,ctx,signer,&p,body),24=>owner(builder,ctx,signer,&p,body),25=>source28::request(builder,ctx,signer,&p,body),26=>source28::answer(builder,ctx,signer,&p,body),27=>source28::settle(builder,ctx,signer,&p,body),28=>discovery_convert(builder,ctx,signer,&p,body),29=>finalize(builder,ctx,signer,&p,body),30=>expire_owner(builder,ctx,signer,&p,body),31=>collect_terminal(builder,ctx,signer,&p,body),32=>source28::reply_part(builder,ctx,signer,&p,body),33=>master32::register(builder,ctx,signer,&p,body),34=>master32::accept_invocation(builder,ctx,signer,&p,body),35=>master32::fund_invocation(builder,ctx,signer,&p,body),36=>master32::commit_invocation(builder,ctx,signer,&p,body),_=>Err(refused("stage28 native action implementation pending"))};
+    if !(19..=37).contains(&action){return Err(refused("unknown stage28 action before bounded body decode"));}let p=policy(builder,ctx)?;
+    let result=match action {19=>bind(builder,ctx,signer,&p,body),20=>register(builder,ctx,signer,&p,body),21=>accept(builder,ctx,signer,&p,body),22=>fund(builder,ctx,signer,&p,body),23=>commit(builder,ctx,signer,&p,body),24=>owner(builder,ctx,signer,&p,body),25=>source28::request(builder,ctx,signer,&p,body),26=>source28::answer(builder,ctx,signer,&p,body),27=>source28::settle(builder,ctx,signer,&p,body),28=>discovery_convert(builder,ctx,signer,&p,body),29=>finalize(builder,ctx,signer,&p,body),30=>expire_owner(builder,ctx,signer,&p,body),31=>collect_terminal(builder,ctx,signer,&p,body),32=>source28::reply_part(builder,ctx,signer,&p,body),33=>master32::register(builder,ctx,signer,&p,body),34=>master32::accept_invocation(builder,ctx,signer,&p,body),35=>master32::fund_invocation(builder,ctx,signer,&p,body),36=>master32::commit_invocation(builder,ctx,signer,&p,body),37=>master32::collect_master(builder,ctx,signer,&p,body),_=>Err(refused("stage28 native action implementation pending"))};
     match result{Err(PalwStateV2Error::KernelRouteRefused(_))=>Ok(()),other=>other}
 }
 
@@ -455,7 +458,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 let data:JobData=borsh::from_slice(raw).map_err(|_|"stage28 lifecycle body grammar")?;
                 if jh.id!=id||data.book.len()!=jh.book_bytes as usize{return Err("stage28 lifecycle header/body extent differs".into());}
                 let book:StageJobBookV28=borsh::from_slice(&data.book).map_err(|_|"stage28 lifecycle book grammar")?;
-                let class=master32::audit_class(rows,p,jh.class)?;let actual=class.check_job(book.job())?;let plan=derive_stage_quota_v28(&class,&actual)?;book.check(&class,&actual,&plan)?;
+                let class=master32::audit_class(rows,p,jh.class)?;let actual=class.check_job(book.job())?;let plan=if rows.contains_key(&(STAGE_TABLE_V14,key(32,&id))){derive_stage_quota_v32(&class,&actual)?}else{derive_stage_quota_v28(&class,&actual)?};book.check(&class,&actual,&plan)?;
                 let h=header(jh.class)?;
                 if book.id()!=id||book.root()!=jh.book||book.original_root()!=jh.original||book.consent()!=jh.consent||jh.consent==[0;64]||book.contract()!=jh.contract.root(){return Err("stage28 lifecycle funded original consent/contract differs".into());}
                 Ok(NativeLifecycleAnchorV32{namespace:28,stage,class:jh.class,source:h.source,program:h.bundle,maximum_scope:book.maximum_scope_root(),maximum_resource:book.maximum_resources_root(),
@@ -480,9 +483,15 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let data:JobData=borsh::from_slice(raw).map_err(|_|"receipt original stage data grammar")?;
         let book:StageJobBookV28=borsh::from_slice(&data.book).map_err(|_|"receipt original stage book grammar")?;
         if book.root()!=h.book||book.terminal()!=h.terminal{return Err("receipt original stage terminal differs".into());}
+        let raw=rows.get(&(STAGE_TABLE_V14,key(2,&h.class))).ok_or("receipt original stage class header absent")?;
+        if raw.len()>1024{return Err("receipt original stage class header cap".into());}
+        let ch:ClassHeader=borsh::from_slice(raw).map_err(|_|"receipt original stage class header grammar")?;
+        let raw=rows.get(&(STAGE_TABLE_V14,key(0,&ch.bundle))).ok_or("receipt original complete bundle header absent")?;
+        if raw.len()>8192{return Err("receipt original complete bundle header cap".into());}
+        let bundle:BundleHeader=borsh::from_slice(raw).map_err(|_|"receipt original complete bundle header grammar")?;
         let class=master32::audit_class(rows,p,h.class)?;let(admitted,commit_deadline,committed)=book.receipt_clocks_v1();
         Ok(crate::palw_native_receipt_windows_v1::NativeReceiptJobV1{
-            namespace:28,job:id,class:a.class,source:a.source,inventory:class.source().inventory_root(),real_parameter:class.source().parameters().root(),
+            namespace:28,complete_model:bundle.source_ids.len()==1&&!rows.contains_key(&(STAGE_TABLE_V14,key(32,&id))),job:id,class:a.class,source:a.source,inventory:class.source().inventory_root(),real_parameter:class.source().parameters().root(),
             funding:a.funding,consent:a.consent,maximum_contract:h.contract.root(),maximum_scope:a.maximum_scope,maximum_resource:a.maximum_resource,
             queue_plan:h.contract.queue_plan,queue_policy:h.contract.queue_policy,source_plan:h.contract.source_plan,physical_service:book.physical_root(),
             requester_operator:a.requester_operator,producer_operator:a.producer_operator,nonce:book.job().nonce,

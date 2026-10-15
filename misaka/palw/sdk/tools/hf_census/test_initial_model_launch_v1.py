@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 import unittest
+import tempfile
 
 import acceptance_cohort as ac
 import initial_model_launch_v1 as launch
@@ -14,6 +15,24 @@ def target():
 
 
 class SevenModelPolicy(unittest.TestCase):
+    def test_export_flags_without_linked_offline_proof_are_not_an_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audit = {"complete_model_identity": {"native_class": "a" * 128},
+                     "qualified_native_profile": True, "final_authenticated": True}
+            self.assertIsNone(launch.proof_derived_identity(audit, root))
+            report = {"schema": ac.NATIVE_AUDIT_SCHEMA, "namespace": 29,
+                      "pinned_headers_and_original_rows_verified": True,
+                      "qualified_native_profile": True, "final_receipt_class": "qualified-final",
+                      "utxo_redemption_verified": True, "local_qualified_validation_network": True,
+                      **{k: "a" * 128 for k in ("class", "source", "job", "program_root", "inventory", "real_parameter_root")}}
+            path = root / "local-qualified.json"
+            ac.write(path, report)
+            evidence = {"path": path.name, "sha256": ac.digest(path)}
+            audit.update(complete_model_identity_evidence=evidence, chain_objects=[evidence],
+                         validated_anchor={k: report[k] for k in ("class", "source", "job")})
+            self.assertIsNone(launch.proof_derived_identity(audit, root), "local devnet validation cannot grant shipping initial rights")
+
     def test_moe_cannot_replace_dense32_and_mistral_cannot_drop_vision(self):
         original = target()
         launch.validate_target(original)

@@ -74,7 +74,8 @@ USAGE:
     palw-class native-parts --kind <text-pages29|text-reply29> --file <bytes> --out <fresh-dir> --network <id> --key-file <seed> --bond <txid:index>
                          (--job <128hex> --seal <128hex> --owner <128hex> | --pending <128hex>) [own-params-snapshot34 pins]
     palw-class native-payload --kind <text-register29|text-prepare29|text-consent29|text-fund29|text-commit29|text-own29|text-close29|
-                         text-request29|text-default29|text-discovery29|text-collect29|window-class37|window-attach37|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28>
+                         text-request29|text-default29|text-discovery29|text-collect29|window-class37|window-attach37|stage-bundle28|stage-class28|stage-accept28|stage-fund28|stage-commit28|
+                         stage-invocation-accept32|stage-invocation-fund32|stage-invocation-commit32>
                          --body <borsh> --out <file> [--program <canonical.tir>] [--request-borsh <file>] [--positions N]
                          [--network <id> --key-file <ml-dsa-87 seed> --bond <txid:index>]
                          [--initial-sequence N --initial-now-daa N --initial-interval-end N --initial-expires-daa N]
@@ -916,6 +917,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 "independently_pinned_selected_parent":hex(&parent_pin.as_bytes()),"inner_state":hex(&checked.inner_state().as_bytes()),
                 "audit_root":hex(&checked.root()),"native_rows_root":hex(&checked.native().root()),"namespace":record.namespace,
                 "class":hex(&record.class),"source":hex(&record.source),"job":hex(&record.job),"inventory":hex(&record.inventory),
+                "program_root":hex(&record.program),"real_parameter_root":hex(&record.real_parameter),
                 "original_funding":hex(&record.funding),"initial_consent":hex(&record.original_consent),
                 "original_maximum_scope":hex(&record.maximum_scope),"actual_scope":hex(&record.actual_scope),
                 "original_maximum_resource":hex(&record.maximum_resource),"actual_resource":hex(&record.actual_resource),
@@ -1101,18 +1103,12 @@ fn run(args: &[String]) -> Result<(), String> {
                 16 << 20,
             )?)
             .map_err(|e| e.to_string())?;
-            let checked = misaka_palw_sdk::native_master_v32::derive_anchored_master_composite_v32(
+            let checked = misaka_palw_sdk::native_master_v32::derive_anchored_master_execution_v32(
                 &child, child_pin, &parent, parent_pin, &view.params, None, &aux, master, &jobs, &values, &generated,
             )?;
             let hex = misaka_palw_sdk::runtime_pack::commit::hex;
-            let report = serde_json::json!({"schema":"misaka.palw.audit-time-master-composite.v32",
-                "network":view.network_id.to_string(),"genesis":hex(&view.params.genesis.hash.as_bytes()),
-                "child":hex(&child_pin.as_bytes()),"selected_parent":hex(&parent_pin.as_bytes()),
-                "inner_state":hex(&checked.state.as_bytes()),"aux_root":hex(&checked.aux_root.as_bytes()),
-                "master":hex(&checked.master),"composite":hex(&checked.composite),
-                "components":checked.components.iter().map(|c| hex(c)).collect::<Vec<_>>(),
-                "own_snapshot_root":own_snapshot.map(|v| hex(&v)),
-                "composite_is_consensus_object":false,"deterministic_from_public_material":true,"A6_or_A8_credit":false});
+            let mut report=misaka_palw_sdk::native_master_v32::master_execution_report_v32(&checked,&view.params,child_pin,parent_pin);
+            report["own_snapshot_root"]=own_snapshot.map(|v|hex(&v)).into();
             use std::io::Write;
             std::fs::OpenOptions::new()
                 .write(true)

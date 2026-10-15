@@ -32,9 +32,30 @@ Active/Final rights, or mints a founding bond. Enabling the target ruleset remai
 dependent on the actual native evidence and activation artifact. The launch set
 does not replace the A6/A8 cohorts or their original failure denominators.
 
+The receipt checker now also has an explicit `stream-v2` pointer input: one
+`{"schema":"misaka.rfc02.receipt-state-stream.v2"}` header followed by JSONL
+`{child, selected_parent, collected}` records. Each pointer line is bounded before
+allocation. The SDK accumulator verifies every consecutive state and commits all
+of them to a rolling transcript root; it retains only the previous checked state
+and the two windows' checked endpoints. It never samples or shortens the frozen
+windows to fit the old 65,536-point/whole-transcript memory ceiling. Output schema
+`misaka.rfc02.proof-derived-receipt-windows.v2` carries the full point count/root
+and bounded cumulative checkpoints. The legacy array input remains separately
+bounded. Both paths are unverified source until the consolidated phase.
+
 Still required: exact runtime variants (especially the multiple distinct 35B
 artifacts), original metadata/context and local weight/artifact pins; full Pixtral
 vision/projector and hybrid MoE conversion; proof-derived complete-model identity
 export for native32; the implementation's consolidated checks; and all seven
 real-checkpoint trials under the target ruleset. Public Hub file metadata alone
 establishes none of those results.
+
+Large-model boundaries remain explicit: the original 1540-pixel Pixtral input,
+head-sharded attention, complete projected output and old Source28/native input
+transport do not all fit the existing v1/v28 limits. The implementation must add
+an independently priced versioned contract and execution path for those shapes;
+listing the vision adapter or increasing only a readonly auditor's buffer does
+not complete that native path. The present local host has 32 GiB physical memory;
+the previously authorized build VPS has an 8 GiB service limit. Full seven-model
+runtime measurements still require the exact weight locations and suitable
+independent verification environments.

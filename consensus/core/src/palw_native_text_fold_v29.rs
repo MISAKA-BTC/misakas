@@ -2472,6 +2472,7 @@ pub(super) fn attach_window37(
 fn check_bound_window_lengths(
     r:&PalwKernelRouteStateV1,h:&JobHeader,program_history_bound:u32,actual_positions:u32,
 )->Result<(),PalwStateV2Error>{
+    if !r.aux.contains_key(&(EXECUTION_JOB_TABLE_V11,key(&(37u8,3u8,h.job)))){return Ok(());}
     let book=original_book(r,h)?;
     check_bound_window_lengths_from_rows(&r.aux,h,&book,Some(program_history_bound),actual_positions)
         .map_err(refused)
@@ -2578,7 +2579,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         check_bound_window_lengths_from_rows(rows,&h,&b,None,actual_positions)?;
         if b.terminal()!=h.terminal{return Err("receipt text original terminal mismatch".into());}
         Ok(crate::palw_native_receipt_windows_v1::NativeReceiptJobV1{
-            namespace:29,job:id,class:a.class,source:a.source,inventory:f.maximum.inventory,real_parameter:f.maximum.parameter,
+            namespace:29,complete_model:true,job:id,class:a.class,source:a.source,inventory:f.maximum.inventory,real_parameter:f.maximum.parameter,
             funding:a.funding,consent:a.consent,maximum_contract:f.maximum.root(),maximum_scope:a.maximum_scope,maximum_resource:a.maximum_resource,
             queue_plan:f.maximum.queue_plan,queue_policy:f.maximum.queue_policy,source_plan:f.maximum.source_acquisition,
             physical_service:{let raw=rows.get(&(EXECUTION_QUOTA_TABLE_V11,key(&(29u8,id,22u8)))).ok_or("receipt text original physical journal absent")?;

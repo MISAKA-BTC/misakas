@@ -9,7 +9,7 @@ pub struct PalwStageExecutionFenceV28 {
     pub policies:NativeStagePoliciesV28,
 }
 pub const STAGE_ACTION_FIRST_V28: u8 = 19;
-pub const STAGE_ACTION_LAST_V28: u8 = 33;
+pub const STAGE_ACTION_LAST_V28: u8 = 37;
 pub const STAGE_COURT_MAX_BYTES_V28: u64 = 16 << 20;
 pub const STAGE_PROOF_PART_MAX_V28: u64 = 32 << 10;
 pub const STAGE_PROOF_PARTS_MAX_V28: u16 = 512;
@@ -359,5 +359,34 @@ impl NativeStageInvocationEnvelopeV32 {
         let upstream_outputs=blob(&mut r,2<<20)?;let body=blob(&mut r,2<<20)?;
         let out=Self{version,master,stage,generated,upstream_jobs,upstream_outputs,body};
         if r.position() as usize!=raw.len()||borsh::to_vec(&out).map_err(|e|e.to_string())?!=raw{return Err("master32 exact canonical invocation envelope".into());}Ok(out)
+    }
+}
+
+/// Readonly complete-model receipt data. This public record is not a grant;
+/// only the private proof32 checked wrapper supplies authenticated authority.
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize)]
+pub struct NativeMasterComponentReceiptV32 {
+    pub stage:u16,pub class:Digest,pub program:Digest,pub source:Digest,pub inventory:Digest,pub real_parameter:Digest,
+    pub job:Digest,pub original_funding:Digest,pub consent:Digest,pub maximum_contract:Digest,pub maximum_scope:Digest,pub maximum_resource:Digest,
+    pub original_quota:Digest,pub maximum_invocation:Digest,pub maximum_court:Digest,pub invocation:Digest,pub input_binding:Digest,pub claim:Digest,pub final_book:Digest,pub settlement:Digest,pub single_credit:Digest,pub payout_queue:Digest,
+    pub requester_operator:Digest,pub producer_operator:Digest,pub admitted:u64,pub committed:u64,pub established:u64,pub challenge_end:u64,pub deadline:u64,pub reward:u64,
+}
+#[derive(Clone,Debug,PartialEq,Eq,BorshSerialize)]
+pub struct NativeMasterExecutionRecordV32 {
+    pub version:u16,pub master:Digest,pub composite:Digest,pub complete_source:Digest,pub manifest:Digest,pub complete_inventory:Digest,
+    pub program_set:Digest,pub real_parameter_set:Digest,pub maximum_scope_set:Digest,pub maximum_resource_set:Digest,pub single_credit_set:Digest,
+    pub components:Vec<NativeMasterComponentReceiptV32>,
+}
+
+#[cfg(test)]
+mod invocation32_wire_tests {
+    use super::*;
+    #[test]
+    fn original_invocation32_counts_are_bounded_before_decode(){
+        let x=NativeStageInvocationEnvelopeV32{version:32,master:[7;64],stage:0,generated:vec![],upstream_jobs:vec![],upstream_outputs:vec![],body:vec![1,2,3]};
+        let b=borsh::to_vec(&x).unwrap();assert_eq!(NativeStageInvocationEnvelopeV32::from_bytes(&b).unwrap(),x);
+        let mut bad=b.clone();bad[68..72].copy_from_slice(&u32::MAX.to_le_bytes());assert!(NativeStageInvocationEnvelopeV32::from_bytes(&bad).is_err());
+        let mut trailing=b.clone();trailing.push(0);assert!(NativeStageInvocationEnvelopeV32::from_bytes(&trailing).is_err());
+        for n in 0..b.len(){assert!(NativeStageInvocationEnvelopeV32::from_bytes(&b[..n]).is_err());}
     }
 }

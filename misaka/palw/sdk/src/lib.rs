@@ -91,6 +91,7 @@ pub mod native_payload_v29;
 pub mod native_redemption_v33;
 pub mod native_spend_v35;
 pub mod native_master_v32;
+pub mod native_invocation_replay_v32;
 pub mod native_lifecycle_v32;
 /// Same native derivation for full25 / first-EOS29 maximum contracts.
 pub mod native_text_v29;
@@ -624,3 +625,7 @@ pub mod real_checkpoint_fixture11;
 pub mod claim_paid_v2;
 
 pub mod native_receipt_windows_v1;
+
+pub mod native_master_witness_v1;
+
+pub mod native_receipt_cas_v1;
