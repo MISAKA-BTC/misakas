@@ -93,6 +93,74 @@ pub fn palw_cell_closure_legacy_refusal_v1(profile: &PalwShapeProfileV3) -> Opti
         .or(Some(PalwCellClosureRefusalV1::UnknownProfileKind))
 }
 
+/// **The one predicate under RFC-0006's consumer v2** (`palw_memory_routing_court_v2`): [`palw_cell_closure_legacy_refusal_v1`]
+/// over [`crate::palw_cell_coverage_v1::palw_legacy_cell_coverage_v2`] — the solo gdn v1/v2 recurrence, the composed hybrid maps and
+/// (with a covering binding, or bindable at registration) the multi-router / Kimi tables are covered; every other gap refuses as in
+/// round 4.
+pub fn palw_cell_closure_refusal_v2(
+    profile: &PalwShapeProfileV3,
+    consumers: crate::palw_cell_coverage_v1::PalwCellConsumersV2<'_>,
+) -> Option<PalwCellClosureRefusalV1> {
+    let gaps = crate::palw_cell_coverage_v1::palw_legacy_cell_coverage_v2(profile, consumers).err()?;
+    if gaps.iter().any(|g| matches!(g, PalwCellCoverageGapV1::UnknownProfileKind { .. })) {
+        return Some(PalwCellClosureRefusalV1::UnknownProfileKind);
+    }
+    gaps.iter()
+        .find_map(|g| match g {
+            PalwCellCoverageGapV1::Uncovered { kind, .. } => Some(PalwCellClosureRefusalV1::Uncovered(*kind)),
+            PalwCellCoverageGapV1::UnknownProfileKind { .. } => None,
+        })
+        .or(Some(PalwCellClosureRefusalV1::UnknownProfileKind))
+}
+
+/// **Which closure a structural step check runs under** — the caller's decision for the claim at hand. `Off` and `Legacy` are the
+/// round-4 `bool` (`From<bool>` keeps every existing caller's meaning); `MemoryRoutingV2` is the closure with consumer v2 in force
+/// for the claim, where a profile consumer v2 reaches is canonical and a solo / composed checkpoint's count is derivable. The
+/// binding row is not in hand at a structural check, so a routed table is judged BINDABLE there (its claims cannot exist past the
+/// claim gate without the binding; where the fold does not hold the graph the court close reads the row).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCellClosureModeV1 {
+    Off,
+    Legacy,
+    MemoryRoutingV2,
+}
+
+impl From<bool> for PalwCellClosureModeV1 {
+    fn from(closure: bool) -> Self {
+        if closure { Self::Legacy } else { Self::Off }
+    }
+}
+
+impl PalwCellClosureModeV1 {
+    pub fn in_force(self) -> bool {
+        self != Self::Off
+    }
+
+    /// Is `profile` uncoverable under this closure (a shape fault past it)?
+    pub fn refuses_profile(self, profile: &PalwShapeProfileV3) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Legacy => palw_cell_closure_legacy_refusal_v1(profile).is_some(),
+            Self::MemoryRoutingV2 => palw_cell_closure_refusal_v2(
+                profile,
+                crate::palw_cell_coverage_v1::PalwCellConsumersV2 { router_binding: None, registration: true },
+            )
+            .is_some(),
+        }
+    }
+
+    /// The mode for a claim accepted at `accepted_daa` under the two mirrors.
+    pub fn for_claim(params: &PalwStateParamsV2, accepted_daa: u64) -> Self {
+        if !palw_cell_closure_governs_v1(params, accepted_daa) {
+            Self::Off
+        } else if params.memory_routing_court_active_at(accepted_daa) {
+            Self::MemoryRoutingV2
+        } else {
+            Self::Legacy
+        }
+    }
+}
+
 /// **Is the closure in force for something dated `daa`** (a registration's block, a claim's acceptance)? `false` on every shipped
 /// network (the mirror is `None`).
 pub fn palw_cell_closure_governs_v1(params: &PalwStateParamsV2, daa: u64) -> bool {
@@ -107,6 +175,14 @@ pub fn palw_cell_closure_registration_refusal_v1(
 ) -> Option<PalwCellClosureRefusalV1> {
     if !palw_cell_closure_governs_v1(params, daa_score) {
         return None;
+    }
+    // RFC-0006 consumer v2: past its fence a registration is judged by what that consumer reaches (a routed table admitted when it
+    // is bindable; its claims wait for the binding at the claim gate).
+    if params.memory_routing_court_active_at(daa_score) {
+        return palw_cell_closure_refusal_v2(
+            profile,
+            crate::palw_cell_coverage_v1::PalwCellConsumersV2 { router_binding: None, registration: true },
+        );
     }
     palw_cell_closure_legacy_refusal_v1(profile)
 }
@@ -125,6 +201,26 @@ pub fn palw_cell_closure_claim_refusal_v1(
     palw_cell_closure_legacy_refusal_v1(held_profile?)
 }
 
+/// **REQ-CELL-1b under consumer v2**: [`palw_cell_closure_claim_refusal_v1`] with the class's router binding row in hand (aux 139).
+/// Past `palw_memory_routing_court_v2` a routed table needs a binding declared AT OR BEFORE the claim's acceptance that covers every
+/// routed reader; the recurrence maps consumer v2 reaches are covered. Below that fence: byte for byte the v1 answer.
+pub fn palw_cell_closure_claim_refusal_v2(
+    params: &PalwStateParamsV2,
+    accepted_daa: u64,
+    held_profile: Option<&PalwShapeProfileV3>,
+    router_binding: Option<&crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
+) -> Option<PalwCellClosureRefusalV1> {
+    if !palw_cell_closure_governs_v1(params, accepted_daa) {
+        return None;
+    }
+    let profile = held_profile?;
+    if !params.memory_routing_court_active_at(accepted_daa) {
+        return palw_cell_closure_legacy_refusal_v1(profile);
+    }
+    let binding = router_binding.filter(|row| row.bound_from_daa <= accepted_daa);
+    palw_cell_closure_refusal_v2(profile, crate::palw_cell_coverage_v1::PalwCellConsumersV2 { router_binding: binding, registration: false })
+}
+
 /// **REQ-CELL-2: does the court convict on the closure alone?** For a claim accepted at `accepted_daa` under a closure in force from
 /// `cell_closure_from_daa`, whose binding's (registered) profile is `profile`: `true` exactly when the profile is uncoverable. The
 /// caller has pinned the binding to the claim's execution root and to the registered class first.
@@ -134,6 +230,25 @@ pub fn palw_cell_closure_court_convicts_v1(
     profile: &PalwShapeProfileV3,
 ) -> bool {
     cell_closure_from_daa.is_some_and(|from| accepted_daa >= from) && palw_cell_closure_legacy_refusal_v1(profile).is_some()
+}
+
+/// **REQ-CELL-2 under consumer v2**: [`palw_cell_closure_court_convicts_v1`] where `memory_routing_from_daa` (the consumer's mirror)
+/// governs the claim too — the class's router binding row (declared at or before the claim's acceptance) in hand. `None` for the
+/// mirror: byte for byte the v1 answer.
+pub fn palw_cell_closure_court_convicts_v2(
+    cell_closure_from_daa: Option<u64>,
+    memory_routing_from_daa: Option<u64>,
+    accepted_daa: u64,
+    profile: &PalwShapeProfileV3,
+    router_binding: Option<&crate::palw_router_binding_v2::PalwRouterBindingRowV2>,
+) -> bool {
+    if !memory_routing_from_daa.is_some_and(|from| accepted_daa >= from) {
+        return palw_cell_closure_court_convicts_v1(cell_closure_from_daa, accepted_daa, profile);
+    }
+    let binding = router_binding.filter(|row| row.bound_from_daa <= accepted_daa);
+    cell_closure_from_daa.is_some_and(|from| accepted_daa >= from)
+        && palw_cell_closure_refusal_v2(profile, crate::palw_cell_coverage_v1::PalwCellConsumersV2 { router_binding: binding, registration: false })
+            .is_some()
 }
 
 impl Params {

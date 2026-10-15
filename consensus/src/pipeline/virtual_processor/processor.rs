@@ -729,6 +729,7 @@ pub struct VirtualStateProcessor {
     /// gives — the acceptance rehearsal, the fold (through the extras' ladder) and the state walk
     /// must get the same answer for the same block.
     pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_memory_routing_court_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
     /// [`Self::palw_shard_licensing_at`]; the panel draw, its validation and the fold's extras all
     /// read it through that, so a node cannot bind what its fold refuses.
@@ -1456,6 +1457,7 @@ impl VirtualStateProcessor {
             palw_canonical_work_daa: params.palw_canonical_work_daa(),
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
+            palw_memory_routing_court_v2: params.palw_memory_routing_court_v2_fence(),
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
@@ -7256,6 +7258,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
+        O::GdnStepAccusedV2 { .. } => "GdnStepAccusedV2",
+        O::MemoryRoutingV2 { .. } => "MemoryRoutingV2",
         O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         O::BondShardsDeclared { .. } => "BondShardsDeclared",
         O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",

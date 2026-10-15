@@ -124,7 +124,9 @@ impl PalwPaidClaimRoundV3 {
         Ok(())
     }
     pub fn complete(&self) -> bool {
-        self.lock.as_ref().is_some_and(|l| l.source_valid && self.receipts.len() >= l.quorum as usize)
+        self.lock.as_ref().is_some_and(|l| {
+            l.source_valid && l.quorum > 0 && l.seats.len() >= l.quorum as usize && self.receipts.len() >= l.quorum as usize
+        })
     }
 }
 /// Common authenticated source adapter for initial and staged contexts. Never
@@ -230,35 +232,9 @@ impl PalwKernelRouteStateV1 {
                 prior_rounds.push((p.message_root, lock.seed));
             }
         }
+        // PRINCIPLES §8: a retired V4 compact plan never yields a check authority (no compact receipt or credit path).
         if a.class.interactive_plan.as_ref().is_some_and(|p| p.version == 4) {
-            let mut previous = Vec::new();
-            for previous_round in 0..round {
-                let previous_row = self.paid_claim_round_v3(enrollment, previous_round)?;
-                let binding =
-                    self.paid_compact_proof_binding_v4(*enrollment, previous_round)?.ok_or("previous compact round proof missing")?;
-                previous.push((
-                    previous_row.message_root,
-                    previous_row.lock.ok_or("previous compact round lock missing")?.seed,
-                    binding.proof_root,
-                ));
-            }
-            let check = PaidClaimCheckAuthorityV2::for_interactive_round_v4(
-                &a.class,
-                &a.enrollment,
-                &row.context,
-                &row.subject,
-                &beacon,
-                round,
-                row.message_root,
-                row.prior_transcript,
-                row.accepted_daa,
-                now,
-                &previous,
-            )?;
-            return match self.paid_compact_proof_binding_v4(*enrollment, round)? {
-                Some(binding) => check.with_compact_proof_binding_v4(binding.proof_root),
-                None => Ok(check),
-            };
+            return Err(crate::palw_claim_compact_v1::PALW_COMPACT_CONTRACT_RETIRED_REASON_V1.into());
         }
         PaidClaimCheckAuthorityV2::for_interactive_round_v3(
             &a.class,

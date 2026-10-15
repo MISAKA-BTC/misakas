@@ -800,7 +800,9 @@ impl TransitionBuilder<'_> {
             },
         }))))
     }
-    pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) {
+    pub(super) fn write_staged_row_v1(&mut self, key: PalwStagedCourtKeyV1, new: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native staged_courts writer")?;
+        self.reserve_staged_indices_v1(&key, &new)?;
         let old = match &new {
             Some(row) => self.state.staged_courts.insert(key, row.clone()),
             None => self.state.staged_courts.remove(&key),
@@ -809,13 +811,52 @@ impl TransitionBuilder<'_> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
         }
+        Ok(())
     }
-    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) {
-        if let Some(c) = contract {
-            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c));
+    /// RFC-0006: what `update_indices` allocates for this write, bounded from the ACTUAL old and new rows without calling the
+    /// Vec-returning index helpers. Every derived index row (responder/prefix/selected/flat/history/TIR/preparer/hold) is a
+    /// projection of one nested typed membership of the row, so `native_members_v1() + 1` bounds each family's output; the
+    /// helpers' scratch Vecs (old and new) and the new index nodes (sized by the largest index tuple) are admitted together.
+    fn reserve_staged_indices_v1(
+        &mut self,
+        key: &PalwStagedCourtKeyV1,
+        new: &Option<PalwStagedCourtRowV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
         }
+        let members = |row: Option<&PalwStagedCourtRowV1>| -> Result<u64, PalwStateV2Error> {
+            row.map_or(Some(0), NativeHeapV1::native_members_v1).and_then(|m| m.checked_add(1)).ok_or_else(|| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwStagedCourtRowV1>("staged index membership count"))
+            })
+        };
+        let old_m = members(self.state.staged_courts.get(key))?;
+        let new_m = members(new.as_ref())?;
+        // The widest index tuple (`staged_tir_responders`) bounds every family's element and node size.
+        type Widest = (PalwBondKeyV2, u64, Hash64, PalwBondKeyV2, Hash64, u64, Hash64);
+        const FAMILIES: u64 = 9;
+        let mut q = super::native_writers::NativeWriteQuoteV1::new("native staged court index scratch and nodes");
+        for m in [old_m, new_m] {
+            for _ in 0..FAMILIES {
+                q.grown::<Widest>(m)?;
+            }
+        }
+        let nodes = new_m.checked_mul(FAMILIES).ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwStagedCourtRowV1>("staged index node count"))
+        })?;
+        q.member::<Widest, ()>(nodes)?;
+        // `staged_tir_by_claim` may add an outer bucket for a new claim.
+        q.member::<Hash64, BTreeSet<(u64, PalwStagedCourtKeyV1)>>(u64::from(new.is_some()))?;
+        self.admit_native_write_v1(q)
     }
-    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) {
+    pub(super) fn stamp_staged_claim_v1(&mut self, claim: Hash64, contract: Option<PalwStagedCourtRowV1>) -> Result<(), PalwStateV2Error> {
+        if let Some(c) = contract {
+            self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(c))?;
+        }
+        Ok(())
+    }
+    fn replace_staged_contract_v1(&mut self, claim: Hash64, contract: PalwStagedClaimContractV1) -> Result<(), PalwStateV2Error> {
         let row = match self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)) {
             Some(PalwStagedCourtRowV1::ClaimBundle(bundle)) => {
                 let mut bundle = bundle.clone();
@@ -824,23 +865,25 @@ impl TransitionBuilder<'_> {
             }
             _ => PalwStagedCourtRowV1::Claim(contract),
         };
-        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row));
+        self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(row))?;
+        Ok(())
     }
-    pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) {
+    pub(super) fn record_staged_panel_v1(&mut self, claim: Hash64, panel: &PalwPanelStateV2) -> Result<(), PalwStateV2Error> {
         if let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() {
             contract.panel.extend(panel.seats.iter().map(|seat| seat.bond));
             if let Some(custody) = &mut contract.prefix_custody {
                 custody.expected_panel = panel.seats.iter().map(|seat| seat.bond).collect();
             }
-            self.replace_staged_contract_v1(claim, contract);
+            self.replace_staged_contract_v1(claim, contract)?;
             if let Some(PalwStagedCourtRowV1::ClaimBundle(mut bundle)) =
                 self.state.staged_courts.get(&PalwStagedCourtKeyV1::Claim(claim)).cloned()
             {
                 bundle.history_custody.custody.expected_panel =
                     panel.seats.iter().map(|seat| seat.bond).filter(|bond| *bond != bundle.history_custody.producer).collect();
-                self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::ClaimBundle(bundle)));
+                self.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(claim), Some(PalwStagedCourtRowV1::ClaimBundle(bundle)))?;
             }
         }
+        Ok(())
     }
     /// Called only on actual signed Valid credit edges; ordinary membership/Sampled pay is
     /// insufficient. Qualification remains claim-rooted after duty/receipt pruning.
@@ -850,15 +893,15 @@ impl TransitionBuilder<'_> {
         receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
         credited: &[PalwBondKeyV2],
         now: u64,
-    ) {
+    ) -> Result<(), PalwStateV2Error> {
         if self.extras.staged_public_court.is_none() {
-            return;
+            return Ok(());
         }
         let Some(mut contract) = self.state.staged_claim_contract_v1(&claim).cloned() else {
-            return;
+            return Ok(());
         };
         let Some(custody) = &mut contract.prefix_custody else {
-            return;
+            return Ok(());
         };
         let mut changed = false;
         for receipt in receipts.iter().filter(|r| {
@@ -868,8 +911,9 @@ impl TransitionBuilder<'_> {
             changed |= custody.qualify(claim, receipt, now);
         }
         if changed {
-            self.replace_staged_contract_v1(claim, contract);
+            self.replace_staged_contract_v1(claim, contract)?;
         }
+        Ok(())
     }
 }
 
@@ -1159,11 +1203,11 @@ pub(super) fn open(
             b.write_staged_row_v1(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
-            );
+            )?;
             b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
-                b.write_legacy_dispute(seed.claim, Some(dispute));
+                b.write_legacy_dispute(seed.claim, Some(dispute))?;
             }
             b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
             if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned()
@@ -1177,7 +1221,7 @@ pub(super) fn open(
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
                     lock.expiry_daa = until;
-                    b.write_slashable_lock(lock_key, Some(lock));
+                    b.write_slashable_lock(lock_key, Some(lock))?;
                 }
             }
         }
@@ -1264,11 +1308,11 @@ pub(super) fn open(
             b.write_staged_row_v1(
                 PalwStagedCourtKeyV1::Claim(seed.claim),
                 Some(PalwStagedCourtRowV1::Claim(PalwStagedClaimContractV1 { terms: extended_terms, ..contract.clone() })),
-            );
+            )?;
             b.write_claim(seed.claim, Some(extended_claim))?;
             if let Some(mut dispute) = b.state.legacy_disputes.get(&seed.claim).cloned() {
                 dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
-                b.write_legacy_dispute(seed.claim, Some(dispute));
+                b.write_legacy_dispute(seed.claim, Some(dispute))?;
             }
             b.da_rekey_v1(seed.claim, until, ctx.daa_score)?;
             if let Some(mut liability) = b.state.panel_liabilities.get(&seed.claim).cloned()
@@ -1284,7 +1328,7 @@ pub(super) fn open(
             for (lock_key, mut lock) in b.claim_locks_v1(&seed.claim) {
                 if lock.expiry_daa < until {
                     lock.expiry_daa = until;
-                    b.write_slashable_lock(lock_key, Some(lock));
+                    b.write_slashable_lock(lock_key, Some(lock))?;
                 }
             }
         }
@@ -1481,7 +1525,7 @@ fn write_admitted_family_v1(
     } else {
         row
     };
-    b.write_staged_row_v1(key, Some(row));
+    b.write_staged_row_v1(key, Some(row))?;
     Ok(())
 }
 pub(super) fn leaf(
@@ -1750,7 +1794,7 @@ fn history_control_v1(
             return Err(stage_refused(movement.claim, "history grant is unsigned, duplicated or outside exact original custody"));
         }
         contract.history_custody.check_v1(&contract.claim.panel).map_err(|e| stage_refused(movement.claim, e))?;
-        b.write_staged_row_v1(claim_key, Some(PalwStagedCourtRowV1::ClaimBundle(contract)));
+        b.write_staged_row_v1(claim_key, Some(PalwStagedCourtRowV1::ClaimBundle(contract)))?;
         return Ok(());
     }
     let Action::HistoryRecovery { stage_seed, action, .. } = &movement.action else {
@@ -1859,7 +1903,7 @@ fn artifact_inventory_control_v1(
                 "public tokenizer EOF inventory",
                 ctx.daa_score,
             )?;
-            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(Box::new(row).into())));
+            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(Box::new(row).into())))?;
         }
         Action::ArtifactInventoryMove(action) => {
             let Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(mut row)) = b.state.staged_courts.get(&key).cloned() else {
@@ -1878,11 +1922,11 @@ fn artifact_inventory_control_v1(
                     b.write_staged_row_v1(
                         PalwStagedCourtKeyV1::Inventory(movement.claim),
                         Some(PalwStagedCourtRowV1::ArtifactInventory(certificate)),
-                    );
+                    )?;
                 }
-                b.write_staged_row_v1(key, None);
+                b.write_staged_row_v1(key, None)?;
             } else {
-                b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(row)));
+                b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(row)))?;
             }
         }
         _ => return Err(stage_refused(movement.claim, "not an artifact inventory action")),
@@ -2012,7 +2056,7 @@ fn selected_control_v1(
     }
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row));
+        b.write_staged_row_v1(key, Some(row))?;
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = selected_response_index_rows_v1(&row);
@@ -2130,7 +2174,7 @@ fn native_selected_control_v1(
     }
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row));
+        b.write_staged_row_v1(key, Some(row))?;
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = selected_response_index_rows_v1(&row);
@@ -2247,7 +2291,7 @@ pub(super) fn publish_tir_layout(
         return Err(stage_refused(class_id, "published layout does not authenticate the registered class"));
     }
     crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&class).map_err(|e| stage_refused(class_id, e.to_string()))?;
-    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::TirLayout(Box::new(layout.clone()))));
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::TirLayout(Box::new(layout.clone()))))?;
     Ok(())
 }
 
@@ -2452,7 +2496,7 @@ pub(super) fn open_native(
         .into(),
     });
     bundle.check_v1().map_err(|e| stage_refused(seed.claim, e))?;
-    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)));
+    b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)))?;
     Ok(())
 }
 
@@ -2600,7 +2644,7 @@ fn flat_control_v1(
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row));
+        b.write_staged_row_v1(key, Some(row))?;
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = flat_response_index_rows_v1(&row);
@@ -2762,7 +2806,7 @@ fn float_control_v1(
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     let row = PalwStagedCourtRowV1::OwnerBundle(bundle);
     if initial {
-        b.write_staged_row_v1(key, Some(row));
+        b.write_staged_row_v1(key, Some(row))?;
     } else {
         let new = row.checkpoint_v1().map_err(|e| stage_refused(movement.claim, e))?;
         let new_index = flat_response_index_rows_v1(&row);
@@ -2869,12 +2913,12 @@ fn bundle_control_v1(
             opened: Vec::new(),
         };
         bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
-        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())));
-        b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)));
+        b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(Box::new(bundle).into())))?;
+        b.write_staged_row_v1(PalwStagedCourtKeyV1::Claim(movement.claim), Some(PalwStagedCourtRowV1::ClaimBundle(extended)))?;
         b.write_claim(movement.claim, Some(claim))?;
         if let Some(mut dispute) = b.state.legacy_disputes.get(&movement.claim).cloned() {
             dispute.hard_deadline_daa = dispute.hard_deadline_daa.max(hard);
-            b.write_legacy_dispute(movement.claim, Some(dispute));
+            b.write_legacy_dispute(movement.claim, Some(dispute))?;
         }
         b.da_rekey_v1(movement.claim, until, ctx.daa_score)?;
         if let Some(mut liability) = b.state.panel_liabilities.get(&movement.claim).cloned()
@@ -2888,7 +2932,7 @@ fn bundle_control_v1(
         for (lock_key, mut lock) in b.claim_locks_v1(&movement.claim) {
             if lock.expiry_daa < until {
                 lock.expiry_daa = until;
-                b.write_slashable_lock(lock_key, Some(lock));
+                b.write_slashable_lock(lock_key, Some(lock))?;
             }
         }
         return Ok(());
@@ -2925,7 +2969,7 @@ fn bundle_control_v1(
             }
             bundle.active = Some(next as u8);
             bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
-            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)));
+            b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::OwnerBundle(bundle)))?;
             return Ok(());
         }
         Action::InventoryPart { offset, bytes } => {
@@ -3321,12 +3365,12 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             _ => None,
         };
         if let Some(until) = tir_until {
-            if ctx.daa_score >= until { b.write_staged_row_v1(key, None); }
+            if ctx.daa_score >= until { b.write_staged_row_v1(key, None)?; }
             continue;
         }
         let material = saved.owner_accounting_v1().map(|(_, _, _, until)| until);
         if material.is_none_or(|until| ctx.daa_score >= until) {
-            b.write_staged_row_v1(key, None);
+            b.write_staged_row_v1(key, None)?;
             continue;
         }
         let old = saved.checkpoint_v1().map_err(|e| stage_refused(ZERO_HASH64, e))?;

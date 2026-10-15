@@ -229,6 +229,17 @@ pub enum PalwMonetaryMaterialActionV1 {
     },
     /// Appended version, independently fenced. Existing variant bytes do not change.
     RecoveryV2(Box<crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2>),
+    /// Explicit generation binding for new complete material acquisition.
+    /// Old Challenge (variant 4) retains its original bytes/meaning.
+    ChallengeCurrentV4 {
+        root: Hash64,
+        consent: Hash64,
+        provider: PalwBondKeyV2,
+        dependency: Hash64,
+        stage: u8,
+        position: u32,
+        valid_until_daa: u64,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwMonetaryMaterialProviderV1 {
@@ -375,7 +386,11 @@ impl PalwChainStateV2 {
             crate::palw_state_v2::PalwStateV2Error::ExecV2Refused("kernel material complete codec capacity is unenrolled".into())
         })?;
         let commitment = crate::palw_material_capacity_v1::kernel_material_commitment_v1(row);
-        let expected = if matches!(row.body, misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. }) {
+        let expected = if params.material_release_recovery_at_v2(now).is_some()
+            && params.material_release_recovery_from_v2().is_some_and(|from| row.committed_daa >= from)
+        {
+            crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4
+        } else if matches!(row.body, misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. }) {
             crate::palw_material_capacity_v1::PalwMaterialCodecV1::SegmentedParts
         } else {
             crate::palw_material_capacity_v1::PalwMaterialCodecV1::KernelPositions
@@ -500,6 +515,14 @@ impl PalwChainStateV2 {
                     return Err(bad("material manifest obligation differs"));
                 }
                 manifest.validate(row.terms.max_material_bytes).map_err(|_| bad("signed material manifest capacity"))?;
+                // Import gate aligned with the fold (`check_enrollment`) and the lifecycle owner (240/241 TypedKernelV4 ->
+                // material release recovery V2): a carried covenant naming the complete typed kernel codec must have been
+                // accepted at or past that fence; a snapshot cannot smuggle the new codec below it.
+                if manifest.scopes.iter().any(|s| s.codec == crate::palw_material_capacity_v1::PalwMaterialCodecV1::TypedKernelV4)
+                    && params.material_release_recovery_at_v2(row.accepted_daa).is_none()
+                {
+                    return Err(bad("typed complete kernel codec carried below its recovery fence"));
+                }
             }
             if key.as_slice() != row.terms.root.as_byte_slice()
                 || row.terms.policy != p.id()
@@ -568,9 +591,9 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("monetary material requires the payment provenance and provider signature gates"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "monetary material cannot be armed: event-relative time cost and recovery liveness approval remain pending",
-        ))
+        // Event-relative time cost and recovery liveness are measured values: arming needs a pinned record for this exact
+        // policy on this network (EMPTY: dormant). testnet-12 DAA 14,000 release plan.
+        self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::MonetaryMaterialV1, &f.policy)
     }
 }
 
@@ -625,5 +648,41 @@ mod tests {
         signatures.offers[0].signature = vec![9; 32];
         assert_eq!(id, signatures.id());
         assert_eq!(e, borsh::from_slice(&borsh::to_vec(&e).unwrap()).unwrap());
+    }
+    #[test]
+    fn complete_kernel_codec_owns_recovery_fence_on_both_ordinary_carriers() {
+        use crate::{
+            palw_lifecycle_objects_v2::{PalwLifecycleKindFenceV1 as F, PalwLifecycleKindOwnerV1 as O, palw_lifecycle_kind_owner_v1},
+            palw_material_capacity_v1::{PalwMaterialCodecV1, PalwMaterialManifestV1, PalwMaterialScopeV1},
+            palw_state_v2::PalwConsensusObjectV2 as C,
+        };
+        let mut e = enrollment();
+        let legacy = C::MonetaryMaterialEnrolledV1 { enrollment: Box::new(e.clone()), signature: vec![] };
+        assert_eq!(palw_lifecycle_kind_owner_v1(&legacy), O::Fence(F::MonetaryMaterialV1));
+        e.terms.material_manifest = Some(PalwMaterialManifestV1 {
+            root: e.terms.root,
+            scopes: vec![PalwMaterialScopeV1 {
+                claim: e.terms.root,
+                commitment: Hash64::from_bytes([8; 64]),
+                codec: PalwMaterialCodecV1::TypedKernelV4,
+                bytes: 100,
+                units: 1,
+                content: Hash64::from_bytes([9; 64]),
+            }],
+        });
+        let new = C::MonetaryMaterialEnrolledV1 { enrollment: Box::new(e.clone()), signature: vec![] };
+        let replaced = C::MonetaryMaterialReplacedV1 {
+            replacement: Box::new(PalwMonetaryMaterialReplacementV1 {
+                root: e.terms.root,
+                previous: Hash64::from_bytes([7; 64]),
+                sequence: 1,
+                enrollment: e,
+            }),
+            signature: vec![],
+        };
+        assert_eq!(palw_lifecycle_kind_owner_v1(&new), O::Fence(F::MaterialReleaseRecoveryV2));
+        assert_eq!(palw_lifecycle_kind_owner_v1(&replaced), O::Fence(F::MaterialReleaseRecoveryV2));
+        assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::KernelPositions).unwrap(), vec![1]);
+        assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::SegmentedParts).unwrap(), vec![2]);
     }
 }

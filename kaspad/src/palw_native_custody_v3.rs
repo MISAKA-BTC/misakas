@@ -77,6 +77,49 @@ pub trait NativeReadyExchangeV3: Send + Sync {
     fn recovery_provider_roster_v4(&self) -> &[PalwBondKeyV2] {
         &[]
     }
+    /// Complete actual kernel material must be durable at every named provider
+    /// before its atomic monetary/recovery carrier can be signed and queued.
+    /// The caller still waits for its own positive native admission afterwards.
+    fn ingest_kernel_material_v4(
+        &self,
+        _material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        _ingress: &kaspa_consensus_core::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4,
+    ) -> Result<(), String> {
+        Err("explicit V4 kernel material ingress unavailable".into())
+    }
+    /// RFC08 bounded provider replacement: every new provider replays the original work under its own native state,
+    /// persists material and the new signed generation, then the sponsor's atomic ReplaceBeforeV4 carrier is queued.
+    /// The caller still waits for its own positive native admission; a queued carrier is not acceptance.
+    fn replace_kernel_material_v4(
+        &self,
+        _context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+        _grant: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+    ) -> Result<(), String> {
+        Err("explicit V4 kernel material replacement unavailable".into())
+    }
+    /// Read permission/data identity only. The caller obtains the opaque native
+    /// authority with its own explicitly configured registered checker key.
+    fn fetch_kernel_material_unit_v4(
+        &self,
+        _query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        _authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>, String> {
+        Err("explicit authenticated kernel material reader unavailable".into())
+    }
+    /// Legacy adapters cannot attribute their String error to a provider.
+    fn fetch_kernel_material_unit_classified_v4(
+        &self,
+        query: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        authority: &kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4,
+    ) -> Result<
+        kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u8>>,
+        kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4,
+    > {
+        self.fetch_kernel_material_unit_v4(query, authority)
+            .map_err(kaspa_consensus_core::palw_kernel_material_query_v4::PalwKernelMaterialFetchErrorV4::Unknown)
+    }
     /// Queue a fully signed prospective contract; the caller must wait for its
     /// OWN coherent native prior-state admission before any execution/draw.
     fn ensure_recovery_session_v4(
@@ -494,6 +537,6 @@ pub fn palw_native_signature_map_owned_v3(
     for row in signatures {
         borsh::to_writer(&mut bytes, row).map_err(|e| e.to_string())?;
     }
-    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes, bytes.len() as u64).map_err(|e| e.to_string())?;
+    preflight_native_value_v1::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes[..], bytes.len() as u64).map_err(|e| e.to_string())?;
     retain_native_value_decode_v1(&bytes, || borsh::from_slice::<BTreeMap<PalwBondKeyV2, Vec<u8>>>(&bytes)).map_err(|e| e.to_string())
 }

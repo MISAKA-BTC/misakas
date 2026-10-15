@@ -21,8 +21,74 @@ pub struct DurableMonetaryMaterialProviderV1 {
     max_contract_bytes: u64,
     total_capacity: u64,
     store: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialProviderStoreV1>,
+    contexts: Option<crate::kernel_material_context_v4::KernelMaterialContextArchiveV4>,
+    expiry_cursor: Option<Hash64>,
 }
 impl DurableMonetaryMaterialProviderV1 {
+    /// Actual native work replay and complete bundle verification precede this
+    /// call; a liability signature must follow successful atomic publication.
+    pub fn prepare_prospective_kernel_v4(
+        &mut self,
+        provider: PalwBondKeyV2,
+        enrollment: &PalwMonetaryMaterialEnrollmentV1,
+        material: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialOwnedV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        capsule: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<Hash64, String> {
+        if !enrollment.offers.iter().any(|o| o.provider == provider)
+            || enrollment.terms.sponsor != material.authority().producer
+            || enrollment.terms.root != material.authority().root
+            || enrollment.terms.material_manifest.as_ref() != Some(material.manifest())
+            || enrollment.terms.native_session.is_some()
+            || enrollment.terms.max_material_bytes > self.max_contract_bytes
+        {
+            return Err("kernel material/enrollment native authority differs".into());
+        }
+        let candidate = self.store.provider_admit_prospective_kernel_v4(
+            enrollment.id(),
+            material,
+            bundle,
+            enrollment.terms.max_material_bytes,
+            self.total_capacity,
+        )?;
+        self.contexts.as_mut().ok_or("kernel ingress has no explicitly configured metadata capacities")?.insert(context, capsule)?;
+        self.publish(candidate)?;
+        Ok(enrollment.id())
+    }
+    /// New native quote authenticates the original work and accepted obligation;
+    /// newly signed replacement still cannot answer before native acceptance.
+    pub fn prepare_replacement_kernel_v4(
+        &mut self,
+        provider: PalwBondKeyV2,
+        material: &kaspa_consensus_core::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4,
+        bundle: &kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+    ) -> Result<Hash64, String> {
+        let (e, consent, _) =
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&material.proposal)?;
+        if !e.offers.iter().any(|p| p.provider == provider)
+            || e.terms.root != context.intent.manifest.root
+            || e.terms.material_manifest.as_ref() != Some(&context.intent.manifest)
+            || material.manifest() != &context.intent.manifest
+            || e.terms.max_material_bytes > self.max_contract_bytes
+        {
+            return Err("replacement publication substitutes own exact grant".into());
+        }
+        let candidate =
+            self.store.provider_admit_replacement_kernel_v4(material, bundle, e.terms.max_material_bytes, self.total_capacity)?;
+        self.contexts.as_mut().ok_or("replacement metadata capacities absent")?.insert(context, &material.proposal)?;
+        self.publish(candidate)?;
+        Ok(consent)
+    }
+    pub fn persist_kernel_signatures_v4(
+        &mut self,
+        context: &kaspa_consensus_core::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        capsule: &kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<(), String> {
+        self.contexts.as_mut().ok_or("kernel context archive unavailable")?.insert(context, capsule)?;
+        Ok(())
+    }
     /// Prospective consent is immutable. Ready binds the actual one-claim capture
     /// only after the whole typed bundle has been atomically published.
     pub fn prepare_native_ready_v3(
@@ -108,7 +174,98 @@ impl DurableMonetaryMaterialProviderV1 {
         provider: PalwBondKeyV2,
         demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        // Every retained generation is examined, not only the first candidate: any kernel-codec generation of this
+        // root/dependency must go through the current native-positive replay path (`answer_material_current_v4`).
+        if self.contexts.is_some()
+            && self.store.material_generation_scopes_v4(consent, root, dependency).any(|(_, scope)| {
+                scope.codec != kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialCodecV1::NativeHeldComplete
+            })
+        {
+            return Err("retained kernel material requires a current native-positive replay before answering".into());
+        }
         self.store.provider_answer_action_v1(consent, root, dependency, provider, demand)
+    }
+    /// Try every retained candidate generation after the current consent. Each
+    /// fallback needs a positive current native generation/provider/exact-scope
+    /// witness. Kernel data additionally replays its intrinsic context against
+    /// the current signed covenant before any answer leaves this owner.
+    pub fn answer_material_current_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.answer_material_generation_v4(preferred, root, dependency, provider, pubkey, demand, native, false)
+    }
+    /// A read request names one signed generation. Unlike court recovery, it
+    /// cannot silently answer under a different consent with equal scope bytes.
+    pub fn answer_material_exact_current_v4(
+        &self,
+        consent: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        self.answer_material_generation_v4(consent, root, dependency, provider, pubkey, demand, native, true)
+    }
+    fn answer_material_generation_v4(
+        &self,
+        preferred: Hash64,
+        root: Hash64,
+        dependency: Hash64,
+        provider: PalwBondKeyV2,
+        pubkey: &[u8],
+        demand: kaspa_consensus_core::palw_material_capacity_v1::PalwMonetaryMaterialDemandV1,
+        native: &dyn kaspa_consensus_core::api::ConsensusApi,
+        exact: bool,
+    ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<PalwMonetaryMaterialActionV1>, String> {
+        use kaspa_consensus_core::{
+            palw_attempt_material_v3::verify_ready_signature_v3, palw_kernel_material_context_v4::restore_kernel_material_context_v4,
+            palw_material_capacity_v1::PalwMaterialCodecV1,
+        };
+        let mut last = String::from("no current eligible retained material generation");
+        for (consent, scope) in self.store.material_generation_scopes_v4(preferred, root, dependency) {
+            if exact && consent != preferred {
+                continue;
+            }
+            let result = (|| {
+                if exact || consent != preferred || self.contexts.is_some() {
+                    native.palw_material_generation_authority_v4(root, consent, provider, scope)?;
+                }
+                if scope.codec != PalwMaterialCodecV1::NativeHeldComplete {
+                    let archive = self.contexts.as_ref().ok_or("kernel answers need explicit durable context capacities")?;
+                    let record = archive.get(consent)?.ok_or("kernel intrinsic context absent")?;
+                    if record.context.intent.manifest.scope(dependency) != Some(scope) {
+                        return Err("kernel stored generation scope differs from context".into());
+                    }
+                    let bundle = self.store.provider_kernel_bundle_owned_v4(consent, dependency)?;
+                    let _candidate = restore_kernel_material_context_v4(
+                        &record.context,
+                        &bundle,
+                        archive.limits(),
+                        self.max_contract_bytes,
+                        |context| native.palw_kernel_material_context_authority_v4(context, &record.capsule, provider, pubkey),
+                        verify_ready_signature_v3,
+                    )?;
+                    // Retain both context and replay tickets while the response
+                    // owner is built. Its returned bytes carry their own lease.
+                    return self.store.provider_answer_action_v1(consent, root, dependency, provider, demand);
+                }
+                self.store.provider_answer_action_v1(consent, root, dependency, provider, demand)
+            })();
+            match result {
+                Ok(answer) => return Ok(answer),
+                Err(reason) => last = reason,
+            }
+        }
+        Err(last)
     }
     pub fn open(
         file: &Path,
@@ -116,6 +273,29 @@ impl DurableMonetaryMaterialProviderV1 {
         total_capacity: u64,
         ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
         authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
+    ) -> Result<Self, String> {
+        Self::open_inner(file, max_contract_bytes, total_capacity, ledger, authority, None)
+    }
+    pub fn open_with_kernel_contexts_v4(
+        file: &Path,
+        max_contract_bytes: u64,
+        total_capacity: u64,
+        authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
+        limits: kaspa_consensus_core::palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4,
+    ) -> Result<Self, String> {
+        let archive = crate::kernel_material_context_v4::KernelMaterialContextArchiveV4::open(
+            &file.with_extension("kernel-context-v4"),
+            limits,
+        )?;
+        Self::open_inner(file, max_contract_bytes, total_capacity, None, authority, Some(archive))
+    }
+    fn open_inner(
+        file: &Path,
+        max_contract_bytes: u64,
+        total_capacity: u64,
+        ledger: Option<&misaka_palw_kernel::ledger::KernelLedgerV1>,
+        authority: impl FnMut(Hash64) -> Option<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialNativeAuthorityV1>,
+        contexts: Option<crate::kernel_material_context_v4::KernelMaterialContextArchiveV4>,
     ) -> Result<Self, String> {
         if max_contract_bytes == 0 || total_capacity < max_contract_bytes {
             return Err("provider material capacity is invalid".into());
@@ -140,7 +320,20 @@ impl DurableMonetaryMaterialProviderV1 {
                 if bytes.len() as u64 != expected {
                     return Err("provider snapshot changed extent during read".into());
                 }
-                kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_verified_v1(&bytes,max_contract_bytes,total_capacity,ledger,authority)?
+                if let Some(archive) = contexts.as_ref() {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_retaining_kernel_v4(&bytes,max_contract_bytes,total_capacity,authority,|consent,scope,_|{
+                        let record=archive.get(consent)?.ok_or("kernel retention context missing; no answers authorized")?;
+                        let (monetary,identity,_)=kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&record.capsule)?;
+                        let length=borsh::object_length(&record.capsule).map_err(|e|e.to_string())? as u64;
+                        let _scratch=kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(length.checked_mul(4).ok_or("kernel retention identity scratch overflow")?).map_err(|e|e.to_string())?;
+                        if identity!=consent || monetary.terms.material_manifest.as_ref()!=Some(&record.context.intent.manifest) || record.context.intent.manifest.scope(scope.claim)!=Some(scope){return Err("kernel retained bytes substitute exact saved identity".into())}
+                        // Retention only: this local identity cannot authorize a
+                        // response, GC, funding or a native accepted claim.
+                        Ok(())
+                    })?
+                } else {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::<PalwMonetaryMaterialProviderStoreV1>::recover_provider_verified_v1(&bytes,max_contract_bytes,total_capacity,ledger,authority)?
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(
@@ -165,7 +358,7 @@ impl DurableMonetaryMaterialProviderV1 {
                 fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
             }
         }
-        Ok(Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store })
+        Ok(Self { _lease: lease, file: file.to_path_buf(), max_contract_bytes, total_capacity, store, contexts, expiry_cursor: None })
     }
     fn publish(
         &mut self,
@@ -296,7 +489,77 @@ impl DurableMonetaryMaterialProviderV1 {
             return Ok(false);
         }
         self.publish(candidate)?;
+        if let Some(archive) = self.contexts.as_mut() {
+            archive.remove_after_verified_gc(stored_consent)?;
+        }
         Ok(true)
+    }
+    /// WAL replay may observe raw material already deleted. Recheck the same
+    /// positive native witness before deleting a remaining context, and finish
+    /// this step before recording completion or signing the provider ACK.
+    pub(crate) fn complete_metadata_gc_v4(
+        &mut self,
+        root: Hash64,
+        stored: Hash64,
+        consent: Hash64,
+        tail: Hash64,
+        block: kaspa_consensus_core::BlockHash,
+        mut witness: impl FnMut(Hash64, Hash64, Hash64, kaspa_consensus_core::BlockHash) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        let Some(archive) = self.contexts.as_mut() else { return Ok(true) };
+        if archive.get(stored)?.is_none() {
+            return Ok(true);
+        }
+        if self.store.holds_material_consent_v4(stored) {
+            return Ok(false);
+        }
+        if !witness(root, consent, tail, block)? {
+            return Ok(false);
+        }
+        archive.remove_after_verified_gc(stored)?;
+        Ok(true)
+    }
+    /// One bounded round-robin metadata row per tick; no first-live row can
+    /// starve later expired offers. A failed read leaves its WAL and bytes held.
+    pub fn expire_unused_kernel_offer_tick_v4(&mut self, native: &dyn kaspa_consensus_core::api::ConsensusApi) -> Result<(), String> {
+        let Some(archive) = self.contexts.as_ref() else { return Ok(()) };
+        let pending = archive.pending_expiry();
+        let Some(consent) = pending.map(|(id, _, _)| id).or_else(|| archive.next_consent(self.expiry_cursor)) else { return Ok(()) };
+        self.expiry_cursor = Some(consent);
+        let record = archive.get(consent)?;
+        let Some(record) = record else {
+            // A durable expiry intent is published before deleting raw bytes,
+            // and metadata is deleted only after raw publication. Missing
+            // metadata can finish that intent, never authorize a fresh delete.
+            if pending.is_none() || self.store.holds_material_consent_v4(consent) {
+                return Err("expiry metadata missing while material remains".into());
+            }
+            self.contexts.as_mut().unwrap().finish_expiry(consent)?;
+            return Ok(());
+        };
+        let (enrollment, id, until) =
+            kaspa_consensus_core::palw_kernel_material_enrollment_v4::kernel_material_capsule_identity_v4(&record.capsule)?;
+        let root = enrollment.terms.root;
+        if id != consent || pending.is_some_and(|(_, r, u)| r != root || u != until) {
+            return Err("kernel expiry intent substitutes exact signed generation/deadline".into());
+        }
+        if !native.palw_kernel_material_capsule_unused_finalized_v4(&record.capsule)? {
+            return Ok(());
+        }
+        self.contexts.as_mut().unwrap().begin_expiry(consent, root, until)?;
+        if self.store.holds_material_consent_v4(consent) {
+            let (candidate, expired) = self.store.provider_discard_expired_kernel_capsule_v4(&record.capsule, |capsule| {
+                native.palw_kernel_material_capsule_unused_finalized_v4(capsule)
+            })?;
+            if !expired {
+                return Ok(());
+            }
+            self.publish(candidate)?;
+        }
+        let archive = self.contexts.as_mut().unwrap();
+        archive.remove_after_verified_gc(consent)?;
+        archive.finish_expiry(consent)?;
+        Ok(())
     }
     pub fn discard_expired_offer(
         &mut self,
@@ -307,7 +570,14 @@ impl DurableMonetaryMaterialProviderV1 {
         if !expired {
             return Ok(false);
         }
+        if let Some(archive) = self.contexts.as_mut() {
+            archive.begin_expiry(enrollment.id(), enrollment.terms.root, enrollment.terms.enrollment_until_daa)?;
+        }
         self.publish(candidate)?;
+        if let Some(archive) = self.contexts.as_mut() {
+            archive.remove_after_verified_gc(enrollment.id())?;
+            archive.finish_expiry(enrollment.id())?;
+        }
         Ok(true)
     }
 }

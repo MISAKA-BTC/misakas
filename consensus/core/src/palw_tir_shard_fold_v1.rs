@@ -178,7 +178,7 @@ pub(super) fn bind_record_v1(
     let drawn = drawn_weights_v1(builder, claim_id, claim, &plan, anchor, outsider)?;
     let record = rules::PalwTirShardClaimV1::bound(plan.s_l, plan.s_p, outsider, drawn)
         .ok_or(PalwStateV2Error::TirShardRefused("a plan of no shards".into()))?;
-    builder.write_tir_shard_claim(*claim_id, Some(record));
+    builder.write_tir_shard_claim(*claim_id, Some(record))?;
     Ok(())
 }
 
@@ -206,7 +206,7 @@ pub(super) fn bind_record_stratified_v1(
     let drawn = drawn_weights_v1(builder, claim_id, &claim, &plan, anchor, outsider)?;
     let record = rules::PalwTirShardClaimV1::bound(plan.s_l, plan.s_p, outsider, drawn)
         .ok_or(PalwStateV2Error::TirShardRefused("a plan of no shards".into()))?;
-    builder.write_tir_shard_claim(*claim_id, Some(record));
+    builder.write_tir_shard_claim(*claim_id, Some(record))?;
     Ok(())
 }
 
@@ -323,7 +323,7 @@ pub(super) fn apply_part_v1(
     }
     let seat_verdicts = palw_seat_verdicts_of_v2(&receipts_v2);
     builder.slash_dissenting_seats(&claim_id, &claim, &seat_verdicts, true)?;
-    builder.credit_seat_receipts(claim_id, &receipts_v2, now);
+    builder.credit_seat_receipts(claim_id, &receipts_v2, now)?;
     for (bond, mask) in &signers {
         let price = price_of(bond, *mask);
         match builder.state.slashable_locks.get(&(*bond, claim_id)).copied() {
@@ -337,8 +337,8 @@ pub(super) fn apply_part_v1(
                     segments: 0,
                     ..lock
                 }),
-            ),
-            None => builder.lock_valid_seat_rcore(*bond, claim_id, price, *mask, record.s_p.max(1), now),
+            )?,
+            None => builder.lock_valid_seat_rcore(*bond, claim_id, price, *mask, record.s_p.max(1), now)?,
         }
     }
     // Land the part: the shard's cell counts, the counted signers, the abstention latch, the progress.
@@ -353,7 +353,7 @@ pub(super) fn apply_part_v1(
         part.receipts.iter().any(|r| !matches!(r.receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid));
     next.progress.mark(u32::from(shard)).map_err(|e| refused(e.to_string()))?;
     if !next.progress.is_complete() {
-        builder.write_tir_shard_claim(claim_id, Some(next));
+        builder.write_tir_shard_claim(claim_id, Some(next))?;
         return Ok(());
     }
     // The last part: the claim licenses, `basis_k` recounted over cells (RFC §4.4), the door recorded.
@@ -372,7 +372,7 @@ pub(super) fn apply_part_v1(
         g_res_sompi: if claim.rcore.licence_door.is_some() { claim.rcore.g_res_sompi } else { g_res },
     };
     staged.rcore.escrow_released = palw_rcore_release_due_v1(builder.params, &builder.state, &claim_id, &staged);
-    builder.write_tir_shard_claim(claim_id, Some(next));
+    builder.write_tir_shard_claim(claim_id, Some(next))?;
     builder.license_claim(claim_id, staged, now)
 }
 
@@ -444,7 +444,7 @@ pub(super) fn apply_readiness_v1(
             proof_version: 2,
             chunks: proof.opened.len().min(u32::MAX as usize) as u32,
         }),
-    );
+    )?;
     Ok(())
 }
 

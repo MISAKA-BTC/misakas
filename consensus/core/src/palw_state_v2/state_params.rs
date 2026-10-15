@@ -169,6 +169,7 @@ impl PalwStateParamsV2 {
             bond_formula_v2: None,
             reporter_income_from_daa: None,
             material_income_from_daa: None,
+            settlement_once_from_daa: None,
             monetary_material: None,
             material_release_recovery_v2: None,
             econ_contracts_v1: Default::default(),
@@ -180,6 +181,7 @@ impl PalwStateParamsV2 {
             public_evidence_reward_from_daa: None,
             claim_hard_deadline_v1: None,
             cell_coverage_closure_from_daa: None,
+            memory_routing_court_from_daa: None,
             rfc0016_v1: None,
             model_eligibility_v1: None,
             rfc0018_v1: None,
@@ -667,6 +669,24 @@ impl PalwStateParamsV2 {
         self.cell_coverage_closure_from_daa
     }
 
+    /// **RFC-0006's memory/routing court mirror** (`crate::palw_gdn_court_v2`) — written by `Params::sync_palw_memory_routing_court_v2`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_memory_routing_court_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.memory_routing_court_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_memory_routing_court_v2_fence`'s height, if the network arms it (the mirror).
+    pub fn memory_routing_court_from_daa(&self) -> Option<u64> {
+        self.memory_routing_court_from_daa
+    }
+
+    /// **Is the memory/routing court consumer v2 in force for something dated `daa`** (a registration's block, a claim's
+    /// acceptance, a binding declaration's block)? `false` on every shipped preset.
+    pub fn memory_routing_court_active_at(&self, daa: u64) -> bool {
+        self.memory_routing_court_from_daa.is_some_and(|from| daa >= from)
+    }
+
     /// **RFC-0017's mirror** (`crate::palw_model_eligibility_v1`) — written by `Params::sync_palw_model_eligibility_v1` and by
     /// nothing else (and by fixtures); `None` where the fence is not armed.
     pub fn with_model_eligibility_v1(
@@ -741,6 +761,18 @@ impl PalwStateParamsV2 {
     }
     pub fn material_income_active_at(&self, daa: u64) -> bool {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    /// RFC-0008 once-only settlement registry mirror (`Params::palw_settlement_once_v1`).
+    pub fn with_settlement_once_from(mut self, from: Option<u64>) -> Self {
+        self.settlement_once_from_daa = from;
+        self
+    }
+    pub fn settlement_once_from(&self) -> Option<u64> {
+        self.settlement_once_from_daa
+    }
+    pub fn settlement_once_active_at(&self, daa: u64) -> bool {
+        self.settlement_once_from_daa.is_some_and(|from| daa >= from)
     }
 
     pub fn with_paid_consumer_lifecycle(

@@ -92,6 +92,10 @@ pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 9;
 mod consumer;
 pub use consumer::*;
 
+// RFC-0008: allocation/history invariance under relabelling, order swaps and splits (source controls).
+#[cfg(test)]
+mod invariance_tests_v1;
+
 mod hold;
 pub use hold::*;
 

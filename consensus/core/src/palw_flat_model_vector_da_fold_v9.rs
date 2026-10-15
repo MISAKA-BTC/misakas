@@ -129,15 +129,15 @@ pub(super) fn demand(
     let demand = row.id();
     let count = builder.state.kernel_route.as_ref().unwrap().flat_vector_open_demands_v9(&id) + 1;
     if let Some(prior) = prior_slot {
-        builder.write_kernel_row(FLAT_VECTOR_DEMAND_TABLE_V9, borsh::to_vec(&prior).unwrap(), None);
+        builder.write_kernel_row(FLAT_VECTOR_DEMAND_TABLE_V9, borsh::to_vec(&prior).unwrap(), None)?;
     }
-    builder.write_kernel_row(FLAT_VECTOR_DEMAND_TABLE_V9, borsh::to_vec(&demand).unwrap(), Some(borsh::to_vec(&row).unwrap()));
+    builder.write_kernel_row(FLAT_VECTOR_DEMAND_TABLE_V9, borsh::to_vec(&demand).unwrap(), Some(borsh::to_vec(&row).unwrap()))?;
     builder.write_kernel_row(
         FLAT_VECTOR_SLOT_TABLE_V9,
         borsh::to_vec(&(*signer, slot)).unwrap(),
         Some(borsh::to_vec(&demand).unwrap()),
-    );
-    builder.write_kernel_row(FLAT_VECTOR_OPEN_COUNT_TABLE_V9, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&count).unwrap()));
+    )?;
+    builder.write_kernel_row(FLAT_VECTOR_OPEN_COUNT_TABLE_V9, borsh::to_vec(&id).unwrap(), Some(borsh::to_vec(&count).unwrap()))?;
     Ok(())
 }
 fn close_demand(builder: &mut TransitionBuilder<'_>, id: &Hash64, mut d: FlatVectorDemandV9) -> Result<(), PalwStateV2Error> {
@@ -150,8 +150,8 @@ fn close_demand(builder: &mut TransitionBuilder<'_>, id: &Hash64, mut d: FlatVec
         .checked_sub(1)
         .ok_or_else(|| refused("flat demand count underflow"))?;
     d.settled = true;
-    builder.write_kernel_row(FLAT_VECTOR_DEMAND_TABLE_V9, borsh::to_vec(id).unwrap(), Some(borsh::to_vec(&d).unwrap()));
-    builder.write_kernel_row(FLAT_VECTOR_OPEN_COUNT_TABLE_V9, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&count).unwrap()));
+    builder.write_kernel_row(FLAT_VECTOR_DEMAND_TABLE_V9, borsh::to_vec(id).unwrap(), Some(borsh::to_vec(&d).unwrap()))?;
+    builder.write_kernel_row(FLAT_VECTOR_OPEN_COUNT_TABLE_V9, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&count).unwrap()))?;
     Ok(())
 }
 pub(super) fn answer(
@@ -189,7 +189,7 @@ pub(super) fn answer(
         header: FlatVectorServedHeaderV9 { answered_daa: ctx.daa_score, answer_root: flat_vector_answer_root_v9(bytes) },
         answer: bytes.to_vec(),
     };
-    builder.write_kernel_row(FLAT_VECTOR_SERVED_TABLE_V9, d.unit.key(&d.vector), Some(borsh::to_vec(&row).unwrap()));
+    builder.write_kernel_row(FLAT_VECTOR_SERVED_TABLE_V9, d.unit.key(&d.vector), Some(borsh::to_vec(&row).unwrap()))?;
     let paid = builder.slash_bond(d.requester, d.bond as u128)?;
     builder.add_kernel_payout(d.poster_payout, paid)?;
     close_demand(builder, &id, d)
@@ -225,6 +225,6 @@ pub(super) fn settle_demand(
     let Some(_fee) = charge(builder, ctx, signer, work, true)? else { return Ok(()) };
     let slash = builder.slash_bond(h.poster, h.reserved as u128)?;
     builder.add_kernel_payout(d.requester_payout, slash.saturating_mul(PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1) / 1000)?;
-    builder.write_kernel_row(FLAT_VECTOR_UNAVAILABLE_TABLE_V9, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&true).unwrap()));
+    builder.write_kernel_row(FLAT_VECTOR_UNAVAILABLE_TABLE_V9, borsh::to_vec(&d.vector).unwrap(), Some(borsh::to_vec(&true).unwrap()))?;
     close_demand(builder, &id, d)
 }

@@ -78,11 +78,17 @@ def validate(envelope, dag, node, bootstrap, expected_providers, import_stamp, r
         enrollmentFinalizedObserved=row['enrollmentFinalized'], publicCertificate=False, releaseApproval=False)
 
 
+def observation_path(root, role):
+    # The node writes under its network data dir, `<--appdir>/misaka-<network>`; the drills
+    # pass `--appdir=<root>/<role>/appdir` (Drill.values[role + '_APPDIR']).
+    return root / role / 'appdir' / 'misaka-testnet-12' / FILE
+
+
 def observe(drill, role, bootstrap, rpc_read, import_stamp, require_bound=True, require_finalized=False, expected_root=None, expected_claim=None):
     # This exact file is written by this owned child's native Consensus API.
     # Bracket it with public reads so an old file after reorg/import/restart
     # cannot satisfy acceptance for the current native generation.
-    path = drill.root / role / 'misaka-testnet-12' / FILE
+    path = observation_path(drill.root, role)
     before = rpc_read(drill, role, 'getBlockDagInfo')
     node = rpc_read(drill, role, 'getPalwNodeStatus')
     try:

@@ -7,7 +7,7 @@ use kaspa_consensus_core::{
     Hash64,
     palw_kernel_parameter_material_v4::*,
     palw_material_capacity_v1::{PALW_MATERIAL_MAX_UNITS_V1, PalwMaterialManifestV1},
-    palw_native_resource_v1::{NativeDemandLeaseV1, ReservedKernelLedgerV1, reserve_native_requests_v1},
+    palw_native_resource_v1::{NativeDemandLeaseV1, reserve_native_requests_v1},
     palw_prospective_kernel_material_v4::*,
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2},
 };
@@ -41,7 +41,7 @@ pub struct ProviderHandoffLimitsV4 {
 pub struct KernelProviderHandoffV4 {
     request: PalwProspectiveKernelMaterialRequestV4,
     // Ownership is intentionally not detachable from the request's lifetime.
-    _candidate: ReservedKernelLedgerV1,
+    _candidate: kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4,
     _workspace: Option<NativeDemandLeaseV1>,
     _output: Option<NativeDemandLeaseV1>,
 }
@@ -168,7 +168,7 @@ impl BorshSerialize for BorrowedPosition<'_> {
         Ok(())
     }
 }
-fn retrieval<'a>(
+pub(super) fn retrieval<'a>(
     ledger: &'a KernelLedgerV1,
     row: &'a ClaimRowV1,
     component: u8,
@@ -229,15 +229,39 @@ pub fn build_kernel_provider_handoff_v4(
     raw_depth: Option<u64>,
     signer: &dyn kaspa_pq_validator_core::MessageSigner,
 ) -> Result<KernelProviderHandoffV4, Refusal> {
-    let route = state.kernel_route().ok_or_else(|| bad("native kernel route absent"))?;
-    let bond = state.bond(&producer).ok_or_else(|| bad("native producer absent"))?;
-    if signer.public_key() != bond.pubkey
-        || commit_daa > expires_daa
+    let owned = kaspa_consensus_core::palw_kernel_producer_candidate_v4::kernel_producer_candidate_v4(
+        state,
+        params,
+        checkpoint,
+        commit_daa,
+        producer,
+        &commit,
+        &salt,
+        commit_daa,
+        expires_daa,
+        raw_depth,
+    )
+    .map_err(bad)?;
+    build_kernel_provider_handoff_from_candidate_v4(owned, providers, commit, salt, material, limits, signer)
+}
+/// Use the opaque grant returned by the producer's OWN Consensus API; no raw
+/// peer state/key/collateral projection is accepted by this interface.
+pub fn build_kernel_provider_handoff_from_candidate_v4(
+    mut owned: kaspa_consensus_core::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4,
+    providers: Vec<PalwBondKeyV2>,
+    commit: SaltedCommitV1,
+    salt: Digest,
+    material: &PaidClaimMaterialWireV2,
+    limits: ProviderHandoffLimitsV4,
+    signer: &dyn kaspa_pq_validator_core::MessageSigner,
+) -> Result<KernelProviderHandoffV4, Refusal> {
+    owned.validate_work(&commit, &salt).map_err(bad)?;
+    if signer.public_key() != owned.producer_pubkey()
         || providers.len() < 2
         || providers.len() > kaspa_consensus_core::palw_monetary_material_v1::PALW_MONETARY_MATERIAL_MAX_PROVIDERS_V1
         || providers.windows(2).any(|p| p[0] >= p[1])
     {
-        return Err(bad("producer signature/roster/lifetime invalid"));
+        return Err(bad("native producer key/roster invalid"));
     }
     let scratch = workspace(material)?;
     if scratch > limits.max_workspace_bytes {
@@ -245,9 +269,8 @@ pub fn build_kernel_provider_handoff_v4(
     }
     let workspace_lease = reserve_native_requests_v1(scratch).map_err(bad)?;
     let (claim, _, _) = commit_identity_v4(&commit);
-    let mut candidate =
-        prepare_unsigned_kernel_candidate_v4(state, params, &producer, &commit, &salt, commit_daa, raw_depth).map_err(bad)?;
-    candidate.try_reserve_kernel_material_v4(&claim).map_err(bad)?;
+    owned.reserve_material_v4().map_err(bad)?;
+    let candidate = owned.ledger();
     let row = candidate.claims.get(&claim).ok_or_else(|| bad("actual candidate absent"))?;
     let mut ranges = [0u32; 256];
     let count = typed_kernel_unit_ranges_v4(&candidate, &claim, |s, n| {
@@ -371,8 +394,14 @@ pub fn build_kernel_provider_handoff_v4(
             units.push((stage, position, bytes));
         }
     }
-    let bundle = PalwTypedKernelMaterialBundleV4 { claim: Hash64::from_bytes(claim), units };
-    let scope = bundle.verify(&candidate, limits.max_material_bytes).map_err(bad)?;
+    let bundle =
+        PalwProspectiveKernelBundleV4::TypedKernelV4(PalwTypedKernelMaterialBundleV4 { claim: Hash64::from_bytes(claim), units });
+    let decode = kaspa_consensus_core::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(&bundle).map_err(bad)?;
+    let _decode = reserve_native_requests_v1(decode.bytes().ok_or_else(|| bad(decode.to_string()))?).map_err(bad)?;
+    let auth = kaspa_consensus_core::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(&bundle, candidate)
+        .map_err(bad)?;
+    let _auth = reserve_native_requests_v1(auth.bytes().ok_or_else(|| bad(auth.to_string()))?).map_err(bad)?;
+    let scope = bundle.verify(candidate, limits.max_material_bytes).map_err(bad)?;
     output.reserve(
         (size_of::<PalwMaterialManifestV1>() + size_of::<kaspa_consensus_core::palw_material_capacity_v1::PalwMaterialScopeV1>())
             as u64,
@@ -380,31 +409,65 @@ pub fn build_kernel_provider_handoff_v4(
     let manifest = PalwMaterialManifestV1 { root: Hash64::from_bytes(claim), scopes: vec![scope] };
     let intent = PalwProspectiveKernelMaterialIntentV4 {
         version: 4,
-        checkpoint,
-        ledger_root: route.ledger_root(),
-        aux_root: route.aux_root(),
-        commit_daa,
-        expires_daa,
-        producer,
+        checkpoint: owned.checkpoint(),
+        ledger_root: owned.ledger_root(),
+        aux_root: owned.aux_root(),
+        commit_daa: owned.commit_daa(),
+        expires_daa: owned.expires_daa(),
+        producer: owned.producer(),
         providers,
         commit,
         salt,
         manifest,
     };
     output.reserve(kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64)?;
-    let message = intent.signing_message(Hash64::from_bytes(route.header.policy.network_domain));
+    let message = intent.signing_message(owned.network());
     let signature = signer.sign_message(message.as_byte_slice(), PALW_PROSPECTIVE_KERNEL_MATERIAL_CONTEXT_V4).map_err(bad)?;
     if signature.len() != kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
         return Err(bad("producer signer returned wrong signature length"));
     }
     Ok(KernelProviderHandoffV4 {
-        request: PalwProspectiveKernelMaterialRequestV4 {
-            intent,
-            producer_signature: signature,
-            bundle: PalwProspectiveKernelBundleV4::TypedKernelV4(bundle),
-        },
-        _candidate: candidate,
+        request: PalwProspectiveKernelMaterialRequestV4 { intent, producer_signature: signature, bundle },
+        _candidate: owned,
         _workspace: workspace_lease,
         _output: output.lease,
     })
+}
+
+// Exact SDK-owned file grammar: nested collection lengths are scanned before
+// Borsh may allocate. File byte caps alone do not authorize native heap demand.
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for PaidClaimMaterialWireV2 {
+    fn scan_native_wire_v1<R: io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeWireScanV1, NativeWireShapeV1};
+        use std::collections::BTreeMap;
+        r.step()?;
+        let mut shape = NativeWireShapeV1::default();
+        macro_rules! field {
+            ($t:ty) => {
+                shape = shape.merge(<$t>::scan_native_wire_v1(r)?)?;
+            };
+        }
+        field!(BTreeMap<(u8,u32,u16,u16),TensorWireV1>);
+        field!(BTreeMap<(u8,u32,u16),TensorWireV1>);
+        field!(BTreeMap<(u16, u16, Option<u16>), TensorWireV1>);
+        field!(BTreeMap<u32,Vec<Vec<TensorWireV1>>>);
+        field!(BTreeMap<u32,Vec<Digest>>);
+        field!(Vec<u32>);
+        field!(BTreeMap<(Digest,u64),misaka_palw_kernel::spec::retrieval::RetrievalItemV1>);
+        Ok(shape)
+    }
+}
+impl kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1 for super::private_bootstrap::ProgramPaidBootstrapWorkV3 {
+    fn scan_native_wire_v1<R: io::Read>(
+        r: &mut kaspa_consensus_core::palw_native_resource_v1::NativeWireReaderV1<R>,
+    ) -> io::Result<kaspa_consensus_core::palw_native_resource_v1::NativeWireShapeV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeWireScanV1;
+        r.step()?;
+        <(u16, Digest)>::scan_native_wire_v1(r)?
+            .merge(SaltedCommitV1::scan_native_wire_v1(r)?)?
+            .merge(PaidClaimMaterialWireV2::scan_native_wire_v1(r)?)?
+            .merge(<(u128, u128, u128)>::scan_native_wire_v1(r)?)
+    }
 }

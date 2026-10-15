@@ -122,7 +122,7 @@ pub(super) fn apply_bootstrap_exact_v1(
     }
     row.validate(&policy).map_err(refuse)?;
     super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
-    builder.write_kernel_row(PALW_BEACON_BOOTSTRAP_TABLE_V1, round_id.to_vec(), Some(encode(&row)));
+    builder.write_kernel_row(PALW_BEACON_BOOTSTRAP_TABLE_V1, round_id.to_vec(), Some(encode(&row)))?;
     Ok(())
 }
 
@@ -152,7 +152,7 @@ pub(super) fn sweep_beacon_bootstrap_v1(
         }
     }
     for (key, row) in writes {
-        builder.write_kernel_row(PALW_BEACON_BOOTSTRAP_TABLE_V1, key, row);
+        builder.write_kernel_row(PALW_BEACON_BOOTSTRAP_TABLE_V1, key, row)?;
     }
     Ok(())
 }

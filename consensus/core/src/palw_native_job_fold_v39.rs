@@ -101,7 +101,7 @@ fn prepay(
     let e = epoch(p, ctx)?;
     let mut s = super::palw_flat_execution_fold_v11::quota_shard(builder, &p.execution, &e, palw_kernel_bond_id_v1(signer), [0; 64])?;
     s.debit_ordinary(&p.execution.quota, &e, &DerivedOrdinaryMetadataV11::from_native_envelope(q)).map_err(bad)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64]);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &s, [0; 64])?;
     Ok(true)
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -276,9 +276,9 @@ fn accept(
         accepted: c.accepted,
         expires: c.wire.expires,
     };
-    builder.write_kernel_row(TABLE, k(18, &id), Some(b(&(h.root(), h))));
-    builder.write_kernel_row(TABLE, k(26, &id), Some(b(&raw)));
-    builder.write_kernel_row(TABLE, k(19, signer), Some(b(&ids)));
+    builder.write_kernel_row(TABLE, k(18, &id), Some(b(&(h.root(), h))))?;
+    builder.write_kernel_row(TABLE, k(26, &id), Some(b(&raw)))?;
+    builder.write_kernel_row(TABLE, k(19, signer), Some(b(&ids)))?;
     super::palw_native_source_fold_v39::retain_class(
         builder,
         class_id,
@@ -336,13 +336,14 @@ pub(super) fn book(r: &PalwKernelRouteStateV1, h: &JobHeader) -> Result<NativeJo
     }
     Ok(book)
 }
-fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, book: &NativeJobBookV39) {
+fn write_book(builder: &mut TransitionBuilder<'_>, h: &mut JobHeader, book: &NativeJobBookV39) -> Result<(), PalwStateV2Error> {
     let raw = b(book);
     h.book = book.root();
     h.book_bytes = raw.len() as u32;
     h.terminal = book.terminal();
-    builder.write_kernel_row(TABLE, k(17, &h.id), Some(raw));
-    builder.write_kernel_row(TABLE, k(16, &h.id), Some(b(&(h.root(), h))));
+    builder.write_kernel_row(TABLE, k(17, &h.id), Some(raw))?;
+    builder.write_kernel_row(TABLE, k(16, &h.id), Some(b(&(h.root(), h))))?;
+    Ok(())
 }
 pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128 {
     list(r, 22, bond)
@@ -355,14 +356,15 @@ pub(super) fn reserved(r: &PalwKernelRouteStateV1, bond: &PalwBondKeyV2) -> u128
         .fold(0u128, |n, h| n.saturating_add(h.original.reserve as u128))
         .saturating_add(public::reserved(r, bond))
 }
-fn write_source(builder: &mut TransitionBuilder<'_>, s: &SourceShardV39, id: Digest) {
+fn write_source(builder: &mut TransitionBuilder<'_>, s: &SourceShardV39, id: Digest) -> Result<(), PalwStateV2Error> {
     let g = s.global_row();
     let a = s.producer_row();
-    builder.write_kernel_row(QUOTA, vec![0], Some(b(&(g.root(), g))));
-    builder.write_kernel_row(QUOTA, b(&(1u8, a.actor)), Some(b(&(a.root(), a))));
+    builder.write_kernel_row(QUOTA, vec![0], Some(b(&(g.root(), g))))?;
+    builder.write_kernel_row(QUOTA, b(&(1u8, a.actor)), Some(b(&(a.root(), a))))?;
     if let Some(r) = s.source_row() {
-        builder.write_kernel_row(QUOTA, b(&(39u8, 0u8, id)), Some(b(&(r.root(), r))));
+        builder.write_kernel_row(QUOTA, b(&(39u8, 0u8, id)), Some(b(&(r.root(), r))))?;
     }
+    Ok(())
 }
 fn fund(
     builder: &mut TransitionBuilder<'_>,
@@ -548,8 +550,8 @@ fn fund(
     material::attach(builder, maximum.input_manifest(), id, deadline)?;
     let book = NativeJobBookV39::fund(token);
     let ch = super::palw_native_source_fold_v39::class_header(builder.state.kernel_route.as_ref().unwrap(), class.root())?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &baseline, id);
-    write_source(builder, &source, id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &baseline, id)?;
+    write_source(builder, &source, id)?;
     for (key, raw) in [
         (b(&(30u8, 0u8)), b(&(queue.root(), queue))),
         (b(&(22u8, 0u8)), b(&(physical.root(), physical))),
@@ -561,7 +563,7 @@ fn fund(
         (b(&(39u8, id, 3u8)), b(&p.execution.quota)),
         (b(&(39u8, id, 4u8)), b(&(contract.carriage().record().root(), contract.carriage().record()))),
     ] {
-        builder.write_kernel_row(QUOTA, key, Some(raw));
+        builder.write_kernel_row(QUOTA, key, Some(raw))?;
     }
     let mut jh = JobHeader {
         version: 39,
@@ -579,22 +581,22 @@ fn fund(
         requester_payout,
         producer_payout,
     };
-    write_book(builder, &mut jh, &book);
-    protected::initialize(builder, &jh);
+    write_book(builder, &mut jh, &book)?;
+    protected::initialize(builder, &jh)?;
     requesters.push(id);
     producers.push(id);
     consents.retain(|x| *x != c.root());
-    builder.write_kernel_row(TABLE, k(21, signer), Some(b(&requesters)));
-    builder.write_kernel_row(TABLE, k(22, &c.producer), Some(b(&producers)));
-    builder.write_kernel_row(TABLE, k(19, &c.producer), Some(b(&consents)));
-    builder.write_kernel_row(TABLE, k(20, &c.root()), Some(b(&(id, book.funding(), c.root()))));
-    builder.write_kernel_row(TABLE, k(25, &id), Some(b(&(next.root(), receipt, ctx.block.as_bytes(), ctx.daa_score))));
+    builder.write_kernel_row(TABLE, k(21, signer), Some(b(&requesters)))?;
+    builder.write_kernel_row(TABLE, k(22, &c.producer), Some(b(&producers)))?;
+    builder.write_kernel_row(TABLE, k(19, &c.producer), Some(b(&consents)))?;
+    builder.write_kernel_row(TABLE, k(20, &c.root()), Some(b(&(id, book.funding(), c.root()))))?;
+    builder.write_kernel_row(TABLE, k(25, &id), Some(b(&(next.root(), receipt, ctx.block.as_bytes(), ctx.daa_score))))?;
     // Preserve the ORIGINAL producer wire and contract for all later replay,
     // audit and GC. The consumed tombstone prevents a second Fund forever.
-    builder.write_kernel_row(TABLE, k(27, &id), Some(b(&c)));
-    builder.write_kernel_row(TABLE, k(18, &c.root()), None);
-    builder.write_kernel_row(TABLE, k(26, &c.root()), None);
-    builder.write_kernel_row(NONCE, b(&c.wire.requester_operator), Some(b(&next)));
+    builder.write_kernel_row(TABLE, k(27, &id), Some(b(&c)))?;
+    builder.write_kernel_row(TABLE, k(18, &c.root()), None)?;
+    builder.write_kernel_row(TABLE, k(26, &c.root()), None)?;
+    builder.write_kernel_row(NONCE, b(&c.wire.requester_operator), Some(b(&next)))?;
     super::palw_native_source_fold_v39::retain_class(
         builder,
         jh.original.class,
@@ -611,7 +613,7 @@ fn fund(
     if let Some(invocation) = &invocation {
         super::palw_native_master_fold_v39::record_funded(builder, ctx, invocation, id)?;
     }
-    builder.note_kernel_bond(&c.producer);
+    builder.note_kernel_bond(&c.producer)?;
     Ok(())
 }
 fn original_binding(h: &JobHeader, plan: &CheckedJobQuotaPlanV11) -> SubjectBindingV11 {
@@ -654,7 +656,7 @@ fn predebit_original(
     )?;
     let action = plan.action(kind, body).map_err(bad)?;
     s.debit_reserved(&p.execution.quota, &e, &binding, &plan, &action).map_err(bad)?;
-    super::palw_flat_execution_fold_v11::write_shard(builder, &s, h.id);
+    super::palw_flat_execution_fold_v11::write_shard(builder, &s, h.id)?;
     Ok(())
 }
 fn restore_job(
@@ -737,8 +739,8 @@ fn commit_after_paid(
     }
     let raw = b(&w);
     h.post_bytes = raw.len() as u32;
-    builder.write_kernel_row(TABLE, k(28, &id), Some(raw));
-    write_book(builder, &mut h, &book);
+    builder.write_kernel_row(TABLE, k(28, &id), Some(raw))?;
+    write_book(builder, &mut h, &book)?;
     protected::set_claim(builder, &h, w.claim.root())?;
     Ok(())
 }
@@ -835,7 +837,7 @@ fn credit(
     } else {
         builder.cancel_native_recipient_v1(Hash64::from_bytes(h.id), h.original.producer, 11);
     }
-    builder.write_payout(queue, Some(PalwPayoutV2 { payload: payout, amount }));
+    builder.write_payout(queue, Some(PalwPayoutV2 { payload: payout, amount }))?;
     if let Some((f, payout)) = finder_payout {
         if builder.params.reporter_income_active_at(ctx.daa_score) {
             let award = Hash64::from_bytes(object_id(
@@ -882,8 +884,8 @@ fn credit(
     .map_err(bad)?;
     public::cancel_remaining(builder, h)?;
     subject.closed = true;
-    builder.write_kernel_row(QUOTA, b(&(2u8, h.id)), Some(b(&(subject.row_root(), subject))));
-    write_book(builder, h, book);
+    builder.write_kernel_row(QUOTA, b(&(2u8, h.id)), Some(b(&(subject.row_root(), subject))))?;
+    write_book(builder, h, book)?;
     let c = NativeSingleCreditV39 {
         version: 39,
         job: h.id,
@@ -897,7 +899,7 @@ fn credit(
         amount,
         established: s.established,
     };
-    builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))));
+    builder.write_kernel_row(TABLE, k(23, &h.id), Some(b(&(c.root(), &c))))?;
     builder.bond_budget_close_v1(&super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id), ctx.daa_score);
     // Keep the original books/posts/credit for Master and independent audit,
     // but a terminal job no longer occupies an active actor job slot. This
@@ -905,7 +907,7 @@ fn credit(
     for (kind, who) in [(21, h.original.requester), (22, h.original.producer)] {
         let mut ids = list(builder.state.kernel_route.as_ref().unwrap(), kind, &who)?;
         ids.retain(|id| *id != h.id);
-        builder.write_kernel_row(TABLE, k(kind, &who), Some(b(&ids)));
+        builder.write_kernel_row(TABLE, k(kind, &who), Some(b(&ids)))?;
     }
     Ok(())
 }

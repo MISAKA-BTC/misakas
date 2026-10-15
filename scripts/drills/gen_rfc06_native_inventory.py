@@ -87,6 +87,9 @@ queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMate
        'crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4','crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4',
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
+       'crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4','crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitResponseV4',
+       'crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4',
+       'crate::palw_step_refute::memory_v2::PalwGdnStepRefutationV2',
        'misaka_palw_kernel::spec::retrieval::SliceResponseV1','misaka_palw_kernel::spec::retrieval::EntryResponseV1','misaka_palw_kernel::spec::retrieval::RetrievalItemV1',
        'misaka_palw_kernel::route::KernelRouteObjectV1','crate::palw_state_v2::PalwConsensusObjectV2','crate::palw_state_v2::PalwTransitionExtrasV1',
        'crate::palw_claim_compact_v4::PalwPaidCompactContractV4','crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4','crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2','crate::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2','crate::palw_material_capacity_v1::PalwMonetaryMaterialProviderStoreV1',
@@ -105,7 +108,11 @@ queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMate
        'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1',
        # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
        'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
-       'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1']; visited=set(); generated=[]; unresolved=[]
+       'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
+       # RFC-0006 consumer v2 (2026-10-15): the router binding rows of kernel route aux 139.
+       'crate::palw_router_binding_v2::PalwRouterBindingRowV2',
+       # RFC-0008 (2026-10-15): the once-only settlement markers of kernel route aux 140 (dormant fence).
+       'crate::palw_settlement_once_v1::PalwSettlementOnceRowV1']; visited=set(); generated=[]; unresolved=[]
 
 # Resolve dependency types; concrete names, aliases/primitive containers are left
 # to Rust's existing type system, so there is no byte-size inference from codec.

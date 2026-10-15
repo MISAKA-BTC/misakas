@@ -57,7 +57,7 @@ The rows in §4 group refs; the counts above are per ref.
 
 | space | values | status |
 |---|---|---|
-| **aux tables** | **134 and 135** | **COLLISION, reported, not renumbered.** Codex `PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2 = 134` and `PAID_CLAIM_COMPACT_V4 = 135` collide with integ RFC-0016 `PALW_RFC0016_QUEUE_INDEX_TABLE_V1 = 134` and `PALW_RFC0016_TELEMETRY_TABLE_V1 = 135`. All four fences are `None` on every preset, so nothing live is affected. `wire_kernel_aux.rs` and `gen_rfc06_native_wire.py` keep both sides' scanner arms (RFC-0016 first) with a COLLISION comment. **One side must move before either fence is armed.** If `palw_claim_compact_v4` is withdrawn under §8, its 135 frees itself. |
+| aux tables | 137 and 138 | **Resolved 2026-10-15 (integ/rfc06-12-remaining):** Codex `PALW_MATERIAL_RELEASE_RECOVERY_TABLE_V2` moved 134 → 137 and `PAID_CLAIM_COMPACT_V4` 135 → 138; RFC-0016 keeps 132–135 and RFC-0018 136. Compact V4 is retired under PRINCIPLES §8 (no generation, acceptance or credit; aux 138 keeps fail-closed decoders only). |
 | aux tables | 136 | RFC-0018 `PALW_SECURITY_CERTIFICATION_TABLE_V1`. New and free. |
 | stage-execution actions (tag V14) | 34..=40 (v28), 41..=70 (v39) | Codex extends the stage namespace. Funded actions (tag V11) stay ≤ 46. No collision. |
 | proto message fields | settlement 13/14, claim view 39 | Integ's RFC-0018 additions. A scan of `rpc.proto`, `messages.proto` and the p2p protos after the merges finds no duplicate field number in any message. |
@@ -200,7 +200,7 @@ The rows in §4 group refs; the counts above are per ref.
 
 ## 6. Not merged: needs a user decision or a build-capable port
 
-1. **aux 134/135 collision** (§3.1). Decide which side moves before arming RFC-0016 or Codex's recovery/compact fences.
+1. ~~**aux 134/135 collision**~~ resolved 2026-10-15: Codex's tables moved to 137/138 (§3.1).
 2. **claim_compact_v1 (in integ) and claim_compact_v4 (Codex) under PRINCIPLES §8.** Their compact proofs are sum-check with a Fiat–Shamir transcript. Codex is converting v1 to "direct probabilistic checks". Rule whether v4 is withdrawn too; that would also free aux 135.
 3. **audit/rpc-index:** the node-only accounting index and supply/evidence RPCs. Its RPC ops 230–243 collide. Pick a free range (245–254 or ≥ 256) and port onto today's coinbase/processor. Compile risk is high.
 4. **mn/model-declarations:** model names, sources and distributions. Needs rework (drop the torrent and availability gate per ADR-0177) and new numbers (tag 140 and tail 0xE2 are taken; its ADR must be ≥ 0179).
@@ -227,8 +227,8 @@ The rows in §4 group refs; the counts above are per ref.
 ## 7. Compile risks (nothing here was built)
 
 - **Codex pushes are labelled "(unverified)" or "UNCOMPILED".** They add about 60k lines: RFC02 v39, native recovery, the compact V4 fold, TIR acquisition.
-- **`wire_generated.rs`** is hand-unioned, and the generator is blocked by the shape-review gate (§3.2). Mismatches between the type graph and the generated scanners will only show at build or test time.
-- **Aux 134 arms:** for 64-byte keys, the RFC-0016 arm shadows Codex's recovery-row arm. This compiles (guarded arms), but the scanner reads Codex 134 rows as RFC-0016 rows if both are ever written.
+- **`wire_generated.rs`** is now the generator's own output again (2026-10-15: the missing shape-review entries for the TIR public owned codecs were added; the pipeline re-runs idempotently). Mismatches between the type graph and the generated scanners still only show at build or test time.
+- ~~**Aux 134 arms**~~ resolved by the 137/138 renumbering.
 - **`get_palw_settlement_call`:** builds `GetPalwSettlementResponse` with RFC-0018's two new fields. Any gRPC or wRPC converter that destructures the struct exhaustively must include them (RFC-0018's own commit handles its side).
 - **`palw_rule_e_prefers_v1`:** now `Result`-returning (Codex) with the RFC-0018 body. Callers come from Codex's side; RFC-0018 added no new caller.
 - **adv/c4-e2e tests** (`24df95834`): ten integration test targets written against round-1 kernel seal semantics. `adv_c4_route.rs` and `adv_c4_fuzz_pipeline.rs` probably need seal-flow updates. Any compile failure blocks `cargo test` for that crate.

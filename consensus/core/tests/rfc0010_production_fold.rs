@@ -1793,7 +1793,9 @@ fn paid_panel_sources_hold_the_same_native_r_until_actual_final_fee_queue_and_su
         plan,
         param_commitments: pc.clone(),
     };
-    let mut preview = v.c.s.kernel_route().unwrap().ledger().unwrap();
+    let mut preview_owner = v.c.s.kernel_route().unwrap().ledger().unwrap();
+    // RFC-0006: an off-chain preview mutates the reserved ledger explicitly (there is no `DerefMut`).
+    let preview = preview_owner.preview_mut_v1();
     preview.begin_block(v.c.daa + 1).unwrap();
     let kid = kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_bond_id_v1(&sponsor);
     preview.sync_bond(kid, v.c.s.bond(&sponsor).unwrap().collateral);

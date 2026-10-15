@@ -186,6 +186,7 @@ impl Params {
         self.validate_palw_bond_formula_v2()?;
         self.validate_palw_reporter_income_v2()?;
         self.validate_palw_material_income_v3()?;
+        self.validate_palw_settlement_once_v1()?;
         self.validate_palw_panel_lifetime_v2()?;
         self.validate_palw_claim_challenge_v2()?;
         self.validate_palw_claim_compact_v4()?;
@@ -212,6 +213,7 @@ impl Params {
         // **RFC-0016's two dormant fences** (`crate::palw_rfc0016_v1`): refused when armed until measured values are pinned.
         self.validate_palw_model_block_rights_v1()?;
         self.validate_palw_elastic_final_capacity_v1()?;
+        self.validate_palw_memory_routing_court_v2()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
         // **ADR-0179's model tiers** (`crate::palw_model_tier_v1`): refused when armed; add-only lists; the mirror must agree.
