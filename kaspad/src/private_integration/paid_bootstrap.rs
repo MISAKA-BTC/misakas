@@ -32,7 +32,8 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 pub fn export_private_paid_bootstrap_v3(config: &Config, output: &Path) -> Result<serde_json::Value, String> {
     let salt = config.palw_drill_genesis_salt.as_ref().ok_or("private paid bootstrap needs explicit salt")?;
-    let expected = super::paid_claim_factory::private_paid_claim_params_v3(salt)?;
+    // RFC-0012 §4.4: the only permitted departure from the exact factory is a later private retirement height.
+    let expected = super::private_expected_retirement_v1(super::paid_claim_factory::private_paid_claim_params_v3(salt)?, config)?;
     if config.private_population.is_some()
         || config.params.consensus_params_id() != expected.consensus_params_id()
         || config.params.skip_proof_of_work

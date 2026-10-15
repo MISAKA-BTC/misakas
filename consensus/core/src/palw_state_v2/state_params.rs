@@ -170,6 +170,7 @@ impl PalwStateParamsV2 {
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             settlement_once_from_daa: None,
+            paid_claim_trap_from_daa: None,
             monetary_material: None,
             material_release_recovery_v2: None,
             econ_contracts_v1: Default::default(),
@@ -788,6 +789,18 @@ impl PalwStateParamsV2 {
     }
     pub fn settlement_once_active_at(&self, daa: u64) -> bool {
         self.settlement_once_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    /// RFC-0007 §4.1 paid-claim trap mirror (`Params::palw_paid_claim_trap_v1`).
+    pub fn with_paid_claim_trap_from(mut self, from: Option<u64>) -> Self {
+        self.paid_claim_trap_from_daa = from;
+        self
+    }
+    pub fn paid_claim_trap_from(&self) -> Option<u64> {
+        self.paid_claim_trap_from_daa
+    }
+    pub fn paid_claim_trap_active_at(&self, daa: u64) -> bool {
+        self.paid_claim_trap_from_daa.is_some_and(|from| daa >= from)
     }
 
     pub fn with_paid_consumer_lifecycle(

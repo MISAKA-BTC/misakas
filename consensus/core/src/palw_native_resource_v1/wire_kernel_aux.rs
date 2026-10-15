@@ -1053,6 +1053,16 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(frame)?
         }
         141 => return Err(wire::wire_bad("unallocated class registration origin row namespace")),
+        142 if key_bytes == 65 && prefix == crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_CONVICTION_PREFIX_V1 => {
+            crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1::scan_native_wire_v1(frame)?
+        }
+        142 if key_bytes == 137 && prefix == crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_HELD_FEE_PREFIX_V1 => {
+            crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1::scan_native_wire_v1(frame)?
+        }
+        142 if key_bytes == 65 && prefix == crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1 => {
+            crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1::scan_native_wire_v1(frame)?
+        }
+        142 => return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

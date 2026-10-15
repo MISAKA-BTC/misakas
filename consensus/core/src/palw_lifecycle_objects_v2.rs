@@ -2583,6 +2583,14 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         true,
     ),
     a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux 142 paid-claim trap rows (court convictions of paid claims, held verifier check fees)",
+        },
+        "palw_paid_claim_trap_v1",
+        "RFC-7 §4.1 T6 planted faults in paid claims and receipt-signer liability (reuses trap tags 102/103)",
+        true,
+    ),
+    a2_row(
         PalwA2SlotV1::StateEncoding { what: "bond budget table 8 immutable paid native consumer service/dispute/material contracts" },
         "palw_paid_consumer_lifecycle_v1",
         "RFC-8 paid consumer lifecycle",

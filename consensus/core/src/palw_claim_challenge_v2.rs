@@ -154,6 +154,14 @@ impl Params {
                         "palw_claim_challenge_v2 requires the monetary material covenant and release recovery V2 at or below it".into(),
                     ));
                 }
+                // RFC07-5 (user decision 2026-10-15 §8, note §4.1 T6): a drawn checker that approves without checking must lose its
+                // fee and answer for the claim — the paid-claim trap carries that deterrence, so it is in force no later than this
+                // fence. (The trap requires this fence at or below it in turn: the two arm at one height.)
+                if !at_or_below(self.palw_paid_claim_trap_v1) {
+                    return Err(PalwModeV2Error::InvalidOwned(
+                        "palw_claim_challenge_v2 requires palw_paid_claim_trap_v1 (lazy-verifier deterrence, RFC07-5) at or below it".into(),
+                    ));
+                }
                 // Native all-target acceptance and the economics are measured: a pinned record (EMPTY: dormant).
                 self.palw_rfc0608_measured_v1(crate::palw_rfc0608_measured_v1::PalwRfc0608FenceV1::ClaimChallengeV2, &f.policy)?;
             }
@@ -335,13 +343,20 @@ impl crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     /// base index names, read structurally from the rows the enrollment fold validated when it wrote them — no ledger rebuild.
     /// `None` for a claim with no paid V2 enrollment (or an index that does not name it exactly).
     pub fn paid_claim_signed_lifetime_v2(&self, claim: &Digest) -> Option<misaka_palw_kernel::claim_paid_v2::PaidClaimLifetimeV2> {
+        self.paid_claim_authority_for_base_unchecked_v2(claim).map(|a| a.enrollment.lifetime)
+    }
+
+    /// **The paid V2 enrollment authority whose base claim is `claim`**, read structurally from the rows the enrollment fold
+    /// validated when it wrote them (no ledger rebuild): the base index must name exactly this claim and its target must be the
+    /// authority's own context. `None` for a claim with no paid V2 enrollment.
+    pub fn paid_claim_authority_for_base_unchecked_v2(&self, claim: &Digest) -> Option<PalwPaidClaimAuthorityV2> {
         let key = paid_claim_index_key_v3(PAID_CLAIM_BASE_INDEX_PREFIX_V3, claim);
         let index = self.aux_row::<PalwPaidClaimIndexV3>(PAID_CLAIM_ENROLLMENTS_V2, &key)?;
         if index.version != 3 || index.kind != PalwPaidClaimIndexKindV3::BaseClaim || index.owner != *claim {
             return None;
         }
         let a: PalwPaidClaimAuthorityV2 = self.aux_row(PAID_CLAIM_ENROLLMENTS_V2, &borsh::to_vec(&index.target).ok()?)?;
-        (a.enrollment.base_claim == *claim && a.context.id() == index.target).then_some(a.enrollment.lifetime)
+        (a.enrollment.base_claim == *claim && a.context.id() == index.target).then_some(a)
     }
 
     pub fn paid_claim_check_authority_v2(

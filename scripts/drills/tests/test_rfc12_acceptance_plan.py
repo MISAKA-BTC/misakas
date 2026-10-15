@@ -68,7 +68,28 @@ def valid_plan():
         'accounting': {'incomeSeats': [0], 'providerPayerSeat': 3},
         'reconciliation': {'bondPageLimit': 100, 'maximumBondPages': 100},
         'coverage': {'archiveRole': 'provider', 'maximumWaitSeconds': 300},
+        'dnsHistory': {'keyringCommands': [], 'validators': [], 'bondWaitSeconds': 600,
+                       'exit': {'unbondCommands': [], 'withdrawCommands': [], 'destinationAddress': None,
+                                'maximumFeeSompi': 0},
+                       'legacySettlementWindowDaa': 0, 'observeAfterFenceDaa': 10, 'scanFromDaa': 0,
+                       'dnsCadence': {'epochLengthBlocks': 2, 'rewardUniquenessWindowBlocks': 600, 'maxReorgHorizonBlocks': 3,
+                   'attestationEpochLengthBlueScore': 2, 'attestationLagBlueScore': 2},
+                       'maximumBlockReads': 100000, 'maximumStatusReads': 1000, 'palwPayoutSource': 'factory-seats'},
     }
+
+
+def late_retirement_plan():
+    plan = valid_plan()
+    plan['identity']['retirementActivationDaa'] = 200
+    plan['dnsHistory'].update(
+        keyringCommands=[['/owned/bin/kaspad', '--palw-drill-write-keyring={ROOT}/keyring']],
+        validators=[{'role': 'provider', 'keyFile': '{ROOT}/keyring/validator-0.seed', 'mode': 'active',
+                     'bondCommands': [['/owned/bin/stake-bond', '--rpc={PROVIDER_WRPC}']]}],
+        exit={'unbondCommands': [['/owned/bin/unbond']], 'withdrawCommands': [['/owned/bin/withdraw']],
+              'destinationAddress': 'misakatest:qexitdestination00', 'maximumFeeSompi': 10**5},
+        # The node rule's window for fence 200 at the testnet-12 cadence: (99 + 1) * 2 + 603 - 200 = 603.
+        legacySettlementWindowDaa=603, observeAfterFenceDaa=700)
+    return plan
 
 
 def raw(plan):
@@ -188,6 +209,29 @@ class PlanControls(unittest.TestCase):
         plan['coverage']['archiveRole'] = 'checker'
         P.parse_plan(raw(plan))
         self.refuses(lambda p: p['evm'].update(roles=['producer']), 'two distinct')
+
+    def test_dns_history_needs_the_later_fence_and_complete_exit_steps(self):
+        parsed = P.parse_plan(raw(late_retirement_plan()))
+        self.assertEqual(parsed['dnsHistory']['validators'][0]['role'], 'provider')
+
+        def late(mutate):
+            plan = late_retirement_plan()
+            mutate(plan)
+            return plan
+        refusals = {
+            'validators at DAA 1': lambda p: p['identity'].update(retirementActivationDaa=1),
+            'scan above fence': lambda p: p['dnsHistory'].update(scanFromDaa=200),
+            'half an exit': lambda p: p['dnsHistory']['exit'].update(withdrawCommands=[]),
+            'exit without destination': lambda p: p['dnsHistory']['exit'].update(destinationAddress=None),
+            'two validators one role': lambda p: p['dnsHistory']['validators'].append(dict(p['dnsHistory']['validators'][0])),
+            'key outside root': lambda p: p['dnsHistory']['validators'][0].update(keyFile='/tmp/validator.seed'),
+            'producer validator': lambda p: p['dnsHistory']['validators'][0].update(role='producer'),
+            'no bond command': lambda p: p['dnsHistory']['validators'][0].update(bondCommands=[]),
+        }
+        for name, mutate in refusals.items():
+            with self.subTest(name=name), self.assertRaises(P.PlanError):
+                P.parse_plan(raw(late(mutate)))
+        self.refuses(lambda p: p['dnsHistory']['exit'].update(destinationAddress='misakatest:qexitdestination00'))
 
 
 if __name__ == '__main__':

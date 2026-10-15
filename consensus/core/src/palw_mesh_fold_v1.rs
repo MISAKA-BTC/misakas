@@ -38,13 +38,13 @@ use crate::palw_audit_1004_v1::PALW_AUDIT_1004_MIN_TRAP_TILES_V1;
 pub const PALW_TRAP_COMMIT_TTL_DAA_V1: u64 = 2 * (PALW_AUDIT_WINDOW_DAA_V1 + PALW_TRAP_REVEAL_WINDOW_DAA_V1);
 
 /// A bond's free collateral for a new reservation: the collateral net of everything the ledger already holds on it.
-fn free_collateral_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, record: &PalwBondStateV2) -> u128 {
+pub(super) fn free_collateral_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, record: &PalwBondStateV2) -> u128 {
     (record.collateral as u128).saturating_sub(state.reserved_exposure(bond)).saturating_sub(state.registration_exposure(bond))
 }
 
 impl TransitionBuilder<'_> {
     /// Add `amount` to a bond's `reserved_exposure` (the audit mesh's reservations).
-    fn mesh_reserve(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
+    pub(super) fn mesh_reserve(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
             return Ok(());
         }
@@ -54,7 +54,7 @@ impl TransitionBuilder<'_> {
     }
 
     /// Return `amount` of a bond's reservation.
-    fn mesh_release(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
+    pub(super) fn mesh_release(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
         if amount == 0 {
             return Ok(());
         }
@@ -637,6 +637,11 @@ pub(super) fn apply_trap_revealed_v1(
 ) -> Result<(), PalwStateV2Error> {
     if !builder.params.audit_mesh_active_at(ctx.daa_score) {
         return Err(refused(PalwMeshErrorV1::Dormant("palw_audit_mesh_v1")));
+    }
+    // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): past the fence a reveal over a paid V2 base claim is a paid-claim trap,
+    // judged and settled by its own rule. Below the fence (and for every other claim) this is `None`: the mesh rule, byte for byte.
+    if let Some(paid) = builder.state.paid_trap_target_v1(builder.params, &reveal.claim, ctx.daa_score) {
+        return super::palw_paid_claim_trap_fold_v1::apply_paid_trap_revealed_v1(builder, ctx, reveal, &paid);
     }
     builder
         .state

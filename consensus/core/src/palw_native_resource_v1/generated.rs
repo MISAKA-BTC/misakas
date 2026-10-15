@@ -92,6 +92,9 @@ native_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRo
 native_struct!(crate::palw_router_binding_v2::PalwRouterBindingRowV2; version, bound_from_daa, readers);
 native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1; version, class_id, block, daa_score, door, admission_digest);
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementOnceRowV1; version, obligation, consumer, amount, debit, settled_daa);
+native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; version, base_claim, enrollment, accuser, convicted_daa, forget_after_daa);
+native_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; version, claim, verifier, slot, poster, fee, release_after_daa);
+native_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; version, enrollment, base_claim, producer, commitment, committed_daa, deposit, forget_after_daa);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);
@@ -242,7 +245,7 @@ native_struct!(misaka_palw_kernel::seg::TiledJobV1; class_binding_id, prompt_len
 native_struct!(misaka_palw_kernel::seg::PromptTileOpeningV1; index, ids, siblings);
 native_enum!(misaka_palw_kernel::spec::SpecObjectV1; RegisterClass { spec }, PostJob { job }, CommitClaim { claim });
 native_struct!(misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeTermsV1; source, sponsor, fee_per_source, max_sources);
-native_enum!(misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2; RegisterClass { class }, EnrollJob { job }, Commit { enrollment, commit, salt }, Fund { enrollment, terms }, Lock { enrollment }, Receipt { receipt }, StageMessage { enrollment, round, prior_transcript, message_root }, FundRound { enrollment, round, terms }, LockRound { enrollment, round }, RoundReceipt { receipt }, ReviewScope { scope }, EconomicEvidence { observation, payment }, IndependenceEvidence { observation }, RegisterCompactContractV4 { registration }, BindCompactProofV4 { enrollment, round, proof });
+native_enum!(misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2; RegisterClass { class }, EnrollJob { job }, Commit { enrollment, commit, salt }, Fund { enrollment, terms }, Lock { enrollment }, Receipt { receipt }, StageMessage { enrollment, round, prior_transcript, message_root }, FundRound { enrollment, round, terms }, LockRound { enrollment, round }, RoundReceipt { receipt }, ReviewScope { scope }, EconomicEvidence { observation, payment }, IndependenceEvidence { observation }, RegisterCompactContractV4 { registration }, BindCompactProofV4 { enrollment, round, proof }, TrapCommitment { enrollment, commitment });
 native_struct!(misaka_palw_kernel::econ_contracts_v1::ModelVerificationAttestationV1; version, network, verifier, tally, model, epoch, sampled_claim, model_root, verdict);
 native_struct!(misaka_palw_kernel::econ_contracts_v1::HorizonExtensionTermsV1; version, network, claim, root, worker, sponsor, current_liability_until_daa, new_liability_until_daa, hard_deadline_daa, consent_by_daa, price_contract);
 native_struct!(misaka_palw_kernel::econ_contracts_v1::MinimumPriceContractTermsV1; version, network, worker, poster, job, class, policy, funded_minimum_sompi, capital_sompi, accept_by_daa, retention_until_daa);
@@ -568,7 +571,7 @@ native_enum!(crate::palw_security_certification_v1::PalwCertificationOutcomeV1; 
 native_struct!(crate::palw_router_binding_v2::PalwRoutedReaderBindingV2; table, reader, router);
 native_enum!(crate::palw_class_registration_origin_v1::PalwClassRegistrationDoorV1; Legacy, Tir, Gen);
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementObligationV1; leg, subject, party, ordinal);
-native_enum!(crate::palw_settlement_once_v1::PalwSettlementConsumerV1; NativeFinal, KernelTick, KernelObject, ExecKernelFee, VerificationGate, SecurityCertification, ExecLegMaturity, VestingMaturity, MonetaryMaterial, ReceiptBlock, ReporterReveal, BondBudgetTick, AuditMesh, ImprovementPool);
+native_enum!(crate::palw_settlement_once_v1::PalwSettlementConsumerV1; NativeFinal, KernelTick, KernelObject, ExecKernelFee, VerificationGate, SecurityCertification, ExecLegMaturity, VestingMaturity, MonetaryMaterial, ReceiptBlock, ReporterReveal, BondBudgetTick, AuditMesh, ImprovementPool, PaidClaimTrap);
 native_enum!(crate::palw_settlement_once_v1::PalwSettlementDebitV1; Issuance { carve }, Escrow { poster, amount }, Held { amount }, Prepaid { sponsor, amount }, Collateral { bond, amount });
 native_struct!(crate::palw_model_vector_v2::ModelVectorHeaderV2; trace_root, class, binding, program_bytes_len, post_bytes_len, max_filing_bytes, max_court_work, poster, posted_daa, liability_until, reserved, refuted, unavailable);
 native_struct!(crate::palw_model_vector_da_v2::ModelVectorUnitV2; position, occurrence, node, axis, line, tile);
@@ -878,7 +881,7 @@ native_struct!(misaka_palw_kernel::opv::OpvClaimRowV1; admitted_daa, window_end_
 native_struct!(misaka_palw_kernel::spec::SpecClassRowV1; spec, kind, bounds);
 native_struct!(misaka_palw_kernel::spec::memory::MemoryLineV1; head, head_root, head_source, advances);
 native_enum!(misaka_palw_kernel::verifier_pay::VerifierPayRowV1; FeeEscrow { poster, amount }, Draw { job, poster, fee, slots, deadline_daa }, HeldShare { held, burned, demanders }, BeaconSource { attempt, class, job, producer, sealed_daa, extra, open }, HeldBounty { filer, producer, amount, convicted_daa, until_daa }, SourceFeeFunding { funding }, SourceFeePromise { context, producer, promise });
-native_enum!(crate::palw_settlement_once_v1::PalwSettlementLegV1; IssuanceFinal, EscrowFinalReward, GateDeferredRelease, CertificationRelease, ExecLegPayment, VestingRelease, MaterialFunding, MaterialProviderFee, MaterialProviderDefault, VerifierCheckFee, ReceiptSpend, NativeReceiptSpend, ReporterAward, ReporterAwardTranche, MeshAuditPay, MeshTrapBounty, ImprovementEarning, SourceFeePromise);
+native_enum!(crate::palw_settlement_once_v1::PalwSettlementLegV1; IssuanceFinal, EscrowFinalReward, GateDeferredRelease, CertificationRelease, ExecLegPayment, VestingRelease, MaterialFunding, MaterialProviderFee, MaterialProviderDefault, VerifierCheckFee, ReceiptSpend, NativeReceiptSpend, ReporterAward, ReporterAwardTranche, MeshAuditPay, MeshTrapBounty, ImprovementEarning, SourceFeePromise, ReceiptSignerLiability);
 native_enum!(crate::palw_flat_model_vector_da_v7::FlatVectorUnitKindV7; Node, Hash(f0), Value(f0));
 native_enum!(crate::palw_flat_model_vector_da_v9::FlatVectorUnitKindV9; Node, Hash(f0), Value(f0), Header);
 native_struct!(misaka_palw_kernel::flat_execution11::ExecutionClassRecordV11; version, candidate9_id, binding_id, descriptor, program_root, parameter_root, inventory_root, max_positions, encoder, class_scope9_root, replay9_root, resource10_root, source_court_bound, execution_policy_root, quota_policy_root, horizons, reward_cap, required_producer_reserve, finder_permille);

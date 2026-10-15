@@ -37,6 +37,7 @@ import rfc12_acceptance_judgement as J  # noqa: E402
 import rfc12_acceptance_observe as O  # noqa: E402
 import rfc12_acceptance_plan as P  # noqa: E402
 import rfc12_complete_bootstrap as complete  # noqa: E402
+import rfc12_retirement_reconciliation as R  # noqa: E402
 from rfc12_owned_resources import OwnedResourceSampler, ResourceLimitExceeded  # noqa: E402
 
 
@@ -62,11 +63,12 @@ MARKER = 'rfc12-private-probe-v1.json'
 # predicates that depend on one are BLOCKED, never inferred.
 # The paid-claim read (op 247, getPalwPaidClaim) is served since 2026-10-15; a node built before it still makes its
 # predicates BLOCKED (rfc12_acceptance_observe.paid_claim_value).
+# RFC-0012 §4.4 (2026-10-16): the per-coinbase DNS share is classified from coinbase outputs and the bonds' own
+# StakeBond transactions (rfc12_retirement_reconciliation), and --private-probe-retirement-daa gives pre-fence DNS
+# history, so those two gaps are closed. The reserve balance itself still has no read.
 NODE_GAPS = [
-    dict(read='per-coinbase DNS validator share after retirement', proposed=None,
-         consumers=['DNS reward stop (checkbox 7)']),
-    dict(read='a private profile that arms palw_dns_retirement_v1 after some DNS-validator history', proposed=None,
-         consumers=['old entitlements / reserve / exit history across the boundary (checkbox 7)']),
+    dict(read='DNS security reserve balance per block (reserve_balance_store)', proposed=None,
+         consumers=['reserve reconciliation across the retirement boundary (checkbox 7); drip outputs are classified']),
     dict(read='in-process crash failpoints between import WAL barriers', proposed=None,
          consumers=['exact crash points; this harness kills at observed phases/files only (checkbox 3)']),
     dict(read='a first-party generator of the paid-work request from a live authenticated snapshot', proposed=None,
@@ -395,7 +397,7 @@ class AcceptanceRun:
         fixture = self.root / 'signed-public-fixture'
         manifest = self.owned_json('MANIFEST', [binaries['node']['path'], '--private-probe-profile=paid-v4',
                                                 '--private-probe-salt=' + self.plan['salt'], '--testnet', '--netsuffix=12',
-                                                '--private-probe-export-bootstrap=' + str(fixture)],
+                                                '--private-probe-export-bootstrap=' + str(fixture)] + self.retirement_flags(),
                                    self.bounds['factoryTimeoutSeconds'])
         bootstrap.validate_factory_manifest(manifest, 'paid-v4')
         self.identity_facts = J.retirement_armed(network, manifest, identity)
@@ -467,6 +469,8 @@ class AcceptanceRun:
                                        self.bounds['phaseTimeoutSeconds'], 'paid-v4', True,
                                        self.fees['maximumProviderAckFeePerCarrierSompi'])
         self.add_observers(node_plan)
+        for node in node_plan['nodes'].values():
+            node['argv'].extend(self.retirement_flags())  # one later fence for every process of this run
         # The coverage archive role keeps every header (no pruning); the producer stays the pruned GC source.
         if self.plan.get('coverage'):
             node_plan['nodes'][P.ROLE_KEYS[self.plan['coverage']['archiveRole']]]['argv'].append('--archival')
@@ -512,6 +516,9 @@ class AcceptanceRun:
             drill.join_link(role, 'A')
         self.work['registration'] = self.wait(lambda: bootstrap.agreement(drill, manifest),
                                               'native registration/binding on all three processes')
+        if self.plan.get('dnsHistory') and self.plan['dnsHistory']['validators']:
+            # Before the clock starts: B restarts in activate_complete_clock with its validator flags already set.
+            self.dns_history_setup()
         self.work['recoveryClock'] = bootstrap.activate_complete_clock(drill, manifest)
         self.work['completeCheck'] = complete.run(drill, self.sampler, cli, salt, fixture, manifest, budget,
                                                   self.fees['maximumBindingReservationSompi'],
@@ -565,7 +572,7 @@ class AcceptanceRun:
         export_dir = work_dir / 'export'
         export = self.owned_json('PAID_WORK_EXPORT', [node, '--private-probe-profile=paid-v4', '--private-probe-salt=' + self.plan['salt'],
                                                       '--testnet', '--netsuffix=12', '--private-probe-paid-request=' + str(request),
-                                                      '--private-probe-export-paid-work=' + str(export_dir)],
+                                                      '--private-probe-export-paid-work=' + str(export_dir)] + self.retirement_flags(),
                                  self.bounds['factoryTimeoutSeconds'])
         if export.get('schema') != 'misaka.private-paid-native-work.v4' or export.get('realTirExecution') is not True \
                 or export.get('releaseApproval') is not False or export.get('nativeEnrollmentIncluded') is not False:
@@ -1290,7 +1297,8 @@ class AcceptanceRun:
         for item in argv:
             if item.startswith('--private-probe-profile='):
                 out.append('--private-probe-profile=' + profile)
-            elif item.startswith('--private-probe-') and not item.startswith('--private-probe-salt='):
+            elif item.startswith('--private-probe-') and not item.startswith(('--private-probe-salt=',
+                                                                               '--private-probe-retirement-daa=')):
                 continue  # paid-only options would refuse before the DB identity pin is reached
             else:
                 out.append(item)
@@ -1356,13 +1364,141 @@ class AcceptanceRun:
         retirement = self.plan['identity']['retirementActivationDaa']
         self.judge(7, 'legacy-bonds-dns-authority-across-retirement', J.retirement_reconciliation,
                    self.reconciliation['pre'], post, retirement)
-        self.judge(7, 'dns-reward-stop', J.dns_reward_stop, post)
         if 'workAccepted' in self.flags:
             claims = self.wait(lambda: self.paid_claim_set(self.live(PRIMARY), 'liability-history'), 'liability read',
                                optional=True)
             self.reconciliation['paidClaimLiability'] = claims
-        self.block(7, 'old-entitlements-and-reserve-history',
-                   'no node read exposes pre-fence DNS entitlements or reserve history; see nodeGaps')
+
+    # ---- RFC-0012 §4.4: DNS-validator history before a later fence, and its coinbase reconciliation ----
+
+    def retirement_flags(self):
+        fence = self.plan['identity']['retirementActivationDaa']
+        return [] if fence == 1 else ['--private-probe-retirement-daa=%d' % fence]
+
+    def registry(self, role='JOIN'):
+        history = self.plan['reconciliation']
+        rpc = self.drill.rpc(role)
+        try:
+            return R.bond_registry(rpc, history['bondPageLimit'], history['maximumBondPages'],
+                                   R.ReadBudget(history['maximumBondPages']))
+        finally:
+            rpc.close()
+
+    def dns_history_setup(self):
+        """Bond each planned DNS validator (operator commands), bind the ONE new registry bond to it, and run the
+        in-process validator service on its role, all below the later fence."""
+        dns, fence = self.plan['dnsHistory'], self.plan['identity']['retirementActivationDaa']
+        self.fixtures('DNS_KEYRING', dns['keyringCommands'])
+        bound = []
+        for validator in dns['validators']:
+            role = P.ROLE_KEYS[validator['role']]
+            known = {bond['bondOutpoint'] for bond in self.registry()}
+            self.fixtures('DNS_BOND_' + role, validator['bondCommands'])
+
+            def new_bond():
+                fresh = [bond for bond in self.registry() if bond['bondOutpoint'] not in known]
+                if len(fresh) > 1:
+                    raise transport.Blocked('the bond commands created %d bonds; one validator needs exactly one' % len(fresh))
+                return fresh[0] if fresh else None
+            bond = self.wait(new_bond, 'the validator stake bond appears in the registry', seconds=dns['bondWaitSeconds'])
+            key = Path(P.fill(validator['keyFile'], self.values())).resolve()
+            if not key.is_file() or self.root not in key.parents:
+                raise transport.Blocked('validator key %s is not an owned file (keyring command)' % key)
+            self.ensure_private(key)
+            for prefix, argument in (('--enable-validator', '--enable-validator'),
+                                     ('--validator-key=', '--validator-key=' + str(key)),
+                                     ('--stake-bond=', '--stake-bond=' + bond['bondOutpoint']),
+                                     ('--validator-mode=', '--validator-mode=' + validator['mode'])):
+                self.set_flag(role, prefix, argument)
+            if role != 'B':
+                self.restart(role)
+            bound.append(dict(role=role, bond=bond, keyFile=str(key), mode=validator['mode']))
+        daa = bootstrap.rpc_read(self.drill, 'JOIN', 'getBlockDagInfo')['virtualDaaScore']
+        if daa >= fence:
+            raise transport.Blocked('the fence (DAA %d) passed at DAA %d before the DNS validators were bonded' % (fence, daa))
+        self.reconciliation['validators'] = bound
+        # The pre-fence legacy view now holds the bonds that will carry history across the fence.
+        self.reconciliation['pre'] = self.legacy_view('JOIN', 'legacy-pre-fence-bonded')
+
+    def legacy_exit(self, fence):
+        exit_ = self.plan['dnsHistory']['exit']
+        record = dict(source='owned-process', commands=bool(exit_['unbondCommands']), released=False)
+        if not exit_['unbondCommands']:
+            return record
+        bond = self.reconciliation['validators'][0]['bond']
+        destination = exit_['destinationAddress']
+        before = self.wait(lambda: self.money_read('JOIN', 'exit-before', [destination]), 'exit destination before')
+        record.update(bond=bond['bondOutpoint'], amount=bond['amount'], maximumFeeSompi=exit_['maximumFeeSompi'],
+                      destinationBefore=before['value']['entries'])
+        self.fixtures('DNS_UNBOND', exit_['unbondCommands'])
+
+        def unbonding():
+            row = next((entry for entry in self.registry() if entry['bondOutpoint'] == bond['bondOutpoint']), None)
+            return row if row and row.get('unbondRequestDaaScore') is not None else None
+        row = self.wait(unbonding, 'the legacy bond unbond request is accepted')
+        release = row['unbondRequestDaaScore'] + row['unbondingPeriodBlocks']
+        record.update(unbondRequestDaaScore=row['unbondRequestDaaScore'], releaseDaa=release,
+                      unbondRequestAfterFence=row['unbondRequestDaaScore'] >= fence)
+        reached = self.wait(lambda: bootstrap.rpc_read(self.drill, 'JOIN', 'getBlockDagInfo')['virtualDaaScore'] >= release
+                            or None, 'the legacy bond release height', optional=True)
+        if not reached:
+            return record
+        record['released'] = True
+        self.fixtures('DNS_WITHDRAW', exit_['withdrawCommands'])
+
+        def paid():
+            row = self.money_read('JOIN', 'exit-after', [destination])
+            J.exactly_one_new_utxo(record['destinationBefore'], row['value']['entries'],
+                                   bond['amount'] - exit_['maximumFeeSompi'], bond['amount'])
+            return row
+        record['destinationAfter'] = self.wait(paid, 'the legacy bond principal is paid once')
+        return record
+
+    def phase_retirement_reconciliation(self):
+        dns, fence = self.plan.get('dnsHistory'), self.plan['identity']['retirementActivationDaa']
+        if fence < 2 or not dns:
+            self.block(7, 'dns-history-before-fence',
+                       'this run arms retirement at DAA %d; no pre-fence DNS history exists' % fence)
+            return
+        target = fence + dns['observeAfterFenceDaa']
+        self.wait(lambda: bootstrap.rpc_read(self.drill, 'JOIN', 'getBlockDagInfo')['virtualDaaScore'] >= target or None,
+                  'the chain passes the fence and its observation span')
+        exit_record = self.legacy_exit(fence)
+        history = self.plan['reconciliation']
+        rpc = self.drill.rpc('JOIN')
+        try:
+            to_daa = rpc.call('getBlockDagInfo')['virtualDaaScore']
+            scan = R.scan_window(rpc, self.genesis, dns['scanFromDaa'], to_daa, self.plan['scan']['maximumScannedChainBlocks'],
+                                 R.ReadBudget(dns['maximumBlockReads']))
+            status_budget = R.ReadBudget(dns['maximumStatusReads'])
+            registry = R.bond_registry(rpc, history['bondPageLimit'], history['maximumBondPages'], status_budget)
+            evidence = dict(scanFromDaa=dns['scanFromDaa'], scanToDaa=to_daa, readsUsed=scan['readsUsed'],
+                            chainBlocks=scan['chainBlocks'], registry=registry, exit=exit_record)
+            try:
+                dns_scripts, unread = R.bond_scripts(scan['bondTxs'], registry)
+            except J.NotObservable as error:
+                dns_scripts, unread = {}, [str(error)]
+            evidence.update(dnsScripts=dns_scripts, bondsWithoutReadTransaction=unread)
+            palw = {seat['payAddress'] for seat in self.manifest['seats']}
+            blocks = R.classify_blocks(scan['blocks'], dns_scripts, set(scan['minerScripts']), palw)
+            evidence['blocks'] = blocks
+            self.judge(7, 'coinbase-outputs-classified-from-node-reads', R.classification_complete, blocks)
+            daas = {block['daa'] for block in blocks
+                    if block['daa'] < fence and any(output['kind'] == R.DNS for output in block['outputs'])}
+            status = R.statuses_at(rpc, daas | {fence - 1}, history['bondPageLimit'], history['maximumBondPages'],
+                                   status_budget)
+        finally:
+            rpc.close()
+        evidence['statusReads'] = {'%s@%d' % key: value for key, value in status.items()}
+        self.evidence['retirementReconciliation'] = evidence
+        self.judge(7, 'dns-share-before-fence-matches-active-entitlement', R.pre_fence_dns_share, blocks, fence, status)
+        entitled = {bond for (bond, daa), value in status.items() if daa == fence - 1 and value == 'active'}
+        entitled |= {output['bond'] for block in blocks if block['daa'] < fence
+                     for output in block['outputs'] if output['kind'] == R.DNS}
+        self.judge(7, 'no-new-dns-share-or-retired-kind-from-the-fence', R.post_fence_dns_share, blocks, scan['bodies'],
+                   fence, dns['legacySettlementWindowDaa'], entitled, dns['dnsCadence'])
+        self.judge(7, 'legacy-bond-exit-paid-once', R.legacy_exit_paid_once, exit_record)
+        self.judge(7, 'dns-reserve-balance-reconciled', R.reserve_balance, None)
 
     def phase_coverage(self):
         """RFC-0006 EXEC origin coverage: freeze production, then read the archive and pruned roles' own minute-cadence
@@ -1638,6 +1774,8 @@ class AcceptanceRun:
             ('fork', (1, 4), ('nodes',), lambda: self.phase_topology('fork')),
             ('partition', (1, 4), ('nodes',), lambda: self.phase_topology('partition')),
             ('bridgeSettle', (5,), ('bridgeDeposit',), self.phase_bridge_settle),
+            # Before pruning: the pre-fence bodies must still be served.
+            ('retirementReconciliation', (7,), ('nodes',), self.phase_retirement_reconciliation),
             ('accounting', (6,), ('nodes',), self.phase_accounting),
             ('capacity', (3,), ('nodes',), self.phase_capacity),
             ('scale', (2,), ('nodes',), self.phase_scale),

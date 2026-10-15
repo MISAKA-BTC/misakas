@@ -201,6 +201,8 @@ pub mod palw_batch_licence_v1;
 pub mod palw_beacon_bootstrap_v1;
 pub mod palw_beacon_source_fee_v1;
 pub mod palw_beacon_source_opt_in_v1;
+/// RFC-0007 RFC07-3 (user decision 2026-10-15): the seal-before-commit order of beacon sources — no source cycle of any length.
+pub mod palw_beacon_source_order_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
 /// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
@@ -445,6 +447,9 @@ pub mod palw_kernel_route_v1;
 pub mod palw_kernel_settlement_v1;
 /// RFC-0008: once-only settlement across all consumers (dormant `palw_settlement_once_v1`; kernel route aux 140).
 pub mod palw_settlement_once_v1;
+/// **RFC-0007 §4.1 T6: planted faults in paid claims and the receipt signers' liability** (dormant `palw_paid_claim_trap_v1`;
+/// kernel route aux 142; reuses the audit mesh's trap objects).
+pub mod palw_paid_claim_trap_v1;
 /// RFC-0006 RFC06-8 (2026-10-15): the registering block and admission digest of each class (dormant
 /// `palw_class_registration_origin_v1`; kernel route aux 141) — the state-only authentication of a class's canonical identity.
 pub mod palw_class_registration_origin_v1;

@@ -76,7 +76,7 @@ CAPACITY_FLAGS = {
 }
 TOP_KEYS = ('schemaVersion', 'kind', 'commit', 'network', 'salt', 'binaries', 'identity', 'bounds',
             'observationBoundsFile', 'fees', 'scan', 'settlement', 'usefulWork', 'topology', 'scale', 'crash',
-            'capacity', 'evm', 'bridge', 'market', 'accounting', 'reconciliation', 'coverage')
+            'capacity', 'evm', 'bridge', 'market', 'accounting', 'reconciliation', 'coverage', 'dnsHistory')
 
 
 class PlanError(ValueError):
@@ -519,6 +519,86 @@ def _coverage(value):
                 maximumWaitSeconds=_int(value['maximumWaitSeconds'], 'coverage.maximumWaitSeconds', 1))
 
 
+VALIDATOR_ROLES = ('provider', 'checker')
+VALIDATOR_MODES = ('active', 'standby')
+PALW_PAYOUT_SOURCES = ('factory-seats',)
+
+
+def _owned_template(value, name, allowed):
+    template = _template(value, name, allowed)
+    if not template.startswith('{ROOT}/') or '..' in template:
+        raise PlanError(name + ' must name a path under the owned {ROOT}')
+    return template
+
+
+def dns_cadence(value, name):
+    """The node's DnsParams the legacy settlement window is derived from (rfc12_retirement_reconciliation, rule note)."""
+    _keys(value, ('epochLengthBlocks', 'rewardUniquenessWindowBlocks', 'maxReorgHorizonBlocks',
+                  'attestationEpochLengthBlueScore', 'attestationLagBlueScore'), name)
+    return dict(epochLengthBlocks=_int(value['epochLengthBlocks'], name + '.epochLengthBlocks', 1),
+                rewardUniquenessWindowBlocks=_int(value['rewardUniquenessWindowBlocks'], name + '.rewardUniquenessWindowBlocks'),
+                maxReorgHorizonBlocks=_int(value['maxReorgHorizonBlocks'], name + '.maxReorgHorizonBlocks'),
+                attestationEpochLengthBlueScore=_int(value['attestationEpochLengthBlueScore'],
+                                                     name + '.attestationEpochLengthBlueScore', 1),
+                attestationLagBlueScore=_int(value['attestationLagBlueScore'], name + '.attestationLagBlueScore'))
+
+
+def check_legacy_window(fence, window, observe, cadence, name):
+    """A non-zero legacy settlement window must be exactly the one the node rule derives; the scan must cover it."""
+    import rfc12_retirement_reconciliation as R
+    if window == 0:
+        return
+    derived = R.legacy_settlement_window(fence, cadence)['windowDaa']
+    if window != derived:
+        raise PlanError('%s.legacySettlementWindowDaa %d is not the window the node rule derives (%d) for fence %d'
+                        % (name, window, derived, fence))
+    if observe <= window:
+        raise PlanError('%s.observeAfterFenceDaa must exceed the legacy settlement window so its last crossing is scanned' % name)
+
+
+def _dns_history(value, allowed):
+    """RFC-0012 §4.4: real DNS-validator history before a later private retirement fence, then its reconciliation."""
+    fields = ('keyringCommands', 'validators', 'bondWaitSeconds', 'exit', 'legacySettlementWindowDaa', 'dnsCadence',
+              'observeAfterFenceDaa', 'scanFromDaa', 'maximumBlockReads', 'maximumStatusReads', 'palwPayoutSource')
+    _keys(value, fields, 'dnsHistory')
+    validators, roles = [], set()
+    if not isinstance(value['validators'], list):
+        raise PlanError('dnsHistory.validators must be a list')
+    for index, item in enumerate(value['validators']):
+        name = 'dnsHistory.validators[%d]' % index
+        _keys(item, ('role', 'keyFile', 'mode', 'bondCommands'), name)
+        role = _enum(item['role'], name + '.role', VALIDATOR_ROLES)
+        if role in roles:
+            raise PlanError('one DNS validator per node role')
+        roles.add(role)
+        validators.append(dict(role=role, keyFile=_owned_template(item['keyFile'], name + '.keyFile', allowed),
+                               mode=_enum(item['mode'], name + '.mode', VALIDATOR_MODES),
+                               bondCommands=_argv_list(item['bondCommands'], name + '.bondCommands', allowed, 1)))
+    exit_ = _keys(value['exit'], ('unbondCommands', 'withdrawCommands', 'destinationAddress', 'maximumFeeSompi'),
+                  'dnsHistory.exit')
+    unbond = _argv_list(exit_['unbondCommands'], 'dnsHistory.exit.unbondCommands', allowed, 0)
+    withdraw = _argv_list(exit_['withdrawCommands'], 'dnsHistory.exit.withdrawCommands', allowed, 0)
+    destination = exit_['destinationAddress']
+    if unbond or withdraw:
+        if not unbond or not withdraw or destination is None or not validators:
+            raise PlanError('a legacy exit needs unbond and withdraw commands, a destination and a bonded validator')
+        destination = _native_address(destination, 'dnsHistory.exit.destinationAddress')
+    elif destination is not None:
+        raise PlanError('dnsHistory.exit.destinationAddress without exit commands')
+    return dict(keyringCommands=_argv_list(value['keyringCommands'], 'dnsHistory.keyringCommands', allowed, 0),
+                validators=validators,
+                bondWaitSeconds=_int(value['bondWaitSeconds'], 'dnsHistory.bondWaitSeconds', 1),
+                exit=dict(unbondCommands=unbond, withdrawCommands=withdraw, destinationAddress=destination,
+                          maximumFeeSompi=_int(exit_['maximumFeeSompi'], 'dnsHistory.exit.maximumFeeSompi')),
+                legacySettlementWindowDaa=_int(value['legacySettlementWindowDaa'], 'dnsHistory.legacySettlementWindowDaa'),
+                dnsCadence=dns_cadence(value['dnsCadence'], 'dnsHistory.dnsCadence'),
+                observeAfterFenceDaa=_int(value['observeAfterFenceDaa'], 'dnsHistory.observeAfterFenceDaa', 1),
+                scanFromDaa=_int(value['scanFromDaa'], 'dnsHistory.scanFromDaa'),
+                maximumBlockReads=_int(value['maximumBlockReads'], 'dnsHistory.maximumBlockReads', 1),
+                maximumStatusReads=_int(value['maximumStatusReads'], 'dnsHistory.maximumStatusReads', 1),
+                palwPayoutSource=_enum(value['palwPayoutSource'], 'dnsHistory.palwPayoutSource', PALW_PAYOUT_SOURCES))
+
+
 def parse_plan(raw):
     """Parse exact plan bytes. Returns a normalized dict carrying the bytes' SHA-256."""
     if not isinstance(raw, (bytes, bytearray)):
@@ -557,6 +637,7 @@ def parse_plan(raw):
         accounting=_accounting(plan['accounting']),
         reconciliation=_reconciliation(plan['reconciliation']),
         coverage=_coverage(plan['coverage']),
+        dnsHistory=_dns_history(plan['dnsHistory'], allowed),
     )
     payers = [out['usefulWork']['kernelPayerSeat']] + out['usefulWork']['checker']['payerSeats']
     if set(payers) & set(out['accounting']['incomeSeats']):
@@ -567,6 +648,14 @@ def parse_plan(raw):
             raise PlanError(name + ' exceeds fees.maximumDepositLockFeeSompi')
     if out['coverage']['archiveRole'] == 'checker' and 'checker' not in out['usefulWork']['checker']['hosts']:
         raise PlanError('an archive coverage role must be a custody node; the checker role hosts no selected checker')
+    fence = out['identity']['retirementActivationDaa']
+    if out['dnsHistory']['validators'] and fence < 2:
+        raise PlanError('DNS-validator history needs the later private retirement (identity.retirementActivationDaa >= 2)')
+    if out['dnsHistory']['scanFromDaa'] >= fence and fence >= 2:
+        raise PlanError('dnsHistory.scanFromDaa must start below the fence so pre-fence history is scanned')
+    if fence >= 2:
+        check_legacy_window(fence, out['dnsHistory']['legacySettlementWindowDaa'], out['dnsHistory']['observeAfterFenceDaa'],
+                            out['dnsHistory']['dnsCadence'], 'dnsHistory')
     for point in out['crash']['points']:
         if point['trigger']['kind'] == 'checker-outbox' and point['role'] not in out['usefulWork']['checker']['hosts']:
             raise PlanError('crash point %s watches a checker outbox on a role that hosts no checker' % point['name'])

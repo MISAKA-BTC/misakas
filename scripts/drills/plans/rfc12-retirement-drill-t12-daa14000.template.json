@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc12-retirement-drill-plan",
+  "commit": "PIN: 40-hex harness commit the reader runs from (clean checkout)",
+  "shippedBinary": {
+    "path": "/PIN/absolute/path/to/the/shipped/kaspad",
+    "sha256": "PIN: sha256 of the exact shipped kaspad the drill nodes run"
+  },
+  "salt": "PIN: the drill's 64-hex genesis salt (never a public value)",
+  "identity": {
+    "genesis": "PIN: 128-hex salted genesis hash the drill nodes report",
+    "consensusParamsId": "PIN: 64-hex consensus params id of the shipped release ruleset",
+    "retirementActivationDaa": 14000,
+    "retirementPolicyId": "PIN: 128-hex settlement policy id the release ruleset commits"
+  },
+  "nodes": [
+    {
+      "name": "seat0-archival",
+      "wrpc": "PIN: 127.0.0.1:port of an ARCHIVAL drill node's wRPC JSON listener",
+      "archival": true
+    },
+    {
+      "name": "seat1-archival",
+      "wrpc": "PIN: 127.0.0.1:port of a second archival drill node",
+      "archival": true
+    },
+    {
+      "name": "seat2",
+      "wrpc": "PIN: 127.0.0.1:port of a pruning drill node",
+      "archival": false
+    }
+  ],
+  "keyringManifest": {
+    "path": "/PIN/absolute/path/to/keyring/manifest.json",
+    "sha256": "PIN: sha256 of the manifest written by kaspad --palw-drill-write-keyring for this salt"
+  },
+  "palwPayoutGroups": [
+    "seats",
+    "bonds",
+    "payout",
+    "heartbeat",
+    "main"
+  ],
+  "window": {
+    "scanFromDaa": 0,
+    "observeAfterFenceDaa": "PIN: > 603 (the legacy settlement window), so the last legacy crossing block is inside the scan",
+    "legacySettlementWindowDaa": 603,
+    "dnsCadence": {
+      "epochLengthBlocks": 2,
+      "rewardUniquenessWindowBlocks": 600,
+      "maxReorgHorizonBlocks": 3,
+      "attestationEpochLengthBlueScore": 2,
+      "attestationLagBlueScore": 2
+    },
+    "derivation": "Lead default 2026-10-16 (pending user review): allow exactly the node's one-time post-retirement payout of historical DNS quality liabilities and nothing else. Node rule: consensus/src/pipeline/virtual_processor/utxo_validation.rs:1394-1396 (a retired block pays only deferred_quality_bonus_outputs), :1091-1095 (no DNS participation from the fence on), :1581-1601 (L = epoch_length_blocks, fd = reward_uniqueness_window_blocks + max_reorg_horizon_blocks, epochs paid = epochs_finalized_at(parent, daa, L, fd)); consensus/core/src/dns_finality.rs:5510-5528 (threshold(E) = (E+1)*L + fd, crossed once); dns_finality.rs:2778-2797 (one output per included validator per epoch). Window W = (floor((R-1)/L)+1)*L + fd - R. Testnet-12 DnsParams: consensus/core/src/config/params.rs:6906-6909 (PALW_T12_DNS_PARAMS = PRODUCTION_DNS_PARAMS.at_two_minute_cadence()), consensus/core/src/dns_finality.rs:1444-1446 (L = 2, max_reorg_horizon_blocks = 3), consensus/core/src/config/params.rs:6608 (reward_uniqueness_window_blocks = 600). R = 14000: fd = 603, last pre-retirement epoch 6999, its threshold 14603, W = 603. Reserve drip (lead default 2026-10-16, pending user review: allowed): utxo_validation.rs:1164-1180 appends reserve_drip_outputs (:875-918) with the same crossing rule (:886-891), paid from the selected parent's committed reserve balance only and capped per block (dns_finality.rs:2727-2765; reserve_drip_per_epoch_cap_sompi = 1000 MSK, config/params.rs:6665; at most 16 outputs, palw_state_v2.rs:545). It cannot pay a post-retirement epoch: a retired block stores no rewarded keys (utxo_validation.rs:1394-1396), no participation enters past the fence (:1091-1095) and the validator pool is 0 past it (processor.rs:4030-4040). Its horizon is therefore the bonus span: W = 603 on the DAA clock, widened at run time only if the last pre-retirement chain block's blue score makes a later attestation epoch ready (processor.rs:4753-4770, dns_finality.rs:1375-1380; L_att = 2, lag = 2, dns_finality.rs:1451-1452). Inside the span only bonds entitled before R, at most one bonus and one drip per bond and crossed pre-retirement epoch; any other post-retirement DNS output, including any accrual for a post-retirement epoch, is a FAIL."
+  },
+  "scan": {
+    "maximumChainBlocks": "PIN: bound on selected-chain blocks from genesis to the scan end",
+    "maximumBlockReads": "PIN: bound on block body reads (chain blocks and their mergesets)",
+    "maximumStatusReads": "PIN: bound on getStakeBonds pages (registry plus one point-of-view read per DAA with a DNS share)",
+    "bondPageLimit": 1000,
+    "maximumBondPages": "PIN: bound on registry pages per read"
+  },
+  "bounds": {
+    "workflowTimeoutSeconds": "PIN: wall-clock bound for the reader, from start until the chain passes the fence span",
+    "probeTimeoutSeconds": "PIN: per-call wRPC timeout",
+    "pollSeconds": "PIN: polling interval while waiting for the fence"
+  }
+}

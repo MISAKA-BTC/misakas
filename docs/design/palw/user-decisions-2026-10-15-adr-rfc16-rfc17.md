@@ -133,3 +133,16 @@ RFC-0018への狭いinterface: 本branchのRFC-0017は`palw_model_eligibility_v1
 * **U-2 の Probation bar:** RFC-0018 の Gate C 述語と認証 sweep から削除した。Gate C 自体は不変である。
 * **RPC:** registry 行(wire v4)に `modelTier` と `modelTierPermille` を載せる。
 * **試験の対応:** ADR-0179 §試験 source。
+
+## 8. ユーザー判断(同日): RFC06〜12 の設計判断メモは推奨案で進める
+
+ユーザー判断:「推奨で進めて良い」(対象: `docs/design/palw/rfc-0006-0007-0008-0012-remaining-work-2026-10-15.md` §4.1〜§4.6)。
+
+| 項目 | 採用する推奨案 | DAA 14,000 での扱い |
+|---|---|---|
+| §4.1 T6 lazy verifier | 既存の監査トラップで故意の不正を混ぜ(planted faults)、receipt 署名者にも責任を負わせる | 実装する(休眠 fence、測定値 gate) |
+| §4.2 長い source cycle | source を target の commit より厳密に前に封印させ、任意の長さの cycle を構造的に作れなくする | 実装する(休眠 fence) |
+| §4.3 Kimi | DAA 14,000 では対象外(credit なし)、後で専用 binding 版 | 対象外のまま |
+| §4.4 DNS 退役の照合 | 後の DAA で DNS を退役させる private profile と、harness の coinbase 出力分類 | 実装する。最終証拠は出荷バイナリの DAA 14,000 跨ぎ drill |
+| §4.5 fence 前に登録された class | DAA 14,000 では拒否を続け、後でレビュー済みの表を固定 | 拒否のまま |
+| §4.6 出どころの無い責任の項 | DAA 14,000 では拒否を続け、後で既存の署名済みフィールドから取る | 拒否のまま |

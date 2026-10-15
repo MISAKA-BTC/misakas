@@ -249,6 +249,10 @@ mod palw_settlement_once_fold_v1;
 /// RFC-0008 RFC08-2: the combined liability predicate wired into settlement and admission (dormant).
 #[path = "palw_settlement_liability_fold_v1.rs"]
 mod palw_settlement_liability_fold_v1;
+// RFC-0007 §4.1 T6: planted faults in paid claims, the receipt signers' liability and held verifier check fees (dormant
+// `palw_paid_claim_trap_v1`; kernel route aux 142; reuses the mesh's trap objects, tags 102/103).
+#[path = "palw_paid_claim_trap_fold_v1.rs"]
+mod palw_paid_claim_trap_fold_v1;
 // RFC-0006 consumer v2 (object tag 244, kernel-route aux 139): the router binding declaration and the checkpoint / routed
 // accusations, past `palw_memory_routing_court_v2`.
 #[path = "palw_memory_routing_fold_v2.rs"]
@@ -1914,6 +1918,9 @@ pub struct PalwStateParamsV2 {
     /// RFC-0008 `palw_settlement_once_v1` mirror (dormant; `None` everywhere).
     #[borsh(skip)]
     settlement_once_from_daa: Option<u64>,
+    /// RFC-0007 §4.1 `palw_paid_claim_trap_v1` mirror (dormant; `None` everywhere).
+    #[borsh(skip)]
+    paid_claim_trap_from_daa: Option<u64>,
     #[borsh(skip)]
     monetary_material: Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialMirrorV1>,
     #[borsh(skip)]

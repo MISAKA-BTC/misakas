@@ -3634,6 +3634,9 @@ wire_struct!(crate::palw_onboarding_v1::KernelBindingRowV1; crate::Hash64, crate
 wire_struct!(crate::palw_onboarding_v1::PostedEvidenceRowV1; crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, u64);
 wire_struct!(crate::palw_opv_bootstrap_v1::CompleteCheckPostV1; u16, [u8;64], Vec<crate::palw_artifact::PalwArtifactOperandV1>, crate::palw_opv_bootstrap_v1::CompleteRootsV1, crate::palw_opv_bootstrap_v1::CompleteRootsV1);
 wire_struct!(crate::palw_opv_bootstrap_v1::CompleteRootsV1; [u8;64], [u8;64], [u8;64]);
+wire_struct!(crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1; u8, [u8; 64], [u8; 64], u64, [u8; 64], u64, u64);
+wire_struct!(crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1; u8, [u8; 64], [u8; 64], [u8; 64], u64, u64);
+wire_struct!(crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1; u8, [u8; 64], [u8; 64], crate::palw_state_v2::PalwBondKeyV2, [u8; 64], u64, u64, u64);
 wire_struct!(crate::palw_panel_economy_v1::PalwSeatEconomyV1; u64, u32, u32);
 wire_struct!(crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2; misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2, crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64, Option<crate::Hash64>);
 wire_struct!(crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2; [u8; 64], crate::Hash64, u64, crate::Hash64);
@@ -4253,6 +4256,10 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementConsumer
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            15 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4366,6 +4373,10 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementLegV1 {
                 Ok(sum)
             }
             18 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            19 => {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
@@ -9192,6 +9203,12 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimObjectV2 {
                         reader,
                     )?,
                 )?;
+                Ok(sum)
+            }
+            15 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),

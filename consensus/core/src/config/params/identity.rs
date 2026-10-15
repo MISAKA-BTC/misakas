@@ -613,6 +613,9 @@ impl Params {
         if self.palw_settlement_once_v1 == Some(ForkActivation::never()) {
             self.palw_settlement_once_v1 = None;
         }
+        if self.palw_paid_claim_trap_v1 == Some(ForkActivation::never()) {
+            self.palw_paid_claim_trap_v1 = None;
+        }
         if self.palw_bond_budget_v1.as_ref().is_some_and(|fence| fence.activation == ForkActivation::never()) {
             self.palw_bond_budget_v1 = None;
         }
@@ -1138,6 +1141,7 @@ impl Params {
             palw_reporter_income_v2,
             palw_material_income_v3,
             palw_settlement_once_v1,
+            palw_paid_claim_trap_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -1469,6 +1473,7 @@ impl Params {
             ("palw_reporter_income_v2", *palw_reporter_income_v2),
             ("palw_material_income_v3", *palw_material_income_v3),
             ("palw_settlement_once_v1", *palw_settlement_once_v1),
+            ("palw_paid_claim_trap_v1", *palw_paid_claim_trap_v1),
             ("palw_panel_lifetime_v2", palw_panel_lifetime_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_challenge_v2", palw_claim_challenge_v2.as_ref().map(|f| f.activation)),
             ("palw_claim_compact_v4", palw_claim_compact_v4.as_ref().map(|f| f.activation)),
@@ -1930,6 +1935,10 @@ impl Params {
         }
         if let Some(at) = self.palw_settlement_once_v1 {
             h.write(b"palw_settlement_once_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_paid_claim_trap_v1 {
+            h.write(b"palw_paid_claim_trap_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(fence) = &self.palw_bond_budget_v1 {
@@ -2744,6 +2753,7 @@ impl Params {
             palw_reporter_income_v2,
             palw_material_income_v3,
             palw_settlement_once_v1,
+            palw_paid_claim_trap_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -3651,6 +3661,9 @@ impl Params {
         if let Some(at) = palw_settlement_once_v1.as_mut() {
             fork(at, visit);
         }
+        if let Some(at) = palw_paid_claim_trap_v1.as_mut() {
+            fork(at, visit);
+        }
         if let Some(fence) = palw_bond_budget_v1.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -4240,6 +4253,7 @@ impl Params {
             palw_reporter_income_v2,
             palw_material_income_v3,
             palw_settlement_once_v1,
+            palw_paid_claim_trap_v1,
             palw_panel_lifetime_v2,
             palw_claim_challenge_v2,
             palw_claim_compact_v4,
@@ -5236,6 +5250,10 @@ impl Params {
         }
         if let Some(at) = palw_settlement_once_v1 {
             h.write(b"palw_settlement_once_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = palw_paid_claim_trap_v1 {
+            h.write(b"palw_paid_claim_trap_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(fence) = &palw_bond_budget_v1 {

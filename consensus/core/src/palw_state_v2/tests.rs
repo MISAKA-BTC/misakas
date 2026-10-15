@@ -16,6 +16,8 @@ mod native_writers_v1;
 mod settlement_once_v1;
 // RFC-0008 RFC08-2: the combined liability predicate at every leg and admission (dormant).
 mod settlement_liability_v1;
+// RFC-0007 §4.1 T6: paid-claim traps, the receipt signers' liability and held check fees (dormant; kernel route aux 142).
+mod paid_claim_trap_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;

@@ -90,6 +90,10 @@ pub enum PalwSettlementLegV1 {
     /// A paid beacon source's once-only fee promise (`PaySourceFeeEscrow`). Subject: the fee context. Party: the promised
     /// producer (kernel id).
     SourceFeePromise = 18,
+    /// RFC-0007 §4.1 T6 (`palw_paid_claim_trap_v1`): the liability charged once to a drawn seat that signed a Clean (complete)
+    /// receipt on a paid claim the court convicted, on its own collateral. Subject: the paid base claim. Party: the seat (kernel
+    /// id).
+    ReceiptSignerLiability = 19,
 }
 
 /// Which consumer settled a leg (audit only; never part of the obligation id).
@@ -116,6 +120,8 @@ pub enum PalwSettlementConsumerV1 {
     AuditMesh = 13,
     /// The improvement pool (refunds, evaluation fees, S1 awards, grant vesting, a dissolution).
     ImprovementPool = 14,
+    /// RFC-0007 §4.1 T6: the paid-claim trap (a held check fee's release, a receipt signer's liability).
+    PaidClaimTrap = 15,
 }
 
 /// **The real debit a leg is paid from** (the journal's source side). A payment is never larger than its debit.
