@@ -83,7 +83,7 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
 primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1'}
-queue=['crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
+queue=['crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
        'misaka_palw_kernel::route::KernelRouteObjectV1','crate::palw_state_v2::PalwConsensusObjectV2','crate::palw_state_v2::PalwTransitionExtrasV1',
        'crate::palw_claim_compact_v4::PalwPaidCompactContractV4','crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4','crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2','crate::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2','crate::palw_material_capacity_v1::PalwMonetaryMaterialProviderStoreV1',
        'crate::palw_state_v2::PalwStateDeltaV2','crate::palw_native_settlement_v1::NativeDeltaEvidenceV1','crate::palw_fork_choice_commitment_v1::PalwForkChoiceDeltaV1',
@@ -201,7 +201,7 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 private={}; public=[]
 for item,code,is_private in generated:

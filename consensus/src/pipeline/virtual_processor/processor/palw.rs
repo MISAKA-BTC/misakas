@@ -256,7 +256,7 @@ impl VirtualStateProcessor {
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return Some(why);
         }
-        let refusal = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+        let refusal = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
             state,
             state_params,
             point,
@@ -527,9 +527,10 @@ impl VirtualStateProcessor {
         let (challenger_state, ancestor_state) =
             match (self.palw_candidate_state_v2_checked(candidate), self.palw_candidate_state_v2_checked(ancestor)) {
                 (Ok(challenger), Ok(ancestor_state)) => (challenger, ancestor_state),
-                (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
+                (Err(PalwWeighFaultV2::StoreUnreadable | PalwWeighFaultV2::NativeCapacityUnavailable), _)
+                | (_, Err(PalwWeighFaultV2::StoreUnreadable | PalwWeighFaultV2::NativeCapacityUnavailable)) => {
                     warn!(
-                        "deep reorg refused: this node's own PALW snapshot is unreadable, so ADR-0065 D2 cannot clear \
+                        "deep reorg refused: this node's own PALW snapshot is unavailable, so ADR-0065 D2 cannot clear \
                          candidate {candidate} — a veto that cannot read its evidence does not wave the reorg through"
                     );
                     return DnsReorgOutcome::FrontierProvenanceViolation;
@@ -618,6 +619,10 @@ impl VirtualStateProcessor {
         let (tip_block, tip_state) = match store.load_tip_retained_v1(state_params) {
             Ok(Some(loaded)) => loaded,
             Ok(None) => return Err(PalwWeighFaultV2::NoOpinion),
+            Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
+                warn!("PALW candidate weighing awaits local native capacity: {reason}");
+                return Err(PalwWeighFaultV2::NativeCapacityUnavailable);
+            }
             Err(e) => {
                 warn!("PALW state fault: this node's own V2 tip snapshot could not be read ({e}); it can weigh no candidate");
                 return Err(PalwWeighFaultV2::StoreUnreadable);
@@ -663,6 +668,10 @@ impl VirtualStateProcessor {
         crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, state_params, tip_state, &removed, &added).map_err(
             |e| {
                 use crate::processes::palw_state_walk::PalwStateWalkError as W;
+                if e.native_capacity_v1().is_some() {
+                    warn!("PALW candidate walk awaits local native capacity: {e}");
+                    return PalwWeighFaultV2::NativeCapacityUnavailable;
+                }
                 match e {
                     W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
                     W::Store(_) | W::State(_) | W::Resource(_) => {
@@ -2000,7 +2009,7 @@ impl VirtualStateProcessor {
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return PalwObjectRehearsalV1::NotAccepted(why);
         }
-        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
             state,
             state_params,
             point,
@@ -2030,7 +2039,7 @@ impl VirtualStateProcessor {
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return PalwObjectRehearsalV1::NotAccepted(why);
         }
-        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
             state,
             state_params,
             point,
@@ -2303,7 +2312,7 @@ impl VirtualStateProcessor {
         if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
             return Check::Refused(why);
         }
-        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
             state,
             state_params,
             point,
@@ -3726,7 +3735,8 @@ impl VirtualStateProcessor {
     /// template building and the mempool call these readers under a held virtual read guard, and a second
     /// read of that parking_lot lock behind the commit's queued upgrade is a deadlock (D6's shape). The state
     /// at a sink is a pure function of the chain, so the derived snapshot is cached by sink alone: one walk
-    /// per sink change, whatever the tip row does in between. Every fallback is the old answer, the tip row.
+    /// per sink change, whatever the tip row does in between. A failed walk is
+    /// unavailable: another branch's tip cannot supply the sink's state.
     pub(crate) fn palw_v2_reader_state(
         &self,
         params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
@@ -3747,14 +3757,16 @@ impl VirtualStateProcessor {
             return Ok(Some((tip_block, tip_state)));
         }
         if !self.reachability_service.has_reachability_data(sink) || !self.reachability_service.has_reachability_data(tip_block) {
-            return Ok(Some((tip_block, tip_state)));
+            return Err(kaspa_database::prelude::StoreError::DataInconsistency(format!(
+                "native reader cannot authenticate sink {sink} from tip {tip_block}: reachability unavailable"
+            )));
         }
         let path = self.dag_traversal_manager.calculate_chain_path(tip_block, sink, None);
         let (removed, added): (Vec<BlockHash>, Vec<BlockHash>) = (path.removed.to_vec(), path.added.to_vec());
         match crate::processes::palw_state_walk::walk_chain_path_retained_v1(
             &store,
             params,
-            tip_state.try_clone_v1().map_err(|e| kaspa_database::prelude::StoreError::DataInconsistency(e.to_string()))?,
+            tip_state.try_clone_v1().map_err(|e| kaspa_database::prelude::StoreError::LocalResourceUnavailable(e.to_string()))?,
             &removed,
             &added,
         ) {
@@ -3763,7 +3775,15 @@ impl VirtualStateProcessor {
                 *self.palw_reader_snapshot.lock() = Some((sink, Arc::clone(&state)));
                 Ok(Some((sink, state)))
             }
-            Err(_) => Ok(Some((tip_block, tip_state))),
+            Err(error) => {
+                if let Some(unavailable) = error.native_capacity_v1() {
+                    Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(unavailable.to_string()))
+                } else {
+                    Err(kaspa_database::prelude::StoreError::DataInconsistency(format!(
+                        "native reader cannot reconstruct accepted sink {sink} from tip {tip_block}: {error}"
+                    )))
+                }
+            }
         }
     }
 
@@ -9048,7 +9068,13 @@ impl VirtualStateProcessor {
                     &header.palw_commitment,
                 )?;
                 let anchor = self.palw_execution_anchor_v1(header, &ready.base.attempt);
-                ready.verify_prior(state, anchor, header.daa_score, Self::verify_mldsa87_with_context_bool)?;
+                ready.verify_prior_with_recovery_v4(
+                    state,
+                    state_params,
+                    anchor,
+                    header.daa_score,
+                    Self::verify_mldsa87_with_context_bool,
+                )?;
                 Some((ready.class_ticket(anchor), ready))
             } else {
                 if kaspa_consensus_core::palw_attempt_material_v3::palw_native_custody_required_v3(
@@ -9621,7 +9647,7 @@ impl VirtualStateProcessor {
         };
         let own_attempt_class = Self::palw_own_attempt_class_of_header_v1(&header);
         let extras = self.palw_transition_extras_for(&point);
-        let mut folded = match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
+        let mut folded = match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_retained_v1(
             state,
             state_params,
             &point,
@@ -9703,7 +9729,7 @@ impl VirtualStateProcessor {
                 );
                 continue;
             }
-            let applied = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            let applied = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
                 &folded,
                 state_params,
                 &point,
@@ -10406,6 +10432,7 @@ impl VirtualStateProcessor {
         let state = self.palw_candidate_state_v2_checked(block).map_err(|fault| match fault {
             PalwWeighFaultV2::NoOpinion => format!("this node cannot weigh block {block}: it holds no PALW history to it"),
             PalwWeighFaultV2::StoreUnreadable => format!("this node's own PALW store would not read for block {block}"),
+            PalwWeighFaultV2::NativeCapacityUnavailable => format!("this node cannot admit native state memory for block {block}"),
         })?;
         let opening = PalwForkChoiceOpeningV1::of(&state).ok_or_else(|| "the genesis state has no fork-choice leaf".to_string())?;
         if opening.leaf.block != block {

@@ -77,6 +77,8 @@ impl CircuitShapeV5 {
 enum TensorStorageV5<'a> {
     Input(InputByteSpanV5),
     Constant(&'a Tensor),
+    Raw(&'a [u8]),
+    Repeated(IntV5),
     Words(Vec<IntV5>),
     Counting,
 }
@@ -99,6 +101,21 @@ impl<'a> CircuitTensorV5<'a> {
         let bytes = shape.elements.checked_mul(dtype.width()).ok_or("circuit tensor input bytes overflow")?;
         let span = builder.input_byte_span(bytes)?;
         Ok(Self { dtype, shape, storage: TensorStorageV5::Input(span), written: shape.elements, _lease: None })
+    }
+    pub(crate) fn raw_constant(dtype: DType, shape: &[usize], bytes: &'a [u8]) -> Result<Self, String> {
+        let shape = CircuitShapeV5::new(shape)?;
+        if shape.elements.checked_mul(dtype.width()) != Some(bytes.len()) {
+            return Err("raw circuit constant length".into());
+        }
+        Ok(Self { dtype, shape, storage: TensorStorageV5::Raw(bytes), written: shape.elements, _lease: None })
+    }
+    pub(crate) fn repeated(dtype: DType, shape: &[usize], value: i128) -> Result<Self, String> {
+        if !dtype.contains(value) {
+            return Err("repeated circuit constant outside dtype".into());
+        }
+        let shape = CircuitShapeV5::new(shape)?;
+        let word = std::array::from_fn(|i| u32::from(((value as u128) >> i) & 1 != 0));
+        Ok(Self { dtype, shape, storage: TensorStorageV5::Repeated(word), written: shape.elements, _lease: None })
     }
     pub fn constant(tensor: &'a Tensor) -> Result<Self, String> {
         let shape = CircuitShapeV5::new(&tensor.shape)?;
@@ -132,6 +149,12 @@ impl<'a> CircuitTensorV5<'a> {
         match &self.storage {
             TensorStorageV5::Counting => Ok([0; 128]),
             TensorStorageV5::Words(values) => values.get(index).copied().ok_or("unwritten circuit tensor element".into()),
+            TensorStorageV5::Repeated(word) => Ok(*word),
+            TensorStorageV5::Raw(bytes) => {
+                let at = index.checked_mul(self.dtype.width()).ok_or("raw constant offset overflow")?;
+                let value = self.dtype.decode_le(&bytes[at..at + self.dtype.width()]);
+                Ok(std::array::from_fn(|i| u32::from(((value as u128) >> i) & 1 != 0)))
+            }
             TensorStorageV5::Constant(t) => Ok(std::array::from_fn(|i| u32::from(((t.data[index] as u128) >> i) & 1 != 0))),
             TensorStorageV5::Input(span) => {
                 let width = self.dtype.width();
@@ -528,7 +551,7 @@ pub struct NativeTensorEndpointV5<'a> {
     pub suite: super::native_commitment::NativeTensorCommitmentV5,
     pub root: Digest,
 }
-fn constrain_endpoint_v5(
+pub(crate) fn constrain_endpoint_v5(
     builder: &mut CircuitBuilderV5,
     endpoint: NativeTensorEndpointV5<'_>,
     tensor: &CircuitTensorV5<'_>,

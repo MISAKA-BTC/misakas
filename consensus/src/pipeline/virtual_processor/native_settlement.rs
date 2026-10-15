@@ -229,8 +229,12 @@ impl VirtualStateProcessor {
                 (None, NativeDeltaEvidenceV1::default(), None, lease)
             } else {
                 // A missing or undecodable delta is a gap in the verified history, not an empty block.
-                let Ok((root, delta)) = self.palw_state_v2_store.read().delta_of_retained_v1(cursor) else {
-                    return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor)));
+                let (root, delta) = match self.palw_state_v2_store.read().delta_of_retained_v1(cursor) {
+                    Ok(row) => row,
+                    Err(StoreError::LocalResourceUnavailable(_)) => {
+                        return Err(WalkFault(HistoryGapV1::NativeCapacityUnavailable, Some(cursor)));
+                    }
+                    Err(_) => return Err(WalkFault(HistoryGapV1::DeltaNotRetained, Some(cursor))),
                 };
                 let lease = self.native_row_reservation_v1(cursor, Some(&delta), self.palw_fork_choice_commitment_v1.is_some())?;
                 #[allow(unused_mut)]
@@ -430,8 +434,12 @@ impl VirtualStateProcessor {
         }
 
         // 3. The PALW state the fork choice weighs, and its frontier.
-        let Some(state) = self.palw_candidate_state_v2(sink) else {
-            return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink)));
+        let state = match self.palw_candidate_state_v2_checked(sink) {
+            Ok(state) => state,
+            Err(super::processor::PalwWeighFaultV2::NativeCapacityUnavailable) => {
+                return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+            }
+            Err(_) => return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink))),
         };
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return stopped(result, gap(HistoryGapV1::ParamsAbsent, None));

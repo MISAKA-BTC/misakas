@@ -18,6 +18,11 @@ pub enum StoreError {
     #[error("data inconsistency: {0}")]
     DataInconsistency(String),
 
+    /// Explicit local capacity/admission refusal, distinct from corrupted data.
+    /// String avoids a database -> consensus Core dependency cycle.
+    #[error("local resource unavailable: {0}")]
+    LocalResourceUnavailable(String),
+
     #[error("rocksdb error {0}")]
     DbError(#[from] rocksdb::Error),
 

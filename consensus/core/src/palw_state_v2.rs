@@ -168,15 +168,15 @@ mod palw_flat_model_vector_fold_v7;
 mod palw_flat_model_vector_fold_v9;
 #[path = "palw_flat_stage_fold_v14.rs"]
 mod palw_flat_stage_fold_v14;
-#[path = "palw_native_initial_fold_v31.rs"]
-mod palw_native_initial_fold_v31;
 #[path = "palw_model_refutation_seal_fold_v4.rs"]
 mod palw_model_refutation_seal_fold_v4;
+#[path = "palw_native_initial_fold_v31.rs"]
+mod palw_native_initial_fold_v31;
 // Lane DA16: the provider court's fold arms (lease, unit challenge, answer, DA transfer) and its closing tick.
-#[path = "palw_monetary_material_fold_v1.rs"]
-mod palw_monetary_material_fold_v1;
 #[path = "palw_material_release_recovery_fold_v2.rs"]
 mod palw_material_release_recovery_fold_v2;
+#[path = "palw_monetary_material_fold_v1.rs"]
+mod palw_monetary_material_fold_v1;
 #[path = "palw_provider_court_fold_v1.rs"]
 mod palw_provider_court_fold_v1;
 // Lane LG14-A: the legacy route's dispute reservations (tags 154–155), their lapse, release and burn, and the reserved DA budget.
@@ -9061,6 +9061,9 @@ impl PalwCourtCloseGroupV2 {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwStateV2Error {
+    /// Local construction capacity is not a consensus object or block fault.
+    #[error("local native construction capacity: {0}")]
+    NativeResource(crate::palw_native_resource_v1::NativeCoverageV1),
     #[error("invalid state params: {0}")]
     InvalidParams(&'static str),
     #[error("chain context is not monotone: {0}")]
@@ -12721,6 +12724,7 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
@@ -13258,6 +13262,30 @@ pub fn apply_palw_transition_v2(
     apply_palw_transition_v3(parent, params, ctx, accepted_objects, work)
 }
 
+/// Retained-owner form of the original V2 face. Policy flags and extras are
+/// exactly the defaults used by the historical V2 -> V3 -> V4 wrappers.
+pub fn apply_palw_transition_retained_v2(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+) -> Result<(crate::palw_native_resource_v1::NativeChainStateV1, crate::palw_native_resource_v1::NativeStateDeltaV1), PalwStateV2Error>
+{
+    apply_palw_transition_retained_v2_with_extras(
+        parent,
+        params,
+        ctx,
+        accepted_objects,
+        current_attempt,
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1::default(),
+    )
+}
+
 /// [`apply_palw_transition_v2`] with ADR-0065 D4's verdict policy — the face the pipeline's
 /// object-acceptance rehearsal and the state-sync walk use, so neither can hold a different
 /// opinion from the transition they exist to predict.
@@ -13340,6 +13368,45 @@ pub fn apply_palw_transition_v2_with_extras(
         None => PalwBlockWorkV3::None,
     };
     apply_palw_transition_v7(
+        parent,
+        params,
+        None,
+        ctx,
+        accepted_objects,
+        work,
+        &[],
+        // No header here (attempt-only wrapper, no merged work) — the own-vs-merged execution dedup
+        // cannot fire, so B-4's own-work key is `default`; below the deep fence it is unread anyway.
+        Hash64::default(),
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .map(|(state, delta, _)| (state, delta))
+}
+
+/// Retained-owner form of the historical rehearsal adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_retained_v2_with_extras(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(crate::palw_native_resource_v1::NativeChainStateV1, crate::palw_native_resource_v1::NativeStateDeltaV1), PalwStateV2Error>
+{
+    let work = match current_attempt {
+        Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
+        None => PalwBlockWorkV3::None,
+    };
+    apply_palw_transition_retained_v7(
         parent,
         params,
         None,
@@ -13627,6 +13694,31 @@ pub fn palw_v2_pre_object_base_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    palw_v2_pre_object_base_retained_v1(
+        parent,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?
+    .into_unreserved_legacy_v1()
+    .map_err(PalwStateV2Error::NativeResource)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_pre_object_base_retained_v1(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
             return Err(PalwStateV2Error::NonMonotonicContext("blue_score must strictly increase along a chain"));
@@ -13636,7 +13728,7 @@ pub fn palw_v2_pre_object_base_v1(
         }
     }
     let mut builder =
-        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+        TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
 
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
@@ -13655,7 +13747,7 @@ pub fn palw_v2_pre_object_base_v1(
     }
     // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
     if let Some(lane) = extras.round_lane {
-        builder.rotate_round_lane(ctx, lane.schedule_span_daa);
+        builder.rotate_round_lane(ctx, lane.schedule_span_daa)?;
     }
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
@@ -13706,7 +13798,7 @@ pub fn palw_v2_pre_object_base_v1(
     palw_panel_v3_fold_v1::advance_v1(&mut builder, parent, ctx)?;
     palw_monetary_material_fold_v1::tick(&mut builder, ctx)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
-    Ok(builder.checkpoint().0)
+    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
 /// Companion to [`palw_v2_pre_object_base_v1`]: apply exactly one accepted object to a base, as the
@@ -13723,14 +13815,41 @@ pub fn palw_v2_apply_one_object_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    palw_v2_apply_one_object_retained_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?
+    .into_unreserved_legacy_v1()
+    .map_err(PalwStateV2Error::NativeResource)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_object_retained_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
     let mut builder =
-        TransitionBuilder::new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+        TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
     // Step 3's reservation for the block's own attempt, as the fold takes it (see
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     apply_object(&mut builder, ctx, object)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
-    Ok(builder.checkpoint().0)
+    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
 /// **Would this licence object actually LICENSE its claim on `base`?** (2026-09-24 DoS audit review
@@ -13785,7 +13904,7 @@ fn palw_v2_licensed_state_v1(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
-) -> Option<(Hash64, PalwChainStateV2)> {
+) -> Option<(Hash64, crate::palw_native_resource_v1::NativeChainStateV1)> {
     let claim = match object {
         PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
         | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
@@ -13799,7 +13918,7 @@ fn palw_v2_licensed_state_v1(
     {
         return None;
     }
-    palw_v2_apply_one_object_v1(
+    palw_v2_apply_one_object_retained_v1(
         base,
         params,
         ctx,
@@ -13930,7 +14049,7 @@ pub fn palw_v2_supplementary_effect_v1(
     }
     let before = base.claims.get(&claim_id).filter(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))?;
     let receipt_deadline = palw_claim_receipt_deadline_v1(base, params, &claim_id, before).ok().flatten()?;
-    let next = palw_v2_apply_one_object_v1(
+    let next = palw_v2_apply_one_object_retained_v1(
         base,
         params,
         ctx,
@@ -13997,6 +14116,56 @@ pub fn apply_palw_transition_v7(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+    let (state, delta, skips) = apply_palw_transition_retained_v7(
+        parent,
+        params,
+        admission,
+        ctx,
+        accepted_objects,
+        block_work,
+        merged_work,
+        own_execution_key,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?;
+    Ok((
+        state.into_unreserved_legacy_v1().map_err(PalwStateV2Error::NativeResource)?,
+        delta.into_unreserved_legacy_v1().map_err(PalwStateV2Error::NativeResource)?,
+        skips.into_unreserved_legacy_v1().map_err(PalwStateV2Error::NativeResource)?,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_retained_v7(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_native_resource_v1::NativeStateDeltaV1,
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+    ),
+    PalwStateV2Error,
+> {
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         apply_palw_transition_v7_inner(
             parent,
@@ -14036,7 +14205,14 @@ fn apply_palw_transition_v7_inner(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
-) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_native_resource_v1::NativeStateDeltaV1,
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+    ),
+    PalwStateV2Error,
+> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
@@ -14048,7 +14224,7 @@ fn apply_palw_transition_v7_inner(
     }
 
     let mut builder =
-        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+        TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
 
     // Prospective custody is authenticated against the pre-object parent. A same-block
     // enrollment/replacement never authorizes this block's capture. A carriage that does not
@@ -14074,7 +14250,15 @@ fn apply_palw_transition_v7_inner(
                 &a.executor_bond,
                 header.nonce,
             );
-            if ready.verify_prior(parent, anchor, header.daa_score, crate::palw_attempt_material_v3::verify_ready_signature_v3).is_ok()
+            if ready
+                .verify_prior_with_recovery_v4(
+                    parent,
+                    params,
+                    anchor,
+                    header.daa_score,
+                    crate::palw_attempt_material_v3::verify_ready_signature_v3,
+                )
+                .is_ok()
             {
                 builder.monetary_native_ready.insert(ready.ready.binding.claim, (ready.ready.session, ready.ready.binding));
             }
@@ -14125,7 +14309,7 @@ fn apply_palw_transition_v7_inner(
     // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
     //     by this block is a credit in THIS block's span, never in the one its finals just closed.
     if let Some(lane) = extras.round_lane {
-        builder.rotate_round_lane(ctx, lane.schedule_span_daa);
+        builder.rotate_round_lane(ctx, lane.schedule_span_daa)?;
     }
     // 1e. ADR-0165: the floor state's TIME step — a Probe that has run its slots and a Normal whose last BLUE REAL attempt is
     //     too old expire here, before the sweeps and before any attempt, so own and merged attempts read one state.
@@ -14491,7 +14675,7 @@ fn apply_palw_transition_v7_inner(
                     ) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
-                            let checkpoint = builder.checkpoint();
+                            let checkpoint = builder.try_checkpoint()?;
                             // B-1: past the deep fence a merged claim escrows its carve, carved from the
                             // MERGED block's own subsidy — the accepting coinbase withholds that same
                             // carve. Below the fence, false → escrows nothing (ADR-0058 D5),
@@ -14537,6 +14721,9 @@ fn apply_palw_transition_v7_inner(
                                     None
                                 }
                                 Err(refused) => {
+                                    if matches!(refused, PalwStateV2Error::NativeResource(_)) {
+                                        return Err(refused);
+                                    }
                                     builder.restore(checkpoint);
                                     // ADR-0160 stage 4 (F-N): a merged attempt's refusal for want of a unit
                                     // registers its demand too.
@@ -14549,10 +14736,13 @@ fn apply_palw_transition_v7_inner(
                 }
             },
             PalwBlockWorkV3::ReceiptSpend(spend) => {
-                let checkpoint = builder.checkpoint();
+                let checkpoint = builder.try_checkpoint()?;
                 match apply_receipt_spend(&mut builder, ctx, spend) {
                     Ok(()) => None,
                     Err(refused) => {
+                        if matches!(refused, PalwStateV2Error::NativeResource(_)) {
+                            return Err(refused);
+                        }
                         builder.restore(checkpoint);
                         Some(refused.to_string())
                     }
@@ -14567,7 +14757,7 @@ fn apply_palw_transition_v7_inner(
     // 4b′. **ADR-0164 F-M1: the riders of this block's leads**, after every claim the block's work creates (a merged lead is created in
     //      4b) and before step 4c, which reads what is resolved. Each batch is atomic; a refused one is a skip and leaves its lead
     //      with its whole carve. The rider marks past their window leave first. A no-op below the fence.
-    apply_pending_riders_v1(&mut builder, ctx, params, admission, &mut merged_skips);
+    apply_pending_riders_v1(&mut builder, ctx, params, admission, &mut merged_skips)?;
 
     // 4b″. **RFC-0010: the permissionless Panel's engine takes what the block carried** — the certified epoch outputs its objects
     //      brought (each verified against the branch and dropped, the block standing, if it does not verify), then the claims this
@@ -14763,7 +14953,7 @@ fn apply_palw_transition_v7_inner(
     }
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
-    Ok((builder.state, delta, merged_skips))
+    builder.native_reservation.finish_transition_v1(builder.state, delta, merged_skips).map_err(PalwStateV2Error::NativeResource)
 }
 
 /// After the LAST open session on a licensed claim ends challenger-side (an explicit
@@ -20503,11 +20693,11 @@ fn apply_pending_riders_v1(
     params: &PalwStateParamsV2,
     admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
     skips: &mut Vec<(BlockHash, String)>,
-) {
+) -> Result<(), PalwStateV2Error> {
     use crate::palw_capacity_s567_v1::{PALW_RIDERS_WINDOW_DAA_V1, PalwCapacityLedgerKeyV1 as K, PalwCapacityLedgerRowV1 as R};
     if !params.capacity_riders_active_at(ctx.daa_score) {
         builder.pending_riders.clear();
-        return;
+        return Ok(());
     }
     let expired: Vec<K> = builder
         .state
@@ -20529,14 +20719,18 @@ fn apply_pending_riders_v1(
             skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
             continue;
         }
-        let checkpoint = builder.checkpoint();
+        let checkpoint = builder.try_checkpoint()?;
         let seen = builder.seen_exec.clone();
         if let Err(why) = attach_riders_v1(builder, ctx, params, admission, &lead_id, &riders) {
+            if matches!(why, PalwStateV2Error::NativeResource(_)) {
+                return Err(why);
+            }
             builder.restore(checkpoint);
             builder.seen_exec = seen;
             skips.push((ctx.block, format!("riders refused ({why}) of {lead_id}")));
         }
     }
+    Ok(())
 }
 
 /// **A rider's share of its lead's escrow, and the subsidy that carves exactly that share** — `(e_r, s_r)` with `e_r = ⌊E_lead / (1 + n)⌋`
@@ -21033,8 +21227,7 @@ fn apply_attempt(
     // absence must not halt floor liveness). Below the monetary fence both calls below are no-ops for every class, so skipping
     // them for the floor is byte-identical there.
     let floor_exempt = claim.class_id == builder.params.base_class_id();
-    let monetary_ready =
-        if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
+    let monetary_ready = if floor_exempt { None } else { palw_monetary_material_fold_v1::plan_native_ready(builder, ctx, claim_id)? };
     if monetary_ready.is_none() && !floor_exempt {
         builder.state.require_native_monetary_material_scope_v1(builder.params, claim_id, &claim)?;
     }
@@ -25083,6 +25276,6 @@ mod native_resource_inventory_v1;
 #[path = "palw_native_resource_v1/private/wire_carriage.rs"]
 mod native_wire_carriage_v1;
 pub(crate) use native_wire_carriage_v1::{
-    restore_index_native_shape_v1, scan_carriage_native_wire_v1, transition_node_unit_v1, transition_existing_index_shape_v1,
-    scan_vertex_delta_row_v1, scan_improvement_delta_row_v1, scan_exec_delta_row_v1, scan_budget_delta_row_v1,
+    restore_index_native_shape_v1, scan_budget_delta_row_v1, scan_carriage_native_wire_v1, scan_exec_delta_row_v1,
+    scan_improvement_delta_row_v1, scan_vertex_delta_row_v1, transition_existing_index_shape_v1, transition_node_unit_v1,
 };

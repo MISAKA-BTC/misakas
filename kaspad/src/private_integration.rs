@@ -43,6 +43,7 @@ pub use paid_v4_bootstrap::export_private_paid_bootstrap_v4;
 mod native_provider;
 pub use native_provider::PrivateNativeCustodySpecV3;
 pub(crate) mod recovery_ack_carrier_v4;
+mod recovery_observation_v4;
 pub use recovery_ack_carrier_v4::PrivateRecoveryAckFeeSpecV4;
 
 pub fn parse_private_recovery_provider_roster_v4(
@@ -478,6 +479,7 @@ pub fn create_private_integration_core_with_native_custody_v4(
     };
     let hook = Box::new(move |mut ctx: crate::palw_native_custody_v3::PalwNativeCustodyContextV3| {
         ctx.recovery_provider_roster_v4 = recovery_providers;
+        recovery_observation_v4::start(&ctx)?;
         hook(ctx)
     });
     Ok(create_core_with_runtime_inner(runtime, args, fd_total_budget, Some(config), Some(hook)))

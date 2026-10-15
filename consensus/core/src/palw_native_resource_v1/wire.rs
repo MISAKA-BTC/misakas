@@ -120,7 +120,7 @@ macro_rules! wire_fixed { ($($ty:ty => $bytes:expr),* $(,)?) => {$ (
     }
 )*}; }
 wire_fixed!(u8=>1,u16=>2,u32=>4,u64=>8,u128=>16,usize=>8,isize=>8,i8=>1,i16=>2,i32=>4,i64=>8,i128=>16,f32=>4,f64=>8,()=>0,
- crate::Hash64=>64,kaspa_hashes::Hash=>32,kaspa_math::Uint512=>64);
+ crate::Hash64=>64,kaspa_hashes::Hash=>32,kaspa_math::Uint512=>64,kaspa_math::Uint576=>72);
 impl NativeWireScanV1 for bool {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;

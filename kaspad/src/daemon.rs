@@ -1129,7 +1129,13 @@ Do you confirm? (y/n)";
         wal_dir.clone(),
         cache_budget,
     ));
-    let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
+    let consensus_manager = match ConsensusManager::new(consensus_factory) {
+        Ok(manager) => Arc::new(manager),
+        Err(unavailable) => {
+            kaspa_core::error!("startup cannot admit native state construction: {unavailable}");
+            exit(1);
+        }
+    };
     // Node-side IBD checkpoints, the startup self-check: a checkpoint this node's OWN selected chain
     // covers but does not pass through is a wrong entry (a merged or round block, a reorged-out block,
     // a typo) or a node on the wrong chain. Caught here, on the synced fleet at the upgrade, before
@@ -1423,7 +1429,10 @@ Do you confirm? (y/n)";
             producer_key_path: args.palw_producer_key.clone(),
             producer_bond: args.palw_producer_bond.clone(),
         })
-        .unwrap_or_else(|why| panic!("RFC-0008 PAV3 private native custody wiring: {why}"))
+        .unwrap_or_else(|why| {
+            kaspa_core::error!("RFC-0008 private native custody startup refused: {why}");
+            exit(1);
+        })
     });
     let palw_producer_service = if args.palw_produce {
         // **A producer with no way to carry a lifecycle object must not start** (audit M2-10).

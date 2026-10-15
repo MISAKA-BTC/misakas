@@ -8882,15 +8882,23 @@ fn palw_seed_attempt_targets_v1(
     bundle: &mut crate::palw_mode_v2::PalwConsensusParamsV2,
 ) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_state_v2::{
-        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_max_exposure_pwu_of_rule_v1,
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_retained_v2,
+        palw_max_exposure_pwu_of_rule_v1,
     };
     let invalid = crate::palw_mode_v2::PalwModeV2Error::Invalid;
     // The genesis block's own context. Only the share table is read out of the fold, and no
     // grant's arithmetic depends on the block, its DAA or its subsidy — so these are the genesis
     // values rather than a placeholder that would have to be explained.
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 0, blue_score: 0, subsidy: 0 };
-    let (state, _delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
-        .map_err(|_| invalid("the genesis registrations do not apply, so no share table can be read from them"))?;
+    let (state, _delta) =
+        apply_palw_transition_retained_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None).map_err(
+            |error| match error {
+                capacity @ crate::palw_state_v2::PalwStateV2Error::NativeResource(_) => {
+                    crate::palw_mode_v2::PalwModeV2Error::State(capacity)
+                }
+                _ => invalid("the genesis registrations do not apply, so no share table can be read from them"),
+            },
+        )?;
 
     let mut rows: Vec<(usize, u16, u64)> = Vec::new();
     for (index, object) in bundle.genesis_objects.iter().enumerate() {

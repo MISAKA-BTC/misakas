@@ -740,7 +740,7 @@ pub fn palw_legacy_dispute_reservation_check_v1(
     reservation: &PalwDisputeReservationV1,
     now_daa: u64,
 ) -> Result<u128, PalwStateV2Error> {
-    let mut builder = TransitionBuilder::new(state, params, false, false, false, true, extras);
+    let mut builder = TransitionBuilder::try_new(state, params, false, false, false, true, extras)?;
     let ctx = PalwBlockContextV2 { block: Hash64::default(), daa_score: now_daa, blue_score: 0, subsidy: 0 };
     apply_dispute_reserved_v1(&mut builder, &ctx, reservation)?;
     Ok(builder.state.legacy_dispute_reservation_v1(&reservation.claim, &reservation.reserver).map(|row| row.deposit).unwrap_or(0))

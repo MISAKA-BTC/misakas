@@ -2,15 +2,50 @@
 //! This module does not register a V4/V5 claim, provide a PCS/GKR proof, or grant
 //! a review. Every emitted gate has executable Boolean semantics; cost is the
 //! actual compiled graph and bounded witness, not an operation-name inventory.
-use crate::hash::{Digest, object_id};
+use crate::hash::Digest;
 use borsh::{BorshDeserialize, BorshSerialize};
 pub mod bits;
 pub mod blake2b;
 pub mod native_commitment;
 pub mod scalar;
 pub mod tensor;
+pub mod trace;
 pub type WireV5 = u32;
 pub type ByteV5 = [WireV5; 8];
+// Borsh framing remains identical to object_id, without an unreserved graph-
+// sized serialization Vec. Both passes use only bounded writer state.
+fn streaming_object_id_v5<T: BorshSerialize>(domain: &[u8], value: &T) -> Digest {
+    struct Count(u64);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| std::io::Error::other("circuit serialization length overflow"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    struct Hash(blake2b_simd::State);
+    impl std::io::Write for Hash {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut length = Count(0);
+    value.serialize(&mut length).expect("bounded in-memory circuit serialization");
+    let mut state = crate::hash::keyed(domain);
+    state.update(&length.0.to_le_bytes());
+    let mut state = Hash(state);
+    value.serialize(&mut state).expect("bounded in-memory circuit serialization");
+    crate::hash::finish(state.0)
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum BooleanGateV5 {
     Constant(bool),
@@ -56,7 +91,7 @@ impl BooleanCircuitV5 {
         &self.assertions
     }
     pub fn id(&self) -> Digest {
-        object_id(b"MISAKA/PALW/BOOLEAN-CIRCUIT/V5", self)
+        streaming_object_id_v5(b"MISAKA/PALW/BOOLEAN-CIRCUIT/V5", self)
     }
     pub fn cost(&self) -> Result<CircuitCostV5, String> {
         let gates = u64::try_from(self.gates.len()).map_err(|_| "circuit gate length overflow")?;
@@ -111,16 +146,27 @@ impl BooleanCircuitV5 {
     /// Exact local witness evaluator. This is a reference relation, not a
     /// succinct proof or authority to label a constraint system approved.
     pub(crate) fn evaluate(&self, inputs: &[bool], limits: CircuitLimitsV5) -> Result<Vec<bool>, String> {
+        self.evaluate_with_input(inputs.len(), |ordinal| inputs[ordinal as usize], limits)
+    }
+    fn evaluate_with_input(
+        &self,
+        input_count: usize,
+        mut input: impl FnMut(u32) -> bool,
+        limits: CircuitLimitsV5,
+    ) -> Result<Vec<bool>, String> {
         self.validate(limits)?;
-        if inputs.len() != self.input_bits as usize {
+        if input_count != self.input_bits as usize {
             return Err("circuit input length mismatch".into());
         }
         let mut values = Vec::new();
         values.try_reserve_exact(self.gates.len()).map_err(|e| e.to_string())?;
+        if values.capacity() != self.gates.len() {
+            return Err("witness allocation capacity differs from exact gate plan".into());
+        }
         for gate in &self.gates {
             let value = match *gate {
                 BooleanGateV5::Constant(v) => v,
-                BooleanGateV5::Input { ordinal } => inputs[ordinal as usize],
+                BooleanGateV5::Input { ordinal } => input(ordinal),
                 BooleanGateV5::Xor { a, b } => values[a as usize] ^ values[b as usize],
                 BooleanGateV5::And { a, b } => values[a as usize] & values[b as usize],
                 BooleanGateV5::Not { a } => !values[a as usize],
@@ -243,6 +289,7 @@ impl CircuitBuilderV5 {
         Ok(())
     }
 }
+#[cfg(test)]
 pub fn input_bits_v5(bytes: &[u8]) -> Vec<bool> {
     bytes.iter().flat_map(|b| (0..8).map(move |i| (b >> i) & 1 != 0)).collect()
 }
@@ -309,6 +356,25 @@ impl CircuitWitnessV5 {
 impl ReservedCircuitV5 {
     pub fn circuit(&self) -> &BooleanCircuitV5 {
         &self.circuit
+    }
+    /// Borrow packed canonical input bytes directly. This avoids an additional
+    /// unreserved input-bit Vec while the graph and witness are both live.
+    pub fn evaluate_bytes(&self, inputs: &[u8], limits: CircuitLimitsV5) -> Result<CircuitWitnessV5, String> {
+        let bits = inputs.len().checked_mul(8).ok_or("packed circuit input length overflow")?;
+        let cost = self.circuit.validate(limits)?;
+        if bits != cost.input_bits as usize {
+            return Err("packed circuit input count mismatch".into());
+        }
+        let lease = self.memory.reserve(cost.witness_bytes)?;
+        let values = self.circuit.evaluate_with_input(
+            bits,
+            |ordinal| {
+                let index = ordinal as usize;
+                (inputs[index / 8] >> (index % 8)) & 1 != 0
+            },
+            limits,
+        )?;
+        Ok(CircuitWitnessV5 { values, _lease: lease })
     }
     pub fn evaluate(&self, inputs: &[bool], limits: CircuitLimitsV5) -> Result<CircuitWitnessV5, String> {
         let cost = self.circuit.validate(limits)?;

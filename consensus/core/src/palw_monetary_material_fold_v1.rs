@@ -298,6 +298,23 @@ pub(super) fn action(
     a: &PalwMonetaryMaterialActionV1,
     signer: &PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    action_inner_v4(builder, ctx, a, signer, false)
+}
+pub(super) fn action_with_recovery_answer_v4(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    a: &PalwMonetaryMaterialActionV1,
+    signer: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    action_inner_v4(builder, ctx, a, signer, true)
+}
+fn action_inner_v4(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    a: &PalwMonetaryMaterialActionV1,
+    signer: &PalwBondKeyV2,
+    recovery_answer: bool,
+) -> Result<(), PalwStateV2Error> {
     if let PalwMonetaryMaterialActionV1::RecoveryV2(recovery) = a {
         return super::palw_material_release_recovery_fold_v2::action(builder, ctx, recovery, signer);
     }
@@ -313,6 +330,17 @@ pub(super) fn action(
         | PalwMonetaryMaterialActionV1::Release { root, .. } => *root,
     };
     let mut row = builder.state.monetary_material_row_v1(root).ok_or_else(|| refused("no enrolled monetary material root"))?;
+    if !recovery_answer
+        && builder.state.material_recovery_row_v2(root).is_some()
+        && matches!(
+            a,
+            PalwMonetaryMaterialActionV1::HeldAnswer { .. }
+                | PalwMonetaryMaterialActionV1::Answer { .. }
+                | PalwMonetaryMaterialActionV1::SegmentedAnswer { .. }
+        )
+    {
+        return Err(refused("new recovery contract answer requires atomic V4 applied checkpoint"));
+    }
     match a {
         PalwMonetaryMaterialActionV1::RecoveryV2(_) => unreachable!("dispatched above"),
         PalwMonetaryMaterialActionV1::SegmentedChallenge { provider, dependency, position, part, valid_until_daa, .. } => {
@@ -351,6 +379,7 @@ pub(super) fn action(
             {
                 return Err(refused("segmented material challenger is unfunded"));
             }
+            super::palw_material_release_recovery_fold_v2::reserve_answer_event_v4(builder, root, provider)?;
             row.challenges.push(PalwMonetaryMaterialChallengeV1 {
                 provider: *provider,
                 dependency: *dependency,
@@ -437,6 +466,7 @@ pub(super) fn action(
             {
                 return Err(refused("native material challenger is unfunded"));
             }
+            super::palw_material_release_recovery_fold_v2::reserve_answer_event_v4(builder, root, provider)?;
             row.challenges.push(PalwMonetaryMaterialChallengeV1 {
                 provider: *provider,
                 dependency: *dependency,
@@ -537,6 +567,7 @@ pub(super) fn action(
             if claim.body.position(*stage, *position).is_none() {
                 return Err(refused("material challenge names no committed position"));
             }
+            super::palw_material_release_recovery_fold_v2::reserve_answer_event_v4(builder, root, provider)?;
             row.challenges.push(PalwMonetaryMaterialChallengeV1 {
                 provider: *provider,
                 dependency: *dependency,
@@ -669,6 +700,11 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
             || builder.state.kernel_route().and_then(|r| r.kernel_claim_row_v1(&row.terms.root)).is_some();
         let failed: Vec<_> =
             row.challenges.iter().filter(|c| !c.answered && ctx.daa_score > c.deadline_daa).map(|c| c.provider).collect();
+        for challenge in
+            row.challenges.iter().filter(|c| !c.answered && (ctx.daa_score > c.deadline_daa || failed.contains(&c.provider)))
+        {
+            super::palw_material_release_recovery_fold_v2::release_answer_event_v4(builder, row.terms.root, &challenge.provider)?;
+        }
         for provider in failed {
             if let Some(p) = row.providers.iter_mut().find(|p| p.provider == provider && !p.charged) {
                 builder.slash_bond(provider, u128::from(p.collateral_sompi))?;

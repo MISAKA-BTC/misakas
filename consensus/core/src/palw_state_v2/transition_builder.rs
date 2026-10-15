@@ -17,6 +17,7 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn new(
         parent: &PalwChainStateV2,
         params: &'a PalwStateParamsV2,
@@ -26,10 +27,26 @@ impl<'a> TransitionBuilder<'a> {
         da_court: bool,
         extras: &'a PalwTransitionExtrasV1,
     ) -> Self {
-        Self {
+        Self::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)
+            .expect("test transition construction capacity")
+    }
+
+    pub(super) fn try_new(
+        parent: &PalwChainStateV2,
+        params: &'a PalwStateParamsV2,
+        unavailable_abstains: bool,
+        capability_bound: bool,
+        uncertified_weightless: bool,
+        da_court: bool,
+        extras: &'a PalwTransitionExtrasV1,
+    ) -> Result<Self, PalwStateV2Error> {
+        let (state, native_reservation) = crate::palw_native_resource_v1::NativeTransitionReservationV1::copy_parent_v1(parent)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        Ok(Self {
+            native_reservation,
             params,
             monetary_native_ready: BTreeMap::new(),
-            state: parent.clone(),
+            state,
             entries: Vec::new(),
             registration_index: None,
             unavailable_abstains,
@@ -51,38 +68,74 @@ impl<'a> TransitionBuilder<'a> {
             heavy_prompt_ids_charged: 0,
             heavy_prompt_claims: BTreeSet::new(),
             panel_v3_beacons: Vec::new(),
-        }
+        })
     }
 
-    pub(super) fn registration_index_v1(&mut self) -> &PalwBondRegistrationIndexV1 {
+    pub(super) fn registration_index_v1(&mut self) -> Result<&PalwBondRegistrationIndexV1, PalwStateV2Error> {
         if self.registration_index.is_none() {
+            use crate::palw_native_resource_v1::{NativeCoverageV1, typed::BTreeNodeEnvelopeV1};
+            // Two actual lookups (key/operator), each an outer bucket and one
+            // holder node per bond. Hash collisions reduce outer memberships.
+            let unit = 2
+                * (std::mem::size_of::<BTreeNodeEnvelopeV1<Hash64, BTreeSet<PalwBondKeyV2>>>()
+                    + std::mem::size_of::<BTreeNodeEnvelopeV1<PalwBondKeyV2, ()>>());
+            let requests = (self.state.bonds.len() as u64).checked_mul(unit as u64).ok_or_else(|| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwBondRegistrationIndexV1>(
+                    "registration lookup construction",
+                ))
+            })?;
+            self.native_reservation.grow_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
             let mut index = PalwBondRegistrationIndexV1::default();
             for (key, record) in &self.state.bonds {
                 index.note(*key, record, true);
             }
             self.registration_index = Some(index);
         }
-        self.registration_index.as_ref().unwrap()
+        Ok(self.registration_index.as_ref().unwrap())
     }
 
-    pub(super) fn registered_pubkey_v1(&mut self, pubkey: &[u8]) -> bool {
+    pub(super) fn registered_pubkey_v1(&mut self, pubkey: &[u8]) -> Result<bool, PalwStateV2Error> {
         let bucket = registration_key_bucket_v1(pubkey);
-        self.registration_index_v1();
-        self.registration_index
+        self.registration_index_v1()?;
+        Ok(self
+            .registration_index
             .as_ref()
             .unwrap()
             .keys
             .get(&bucket)
-            .is_some_and(|keys| keys.iter().any(|key| self.state.bonds.get(key).is_some_and(|record| record.pubkey == pubkey)))
+            .is_some_and(|keys| keys.iter().any(|key| self.state.bonds.get(key).is_some_and(|record| record.pubkey == pubkey))))
     }
 
-    pub(super) fn registered_operator_v1(&mut self, operator: Hash64) -> Option<PalwBondKeyV2> {
-        self.registration_index_v1().operators.get(&operator).and_then(|holders| holders.first().copied())
+    pub(super) fn registered_operator_v1(&mut self, operator: Hash64) -> Result<Option<PalwBondKeyV2>, PalwStateV2Error> {
+        Ok(self.registration_index_v1()?.operators.get(&operator).and_then(|holders| holders.first().copied()))
     }
 
     // Every write goes through one of these, so the delta cannot miss a change.
 
-    pub(super) fn write_bond(&mut self, key: PalwBondKeyV2, new: Option<PalwBondStateV2>) {
+    pub(super) fn write_bond(&mut self, key: PalwBondKeyV2, new: Option<PalwBondStateV2>) -> Result<(), PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1, typed::BTreeNodeEnvelopeV1};
+        let path = "native bond writer clone, memberships and journal";
+        // The incoming value and its separately owned map clone coexist with
+        // the journal. The old record moves from the already reserved source
+        // state into the journal, so it needs no extra deep copy here.
+        let mut bound = new
+            .native_heap_v1(path)
+            .scale::<PalwBondStateV2>(2, path)
+            .add::<PalwDeltaEntryV2>(NativeCoverageV1::Bounded { bytes: 8 * std::mem::size_of::<PalwDeltaEntryV2>() as u64 }, path);
+        if new.is_some() {
+            let primary = std::mem::size_of::<BTreeNodeEnvelopeV1<PalwBondKeyV2, PalwBondStateV2>>();
+            let lookup = if self.registration_index.is_some() {
+                2 * (std::mem::size_of::<BTreeNodeEnvelopeV1<Hash64, BTreeSet<PalwBondKeyV2>>>()
+                    + std::mem::size_of::<BTreeNodeEnvelopeV1<PalwBondKeyV2, ()>>())
+            } else {
+                0
+            };
+            bound = bound.add::<PalwBondStateV2>(NativeCoverageV1::Bounded { bytes: (primary + lookup) as u64 }, path);
+        }
+        self.native_reservation
+            .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+            .map_err(PalwStateV2Error::NativeResource)?;
+
         // ADR-0160 F-W: the bond's cap is a function of its collateral, so every collateral move — a
         // slash lowers it, a refund restores it — re-caps the bond's provisional term HERE, the one
         // site all of them pass (the "recap" of ADR-0160 §7.1).
@@ -108,6 +161,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         self.weight_cap_retotal(before, self.weight_cap_term(&key));
         self.entries.push(PalwDeltaEntryV2::Bond { key, old, new });
+        Ok(())
     }
 
     // ---- ADR-0160 F-W (lane cap-weight): the per-bond weight cap's two maintenance moves ----
@@ -1978,7 +2032,7 @@ impl<'a> TransitionBuilder<'a> {
     /// the forfeiture would have taken it with the rest; so the refund joins the forfeiture: `slashed`
     /// and `collateral` stay, and the freeze's `forfeited_sompi` records it (entry 82). A tier freeze
     /// leaves collateral, so its bond is refunded as any other. Below F-L no freeze exists.
-    pub(super) fn refund_held_forfeits_v1(&mut self, forfeits: &[PalwHeldForfeitV1]) {
+    pub(super) fn refund_held_forfeits_v1(&mut self, forfeits: &[PalwHeldForfeitV1]) -> Result<(), PalwStateV2Error> {
         for record in forfeits {
             let Some(mut bond) = self.state.bonds.get(&record.challenger).cloned() else { continue };
             let refund = record.amount.min(bond.slashed);
@@ -1997,8 +2051,9 @@ impl<'a> TransitionBuilder<'a> {
             }
             bond.slashed -= refund;
             bond.collateral = bond.collateral.saturating_add(refund);
-            self.write_bond(record.challenger, Some(bond));
+            self.write_bond(record.challenger, Some(bond))?;
         }
+        Ok(())
     }
 
     /// The accusers `claim_id` contributes to the A-6 index: its open sessions' and its refuted
@@ -2386,7 +2441,7 @@ impl<'a> TransitionBuilder<'a> {
         self.da_default_charge_v1(ctx, &claim, &charge)?;
         palw_vertex_fold_v1::charge_held_attesters_v1(self, &claim_id, &attesters)?;
         // ...and, the conviction closed, each such challenger made whole.
-        self.refund_held_forfeits_v1(&withheld);
+        self.refund_held_forfeits_v1(&withheld)?;
         Ok(())
     }
 
@@ -2456,11 +2511,13 @@ impl<'a> TransitionBuilder<'a> {
             || !default.custodians.contains(&contract.producer)
             || default.custodians.contains(&winner)
             || default.custodians.iter().any(|bond| {
-                *bond != contract.producer && !contract.custody.credited.get(bond)
-                    .is_some_and(|receipt| receipt.credited_daa <= default.opened_daa)
+                *bond != contract.producer
+                    && !contract.custody.credited.get(bond).is_some_and(|receipt| receipt.credited_daa <= default.opened_daa)
             })
         {
-            return Err(PalwStateV2Error::CarriageInconsistent("history default differs from the accepted pledge and literal expired custody grant".into()));
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "history default differs from the accepted pledge and literal expired custody grant".into(),
+            ));
         }
         // The literal expired set includes the producer (checked above): its leg runs.
         self.staged_selected_default_charge_v1(ctx, request.claim, claim, contract.producer, &default.custodians, winner)
@@ -2483,7 +2540,9 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_offence_id_v1};
         if producer != claim.bond || ctx.daa_score < claim.accepted_daa || winner == producer || unpaid.contains(&winner) {
-            return Err(PalwStateV2Error::CarriageInconsistent("retained source default changes producer, independent winner or literal signer roles".into()));
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "retained source default changes producer, independent winner or literal signer roles".into(),
+            ));
         }
         let covering: std::collections::BTreeSet<PalwBondKeyV2> = unpaid.iter().copied().filter(|bond| *bond != producer).collect();
         if !unpaid.contains(&producer) {
@@ -2533,30 +2592,34 @@ impl<'a> TransitionBuilder<'a> {
         // 1. S4 on each covering signer, lock first.
         self.charge_covering_signers_v1(&conv, claim_id, &charge.covering, charge.g)?;
         // 2. The producer, by stage.
-        let nominal = if !run_producer_leg { 0 } else { match charge.stage {
-            PalwDaStageV1::Live | PalwDaStageV1::Licensed => {
-                self.void_and_slash_at(claim_id, claim, now, PalwVoidReasonV2::ProducerWithholding, Some(&conv))?
+        let nominal = if !run_producer_leg {
+            0
+        } else {
+            match charge.stage {
+                PalwDaStageV1::Live | PalwDaStageV1::Licensed => {
+                    self.void_and_slash_at(claim_id, claim, now, PalwVoidReasonV2::ProducerWithholding, Some(&conv))?
+                }
+                PalwDaStageV1::FinalRow => {
+                    // **The reversal records what was confirmed — the WITHHOLDING, never a proof** (M3
+                    // review F1): a `CourtFraud` void here would let kind 3's `CourtFraud { voided_daa }`
+                    // convict every honest full-mask signer for the producer's silence, whatever
+                    // `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` says. `ProducerWithholding` leaves N9's
+                    // `da_confirmed` gate as the ONLY route from a DA default to a signer.
+                    self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::ProducerWithholding)?;
+                    self.mark_liability_convicted(claim_id, now, PalwVoidReasonV2::ProducerWithholding);
+                    self.da_release_all_v1(claim_id, true, now)?;
+                    self.post_final_producer_leg_v1(
+                        &conv,
+                        claim_id,
+                        charge.producer,
+                        offence_id,
+                        PalwOffenceKindV1::DaDefault,
+                        charge.g,
+                        fp_first,
+                    )?
+                }
             }
-            PalwDaStageV1::FinalRow => {
-                // **The reversal records what was confirmed — the WITHHOLDING, never a proof** (M3
-                // review F1): a `CourtFraud` void here would let kind 3's `CourtFraud { voided_daa }`
-                // convict every honest full-mask signer for the producer's silence, whatever
-                // `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` says. `ProducerWithholding` leaves N9's
-                // `da_confirmed` gate as the ONLY route from a DA default to a signer.
-                self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::ProducerWithholding)?;
-                self.mark_liability_convicted(claim_id, now, PalwVoidReasonV2::ProducerWithholding);
-                self.da_release_all_v1(claim_id, true, now)?;
-                self.post_final_producer_leg_v1(
-                    &conv,
-                    claim_id,
-                    charge.producer,
-                    offence_id,
-                    PalwOffenceKindV1::DaDefault,
-                    charge.g,
-                    fp_first,
-                )?
-            }
-        } };
+        };
         // 3. The record, once per claim; forfeiture by claim; the reward to the earliest defaulted accuser.
         if !self.state.consumed_offences.contains_key(&offence_id) {
             self.close_conviction_v1(
@@ -2869,7 +2932,7 @@ impl<'a> TransitionBuilder<'a> {
         for (id, claim) in live {
             let held: Vec<PalwHeldForfeitV1> = self.state.held_forfeits_of_claim(&id).map(|(_, record)| record.clone()).collect();
             self.void_claim(id, &claim, now_daa, PalwVoidReasonV2::AggregateForfeit)?;
-            self.refund_held_forfeits_v1(&held);
+            self.refund_held_forfeits_v1(&held)?;
         }
         let collateral = self.state.bonds.get(&bond).map(|record| record.collateral).unwrap_or(0);
         let mut taken = self.slash_bond(bond, u128::from(collateral))?;
@@ -6887,7 +6950,7 @@ impl<'a> TransitionBuilder<'a> {
     /// minted onto that span's own rounds. Then, at every block, every schedule and permit row
     /// older than the span before this block's is dropped: a round block anchored two spans back can
     /// no longer be accepted, so nothing it could collide with needs keeping.
-    pub(super) fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
+    pub(super) fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) -> Result<(), PalwStateV2Error> {
         use crate::palw_execution_lane_v1::{
             PalwExecFinalV1, palw_execution_schedule_assign_quanta_bounded_v1, palw_execution_schedule_assign_quanta_windowed_v1,
             palw_execution_schedule_seeded_v1, palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
@@ -6984,7 +7047,7 @@ impl<'a> TransitionBuilder<'a> {
                             lane.span_open_round,
                             window_rounds,
                             &forfeited,
-                        ) {
+                        )? {
                             palw_execution_schedule_assign_quanta_windowed_v1(
                                 &mut schedule,
                                 lane.execution_quantum,
@@ -7075,6 +7138,7 @@ impl<'a> TransitionBuilder<'a> {
         for key in self.state.round_equivocations.range(..(keep_from, 0)).map(|(k, _)| *k).collect::<Vec<_>>() {
             self.write_round_equivocations(key, None);
         }
+        Ok(())
     }
 
     /// **ADR-0125 §7.3: a permit proven signed twice.** The acceptance layer checked the evidence
@@ -8227,10 +8291,20 @@ impl<'a> TransitionBuilder<'a> {
     /// length. `restore` must return the builder to EXACTLY this point or a skipped work would
     /// leave fingerprints in the root — which is why this is a full clone rather than an undo
     /// log: an `apply_*` that grows a new mid-write failure mode cannot corrupt a clone.
+    #[cfg(test)]
     pub(super) fn checkpoint(&self) -> (PalwChainStateV2, usize) {
         (self.state.clone(), self.entries.len())
     }
 
+    /// The aggregate construction owner retains this exact state copy until
+    /// rollback or the final output ownership split. A local refusal occurs
+    /// before Clone, never as a semantic rejection of the carried work.
+    pub(super) fn try_checkpoint(&mut self) -> Result<(PalwChainStateV2, usize), PalwStateV2Error> {
+        let requests =
+            crate::palw_native_resource_v1::native_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
+        self.native_reservation.grow_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
+        Ok((self.state.clone(), self.entries.len()))
+    }
     pub(super) fn restore(&mut self, checkpoint: (PalwChainStateV2, usize)) {
         self.state = checkpoint.0;
         self.entries.truncate(checkpoint.1);
@@ -8357,7 +8431,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut slashed = record;
         slashed.collateral -= debit;
         slashed.slashed = slashed.slashed.checked_add(debit).ok_or(PalwStateV2Error::Overflow("cumulative slash"))?;
-        self.write_bond(bond, Some(slashed));
+        self.write_bond(bond, Some(slashed))?;
         Ok(debit)
     }
 
@@ -9962,7 +10036,7 @@ impl<'a> TransitionBuilder<'a> {
         // EVM action refusals retain the block, so the first leg must roll back
         // if the second leg fails (including first-time budget migration).
         if self.params.bond_budget_active_at(ctx.daa_score) {
-            let checkpoint = self.checkpoint();
+            let checkpoint = self.try_checkpoint()?;
             let reserve = (|| {
                 use crate::palw_bond_budget_v1::PalwBudgetOriginV1;
                 if let Some(bond) = owner_bond {

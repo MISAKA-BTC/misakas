@@ -3,6 +3,23 @@
 use super::*;
 use std::{fmt, io, mem::size_of, ops::Deref};
 
+/// Capacity and state/codec refusal retain separate causes across storage and
+/// native callers. A local resource limit cannot disqualify a valid block.
+#[derive(Debug)]
+pub enum NativeDecodeErrorV1<E> {
+    Resource(NativeCoverageV1),
+    Decode(E),
+}
+impl<E: fmt::Display> fmt::Display for NativeDecodeErrorV1<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resource(e) => write!(f, "{e}"),
+            Self::Decode(e) => write!(f, "{e}"),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for NativeDecodeErrorV1<E> {}
+pub type NativeStateMutationErrorV1 = NativeDecodeErrorV1<crate::palw_state_v2::PalwStateV2Error>;
 pub struct NativeRetainedV1<T> {
     value: T,
     _lease: Option<NativeDemandLeaseV1>,
@@ -163,6 +180,24 @@ pub fn retain_native_carriage_decode_v1<T, E: fmt::Display>(
     Ok(NativeRetainedV1 { value, _lease: lease })
 }
 
+/// Classified cold carriage form used by native storage.
+pub fn retain_native_carriage_decode_classified_v1<T, E: fmt::Display>(
+    point: crate::BlockHash,
+    canonical: &[u8],
+    decode: impl FnOnce() -> Result<T, E>,
+) -> Result<NativeRetainedV1<T>, NativeDecodeErrorV1<E>> {
+    let lease = if enabled() {
+        let preflight = preflight_native_carriage_v1(canonical, canonical.len() as u64).map_err(|why| {
+            NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<T>("actual cold native carriage shape", &why.to_string()))
+        })?;
+        reserve_native_wire_v1(point, &preflight).map_err(NativeDecodeErrorV1::Resource)?
+    } else {
+        None
+    };
+    let value = decode().map_err(NativeDecodeErrorV1::Decode)?;
+    Ok(NativeRetainedV1 { value, _lease: lease })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,15 +270,16 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         delta: &crate::palw_state_v2::PalwStateDeltaV2,
         params: &crate::palw_state_v2::PalwStateParamsV2,
         revert: bool,
-    ) -> Result<Self, String> {
-        let requests = if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(|e| e.to_string())? } else { 0 };
-        let lease = reserve_native_requests_v1(requests).map_err(|e| e.to_string())?;
+    ) -> Result<Self, NativeStateMutationErrorV1> {
+        let requests =
+            if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)? } else { 0 };
+        let lease = reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
         let value = if revert {
             crate::palw_state_v2::revert_delta_v2(&self.value, delta, params)
         } else {
             crate::palw_state_v2::apply_delta_v2(&self.value, delta, params)
         }
-        .map_err(|e| e.to_string())?;
+        .map_err(NativeDecodeErrorV1::Decode)?;
         Ok(Self { value, _lease: lease })
     }
 }
@@ -337,6 +373,23 @@ pub fn retain_native_value_decode_v1<T: NativeWireScanV1, E: fmt::Display>(
         None
     };
     let value = decode().map_err(|e| NativeCoverageV1::unsupported::<T>("cold native typed value decode", &e.to_string()))?;
+    Ok(NativeRetainedV1 { value, _lease: lease })
+}
+
+/// Classified standalone cold value form used by native storage.
+pub fn retain_native_value_decode_classified_v1<T: NativeWireScanV1, E: fmt::Display>(
+    canonical: &[u8],
+    decode: impl FnOnce() -> Result<T, E>,
+) -> Result<NativeRetainedV1<T>, NativeDecodeErrorV1<E>> {
+    let lease = if enabled() {
+        let shape = preflight_native_value_v1::<T>(canonical, canonical.len() as u64).map_err(|e| {
+            NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<T>("cold native typed value", &e.to_string()))
+        })?;
+        reserve_native_requests_v1(shape.logical_requests_v1()).map_err(NativeDecodeErrorV1::Resource)?
+    } else {
+        None
+    };
+    let value = decode().map_err(NativeDecodeErrorV1::Decode)?;
     Ok(NativeRetainedV1 { value, _lease: lease })
 }
 

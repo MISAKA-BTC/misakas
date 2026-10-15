@@ -499,6 +499,16 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
         Err("monetary material covenant reads are unavailable".into())
     }
+    /// Read-only current/finalized native metadata, retaining allocation ownership
+    /// through private-process observation serialization. No public RPC tag.
+    fn palw_material_recovery_observation_v4(
+        &self,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_recovery_observation_v4::NativeRecoveryObservationV4>,
+        String,
+    > {
+        Err("native material recovery observations unavailable".into())
+    }
 
     /// RFC-0008 PAV3 producer read: the canonical prior native session for `attempt` at `daa`
     /// (`palw_attempt_material_v3::select_native_session_v3`, the one rule `verify_prior` re-runs) over the coherent tip
@@ -544,8 +554,45 @@ pub trait ConsensusApi: Send + Sync {
         Err("native finalized terminal receipt reads are unavailable".into())
     }
 
-    fn palw_material_provider_ack_checkpoint_finalized_v2(&self,_provider:crate::palw_state_v2::PalwBondKeyV2)
-        ->Result<Option<(BlockHash,crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>,String> {
+    /// Bounded positive terminal rows in the CURRENT native-finalized state.
+    fn palw_material_provider_terminal_receipts_finalized_v4(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2>>,
+        String,
+    > {
+        Err("native finalized provider terminal reads unavailable".into())
+    }
+    fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
+        Err("native finalized recovery clock unavailable".into())
+    }
+    fn palw_native_recovery_session_quote_v4(
+        &self,
+        _checkpoint: Option<BlockHash>,
+        _daa: u64,
+        _class: Hash64,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+        _providers: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        String,
+    > {
+        Err("native recovery enrollment quotes unavailable".into())
+    }
+    fn palw_material_recovery_enrollment_finalized_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _recovery: Hash64,
+    ) -> Result<bool, String> {
+        Err("native finalized recovery enrollment reads unavailable".into())
+    }
+
+    fn palw_material_provider_ack_checkpoint_finalized_v2(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>, String> {
         Err("native finalized provider ACK checkpoints unavailable".into())
     }
 

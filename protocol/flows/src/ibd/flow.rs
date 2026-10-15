@@ -1607,7 +1607,9 @@ impl IbdFlow {
             }
             IbdType::DownloadHeadersProof => {
                 drop(session); // Avoid holding the previous consensus throughout the staging IBD
-                let staging = self.ctx.consensus_manager.new_staging_consensus();
+                let staging = self.ctx.consensus_manager.new_staging_consensus().map_err(|unavailable| {
+                    ProtocolError::OtherOwned(format!("local native capacity cannot create staging consensus: {unavailable}"))
+                })?;
                 match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_header).await {
                     Ok(proof_pruning_point) => {
                         // The commit barrier. Everything above this line is reversible by

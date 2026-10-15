@@ -575,7 +575,7 @@ impl TransitionBuilder<'_> {
             || self.state.panel_v3.as_ref().and_then(|engine| engine.claim(&root)).is_some_and(|record| record.strata.is_some());
         let maximum = if shard { pool } else { pool / bonds.len().max(1) as u64 };
         let until = super::palw_exec_v2_rewards_v1::horizon(&self.state, self.params, &root)?.unwrap_or(claim.trace_retention_daa);
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.try_checkpoint()?;
         for bond in bonds {
             if let Err(error) = self.hold_native_recipient_v1(root, bond, 1, now, until, maximum, &[]) {
                 self.restore(checkpoint);
@@ -1335,7 +1335,7 @@ impl TransitionBuilder<'_> {
         if maximum == 0 && actual == 0 {
             return Ok(());
         }
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.try_checkpoint()?;
         let reserved = (|| {
             let capital = self.state.bond(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
             if self.state.bond_budget.is_none() {
@@ -1819,13 +1819,13 @@ impl TransitionBuilder<'_> {
         open_round: u64,
         window_rounds: u64,
         forfeited: &std::collections::BTreeSet<Hash64>,
-    ) -> bool {
-        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return false };
+    ) -> Result<bool, PalwStateV2Error> {
+        let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(false) };
         if self.state.bond_budget.is_none() {
             // The pre-object clock creates and validates the book. Without it
             // no ticket may escape into the old uncapped fallback.
             schedule.quanta.clear();
-            return true;
+            return Ok(true);
         }
         let policy = mirror.policy;
         {
@@ -1849,7 +1849,7 @@ impl TransitionBuilder<'_> {
         }
         let span = schedule.span_index;
         let now = ctx.daa_score;
-        let checkpoint = self.checkpoint();
+        let checkpoint = self.try_checkpoint()?;
         let reserved = self.bond_budget_op(|budget, state, j| {
             for (bond, n) in allocated {
                 let capital = state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
@@ -1864,7 +1864,7 @@ impl TransitionBuilder<'_> {
             self.restore(checkpoint);
             schedule.quanta.clear();
         }
-        true
+        Ok(true)
     }
 
     /// **A Final's weight under the budget** (`finalize_claim`): the grant, clipped to the claim's reservation; the input unchanged for

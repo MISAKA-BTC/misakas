@@ -48,15 +48,17 @@ impl TestBlockBuilder {
         let mut accumulated_bond_view = self.initial_active_bond_view();
         // Search for the sink block from the PoV of this virtual
         let round_tips = self.palw_round_tips(&parents);
-        let (pov_sink, virtual_parent_candidates) = self.sink_search_algorithm(
-            &virtual_read,
-            &mut accumulated_diff,
-            &mut accumulated_bond_view,
-            sink,
-            parents,
-            finality_point,
-            pruning_point,
-        );
+        let (pov_sink, virtual_parent_candidates) = self
+            .sink_search_algorithm(
+                &virtual_read,
+                &mut accumulated_diff,
+                &mut accumulated_bond_view,
+                sink,
+                parents,
+                finality_point,
+                pruning_point,
+            )
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
         let (pov_virtual_parents, pov_virtual_ghostdag_data) =
             self.pick_virtual_parents(pov_sink, virtual_parent_candidates, pruning_point, round_tips);
         let pov_sink_multiset = self.utxo_multisets_store.get(pov_sink).unwrap();

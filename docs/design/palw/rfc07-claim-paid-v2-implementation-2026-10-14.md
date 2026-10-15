@@ -468,3 +468,25 @@ whole-trace/program constructor, a PCS/GKR argument, a V5 native claim or
 activation. Consequently it does not close the missing argument-family rows,
 claim a compact verifier cost, or establish the required independent 128-bit
 review. Old V3/V4 bytes, roots and dormant gates remain separate.
+
+The following source boundary adds `compile_registered_program_trace_v5`.
+It borrows the actual registered single-program class from a ledger, compares
+its decoded program cache to immutable canonical bytes with a streaming writer,
+and binds the program root and the registered parameter map. It unrolls every
+block occurrence and position from zero, with public token/position constants,
+exact carry handles, initial zero Fixed states, position-entry state reads, and
+last-window history handles. All native node roots are constrained, including
+history/state results; the returned public binding names the native evidence
+and output roots. No separately chosen intermediate recurrence is a witness.
+The arena and write/history/reference buffers are admitted from actual instance
+and node counts before allocation. Whole-graph hashing now streams Borsh bytes
+instead of allocating a second serialized graph, and packed input evaluation
+borrows bytes without allocating an input-bit copy.
+
+This constructor consumes the registered ProgramV1 representation. Native
+pipeline/ProgramV2 and typed memory stage composition, claim/job binding of the
+new public circuit binding, PCS/GKR proving and verification, native V5 storage,
+SDK/CLI migration and independent review still remain. The new test source
+checks two positions whose post block must read the entry state (outputs 1 and
+3, rather than 2 and 4), history, altered node commitments, cache substitution
+and refusal before metadata allocation; none has been compiled or executed.

@@ -68,8 +68,8 @@ pub mod monetary_material;
 /// RFC-0008 covenant (2026-10-15 round 3): the provider-side GC janitor over the native finality witness.
 pub mod monetary_material_gc;
 
-pub mod monetary_material_rpc;
 pub mod material_recovery_ack_v2;
+pub mod monetary_material_rpc;
 
 pub mod native_ready_v3;
 
@@ -81,3 +81,5 @@ pub mod provider_transport_v1;
 #[cfg(test)]
 #[path = "../../kernel/tests/common/mod.rs"]
 mod monetary_gc_kernel_fixture;
+
+pub mod native_carrier_queue_v4;

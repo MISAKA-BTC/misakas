@@ -50,16 +50,19 @@ impl TestConsensus {
         let notification_root = Arc::new(ConsensusNotificationRoot::new(notification_sender));
         let counters = Default::default();
         let tx_script_cache_counters = Default::default();
-        let consensus = Arc::new(Consensus::new(
-            db,
-            Arc::new(config.clone()),
-            Default::default(),
-            notification_root,
-            counters,
-            tx_script_cache_counters,
-            0,
-            Arc::new(MiningRules::default()),
-        ));
+        let consensus = Arc::new(
+            Consensus::new(
+                db,
+                Arc::new(config.clone()),
+                Default::default(),
+                notification_root,
+                counters,
+                tx_script_cache_counters,
+                0,
+                Arc::new(MiningRules::default()),
+            )
+            .expect("test native state construction must fit its declared capacity"),
+        );
         let block_builder = TestBlockBuilder::new(consensus.virtual_processor.clone());
 
         Self { params: config.params.clone(), consensus, block_builder, _db_lifetime: Default::default() }
@@ -71,16 +74,19 @@ impl TestConsensus {
         let notification_root = Arc::new(ConsensusNotificationRoot::with_context(notification_sender, context));
         let counters = Default::default();
         let tx_script_cache_counters = Default::default();
-        let consensus = Arc::new(Consensus::new(
-            db,
-            Arc::new(config.clone()),
-            Default::default(),
-            notification_root,
-            counters,
-            tx_script_cache_counters,
-            0,
-            Arc::new(MiningRules::default()),
-        ));
+        let consensus = Arc::new(
+            Consensus::new(
+                db,
+                Arc::new(config.clone()),
+                Default::default(),
+                notification_root,
+                counters,
+                tx_script_cache_counters,
+                0,
+                Arc::new(MiningRules::default()),
+            )
+            .expect("test native state construction must fit its declared capacity"),
+        );
         let block_builder = TestBlockBuilder::new(consensus.virtual_processor.clone());
 
         Self { consensus, block_builder, params: config.params.clone(), _db_lifetime: db_lifetime }
@@ -93,16 +99,19 @@ impl TestConsensus {
         let notification_root = Arc::new(ConsensusNotificationRoot::new(dummy_notification_sender));
         let counters = Default::default();
         let tx_script_cache_counters = Default::default();
-        let consensus = Arc::new(Consensus::new(
-            db,
-            Arc::new(config.clone()),
-            Default::default(),
-            notification_root,
-            counters,
-            tx_script_cache_counters,
-            0,
-            Arc::new(MiningRules::default()),
-        ));
+        let consensus = Arc::new(
+            Consensus::new(
+                db,
+                Arc::new(config.clone()),
+                Default::default(),
+                notification_root,
+                counters,
+                tx_script_cache_counters,
+                0,
+                Arc::new(MiningRules::default()),
+            )
+            .expect("test native state construction must fit its declared capacity"),
+        );
         let block_builder = TestBlockBuilder::new(consensus.virtual_processor.clone());
 
         Self { consensus, block_builder, params: config.params.clone(), _db_lifetime: db_lifetime }
@@ -687,12 +696,12 @@ impl TestConsensusFactory {
 }
 
 impl ConsensusFactory for TestConsensusFactory {
-    fn new_active_consensus(&self) -> (ConsensusInstance, DynConsensusCtl) {
+    fn new_active_consensus(&self) -> kaspa_consensusmanager::ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         let ci = ConsensusInstance::new(self.tc.session_lock(), self.tc.consensus_clone());
-        (ci, self.tc.consensus_clone() as DynConsensusCtl)
+        Ok((ci, self.tc.consensus_clone() as DynConsensusCtl))
     }
 
-    fn new_staging_consensus(&self) -> (ConsensusInstance, DynConsensusCtl) {
+    fn new_staging_consensus(&self) -> kaspa_consensusmanager::ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         unimplemented!()
     }
 

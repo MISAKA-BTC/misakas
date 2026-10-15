@@ -90,7 +90,7 @@ pub(super) fn apply_paid_claim_v2(
     signer: &PalwBondKeyV2,
     o: &PaidClaimObjectV2,
 ) -> Result<(), PalwStateV2Error> {
-    let checkpoint = b.checkpoint();
+    let checkpoint = b.try_checkpoint()?;
     let result = apply_inner(b, ctx, signer, o);
     if result.is_err() {
         b.restore(checkpoint);

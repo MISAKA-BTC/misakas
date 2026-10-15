@@ -13775,7 +13775,7 @@ async fn an_exhausted_sink_search_holds_at_the_previous_sink() {
 
     // No tips at all: the heap is empty before the first pop, which is the exhaustion path.
     let (sink, candidates) =
-        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point);
+        vp.sink_search_algorithm(&virtual_read, &mut diff, &mut bond_view, prev_sink, vec![], finality_point, pruning_point).unwrap();
 
     assert_eq!(sink, prev_sink, "an exhausted search must hold virtual where it was");
     assert!(candidates.is_empty(), "and merge nothing while it holds");

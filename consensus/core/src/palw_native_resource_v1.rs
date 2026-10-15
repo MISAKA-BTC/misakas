@@ -7,9 +7,14 @@ pub use typed::{NativeCoverageV1, NativeFieldInventoryV1, NativeHeapV1};
 pub(crate) use typed::{native_enum, native_struct, native_tuple_struct, native_unit, native_unsupported};
 mod demand;
 mod retained;
+pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
+mod transition;
 pub use retained::{
-    NativeRetainedV1, native_delta_replay_requests_v1, retain_native_carriage_decode_v1, retain_native_value_decode_v1,
+    NativeDecodeErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
+    retain_native_carriage_decode_classified_v1, retain_native_carriage_decode_v1, retain_native_value_decode_classified_v1,
+    retain_native_value_decode_v1,
 };
+pub(crate) use transition::NativeTransitionReservationV1;
 pub type NativeStateDeltaV1 = NativeRetainedV1<crate::palw_state_v2::PalwStateDeltaV2>;
 pub type NativeChainStateV1 = NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2>;
 pub type NativeStateCarriageV1 = NativeRetainedV1<crate::palw_state_v2::PalwStateCarriageV2>;

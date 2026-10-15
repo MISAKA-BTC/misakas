@@ -246,7 +246,7 @@ pub(super) fn apply_vertex_equivocation_v1(
     let record = builder.state.bonds.get(&seat).ok_or(PalwStateV2Error::MissingBond(seat))?.clone();
     if matches!(record.status, PalwBondStatusV2::Active) {
         let status = PalwBondStatusV2::Retiring { since_daa: daa, settled_at_since: builder.state.settled_attempt_finals };
-        builder.write_bond(seat, Some(PalwBondStateV2 { status, ..record }));
+        builder.write_bond(seat, Some(PalwBondStateV2 { status, ..record }))?;
     }
     // 4. The conviction: one per `(seat, round)`.
     let (accepted_daa, leaves_root) = match builder.state.vertex.rounds.get(&(round, seat)) {

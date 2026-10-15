@@ -290,7 +290,8 @@ impl VirtualStateProcessor {
         mut heap: BinaryHeap<SortableBlock>,
         mut diff_point: BlockHash,
         finality_point: BlockHash,
-    ) -> (BlockHash, VecDeque<BlockHash>, PalwRuleESearchV1) {
+    ) -> Result<(BlockHash, VecDeque<BlockHash>, PalwRuleESearchV1), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>
+    {
         let blue_work = |h: BlockHash| self.ghostdag_store.get_blue_work(h).unwrap();
         let snapshot: Vec<SortableBlock> = heap.clone().into_sorted_iter().collect();
         let mut states = PalwRuleEStatesV1::default();
@@ -325,7 +326,7 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 report.validated += 1;
-                diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate);
+                diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate)?;
                 if diff_point == candidate && self.dns_reorg_outcome(candidate, prev_sink, bond_view).is_accept() {
                     report.admitted += 1;
                     accepted.push(candidate);
@@ -338,12 +339,12 @@ impl VirtualStateProcessor {
         self.palw_rule_e_max_extra_validated.fetch_max(report.validated, std::sync::atomic::Ordering::Relaxed);
         self.palw_rule_e_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // `diff` back at the chosen sink: it was UTXO-validated above (or is `first`), so the walk ends there.
-        let restored = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, best);
+        let restored = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, best)?;
         assert_eq!(restored, best, "rule E's chosen sink {best} was UTXO-valid a moment ago");
         let root_blue_work = self.ghostdag_store.get_blue_work(self.depth_store.merge_depth_root(best).unwrap()).unwrap_or_default();
         if best == first {
             // The status quo's answer, exactly: the heap as it stood at `first`.
-            return (first, snapshot.into_iter().take_while(|s| s.blue_work >= root_blue_work).map(|s| s.hash).collect(), report);
+            return Ok((first, snapshot.into_iter().take_while(|s| s.blue_work >= root_blue_work).map(|s| s.hash).collect(), report));
         }
         info!(
             "rule E: sink {best} (blue work {}) chosen over the GHOSTDAG-heavier candidate {first} (blue work {}) — it ranks first over \
@@ -362,6 +363,6 @@ impl VirtualStateProcessor {
             })
             .map(|s| s.hash)
             .collect();
-        (best, parents, report)
+        Ok((best, parents, report))
     }
 }

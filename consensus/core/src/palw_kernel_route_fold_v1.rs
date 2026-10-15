@@ -1389,7 +1389,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         if *producer != kid || promise.accepted_daa != ctx.daa_score {
             return Err(refused("paid source recipient or acceptance position differs"));
         }
-        let checkpoint = builder.checkpoint();
+        let checkpoint = builder.try_checkpoint()?;
         if builder
             .reserve_source_income_v1(
                 ctx,

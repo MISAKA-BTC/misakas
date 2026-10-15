@@ -131,7 +131,7 @@ pub(super) fn apply_object(
             // no uniqueness check, splitting collateral across N registrations of the SAME key
             // manufactured N independent seat tickets, and a 3-of-5 panel is a permanent quorum for
             // whoever holds three of them.
-            if builder.registered_pubkey_v1(pubkey) {
+            if builder.registered_pubkey_v1(pubkey)? {
                 return Err(PalwStateV2Error::DuplicateBondKey(*bond));
             }
             // **One identity, one bond** (audit 2026-09-19). The line above makes a second bond
@@ -148,7 +148,7 @@ pub(super) fn apply_object(
             // already on the chain cannot be claimed a second time.
             if builder.extras.operator_id_unique_active {
                 let operator = palw_operator_id_v2(operator_pubkey);
-                if let Some(holder) = builder.registered_operator_v1(operator) {
+                if let Some(holder) = builder.registered_operator_v1(operator)? {
                     return Err(PalwStateV2Error::DuplicateOperator { operator, holder });
                 }
             }
@@ -167,6 +167,16 @@ pub(super) fn apply_object(
             if builder.capability_bound {
                 check_capable_classes_declared_v1(&builder.state, *bond, capable_classes, false, 0, *collateral)?;
             }
+            // The constructor clones these three typed fields. Reserve that
+            // input copy before it creates public-key/capability allocations.
+            {
+                use crate::palw_native_resource_v1::NativeHeapV1;
+                let bound = (pubkey, operator_pubkey, capable_classes).native_heap_v1("native registration input copy");
+                builder
+                    .native_reservation
+                    .grow_v1(bound.bytes().ok_or_else(|| PalwStateV2Error::NativeResource(bound))?)
+                    .map_err(PalwStateV2Error::NativeResource)?;
+            }
             builder.write_bond(
                 *bond,
                 Some(palw_bond_state_from_registration_v2(
@@ -177,7 +187,7 @@ pub(super) fn apply_object(
                     ctx.daa_score,
                     capable_classes.clone(),
                 )),
-            );
+            )?;
         }
         PalwConsensusObjectV2::ModelBuy { line_id, holder, msk_in, min_units_out, sink_index: _ } => {
             model_buy_v1(builder, ctx, line_id, holder, *msk_in, *min_units_out)?;
@@ -665,7 +675,7 @@ pub(super) fn apply_object(
                     // A proven verdict (S-4): `CourtConviction` past `palw_rcore_plus`.
                     builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?;
                     // ...and, the conviction closed, each wronged challenger made whole.
-                    builder.refund_held_forfeits_v1(&wronged);
+                    builder.refund_held_forfeits_v1(&wronged)?;
                 }
                 crate::palw_checkpoint_court_v1::PalwCheckpointCourtVerdictV1::FalseAccusation => {
                     let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
@@ -1112,7 +1122,7 @@ pub(super) fn apply_object(
             // no second site to forget.
             let mut declared = record;
             declared.capable_classes = capable_classes.clone();
-            builder.write_bond(*bond, Some(declared));
+            builder.write_bond(*bond, Some(declared))?;
         }
         PalwConsensusObjectV2::BondRetireRequested { bond, .. } => {
             let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.clone();
@@ -1139,7 +1149,7 @@ pub(super) fn apply_object(
                     if builder.capability_bound {
                         retiring.capable_classes.clear();
                     }
-                    builder.write_bond(*bond, Some(retiring));
+                    builder.write_bond(*bond, Some(retiring))?;
                 }
             }
         }

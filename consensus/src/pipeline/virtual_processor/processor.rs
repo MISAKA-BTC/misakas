@@ -212,6 +212,9 @@ pub(crate) enum PalwWeighFaultV2 {
     /// absence: a fault, and a gate that can refuse must. Both ends are classified, because a
     /// split at the tip alone leaves the identical fail-open at the walk one line below it.
     StoreUnreadable,
+    /// The local quota could not admit an actual typed state/walk request.
+    /// Neither honest absence nor evidence of a faulty candidate/store.
+    NativeCapacityUnavailable,
 }
 
 /// **How one chain block stands as a panel anchor** ([`VirtualStateProcessor::palw_chain_block_as_anchor_v1`]).
@@ -313,10 +316,24 @@ fn exec_v2_test_admitted_classes_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64>
 
 /// Rows that must share a UTXO commit. Genesis has no earlier durable PALW tip
 /// to replay from, so its initial materialization must ride the delta and status.
+fn native_store_capacity_v1(
+    error: kaspa_database::prelude::StoreError,
+) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+    match error {
+        kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason) => {
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            >("native store capacity", &reason)
+        }
+        other => panic!("unexpected native store failure: {other}"),
+    }
+}
 struct PalwUtxoCommitV2 {
     root: Hash64,
     delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
-    genesis: Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    _native_delta_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    genesis: Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
+    _native_genesis_carriages_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
     genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
 }
 
@@ -1632,7 +1649,10 @@ impl VirtualStateProcessor {
             let messages: Vec<VirtualStateProcessingMessage> = std::iter::once(msg).chain(self.receiver.try_iter()).collect();
             trace!("virtual processor received {} tasks", messages.len());
 
-            self.resolve_virtual();
+            let resolution = self.resolve_virtual();
+            if let Err(ref unavailable) = resolution {
+                warn!("virtual resolution deferred by local native capacity: {unavailable}; no block is disqualified");
+            }
 
             let statuses_read = self.statuses_store.read();
             for msg in messages {
@@ -1640,7 +1660,11 @@ impl VirtualStateProcessor {
                     VirtualStateProcessingMessage::Exit => break 'outer,
                     VirtualStateProcessingMessage::Process(task, virtual_state_result_transmitter) => {
                         // We don't care if receivers were dropped
-                        let _ = virtual_state_result_transmitter.send(Ok(statuses_read.get(task.block().hash()).unwrap()));
+                        let result = match &resolution {
+                            Ok(()) => Ok(statuses_read.get(task.block().hash()).unwrap()),
+                            Err(unavailable) => Err(RuleError::LocalNativeCapacityUnavailable(unavailable.clone())),
+                        };
+                        let _ = virtual_state_result_transmitter.send(result);
                     }
                 };
             }
@@ -1650,7 +1674,7 @@ impl VirtualStateProcessor {
         self.pruning_sender.send(PruningProcessingMessage::Exit).unwrap();
     }
 
-    fn resolve_virtual(self: &Arc<Self>) {
+    fn resolve_virtual(self: &Arc<Self>) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let virtual_read = self.virtual_stores.upgradable_read();
         let prev_state = virtual_read.state.get().unwrap();
@@ -1708,7 +1732,7 @@ impl VirtualStateProcessor {
             tips,
             finality_point,
             pruning_point,
-        );
+        )?;
         let (virtual_parents, virtual_ghostdag_data) =
             self.pick_virtual_parents(new_sink, virtual_parent_candidates, pruning_point, round_tips);
         assert_eq!(virtual_ghostdag_data.selected_parent, new_sink);
@@ -1728,19 +1752,21 @@ impl VirtualStateProcessor {
             "the lead cap's policy leaves only merged tips out, never the sink"
         );
 
-        let new_virtual_state = self
-            .calculate_and_commit_virtual_state(
-                virtual_read,
-                virtual_parents,
-                virtual_ghostdag_data,
-                sink_multiset,
-                &mut accumulated_diff,
-                // After `sink_search_algorithm` the walked view equals the bond
-                // set as-of the new sink (= the virtual block's selected parent).
-                &accumulated_bond_view,
-                &chain_path,
-            )
-            .expect("all possible rule errors are unexpected here");
+        let new_virtual_state = match self.calculate_and_commit_virtual_state(
+            virtual_read,
+            virtual_parents,
+            virtual_ghostdag_data,
+            sink_multiset,
+            &mut accumulated_diff,
+            // After `sink_search_algorithm` the walked view equals the bond
+            // set as-of the new sink (= the virtual block's selected parent).
+            &accumulated_bond_view,
+            &chain_path,
+        ) {
+            Ok(state) => state,
+            Err(RuleError::LocalNativeCapacityUnavailable(unavailable)) => return Err(unavailable),
+            Err(error) => panic!("all possible rule errors are unexpected here: {error}"),
+        };
 
         let compact_sink_ghostdag_data = if let Some(sink_ghostdag_data) = Lazy::get(&sink_ghostdag_data) {
             // If we had to retrieve the full data, we convert it to compact
@@ -1784,6 +1810,7 @@ impl VirtualStateProcessor {
                 )))
                 .expect("expecting an open unbounded channel");
         }
+        Ok(())
     }
 
     pub(crate) fn virtual_finality_point(&self, virtual_ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
@@ -1824,7 +1851,7 @@ impl VirtualStateProcessor {
         bond_view: &mut ActiveBondView,
         from: BlockHash,
         to: BlockHash,
-    ) -> BlockHash {
+    ) -> Result<BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.1): walk the active-bond
         // view in lockstep with `diff` so it always equals the bond set as-of
         // the block whose UTXO state `diff` represents. No-op on networks
@@ -1855,14 +1882,22 @@ impl VirtualStateProcessor {
         let mut palw_state = match self.palw_state_params_v2.as_ref() {
             None => None,
             Some(params) => {
-                let loaded = self.palw_state_v2_store.read().load_tip_retained_v1(params).unwrap_or_else(|e| {
-                    panic!(
-                        "the stored PALW V2 tip does not load under this build ({e}). A state written by another \
+                let loaded = match self.palw_state_v2_store.read().load_tip_retained_v1(params) {
+                    Ok(loaded) => loaded,
+                    Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
+                        return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                            kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+                        >("native cold tip capacity", &reason));
+                    }
+                    Err(e) => {
+                        panic!(
+                            "the stored PALW V2 tip does not load under this build ({e}). A state written by another \
                          PALW_STATE_V2_VERSION or ruleset is not migrated in place: this network re-genesises on a \
                          ruleset change (ADR-0042 Decision 11, ADR-0075 §7), so wipe the datadir and resync from peers \
                          announcing this build's fingerprint"
-                    )
-                });
+                        )
+                    }
+                };
                 match loaded {
                     None => None,
                     Some((tip_block, tip_state)) if tip_block == from => Some(tip_state),
@@ -1883,6 +1918,9 @@ impl VirtualStateProcessor {
                                 Some(state)
                             }
                             Err(e) => {
+                                if let Some(capacity) = e.native_capacity_v1() {
+                                    return Err(capacity);
+                                }
                                 // **A gap between the stored tip and the walk's base is THIS NODE's
                                 // problem, and it used to be charged to the chain.**
                                 //
@@ -1925,12 +1963,15 @@ impl VirtualStateProcessor {
                                                 Some(state)
                                             }
                                             Err(snap_err) => {
+                                                if let Some(capacity) = snap_err.native_capacity_v1() {
+                                                    return Err(capacity);
+                                                }
                                                 error!(
                                                     "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and neither does the \
                                                      pruning snapshot at {snap_block} ({snap_err}). This node cannot evaluate ANY candidate until its state store is repaired \
                                                      — resync this data directory from peers announcing this build's fingerprint."
                                                 );
-                                                return from;
+                                                return Ok(from);
                                             }
                                         }
                                     }
@@ -1939,14 +1980,21 @@ impl VirtualStateProcessor {
                                             "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and this store holds no pruning \
                                              snapshot to rebuild from. This node cannot evaluate ANY candidate until its state store is repaired — resync this data directory."
                                         );
-                                        return from;
+                                        return Ok(from);
+                                    }
+                                    Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
+                                        return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                                            kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+                                        >(
+                                            "native cold pruning snapshot capacity", &reason
+                                        ));
                                     }
                                     Err(snap_err) => {
                                         error!(
                                             "PALW V2 state cannot be established at {from}: the tip at {tip_block} does not walk here ({e}) and the pruning snapshot cannot be \
                                              read ({snap_err}). This node cannot evaluate ANY candidate until its state store is repaired — resync this data directory."
                                         );
-                                        return from;
+                                        return Ok(from);
                                     }
                                 }
                             }
@@ -1958,7 +2006,7 @@ impl VirtualStateProcessor {
 
         // Avoid reorging if disqualified status is already known
         if self.statuses_store.read().get(to).unwrap() == StatusDisqualifiedFromChain {
-            return from;
+            return Ok(from);
         }
 
         let mut split_point: Option<BlockHash> = None;
@@ -1997,17 +2045,22 @@ impl VirtualStateProcessor {
                     .palw_state_v2_store
                     .read()
                     .delta_of_retained_v1(current)
-                    .map_err(|e| e.to_string())
-                    .and_then(|(_, delta)| state.try_delta_v1(&delta, params, true));
+                    .map_err(crate::processes::palw_state_walk::PalwStateWalkError::Store)
+                    .and_then(|(_, delta)| {
+                        state.try_delta_v1(&delta, params, true).map_err(crate::processes::palw_state_walk::PalwStateWalkError::from)
+                    });
                 match reverted {
                     Ok(previous) => *state = previous,
                     Err(why) => {
+                        if let Some(capacity) = why.native_capacity_v1() {
+                            return Err(capacity);
+                        }
                         error!(
                             "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {current} \
                              and virtual will not move onto {to}. This is a gap in THIS node's delta store, not a fault of the chain — \
                              resync this data directory if it persists."
                         );
-                        return current;
+                        return Ok(current);
                     }
                 }
             }
@@ -2087,17 +2140,24 @@ impl VirtualStateProcessor {
                             .palw_state_v2_store
                             .read()
                             .delta_of_retained_v1(current)
-                            .map_err(|e| e.to_string())
-                            .and_then(|(_, delta)| state.try_delta_v1(&delta, params, false));
+                            .map_err(crate::processes::palw_state_walk::PalwStateWalkError::Store)
+                            .and_then(|(_, delta)| {
+                                state
+                                    .try_delta_v1(&delta, params, false)
+                                    .map_err(crate::processes::palw_state_walk::PalwStateWalkError::from)
+                            });
                         match applied {
                             Ok(next) => *state = next,
                             Err(why) => {
+                                if let Some(capacity) = why.native_capacity_v1() {
+                                    return Err(capacity);
+                                }
                                 error!(
                                     "PALW V2 state cannot advance through chain block {current} ({why}); the UTXO walk stops at {diff_point} \
                                      and virtual will hold there. This is a gap in THIS node's delta store, not a fault of the chain — \
                                      resync this data directory if it persists."
                                 );
-                                return diff_point;
+                                return Ok(diff_point);
                             }
                         }
                     }
@@ -2457,7 +2517,7 @@ impl VirtualStateProcessor {
                                     current,
                                     own_attempt_class,
                                     &ctx.palw_round_fee_incomes,
-                                );
+                                )?;
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -2596,7 +2656,7 @@ impl VirtualStateProcessor {
                                     Some(envelope) => self.palw_attempt_keys_v1(Some(header.as_ref()), &envelope.attempt),
                                     None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
                                 };
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v7(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -2712,15 +2772,9 @@ impl VirtualStateProcessor {
                                                 )
                                             );
                                         }
-                                        // Retain the resulting payload. The fresh transition's
-                                        // pre-construction workspace remains a separately audited
-                                        // admission seam; this is lifetime ownership, not a proof
-                                        // authorizing those earlier allocations.
-                                        *state =
-                                            kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(next)
-                                                .unwrap_or_else(|e| {
-                                                    panic!("local native capacity refuses accepted state ownership: {e}")
-                                                });
+                                        // The construction ticket moves with the state; no
+                                        // post-construction reservation can authorize its clone.
+                                        *state = next;
                                         // Launch blockers §8: say it out loud. A voided claim's
                                         // escrow is burned by don't-mint (Decision 10), and a
                                         // network whose panels never bind burns the whole worker
@@ -2732,7 +2786,11 @@ impl VirtualStateProcessor {
                                                 "PALW: block {current} voided claims holding {destroyed} sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)"
                                             );
                                         }
-                                        Some((state.state_root(), delta))
+                                        let (delta, delta_lease) = delta.into_parts_v1();
+                                        Some((state.state_root(), delta, delta_lease))
+                                    }
+                                    Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
+                                        return Err(why);
                                     }
                                     Err(palw_error) => {
                                         info!("Block {} is disqualified from virtual chain (PALW state): {}", current, palw_error);
@@ -2775,13 +2833,15 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(|(root, delta)| PalwUtxoCommitV2 {
+                            palw_v2_staged.map(|(root, delta, delta_lease)| PalwUtxoCommitV2 {
                                 root,
                                 delta,
+                                _native_delta_lease: delta_lease,
                                 genesis: None,
+                                _native_genesis_carriages_lease: None,
                                 genesis_carriages: Vec::new(),
                             }),
-                        );
+                        )?;
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
                     }
@@ -2807,7 +2867,7 @@ impl VirtualStateProcessor {
         if let Some(state) = palw_state.as_ref() {
             let mut batch = WriteBatch::default();
             let mut store = self.palw_state_v2_store.write();
-            let _native_tip_write = store.set_tip_batch_tracked_v1(&mut batch, diff_point, state).unwrap();
+            let _native_tip_write = store.set_tip_batch_tracked_v1(&mut batch, diff_point, state).map_err(native_store_capacity_v1)?;
             drop(store);
             self.db.write(batch).unwrap();
         }
@@ -2818,7 +2878,7 @@ impl VirtualStateProcessor {
             self.counters.chain_disqualified_counts.fetch_add(chain_disqualified_counter, Ordering::Relaxed);
         }
 
-        diff_point
+        Ok(diff_point)
     }
 
     /// C-01 (slice S6/S9/S9b) — compute the flat/reconstruct PARENT seed for
@@ -3186,8 +3246,11 @@ impl VirtualStateProcessor {
         // it produced and the delta that produces it — staged in THIS batch so the PALW state and
         // the block's UTXO data can never be half-written relative to each other. `None` on every
         // network whose mode is not `ConsensusV2`, which is every shipped preset.
-        palw_v2_staged: Option<PalwUtxoCommitV2>,
-    ) {
+        mut palw_v2_staged: Option<PalwUtxoCommitV2>,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        // Carriage source/serialization storage stays reserved until the batch
+        // commit even though the staged records move into their store writer.
+        let _native_genesis_carriages = palw_v2_staged.as_mut().and_then(|staged| staged._native_genesis_carriages_lease.take());
         let mut batch = WriteBatch::default();
         // Pruning -> PALW matches pruning/import lock order. A long-running
         // candidate must recheck irreversible ancestry at its actual commit.
@@ -3225,10 +3288,15 @@ impl VirtualStateProcessor {
         let mut native_genesis_write = None;
         if let Some(staged) = palw_v2_staged {
             let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
-            native_delta_write = Some(store.insert_delta_batch_tracked_v1(&mut batch, current, staged.root, &staged.delta).unwrap());
+            native_delta_write = Some(
+                store
+                    .insert_delta_batch_tracked_v1(&mut batch, current, staged.root, &staged.delta)
+                    .map_err(native_store_capacity_v1)?,
+            );
             if let Some(genesis) = staged.genesis {
                 assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
-                native_genesis_write = Some(store.set_tip_batch_tracked_v1(&mut batch, current, &genesis).unwrap());
+                native_genesis_write =
+                    Some(store.set_tip_batch_tracked_v1(&mut batch, current, &genesis).map_err(native_store_capacity_v1)?);
             }
             if !staged.genesis_carriages.is_empty() {
                 assert_eq!(current, self.genesis.hash, "only genesis declarations use this initial commit");
@@ -3406,6 +3474,7 @@ impl VirtualStateProcessor {
         drop(public_pruning_guard);
         // Calling the drops explicitly after the batch is written in order to avoid possible errors.
         drop(write_guard);
+        Ok(())
     }
 
     fn calculate_and_commit_virtual_state(
@@ -4869,7 +4938,7 @@ impl VirtualStateProcessor {
         tips: Vec<BlockHash>,
         finality_point: BlockHash,
         pruning_point: BlockHash,
-    ) -> (BlockHash, VecDeque<BlockHash>) {
+    ) -> Result<(BlockHash, VecDeque<BlockHash>), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // TODO (relaxed): additional tests
 
         // ADR-0125: a round block is never a sink. Each round tip stands for its anchor, and the set
@@ -4891,12 +4960,12 @@ impl VirtualStateProcessor {
         // branch out-works them the preference stops firing and ordinary work-max selection
         // resumes seamlessly.
         if let Some(preferred) = self.dns_stake_preferred_tip(prev_sink, &tips, finality_point) {
-            diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, preferred);
+            diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, preferred)?;
             if diff_point == preferred && self.dns_reorg_outcome(preferred, prev_sink, bond_view).is_accept() {
                 info!(
                     "DNS stake preference: this chain's own overlay is dead (anchor stale past TTL) and tip {preferred} carries a confirmation-grade live overlay within the work-deficit bound; moving the sink there (previous sink {prev_sink}). Templates now extend the live-overlay branch."
                 );
-                return (preferred, VecDeque::new());
+                return Ok((preferred, VecDeque::new()));
             }
             warn!(
                 "DNS stake preference: preferred tip {preferred} failed UTXO validation or the reorg gate; falling back to work-max sink selection"
@@ -4960,12 +5029,12 @@ impl VirtualStateProcessor {
                         None => String::new(),
                     }
                 );
-                let restored = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, prev_sink);
+                let restored = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, prev_sink)?;
                 assert_eq!(
                     restored, prev_sink,
                     "the previous sink {prev_sink} is not UTXO-valid — virtual cannot hold anywhere, which is a corrupted store rather than a rejected chain"
                 );
-                return (prev_sink, VecDeque::new());
+                return Ok((prev_sink, VecDeque::new()));
             };
             let candidate = popped.hash;
             // QR reachability hardening: skip a candidate whose reachability is missing (half-pruned)
@@ -4980,7 +5049,7 @@ impl VirtualStateProcessor {
                 }
             };
             if candidate_at_or_above_finality {
-                diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate);
+                diff_point = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, candidate)?;
                 if diff_point == candidate {
                     // This indicates that candidate has valid UTXO state and that `diff` represents its diff from virtual
 
@@ -5004,7 +5073,7 @@ impl VirtualStateProcessor {
                                 candidate,
                                 gate_rejected.map(|(rejected, reason, _)| (rejected, reason)),
                                 false,
-                            );
+                            )?;
                         }
                         if let Some((rejected, reason, rejected_work)) = gate_rejected {
                             warn!(
@@ -5038,16 +5107,16 @@ impl VirtualStateProcessor {
                                 heap,
                                 diff_point,
                                 finality_point,
-                            );
+                            )?;
                             self.note_palw_refusal_streak(sink, gate_rejected.map(|(rejected, reason, _)| (rejected, reason)), true);
-                            return (sink, parents);
+                            return Ok((sink, parents));
                         }
                         // The heap is GHOSTDAG's own order, so the sink is the maximum of every
                         // candidate left in it and `pick_virtual_parents`' assumption holds as is.
-                        return (
+                        return Ok((
                             candidate,
                             heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
-                        );
+                        ));
                     }
                     if gate_rejected.is_none() {
                         gate_rejected =
@@ -5608,72 +5677,129 @@ impl VirtualStateProcessor {
 
     /// Initializes UTXO state of genesis and points virtual at genesis.
     /// Note that pruning point-related stores are initialized by `init`
-    pub fn process_genesis(self: &Arc<Self>) {
+    pub fn process_genesis(self: &Arc<Self>) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // ADR-0042 Decision 5 / Unit C: the V2 state's zero point. Installed beside the genesis
         // UTXO commit so a fresh database has a tip to walk from, and skipped entirely on a
         // network with no V2 bundle (every shipped preset), where the store stays empty.
-        let palw_genesis = self.palw_state_params_v2.as_ref().map(|state_params| {
-            // The genesis block APPLIES the bundle's registration list. A V2 network has no class
-            // and no bond until something registers them, and the only block that can is this one:
-            // admission refuses an attempt naming a bond the chain does not have, so a genesis
-            // that registers nothing produces a network that boots and then cannot make a block.
-            // Found by measurement — the harness wedged exactly there the moment admission was
-            // wired, with every block refused for a bond that existed nowhere.
-            let objects = self.palw_genesis_objects_v2.clone();
-            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                block: self.genesis.hash,
-                daa_score: self.genesis.daa_score,
-                blue_score: 0,
-                // Genesis funds no escrow: its coinbase pays the premine, and its object list
-                // registers — it creates no claim, so there is nothing for a carve to attach to.
-                subsidy: 0,
-            };
-            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
-                &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
-                state_params,
-                &point,
-                &objects,
-                None,
-                self.palw_unavailable_abstains_at(self.genesis.daa_score),
-                self.palw_capability_bound_at(self.genesis.daa_score),
-                self.palw_uncertified_weightless_at(self.genesis.daa_score),
-                self.palw_da_court_at(self.genesis.daa_score),
-                // The genesis block opens no court session, so this cannot change what it folds —
-                // and "cannot change anything" is exactly how a fence resolved differently in one
-                // face survives until the block where it matters.
-                &self.palw_transition_extras_for(&point),
-            )
-            .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
-            let mut genesis_carriages = Vec::new();
-            for object in &objects {
-                if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-                    class_id,
-                    artifact_root,
-                    admission: Some(carriage),
-                    ..
-                } = object
-                {
-                    let accepted = genesis_state.class(class_id).expect("the genesis class registration was accepted");
-                    assert_eq!(accepted.artifact_root, *artifact_root, "genesis declaration must name the accepted artifact");
-                    assert_eq!(accepted.registered_daa, point.daa_score);
-                    assert_eq!(
-                        carriage.profile.shape_profile_id(),
-                        *class_id,
-                        "genesis declaration must authenticate its class profile"
-                    );
-                    assert_eq!(carriage.canonical.shape_profile_id, *class_id, "genesis canonical job must name the same profile");
-                    genesis_carriages.push((
-                        *class_id,
-                        crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
-                            registered_daa: accepted.registered_daa,
-                            artifact_root: accepted.artifact_root,
-                            carriage: borsh::to_vec(carriage.as_ref()).expect("the accepted genesis declaration must encode"),
-                        },
-                    ));
+        let palw_genesis = self
+            .palw_state_params_v2
+            .as_ref()
+            .map(|state_params| {
+                // The genesis block APPLIES the bundle's registration list. A V2 network has no class
+                // and no bond until something registers them, and the only block that can is this one:
+                // admission refuses an attempt naming a bond the chain does not have, so a genesis
+                // that registers nothing produces a network that boots and then cannot make a block.
+                // Found by measurement — the harness wedged exactly there the moment admission was
+                // wired, with every block refused for a bond that existed nowhere.
+                let objects = &self.palw_genesis_objects_v2;
+                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: self.genesis.hash,
+                    daa_score: self.genesis.daa_score,
+                    blue_score: 0,
+                    // Genesis funds no escrow: its coinbase pays the premine, and its object list
+                    // registers — it creates no claim, so there is nothing for a carve to attach to.
+                    subsidy: 0,
+                };
+                let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v2_with_extras(
+                    &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
+                    state_params,
+                    &point,
+                    &objects,
+                    None,
+                    self.palw_unavailable_abstains_at(self.genesis.daa_score),
+                    self.palw_capability_bound_at(self.genesis.daa_score),
+                    self.palw_uncertified_weightless_at(self.genesis.daa_score),
+                    self.palw_da_court_at(self.genesis.daa_score),
+                    // The genesis block opens no court session, so this cannot change what it folds —
+                    // and "cannot change anything" is exactly how a fence resolved differently in one
+                    // face survives until the block where it matters.
+                    &self.palw_transition_extras_for(&point),
+                )
+                .map_err(|why| match why {
+                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(capacity) => capacity,
+                    other => {
+                        panic!("the bundle's genesis registrations must apply — validate_palw_v2 ran them at construction: {other}")
+                    }
+                })?;
+                let (delta, delta_lease) = delta.into_parts_v1();
+                // Admission declarations are raw canonical metadata here, not
+                // decoded tensor artifacts. Count their exact canonical vectors
+                // independently of the state's native heap. Covers carriage Vec,
+                // bincode record and batch copies (including old/new Vec buffers)
+                // plus concrete outer Vec/Arc/record framing before allocation.
+                let mut carriage_requests = 0u64;
+                for object in objects {
+                    if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                        admission: Some(carriage),
+                        ..
+                    } = object
+                    {
+                        let bytes = borsh::object_length(carriage.as_ref()).map_err(|e| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                                kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+                            >("genesis declaration canonical length", &e.to_string())
+                        })? as u64;
+                        let frames =
+                            8 * std::mem::size_of::<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>()
+                                as u64
+                                + 2 * std::mem::size_of::<crate::model::stores::palw_class_carriage::PalwClassCarriageRecord>() as u64
+                                + 2 * std::mem::size_of::<[usize; 2]>() as u64;
+                        carriage_requests = bytes
+                            .checked_mul(6)
+                            .and_then(|n| n.checked_add(frames))
+                            .and_then(|n| n.checked_add(carriage_requests))
+                            .ok_or_else(|| {
+                                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<
+                                    kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+                                >("genesis declaration workspace")
+                            })?;
+                    }
                 }
-            }
-            PalwUtxoCommitV2 { root: genesis_state.state_root(), delta, genesis: Some(genesis_state), genesis_carriages }
-        });
+                let carriage_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(carriage_requests)?;
+                let mut genesis_carriages = Vec::new();
+                for object in objects {
+                    if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                        class_id,
+                        artifact_root,
+                        admission: Some(carriage),
+                        ..
+                    } = object
+                    {
+                        let accepted = genesis_state.class(class_id).expect("the genesis class registration was accepted");
+                        assert_eq!(accepted.artifact_root, *artifact_root, "genesis declaration must name the accepted artifact");
+                        assert_eq!(accepted.registered_daa, point.daa_score);
+                        assert_eq!(
+                            carriage.profile.shape_profile_id(),
+                            *class_id,
+                            "genesis declaration must authenticate its class profile"
+                        );
+                        assert_eq!(carriage.canonical.shape_profile_id, *class_id, "genesis canonical job must name the same profile");
+                        genesis_carriages.push((
+                            *class_id,
+                            crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                                registered_daa: accepted.registered_daa,
+                                artifact_root: accepted.artifact_root,
+                                carriage: {
+                                    let length =
+                                        borsh::object_length(carriage.as_ref()).expect("already counted canonical declaration");
+                                    let mut bytes = Vec::with_capacity(length);
+                                    borsh::to_writer(&mut bytes, carriage.as_ref()).expect("accepted declaration serializes");
+                                    bytes
+                                },
+                            },
+                        ));
+                    }
+                }
+                Ok(PalwUtxoCommitV2 {
+                    root: genesis_state.state_root(),
+                    delta,
+                    _native_delta_lease: delta_lease,
+                    _native_genesis_carriages_lease: carriage_lease,
+                    genesis: Some(genesis_state),
+                    genesis_carriages,
+                })
+            })
+            .transpose()?;
 
         // Derive the complete registration transition before any UTXO-valid write.
         // Unlike later tips, genesis has no older materialization from which a
@@ -5690,7 +5816,7 @@ impl VirtualStateProcessor {
             0,    // kaspa-pq ADR-0018 "本格版" (Phase 4): genesis reserve balance is 0.
             None, // kaspa-pq ADR-0020 v0.4: genesis is EVM-inert (v0 header).
             palw_genesis,
-        );
+        )?;
 
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();
@@ -5706,6 +5832,7 @@ impl VirtualStateProcessor {
             &Default::default(),
             &Default::default(),
         );
+        Ok(())
     }
 
     /// Import recovery barriers must survive loss of the process and its page

@@ -46,7 +46,9 @@ use bincode::Options;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
-use kaspa_consensus_core::palw_native_resource_v1::{NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_v1};
+use kaspa_consensus_core::palw_native_resource_v1::{
+    NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_classified_v1,
+};
 use kaspa_consensus_core::palw_state_v2::{
     PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
 };
@@ -205,7 +207,7 @@ fn native_writer_is_strict_v1() -> bool {
 }
 fn reject_untracked_writer_v1() -> StoreResult<()> {
     if native_writer_is_strict_v1() {
-        return Err(StoreError::DataInconsistency(
+        return Err(StoreError::LocalResourceUnavailable(
             "native strict write requires a tracked allocation ticket held through commit".into(),
         ));
     }
@@ -373,8 +375,8 @@ impl DbPalwStateV2Store {
                 .native_heap_v1("native delta writer/history workspace")
                 .scale::<PalwStateDeltaV2>(2, "delta writer/history copies")
                 .add::<PalwStateDeltaV2>(NativeCoverageV1::Bounded { bytes: encoded }, "encoded delta writer vectors");
-            let requests = typed.bytes().ok_or_else(|| StoreError::DataInconsistency(typed.to_string()))?;
-            reserve_native_requests_v1(requests).map_err(|e| StoreError::DataInconsistency(e.to_string()))?
+            let requests = typed.bytes().ok_or_else(|| StoreError::LocalResourceUnavailable(typed.to_string()))?;
+            reserve_native_requests_v1(requests).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?
         } else {
             None
         };
@@ -439,7 +441,7 @@ impl DbPalwStateV2Store {
     /// (`DataInconsistency`), never reported absent.
     pub fn delta_of(&self, block: BlockHash) -> StoreResult<(Hash64, PalwStateDeltaV2)> {
         let (root, delta) = self.delta_of_retained_v1(block)?;
-        delta.into_unreserved_legacy_v1().map(|delta| (root, delta)).map_err(|e| StoreError::DataInconsistency(e.to_string()))
+        delta.into_unreserved_legacy_v1().map(|delta| (root, delta)).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))
     }
 
     /// Decode directly from a pinned record view. No intermediate bincode
@@ -452,10 +454,18 @@ impl DbPalwStateV2Store {
         let key = kaspa_database::prelude::DbKey::new(&prefix, block);
         let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
         let record: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&bytes)?;
-        let delta = kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_v1(record.delta_borsh, || {
-            borsh::from_slice::<PalwStateDeltaV2>(record.delta_borsh)
-        })
-        .map_err(|e| StoreError::DataInconsistency(format!("palw delta allocation/decode at {block}: {e}")))?;
+        let delta =
+            kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_classified_v1(record.delta_borsh, || {
+                borsh::from_slice::<PalwStateDeltaV2>(record.delta_borsh)
+            })
+            .map_err(|e| match e {
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
+                    StoreError::LocalResourceUnavailable(format!("palw delta allocation at {block}: {e}"))
+                }
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+                    StoreError::DataInconsistency(format!("palw delta decode at {block}: {e}"))
+                }
+            })?;
         Ok((record.state_root, delta))
     }
 
@@ -491,7 +501,7 @@ impl DbPalwStateV2Store {
             state,
             self.db.native_single_directory_quota_path_v1(),
         )
-        .map_err(|e| StoreError::DataInconsistency(e.to_string()))?;
+        .map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?;
         let carriage = PalwStateCarriageV2::from_state(state);
         let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
         let record = PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh };
@@ -637,7 +647,7 @@ impl DbPalwStateV2Store {
             state,
             self.db.native_single_directory_quota_path_v1(),
         )
-        .map_err(|e| StoreError::DataInconsistency(e.to_string()))?;
+        .map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?;
         let carriage = PalwStateCarriageV2::from_state(state);
         let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
         let inventory = kaspa_consensus_core::palw_native_resource_v1::inventory_accepted_state_v1(
@@ -708,7 +718,7 @@ impl DbPalwStateV2Store {
                 state
                     .into_unreserved_legacy_v1()
                     .map(|state| (block, state))
-                    .map_err(|why| StoreError::DataInconsistency(why.to_string()))
+                    .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))
             })
             .transpose()
     }
@@ -770,7 +780,7 @@ impl DbPalwStateV2Store {
             self.pruning_snapshot_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
             let state =
                 self.materialize_native_fields_v1(record.block, record.state_root, record.carriage_borsh, params, "pruning snapshot")?;
-            let served = Arc::new(state.try_carriage_v1().map_err(|e| StoreError::DataInconsistency(e.to_string()))?);
+            let served = Arc::new(state.try_carriage_v1().map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?);
             *self.pruning_snapshot_cache.lock() = Some((record.block, record.state_root, Arc::clone(&served)));
             Ok(Some(served))
         })
@@ -783,7 +793,7 @@ impl DbPalwStateV2Store {
                 state
                     .into_unreserved_legacy_v1()
                     .map(|state| (block, state))
-                    .map_err(|why| StoreError::DataInconsistency(why.to_string()))
+                    .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))
             })
             .transpose()
     }
@@ -858,7 +868,7 @@ impl DbPalwStateV2Store {
         if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(canonical) {
             return Err(StoreError::DataInconsistency(format!("palw v2 {label}: {why}")));
         }
-        retain_native_carriage_decode_v1(block, canonical, || {
+        retain_native_carriage_decode_classified_v1(block, canonical, || {
             let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
                 .map_err(|why| format!("palw v2 {label} does not decode: {why}"))?;
             let armed = self.uncertified_weightless_at(&carriage);
@@ -866,7 +876,12 @@ impl DbPalwStateV2Store {
                 .into_state_v3(params, Some(root), armed, self.canonical_work_daa)
                 .map_err(|why| format!("palw v2 {label} refused: {why}"))
         })
-        .map_err(|why| StoreError::DataInconsistency(why.to_string()))
+        .map_err(|why| match why {
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
+                StoreError::LocalResourceUnavailable(e.to_string())
+            }
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => StoreError::DataInconsistency(e),
+        })
     }
 }
 

@@ -1548,7 +1548,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         recovery::pruned::import_public_carriage(&mut chain, &premine, claim).await;
     }
     let producer_capital = chain.tc.palw_operator_da_standing_v1(chain.view(claim).producer).unwrap().collateral;
-    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))));
+    let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
     let config = Arc::new(chain.config.clone());
     let tick = Arc::new(TickService::new());
     let (_meta_lifetime, meta_db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));

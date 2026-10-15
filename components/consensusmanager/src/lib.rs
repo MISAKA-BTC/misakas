@@ -27,13 +27,14 @@ pub trait ConsensusCtl: Sync + Send {
 }
 
 pub type DynConsensusCtl = Arc<dyn ConsensusCtl>;
+pub type ConsensusCreationResult<T> = Result<T, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>;
 
 pub trait ConsensusFactory: Sync + Send {
     /// Load an instance of current active consensus or create one if no such exists
-    fn new_active_consensus(&self) -> (ConsensusInstance, DynConsensusCtl);
+    fn new_active_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)>;
 
     /// Create a new empty staging consensus
-    fn new_staging_consensus(&self) -> (ConsensusInstance, DynConsensusCtl);
+    fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)>;
 
     /// Close the factory and cleanup any shared resources used by it
     fn close(&self);
@@ -50,11 +51,11 @@ pub trait ConsensusFactory: Sync + Send {
 struct MockFactory;
 
 impl ConsensusFactory for MockFactory {
-    fn new_active_consensus(&self) -> (ConsensusInstance, DynConsensusCtl) {
+    fn new_active_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         unimplemented!()
     }
 
-    fn new_staging_consensus(&self) -> (ConsensusInstance, DynConsensusCtl) {
+    fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
         unimplemented!()
     }
 
@@ -119,9 +120,9 @@ pub struct ConsensusManager {
 impl ConsensusManager {
     pub const IDENT: &'static str = "consensus manager";
 
-    pub fn new(factory: Arc<dyn ConsensusFactory>) -> Self {
-        let (consensus, ctl) = factory.new_active_consensus();
-        Self { factory, inner: RwLock::new(ManagerInner::new(consensus, ctl)) }
+    pub fn new(factory: Arc<dyn ConsensusFactory>) -> ConsensusCreationResult<Self> {
+        let (consensus, ctl) = factory.new_active_consensus()?;
+        Ok(Self { factory, inner: RwLock::new(ManagerInner::new(consensus, ctl)) })
     }
 
     /// Creates a consensus manager with a fixed consensus. Will panic if staging API is used. To be
@@ -138,9 +139,9 @@ impl ConsensusManager {
         self.inner.read().current.consensus.clone()
     }
 
-    pub fn new_staging_consensus(self: &Arc<Self>) -> StagingConsensus {
-        let (consensus, ctl) = self.factory.new_staging_consensus();
-        StagingConsensus::new(self.clone(), ConsensusInner::new(consensus, ctl))
+    pub fn new_staging_consensus(self: &Arc<Self>) -> ConsensusCreationResult<StagingConsensus> {
+        let (consensus, ctl) = self.factory.new_staging_consensus()?;
+        Ok(StagingConsensus::new(self.clone(), ConsensusInner::new(consensus, ctl)))
     }
 
     pub fn register_consensus_reset_handler(&self, handler: Arc<dyn ConsensusResetHandler>) {
