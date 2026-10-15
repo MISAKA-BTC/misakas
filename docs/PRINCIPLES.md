@@ -73,7 +73,7 @@
 
 ## 1. 不可侵原則
 
-MISAKAの有用計算は、Panelの多数派、単独Panel、producer、または特権的operatorの正直さを、安全性の最終根拠としてはならない。
+モデル計算の不正裁定は、Panelの多数派、単独Panel、producer、または特権的operatorの主観的判断を最終根拠としてはならない。合意 credit の認証には、抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる（§8）。承認の認証と計算不正の客観的裁定を区別する。
 
 MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する費用が、その計算自体の実行費用に匹敵し、場合によっては上回るという問題を前提とする。
 
@@ -97,7 +97,7 @@ MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する�
 - 計算区間
 - tensorの一部
 - 状態遷移
-- Freivalds/GKR等によって集約された計算制約
+- Freivalds 等による直接の代数的スポットチェック（§8。計算 validity proof は用いない）
 
 検証者は、原則として巨大なモデルの全計算を再実行する必要はない。少数の検査で不一致を発見し、発見後に対象を絞り込んで客観的な裁定へ進める。
 
@@ -207,10 +207,24 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 - 立証された不正をslashし、残る被害をbond単位の上限で有界化する。
 - モデルを共有してbondを集めた方が、非公開より多くの配分を得る経済構造にする（§0）。
 
-そして、**MISAKAの安全性は、Panelの人数や誰かの正直さではなく、検証の健全性、不正追及の公開性、裁定の客観性、bond単位の被害上限によって定義される。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
+そして、**MISAKAの安全性は、検査範囲、不正追及の公開性、裁定の客観性、bond単位の被害上限によって評価する。合意 credit の承認には、抽選された検証者の正直な割合と参加・取得可能性の明示的な前提がある（§8）。MISAKAの最終Goalは不正の完全排除ではなく、モデルの非公開を経済的に不利にすることである。**
 
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
 > *Probabilistic Detection. Public Localization. Deterministic Adjudication. Bond-Bounded Damage. Closure Is Uneconomic.*
+
+
+## 8. モデル計算の暗号学的証明を使用しない（2026-10-15、ユーザー恒久決定）
+
+**MISAKA は LLM・モデル計算の正しさを暗号学的に証明する仕組みを一切使用せず、今後も使用しない。**
+この節は本書の他の節、既存・将来の ADR・RFC・設計・実装・有効化計画・研究項目に優先する。
+過去の文書に採用・拡張候補と書かれていても、その記述は撤回対象であり、採用を継続する根拠にはならない。
+
+1. **採用禁止。** zero-knowledge 証明、zk-SNARK / zk-STARK、zkVM・zkML、多項式コミットメント（PCS）等に基づく succinct argument / validity proof、再帰証明・proof aggregation を使用しない。GKR や producer が送信する多項式証明 transcript による計算 validity argument へ迂回しない。導入を将来課題や研究候補にも残さない。
+2. **検証方法。** 確率的検出（サンプリング再実行・決定論的再計算・代数的スポットチェック）を行い、不一致を公開証拠で局所化し、決定論的に裁定し、経済的に抑止する。直接の Freivalds 検査などは、その検査器が読んだ入力と検査した関係だけを対象とし、全モデル計算の暗号学的証明とは呼ばない。
+3. **合意 credit の認証。** 抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる。その割合、抽選・重み・相関、取得可能性、期限、検出範囲を報告する。署名や quorum は承認者と対象の認証であり、算術真実の暗号学的証明ではない。異議時の有罪判定は公開証拠と決定論的 court による。
+4. **利用できる暗号機構。** ハッシュ・署名・Merkle commitment・VRF/beacon は、データの同一性・認証・乱数に使用できる。Merkle opening は保持データの所属を認証するもので、モデル計算の正当性を証明するものではない。
+5. **実装と互換性。** 禁止した方式を新規生成・受理し、報酬や weight・credit の計算正当性の根拠にしてはならない。旧履歴の読み取りや wire ID の保存が必要な場合も、その目的に限る。旧 ID の意味を別方式へ再解釈せず、必要な移行は明示的な version/fence で行う。
+6. **評価。** 128-bit 等の数字を全計算の暗号学的健全性として保証しない。許容する検査の誤検出・見逃し、反復・grinding、正直な検証者の参加、データ取得、費用と経済条件を、それぞれの前提を明示して評価する。未測定値は UNKNOWN とし、禁止方式の実装を不足解消の条件にはしない。
 
 ---
 
@@ -224,7 +238,7 @@ This appendix records where the principle already decides open work. It is a poi
   - its detection probability is stated, including the probability that a capable honest verifier actually checks;
   - its collateral covers the maximum gain divided by that probability.
 
-  Where that is unaffordable, aggregated checks (Freivalds/GKR-style) are required, not a lower assumed detection rate.
+  Direct randomized algebraic checks may reduce repeated arithmetic work; their detection scope, actual input-read cost and honest-verifier assumptions must be explicit. A cryptographic computation-validity argument is prohibited by §8, including as a proposed remedy for expensive verification.
 
   **Amended 2026-10-14 (§0):** the detection-probability bound and the collateral-covers-gain/p condition are no longer gates for earning. They are measured and reported (UNKNOWN when unknown). The gate is the per-bond Block / Reward / Final Weight caps, objective court and slash for any model shared with at least one honest verifier, and the two-stage closure-disadvantage evaluation. `p = 0` for a closed model is a bounded residual risk.
 - **§2's grinding resistance** is why the sealed-source beacon (v3) and the complete-check bootstrap are prerequisites for any sampled approval.

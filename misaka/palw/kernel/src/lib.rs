@@ -196,9 +196,8 @@ pub mod flat_seal9;
 
 pub mod claim_paid_v2;
 pub mod claim_interactive_v3;
-/// R7-RELATION (2026-10-15 round 3): compact relation proof compilers under the dormant ClaimV2 contract; unreviewed.
+/// R7-RELATION: direct probabilistic checks and historical wire decoding; PRINCIPLES §8 prohibits computation proofs.
 pub mod claim_compact_v1;
-pub mod claim_circuit_v5;
 pub mod panel_lifetime_v2;
 /// RFC07/RFC08 signed economic contracts (inner 67–69), 2026-10-15; dormant.
 pub mod econ_contracts_v1;
