@@ -1954,6 +1954,10 @@ pub struct PalwStateParamsV2 {
     /// carriers read the per-block extras). `None` on every shipped preset, and validation refuses every armed one.
     #[borsh(skip)]
     memory_routing_court_from_daa: Option<u64>,
+    /// **RFC-0006 RFC06-8: `Params::palw_class_registration_origin_v1`'s height**, mirrored by
+    /// `Params::sync_palw_class_registration_origin_v1` (the registration fold reads it). `None` on every shipped preset.
+    #[borsh(skip)]
+    class_registration_origin_from_daa: Option<u64>,
     /// **RFC-0016: `Params::palw_model_block_rights_v1` and `palw_elastic_final_capacity_v1`, mirrored by `Params::sync_palw_rfc0016_v1`**
     /// (`crate::palw_rfc0016_v1::PalwRfc0016MirrorV1`). `None` on every shipped preset; validation refuses either fence armed.
     #[borsh(skip)]
@@ -18631,6 +18635,33 @@ fn apply_class_registration_v1(
         && !builder.state.activation_pools.contains_key(class_id)
     {
         builder.write_activation_pool(*class_id, crate::palw_activation_pool_v1::PalwActivationPoolV1::opened_at(ctx.daa_score))?;
+    }
+    // **RFC-0006 RFC06-8 (dormant `palw_class_registration_origin_v1`): the registering block and the admission digest**, kept
+    // in kernel route aux 141 so the class's original canonical identity can later be authenticated by state alone. Written
+    // only by a registration that defines `registered_daa` (a first registration, or a Dormant re-registration outside the
+    // immutable-model rule); an immutable re-registration keeps the original row. Below the fence nothing is read or written.
+    if builder.params.class_registration_origin_active_at(ctx.daa_score) && immutable_previous.is_none() {
+        use crate::palw_class_registration_origin_v1::*;
+        let (door, admission_digest) = palw_class_registration_origin_of_v1(object)
+            .map_err(|_| PalwStateV2Error::ImmutableModelUpdate("class registration admission digest"))?
+            .ok_or(PalwStateV2Error::ImmutableModelUpdate("class registration origin needs a registration object"))?;
+        if builder.state.kernel_route.is_none() {
+            return Err(PalwStateV2Error::ImmutableModelUpdate("class registration origin needs the kernel-route aux store (aux 141)"));
+        }
+        let row = PalwClassRegistrationOriginRowV1 {
+            version: PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1,
+            class_id: *class_id,
+            block: ctx.block,
+            daa_score: ctx.daa_score,
+            door,
+            admission_digest,
+        };
+        // Admitted before encoding (RFC06-1's typed writer).
+        builder.write_kernel_row_encoded_v1(
+            PALW_CLASS_REGISTRATION_ORIGIN_TABLE_V1,
+            &palw_class_registration_origin_key_v1(class_id),
+            Some(&row),
+        )?;
     }
     Ok(())
 }

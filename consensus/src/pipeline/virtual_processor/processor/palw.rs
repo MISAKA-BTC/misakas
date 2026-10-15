@@ -2854,7 +2854,13 @@ impl VirtualStateProcessor {
             ) {
                 Ok(_) => {
                     if complete {
-                        self.palw_snapshot_declaration_identity_v1(*id, class, snapshot.class_semantics.get(id), &record.carriage)?;
+                        self.palw_snapshot_declaration_identity_v1(
+                            *id,
+                            class,
+                            snapshot.class_semantics.get(id),
+                            snapshot.kernel_route.as_ref(),
+                            &record.carriage,
+                        )?;
                     }
                     declarations.push((*id, record.carriage.clone()));
                 }
@@ -2888,7 +2894,13 @@ impl VirtualStateProcessor {
                 bytes,
             )?;
             if complete {
-                self.palw_snapshot_declaration_identity_v1(*id, class, snapshot.class_semantics.get(id), bytes)?;
+                self.palw_snapshot_declaration_identity_v1(
+                    *id,
+                    class,
+                    snapshot.class_semantics.get(id),
+                    snapshot.kernel_route.as_ref(),
+                    bytes,
+                )?;
             }
         }
         if complete {
@@ -2909,10 +2921,17 @@ impl VirtualStateProcessor {
         id: kaspa_hashes::Hash64,
         class: &kaspa_consensus_core::palw_state_v2::PalwClassStateV2,
         semantics: Option<&kaspa_consensus_core::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        route: Option<&kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1>,
         bytes: &[u8],
     ) -> Result<(), String> {
         // Already checked against the declaration by the shared helper.
         if semantics.is_some() {
+            return Ok(());
+        }
+        // RFC06-8: a class registered past `palw_class_registration_origin_v1` carries its registering block and admission digest
+        // in the snapshot's own state (kernel route aux 141); bytes that hash to that digest ARE the original declaration. A class
+        // registered before the fence has no row and falls through to the genesis rule below, unchanged.
+        if kaspa_consensus_core::palw_class_registration_origin_v1::palw_class_declaration_origin_authenticated_v1(route, &id, class, bytes) {
             return Ok(());
         }
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;

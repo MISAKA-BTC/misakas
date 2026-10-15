@@ -263,6 +263,8 @@ for _t in AUX.TABLES:
     if _t not in AUX.RESERVED and _t not in _total:AUX_SPEC_ARMS+=f'{_t}=>return Err(wire::wire_bad("unallocated aux table {_t} row namespace")),\n'
 # The RFC07/RFC08 tables above dispatch on guarded key shapes only; a shape none of their folds writes is malformed too.
 AUX_SPEC_ARMS+='115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136=>return Err(wire::wire_bad("unallocated aux row namespace")),\n'
+# RFC-0006 RFC06-8 (2026-10-15): class registration origins (aux 141, keyed by the 64-byte class id; dormant fence).
+AUX_SPEC_ARMS+='141 if key_bytes==64=>crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(&mut frame)?,\n141=>return Err(wire::wire_bad("unallocated class registration origin row namespace")),\n'
 AUX_HELPERS='''
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.
 const NATIVE_AUX_KEY_MAX_BYTES_V1: u64 = 4096;

@@ -445,6 +445,9 @@ pub mod palw_kernel_route_v1;
 pub mod palw_kernel_settlement_v1;
 /// RFC-0008: once-only settlement across all consumers (dormant `palw_settlement_once_v1`; kernel route aux 140).
 pub mod palw_settlement_once_v1;
+/// RFC-0006 RFC06-8 (2026-10-15): the registering block and admission digest of each class (dormant
+/// `palw_class_registration_origin_v1`; kernel route aux 141) — the state-only authentication of a class's canonical identity.
+pub mod palw_class_registration_origin_v1;
 /// RFC-0008: the combined pre-draw cap / collectibility / signed horizon & TTL / post-Final / vest-retire predicate (dormant).
 pub mod palw_settlement_liability_v1;
 /// Kimi K3 native geometry, integer ops, tokenizer and artifact identity. Not a genesis class.
