@@ -51,10 +51,6 @@ pub const PALW_RFC0608_OPEN_BLOCKERS_V1: &[(PalwRfc0608FenceV1, &str)] = &[
         "RFC07-5: lazy-verifier (T6) deterrence is unresolved — a drawn checker can approve without checking and still be paid",
     ),
     (
-        PalwRfc0608FenceV1::ClaimChallengeV2,
-        "RFC07-6: the checker files one demand per claim; a multi-demand submission loop over all four target adapters is missing",
-    ),
-    (
         PalwRfc0608FenceV1::BeaconSourceOptInV1,
         "RFC07-3: source-dependency cycles longer than two producers cannot be judged (BeaconContextV1 carries no subject \
          claim/producer)",
