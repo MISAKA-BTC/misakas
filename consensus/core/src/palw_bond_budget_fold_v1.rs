@@ -2173,12 +2173,24 @@ impl TransitionBuilder<'_> {
     /// **ADR-0177 (2026-10-14): claim-bound verifier capital per bond and model** — every live Panel duty's seat exposure, attributed to
     /// the model its claim reserved against (claims without a budget model count nowhere). A waiting bond, a registration, an AMM /
     /// Position or an unpaid reward is never here: only collateral a seat has actually bound to a live claim.
+    ///
+    /// **ADR-0177 C5 (user decision 2026-10-15):** only capital with a defined verification liability, hold period and slashable scope
+    /// counts ([`crate::palw_bond_budget_v1::palw_verifier_capital_counted_v1`]): a seat's exposure while its claim is live (not
+    /// terminal). Capital merely bonded for Panel=0 / OPV has no source here and counts 0 until OPV's verifier-liability accounting
+    /// exists ([`crate::palw_bond_budget_v1::PALW_OPV_VERIFIER_LIABILITY_ACCOUNTING_DEFINED_V1`]).
     pub(super) fn bond_budget_verifier_capital_v1(&self) -> BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> {
         let mut out: BTreeMap<PalwBondKeyV2, BTreeMap<Hash64, u64>> = BTreeMap::new();
         let Some(budget) = self.state.bond_budget.as_ref() else { return out };
         for (claim_id, duty) in self.state.panel_duties.iter() {
             let Some((model, _)) = budget.claim_row(claim_id).and_then(|row| row.model) else { continue };
-            let amount = u64::try_from(duty.seat_exposure).unwrap_or(u64::MAX);
+            let claim_live = self.state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal());
+            let counted = crate::palw_bond_budget_v1::palw_verifier_capital_counted_v1(
+                crate::palw_bond_budget_v1::PalwVerifierCapitalSourceV1::PanelSeatExposure { exposure: duty.seat_exposure, claim_live },
+            );
+            if counted == 0 {
+                continue;
+            }
+            let amount = u64::try_from(counted).unwrap_or(u64::MAX);
             for seat in duty.seats.keys() {
                 let entry = out.entry(*seat).or_default().entry(model).or_default();
                 *entry = entry.saturating_add(amount);

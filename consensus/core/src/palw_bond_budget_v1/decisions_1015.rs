@@ -16,6 +16,10 @@
 //! C4b the coinbase-derived per-claim ceiling `r_c` never binds user-paid escrow (`palw_bond_budget_escrow_reservation_v1`); the
 //!     producer's common `R` cap and the required collateral still do, and an insufficient claim is refused BEFORE acceptance, never
 //!     reduced after
+//! C5  verifier capital counts toward a model's allocation `S_m` only where its verification liability, hold period and slashable
+//!     scope are defined: a Panel seat's exposure locked behind a LIVE claim (liability: the false-Valid conviction; hold: the seat
+//!     lock until the claim resolves; scope: that exposure). Capital merely bonded for Panel=0 / OPV counts 0 until OPV's
+//!     verifier-liability accounting exists
 //! ```
 //!
 //! Nothing in this module is built or run by the lane that wrote it (a separate validation agent compiles). No line is a PASS.
@@ -141,6 +145,42 @@ impl PalwBondBudgetStateV1 {
                 .min(burst.block_units.saturating_sub(short.block_units) / PALW_BUDGET_BLOCK_UNIT_V1);
         }
         n
+    }
+}
+
+/// **C5 (user decision 2026-10-15): is OPV (Panel=0) verifier-liability accounting defined?** `false`: no verification liability,
+/// hold or slashable scope exists yet for capital merely bonded for Panel=0 / OPV checks, so such capital counts 0 in `S_m` (the
+/// user: required before activation). Flipping this is a reviewed change with the accounting it names, never a value.
+pub const PALW_OPV_VERIFIER_LIABILITY_ACCOUNTING_DEFINED_V1: bool = false;
+
+/// **C5: a candidate source of verifier capital for a model's `S_m`.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwVerifierCapitalSourceV1 {
+    /// A Panel seat's exposure locked behind a claim (`PalwPanelDutyRowV1::seat_exposure`): liability = the false-Valid conviction of
+    /// the seat, hold = the seat lock until the claim resolves, slashable scope = that exposure. Counts while the claim is live.
+    PanelSeatExposure { exposure: u128, claim_live: bool },
+    /// Capital merely bonded for Panel=0 / OPV checking (no seat, no per-check liability or hold yet).
+    OpvBondedOnly { capital: u128 },
+}
+
+/// **C5: the verifier capital a source contributes to `S_m`** — its amount only where liability, hold and slashable scope are all
+/// defined; `0` otherwise (bonded-only Panel=0 capital, a seat whose claim has resolved, a zero exposure).
+pub fn palw_verifier_capital_counted_v1(source: PalwVerifierCapitalSourceV1) -> u128 {
+    match source {
+        PalwVerifierCapitalSourceV1::PanelSeatExposure { exposure, claim_live } => {
+            if claim_live {
+                exposure
+            } else {
+                0
+            }
+        }
+        PalwVerifierCapitalSourceV1::OpvBondedOnly { capital } => {
+            if PALW_OPV_VERIFIER_LIABILITY_ACCOUNTING_DEFINED_V1 {
+                capital
+            } else {
+                0
+            }
+        }
     }
 }
 
@@ -322,6 +362,16 @@ mod tests {
             ),
             Err(PalwBudgetRefusalV1::LiabilityExceedsCapital)
         );
+    }
+
+    #[test]
+    fn c5_only_liability_backed_verifier_capital_counts() {
+        use PalwVerifierCapitalSourceV1::*;
+        assert_eq!(palw_verifier_capital_counted_v1(PanelSeatExposure { exposure: 500, claim_live: true }), 500);
+        assert_eq!(palw_verifier_capital_counted_v1(PanelSeatExposure { exposure: 500, claim_live: false }), 0, "resolved: no lock");
+        assert_eq!(palw_verifier_capital_counted_v1(PanelSeatExposure { exposure: 0, claim_live: true }), 0);
+        assert!(!PALW_OPV_VERIFIER_LIABILITY_ACCOUNTING_DEFINED_V1);
+        assert_eq!(palw_verifier_capital_counted_v1(OpvBondedOnly { capital: 1_000_000 }), 0, "bonded-only Panel=0 capital counts 0");
     }
 
     #[test]
