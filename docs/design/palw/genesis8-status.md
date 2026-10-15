@@ -12,12 +12,14 @@ Branch: `integ/genesis10`. Registry (pins, sizes, LFS SHA-256): `scripts/genesis
 
 The user chose ten models, then dropped #7 (Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), then switched
 every source to the uncensored variant (huihui abliterated; Dolphin where no huihui variant exists), then fixed #5 to the BF16
-release and #6 to the bf16 GGUF of a community SFT, then made #8 the existing **official-derived** PALWQ361 runtime (the only entry
-that is not an uncensored variant). Ids keep the original numbering.
+release and #6 to the bf16 GGUF of a community SFT. On 2026-10-16 the user moved #8 to huihui's abliterated Qwen3.6-35B-A3B GGUF
+(Q8_0), rebuilt at 32K into a new repository; the earlier official-derived note no longer applies and **every entry is an
+uncensored variant**. Ids keep the original numbering.
 
 **Served context: 32,768 tokens for every genesis model** (user decision 2026-10-16). The GDN classes (#2 #3 #6) are calibrated on
 one 32,768-token sequence (freeze-v1 §5.2); the dense TIR classes (#4 #5 #10) declare 32,768; #1 is re-converted with the A16
-converter at `--n-ctx 32768`; **#8's published runtime serves 512** (its PALWQ361 header) and is blocked until re-converted (§5).
+converter at `--n-ctx 32768`; #8 is rebuilt with `qwen36-convert --context 32768` (a PALWQ361 artifact bakes its context into its
+header and rotary table; the earlier 512-position runtime repository stays as history).
 Memory design for the long context: [RFC-0020](../../rfc/0020-long-context-calibration-memory.md).
 
 **Scope: text generation only** (user policy 2026-10-15): token ids in, next-token logits out. Vision towers and projectors
@@ -34,14 +36,13 @@ route (`palw_genesis8_admits_input_v1`); the pipeline never fetches mmproj or pr
 | 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma4UnifiedForConditionalGeneration (dense; text decoder) | Apache-2.0 | TIR | not run (adapter added) | text path covered at the family level; image path out of scope (text generation only) | `Misakachain/Huihui-gemma-4-12B-it-abliterated-PALW` |
 | 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | GptOssForCausalLM (MoE, sinks) | Apache-2.0 | TIR | not run | covered at the family level | `Misakachain/Huihui-gpt-oss-20b-BF16-abliterated-PALW` |
 | 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, file `…-bf16.gguf` (54.66 GB, sha256 `fcddc1ff…1d53`); base: community SFT `nerkyor/Qwen3.8-27B-Coder390-…` | GGUF `qwen35` (GDN hybrid) | Apache-2.0 | TIR | not run; end-to-end streaming implemented (unverified) | as #2 (see the `output_gate_type` note, §6) | `Misakachain/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-PALW` |
-| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, file `palw-runtime/qwen36-35b-a3b.palwq36` (36,492,831,232 B, sha256 `5fe1d15c…8b29`): the existing **official-derived** PALWQ361 runtime of `Qwen/Qwen3.6-35B-A3B`, not an uncensored variant | Qwen3_5MoeForConditionalGeneration (GDN hybrid + MoE; text decoder) | Apache-2.0 | PALWQ361 (legacy step court, Q36 profile) | **wrap only** (not re-converted): the file streamed anonymously at the pinned commit, its LFS SHA-256 checked before the index is written, carried byte for byte with its legacy id as the inner root (`palwart pack --from-url`); implemented (unverified), not run. **BLOCKED for 32K:** the header (bytes 0..1023 read 2026-10-16) says `max_position 512`, rotary table 512 — the PALWQ361 context is baked into the artifact (§5) | the Q36 step court covers its layer kinds; GDN solo/hybrid v2 court merged from the GDN lane (unverified) | the same repository, added under `palwart/` (the runtime's own files are never replaced) |
+| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0`, file `…-ggml-model-Q8_0.gguf` (37,801,096,416 B; f16 at 71.07 GB is the alternative); base `Qwen/Qwen3.6-35B-A3B` | GGUF `qwen35moe` (GDN hybrid + MoE; text decoder) | Apache-2.0 | PALWQ361 (legacy step court, Q36 profile) | **to rebuild at 32K, streamed both ends** (`converter: palwq36`, implemented, unverified, not run): a measuring pass (`qwen36-convert --reference-only --measured-out`, the GGUF by HTTPS range, whole-file SHA-256 against the LFS id, every window's SHA-256 recorded), then an output pass (`--measured-in --url-windows-in --out FIFO`) into `palwart pack --from-pipe` (2 GiB segments uploaded and deleted). The trailing MTP block is dropped; the stored Q8_0 is dequantized and re-quantized per channel with power-of-two group exponents (not integer-exact). History: `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3` (512 positions; its profile pins a Claude-4.7-Opus-abliterated Q4_K_M) stays as it is | the Q36 step court covers its layer kinds; GDN solo/hybrid v2 court merged (unverified) | **new** `Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW` |
 | 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | LlamaForCausalLM (dense) | Llama 3.3 Community License | TIR | not run | **not required** (user decision); the families are covered | `Misakachain/Llama-3.3-70B-Instruct-abliterated-PALW` (name begins with "Llama"; card says "Built with Llama"; LICENSE, USE_POLICY.md, NOTICE ship with it) |
 
 #6's `mmproj-model-bf16.gguf` (the vision projector) is listed among the registry's excluded files and never fetched (scope).
-#8's dedup check (`genesis10_pipeline.py dedup-check --model 8`, metadata only): the repository is Xet-enabled, the legacy file is
-stored as Xet chunks (`4aab592f…`), its LFS id matches the pin and `hf_xet` is installed — every segment but the last is an exact
-byte slice of that file, so the re-upload is **expected** to be cheap (new bytes ≈ the chunks at the 17 segment cuts plus the
-small sections). An expectation, not a measurement.
+#8's `mmproj-model-f16.gguf` is excluded likewise. In the #8 GGUF the tensors are stored head first (`output.weight`,
+`output_norm.weight`, `token_embd.weight`), then `blk.0` … `blk.40` in numeric order (`blk.40` is the MTP block): the hashed reader
+catches up over the head when the embedding is read first and hashes the rest in order, so each pass downloads about one file.
 
 ## 2. Coverage: architecture × layer kind
 
@@ -64,7 +65,7 @@ is this branch. The K2-TIR kernels are **implemented, not active** on any networ
 | gpt-oss (#5) | attention sinks, alternating sliding 128 / full, YaRN (truncate=false), top-k router with softmax over the k, clamped SwiGLU (α 1.702, limit 7), expert biases, fused interleaved experts | covered | covered |
 | | MXFP4 expert weights | decoded to floats then re-quantised (not integer-exact) | not needed: #5 is the BF16 source; `MXFP4_EXACT_INT` section kind reserved |
 | Qwen3.6-35B-A3B (#8, PALWQ361) | GDN, 4-tap conv, L2 norm, partial RoPE, MoE top-k router (one per table), grouped wide matmuls | covered by the Q36 step court | + GDN solo/hybrid v2 court and composed maps (GDN lane, merged, unverified) |
-| | conversion | — | not needed: the published official-derived runtime is wrapped byte for byte |
+| | conversion | — | `qwen36-convert` from the abliterated Q8_0 GGUF at `--context 32768`, two passes, streamed both ends (bit-identical to the one-pass file: `misaka/palw/base0/tests/qwen36_streamed_output.rs`) |
 | Llama 3 (#10) | llama3 rope, GQA, SwiGLU | covered | covered; real-scale court/seat resources unmeasured (not required) |
 | all TIR-route classes | RFC-0006 cell coverage (`palw_tir_cell_coverage_v1`, every relation/routing/carry/state/door) | per class | asserted on the real headers of #2 #3 #4 #5 #10 (`misaka/palw/sdk/tests/genesis8_coverage.rs`, written) |
 | all classes | registration binding of the PALWART3 root | — | **missing** (§5) |
@@ -143,6 +144,7 @@ changes; ±50%; RFC-0020 §9):
 | #2 | 1.5–2 h | ~10 min | 1.5–2 h + ~0.5 h | 2.5–3.5 GB (fit ~5–6 GB) |
 | #3 | 4.5–7 h | ~30 min | 4.5–7 h + ~1 h | 5–6 GB (fit ~16 GB) |
 | #6 (streamed GGUF) | 13–19 h | 1.5–3 h (HTTPS re-read, upload) | not on this host | 8–11 GB |
+| #8 (PALWQ361, streamed both ends) | measuring pass 20–40 min | output pass 35–70 min (≈ 37 GB uploaded) | not on this host | ~7–9 GB (a layer's dequantized experts, 1.5 GiB window cache, ~0.75 GB of parameter rows ×2) |
 
 #6 on this Mac: 15–22 h in all — under 24 h only just, and uncertain. Fastest correct path: a calibration-only machine (64 cores,
 ≥ 64 GB, the GGUF on disk) running `palw-tir-fidelity --calibrate-only --stats-out` (≈3–4 h, also able to run the long fit),
@@ -152,7 +154,8 @@ What it needs:
 
 * binaries: `cargo build --release -p misaka-palw-tir-artifact --bin palwart`,
   `cargo build --release -p misaka-palw-tir-lower --features remote --bin palw-tir-convert --bin palw-tir-fidelity` (the `remote`
-  feature only for #6's HTTPS-streamed GGUF) and, for #1, `cargo build --release -p misaka-palw-base0 --bin qwen25-convert`;
+  feature only for #6's HTTPS-streamed GGUF) and, for #1 and #8, `cargo build --release -p misaka-palw-base0 --bin qwen25-convert
+  --bin qwen36-convert`;
 * `hf` CLI (`/Users/wata/Downloads/hf-upload-venv/bin/hf`) and a valid login (`hf auth login --force`) for uploads — `--stream`
   uploads during conversion, so the login must be valid before it starts;
 * a Python with `tokenizers` for the calibration tokens (`/Users/wata/Downloads/MISAKA-wt-b/tir-venv/bin/python`);
@@ -168,7 +171,7 @@ Disk plan (estimates from the registry: output ≈ 1.08 × parameters as int8 co
 | 4 | 23.9 GB | 12.9 GB | 38.8 GB | 28.1 GB | one 24 GB shard |
 | 5 | 41.8 GB | 22.6 GB | 66.4 GB | 14.0 GB | 9 shards |
 | 6 | 54.66 GB (bf16 GGUF) | 29.5 GB | 86.2 GB | **~4 GB** | HTTPS range reads, never stored; ≈2.5–3× the file downloaded (two passes; lexicographic layer order in the file) |
-| 8 | 36.5 GB (legacy `.palwq36`) | 36.5 GB | 75.0 GB | ~4 GB | **blocked for 32K** (serves 512); the wrap path stays implemented |
+| 8 | 37.8 GB (Q8_0 GGUF) | ~37 GB | ~43 GB (local GGUF, output still piped) | **~5 GB** | GGUF by HTTPS range, read twice (measure, then output; ≈ 2 × 37.8 GB downloaded); one 2 GiB segment and the ~0.75 GB measuring record on disk |
 | 10 | 141.1 GB | 76.2 GB | 219.3 GB | 14.1 GB | 30 shards |
 
 The pipeline keeps a 30 GB free-disk floor (`--min-free-gb`) for the validation agent that shares the disk.
@@ -179,16 +182,14 @@ RSS with an mmapped checkpoint (mapped pages count). Measure with `--ram-account
 
 ## 5. Open items
 
-* **#8 at 32K (blocked; needs the user):** the published `palw-runtime/qwen36-35b-a3b.palwq36` serves 512 positions — header
-  `max_position 512`, rotary table 512, and the GDN state exponents' horizon correction is sized to it; the context is baked into
-  the artifact, not a class parameter. Re-conversion: `qwen36-convert --gguf FILE --out ARTIFACT --context 32768` (or `--url URL
-  --header FIRST64MB` to stream the input) from a pinned `qwen35moe` GGUF, then `palwart pack`. Needs (a) **a source decision**:
-  no official Qwen GGUF exists (`Qwen/Qwen3.6-35B-A3B-GGUF` answers 401); `unsloth/Qwen3.6-35B-A3B-GGUF@a483e9e6` (Apache-2.0)
-  has `Qwen3.6-35B-A3B-Q8_0.gguf` (36.9 GB) and a two-shard BF16; and **provenance**: the runtime repository's own profile
-  (`config/qwen3.6-35b-a3b-claude-4.7-profile.json`) pins `huihui_ai/Qwen3.6-abliterated:35b-Claude-4.7` Q4_K_M as its inference
-  artifact and its card's `base_model` is `huihui-ai/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated` — the "official-derived"
-  description of the published file needs the user's confirmation; (b) **disk**: the converter writes the ~36 GB `.palwq36`
-  locally before packing (~38 GB peak with the 30 GB floor kept: more than ~64 GB free allows) unless a two-pass writer is added.
+* **#8's fit at 32K is not measurable on this Mac:** no tool compares the PALWQ361 engine with the f32 reference at windows along a
+  long sequence (`qwen36-run --reference` scores the converter's 8-token prompt), the f32 reference over 32K positions of the
+  35B-A3B MoE is another full read of the GGUF and hours of compute, and the integer engine needs the ~37 GB artifact on local
+  disk against 32 GB of RAM. Recorded as not measured in the run; the measuring pass's log carries the reference's next-token
+  check. Needs a ≥ 64 GB host and a windowed comparator for the legacy engine (not written).
+* **#8's calibration** is the legacy converter's own 8-token prompt with the analytic horizon correction of the GDN state exponents
+  to 32,768 (`qwen36_calibrate::horizon_growth_bits`), not a 32K sequence: the freeze-v1 §5.2 rule binds the TIR route, and the
+  PALWQ361 route has no 32K evidence until the fit above is measured.
 * **The fit of #5, #6 and #10** is not measured on this host (§4.1); measure it on a host with the source on disk and RAM for the
   integer program before the index is relied on.
 * **#1 at 32K**: the A16 route has no long-context check (qwen25-convert's FAITHFUL report covers its 57-token prompt).

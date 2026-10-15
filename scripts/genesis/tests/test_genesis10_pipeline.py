@@ -46,11 +46,16 @@ class Registry(unittest.TestCase):
             for f in m["files"]:
                 self.assertNotIn(f["path"], ("preprocessor_config.json", "video_preprocessor_config.json", "processor_config.json"))
         eight = gp.model_by_id(self.reg, 8)
-        self.assertEqual(eight["target_repo"], "Misakachain/Qwen3.6-35B-A3B-PALW-runtime")
-        self.assertEqual(eight["source_revision"], "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38")
-        self.assertEqual(eight["legacy_artifact"]["sha256"], "5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29")
-        self.assertEqual(eight["upload_prefix"], "palwart/", "an addition to the existing repository")
-        self.assertTrue(gp.is_legacy_wrap(eight))
+        self.assertEqual(eight["target_repo"], "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW", "a NEW repository")
+        self.assertEqual(eight["source_repo"], "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF")
+        self.assertEqual(eight["source_revision"], "acd5abe0c5ebd064f3863ca7d4bba2d924ec6544")
+        q8 = next(f for f in eight["files"] if f["path"] == gp.variant_file(eight, None))
+        self.assertEqual((q8["path"], q8["bytes"]), ("Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf", 37801096416))
+        self.assertEqual(len(q8["lfs_sha256"]), 64)
+        self.assertIn("mmproj-model-f16.gguf", eight["excluded_files"], "text only: never fetched")
+        self.assertNotIn("upload_prefix", eight)
+        self.assertTrue(gp.is_palwq36(eight) and not gp.is_legacy_wrap(eight))
+        self.assertEqual(eight["history_artifact"]["repo"], "Misakachain/Qwen3.6-35B-A3B-PALW-runtime", "the old runtime is history")
 
     def test_every_gdn_hybrid_converts_with_the_fix_of_the_9b_fit_refusal(self):
         # The past refusal of Huihui-Qwen3.5-9B (HF_FIT_OUT_OF_TOLERANCE, KL 0.268) was the GDN core's 16-bit grid; the fix is
@@ -88,14 +93,18 @@ class Cards(unittest.TestCase):
                            "Scope: text generation only"):
                 self.assertIn(needle, card, f"#{mid}: {needle}")
             self.assertEqual(gp.manifest_for(m, None)["scope"]["kind"], "text-generation")
-        self.assertIn("official-derived", gp.model_card(gp.model_by_id(self.reg, 8), None, None))
-        self.assertFalse(gp.manifest_for(gp.model_by_id(self.reg, 8), None)["uncensored"])
+        eight_card = gp.model_card(gp.model_by_id(self.reg, 8), None, None)
+        self.assertNotIn("official-derived", eight_card)
+        self.assertIn("not an integer-exact lowering of Q8_0", eight_card)
+        self.assertTrue(all(gp.manifest_for(m, None)["uncensored"] for m in self.reg["models"]), "every entry is uncensored")
         one = gp.manifest_for(gp.model_by_id(self.reg, 1), None)
         self.assertEqual(one["served_context"], 32768, "#1 is re-converted at 32K")
         self.assertIn("--a16 --n-ctx 32768", one["conversion"]["a16"]["tool"])
         self.assertEqual(one["conversion"]["history_artifact"]["sha256"],
                          "894e6914294e0b225a559365914a5e4509ffcd6ac884ca77f7e0f020c4595438", "the 8k file stays as history")
-        self.assertEqual(gp.manifest_for(gp.model_by_id(self.reg, 8), None)["served_context"], 512, "#8 as published")
+        eight = gp.manifest_for(gp.model_by_id(self.reg, 8), None)
+        self.assertEqual(eight["served_context"], 32768, "#8 rebuilt at 32K")
+        self.assertIn("--context 32768", eight["conversion"]["palwq36"]["tool"])
 
 
 class Plans(unittest.TestCase):
@@ -141,15 +150,23 @@ class DryRuns(unittest.TestCase):
                     if mid == 1:
                         self.assertIn("--a16 --n-ctx 32768", out)
                         self.assertIn("model.safetensors", out, "the A16 converter reads the checkpoint")
-                    if mid == 8:
-                        self.assertIn("BLOCKED", out)
+                    self.assertNotIn("BLOCKED", out)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                rc = gp.main(["run", "--model", "8", "--dry-run", "--stream", "--work", d, "--hf", "/nonexistent/hf"])
+                rc = gp.main(["run", "--model", "8", "--dry-run", "--stream", "--work", d, "--hf", "/nonexistent/hf", "--redo"])
             self.assertEqual(rc, 0, buf.getvalue()[-2000:])
             out = buf.getvalue()
-            self.assertIn("--from-sha256 5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29", out, "#8 is wrapped, streamed")
-            self.assertIn(" palwart --commit-message", out, "uploaded under palwart/, never over the runtime's own files")
+            eight = gp.model_by_id(gp.load_registry(), 8)
+            q8 = next(f for f in eight["files"] if f["path"] == gp.variant_file(eight, None))
+            # Streamed both ends: the measuring pass checks the GGUF against its LFS id; the output pass writes into a pipe.
+            self.assertIn("--url-sha256 " + q8["lfs_sha256"], out)
+            self.assertIn("--reference-only --measured-out", out)
+            self.assertIn("--url-windows-in", out)
+            self.assertIn("--measured-in", out)
+            self.assertIn("--from-pipe", out)
+            self.assertIn("--context 32768", out)
+            self.assertNotIn("mmproj", out.split("[genesis] #8 convert")[0].split("download")[-1], "mmproj is never fetched")
+            self.assertIn("Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW", out)
 
 
 class Calibration(unittest.TestCase):
@@ -177,8 +194,8 @@ class Calibration(unittest.TestCase):
         self.assertTrue(gp.is_a16(one) and not gp.is_legacy_wrap(one))
         self.assertEqual(gp.effective_options(one, None)["n_ctx"], 32768)
         for m in self.reg["models"]:
-            self.assertEqual(m["served_context"], 512 if m["id"] == 8 else 32768, m["id"])
-        self.assertIn("max_position 512", gp.model_by_id(self.reg, 8)["blocked"])
+            self.assertEqual(m["served_context"], 32768, m["id"])
+            self.assertNotIn("blocked", m, m["id"])
 
     def test_the_manifest_pins_the_texts_tokenizer_lengths_and_policy(self):
         texts = self.reg["calibration_texts"]
@@ -189,7 +206,7 @@ class Calibration(unittest.TestCase):
         for m in self.reg["models"]:
             man = gp.manifest_for(m, None, 4096, None, texts)
             cal = man["conversion"].get("calibration")
-            if gp.is_legacy_wrap(m) or gp.is_a16(m):
+            if gp.is_legacy_wrap(m) or gp.is_a16(m) or gp.is_palwq36(m):
                 self.assertIsNone(cal, f"#{m['id']}: no TIR calibration (a wrapped legacy file, or the A16 converter's own)")
                 continue
             self.assertEqual(cal["tokens_file"], "calib-tokens.json")
@@ -220,7 +237,7 @@ class Calibration(unittest.TestCase):
                                    local_source=None, gguf_variant=None)
             p = gp.Pipeline(a)
             self.assertEqual(p.fit_plan(gp.model_by_id(p.reg, 2))[0], True)
-            self.assertIn("legacy", p.fit_plan(gp.model_by_id(p.reg, 8))[1])
+            self.assertIn("PALWQ361 at 32K is not measurable", p.fit_plan(gp.model_by_id(p.reg, 8))[1])
             self.assertIn("streamed", p.fit_plan(gp.model_by_id(p.reg, 6))[1])
             self.assertIn("--fit-max-gb", p.fit_plan(gp.model_by_id(p.reg, 10))[1])
             buf = io.StringIO()

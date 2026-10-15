@@ -4600,13 +4600,15 @@ establish that implementation, native Final or RFC02 completion.
 
 **This replaces the initial seven-model target below** (kept as history). The user named ten genesis models, dropped #7
 (Gemma 4 26B-A4B, overlapping #8) and #9 (Qwen3-32B, overlapping #6), and chose the uncensored variant of each (huihui
-abliterated; Dolphin where no huihui variant exists) except #8, which is the existing **official-derived** PALWQ361 runtime of
-Qwen3.6-35B-A3B carried byte for byte (the only entry that is not an uncensored variant). Ids keep the original numbering. These
+abliterated; Dolphin where no huihui variant exists) — #8 included since 2026-10-16, rebuilt from huihui's abliterated
+Qwen3.6-35B-A3B GGUF. Ids keep the original numbering. These
 models are the next network's genesis (RFC-0019 edition 0, the 1.0 tier); testnet-12, its preset and its DAA 14,000 release scope
-are unchanged. **Every genesis model is served at a 32K context (32,768 tokens; user decision 2026-10-16).** #8's published
-runtime bakes 512 positions into its PALWQ361 header and rotary table, so it is blocked until re-converted at 32,768 (source and
-provenance need the user, `docs/design/palw/genesis8-status.md` §5); #1 is re-converted with the A16 converter at `--n-ctx 32768`
-(the published 8k file stays as history).
+are unchanged. **Every genesis model is served at a 32K context (32,768 tokens; user decision 2026-10-16).** A PALWQ361 artifact
+bakes its context into its header and rotary table, so #8 is rebuilt with `qwen36-convert --context 32768` from
+`huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0` (Q8_0), streamed both ends (a measuring pass, then an output
+pass into `palwart pack --from-pipe`, bit-identical to the one-pass file), into the new `Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW`;
+the earlier 512-position `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` stays as history. #1 is re-converted with the A16 converter at
+`--n-ctx 32768` (the published 8k file stays as history).
 
 **Scope: text generation only** (user policy, 2026-10-15). A genesis class maps token ids to next-token logits. Vision towers and
 projectors (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not
@@ -4622,7 +4624,7 @@ covered, not admitted as claims and not rewarded; image paths will not be enable
 | 4 | `huihui-ai/Huihui-gemma-4-12B-it-abliterated` @ `060ea173` | Gemma-4 Unified (dense, multimodal wrapper) | Apache-2.0 | TIR |
 | 5 | `huihui-ai/Huihui-gpt-oss-20b-BF16-abliterated` @ `b73ec897` | gpt-oss MoE (sinks, sliding window) | Apache-2.0 | TIR |
 | 6 | `huihui-ai/Huihui-Qwen3.8-27B-Coder390-EfficientThink-abliterated-GGUF` @ `a0b17c71`, bf16 GGUF | Qwen3.8 GDN hybrid (community SFT) | Apache-2.0 | TIR |
-| 8 | `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` @ `bbc2f6c3`, `palw-runtime/qwen36-35b-a3b.palwq36` (official-derived; serves 512 as published — blocked for 32K) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
+| 8 | `huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF` @ `acd5abe0`, Q8_0 (rebuilt at `--context 32768`) | Qwen3.6 GDN hybrid + MoE | Apache-2.0 | PALWQ361 integer runtime |
 | 10 | `huihui-ai/Llama-3.3-70B-Instruct-abliterated` @ `fa133346` | Llama 3 dense | Llama 3.3 | TIR (not required to be end-to-end adjudicable) |
 
 Every genesis model ships as **one versioned `PALWART3` artifact** (`misaka/palw/tir/artifact/src/palwart_v3.rs`): an index and
@@ -4631,8 +4633,7 @@ per-architecture weight section (A16, PALWQ361 integer, TIR inventory; MXFP4 exa
 source configuration, license texts and calibration inputs. The legacy `.palwart`/`.palwtir`/`.palwq36` formats stay readable under
 their own magics and identities (kept as inner roots, never reinterpreted); the catalog's `artifact_root` is the `PALWART3` root.
 Published artifacts go to `Misakachain/<SourceName>-PALW` (#10's name begins with "Llama", its card says "Built with Llama", and
-the Llama 3.3 license, Acceptable Use Policy and notice ship with it); #8's container is added to its existing repository under
-`palwart/`, never replacing the runtime's own files.
+the Llama 3.3 license, Acceptable Use Policy and notice ship with it).
 
 Calibration measures each site's activation range on the float reference (absmax, per-position and per-channel maxima); the
 integer program, and every adjudication over it, is exact and deterministic for any pinned calibration set, so the calibration

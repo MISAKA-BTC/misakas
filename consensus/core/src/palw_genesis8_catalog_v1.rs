@@ -1,8 +1,9 @@
 //! **Genesis 8 — the next network's genesis model list, as an RFC-0019 edition-0 template** (user decisions 2026-10-15; dormant).
 //!
-//! The genesis set is eight models; ids keep the user's original 1..10 numbering (7 and 9 were dropped). Seven are uncensored variants
-//! (huihui abliterated, Dolphin where no huihui variant exists); #8 is the existing official-derived PALWQ361 integer runtime
-//! (`Misakachain/Qwen3.6-35B-A3B-PALW-runtime`), carried byte for byte, the only entry that is not an uncensored variant.
+//! The genesis set is eight models; ids keep the user's original 1..10 numbering (7 and 9 were dropped). Every one is an uncensored
+//! variant (huihui abliterated, Dolphin where no huihui variant exists). #8 is rebuilt at 32K (user decision 2026-10-16) from huihui's
+//! abliterated Qwen3.6-35B-A3B GGUF (Q8_0) with the legacy PALWQ361 converter into a new repository; the earlier
+//! `Misakachain/Qwen3.6-35B-A3B-PALW-runtime` (512 positions) stays as history.
 //!
 //! **Scope: text generation only** (user policy 2026-10-15) — token ids in, next-token logits out. Vision towers and projectors
 //! (mmproj), image/audio/video embedders and multi-token-prediction heads are not computed, not covered, not admitted as claims and
@@ -56,13 +57,12 @@ pub struct PalwGenesisModelV1 {
     pub tentative: bool,
     /// The catalog's kernel version (0: the class's own registered binding).
     pub kernel_version: u16,
-    /// An uncensored variant (every entry but #8).
+    /// An uncensored variant (every genesis entry since 2026-10-16).
     pub uncensored: bool,
     /// What the checkpoint carries beyond text generation: never computed, covered, admitted or rewarded.
     pub out_of_scope: &'static [&'static str],
-    /// The context the class must serve: [`PALW_GENESIS_SERVED_CONTEXT_V1`] for every genesis model (user decision 2026-10-16).
-    /// #8's published PALWQ361 runtime bakes 512 into its header and rotary table, so its root cannot be supplied until it is
-    /// re-converted at this context.
+    /// The context the class must serve: [`PALW_GENESIS_SERVED_CONTEXT_V1`] for every genesis model (user decision 2026-10-16). A
+    /// PALWQ361 artifact bakes its context into its header and rotary table, so #8 is rebuilt with `qwen36-convert --context 32768`.
     pub served_context: u32,
 }
 
@@ -196,18 +196,18 @@ pub const PALW_GENESIS8_MODELS_V1: [PalwGenesisModelV1; 8] = [
     },
     PalwGenesisModelV1 {
         genesis_id: 8,
-        artifact_repo: "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-        source_repo: "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-        source_revision: "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
-        source_file: "palw-runtime/qwen36-35b-a3b.palwq36",
+        artifact_repo: "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
+        source_repo: "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF",
+        source_revision: "acd5abe0c5ebd064f3863ca7d4bba2d924ec6544",
+        source_file: "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf",
         architecture: "Qwen3_5MoeForConditionalGeneration",
         license: "apache-2.0",
         route: PalwGenesisRouteV1::PalwQ361,
         e2e_adjudicable: true,
         tentative: false,
         kernel_version: 0,
-        uncensored: false,
-        out_of_scope: &["vision tower", "MTP head"],
+        uncensored: true,
+        out_of_scope: &["vision projector mmproj-model-f16.gguf (not fetched)", "MTP block blk.40.nextn.* (dropped by the converter)"],
         served_context: PALW_GENESIS_SERVED_CONTEXT_V1,
     },
     PalwGenesisModelV1 {
@@ -349,8 +349,11 @@ mod tests {
         assert_eq!(PALW_GENESIS8_MODELS_V1.iter().filter(|m| m.e2e_adjudicable).count(), 7);
         assert!(palw_genesis8_model_v1(3).unwrap().tentative);
         let eight = palw_genesis8_model_v1(8).unwrap();
-        assert!(!eight.uncensored && eight.route == PalwGenesisRouteV1::PalwQ361, "#8: the existing official-derived runtime");
-        assert_eq!(PALW_GENESIS8_MODELS_V1.iter().filter(|m| !m.uncensored).count(), 1, "the only non-uncensored entry");
+        assert!(
+            eight.route == PalwGenesisRouteV1::PalwQ361 && eight.source_repo.starts_with("huihui-ai/"),
+            "#8: rebuilt from huihui's GGUF"
+        );
+        assert!(PALW_GENESIS8_MODELS_V1.iter().all(|m| m.uncensored), "every genesis model is an uncensored variant");
         assert!(PALW_GENESIS8_MODELS_V1.iter().all(|m| m.served_context == 32_768), "every genesis model is served at 32K");
     }
 

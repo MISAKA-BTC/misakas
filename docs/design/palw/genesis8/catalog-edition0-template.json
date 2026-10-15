@@ -1,6 +1,6 @@
 {
  "schema": "misaka.genesis8.catalog-edition0-template.v1",
- "note": "RFC-0019 edition 0 of the NEXT network (not testnet-12). Fill class_id (the declared class) and artifact_root (the PALWART3 root from genesis10_results.json), then feed {\"fence_daa\": N, \"editions\": [edition0]} to scripts/release/misaka-release-manifest.py write. The Rust twin is consensus/core/src/palw_genesis8_catalog_v1.rs::palw_genesis8_edition0_v1. Null roots are deliberate: nothing is armed from a placeholder. Every model is served at 32,768 tokens (user decision 2026-10-16); #8's published runtime serves 512 and its root waits for a 32K re-conversion; #1's root is the 32K A16 re-conversion (the published 8k file is history).",
+ "note": "RFC-0019 edition 0 of the NEXT network (not testnet-12). Fill class_id (the declared class) and artifact_root (the PALWART3 root from genesis10_results.json), then feed {\"fence_daa\": N, \"editions\": [edition0]} to scripts/release/misaka-release-manifest.py write. The Rust twin is consensus/core/src/palw_genesis8_catalog_v1.rs::palw_genesis8_edition0_v1. Null roots are deliberate: nothing is armed from a placeholder. Every model is served at 32,768 tokens (user decision 2026-10-16); #8 is rebuilt at 32K from huihui's abliterated Q8_0 GGUF into a new repository (the 512-position runtime repository is history); #1's root is the 32K A16 re-conversion (the published 8k file is history).",
  "editions": [
   {
    "activation_daa": 0,
@@ -86,17 +86,16 @@
     },
     {
      "genesis_id": 8,
-     "artifact_repo": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-     "source": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime@bbc2f6c3dc7940efe12698a4b09a4cd983e21b38:palw-runtime/qwen36-35b-a3b.palwq36",
+     "artifact_repo": "Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
+     "source": "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF@acd5abe0c5ebd064f3863ca7d4bba2d924ec6544:Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf (qwen36-convert --context 32768)",
      "e2e_adjudicable": true,
      "tentative": false,
      "class_id": null,
      "artifact_root": null,
      "kernel_version": 0,
      "verification_plan_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "uncensored": false,
-     "served_context": 32768,
-     "blocked": "the published runtime serves 512 (PALWQ361 header max_position 512): re-convert at 32,768 from a pinned source the user names"
+     "uncensored": true,
+     "served_context": 32768
     },
     {
      "genesis_id": 10,

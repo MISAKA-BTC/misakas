@@ -50,7 +50,8 @@ APACHE_NOTE = "Apache License 2.0 (the full text ships in the artifact: scripts/
 #
 # User decision 2026-10-16: EVERY genesis model is served at a 32K context (32,768 tokens). The GDN classes (#2 #3 #6) are
 # therefore calibrated on one 32,768-token sequence (the first 32K tokens of RFC-0002); the dense TIR classes declare 32,768;
-# #1 is re-converted at --n-ctx 32768; #8's published runtime serves 512 (its header) and is blocked until re-converted.
+# #1 is re-converted at --n-ctx 32768; #8 is rebuilt at --context 32768 from huihui's abliterated Q8_0 GGUF (the published
+# 512-position runtime stays as history).
 GENESIS_CONTEXT = 32768
 CALIB_POSITIONS_DEFAULT = GENESIS_CONTEXT
 RECURRENT_CALIB = {"kind": "recurrent", "docs": ["docs/rfc/0002-palw-tensor-ir.md"], "len": CALIB_POSITIONS_DEFAULT, "chunks": 1}
@@ -167,36 +168,33 @@ MODELS = [
                            "why": "the GGUF repo has no tokenizer.json; calibration tokenises with the Qwen3.8 tokenizer, checked "
                                   "token by token against the GGUF's own tokenizer.ggml.tokens before use"},
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
-    dict(id=8, slug="qwen36-35b-a3b-palwq361", source_repo="Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-         source_revision="bbc2f6c3dc7940efe12698a4b09a4cd983e21b38", source_format="palwq361",
+    dict(id=8, slug="huihui-qwen36-35b-a3b", source_repo="huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF",
+         source_revision="acd5abe0c5ebd064f3863ca7d4bba2d924ec6544", source_format="gguf",
          base_model="Qwen/Qwen3.6-35B-A3B", base_author="Qwen team (Alibaba Cloud)",
-         derivation="PALWQ361 integer runtime derived from the official weights (NOT an uncensored variant)",
-         derivation_author="MISAKA (Misakachain)",
-         derivation_note="User decision 2026-10-15: #8 is the EXISTING official-derived PALWQ361 integer runtime, not re-converted "
-                         "and the only non-uncensored genesis entry. Its published legacy file is carried byte for byte in a "
-                         "PALWART3 index and segments added to the SAME repository under palwart/ (no legacy file replaced).",
-         architecture="Qwen3_5MoeForConditionalGeneration", model_type="qwen3_5_moe", family="qwen35-gdn-hybrid-moe",
-         license="apache-2.0", target_repo="Misakachain/Qwen3.6-35B-A3B-PALW-runtime", upload_prefix="palwart/",
-         stem="Qwen3.6-35B-A3B-PALW", converter="palwq36-legacy-wrap",
-         convert_options={"n_ctx": 512},
-         served_context=512,
-         blocked="the published runtime serves 512 positions: its PALWQ361 header (read 2026-10-16, bytes 0..1023 at bbc2f6c3) says "
-                 "max_position 512 and a 512-row rotary table, and the PALWQ361 context is baked into the artifact (shape, rotary "
-                 "table, the GDN state exponents' horizon correction). Every genesis model is served at 32,768 (user decision "
-                 "2026-10-16): re-convert with qwen36-convert --context 32768 from a pinned qwen35moe GGUF of a source the user "
-                 "names (docs/design/palw/genesis8-status.md §5). The repository's own profile pins the Claude-4.7-Opus-abliterated "
-                 "Q4_K_M GGUF as its inference artifact, so the published file's provenance needs the user's confirmation too.",
-         legacy_artifact={"repo": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-                          "revision": "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
-                          "path": "palw-runtime/qwen36-35b-a3b.palwq36",
-                          "bytes": 36492831232,
-                          "sha256": "5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29",
-                          "xet_hash": "4aab592f35f66e211c4c1da91faadeac1232b4f5e4f1dc7b8f98ad4d98c2fcb6",
-                          "converter": "the published PALWQ361 runtime (qwen36-convert); not re-run"},
+         derivation="abliteration, GGUF (Q8_0)", derivation_author="huihui-ai",
+         derivation_note="User decision 2026-10-16: #8 is rebuilt at 32K from huihui's abliterated GGUF (Q8_0, the lead default; "
+                         "f16 at 71 GB is the alternative) with the legacy PALWQ361 converter, streamed both ends: the GGUF by HTTPS "
+                         "range (whole-file SHA-256 against the LFS id, per-window checks), the artifact in 2 GiB segments uploaded "
+                         "and deleted. The trailing MTP block is dropped, mmproj is not fetched (text generation only). The "
+                         "converter dequantizes the stored Q8_0 blocks and re-quantizes per output channel with power-of-two group "
+                         "exponents: not an integer-exact lowering of Q8_0. The earlier Misakachain/Qwen3.6-35B-A3B-PALW-runtime "
+                         "(512-position PALWQ361) stays as history.",
+         architecture="Qwen3_5MoeForConditionalGeneration (GGUF qwen35moe)", model_type="qwen35moe", family="qwen35-gdn-hybrid-moe",
+         license="apache-2.0", target_repo="Misakachain/Huihui-Qwen3.6-35B-A3B-abliterated-PALW",
+         stem="Huihui-Qwen3.6-35B-A3B-abliterated-PALW", converter="palwq36",
+         convert_options={"context": GENESIS_CONTEXT, "gguf_variant": "q8_0", "window_mib": 64, "cache_windows": 24},
+         gguf_variants={"q8_0": "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q8_0.gguf",
+                        "f16": "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-f16.gguf"},
          tokenizer_source={"repo": "Qwen/Qwen3.6-35B-A3B", "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
                            "files": ["tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "config.json", "generation_config.json"],
-                           "why": "the runtime repository carries no tokenizer: the official tokenizer and chat template of the base model"},
-         out_of_scope=["vision tower", "MTP head"],
+                           "why": "the GGUF repository has no tokenizer.json; the base model's tokenizer (abliteration leaves it "
+                                  "unchanged), checked id by id against the GGUF's tokenizer.ggml.tokens before use"},
+         history_artifact={"repo": "Misakachain/Qwen3.6-35B-A3B-PALW-runtime", "revision": "bbc2f6c3dc7940efe12698a4b09a4cd983e21b38",
+                           "path": "palw-runtime/qwen36-35b-a3b.palwq36", "bytes": 36492831232,
+                           "sha256": "5fe1d15caf0e544b718a4a2398db4f902b9a6722b266dd53824fbc9723578b29",
+                           "note": "serves 512 positions (PALWQ361 header max_position 512); its repository profile pins a "
+                                   "Claude-4.7-Opus-abliterated Q4_K_M GGUF; left as history"},
+         out_of_scope=["vision projector mmproj-model-f16.gguf (not fetched)", "MTP block blk.40.nextn.* (dropped by the converter)"],
          e2e_adjudicable=True, tentative=False, components=["decoder"]),
     dict(id=10, slug="llama33-70b-abliterated", source_repo="huihui-ai/Llama-3.3-70B-Instruct-abliterated",
          source_revision="fa13334669544bab573e0e5313cad629a9c02e2c", source_format="safetensors",
@@ -267,14 +265,15 @@ def build() -> dict:
         out.append(m2)
     return {
         "schema": "misaka.genesis8.models.v2",
-        "decision": "user-2026-10-15-genesis8 (uncensored variants; #5 BF16 b73ec897; #6 bf16 GGUF a0b17c71; #8 the existing "
-                    "official-derived PALWQ361 runtime bbc2f6c3; text generation only); user-2026-10-16 every model served at 32K",
+        "decision": "user-2026-10-15-genesis8 (uncensored variants; #5 BF16 b73ec897; #6 bf16 GGUF a0b17c71; text generation "
+                    "only); user-2026-10-16 every model served at 32K, #8 rebuilt from huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-"
+                    "MTP-GGUF@acd5abe0 Q8_0 into a new repository",
         "served_context": GENESIS_CONTEXT,
         "recorded_from": "anonymous Hub API /api/models/<repo>/revision/<sha>?blobs=true (metadata only; no weights read)",
         "numbering": "ids keep the user's original 1..10; 7 (Gemma 4 26B-A4B) and 9 (Qwen3-32B) were dropped",
         "scope": SCOPE,
         "calibration_texts": CALIB_TEXTS,
-        "uncensored": "every entry is an uncensored variant except #8, the existing official-derived PALWQ361 runtime",
+        "uncensored": "every entry is an uncensored variant (huihui abliterated; Dolphin 3.0 for the 1.5B)",
         "license_notes": {"apache-2.0": APACHE_NOTE,
                           "llama3.3": "Llama 3.3 Community License Agreement; Acceptable Use Policy at https://www.llama.com/llama3_3/use-policy"},
         "models": out,

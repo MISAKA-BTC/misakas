@@ -237,6 +237,8 @@ def estimate(m: dict, variant: str | None, stream: bool, segment_gb: float) -> d
         biggest = out
     elif is_a16(m):
         out = int(total_in / 2 * 1.17)  # the A16 file: int8 codes, i16 embedding rows, the 32K rotary table
+    elif is_palwq36(m):
+        out = int(total_in * 0.98)  # int8 codes + a power-of-two exponent per 32 + the header (~0.75 GB of parameter rows)
     elif m["source_format"] == "gguf" and vf and "iq3" in vf.lower():
         out = int(54.66e9 / 2 * 1.08)  # stored integer codes are one byte a weight in the TIR section (~27B params)
     else:
@@ -245,13 +247,17 @@ def estimate(m: dict, variant: str | None, stream: bool, segment_gb: float) -> d
     if stream:
         # Sharded safetensors: two resident shards (`--shard-keep 2`) + one segment. A GGUF, or a published legacy file, is read
         # over HTTPS and never stored (`--gguf-url`, `palwart pack --from-url`): one segment and the small files.
-        if m["source_format"] == "gguf" or is_legacy_wrap(m):
+        if is_palwq36(m):
+            peak_in = 1 * GB  # the measuring record (parameter rows) beside the segment in flight
+        elif m["source_format"] == "gguf" or is_legacy_wrap(m):
             peak_in = 0
         elif is_a16(m):
             peak_in = total_in + out  # the checkpoint is read whole and the A16 file is written before it is packed
         else:
             peak_in = biggest if len(weights) <= 1 else min(total_in, 2 * biggest)
         peak = peak_in + seg + 2 * GB
+    elif is_palwq36(m):
+        peak = total_in + seg + 3 * GB  # a local GGUF; the artifact still goes through the pipe, segment by segment
     else:
         peak = total_in + out + 2 * GB + (out if is_a16(m) else 0)
     return {"input_bytes": total_in, "biggest_input_file": biggest, "output_bytes_est": out, "peak_disk_bytes_est": peak,
@@ -259,6 +265,12 @@ def estimate(m: dict, variant: str | None, stream: bool, segment_gb: float) -> d
 
 
 # ---------------------------------------------------------------------------------------------- manifest and card
+
+def is_palwq36(m: dict) -> bool:
+    """#8: rebuilt from a `qwen35moe` GGUF with the legacy PALWQ361 converter (`qwen36-convert --context N`), streamed both ends:
+    a measuring pass, then an output pass writing into a pipe that `palwart pack --from-pipe` cuts into segments."""
+    return m["converter"] == "palwq36"
+
 
 def is_a16(m: dict) -> bool:
     """#1: converted with the legacy base0 A16 converter (`qwen25-convert --a16 --n-ctx N`), then carried in the container."""
@@ -274,7 +286,7 @@ def effective_options(m: dict, context: int | None) -> dict:
     o = json.loads(json.dumps(m.get("convert_options") or {}))
     if is_legacy_wrap(m):
         return o
-    if "context" in o or is_a16(m):
+    if "context" in o or is_a16(m):  # (the PALWQ361 rebuild's `context` is its rotary width, baked into the file)
         n = int(context or o.get("context") or o.get("n_ctx"))
         if n < 64:
             raise SystemExit(f"--context {n}: give at least 64")
@@ -349,6 +361,24 @@ def manifest_for(m: dict, variant: str | None, context: int | None = None, calib
         conv.update({"legacy_artifact": {k: la[k] for k in ("repo", "revision", "path", "bytes", "sha256", "artifact_digest", "xet_hash",
                                                              "converter") if k in la},
                      "requantised": False, "reconverted": False})
+    if is_palwq36(m):
+        conv["palwq36"] = {
+            "tool": f"qwen36-convert --url <pinned resolve URL> --url-bytes N --url-sha256 <LFS id> --context {opts['context']}: a "
+                    "measuring pass (--reference-only --measured-out), then an output pass (--measured-in --out FIFO) into "
+                    "palwart pack --from-pipe",
+            "calibration": "the converter's own 8-token prompt, with the analytic horizon correction of the Gated DeltaNet state "
+                           "exponents to the served context (qwen36_calibrate::horizon_growth_bits)",
+            "quantisation": "the stored Q8_0 blocks are dequantized and re-quantized per output channel with a power-of-two exponent "
+                            "per 32 weights (PALWQ361): not an integer-exact lowering of Q8_0",
+            "mtp": "the trailing multi-token-prediction block (nextn_predict_layers) is not a layer of the artifact",
+            "input_check": "whole-file SHA-256 over the range-read bytes in order against the LFS id; every window's SHA-256 checked "
+                           "again when it is read again, in either pass",
+            "output_check": "the output pass refuses any tensor whose codes differ from the measuring pass's (BLAKE2b) and any "
+                            "measured parameter that differs from the header's",
+            **(calib or {}),
+        }
+    if m.get("history_artifact") and not is_a16(m):
+        conv["history_artifact"] = dict(m["history_artifact"])
     if is_a16(m):
         conv["a16"] = {"tool": f"qwen25-convert <source> --a16 --n-ctx {opts['n_ctx']} --out {opts['a16_file']}",
                        "calibration": "the converter's own 57-token prompt (misaka/palw/base0/src/bin/qwen25-convert.rs), fixed in source",
@@ -374,7 +404,7 @@ def manifest_for(m: dict, variant: str | None, context: int | None = None, calib
                          "method": "sampled deterministic re-execution, public localization, deterministic court (PRINCIPLES §8: no cryptographic proof of computation)"},
         "tentative": m.get("tentative", False),
         "served_context": served_context(m, opts),
-        "uncensored": m["id"] != 8,
+        "uncensored": m.get("uncensored", True),
         "scope": {"kind": "text-generation", "inputs": "token ids", "outputs": "next-token logits",
                   "out_of_scope_components": m.get("out_of_scope", []),
                   "rule": "vision towers, projectors (mmproj), image/audio/video embedders and multi-token-prediction heads are not "
@@ -408,9 +438,7 @@ def model_card(m: dict, variant: str | None, record: dict | None, manifest: dict
         "This is the **PALW-converted form** of an existing model for the MISAKA chain: one `PALWART3` `.palwart` artifact "
         "(an index file plus segment files). It is **not** a newly trained or fine-tuned model and makes no claim about the "
         "model's quality or safety. "
-        + ("The source model is an uncensored variant (refusal behaviour reduced upstream)." if m["id"] != 8 else
-           "This entry is the existing **official-derived** PALWQ361 integer runtime of Qwen3.6-35B-A3B — the only genesis model "
-           "that is not an uncensored variant — carried byte for byte, not re-converted."),
+        + "The source model is an uncensored variant (refusal behaviour reduced upstream).",
         "",
         "## Scope: text generation only",
         "",
@@ -471,6 +499,12 @@ def model_card(m: dict, variant: str | None, record: dict | None, manifest: dict
             h = man["conversion"]["history_artifact"]
             lines.append(f"- history: the 8k A16 file `{h['path']}` (SHA-256 `{h['sha256']}`) published at `{h['revision'][:12]}` stays in this "
                          "repository; it is not this artifact")
+    q36 = man["conversion"].get("palwq36")
+    if q36:
+        lines.append(f"- converted with `{q36['tool']}`; {q36['quantisation']}; calibration: {q36['calibration']}")
+        h = man["conversion"].get("history_artifact")
+        if h:
+            lines.append(f"- history: `{h['repo']}@{h['revision'][:12]}` `{h['path']}` ({h['note']}) — not this artifact")
     cal = man["conversion"].get("calibration")
     if cal:
         docs = ", ".join(f"`{d['path']}` (git blob `{str(d.get('git_blob'))[:12]}`)" for d in cal["documents"])
@@ -587,7 +621,8 @@ class Pipeline:
             problems.append(f"BLOCKED: {m['blocked']}")
         elif m.get("blocked"):
             log(f"#{m['id']} BLOCKED (a real run stops here): {m['blocked']}")
-        needed = ["palwart"] if is_legacy_wrap(m) else ["qwen25-convert", "palwart"] if is_a16(m) else ["palw-tir-convert", "palwart"]
+        needed = (["palwart"] if is_legacy_wrap(m) else ["qwen25-convert", "palwart"] if is_a16(m)
+                  else ["qwen36-convert", "palwart"] if is_palwq36(m) else ["palw-tir-convert", "palwart"])
         if self.fit_plan(m)[0]:
             needed.append("palw-tir-fidelity")
         for t in needed:
@@ -901,6 +936,8 @@ class Pipeline:
                 argv += ["--license-file", lf]
             argv += self.hook_args(m, "--on-segment", "--on-segment-arg", "--delete-after-hook")
             argv += ["--json"]
+        elif is_palwq36(m):
+            return self.palwq36_convert(m, opts, d, st, seg)
         elif m["converter"] in ("tir", "tir-gguf"):
             o = opts
             model_path = d["src"]
@@ -963,6 +1000,82 @@ class Pipeline:
         if p.returncode != 0:
             raise SystemExit(f"#{m['id']}: the converter exited {p.returncode}")
         report.write_text(p.stdout)
+        st.mark("convert", {"report": str(report)})
+
+    def palwq36_convert(self, m: dict, opts: dict, d: dict, st: State, seg: list[str]) -> None:
+        """#8 at 32K: `qwen36-convert` twice over the same verified bytes, never storing the GGUF or the artifact.
+        1. measuring pass (`--reference-only --measured-out`): reads every tensor by range, calibrates, records the measured
+           parameter rows, the artifact's length and every tensor's code digest; hashes the GGUF in order and compares it with
+           the LFS id before it exits, and records every window's digest (`--url-windows-out`);
+        2. output pass (`--measured-in --url-windows-in --out FIFO`): every window it reads must match those digests; it writes
+           header (built with the measured rows) and codes strictly in order into a pipe, refusing any tensor whose codes differ
+           from the measuring pass's; `palwart pack --from-pipe --from-bytes N` cuts the stream into 2 GiB segments, each handed
+           to the uploader and deleted, the index last.
+        The bytes are the one-pass file's (`misaka/palw/base0/tests/qwen36_streamed_output.rs`)."""
+        self.prepare_gguf_side_files(m, d)  # the tokenizer checked id by id against the GGUF; its chat template and metadata
+        manifest = self.write_manifest(m)
+        report = d["base"] / "convert-report.json"
+        vf = variant_file(m, self.a.gguf_variant)
+        if self.a.local_source:
+            src_in = ["--gguf", str(d["src"] / vf)]
+            first, second = list(src_in), list(src_in)
+        else:
+            gw = self.gguf_weight(m)
+            url = ["--url", self.gguf_url(m), "--url-bytes", str(gw["bytes"]),
+                   "--url-window-mib", str(opts.get("window_mib", 64)), "--url-cache-windows", str(opts.get("cache_windows", 24))]
+            first = url + ["--url-sha256", gw["lfs_sha256"], "--url-windows-out", str(d["base"] / "q36-windows.json")]
+            second = url + ["--url-windows-in", str(d["base"] / "q36-windows.json")]
+        measured = d["base"] / "q36-measured.bin"
+        ctx = ["--context", str(opts["context"])]
+        if not (st.done("q36-measure") and measured.exists()):
+            argv = [self.tool("qwen36-convert"), *first, *ctx, "--reference-only", "--measured-out", str(measured),
+                    "--out", str(d["base"] / "q36-measure.unused")]
+            log(f"#{m['id']} PALWQ361 measuring pass (log: {d['base'] / 'q36-measure.log'})")
+            if self.a.dry_run:
+                self.r.run(argv)
+            else:
+                with open(d["base"] / "q36-measure.log", "w") as logf:
+                    p = subprocess.run(argv, stdout=logf, stderr=subprocess.STDOUT, env=anon_env())
+                if p.returncode != 0:
+                    raise SystemExit(f"#{m['id']}: the measuring pass exited {p.returncode} (log: {d['base'] / 'q36-measure.log'})")
+                st.mark("q36-measure", {"measured": str(measured)})
+        file_bytes = "<from the measuring record>"
+        if not self.a.dry_run:
+            head = measured.read_bytes()[:16]
+            if head[:8] != b"PALWQ36M":
+                raise SystemExit(f"{measured}: not a measuring pass's record")
+            file_bytes = str(int.from_bytes(head[8:16], "little"))
+        fifo = d["base"] / "q36.fifo"
+        pack = [self.tool("palwart"), "pack", "--from-pipe", str(fifo), "--from-bytes", file_bytes,
+                "--from-name", f"{m['stem']}.palwq36", "--source-dir", str(d["src"]), "--out-dir", str(d["out"]), "--stem", m["stem"],
+                "--family", m["family"], "--manifest", str(manifest), *seg]
+        for lf in self.license_files(m, d["src"]):
+            pack += ["--license-file", lf]
+        pack += self.hook_args(m, "--on-segment", "--on-segment-arg", "--delete-after-hook") + ["--json"]
+        conv = [self.tool("qwen36-convert"), *second, *ctx, "--measured-in", str(measured), "--out", str(fifo)]
+        log(f"#{m['id']} PALWQ361 output pass into {fifo} → palwart pack (report: {report})")
+        if self.a.dry_run:
+            self.r.run(["mkfifo", str(fifo)])
+            self.r.run(pack + ["&"])
+            self.r.run(conv)
+            return
+        fifo.unlink(missing_ok=True)
+        os.mkfifo(fifo)
+        packer = subprocess.Popen(pack, text=True, stdout=subprocess.PIPE, env=anon_env())
+        try:
+            with open(d["base"] / "q36-output.log", "w") as logf:
+                p = subprocess.run(conv, stdout=logf, stderr=subprocess.STDOUT, env=anon_env())
+            if p.returncode != 0:
+                packer.kill()
+                raise SystemExit(f"#{m['id']}: the output pass exited {p.returncode} (log: {d['base'] / 'q36-output.log'})")
+            out, _ = packer.communicate()
+        finally:
+            if packer.poll() is None:
+                packer.kill()
+            fifo.unlink(missing_ok=True)
+        if packer.returncode != 0:
+            raise SystemExit(f"#{m['id']}: palwart pack exited {packer.returncode}")
+        report.write_text(out)
         st.mark("convert", {"report": str(report)})
 
     def ram_args(self, d: dict, step: str) -> list[str]:
@@ -1088,6 +1201,12 @@ class Pipeline:
         if is_a16(m):
             return False, ("the A16 route's check is qwen25-convert's own FAITHFUL report over its 57-token prompt (in the manifest); "
                            "no long-context check exists for the A16 engine")
+        if is_palwq36(m):
+            return False, ("PALWQ361 at 32K is not measurable on this Mac: no tool compares the legacy engine with the f32 reference "
+                           "at windows along a long sequence (qwen36-run --reference scores the converter's 8-token prompt only), "
+                           "the f32 reference over 32K positions of the 35B-A3B MoE is another full read of the GGUF and hours of "
+                           "compute, and the integer engine needs the ~37 GB artifact on local disk against 32 GB of RAM (the "
+                           "streamed run keeps none of it). The measuring pass's log records the reference's next-token check")
         if self.a.no_fit:
             return False, "--no-fit"
         if m["converter"] == "tir-gguf" and not self.a.local_source:
