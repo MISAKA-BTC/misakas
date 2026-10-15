@@ -170,6 +170,12 @@ pub fn palw_rfc0016_calibration_conforms_v1(values: &PalwRfc0016ValuesV1) -> Res
     Ok(())
 }
 
+/// **V11 (user decision 2026-10-15): the coinbase-receiving mining route is NOT migrated off the Panel this round.** The V2 Attempt
+/// route keeps its existing Panel (Panel=1 hold, coinbase-derived escrow); the Kernel/OPV route's Panel=0 is a different, user-paid
+/// route and never makes the coinbase route Panel-free (D-P5). A migration needs real-node tests of verification, rotation,
+/// liability and Final first, then a separate decision — flipping this is that decision, never a value.
+pub const PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1: bool = false;
+
 /// σ, named (placeholder until measured).
 pub const PALW_RFC0016_SIGMA_PERMILLE_V1: u32 = PALW_RFC0016_VALUES_V1.sigma_permille;
 /// k, named (placeholder until measured; 1000 = the tilt is off).
@@ -521,6 +527,20 @@ mod tests {
         assert_eq!(decided.epoch_daa, PALW_RFC0016_EPOCH_CALIBRATION_DAA_V1);
         assert_eq!(decided.average.unwrap().span_daa(), PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);
         assert_eq!(PALW_RFC0016_CALIBRATION_START_V1.entrant_age_daa, PALW_RFC0016_AVERAGE_WINDOW_CALIBRATION_DAA_V1);
+    }
+
+    /// V11 (user decision 2026-10-15): no coinbase Panel migration — the coinbase-derived origins stay on the Panel (Panel=1) route;
+    /// only the user-paid kernel route is Panel=0, and it carries no coinbase leg.
+    #[test]
+    fn v11_the_coinbase_route_keeps_its_panel() {
+        use crate::palw_bond_budget_v1::{PalwBudgetOriginV1 as O, PalwHoldModeV1, palw_budget_origin_is_user_escrow_v1};
+        assert!(!PALW_RFC0016_COINBASE_PANEL_MIGRATION_V1);
+        for coinbase in [O::Attempt, O::Rider, O::FreePrompt] {
+            assert_eq!(PalwHoldModeV1::for_origin(coinbase), PalwHoldModeV1::PanelOne, "{coinbase:?} stays on the Panel route");
+            assert!(!palw_budget_origin_is_user_escrow_v1(coinbase), "{coinbase:?} is coinbase-derived");
+        }
+        assert_eq!(PalwHoldModeV1::for_origin(O::KernelRoute), PalwHoldModeV1::PanelZero);
+        assert!(palw_budget_origin_is_user_escrow_v1(O::KernelRoute), "Panel=0 is the user-paid route, no coinbase leg");
     }
 
     #[test]
