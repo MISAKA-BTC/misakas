@@ -4664,3 +4664,22 @@ complete Master aggregate or a private escrow payment does not replace those
 approvals. The all-seven block/coinbase/Final-weight gate must inspect the actual
 ordinary model/claim approval path and original bond caps. Report missing
 approvals, unknown detection rates and absent execution evidence explicitly.
+
+### II.14.63 Unsupported models and consensus upgrades (user decision, 2026-10-15)
+
+When a model cannot be supported under the current RFC02 consensus rules,
+implement the required **hard fork or soft fork** to support it. Record the exact
+model/task/context and missing feature. Existing-rule frontend or lowering
+changes need no consensus change; a new primitive, grammar or validity extension
+uses an explicitly versioned hard fork when old nodes would disagree. Use a
+soft fork only when the new validity conditions restrict the old valid set and
+old nodes accept the resulting blocks. Determine compatibility from the actual
+rules; never reinterpret frozen old bytes or primitive semantics.
+
+Both paths need explicit activation, node/migration implementation, original
+source and full-context evidence, independent replay and public deterministic
+court, DA/resource/deadline/economic checks, sampled-validator approvals, Final,
+redemption and reorg verification. Unsupported models earn no provisional rights
+by bypassing those checks. PRINCIPLES §8 remains mandatory in either upgrade.
+The current implementation and validation backlog is tracked in
+[the remaining-work document](../design/palw/tir/rfc0002-remaining-work-2026-10-15.md).

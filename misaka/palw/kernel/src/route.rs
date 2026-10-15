@@ -170,6 +170,8 @@ fn stage_action_cap(action: u8) -> usize {
         40 => 130 + 7,
         41 => MAX_STAGE_SOURCE_BYTES_V39,
         42 => 262 + 7,
+        71 => 67 + 7,
+        72 => 64 + 7,
         65 => (46 << 20) + 7,
         57 | 67 => 256 + 7,
         50 => (32 << 10) + 143 + 7,
@@ -186,6 +188,8 @@ fn stage_action_extent(action: u8, encoded: usize) -> bool {
             39 => encoded >= 143 + 7,
             40 => encoded == 130 + 7,
             42 => encoded == 262 + 7,
+            71 => encoded == 67 + 7,
+            72 => encoded == 64 + 7,
             50 => encoded >= 143 + 7,
             58 | 68 => encoded >= 72 + 7,
             59 | 60 | 66 | 69 | 70 => encoded == 64 + 7,
@@ -813,7 +817,7 @@ pub fn borrowed_native_action_v1(bytes: &[u8]) -> Result<Option<BorrowedNativeAc
     };
     let (cap, last) = match tag {
         TAG_FUNDED_EXECUTION_V11 => (MAX_FUNDED_EXECUTION_BYTES_V11, 46),
-        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 70),
+        TAG_STAGE_EXECUTION_V14 => (stage_action_cap(bytes.get(2).copied().unwrap_or(0)), 79),
         _ => return Ok(None),
     };
     let bad = |why: &str| KernelRefusalV1::new("NativeAction", RefusalKindV1::Malformed, why);
@@ -991,7 +995,7 @@ impl KernelRouteObjectV1 {
         }
         if tag == TAG_STAGE_EXECUTION_V14 {
             let count = rest.get(2..6).ok_or_else(|| bad(RefusalKindV1::Malformed, "truncated stage14 action frame".into()))?;
-            if rest.get(1).is_none_or(|a| *a > 70 || !stage_action_extent(*a, bytes.len()))
+            if rest.get(1).is_none_or(|a| *a > 79 || !stage_action_extent(*a, bytes.len()))
                 || u32::from_le_bytes(count.try_into().unwrap()) as usize != rest.len().saturating_sub(6)
             {
                 return Err(bad(RefusalKindV1::Malformed, "stage14 action/count differs from exact bounded carrier".into()));
@@ -1309,7 +1313,7 @@ mod tests {
         assert!(borrowed_native_action_v1(&collect).is_ok());
         assert!(KernelRouteObjectV1::decode(&collect).is_ok());
         let mut unknown = collect;
-        unknown[2] = 71;
+        unknown[2] = 80;
         assert!(borrowed_native_action_v1(&unknown).is_err());
         assert!(KernelRouteObjectV1::decode(&unknown).is_err());
     }
@@ -1355,7 +1359,7 @@ mod tests {
         }
         assert!(borrowed_native_action_v1(&KernelRouteObjectV1::Withdraw { bond: [1; 64] }.encode()).unwrap().is_none());
         // Funded actions run to 46: 45/46 are the typed window class v37 register/attach (RFC02 §II.14.60), as the decoder admits.
-        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 71)] {
+        for (tag, last, unknown) in [(TAG_FUNDED_EXECUTION_V11, 46, 47), (TAG_STAGE_EXECUTION_V14, 38, 80)] {
             let mut raw = vec![1, tag, last, 0, 0, 0, 0];
             assert_eq!(borrowed_native_action_v1(&raw).unwrap().unwrap().action, last);
             raw[2] = unknown;

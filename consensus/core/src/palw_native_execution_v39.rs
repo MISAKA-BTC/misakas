@@ -9,7 +9,7 @@ use misaka_palw_kernel::{
 };
 
 pub const NATIVE_ACTION_FIRST_V39: u8 = 41;
-pub const NATIVE_ACTION_LAST_V39: u8 = 70;
+pub const NATIVE_ACTION_LAST_V39: u8 = 79;
 pub const REGISTER_SOURCE_ACTION_V39: u8 = 41;
 pub const REGISTER_CLASS_ACTION_V39: u8 = 42;
 pub const SOURCE_START_ACTION_V39: u8 = 57;
@@ -19,6 +19,14 @@ pub const SOURCE_COLLECT_ACTION_V39: u8 = 60;
 pub const SOURCE_PART_BYTES_V39: usize = 32 << 10;
 pub const SOURCE_UPLOAD_MAX_BYTES_V39: usize = misaka_palw_kernel::flat_source39::SOURCE39_MAX_BYTES;
 pub const SOURCE_UPLOAD_MAX_PARTS_V39: usize = SOURCE_UPLOAD_MAX_BYTES_V39.div_ceil(SOURCE_PART_BYTES_V39);
+
+/// Optional immutable data archive for bodies whose live retention was released.
+/// Returned bytes carry no authority. Auditors authenticate them against the
+/// original source/class headers in their current independently anchored state.
+pub trait NativeOriginalSourceArchiveV39 {
+    fn source(&self, id: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String>;
+    fn class(&self, id: Digest, maximum: usize) -> Result<Option<Vec<u8>>, String>;
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NativeSourceUploadStartV39 {
@@ -96,7 +104,7 @@ pub fn source_protocol_root_v39() -> Digest {
             SOURCE_UPLOAD_MAX_BYTES_V39 as u64,
             misaka_palw_kernel::flat_resources39::ordinary_court_id_v39(),
             crate::palw_native_job_v39::final_conditions_id_v39(),
-            b"canonical39;real-PC-only;inputs-separate;original-context;paid-before-parse;owning-material61-64;metadata67-70;master-body-pages93x32768".to_vec(),
+            b"canonical39;real-PC-only;inputs-separate;original-context;paid-before-parse;owning-material61-64;metadata67-70;master-body-pages93x32768;retention71-72;immutable-headers-exact-rehydration;class-holds94-95;live-payers96-97;source-active-classes98;mining73-79".to_vec(),
         ),
     )
 }

@@ -48,6 +48,7 @@ pub struct NativeJobOriginalV39 {
     pub queue: Digest,
     pub physical: Digest,
     pub final_policy: Digest,
+    pub final_authority: Digest,
     pub final_basis: Digest,
     pub requester: PalwBondKeyV2,
     pub producer: PalwBondKeyV2,
@@ -140,6 +141,7 @@ impl NativeJobOriginalV39 {
             || self.source_plan != quota.source().root()
             || self.paged_plan != quota.paged().root()
             || self.final_policy != p.final_policy
+            || self.final_authority != final_authority_v39(p)
             || self.physical != p.physical_service
             || requester != maximum.request().requester
             || producer != maximum.request().producer
@@ -153,7 +155,6 @@ impl NativeJobOriginalV39 {
             || self.finder
                 != u64::try_from(self.reserve as u128 * execution.finder_permille as u128 / 1000)
                     .map_err(|_| "native39 original finder extent")?
-            || self.finder == 0
             || self.finder > self.reserve
             || self.interval != self.admitted / p.execution.quota.interval_daa
             || self.commit_until <= self.admitted
@@ -437,7 +438,7 @@ impl NativeJobBookV39 {
     }
     pub(crate) fn finalize(
         &mut self,
-        conditions: &crate::palw_native_final_v27::CheckedNativeFinalConditionsV27,
+        conditions: &CheckedNativeFinalConditionsV39,
         closure: &NativeFinalClosureV39,
     ) -> Result<NativeSettlementV39, String> {
         let c = self.claim.as_ref().ok_or("native39 original claim absent")?;
@@ -457,6 +458,7 @@ impl NativeJobBookV39 {
             || closure.original_closure == [0; 64]
             || closure.now <= c.final_after
             || conditions.policy_root() != self.original.final_policy
+            || conditions.authority_root() != self.original.final_authority
             || conditions.basis_root() != self.original.final_basis
             || conditions.complete_path_daa() > self.original.challenge_window
         {
@@ -466,7 +468,14 @@ impl NativeJobBookV39 {
         // challenge horizon and no old quota/window credit returned here.
         let proof = object_id(
             b"misaka-palw/native/original-verified-Final-conditions/v39",
-            &(self.funding(), c.claim, conditions.policy_root(), conditions.basis_root(), closure.original_closure),
+            &(
+                self.funding(),
+                c.claim,
+                conditions.policy_root(),
+                conditions.authority_root(),
+                conditions.basis_root(),
+                closure.original_closure,
+            ),
         );
         self.settle(NativeJobTerminalV39::Final, closure.now, proof, 0)
     }
@@ -635,6 +644,7 @@ pub struct NativeMaximumContractV39 {
     pub physical: Digest,
     pub temporal: NativeTemporalV39,
     pub final_policy: Digest,
+    pub final_authority: Digest,
     pub final_basis: crate::palw_native_final_v27::NativeFinalClassBasisV27,
 }
 impl NativeMaximumContractV39 {
@@ -645,7 +655,7 @@ impl NativeMaximumContractV39 {
 pub struct CheckedNativeMaximumV39 {
     record: NativeMaximumContractV39,
     queue: crate::palw_native_queue_v30::CheckedNativeQueuePlanV30,
-    conditions: crate::palw_native_final_v27::CheckedNativeFinalConditionsV27,
+    conditions: CheckedNativeFinalConditionsV39,
 }
 impl CheckedNativeMaximumV39 {
     pub fn record(&self) -> &NativeMaximumContractV39 {
@@ -654,7 +664,7 @@ impl CheckedNativeMaximumV39 {
     pub fn queue(&self) -> &crate::palw_native_queue_v30::CheckedNativeQueuePlanV30 {
         &self.queue
     }
-    pub fn conditions(&self) -> &crate::palw_native_final_v27::CheckedNativeFinalConditionsV27 {
+    pub fn conditions(&self) -> &CheckedNativeFinalConditionsV39 {
         &self.conditions
     }
     pub fn carriage(&self) -> &crate::palw_native_paged_carriage_v29::CheckedNativePagedCarriagePlanV29 {
@@ -771,16 +781,7 @@ impl CheckedNativeMaximumV39 {
             maximum_court_work: class.scope().maximum_work,
             maximum_court_scratch: class.scope().maximum_scratch,
         };
-        let conditions = final_policy.check_class(
-            p.network_domain,
-            &basis,
-            temporal.acquisition.checked_add(temporal.proof_window).ok_or("native39 original complete path overflow")?,
-            true,
-            service.implemented,
-        )?;
-        if temporal.challenge_window < conditions.complete_path_daa() {
-            return Err("native39 original challenge window lacks measured complete independent opportunity".into());
-        }
+        let conditions = CheckedNativeFinalConditionsV39::derive(p, final_policy, &basis, &temporal, service.implemented)?;
         let record = NativeMaximumContractV39 {
             version: 39,
             class: class.root(),
@@ -802,6 +803,7 @@ impl CheckedNativeMaximumV39 {
             physical: p.physical_service,
             temporal,
             final_policy: p.final_policy,
+            final_authority: conditions.authority_root(),
             final_basis: basis,
         };
         Ok(Self { record, queue, conditions })
@@ -1049,4 +1051,122 @@ pub fn final_conditions_id_v39() -> Digest {
         misaka_palw_kernel::flat_public39::public_protocol_id_v39(),
         b"metrics-report-only;original-paid-coins/shared21/queue30/mass/temporal;independent-finalizer;public-local-reexecution-courts;identity-only-hash-signature-merkle;escrowFinal-zero-B-F-R;sampled-validator-credit-separate;no-cryptographic-LLM-correctness-proof".to_vec(),
     ))
+}
+
+/// New owning39 rules explicitly separate evaluation metrics from admission.
+/// Old27 wire and consumers retain their original meaning. This token cannot be
+/// deserialized or minted by a claimant's calibration record or success flag.
+pub struct CheckedNativeFinalConditionsV39 {
+    policy: Digest,
+    authority: Digest,
+    basis: Digest,
+    path: u64,
+    metrics: NativeFinalMetricsV39,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeFinalMetricsV39 {
+    /// None is UNKNOWN. No probability or expected-profit threshold grants or
+    /// revokes funded escrow rights under owning39.
+    pub detection_fraction: Option<(u64, u64)>,
+    pub complete_reference_cost_sompi: u64,
+    pub maximum_gain_sompi: u64,
+    pub collectible_reserve_sompi: u64,
+    pub finder_award_sompi: u64,
+}
+pub fn final_authority_v39(p: &NativeExecutionPoliciesV39) -> Digest {
+    object_id(b"misaka-palw/native/original-final-authority/v39", &(p.root(), final_conditions_id_v39()))
+}
+impl CheckedNativeFinalConditionsV39 {
+    pub fn policy_root(&self) -> Digest {
+        self.policy
+    }
+    pub fn authority_root(&self) -> Digest {
+        self.authority
+    }
+    pub fn basis_root(&self) -> Digest {
+        self.basis
+    }
+    pub fn complete_path_daa(&self) -> u64 {
+        self.path
+    }
+    pub fn metrics(&self) -> &NativeFinalMetricsV39 {
+        &self.metrics
+    }
+    fn derive(
+        p: &NativeExecutionPoliciesV39,
+        environment: &crate::palw_native_final_v27::NativeFinalPolicyV27,
+        basis: &crate::palw_native_final_v27::NativeFinalClassBasisV27,
+        temporal: &NativeTemporalV39,
+        actual_service: bool,
+    ) -> Result<Self, String> {
+        // The authenticated environment supplies measured resource/time and
+        // actual service assumptions, never a class/model/compiler allowlist.
+        // In particular do NOT call old27.check/check_class: those frozen
+        // consumers intentionally have different numerical economic gates.
+        environment.queue_policy.check(p.network_domain)?;
+        if environment.version != 27
+            || environment.network_domain != p.network_domain
+            || environment.root() != p.final_policy
+            || !actual_service
+            || environment.calibrations.len() > 128
+            || environment.calibrations.windows(2).any(|w| w[0].profile >= w[1].profile)
+            || basis.original_finder_award_sompi > basis.original_producer_reserve_sompi
+            || basis.execution_policy != p.execution.execution.root()
+            || basis.quota_policy != p.execution.quota.root()
+            || basis.discovery_policy != p.execution.discovery.root()
+            || basis.source_protocol != p.source_protocol39
+            || basis.physical_service != p.physical_service
+        {
+            return Err("native39 original environment/resources/collateral identity differs".into());
+        }
+        let c = environment
+            .calibrations
+            .iter()
+            .find(|c| c.profile == basis.verifier_profile)
+            .ok_or("native39 executable public verifier profile lacks resource/time service coverage")?;
+        if basis.maximum_reference_bytes > c.maximum_reference_bytes
+            || basis.maximum_court_bytes > c.maximum_court_bytes
+            || basis.maximum_court_work > c.maximum_court_work
+            || basis.maximum_court_scratch > c.maximum_court_scratch
+            || !c.original_source_ready
+            || !c.whole_claim_detector_ready
+            || !c.actual_delivery_ready
+            || (environment.purpose.is_qualified() && !c.independent_node_ready)
+            || [c.measurement_root, c.source_availability_root, c.real_delivery_service_root].contains(&[0; 64])
+            || (environment.purpose.is_qualified() && c.independent_native_final_root == [0; 64])
+        {
+            return Err("native39 original source/executable detector/time/resource/delivery conditions unready".into());
+        }
+        let path = [
+            c.measured_cold_reference_daa,
+            c.measured_sequential_discovery_daa,
+            c.measured_prove_before_seal_daa,
+            c.measured_proof_delivery_daa,
+            c.restart_reorg_margin_daa,
+        ]
+        .into_iter()
+        .try_fold(0u64, |n, x| n.checked_add(x))
+        .ok_or("native39 measured path overflow")?;
+        let original = temporal.acquisition.checked_add(temporal.proof_window).ok_or("native39 path overflow")?;
+        if path == 0 || path > original || path > temporal.challenge_window {
+            return Err("native39 measured complete path exceeds original prepaid opportunity".into());
+        }
+        let fraction = (c.whole_claim_detection_denominator != 0
+            && c.whole_claim_detection_numerator <= c.whole_claim_detection_denominator
+            && c.whole_claim_detection_root != [0; 64])
+            .then_some((c.whole_claim_detection_numerator, c.whole_claim_detection_denominator));
+        Ok(Self {
+            policy: environment.root(),
+            authority: final_authority_v39(p),
+            basis: basis.root(),
+            path,
+            metrics: NativeFinalMetricsV39 {
+                detection_fraction: fraction,
+                complete_reference_cost_sompi: basis.complete_reference_cost_sompi,
+                maximum_gain_sompi: basis.maximum_producer_gain_sompi,
+                collectible_reserve_sompi: basis.original_producer_reserve_sompi,
+                finder_award_sompi: basis.original_finder_award_sompi,
+            },
+        })
+    }
 }

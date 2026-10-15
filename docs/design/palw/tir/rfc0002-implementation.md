@@ -8,6 +8,10 @@ G14 prosecution/bounds and X8R/BUDGET integration through `123d8254e`. Original 
 
 Statuses below describe inspected code/evidence, not assumed results from earlier progress reports.
 
+The current detailed backlog, validation order, seven-model status and the user's
+hard-fork/soft-fork policy for unsupported models are tracked in
+[RFC02 remaining work (2026-10-15)](rfc0002-remaining-work-2026-10-15.md).
+
 | Requirement | Existing evidence / current action | Completion evidence still required |
 | --- | --- | --- |
 | Current specification | RFC02 now separates current requirements from historical primitive-count, replay, availability and seating notes; §II.14 incorporates all six review requirements | Keep formal specification and implementation aligned as versioned features land |

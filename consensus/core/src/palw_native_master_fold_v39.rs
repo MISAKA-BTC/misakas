@@ -470,6 +470,15 @@ fn register(
     for (i, page) in raw.chunks(32768).enumerate() {
         builder.write_kernel_row(TABLE, k(93, &(id, i as u16)), Some(page.to_vec()));
     }
+    for c in &m.components {
+        super::palw_native_source_fold_v39::retain_class(
+            builder,
+            c.class,
+            super::palw_native_source_fold_v39::HOLD_MASTER,
+            super::palw_native_source_fold_v39::master_hold_object(id, c.stage),
+            m.deadline,
+        )?;
+    }
     builder.write_kernel_row(TABLE, k(82, &id), Some(b(&(progress.root(), progress))));
     builder.write_kernel_row(TABLE, k(85, signer), Some(b(&ids)));
     builder.write_kernel_row(
@@ -744,6 +753,14 @@ fn close(
     }
     // Header, funded bindings and immutable terminal credit roots remain. A
     // terminal Master never creates another payment, receipt or quota refund.
+    for c in &m.components {
+        super::palw_native_source_fold_v39::release_class(
+            builder,
+            c.class,
+            super::palw_native_source_fold_v39::HOLD_MASTER,
+            super::palw_native_source_fold_v39::master_hold_object(id, c.stage),
+        )?;
+    }
     let mut ids = catalog(builder.state.kernel_route.as_ref().unwrap(), &m.owner)?;
     ids.retain(|v| *v != id);
     builder.write_kernel_row(TABLE, k(85, &m.owner), Some(b(&ids)));
@@ -1037,6 +1054,15 @@ impl PalwChainStateV2 {
         parameters: &crate::config::params::Params,
         id: Digest,
     ) -> Result<CheckedNativeMasterSourceAuditV39, String> {
+        Self::native_master_sources_from_stream_with_archive_v39(rows, anchor, parameters, id, None)
+    }
+    pub fn native_master_sources_from_stream_with_archive_v39<R: crate::palw_native_audit_proof_v39::NativeAuditRowReaderV39>(
+        rows: &crate::palw_native_audit_proof_v39::VerifiedNativeAuxRowsV39<R>,
+        anchor: &crate::palw_native_state_anchor_v39::CheckedNativeStateAnchorV39,
+        parameters: &crate::config::params::Params,
+        id: Digest,
+        archive: Option<&dyn NativeOriginalSourceArchiveV39>,
+    ) -> Result<CheckedNativeMasterSourceAuditV39, String> {
         let daa = anchor.daa();
         let p = &parameters
             .palw_native_execution_v39
@@ -1106,7 +1132,7 @@ impl PalwChainStateV2 {
         drop(raw);
         let mut classes = Vec::with_capacity(wire.classes.len());
         for class in &wire.classes {
-            classes.push(super::palw_native_source_fold_v39::restore_audited_class(rows, p, *class, &mut remaining)?);
+            classes.push(super::palw_native_source_fold_v39::restore_audited_class(rows, p, *class, &mut remaining, archive)?);
         }
         let s = restore_with_classes(wire, classes).map_err(|e| e.to_string())?;
         check_restored(&m, &s).map_err(|e| e.to_string())?;

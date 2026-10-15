@@ -6,7 +6,7 @@ use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
 };
-use misaka_palw_sdk::native_audit_io_v39::{AuxStreamHeaderV39, AuxStreamRowV39, CasObjectV39};
+use misaka_palw_sdk::native_audit_io_v39::{AuxStreamHeaderV39, AuxStreamRowV39, CasObjectV39, PayoutStreamRowV39};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
@@ -207,6 +207,75 @@ fn run() -> Result<(), String> {
     )?;
     output.write(&partial.join("envelope39.bin"), &anchor.rows[0].value)?;
     let anchor_state = anchor.state_preimage;
+    // Common payout identity is independently authenticated at the same pinned
+    // state. No execution32 authority or larger old opening cap is imported.
+    {
+        use kaspa_consensus_core::{
+            palw_native_audit_proof_v32 as common,
+            palw_state_proof_v1::{PalwCollectionOpeningV1, PalwFactProofV1, PalwStateOpeningV1},
+        };
+        let payouts = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(60),
+                client.get_palw_state_proof(kaspa_rpc_core::GetPalwStateProofRequest {
+                    block_hash: child.to_string(),
+                    collection: "pending-payouts-v32".into(),
+                }),
+            )
+            .await
+            .map_err(|_| "audit39 common payout RPC timeout")?
+            .map_err(|e| e.to_string())
+        })?;
+        if !payouts.available
+            || payouts.block_hash != child.to_string()
+            || payouts.collection != "pending-payouts-v32"
+            || payouts.state_preimage != anchor_state
+            || payouts.rows.len() > common::NATIVE_AUX_PROOF_MAX_ROWS_V32
+        {
+            return Err("audit39 common payout same original bounded state unavailable".into());
+        }
+        let mut total = anchor_state.len();
+        let mut prior = None;
+        for row in &payouts.rows {
+            if row.key.len() != 64 || row.value.len() != 72 || prior.as_ref().is_some_and(|k: &Vec<u8>| k >= &row.key) {
+                return Err("audit39 common payout exact rows/order".into());
+            }
+            total = total
+                .checked_add(136)
+                .filter(|n| *n <= common::NATIVE_AUX_PROOF_MAX_BYTES_V32)
+                .ok_or("audit39 common payout unchanged byte cap")?;
+            prior = Some(row.key.clone());
+        }
+        let proof = PalwFactProofV1 {
+            state: PalwStateOpeningV1 { preimage: anchor_state.clone() },
+            collection: PalwCollectionOpeningV1 {
+                label: common::NATIVE_PAYOUT_LABEL_V32.to_vec(),
+                rows: payouts.rows.into_iter().map(|r| (r.key, r.value)).collect(),
+            },
+        };
+        common::verify_native_payout_rows_v32(&proof, proof.state.root())?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(partial.join("payouts-stream39.jsonl"))
+            .map_err(|e| e.to_string())?;
+        let state = output.object(&anchor_state)?;
+        output.line(
+            &mut file,
+            &AuxStreamHeaderV39 {
+                schema: "misaka.palw.native-payout-stream.v39".into(),
+                state,
+                total_rows: proof.collection.rows.len(),
+                objects: objects.clone(),
+            },
+            4096,
+        )?;
+        for (key, value) in proof.collection.rows {
+            let value = output.object(&value)?;
+            output.line(&mut file, &PayoutStreamRowV39 { key: misaka_palw_sdk::runtime_pack::commit::hex(&key), value }, 4096)?;
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
     let (mut cursor, mut total, mut count, mut original_state) = ("-".to_string(), None, 0usize, None::<Vec<u8>>);
     let started = Instant::now();
     loop {

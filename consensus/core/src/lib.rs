@@ -996,6 +996,7 @@ pub mod palw_state_carriage_rpc_v1;
 pub mod palw_attempt_material_v3;
 
 pub mod palw_tir_objective_v1;
+pub mod palw_native_job_audit_v39;
 pub mod palw_native_job_v39;
 
 pub mod palw_native_audit_page_v39;

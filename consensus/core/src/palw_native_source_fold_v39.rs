@@ -10,6 +10,10 @@ use misaka_palw_kernel::{
     hash::{Digest, object_id},
 };
 const TABLE: u8 = 112;
+pub(super) const HOLD_CONSENT: u8 = 0;
+pub(super) const HOLD_JOB: u8 = 1;
+pub(super) const HOLD_MASTER: u8 = 2;
+pub(super) const HOLD_MODEL: u8 = 3;
 fn refused(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(s.into())
 }
@@ -172,6 +176,7 @@ pub(super) fn restore_audited_class<R: crate::palw_native_audit_proof_v39::Nativ
     p: &NativeExecutionPoliciesV39,
     id: Digest,
     remaining: &mut usize,
+    archive: Option<&dyn NativeOriginalSourceArchiveV39>,
 ) -> Result<CheckedNativeClassV39, String> {
     let get = |kind: u8, id: Digest, cap: usize, remaining: &mut usize| -> Result<Vec<u8>, String> {
         let raw = rows.row(TABLE, &key(kind, &id), cap.min(*remaining))?.ok_or("audit39 original source/class row absent")?;
@@ -196,23 +201,46 @@ pub(super) fn restore_audited_class<R: crate::palw_native_audit_proof_v39::Nativ
     if sh.version != 39 || sh.id != h.source || sh.root() != root || sh.bytes != h.source_bytes {
         return Err("audit39 original source header identity differs".into());
     }
-    let raw = get(1, h.source, SOURCE_UPLOAD_MAX_BYTES_V39 + 4, remaining)?;
-    if raw.len() < 4 || u32::from_le_bytes(raw[..4].try_into().unwrap()) != sh.bytes || raw.len() != sh.bytes as usize + 4 {
-        return Err("audit39 original source body exact extent differs".into());
-    }
-    if object_id(b"misaka-palw/native/source-body/v39", &&raw[4..]) != sh.body {
+    let raw = if rows.contains(TABLE, &key(1, &h.source)) {
+        let raw = get(1, h.source, SOURCE_UPLOAD_MAX_BYTES_V39 + 4, remaining)?;
+        if raw.len() < 4 || u32::from_le_bytes(raw[..4].try_into().unwrap()) != sh.bytes || raw.len() != sh.bytes as usize + 4 {
+            return Err("audit39 original source body exact extent differs".into());
+        }
+        borsh::from_slice::<Vec<u8>>(&raw).map_err(|_| "audit39 original source body grammar")?
+    } else {
+        let raw = archive
+            .ok_or("audit39 collected original source requires its immutable body archive")?
+            .source(h.source, (sh.bytes as usize).min(*remaining))?
+            .ok_or("audit39 original source archive body absent")?;
+        *remaining = remaining.checked_sub(raw.len()).ok_or("audit39 original source archive reservation exhausted")?;
+        raw
+    };
+    if raw.len() != sh.bytes as usize || object_id(b"misaka-palw/native/source-body/v39", &raw) != sh.body {
         return Err("audit39 original source body hash differs".into());
     }
-    let source = FlatSourceWireV39::from_bytes(&raw[4..])?.check()?;
+    let source = FlatSourceWireV39::from_bytes(&raw)?.check()?;
     drop(raw);
     if source.root() != h.source {
         return Err("audit39 original source canonical identity differs".into());
     }
-    let raw = get(3, id, 266, remaining)?;
-    if raw.len() != h.class_bytes as usize + 4 || u32::from_le_bytes(raw[..4].try_into().unwrap()) != h.class_bytes {
-        return Err("audit39 original class body exact extent differs".into());
+    let raw = if rows.contains(TABLE, &key(3, &id)) {
+        let raw = get(3, id, 266, remaining)?;
+        if raw.len() != h.class_bytes as usize + 4 || u32::from_le_bytes(raw[..4].try_into().unwrap()) != h.class_bytes {
+            return Err("audit39 original class body exact extent differs".into());
+        }
+        borsh::from_slice::<Vec<u8>>(&raw).map_err(|_| "audit39 original class body grammar")?
+    } else {
+        let raw = archive
+            .ok_or("audit39 collected original class requires its immutable body archive")?
+            .class(id, (h.class_bytes as usize).min(*remaining))?
+            .ok_or("audit39 original class archive body absent")?;
+        *remaining = remaining.checked_sub(raw.len()).ok_or("audit39 original class archive reservation exhausted")?;
+        raw
+    };
+    if raw.len() != h.class_bytes as usize {
+        return Err("audit39 archived original class exact extent differs".into());
     }
-    let class = NativeClassWireV39::from_bytes(&raw[4..])?.check(&source, p)?;
+    let class = NativeClassWireV39::from_bytes(&raw)?.check(&source, p)?;
     if class.root() != h.id || class.record() != &h.record {
         return Err("audit39 original complete class/resource derivation differs".into());
     }
@@ -316,7 +344,19 @@ fn register_source(
     }
     let source = FlatSourceWireV39::from_bytes(body).map_err(refused)?.check().map_err(refused)?;
     let id = source.root();
-    if builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(TABLE, key(0, &id))) {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if r.aux.contains_key(&(TABLE, key(1, &id))) {
+        return Ok(());
+    }
+    if r.aux.contains_key(&(TABLE, key(0, &id))) {
+        let h = source_header(r, id)?;
+        if h.bytes as usize != body.len() || h.body != object_id(b"misaka-palw/native/source-body/v39", &body) {
+            return Err(refused("source39 rehydration changes immutable original bytes"));
+        }
+        catalog.sources.push(id);
+        builder.write_kernel_row(TABLE, key(1, &id), Some(bytes(&body)));
+        builder.write_kernel_row(TABLE, key(96, &id), Some(bytes(signer)));
+        builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)));
         return Ok(());
     }
     let h = SourceHeaderV39 {
@@ -330,6 +370,7 @@ fn register_source(
     catalog.sources.push(id);
     builder.write_kernel_row(TABLE, key(0, &id), Some(bytes(&(h.root(), &h))));
     builder.write_kernel_row(TABLE, key(1, &id), Some(bytes(&body.to_vec())));
+    builder.write_kernel_row(TABLE, key(96, &id), Some(bytes(signer)));
     builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)));
     Ok(())
 }
@@ -356,9 +397,25 @@ fn register_class(
     let source = FlatSourceWireV39::from_bytes(&raw).map_err(refused)?.check().map_err(refused)?;
     let class = wire.check(&source, p).map_err(refused)?;
     let id = class.root();
-    if builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(TABLE, key(2, &id))) {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    if r.aux.contains_key(&(TABLE, key(3, &id))) {
         return Ok(());
     }
+    let old = if r.aux.contains_key(&(TABLE, key(2, &id))) {
+        let old = class_header(r, id)?;
+        if old.record != *class.record()
+            || old.source != source.root()
+            || old.source_bytes != sh.bytes
+            || old.class_bytes as usize != body.len()
+        {
+            return Err(refused("source39 class rehydration changes immutable derivation"));
+        }
+        Some(old)
+    } else {
+        None
+    };
+    let source_references =
+        count(r, 98, source.root())?.checked_add(1).ok_or_else(|| refused("source39 active class count overflow"))?;
     let h = ClassHeaderV39 {
         version: 39,
         id,
@@ -370,9 +427,148 @@ fn register_class(
         registered: ctx.daa_score,
     };
     catalog.classes.push(id);
-    builder.write_kernel_row(TABLE, key(2, &id), Some(bytes(&(h.root(), &h))));
+    if old.is_none() {
+        builder.write_kernel_row(TABLE, key(2, &id), Some(bytes(&(h.root(), &h))));
+    }
     builder.write_kernel_row(TABLE, key(3, &id), Some(bytes(&body.to_vec())));
+    builder.write_kernel_row(TABLE, key(97, &id), Some(bytes(signer)));
+    builder.write_kernel_row(TABLE, key(98, &source.root()), Some(bytes(&source_references)));
     builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&catalog)));
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct ClassHold {
+    version: u16,
+    class: Digest,
+    kind: u8,
+    object: Digest,
+    until: u64,
+}
+impl ClassHold {
+    fn id(&self) -> Digest {
+        class_hold_id(self.kind, self.object)
+    }
+    fn root(&self) -> Digest {
+        object_id(b"misaka-palw/native/original-class-retention/v39", self)
+    }
+}
+pub(super) fn class_hold_id(kind: u8, object: Digest) -> Digest {
+    object_id(b"misaka-palw/native/original-class-holder/v39", &(kind, object))
+}
+pub(super) fn master_hold_object(master: Digest, stage: u16) -> Digest {
+    object_id(b"misaka-palw/native/original-Master-class-holder/v39", &(master, stage))
+}
+fn count(r: &PalwKernelRouteStateV1, kind: u8, id: Digest) -> Result<u64, PalwStateV2Error> {
+    let Some(raw) = r.aux.get(&(TABLE, key(kind, &id))) else { return Ok(0) };
+    if raw.len() != 8 {
+        return Err(refused("source39 exact retention counter grammar"));
+    }
+    Ok(u64::from_le_bytes(raw.as_slice().try_into().unwrap()))
+}
+/// Called only inside the real consent/Fund/Master/model transition, after its
+/// original metadata debit. No SDK-supplied reference count is accepted.
+pub(super) fn retain_class(
+    builder: &mut TransitionBuilder<'_>,
+    class: Digest,
+    kind: u8,
+    object: Digest,
+    until: u64,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    class_header(r, class)?;
+    let hold = ClassHold { version: 39, class, kind, object, until };
+    if kind > HOLD_MODEL
+        || object == [0; 64]
+        || until == 0
+        || !r.aux.contains_key(&(TABLE, key(3, &class)))
+        || r.aux.contains_key(&(TABLE, key(94, &hold.id())))
+    {
+        return Err(refused("source39 original class hold absent/replayed/nonlive"));
+    }
+    let n = count(r, 95, class)?.checked_add(1).ok_or_else(|| refused("source39 original class reference overflow"))?;
+    builder.write_kernel_row(TABLE, key(94, &hold.id()), Some(bytes(&(hold.root(), &hold))));
+    builder.write_kernel_row(TABLE, key(95, &class), Some(bytes(&n)));
+    Ok(())
+}
+pub(super) fn release_class(
+    builder: &mut TransitionBuilder<'_>,
+    class: Digest,
+    kind: u8,
+    object: Digest,
+) -> Result<(), PalwStateV2Error> {
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let id = class_hold_id(kind, object);
+    let (root, hold): (Digest, ClassHold) = read(r, 94, &id, 256)?;
+    if hold.version != 39 || hold.class != class || hold.kind != kind || hold.object != object || hold.root() != root {
+        return Err(refused("source39 original class release reference differs"));
+    }
+    let n = count(r, 95, class)?.checked_sub(1).ok_or_else(|| refused("source39 original class reference underflow"))?;
+    builder.write_kernel_row(TABLE, key(94, &id), None);
+    builder.write_kernel_row(TABLE, key(95, &class), Some(bytes(&n)));
+    Ok(())
+}
+fn retention_action(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    signer: &PalwBondKeyV2,
+    p: &NativeExecutionPoliciesV39,
+    action: u8,
+    raw: &[u8],
+) -> Result<(), PalwStateV2Error> {
+    if action == 72 {
+        let id: Digest = raw.try_into().map_err(|_| refused("source39 expired hold exact id"))?;
+        let (root, hold): (Digest, ClassHold) = read(builder.state.kernel_route.as_ref().unwrap(), 94, &id, 256)?;
+        if hold.version != 39 || hold.id() != id || hold.root() != root || hold.kind != HOLD_CONSENT || ctx.daa_score <= hold.until {
+            return Err(refused("source39 only actually expired producer consent holds may be reaped"));
+        }
+        if !prepay(builder, ctx, signer, p, 0, raw.len() as u64, 0)? {
+            return Ok(());
+        }
+        return release_class(builder, hold.class, hold.kind, hold.object);
+    }
+    if raw.len() != 67 || raw[..2] != 39u16.to_le_bytes() || raw[2] > 1 {
+        return Err(refused("source39 release exact kind/id grammar"));
+    }
+    let class = raw[2] == 1;
+    let id: Digest = raw[3..].try_into().unwrap();
+    let r = builder.state.kernel_route.as_ref().unwrap();
+    let (owner, extent, source) = if class {
+        let h = class_header(r, id)?;
+        if count(r, 95, id)? != 0 || !r.aux.contains_key(&(TABLE, key(3, &id))) {
+            return Err(refused("source39 live consent/job/Master/model still retains this class"));
+        }
+        let owner: PalwBondKeyV2 = read(r, 97, &id, 128)?;
+        (owner, h.class_bytes as u64, Some(h.source))
+    } else {
+        let h = source_header(r, id)?;
+        if count(r, 98, id)? != 0 || !r.aux.contains_key(&(TABLE, key(1, &id))) {
+            return Err(refused("source39 an active class still retains this source"));
+        }
+        let owner: PalwBondKeyV2 = read(r, 96, &id, 128)?;
+        (owner, h.bytes as u64, None)
+    };
+    if owner != *signer {
+        return Err(refused("source39 release is owned by another retention payer"));
+    }
+    if !prepay(builder, ctx, signer, p, extent, raw.len() as u64, 0)? {
+        return Ok(());
+    }
+    let mut c = catalog(builder.state.kernel_route.as_ref().unwrap(), signer)?;
+    let ids = if class { &mut c.classes } else { &mut c.sources };
+    let index = ids.iter().position(|v| *v == id).ok_or_else(|| refused("source39 original active catalog entry absent"))?;
+    ids.remove(index);
+    if let Some(source) = source {
+        let n = count(builder.state.kernel_route.as_ref().unwrap(), 98, source)?
+            .checked_sub(1)
+            .ok_or_else(|| refused("source39 original active source count underflow"))?;
+        builder.write_kernel_row(TABLE, key(98, &source), Some(bytes(&n)));
+    }
+    builder.write_kernel_row(TABLE, key(if class { 3 } else { 1 }, &id), None);
+    builder.write_kernel_row(TABLE, key(if class { 97 } else { 96 }, &id), None);
+    builder.write_kernel_row(TABLE, key(5, signer), Some(bytes(&c)));
+    // Immutable headers survive. Rehydration must reproduce their exact bytes
+    // and original class derivation; freeing a slot never adds Q/B/R/F rights.
     Ok(())
 }
 
@@ -562,7 +758,7 @@ fn upload_action(
         return Err(refused("source39 original assembly source identity differs"));
     }
     register_source(builder, ctx, signer, p, &raw)?;
-    if !builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(TABLE, key(0, &h.start.source))) {
+    if !builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&(TABLE, key(1, &h.start.source))) {
         return Err(refused("source39 paid source registration did not establish original root"));
     }
     cleanup_upload(builder, &h)
@@ -595,6 +791,7 @@ pub(super) fn apply(
     match action {
         REGISTER_SOURCE_ACTION_V39 => register_source(builder, ctx, signer, &p, body),
         REGISTER_CLASS_ACTION_V39 => register_class(builder, ctx, signer, &p, body),
+        71 | 72 => retention_action(builder, ctx, signer, &p, action, body),
         SOURCE_START_ACTION_V39 => upload_start(builder, ctx, signer, &p, body),
         SOURCE_PART_ACTION_V39 | SOURCE_ASSEMBLE_ACTION_V39 | SOURCE_COLLECT_ACTION_V39 => {
             upload_action(builder, ctx, signer, &p, action, body)
