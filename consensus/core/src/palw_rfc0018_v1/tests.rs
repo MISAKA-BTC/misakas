@@ -32,6 +32,7 @@ fn with_mirror(rule: PalwGateCRuleV1) -> PalwStateParamsV2 {
         rule_e_participation_v2_from_daa: Some(FENCE),
         gate_c_from_daa: Some(FENCE),
         gate_c_rule: rule,
+        certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(720),
     }))
 }
 
@@ -120,67 +121,225 @@ fn rfc18_rule_e_v2_needs_rule_e_at_or_below_it_and_the_mirror_must_agree() {
 }
 
 // =================================================================================================================================
-// Gate C
+// Gate C — SecurityCertified (adopted 2026-10-15)
 // =================================================================================================================================
+
+use crate::palw_security_certification_v1::*;
+
+const DAY: u64 = 720;
+
+fn claim_id(n: u64) -> Hash64 {
+    Hash64::from_u64_word(0x5EC0_0000 + n)
+}
+
+/// A certification row of `claim` with `outcome` written into `state`'s kernel route.
+fn certify(state: &mut PalwChainStateV2, claim: &Hash64, outcome: Option<PalwCertificationOutcomeV1>) {
+    let row = PalwClaimCertificationRowV1 {
+        claim: claim.as_bytes(),
+        class_id: class(1).as_bytes(),
+        producer_bond: [1; 64],
+        producer_principal: [2; 64],
+        attempt: true,
+        final_daa: FENCE + 10,
+        committed_daa: FENCE + 10,
+        committed_span: 0,
+        anchor: None,
+        draws: Vec::new(),
+        drawn_daa: 0,
+        deadline_daa: 0,
+        attestations: Vec::new(),
+        held_reward: 0,
+        payout_payload: [3; 64],
+        outcome: outcome.map(|o| (o, FENCE + 99)),
+    };
+    state.set_kernel_aux_row_for_tests(
+        PALW_SECURITY_CERTIFICATION_TABLE_V1,
+        certification_claim_key_v1(&palw_certification_id_v1(claim)),
+        Some(borsh::to_vec(&row).unwrap()),
+    );
+}
 
 #[test]
 fn rfc18_gate_c_is_the_identity_below_its_fence_and_on_every_shipped_network() {
     let shipped = t12_state_params();
+    let armed = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let state = PalwChainStateV2::genesis();
     for phase in [
         PalwClaimPhaseV2::Provisional,
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 10 },
         PalwClaimPhaseV2::Final { final_daa: 20 },
     ] {
         let c = claim_at(FENCE + 1, phase.clone());
-        assert!(palw_independently_work_certified_v1(&c, &PalwGateCViewV1::of(&shipped)), "no mirror: legacy");
-        assert_eq!(palw_gate_c_weight_v1(&shipped, &c, 77), 77);
-        assert_eq!(palw_gate_c_reward_v1(&shipped, &c, 55), 55);
+        assert!(palw_independently_work_certified_v1(&claim_id(1), &c, &PalwGateCViewV1::of(&shipped, &state)), "no mirror: legacy");
+        assert_eq!(palw_gate_c_weight_v1(&shipped, &state, &claim_id(1), &c, 77), 77);
         assert_eq!(palw_claim_provisional_weight_v1(&shipped, &c), 300);
+        assert!(palw_gate_c_settles_anchor_v1(&shipped, &c));
         // A claim accepted BELOW the fence keeps its old rule forever (A-2), whatever the rule past it.
-        let armed = with_mirror(PalwGateCRuleV1::Undecided);
         let old = claim_at(FENCE - 1, phase);
-        assert!(palw_independently_work_certified_v1(&old, &PalwGateCViewV1::of(&armed)));
+        assert!(palw_independently_work_certified_v1(&claim_id(2), &old, &PalwGateCViewV1::of(&armed, &state)));
         assert_eq!(palw_claim_provisional_weight_v1(&armed, &old), 300);
+        assert!(palw_gate_c_settles_anchor_v1(&armed, &old));
     }
 }
 
+/// `Final` is not `SecurityCertified`: a governed claim adds nothing until its certification row certifies; a Panel licence, `Final`
+/// alone, a failed or vetoed certification and a void never certify.
 #[test]
-fn rfc18_gate_c_undecided_is_fail_closed_and_the_candidate_reads_the_licence() {
-    let undecided = with_mirror(PalwGateCRuleV1::Undecided);
-    let candidate = with_mirror(PalwGateCRuleV1::CandidateLicensedOrFinalV1);
-    let provisional = claim_at(FENCE, PalwClaimPhaseV2::Provisional);
-    let licensed = claim_at(FENCE, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: FENCE + 30 });
+fn rfc18_gate_c_final_is_not_security_certified() {
+    let p = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let mut state = PalwChainStateV2::genesis();
     let fin = claim_at(FENCE, PalwClaimPhaseV2::Final { final_daa: FENCE + 60 });
-    let voided = claim_at(FENCE, PalwClaimPhaseV2::Voided { voided_daa: FENCE + 5, reason: PalwVoidReasonV2::BindTimeout });
-    for c in [&provisional, &licensed, &fin, &voided] {
-        assert!(!palw_independently_work_certified_v1(c, &PalwGateCViewV1::of(&undecided)), "nothing counts until defined");
-        assert_eq!(palw_gate_c_weight_v1(&undecided, c, 9), 0);
+    let licensed = claim_at(FENCE, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: FENCE + 30 });
+    let view = |p: &PalwStateParamsV2, s: &PalwChainStateV2, id: u64, c: &PalwClaimStateV2| {
+        palw_independently_work_certified_v1(&claim_id(id), c, &PalwGateCViewV1::of(p, s))
+    };
+    assert!(!view(&p, &state, 1, &fin), "Final without a certification row");
+    assert!(!view(&p, &state, 1, &licensed), "a Panel licence is no certification");
+    for failed in [
+        PalwCertificationOutcomeV1::NotCertified,
+        PalwCertificationOutcomeV1::Vetoed,
+        PalwCertificationOutcomeV1::NoPopulation,
+        PalwCertificationOutcomeV1::Expired,
+        PalwCertificationOutcomeV1::Withdrawn,
+    ] {
+        certify(&mut state, &claim_id(1), Some(failed));
+        assert!(!view(&p, &state, 1, &fin), "{failed:?} certifies nothing");
+        assert_eq!(palw_gate_c_weight_v1(&p, &state, &claim_id(1), &fin, 9), 0);
     }
-    assert!(!palw_independently_work_certified_v1(&provisional, &PalwGateCViewV1::of(&candidate)));
-    assert!(palw_independently_work_certified_v1(&licensed, &PalwGateCViewV1::of(&candidate)));
-    assert!(palw_independently_work_certified_v1(&fin, &PalwGateCViewV1::of(&candidate)));
-    assert!(!palw_independently_work_certified_v1(&voided, &PalwGateCViewV1::of(&candidate)), "a void is never certified");
-    // The licence site asks as licensed; the others ask the record they hold.
-    assert!(palw_gate_c_settles_anchor_v1(&candidate, &provisional, true));
-    assert!(!palw_gate_c_settles_anchor_v1(&candidate, &provisional, false));
-    assert!(!palw_gate_c_settles_anchor_v1(&undecided, &provisional, true));
+    certify(&mut state, &claim_id(1), None);
+    assert!(!view(&p, &state, 1, &fin), "undecided certifies nothing");
+    certify(&mut state, &claim_id(1), Some(PalwCertificationOutcomeV1::Certified));
+    assert!(view(&p, &state, 1, &fin));
+    assert_eq!(palw_gate_c_weight_v1(&p, &state, &claim_id(1), &fin, 9), 9);
+    let voided = claim_at(FENCE, PalwClaimPhaseV2::Voided { voided_daa: FENCE + 70, reason: PalwVoidReasonV2::BindTimeout });
+    assert!(!view(&p, &state, 1, &voided), "a reversed claim is never certified, whatever its row says");
+    let closed = with_mirror(PalwGateCRuleV1::FailClosedV1);
+    assert!(!view(&closed, &state, 1, &fin), "the fail-closed fixture certifies nothing");
+    // Provisional weight is 0 past the fence for EVERY phase (one number over the claim's life), and no licence/Final site ticks the
+    // settled-anchor clock for a governed claim (it ticks once, at certification).
+    for c in [&fin, &licensed, &voided] {
+        assert_eq!(palw_claim_provisional_weight_v1(&p, c), 0);
+        assert!(!palw_gate_c_settles_anchor_v1(&p, c));
+    }
 }
 
-/// The provisional site must give ONE number over a claim's life, or `bounded_immature` would add 0 and later subtract the weight.
+/// ONE consensus-credit rule for frontier and settlement: a SecurityCertified ATTEMPT in Final. The "only a Free-Prompt Final exists"
+/// case moves neither, certified or not.
 #[test]
-fn rfc18_gate_c_provisional_weight_is_stable_over_the_claims_life() {
-    for rule in [PalwGateCRuleV1::Undecided, PalwGateCRuleV1::CandidateLicensedOrFinalV1] {
-        let p = with_mirror(rule);
-        let phases = [
-            PalwClaimPhaseV2::Provisional,
-            PalwClaimPhaseV2::PanelBound { bound_daa: FENCE + 3 },
-            PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: FENCE + 30 },
-            PalwClaimPhaseV2::Final { final_daa: FENCE + 60 },
-            PalwClaimPhaseV2::Voided { voided_daa: FENCE + 9, reason: PalwVoidReasonV2::BindTimeout },
-        ];
-        let answers: Vec<u128> = phases.iter().map(|ph| palw_claim_provisional_weight_v1(&p, &claim_at(FENCE, ph.clone()))).collect();
-        assert!(answers.windows(2).all(|w| w[0] == w[1]), "{rule:?}: one answer for every phase, got {answers:?}");
+fn rfc18_one_rule_for_frontier_and_settlement_and_the_free_prompt_only_case() {
+    use crate::palw_state_v2::PalwClaimSourceV2;
+    let fin = PalwClaimPhaseV2::Final { final_daa: 1 };
+    let fp = PalwClaimSourceV2::FreePrompt { quanta: 8, spent: Default::default() };
+    assert!(!palw_consensus_credit_anchor_v1(true, true, &fp, &fin), "a certified free-prompt Final anchors nothing");
+    assert!(!palw_consensus_credit_anchor_v1(true, false, &PalwClaimSourceV2::Attempt, &fin));
+    assert!(palw_consensus_credit_anchor_v1(true, true, &PalwClaimSourceV2::Attempt, &fin));
+    assert!(palw_consensus_credit_anchor_v1(false, false, &fp, &fin), "below the fence the released frontier takes any source");
+    // The frontier site agrees with the pure rule on a real state.
+    let p = with_mirror(PalwGateCRuleV1::SecurityCertifiedV1);
+    let mut state = PalwChainStateV2::genesis();
+    let mut fp_claim = claim_at(FENCE, fin.clone());
+    fp_claim.source = fp;
+    certify(&mut state, &claim_id(5), Some(PalwCertificationOutcomeV1::Certified));
+    assert!(!palw_gate_c_advances_frontier_v1(&p, &state, &claim_id(5), &fp_claim));
+    let attempt = claim_at(FENCE, fin);
+    assert!(palw_gate_c_advances_frontier_v1(&p, &state, &claim_id(5), &attempt));
+    assert!(!palw_gate_c_advances_frontier_v1(&p, &state, &claim_id(6), &attempt), "another claim's row certifies nothing");
+}
+
+fn drawn_row(positive: usize, negative: usize, m: usize) -> PalwClaimCertificationRowV1 {
+    use crate::palw_model_eligibility_v1::{PalwEligibilityAttestationRowV1, PalwEligibilityVerdictV1};
+    let draws: Vec<[u8; 64]> = (0..m).map(|i| [i as u8 + 10; 64]).collect();
+    let mut attestations = Vec::new();
+    for (i, d) in draws.iter().enumerate() {
+        if i < positive {
+            attestations.push(PalwEligibilityAttestationRowV1 {
+                verifier: *d,
+                verdict: PalwEligibilityVerdictV1::Reproduced,
+                transcript: [7; 64],
+                attested_daa: 1,
+            });
+        } else if i < positive + negative {
+            attestations.push(PalwEligibilityAttestationRowV1 {
+                verifier: *d,
+                verdict: PalwEligibilityVerdictV1::Unavailable,
+                transcript: [0; 64],
+                attested_daa: 1,
+            });
+        }
     }
+    PalwClaimCertificationRowV1 {
+        claim: [1; 64],
+        class_id: [2; 64],
+        producer_bond: [3; 64],
+        producer_principal: [4; 64],
+        attempt: true,
+        final_daa: 1_000,
+        committed_daa: 1_000,
+        committed_span: 0,
+        anchor: Some((1, [5; 64])),
+        draws,
+        drawn_daa: 1_010,
+        deadline_daa: 1_010 + 2 * DAY,
+        attestations,
+        held_reward: 0,
+        payout_payload: [6; 64],
+        outcome: None,
+    }
+}
+
+#[test]
+fn rfc18_certification_verdict_m_of_k_veto_deadline_and_prosecution_window() {
+    let policy = PalwSecurityCertificationPolicyV1::design_unapproved_v1(DAY);
+    let (k, m) = (policy.k as usize, policy.m as usize);
+    let ok = PalwCertificationClaimFactsV1 { still_final: true, accusation_pending: false };
+    let elapsed = 1_000 + policy.prosecution_window_daa;
+    // k positives, prosecution window not elapsed: wait — never fail at the attestation deadline.
+    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), ok, 1_100), None);
+    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), ok, elapsed), Some(PalwCertificationOutcomeV1::Certified));
+    // An open accusation holds the decision.
+    let pending = PalwCertificationClaimFactsV1 { still_final: true, accusation_pending: true };
+    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), pending, elapsed), None);
+    // The adopted rule is m-of-k alone (no veto): negatives beside k positives do not refuse.
+    assert_eq!(policy.veto, 0);
+    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 2, m), ok, elapsed), Some(PalwCertificationOutcomeV1::Certified));
+    // The veto proposal (U-6), where a policy sets it: honest negatives stop certification even with k positives.
+    let vetoing = PalwSecurityCertificationPolicyV1 { veto: 2, ..policy };
+    assert_eq!(
+        palw_certification_verdict_v1(&vetoing, &drawn_row(k, 2, m), ok, elapsed),
+        Some(PalwCertificationOutcomeV1::Vetoed)
+    );
+    // Fewer than k by the deadline.
+    let row = drawn_row(k - 1, 0, m);
+    assert_eq!(palw_certification_verdict_v1(&policy, &row, ok, row.deadline_daa), None);
+    assert_eq!(palw_certification_verdict_v1(&policy, &row, ok, row.deadline_daa + 1), Some(PalwCertificationOutcomeV1::NotCertified));
+    // No longer Final (a conviction reversed it).
+    let gone = PalwCertificationClaimFactsV1 { still_final: false, accusation_pending: false };
+    assert_eq!(palw_certification_verdict_v1(&policy, &drawn_row(k, 0, m), gone, elapsed), Some(PalwCertificationOutcomeV1::Withdrawn));
+    // Never drawn by `certify_by_daa`.
+    let mut undrawn = drawn_row(0, 0, 0);
+    undrawn.anchor = None;
+    assert_eq!(palw_certification_verdict_v1(&policy, &undrawn, ok, 1_000 + policy.certify_by_daa), None);
+    assert_eq!(
+        palw_certification_verdict_v1(&policy, &undrawn, ok, 1_001 + policy.certify_by_daa),
+        Some(PalwCertificationOutcomeV1::Expired)
+    );
+    assert!(PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1.is_empty(), "no class certifies by the public-check path in this binary");
+}
+
+/// The pool is the GLOBAL registry: maturity and collateral bound it, the producer's operator is out, and nothing about holding the
+/// model is read.
+#[test]
+fn rfc18_certification_pool_is_global_and_excludes_the_producer() {
+    let policy = PalwSecurityCertificationPolicyV1::design_unapproved_v1(DAY);
+    let commit = 100 * DAY;
+    let producer = [9u8; 64];
+    assert!(palw_certification_pool_admits_v1(&policy, commit, &producer, true, 0, 1, &[1; 64]));
+    assert!(!palw_certification_pool_admits_v1(&policy, commit, &producer, true, 0, 1, &producer), "never the producer's operator");
+    assert!(!palw_certification_pool_admits_v1(&policy, commit, &producer, false, 0, 1, &[1; 64]), "Active only");
+    assert!(
+        !palw_certification_pool_admits_v1(&policy, commit, &producer, true, commit - 1, 1, &[1; 64]),
+        "a bond registered after the claim cannot be drawn for it"
+    );
 }
 
 // =================================================================================================================================

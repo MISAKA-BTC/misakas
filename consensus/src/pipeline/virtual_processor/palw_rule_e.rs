@@ -253,9 +253,11 @@ impl VirtualStateProcessor {
             Ordering::Greater => true,
             Ordering::Less => false,
             Ordering::Equal => {
-                counts
-                    && even(&pair.a)
-                    && even(&pair.b)
+                // RFC-0018 §6.4: past v2, two sides with no certified credit at all go to the DAG's order (`palw_rule_e_decide_v2`).
+                let no_credit = |side: &kaspa_consensus_core::palw_fork_choice_rule_e_v1::PalwRuleESideV1| {
+                    side.participation_capital_v2 == 0 && side.economic() == (0, 0, 0)
+                };
+                ((capital_v2 && no_credit(&pair.a) && no_credit(&pair.b)) || (counts && even(&pair.a) && even(&pair.b)))
                     && match (self.ghostdag_store.get_blue_work(challenger), self.ghostdag_store.get_blue_work(best)) {
                         (Ok(c), Ok(b)) => SortableBlock::new(challenger, c) > SortableBlock::new(best, b),
                         _ => false,

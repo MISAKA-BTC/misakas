@@ -355,9 +355,11 @@ impl PalwChainStateV2 {
         // (`palw_claim_provisional_weight_v1`, F-W's staged weight, the budget engine's provisional), "as at acceptance", so they
         // equal the state's own `bounded_immature` terms.
         let certified = crate::palw_rfc0018_v1::palw_independently_work_certified_v1(
+            &claim_id,
             claim,
-            &crate::palw_rfc0018_v1::PalwGateCViewV1::with_chain(params, self),
+            &crate::palw_rfc0018_v1::PalwGateCViewV1::of(params, self),
         );
+        let governed = crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim);
         let record = |status: PalwRuleEClaimStatusV1,
                       safe_weight: u128,
                       live_weight: u128,
@@ -366,6 +368,11 @@ impl PalwChainStateV2 {
                       budget: Option<PalwRuleEBudgetTermsV1>| {
             let (status, safe_weight) = match (certified, status) {
                 (false, PalwRuleEClaimStatusV1::Final) => (PalwRuleEClaimStatusV1::Voided, 0),
+                // RFC-0018 §7.5's one rule: past the fence a certified Free-Prompt `Final` keeps its spends' weight but never stands as
+                // the frontier (frontier and settlement credit are certified ATTEMPTS only) — resolved, weight kept, no frontier.
+                (true, PalwRuleEClaimStatusV1::Final) if governed && !matches!(claim.source, PalwClaimSourceV2::Attempt) => {
+                    (PalwRuleEClaimStatusV1::Voided, safe_weight)
+                }
                 _ => (status, safe_weight),
             };
             PalwRuleEClaimRecordV1 {
@@ -524,13 +531,16 @@ impl PalwRuleESideAccV1 {
             PalwRuleEClaimStatusV1::Live => {
                 self.oldest_live = Some(self.oldest_live.map_or(record.accepted_blue_score, |o| o.min(record.accepted_blue_score)));
             }
-            PalwRuleEClaimStatusV1::Voided => return Ok(()),
+            // A `Voided` record holds no prefix and stands as no frontier. Its weights are 0 (the record prices a void at 0) except
+            // RFC-0018's certified Free-Prompt `Final` past Gate C, which keeps its spends' safe weight — credited below as safe.
+            PalwRuleEClaimStatusV1::Voided if record.safe_weight == 0 && record.live_weight == 0 => return Ok(()),
+            PalwRuleEClaimStatusV1::Voided => {}
         }
         let add = |sum: &mut u128, weight: u128| -> Result<(), PalwRuleEErrorV1> {
             *sum = sum.checked_add(weight).ok_or(PalwRuleEErrorV1::Overflow)?;
             Ok(())
         };
-        let is_final = record.status == PalwRuleEClaimStatusV1::Final;
+        let is_final = record.status != PalwRuleEClaimStatusV1::Live;
         if let Some(terms) = record.budget {
             let group = self.budgeted.entry((record.bond, terms.version, terms.window)).or_insert((0, 0, terms.final_weight_ceiling));
             group.2 = group.2.min(terms.final_weight_ceiling);
@@ -811,6 +821,14 @@ pub fn palw_rule_e_decide_v2(
         );
     }
     let allow = |yes: bool| if yes { PalwDeepReorgV2::Allow } else { PalwDeepReorgV2::Refuse };
+    // RFC-0018 §6.4: where NEITHER exclusive past holds any certified consensus credit (no certified participation, no frontier, no
+    // weight), no PALW finality is at stake on either side — the DAG's own order decides, so two uncertified partitions converge
+    // instead of each keeping its incumbent. Uncertified history carries no PALW settlement finality (§7.8), so nothing is reversed
+    // that the chain ever reported final.
+    let no_credit = |s: &PalwRuleESideV1| s.participation_capital_v2 == 0 && s.economic() == (0, 0, 0);
+    if no_credit(incumbent) && no_credit(challenger) {
+        return allow(ghostdag_heavier());
+    }
     match palw_rule_e_order_v2(challenger, incumbent, participation_counts, true) {
         Ordering::Greater => PalwDeepReorgV2::Allow,
         Ordering::Less => PalwDeepReorgV2::Refuse,

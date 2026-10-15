@@ -3895,6 +3895,45 @@ wire_struct!(crate::palw_seat_availability_v1::PalwSeatAvailEpochV1; u64, u32, u
 wire_struct!(crate::palw_seat_availability_v1::PalwSeatAvailabilityV1; Option<u64>, Vec<crate::palw_seat_availability_v1::PalwSeatAvailEpochV1>);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventAnswerV1; crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1, crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1; Box<crate::palw_step_leg::PalwStepBindingV2>, crate::palw_constraint_stream_carriage_v1::PalwRetainedCourtProfileV1);
+wire_struct!(crate::palw_security_certification_v1::PalwCertificationClassRowV1; u64, u64, u64);
+wire_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRowV1; u64, u32);
+impl NativeWireScanV1 for crate::palw_security_certification_v1::PalwCertificationOutcomeV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            4 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            5 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            6 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV1; crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, bool, u64, u64, u64, Option<(u64, crate::palw_model_eligibility_v1::EligDigestV1)>, Vec<crate::palw_model_eligibility_v1::EligDigestV1>, u64, u64, Vec<crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1>, u64, crate::palw_model_eligibility_v1::EligDigestV1, Option<(crate::palw_security_certification_v1::PalwCertificationOutcomeV1, u64)>);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1; u32, u32);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventDemandV1; crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventNativeAnswerV1; crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1);

@@ -71,6 +71,9 @@ native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1; 
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; probation_epoch, probation_units_used, attempt_epoch, attempts_in_epoch, attempts_total, fees_burned_sompi);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; commit, committer_principal, committed_daa, committed_span, anchor, draws, examined, drawn_daa, deadline_daa, attestations, outcome);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; class_id, accepted_daa, units, final_weight);
+native_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV1; claim, class_id, producer_bond, producer_principal, attempt, final_daa, committed_daa, committed_span, anchor, draws, drawn_daa, deadline_daa, attestations, held_reward, payout_payload, outcome);
+native_struct!(crate::palw_security_certification_v1::PalwCertificationClassRowV1; committed, certified, failed);
+native_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRowV1; epoch, draws);
 native_struct!(crate::palw_provider_court_v1::ProviderLeaseRowV1; reserved, filed_daa, serve_until_daa, charged);
 native_struct!(crate::palw_provider_court_v1::ProviderChallengeRowV1; challenger, bond, filed_daa, deadline_daa, answered);
 native_struct!(crate::palw_provider_court_v1::ProviderSubjectRowV1; transferred_daa, lapsed_daa, charged, requested);
@@ -507,6 +510,7 @@ native_struct!(crate::palw_beacon_bootstrap_v1::PalwBootstrapJudgementV1; judged
 native_enum!(crate::palw_model_eligibility_v1::PalwEligibilityStageV1; Registered, Probation, Eligible, Lapsed);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1; verifier, verdict, transcript, attested_daa);
 native_enum!(crate::palw_model_eligibility_v1::PalwEligibilityExamOutcomeV1; Passed, NotPromoted, NoPopulation);
+native_enum!(crate::palw_security_certification_v1::PalwCertificationOutcomeV1; Certified, PublicCheckCertified, NotCertified, Vetoed, NoPopulation, Expired, Withdrawn);
 native_struct!(crate::palw_model_vector_v2::ModelVectorHeaderV2; trace_root, class, binding, program_bytes_len, post_bytes_len, max_filing_bytes, max_court_work, poster, posted_daa, liability_until, reserved, refuted, unavailable);
 native_struct!(crate::palw_model_vector_da_v2::ModelVectorUnitV2; position, occurrence, node, axis, line, tile);
 native_struct!(crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3; trace_root, class, binding, profile, scope_root, program_bytes_len, pc_instances, post_bytes_len, max_filing_bytes, max_court_work, max_court_scratch_bytes, poster, posted_daa, liability_until, reserved, refuted);

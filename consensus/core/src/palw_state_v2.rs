@@ -227,6 +227,10 @@ mod palw_beacon_bootstrap_fold_v1;
 #[path = "palw_model_eligibility_fold_v1.rs"]
 mod palw_model_eligibility_fold_v1;
 pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
+// RFC-0018 §7 (Gate C, adopted 2026-10-15): SecurityCertified — kernel-route aux 136, attestations on inner 75, past
+// `palw_independently_work_certified_v1`.
+#[path = "palw_security_certification_fold_v1.rs"]
+mod palw_security_certification_fold_v1;
 #[path = "palw_panel_source_fee_fold_v2.rs"]
 mod palw_panel_source_fee_fold_v2;
 #[path = "palw_panel_v3_fold_v1.rs"]
@@ -14898,17 +14902,20 @@ fn apply_palw_transition_v7_inner(
         // pruning there would delete history a live claim still needs.
         Some((oldest_open, _)) => oldest_open.saturating_sub(1),
     };
-    // **RFC-0018 Gate C's frontier site**: a `Final` claim Gate C does not certify is resolved (it holds no prefix back) but matures
-    // nothing, as a `Voided` one — it never stands as the frontier. The identity below its fence and on every shipped network.
+    // **RFC-0018 Gate C's frontier site** (adopted 2026-10-15): past the fence the frontier is the deepest SecurityCertified ATTEMPT in
+    // the resolved prefix — the one consensus-credit rule settlement depth shares (`palw_consensus_credit_anchor_v1`). A `Final`
+    // claim not (yet) certified is resolved (it holds no prefix back) but matures nothing; a Free-Prompt `Final` never stands as the
+    // frontier. The identity below its fence (keyed on each claim's acceptance DAA) and on every shipped network.
     if let Some(claim) = builder
         .state
         .claims
-        .values()
-        .filter(|c| {
+        .iter()
+        .filter(|(id, c)| {
             matches!(c.phase, PalwClaimPhaseV2::Final { .. })
                 && c.accepted_blue_score <= resolved_through
-                && crate::palw_rfc0018_v1::palw_gate_c_advances_frontier_v1(builder.params, &builder.state, c)
+                && crate::palw_rfc0018_v1::palw_gate_c_advances_frontier_v1(builder.params, &builder.state, id, c)
         })
+        .map(|(_, c)| c)
         .max_by_key(|c| c.accepted_blue_score)
         && claim.accepted_blue_score > old_frontier.0
     {
@@ -19179,7 +19186,7 @@ fn apply_receipt_spend(
     let credited = builder.bond_budget_receipt_spend_v1(ctx, &claim_id, per_quantum, last_quantum)?;
     // **RFC-0018 Gate C's receipt-spend site**: a spend of an uncertified free-prompt claim weighs nothing (the identity below its
     // fence, keyed on the claim's acceptance DAA, and on every shipped network). The block still spends its quantum.
-    let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(builder.params, &claim, credited);
+    let credited = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(builder.params, &builder.state, &claim_id, &claim, credited);
     builder.state.safe_weight = builder.state.safe_weight.checked_add(credited).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };
