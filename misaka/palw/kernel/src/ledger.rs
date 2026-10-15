@@ -1400,7 +1400,10 @@ impl KernelLedgerV1 {
             KernelRouteObjectV1::AttestModelVerificationV1 { .. }
             | KernelRouteObjectV1::ConsentHorizonExtensionV1 { .. }
             | KernelRouteObjectV1::SignMinimumPriceContractV1 { .. } => {
-                return Err(KernelRefusalV1::rule(name, "economic contracts must be interpreted by the authenticated native consumer"));
+                return Err(KernelRefusalV1::rule(
+                    name,
+                    "economic contracts must be interpreted by the authenticated native consumer",
+                ));
             }
             // M*-49 (`palw_verifier_pay_v1`): the signer is the drawn slot holder (`authorize`); below the consumer's fence no draw
             // exists, so the attestation is refused by its own rule.

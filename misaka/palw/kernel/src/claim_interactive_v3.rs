@@ -40,6 +40,10 @@ impl CompiledClaimProofPlanV3 {
         object_id(b"MISAKA/PALW/CLAIM-PROOF-PLAN/V3", self)
     }
     pub fn validate(&self, target: PaidClaimTargetV2, mode: InteractiveModeV1, rounds: u32, blocks: u64) -> Result<(), String> {
+        // R7-RELATION (2026-10-15): a compact family's compiler id is recognized and refused by name, never read as an unknown plan.
+        if is_compact_proof_family_compiler_v1(&self.compiler) {
+            return Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.into());
+        }
         if self.version != 3
             || self.compiler != full_material_compiler_v3()
             || self.target != target
@@ -67,6 +71,81 @@ impl CompiledClaimProofPlanV3 {
         Ok(object_id(b"MISAKA/PALW/CLAIM-PROOF-OPENING/V3", &(self.id(), bytes)))
     }
 }
+/// **R7-RELATION (RFC-0007 2026-10-15, item 5): compact proof families need their own versioned contracts.** The relation families
+/// a compact contract could cover; each has its own compiler identity, distinct from [`full_material_compiler_v3`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum CompactProofFamilyV1 {
+    /// A sum-check reduction over the committed relation's multilinear extension.
+    SumCheckV1 = 0,
+    /// A layered-circuit (GKR-style) interactive proof.
+    GkrV1 = 1,
+    /// A Freivalds-style randomized matrix-product check with an encoded query.
+    FreivaldsV1 = 2,
+}
+
+impl CompactProofFamilyV1 {
+    pub const ALL: [Self; 3] = [Self::SumCheckV1, Self::GkrV1, Self::FreivaldsV1];
+}
+
+/// **The versioned compact proof family contract — a STUB.** It names what such a contract must bind (the family, the exact target
+/// and relation encoding, the reviewed soundness statement and its bits, and finite proof/verifier bounds), so it can be reviewed and
+/// versioned apart from the full-material-opening compiler. No compact verifier exists in this tree: registration refuses every
+/// contract with [`COMPACT_PROOF_FAMILY_REFUSAL_V1`] — never silently accepted, never a fallback to the full-material plan.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CompactProofFamilyContractV1 {
+    pub version: u16,
+    pub family: CompactProofFamilyV1,
+    pub target: PaidClaimTargetV2,
+    /// The canonical encoding of the relation the family proves (per class, including every relation family it covers).
+    pub relation_root: Digest,
+    /// The independent soundness review the contract's bound comes from.
+    pub soundness_review_root: Digest,
+    /// The reviewed per-check soundness, in bits (an effective, cumulative bound is the review's, never this field's).
+    pub claimed_soundness_bits: u16,
+    pub maximum_proof_bytes: u64,
+    pub maximum_verifier_work: u64,
+}
+
+/// Why registration refuses every compact family contract today.
+pub const COMPACT_PROOF_FAMILY_REFUSAL_V1: &str = "compact proof family contracts are refused: no versioned compact verifier, relation \
+     coverage map or independent soundness review exists (RFC-0007 2026-10-15 R7-RELATION); only the full-material-opening compiler \
+     v3 is admitted";
+
+/// The compiler identity of a compact family (distinct per family; never [`full_material_compiler_v3`]).
+pub fn compact_proof_family_compiler_v1(family: CompactProofFamilyV1) -> Digest {
+    object_id(b"MISAKA/PALW/CLAIM-PROOF-COMPILER/COMPACT/V1", &family)
+}
+
+pub fn is_compact_proof_family_compiler_v1(compiler: &Digest) -> bool {
+    CompactProofFamilyV1::ALL.iter().any(|f| compact_proof_family_compiler_v1(*f) == *compiler)
+}
+
+impl CompactProofFamilyContractV1 {
+    pub fn id(&self) -> Digest {
+        object_id(b"MISAKA/PALW/COMPACT-PROOF-FAMILY-CONTRACT/V1", self)
+    }
+
+    pub fn compiler(&self) -> Digest {
+        compact_proof_family_compiler_v1(self.family)
+    }
+
+    /// **Registration**: always refused, with the explicit reason (a structurally malformed contract is refused first, by its own).
+    pub fn register(&self) -> Result<(), String> {
+        if self.version != 1
+            || self.relation_root == [0; 64]
+            || self.soundness_review_root == [0; 64]
+            || self.claimed_soundness_bits == 0
+            || self.maximum_proof_bytes == 0
+            || self.maximum_verifier_work == 0
+        {
+            return Err("a compact proof family contract needs its version, relation, review and finite bounds".into());
+        }
+        Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.into())
+    }
+}
+
 pub fn full_material_compiler_v3() -> Digest {
     crate::hash::id(
         b"MISAKA/PALW/CLAIM-PROOF-COMPILER/V3",
@@ -164,5 +243,35 @@ mod tests {
         assert!(
             CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Segmented, InteractiveModeV1::StagedBeacon, 65, 4096, 100).is_err()
         );
+    }
+
+    /// **R7-RELATION (2026-10-15)**: every compact family contract is refused at registration by name, and a plan carrying a compact
+    /// compiler id is refused with the same explicit reason — never silently read as the full-material plan.
+    #[test]
+    fn compact_proof_family_contracts_are_refused_by_name_never_silently_accepted() {
+        let mut ids = std::collections::BTreeSet::new();
+        for family in CompactProofFamilyV1::ALL {
+            let contract = CompactProofFamilyContractV1 {
+                version: 1,
+                family,
+                target: PaidClaimTargetV2::Program,
+                relation_root: [1; 64],
+                soundness_review_root: [2; 64],
+                claimed_soundness_bits: 128,
+                maximum_proof_bytes: 1 << 20,
+                maximum_verifier_work: 1 << 30,
+            };
+            assert_eq!(contract.register(), Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.to_string()));
+            assert_ne!(contract.compiler(), full_material_compiler_v3());
+            assert!(ids.insert(contract.compiler()), "one compiler identity per family");
+            let mut plan =
+                CompiledClaimProofPlanV3::compile(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 4096, 100).unwrap();
+            plan.compiler = contract.compiler();
+            assert_eq!(
+                plan.validate(PaidClaimTargetV2::Program, InteractiveModeV1::StagedBeacon, 2, 100),
+                Err(COMPACT_PROOF_FAMILY_REFUSAL_V1.to_string())
+            );
+        }
+        assert!(!is_compact_proof_family_compiler_v1(&full_material_compiler_v3()));
     }
 }

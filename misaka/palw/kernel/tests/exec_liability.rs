@@ -120,3 +120,30 @@ fn prefinal_default_keeps_the_consumer_floor_for_a_later_fraud_court() {
     assert_eq!(w.l.claims[&id].liability_until, Some(600), "default cannot shorten the consumer floor to 232");
     assert!(w.l.claims[&id].reserved > 0);
 }
+
+/// **R8-WINDOW (2026-10-15): a consented extension lengthens a live EXEC dependency horizon** — only from the exact live value, never
+/// past the claim-fixed deadline, never reopened once expired; the extended last day still holds the collateral and the next releases.
+#[test]
+fn a_consented_extension_lengthens_a_live_exec_horizon_inside_its_hard_deadline_only() {
+    let mut w = World::new();
+    let job = w.post_job(2, &[3, 17, 9], 3, 1);
+    let honest = w.honest(&job, 3);
+    let id = honest.claim.id();
+    w.block(10, vec![honest.tx, T::PanelCovered { claim: id }]);
+    w.l.bind_exec_reward_until([0xE1; 64], id, 500, 600).unwrap();
+    w.block(60, vec![]);
+    assert!(w.l.extend_claim_liability_by_consent_v1(&id, 599, 700, 800).is_err(), "a stale horizon never applies");
+    assert!(w.l.extend_claim_liability_by_consent_v1(&id, 600, 600, 800).is_err(), "never equal or shorter");
+    assert!(w.l.extend_claim_liability_by_consent_v1(&id, 600, 801, 800).is_err(), "never past the claim-fixed deadline");
+    w.l.extend_claim_liability_by_consent_v1(&id, 600, 700, 800).unwrap();
+    assert_eq!(w.l.claims[&id].liability_until, Some(700));
+    w.l.validate_exec_reward_holds().unwrap();
+    let root = w.l.root();
+    w.l = KernelLedgerV1::from_rows(&w.genesis, w.l.scalars(), &w.l.to_rows()).unwrap();
+    assert_eq!(w.l.root(), root, "the extension is in the rows");
+    w.block(700, vec![]);
+    assert_eq!(w.l.claims[&id].reserved, 1000, "the extended inclusive last day still holds the collateral");
+    w.block(701, vec![]);
+    assert_eq!(w.l.claims[&id].reserved, 0, "retention stays finite");
+    assert!(w.l.extend_claim_liability_by_consent_v1(&id, 700, 750, 800).is_err(), "an expired horizon is never reopened");
+}

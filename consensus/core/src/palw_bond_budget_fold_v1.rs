@@ -1477,7 +1477,18 @@ impl TransitionBuilder<'_> {
         }
         let capital = self.state.bonds.get(&bond).map_or(0, |b| b.collateral);
         self.bond_budget_op(|budget, _, j| {
-            budget.hold_native_income_v1(&mirror.policy, capital, id, bond, row.accepted_daa, until, row.reserved.reward_sompi, &[], false, j)
+            budget.hold_native_income_v1(
+                &mirror.policy,
+                capital,
+                id,
+                bond,
+                row.accepted_daa,
+                until,
+                row.reserved.reward_sompi,
+                &[],
+                false,
+                j,
+            )
         })
         .expect("the engine holding the row exists")
         .map_err(|why| budget_refused(bond, why))

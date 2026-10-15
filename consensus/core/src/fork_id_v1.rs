@@ -834,7 +834,8 @@ mod tests {
                 params.sync_palw_econ_contracts_v1();
             }
             "palw_horizon_extension_v1" => {
-                params.palw_horizon_extension_v1 = Some(crate::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1::unapproved_probe_at(at));
+                params.palw_horizon_extension_v1 =
+                    Some(crate::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1::unapproved_probe_at(at));
                 params.sync_palw_econ_contracts_v1();
             }
             "palw_minimum_price_v1" => {

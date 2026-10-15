@@ -1426,6 +1426,16 @@ only where an existing record justifies it.
    plan, positions, repetitions and step/stage union; a source policy's M127 field label cannot overstate a CRT result.
 5. Remaining (observations): v1/v2 node evidence exists; v4/v5 courts not reached; compact proof families need
    their own contracts; class-by-class public refutation of routing/history/gather is open.
+6. **Compact proof family contract (2026-10-15).** A compact family (sum-check, GKR-style layered circuit, Freivalds-style
+   encoded query) is a separately versioned contract, never a variant of the full-material-opening plan
+   (`CompiledClaimProofPlanV3`). It MUST bind the family, the exact target, the canonical relation encoding (covering
+   every relation family of the class it is registered for), an independent soundness review identity and the reviewed
+   per-check bits, and finite proof-byte and verifier-work bounds. Each family has its own compiler identity
+   (`compact_proof_family_compiler_v1`), distinct from `full_material_compiler_v3`. Until a compact verifier, its relation
+   coverage map and the review exist, registration MUST refuse every such contract by name — and a plan carrying a compact
+   compiler identity with the same explicit reason — never silently accept it or fall back to the full-material plan.
+   Implementation: `misaka_palw_kernel::claim_interactive_v3::CompactProofFamilyContractV1` (a stub refused by
+   `register`); no fence, wire tag or state changes.
 
 ### R7-ECON — costs, collection and lazy verification
 
@@ -1441,6 +1451,16 @@ only where an existing record justifies it.
 5. Named parameters: per-attempt deposit binding against one-deposit-many-attempts and its concurrency cap `N_max`
    (econ record S4) — **value: USER DECISION REQUIRED**.
 6. Remaining: measured costs, collection floor, funded minimum, lazy-verifier deterrence (validation/evidence).
+7. **Dormant mechanics (2026-10-15, no activation).** M\*-49's drawn-check attestation is carried as kernel inner 39
+   (`AttestDrawnCheckV1`, `palw_verifier_pay_v1`; signed by the drawn slot holder). The optional verification-attestation
+   gate on the model allocation is `palw_model_verification_gate_v1` (inner 67, aux 125): per model-epoch `m` stake-drawn
+   slots (with replacement) each attest one beacon-sampled Final claim; the epoch's allocation subsidy is payable only on
+   `k` "verified" slots, withheld (never minted) only for unattested verification, and never withheld because a model had no
+   Final claim to sample (ADR-0177 D1). Named parameters `PalwModelVerificationGatePolicyV1 {slots m, threshold k,
+   sample_rule, attestation_window_daa, maximum_open_tallies, review scopes}` — invariant `0 < k <= m <= 255`, `2k > m`;
+   **value: USER DECISION REQUIRED** (interim probe m = 47, k = 24 from the 2026-10-10 ruling, unapproved). The OPVB
+   beacon wiring that opens a tally and the payout integration of its outcome remain open; T6 (lazy verifier) is not
+   closed by an attestation.
 
 ### ALL-MODEL
 

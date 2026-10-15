@@ -556,9 +556,15 @@ impl Params {
         if self.palw_panel_lifetime_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_panel_lifetime_v2 = None; }
         if self.palw_claim_challenge_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_claim_challenge_v2 = None; }
         if self.palw_monetary_material_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_monetary_material_v1 = None; }
-        if self.palw_model_verification_gate_v1.is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_model_verification_gate_v1 = None; }
-        if self.palw_horizon_extension_v1.is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_horizon_extension_v1 = None; }
-        if self.palw_minimum_price_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) { self.palw_minimum_price_v1 = None; }
+        if self.palw_model_verification_gate_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_model_verification_gate_v1 = None;
+        }
+        if self.palw_horizon_extension_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_horizon_extension_v1 = None;
+        }
+        if self.palw_minimum_price_v1.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_minimum_price_v1 = None;
+        }
         if self.palw_material_income_v3 == Some(ForkActivation::never()) {
             self.palw_material_income_v3 = None;
         }
@@ -1695,9 +1701,21 @@ impl Params {
         if let Some(f) = &self.palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &self.palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
         if let Some(f) = &self.palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &self.palw_model_verification_gate_v1 { h.write(b"palw_model_verification_gate_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &self.palw_horizon_extension_v1 { h.write(b"palw_horizon_extension_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &self.palw_minimum_price_v1 { h.write(b"palw_minimum_price_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &self.palw_model_verification_gate_v1 {
+            h.write(b"palw_model_verification_gate_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_horizon_extension_v1 {
+            h.write(b"palw_horizon_extension_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &self.palw_minimum_price_v1 {
+            h.write(b"palw_minimum_price_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
         if let Some(at) = self.palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());
@@ -3283,9 +3301,15 @@ impl Params {
         if let Some(f) = palw_panel_lifetime_v2.as_mut() { fork(&mut f.activation, visit); }
         if let Some(f) = palw_claim_challenge_v2.as_mut() { fork(&mut f.activation, visit); }
         if let Some(f) = palw_monetary_material_v1.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_model_verification_gate_v1.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_horizon_extension_v1.as_mut() { fork(&mut f.activation, visit); }
-        if let Some(f) = palw_minimum_price_v1.as_mut() { fork(&mut f.activation, visit); }
+        if let Some(f) = palw_model_verification_gate_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_horizon_extension_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
+        if let Some(f) = palw_minimum_price_v1.as_mut() {
+            fork(&mut f.activation, visit);
+        }
         if let Some(at) = palw_material_income_v3.as_mut() {
             fork(at, visit);
         }
@@ -4722,9 +4746,21 @@ impl Params {
         if let Some(f) = &palw_panel_lifetime_v2 { h.write(b"palw_panel_lifetime_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
         if let Some(f) = &palw_claim_challenge_v2 { h.write(b"palw_claim_challenge_v2"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id()); }
         if let Some(f) = &palw_monetary_material_v1 { h.write(b"palw_monetary_material_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &palw_model_verification_gate_v1 { h.write(b"palw_model_verification_gate_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &palw_horizon_extension_v1 { h.write(b"palw_horizon_extension_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
-        if let Some(f) = &palw_minimum_price_v1 { h.write(b"palw_minimum_price_v1"); h.write(f.activation.daa_score().to_le_bytes()); h.write(f.policy.id().as_bytes()); }
+        if let Some(f) = &palw_model_verification_gate_v1 {
+            h.write(b"palw_model_verification_gate_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_horizon_extension_v1 {
+            h.write(b"palw_horizon_extension_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
+        if let Some(f) = &palw_minimum_price_v1 {
+            h.write(b"palw_minimum_price_v1");
+            h.write(f.activation.daa_score().to_le_bytes());
+            h.write(f.policy.id().as_bytes());
+        }
         if let Some(at) = palw_material_income_v3 {
             h.write(b"palw_material_income_v3");
             h.write(at.daa_score().to_le_bytes());

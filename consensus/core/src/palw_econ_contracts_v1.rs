@@ -367,8 +367,10 @@ impl PalwHorizonExtensionFenceV1 {
 
 /// **The claim-fixed hard deadline** of a kernel claim accepted at `committed_daa` (`d0`): fixed at acceptance, never moved by an
 /// extension. `None` on overflow (refused).
-// X3: the lead unifies this bound with `palw_x3_hard_deadline_v2` / `palw_x3_effective_deadline_v2` once the X3 fence lands; until
-// then the policy's `maximum_claim_horizon_daa` from the kernel claim's own acceptance is the local claim-fixed bound.
+// X3: the kernel claim has no native `dispute_hard_deadline`; this is its local claim-fixed bound from its own acceptance. The fold
+// caps it with `palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, palw_claim_hard_deadline_of_v1(root))` — the EXEC root
+// native claim's X3 deadline where `palw_claim_hard_deadline_v1` governs it. The lead may replace the local term once X3 defines a
+// kernel-claim deadline.
 pub fn palw_horizon_extension_hard_deadline_v1(committed_daa: u64, policy: &PalwHorizonExtensionPolicyV1) -> Option<u64> {
     committed_daa.checked_add(policy.maximum_claim_horizon_daa).filter(|d| *d != u64::MAX)
 }
@@ -739,7 +741,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     }
                 }
                 PALW_HORIZON_EXTENSION_TABLE_V1 => {
-                    let (_, policy) = mirror.horizon_extension.as_ref().ok_or_else(|| refuse("an extension without its fence".into()))?;
+                    let (_, policy) =
+                        mirror.horizon_extension.as_ref().ok_or_else(|| refuse("an extension without its fence".into()))?;
                     let row: PalwHorizonExtensionRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                     row.validate().map_err(|e| refuse(e.into()))?;
                     if *key != palw_horizon_extension_key_v1(&row.terms.id()) || row.policy != policy.id() {
@@ -890,10 +893,18 @@ mod tests {
         assert_eq!(palw_model_verification_subsidy_v1(O::Unattested, 50), PalwGatedSubsidyV1 { withheld: 50, ..Default::default() });
         assert_eq!(palw_model_verification_subsidy_v1(O::Pending, 50).deferred, 50);
         assert_eq!(palw_model_verification_subsidy_v1(O::Attested, 50).payable, 50);
-        assert_eq!(palw_model_verification_sample_v1(PalwVerificationSampleRuleV1::UniformFinalClaimV1, &[1; 64], &[2; 64], &[]), Ok(None));
+        assert_eq!(
+            palw_model_verification_sample_v1(PalwVerificationSampleRuleV1::UniformFinalClaimV1, &[1; 64], &[2; 64], &[]),
+            Ok(None)
+        );
         assert!(
-            palw_model_verification_sample_v1(PalwVerificationSampleRuleV1::UniformFinalClaimV1, &[1; 64], &[2; 64], &[[2; 64], [1; 64]])
-                .is_err()
+            palw_model_verification_sample_v1(
+                PalwVerificationSampleRuleV1::UniformFinalClaimV1,
+                &[1; 64],
+                &[2; 64],
+                &[[2; 64], [1; 64]]
+            )
+            .is_err()
         );
     }
 

@@ -50,9 +50,8 @@ pub(super) fn open_model_verification_tally_v1(
             return Err(refuse("the model-epoch tally is already open"));
         }
         let mut open = 0u32;
-        for (_, bytes) in route
-            .aux
-            .range((PALW_MODEL_VERIFICATION_TABLE_V1, Vec::new())..(PALW_MODEL_VERIFICATION_TABLE_V1 + 1, Vec::new()))
+        for (_, bytes) in
+            route.aux.range((PALW_MODEL_VERIFICATION_TABLE_V1, Vec::new())..(PALW_MODEL_VERIFICATION_TABLE_V1 + 1, Vec::new()))
         {
             let row: PalwModelVerificationTallyV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
             if row.outcome(policy.threshold, ctx.daa_score) == PalwModelVerificationOutcomeV1::Pending {
@@ -105,9 +104,8 @@ pub(super) fn attest_model_verification_v1(
         if attestation.network != route.header.policy.network_domain {
             return Err(refuse("the attestation names another network"));
         }
-        let row: PalwModelVerificationTallyV1 = route
-            .aux_row(PALW_MODEL_VERIFICATION_TABLE_V1, &attestation.tally)
-            .ok_or_else(|| refuse("no such model-epoch tally"))?;
+        let row: PalwModelVerificationTallyV1 =
+            route.aux_row(PALW_MODEL_VERIFICATION_TABLE_V1, &attestation.tally).ok_or_else(|| refuse("no such model-epoch tally"))?;
         row
     };
     row.validate(&policy).map_err(refuse)?;
@@ -200,9 +198,8 @@ pub(super) fn consent_horizon_extension_v1(
         let existing: Option<PalwHorizonExtensionRowV1> = route.aux_row(PALW_HORIZON_EXTENSION_TABLE_V1, &key);
         if existing.is_none() {
             let mut open = 0u32;
-            for (_, bytes) in route
-                .aux
-                .range((PALW_HORIZON_EXTENSION_TABLE_V1, Vec::new())..(PALW_HORIZON_EXTENSION_TABLE_V1 + 1, Vec::new()))
+            for (_, bytes) in
+                route.aux.range((PALW_HORIZON_EXTENSION_TABLE_V1, Vec::new())..(PALW_HORIZON_EXTENSION_TABLE_V1 + 1, Vec::new()))
             {
                 let other: PalwHorizonExtensionRowV1 = borsh::from_slice(bytes).map_err(|e| refuse(e.to_string()))?;
                 if other.applied_daa.is_none() && other.terms.consent_by_daa >= now {
@@ -228,7 +225,16 @@ pub(super) fn consent_horizon_extension_v1(
             if claim.liability_until != Some(terms.current_liability_until_daa) || now > terms.current_liability_until_daa {
                 return Err(refuse("the extension names a horizon the claim no longer has, or one already expired"));
             }
-            if palw_horizon_extension_hard_deadline_v1(claim.committed_daa, &policy) != Some(terms.hard_deadline_daa) {
+            // X3: the kernel claim's own claim-fixed bound, further capped (`min`) by the EXEC root native claim's X3
+            // `dispute_hard_deadline` where `palw_claim_hard_deadline_v1` governs that claim (REQ-X3-2's `effective = min(proposed, hard)`).
+            let root_x3 = builder
+                .state
+                .claims
+                .get(&Hash64::from_bytes(terms.root))
+                .and_then(|root| crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(builder.params, root));
+            let hard = palw_horizon_extension_hard_deadline_v1(claim.committed_daa, &policy)
+                .map(|own| crate::palw_ruling_fences_v1::palw_claim_effective_deadline_v1(own, root_x3));
+            if hard != Some(terms.hard_deadline_daa) {
                 return Err(refuse("the extension's hard deadline is not the claim-fixed one"));
             }
             // §15.5: a transferred claim's providers consent through their own signed leases, which must already cover the new horizon.

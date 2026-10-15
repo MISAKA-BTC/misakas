@@ -37,6 +37,9 @@ native_struct!(crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2; authori
 native_struct!(crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2; terms, signer, enrolled_daa, enrolled_block, policy, pause_started_daa, total_paused_daa, authority_kind);
 native_struct!(misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2; version, network, ruleset, nonce, producer, class, accept_from_daa, accept_by_daa, service_until_daa, liability_until_daa, maximum_retries, maximum_pause_daa, maximum_pwu, maximum_reserved_sompi, maximum_escrow_sompi, maximum_rights_sompi);
 native_struct!(misaka_palw_kernel::panel_lifetime_v2::PanelConsumerLifetimeTermsV2; version, authorization, network, ruleset, claim, class, work, producer, immutable_fields, accept_by_daa, service_until_daa, liability_until_daa, maximum_retries, maximum_pause_daa);
+native_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1; model, epoch, beacon, model_root, sampled_claim, slots, opened_daa, deadline_daa, policy);
+native_struct!(crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1; terms, consented, first_daa, applied_daa, policy);
+native_struct!(crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1; terms, consented, first_daa, signed_daa, policy);
 native_struct!(crate::palw_step_leg::PalwStepBindingV2; version, job_context, shape_profile, checkpoint_profile, state_chunk_map_id, full_logits_trace_root, activation_leg_root, step_leaf_count, step_merkle_root, checkpoint_count, checkpoint_merkle_root, committed_execution_root);
 native_enum!(crate::palw_held_da_v1::PalwHeldMissingV1; PromptIdsTile { tile }, StateChunk { checkpoint, chunk }, StepRange { first, count }, StepLeaf { leaf });
 native_enum!(crate::palw_held_da_v1::PalwHeldDisclosureV1; PromptIdsTile { opening }, StateChunk { anchor, chunk }, StepRange { opening }, StepLeaf { evidence });
@@ -217,6 +220,9 @@ native_struct!(misaka_palw_kernel::court_scope::CourtScopePolicyV1; activation_d
 native_struct!(misaka_palw_kernel::court_scope::CourtScopeRowV1; requested, dismissed);
 native_struct!(misaka_palw_kernel::sealed_bounty::SealedBountyPolicyV1; activation_daa, contest_daa);
 native_struct!(misaka_palw_kernel::ledger::BlockBudgetV1; adjudications, court_work);
+native_enum!(misaka_palw_kernel::econ_contracts_v1::ModelVerificationVerdictV1; Unset, Verified, CouldNotVerify);
+native_struct!(misaka_palw_kernel::econ_contracts_v1::HorizonExtensionTermsV1; version, network, claim, root, worker, sponsor, current_liability_until_daa, new_liability_until_daa, hard_deadline_daa, consent_by_daa, price_contract);
+native_struct!(misaka_palw_kernel::econ_contracts_v1::MinimumPriceContractTermsV1; version, network, worker, poster, job, class, policy, funded_minimum_sompi, capital_sompi, accept_by_daa, retention_until_daa);
 native_struct!(crate::palw_legs::PalwCheckpointProfileV1; version, checkpoint_interval, state_layout_id);
 native_struct!(crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1; prompt_token_count, tile_index, tile_ids, opening);
 native_struct!(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1; leaf, opening);

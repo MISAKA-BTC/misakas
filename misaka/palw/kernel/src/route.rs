@@ -622,13 +622,22 @@ pub enum KernelRouteObjectV1 {
     AuthorizePanelLifetimeV2 { authorization:crate::panel_lifetime_v2::PanelLifetimeAuthorizationV2 } = 66,
     /// **M\*-49 (`palw_verifier_pay_v1`, G14R's reserved 39)**: a drawn slot holder attests its check of `claim`; the ledger pays its
     /// unpaid slots `check_fee` out of the poster's escrow before the attestation deadline. Signed by `verifier`.
-    AttestDrawnCheckV1 { verifier: Digest, claim: Digest } = 39,
+    AttestDrawnCheckV1 {
+        verifier: Digest,
+        claim: Digest,
+    } = 39,
     /// RFC07 R7-ECON: a drawn verifier's attestation for a model-epoch verification tally (consumer-owned).
-    AttestModelVerificationV1 { attestation: crate::econ_contracts_v1::ModelVerificationAttestationV1 } = 67,
+    AttestModelVerificationV1 {
+        attestation: crate::econ_contracts_v1::ModelVerificationAttestationV1,
+    } = 67,
     /// RFC08 R8-WINDOW: one affected party's consent to a live dependency horizon extension (consumer-owned).
-    ConsentHorizonExtensionV1 { terms: crate::econ_contracts_v1::HorizonExtensionTermsV1 } = 68,
+    ConsentHorizonExtensionV1 {
+        terms: crate::econ_contracts_v1::HorizonExtensionTermsV1,
+    } = 68,
     /// RFC08 R8-ECON: one party's signature on a worker/poster minimum-price contract (consumer-owned).
-    SignMinimumPriceContractV1 { contract: crate::econ_contracts_v1::MinimumPriceContractTermsV1 } = 69,
+    SignMinimumPriceContractV1 {
+        contract: crate::econ_contracts_v1::MinimumPriceContractTermsV1,
+    } = 69,
 }
 
 /// The digest of a filed proof's exact bytes: `H("misaka-palw/kernel/proof-digest/v1"; borsh(proof))`.
@@ -1235,11 +1244,35 @@ mod tests {
             .collect();
         assert!(tags.iter().all(|t| max_encoded_bytes_of_tag(*t).is_some() && name_of_tag(*t) != "Unknown"));
         assert!(max_encoded_bytes_of_tag(0).is_none());
-        assert!((38..=39).all(|t| max_encoded_bytes_of_tag(t).is_none()), "38/39 are reserved for G14R, not allocated");
-        // 61–65: prepaid sources, native Panel authority and prospective V2 claim/Panel consent. 67 is unallocated.
-        assert!(max_encoded_bytes_of_tag(67).is_none(), "67 is not allocated");
-        for tag in (22..=37).chain(40..=66) {
+        assert!(max_encoded_bytes_of_tag(38).is_none(), "38 stays reserved for G14R, not allocated");
+        // 39: G14R's M*-49 drawn-check attestation (2026-10-15). 61–66: prepaid sources, native Panel authority and prospective V2
+        // claim/Panel consent. 67–69: RFC07/RFC08 signed economic contracts (2026-10-15). 70–73 are unallocated.
+        assert!((70..=73).all(|t| max_encoded_bytes_of_tag(t).is_none()), "70–73 are not allocated");
+        for tag in (22..=37).chain(39..=69) {
             assert!(max_encoded_bytes_of_tag(tag).is_some());
+        }
+        for o in [
+            KernelRouteObjectV1::AttestDrawnCheckV1 { verifier: [1; 64], claim: [2; 64] },
+            KernelRouteObjectV1::ConsentHorizonExtensionV1 {
+                terms: crate::econ_contracts_v1::HorizonExtensionTermsV1 {
+                    version: 1,
+                    network: [1; 64],
+                    claim: [2; 64],
+                    root: [3; 64],
+                    worker: [4; 64],
+                    sponsor: [5; 64],
+                    current_liability_until_daa: 100,
+                    new_liability_until_daa: 150,
+                    hard_deadline_daa: 200,
+                    consent_by_daa: 90,
+                    price_contract: [0; 64],
+                },
+            },
+        ] {
+            let bytes = o.encode();
+            assert_eq!(bytes[1], o.tag(), "{}", o.name());
+            assert!(bytes.len() <= o.max_encoded_bytes(), "{}", o.name());
+            assert_eq!(KernelRouteObjectV1::decode(&bytes).unwrap(), o);
         }
         assert_eq!(name_of_tag(TAG_FUND_BEACON_SOURCE_FEE_V1), "FundBeaconSourceFee");
         assert_eq!(name_of_tag(TAG_OPT_IN_PAID_BEACON_SOURCE_V1), "OptInPaidBeaconSource");

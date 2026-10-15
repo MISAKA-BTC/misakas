@@ -522,6 +522,9 @@ wire_struct!(crate::palw_derived_v1::PalwDerivedKeyV1; crate::Hash64, crate::Has
 wire_struct!(crate::palw_derived_v1::PalwDerivedRowV1; crate::Hash64, crate::Hash64, u16, crate::Hash64, crate::Hash64, u64, u64);
 wire_struct!(crate::palw_e2e_adjudicability::PalwE2eCoveringV1; bool, bool, bool, bool, bool, bool, u32, bool, std::collections::BTreeSet<crate::Hash64>);
 wire_struct!(crate::palw_e2e_adjudicability::PalwE2eFamilyV1; crate::Hash64, crate::Hash64, BTreeSet<crate::Hash64>, crate::palw_e2e_adjudicability::PalwE2eCoveringV1);
+wire_struct!(crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1; misaka_palw_kernel::econ_contracts_v1::HorizonExtensionTermsV1, Vec<[u8;64]>, u64, Option<u64>, crate::Hash64);
+wire_struct!(crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1; misaka_palw_kernel::econ_contracts_v1::MinimumPriceContractTermsV1, Vec<[u8;64]>, u64, Option<u64>, crate::Hash64);
+wire_struct!(crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1; [u8;64], u64, [u8;64], [u8;64], Option<[u8;64]>, Vec<([u8;64], misaka_palw_kernel::econ_contracts_v1::ModelVerificationVerdictV1)>, u64, u64, crate::Hash64);
 wire_struct!(crate::palw_economic_payout_v1::PalwClaimEconomicsV1; u128, u128, u16, u128, u128, u64, u16);
 impl NativeWireScanV1 for crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
@@ -2856,6 +2859,28 @@ impl NativeWireScanV1 for misaka_palw_kernel::descriptor::KernelStatusV1 {
 }
 wire_struct!(misaka_palw_kernel::descriptor::ResourceLimitsV1; u32, u64, u32, u128, u128, u64, u64);
 wire_struct!(misaka_palw_kernel::descriptor::SoundnessPolicyV1; u16, u8, u16);
+wire_struct!(misaka_palw_kernel::econ_contracts_v1::HorizonExtensionTermsV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u64, [u8;64]);
+wire_struct!(misaka_palw_kernel::econ_contracts_v1::MinimumPriceContractTermsV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u64);
+impl NativeWireScanV1 for misaka_palw_kernel::econ_contracts_v1::ModelVerificationVerdictV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 wire_struct!(misaka_palw_kernel::evidence::EvidenceHeaderV1; [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64]);
 wire_struct!(misaka_palw_kernel::evidence::SegmentV1; u32, u32, [u8;64], [u8;64]);
 wire_struct!(misaka_palw_kernel::evidence::SuiteParamsV1; [u8;64], u32, u32, u8, u16, u16);

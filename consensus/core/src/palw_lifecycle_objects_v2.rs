@@ -2199,16 +2199,25 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "RFC07 R7-ECON model-epoch verification attestation (extends palw_model_bond_allocation_v1)",
         true,
     ),
-    a2_row(PalwA2SlotV1::KernelInner { lo: 68, hi: 68 }, "palw_horizon_extension_v1", "RFC08 R8-WINDOW consented horizon extension", true),
+    a2_row(
+        PalwA2SlotV1::KernelInner { lo: 68, hi: 68 },
+        "palw_horizon_extension_v1",
+        "RFC08 R8-WINDOW consented horizon extension",
+        true,
+    ),
     a2_row(PalwA2SlotV1::KernelInner { lo: 69, hi: 69 }, "palw_minimum_price_v1", "RFC08 R8-ECON minimum-price contract", true),
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel route aux125 model-epoch verification tallies (drawn slots, verdicts, sampled claim)" },
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux125 model-epoch verification tallies (drawn slots, verdicts, sampled claim)",
+        },
         "palw_model_verification_gate_v1",
         "RFC07 R7-ECON verification-attestation gate",
         true,
     ),
     a2_row(
-        PalwA2SlotV1::StateEncoding { what: "kernel route aux126 consented horizon extensions; kernel claim liability and EXEC income hold lengthened" },
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux126 consented horizon extensions; kernel claim liability and EXEC income hold lengthened",
+        },
         "palw_horizon_extension_v1",
         "RFC08 R8-WINDOW consented horizon extension",
         true,

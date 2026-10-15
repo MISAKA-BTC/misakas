@@ -85,6 +85,8 @@ pub mod kernel_rows;
 pub mod onboarding_chain;
 pub mod panel_source_fee_v2;
 pub mod panel_lifetime_v2;
+/// RFC07/RFC08 signed economic contracts (inner 39, 67–69): offline drafts and signing; dormant.
+pub mod econ_contracts_v1;
 pub mod onboarding_snapshot;
 /// RFC-0002 Part II §II.2: the header-only model preflight (`palw-class preflight <model>`).
 pub mod preflight;
