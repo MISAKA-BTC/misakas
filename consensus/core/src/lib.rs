@@ -538,6 +538,9 @@ pub mod palw_model_tier_v1;
 /// catalogs (genesis = edition 0) chained by `previous_catalog_root`, each edition activating at its own DAA; canonical encoding and
 /// root, chain validation, `annual_catalog_active_at`, `model_tier_permille` and the node's catalog status.
 pub mod palw_annual_catalog_v1;
+/// **Genesis 8** (user decisions 2026-10-15, dormant): the next network's genesis model list and its RFC-0019 edition-0 builder over
+/// supplied `PALWART3` roots — no preset reads it; testnet-12 is untouched.
+pub mod palw_genesis8_catalog_v1;
 /// RFC-0015: the Panel=0 (`OptimisticPublicVerification`) fence `palw_panel_free_v1` — dormant, no height, refused when armed.
 pub mod palw_panel_free_v1;
 pub mod palw_panel_lifetime_v2;
