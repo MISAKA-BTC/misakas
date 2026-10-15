@@ -219,12 +219,9 @@ fn frame_semantic_bundle_v1(b: &TransitionBuilder<'_>, frame: &Frame, now_daa: u
         .class_semantics
         .get(&original.job.class_id)
         .ok_or_else(|| refused("TIR original semantic component lost its class's immutable semantics"))?;
-    let pledge = b
-        .extras
-        .history_custody_pledges
-        .get(&claim)
-        .cloned()
-        .ok_or_else(|| refused("TIR original with a semantic stage lacks its producer's signed history pledge (TFP1 history_pledge)"))?;
+    let pledge = b.extras.history_custody_pledges.get(&claim).cloned().ok_or_else(|| {
+        refused("TIR original with a semantic stage lacks its producer's signed history pledge (TFP1 history_pledge)")
+    })?;
     pledge.check_v1().map_err(refused)?;
     let producer = frame.custody_v1().pledge_v1().producer;
     let record = b.state.bond(&producer).ok_or(PalwStateV2Error::MissingBond(producer))?;
@@ -300,7 +297,8 @@ pub fn palw_tir_public_conviction_preflight_v1(
     evidence.check_v1().map_err(refused)?;
     let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
     rules(&builder)?;
-    let frame = palw_tir_public_claim_v1(base, claim).cloned().ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
+    let frame =
+        palw_tir_public_claim_v1(base, claim).cloned().ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
     frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: next_daa, blue_score: 0, subsidy: 0 };
     apply_conviction_v1(&mut builder, &ctx, &frame, filer, evidence)
@@ -787,7 +785,9 @@ fn apply_conviction_v1(
     filer: PalwBondKeyV2,
     evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
 ) -> Result<(), PalwStateV2Error> {
-    use crate::palw_tir_objective_v1::{PalwTirObjectiveOutcomeV1 as Arith, PalwTirOutputFaultV1 as OutFault, PalwTirOutputOutcomeV1 as Out};
+    use crate::palw_tir_objective_v1::{
+        PalwTirObjectiveOutcomeV1 as Arith, PalwTirOutputFaultV1 as OutFault, PalwTirOutputOutcomeV1 as Out,
+    };
     use crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1 as E;
     let claim_id = frame.plan_v1().original_claim;
     let terms = frame.plan_v1().terms;
@@ -840,8 +840,9 @@ fn apply_conviction_v1(
         }
         E::DecodeToken { proof } => {
             // The ORIGINAL job's own selection rule — greedy, seeded Decision 11 sampling, or the V4 pipeline — never the filer's.
-            let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&frame.original_v1().job)
-                .ok_or_else(|| refused("TIR original job's selection is a constraint mask or a tail; the frame's selection door does not judge it"))?;
+            let rule = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&frame.original_v1().job).ok_or_else(|| {
+                refused("TIR original job's selection is a constraint mask or a tail; the frame's selection door does not judge it")
+            })?;
             match crate::palw_tir_objective_v1::adjudicate_original_decode_v1(
                 &b.state,
                 claim_id,
@@ -862,7 +863,9 @@ fn apply_conviction_v1(
                     Some(claim.execution_root)
                 }
                 Arith::PredicateHolds { .. } => {
-                    return Err(refused("TIR nominated selection holds under the job's rule: no conviction, and no finding of claim honesty"));
+                    return Err(refused(
+                        "TIR nominated selection holds under the job's rule: no conviction, and no finding of claim honesty",
+                    ));
                 }
             }
         }
@@ -1149,7 +1152,9 @@ mod conviction_e2e_tests {
         PalwTirPublicConvictionEvidenceV1 as Evidence,
     };
     use crate::palw_tir_public_claim_v1::{PalwTirPublicFrameFixtureV1, palw_tir_public_frame_fixture_v1};
-    use crate::palw_tir_public_custody_v1::{PalwTirPublicCustodyGrantV1, PalwTirPublicOriginalCreditV1, PalwTirPublicOriginalPanelV1};
+    use crate::palw_tir_public_custody_v1::{
+        PalwTirPublicCustodyGrantV1, PalwTirPublicOriginalCreditV1, PalwTirPublicOriginalPanelV1,
+    };
 
     const FORGED_LEAF: usize = 7;
     const COLLATERAL: u64 = 1_000_000_000_000;
@@ -1234,8 +1239,11 @@ mod conviction_e2e_tests {
                     manifest_digest: h(0xD1),
                     retained_bytes: 1,
                 };
-                let ready =
-                    crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1 { descriptor, accepted_daa: bound + 2, work_receipt: h(0xE1) };
+                let ready = crate::palw_tir_public_owned_v1::PalwTirPublicReadyV1 {
+                    descriptor,
+                    accepted_daa: bound + 2,
+                    work_receipt: h(0xE1),
+                };
                 (bound + 2, grant, PalwTirPublicOriginalCreditV1 { receipt, ready })
             })
             .collect();
@@ -1325,7 +1333,9 @@ mod conviction_e2e_tests {
                 },
             );
         }
-        state.staged_courts.insert(frame.key_v1(), crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirClaim(Box::new(frame.clone()).into()));
+        state
+            .staged_courts
+            .insert(frame.key_v1(), crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirClaim(Box::new(frame.clone()).into()));
         super::super::palw_staged_court_fold_v1::rebuild_indices(&mut state);
         let extras = PalwTransitionExtrasV1 {
             tir_public_allocation_rules_v1: Some(fx.rules),
@@ -1377,7 +1387,9 @@ mod conviction_e2e_tests {
         let phase = state.claims.get(&claim_id).unwrap().phase.clone();
         let collateral = std::iter::once(producer).chain(drawn()).map(|b| state.bonds.get(&b).unwrap().collateral).collect();
         let consumed = std::iter::once(palw_court_conviction_offence_id_v1(&producer.0, &claim_id))
-            .chain(drawn().into_iter().map(|seat| crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim_id)))
+            .chain(
+                drawn().into_iter().map(|seat| crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, &claim_id)),
+            )
             .map(|key| state.consumed_offences.contains_key(&key))
             .collect();
         (phase, collateral, consumed)
@@ -1419,7 +1431,11 @@ mod conviction_e2e_tests {
         assert!(collateral[0] < COLLATERAL, "the producer is actually debited (its reservation at least)");
         assert!(collateral[1] <= COLLATERAL - LOCK as u64 && collateral[2] <= COLLATERAL - LOCK as u64, "each colluding Valid: S4");
         assert_eq!(collateral[3], COLLATERAL, "the honest drawn seat that signed no Valid is never charged");
-        assert_eq!(consumed, vec![true, true, true, false], "CourtConviction once; each colluder's false-Valid once; never the honest seat");
+        assert_eq!(
+            consumed,
+            vec![true, true, true, false],
+            "CourtConviction once; each colluder's false-Valid once; never the honest seat"
+        );
         for seat in colluders() {
             assert!(!outside.state.slashable_locks.contains_key(&(seat, claim_id)), "the lock was taken, not left to expire");
         }
@@ -1446,7 +1462,9 @@ mod conviction_e2e_tests {
         // Outside the frame's own d0 door nothing is adjudicated.
         let mut late = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         let door = terms.collect_until_daa - terms.accepted_daa;
-        assert!(apply_verified_control_v1(&mut late, &at(&frame, door), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
+        assert!(
+            apply_verified_control_v1(&mut late, &at(&frame, door), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err()
+        );
     }
 
     #[test]
@@ -1459,7 +1477,10 @@ mod conviction_e2e_tests {
         let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         assert!(apply_verified_control_v1(&mut b, &at(&frame, 5), frame.clone(), &filing(&frame, outsider(), cone(&fx))).is_err());
         assert_eq!(b.state.state_root(), root);
-        assert!(matches!(b.state.claims.get(&frame.plan_v1().original_claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        assert!(matches!(
+            b.state.claims.get(&frame.plan_v1().original_claim).unwrap().phase,
+            PalwClaimPhaseV2::ReceiptLicensed { .. }
+        ));
         // A wrong burn is refused before adjudication (the frame's native terminal rent is exact).
         let mut cheap = filing(&frame, outsider(), cone(&fx));
         cheap.declared_rent_sompi = frame.conviction_rent_v1() - 1;
@@ -1488,7 +1509,10 @@ mod conviction_e2e_tests {
         let mut short = ids.clone();
         short.pop();
         if !short.is_empty() {
-            assert!(apply_verified_control_v1(&mut b, &at(&honest, 5), honest.clone(), &filing(&honest, outsider(), output(short))).is_err());
+            assert!(
+                apply_verified_control_v1(&mut b, &at(&honest, 5), honest.clone(), &filing(&honest, outsider(), output(short)))
+                    .is_err()
+            );
         }
         assert_eq!(b.state.state_root(), root);
         // The lying original: convicted, CourtFraud, colluding Valid custodians charged, honest seat untouched.
@@ -1536,7 +1560,9 @@ mod conviction_e2e_tests {
                 expected_turn: 0,
                 declared_rent_sompi: 0,
                 signer: outsider(),
-                action: A::Preparation(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1::PreparationCollect { actor: producer }),
+                action: A::Preparation(crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1::PreparationCollect {
+                    actor: producer,
+                }),
                 signature: vec![5; SIG],
             };
             control.check_v1().unwrap();
@@ -1665,7 +1691,10 @@ mod conviction_e2e_tests {
         assert_eq!(fresh.staged_holds, archival.staged_holds);
         assert_eq!(fresh.staged_tir_claims_by_producer, archival.staged_tir_claims_by_producer);
         let now = lying.plan_v1().terms.accepted_daa + 6;
-        assert_eq!(fresh.palw_tir_public_prosecution_open_v1(&claim_id, now), archival.palw_tir_public_prosecution_open_v1(&claim_id, now));
+        assert_eq!(
+            fresh.palw_tir_public_prosecution_open_v1(&claim_id, now),
+            archival.palw_tir_public_prosecution_open_v1(&claim_id, now)
+        );
         assert_eq!(palw_tir_public_claim_v1(&fresh, claim_id), palw_tir_public_claim_v1(&archival, claim_id));
         assert_eq!(
             fresh.staged_court_row_v1(&Key::TirWitness(claim_id, outsider())),
@@ -1683,5 +1712,307 @@ mod conviction_e2e_tests {
             })
             .collect();
         assert_eq!(roots[0], roots[1], "the restored node reaches the archival node's exact post-conviction root");
+    }
+
+    /// The producer's honest preparation on the claim-wide lane, after the original acceptance installed it: one paid capture
+    /// debit, then its own `PreparationReady` over a descriptor of the original roots.
+    fn producer_ready(
+        frame: &Frame,
+        state: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+    ) -> PalwChainStateV2 {
+        use crate::palw_tir_public_owned_v1::{
+            PalwTirPublicOwnedActionV1 as Owned, PalwTirPublicWorkDebitV1, PalwTirPublicWorkPhaseV1, PalwTirPublicWorkScopeV1,
+            PalwTirPublicWorkV1,
+        };
+        let plan = frame.plan_v1();
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let header = frame.header_v1();
+        let original = frame.original_v1();
+        let scope = PalwTirPublicWorkScopeV1 {
+            claim: plan.original_claim,
+            owner: producer,
+            reserved_daa: plan.terms.accepted_daa,
+            bundle_id: plan.allocation_id,
+            source_id: plan.source_id,
+            turn: 0,
+            request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 0 },
+            actor: producer,
+            phase: PalwTirPublicWorkPhaseV1::Capture,
+            input_head: plan.source_id,
+            input_offset: 0,
+            slice: 0,
+            cursor_id: h(9),
+        };
+        let debit = PalwTirPublicWorkDebitV1 {
+            expected_nonce: 0,
+            previous_head: Hash64::default(),
+            scope,
+            work: PalwTirPublicWorkV1 { attempts: 1, parser_steps: 1, ..Default::default() },
+            restart: false,
+            history: None,
+        };
+        let prep = |action: Owned| Control {
+            version: 1,
+            claim: plan.original_claim,
+            allocation_id: plan.allocation_id,
+            source_id: plan.source_id,
+            target: T::Preparation { original_accepted_daa: plan.terms.accepted_daa },
+            expected_turn: 0,
+            declared_rent_sompi: 0,
+            signer: producer,
+            action: A::Preparation(action),
+            signature: vec![5; SIG],
+        };
+        let descriptor = crate::palw_backend::PalwTirPublicPreparedDescriptorV1 {
+            version: 1,
+            source_id: plan.source_id,
+            class_id: frame.descriptor_v1().class_id,
+            artifact_root: header.artifact_root,
+            execution_root: original.execution_root,
+            trace_root: original.trace_root,
+            step_root: header.step_merkle_root,
+            step_leaf_count: header.step_leaf_count,
+            decode_count: header.job_context.exact_decode_tokens,
+            vocab: plan.acquisition.envelope.vocab,
+            material_until_daa: plan.terms.material_until_daa,
+            manifest_digest: h(0xD1),
+            retained_bytes: 1,
+        };
+        let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
+        apply_verified_control_v1(&mut b, &at(frame, 1), frame.clone(), &prep(Owned::WorkDebit(debit))).unwrap();
+        apply_verified_control_v1(&mut b, &at(frame, 2), frame.clone(), &prep(Owned::PreparationReady { descriptor })).unwrap();
+        b.state.clone()
+    }
+
+    /// The frame installed at its own acceptance (claim-wide preparation beside it), its producer Ready, and an outside owner's
+    /// accepted Open and Demand of one original step leaf. Returns the state after the Demand, the owner's acquisition target
+    /// and the step offset (from the original acceptance) the custodian answers from.
+    fn demanded_world(
+        fx: &PalwTirPublicFrameFixtureV1,
+        frame: &Frame,
+        leaf: u64,
+    ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, T, u64) {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let (mut state, params, extras) = world(fx, frame);
+        state.staged_courts.remove(&frame.key_v1());
+        super::super::palw_staged_court_fold_v1::rebuild_indices(&mut state);
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        install_original_v1(&mut b, &at(frame, 0), frame.clone()).unwrap();
+        let installed = b.state.clone();
+        let ready = producer_ready(frame, &installed, &params, &extras);
+        let plan = frame.plan_v1();
+        let open_at = plan.preparation_until_daa - plan.terms.accepted_daa;
+        let rent = owner_terms_v1(frame).unwrap().plan.rent_sompi;
+        let opened =
+            control_step(frame, &ready, &params, &extras, open_at, outsider(), T::OwnerOpen { owner: outsider() }, A::Open, rent, 0)
+                .expect("an outside bond opens its own acquisition after the preparation door");
+        let acquisition = T::Acquisition { owner: outsider(), reserved_daa: plan.terms.accepted_daa + open_at };
+        let request = crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: leaf };
+        let demanded = control_step(
+            frame,
+            &opened,
+            &params,
+            &extras,
+            open_at + 1,
+            outsider(),
+            acquisition,
+            A::Acquisition(Owned::Demand { request }),
+            0,
+            0,
+        )
+        .expect("the owner demands one original step leaf from the frame's Ready custodians");
+        (demanded, params, extras, acquisition, open_at + 2)
+    }
+
+    /// One verified control at `offset` DAA past the original acceptance; the new state on success.
+    #[allow(clippy::too_many_arguments)]
+    fn control_step(
+        frame: &Frame,
+        state: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        offset: u64,
+        signer: PalwBondKeyV2,
+        target: T,
+        action: A,
+        rent: u64,
+        turn: u64,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        let plan = frame.plan_v1();
+        let control = Control {
+            version: 1,
+            claim: plan.original_claim,
+            allocation_id: plan.allocation_id,
+            source_id: plan.source_id,
+            target,
+            expected_turn: turn,
+            declared_rent_sompi: rent,
+            signer,
+            action,
+            signature: vec![5; SIG],
+        };
+        let mut b = TransitionBuilder::new(state, params, false, false, false, false, extras);
+        apply_verified_control_v1(&mut b, &at(frame, offset), frame.clone(), &control).map(|()| b.state.clone())
+    }
+
+    /// The owner's open demand on `frame`: `(demand, respond_until, turn, producer's finished body)`.
+    fn owner_pending(
+        frame: &Frame,
+        state: &PalwChainStateV2,
+        acquisition: T,
+    ) -> (Hash64, u64, u64, Option<crate::palw_tir_public_owned_v1::PalwTirPublicAcceptedBodyRefV1>) {
+        let T::Acquisition { owner, reserved_daa } = acquisition else { unreachable!() };
+        let key = owner_key(frame, owner, reserved_daa).unwrap();
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let Some(Row::TirAcquisition(row)) = state.staged_court_row_v1(&key) else { panic!("the owner's acquisition row") };
+        let p = row.owned.active_v1().expect("an open demand");
+        (p.demand_id, p.respond_until_daa, p.turn, p.slots.get(&producer).and_then(|slot| slot.finished.clone()))
+    }
+
+    /// The producer answers the open demand from its committed material — Begin, the canonical Part(s), Finish — one accepted
+    /// move per DAA from `offset`. Returns the state and the next free offset.
+    #[allow(clippy::too_many_arguments)]
+    fn producer_answers(
+        fx: &PalwTirPublicFrameFixtureV1,
+        frame: &Frame,
+        state: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        acquisition: T,
+        leaf: usize,
+        mut offset: u64,
+    ) -> (PalwChainStateV2, u64) {
+        use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, PalwTirPublicOwnedActionV1 as Owned};
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let (demand, _, turn, _) = owner_pending(frame, state, acquisition);
+        let body = borsh::to_vec(&crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf {
+            preimage: fx.execution.preimages[leaf].clone(),
+            opening: crate::palw_step_leg::step_opening_v1(&fx.execution.hashes, leaf as u64).unwrap(),
+        })
+        .unwrap();
+        let begin = Owned::Begin {
+            demand_id: demand,
+            answerer: producer,
+            total_bytes: body.len() as u64,
+            body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body),
+        };
+        let mut answered =
+            control_step(frame, state, params, extras, offset, producer, acquisition, A::Acquisition(begin), 0, turn).expect("Begin");
+        offset += 1;
+        for (i, bytes) in body.chunks(PART).enumerate() {
+            let part = Owned::Part { demand_id: demand, answerer: producer, offset: (i * PART) as u64, bytes: bytes.to_vec() };
+            answered = control_step(frame, &answered, params, extras, offset, producer, acquisition, A::Acquisition(part), 0, turn)
+                .expect("Part");
+            offset += 1;
+        }
+        let finish = Owned::Finish { demand_id: demand, answerer: producer };
+        answered = control_step(frame, &answered, params, extras, offset, producer, acquisition, A::Acquisition(finish), 0, turn)
+            .expect("Finish authenticates the committed leaf against the original step root");
+        (answered, offset + 1)
+    }
+
+    /// **G14 R5: an honest custodian that answers an outside owner's demand inside its clock is never defaulted or charged** —
+    /// the owner's Collect past the clock finds nobody missing and is refused; the producer's collateral and claim are untouched.
+    /// The charge is live, only unearned: the same producer silent on the owner's next demand IS collected once its clock passes.
+    #[test]
+    fn g14_an_honest_custodian_answers_in_time_and_is_not_slashed() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicOwnedActionV1 as Owned;
+        let fx = palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let base = frame.plan_v1().terms.accepted_daa;
+        let claim_id = frame.plan_v1().original_claim;
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let (demanded, params, extras, acquisition, offset) = demanded_world(&fx, &frame, 0);
+        let before = demanded.bonds.get(&producer).unwrap().collateral;
+        let (demand, respond_until, turn, _) = owner_pending(&frame, &demanded, acquisition);
+        let (answered, next) = producer_answers(&fx, &frame, &demanded, &params, &extras, acquisition, 0, offset);
+        assert!(base + next <= respond_until, "the whole answer landed inside its own response clock");
+        assert!(owner_pending(&frame, &answered, acquisition).3.is_some(), "the accepted slot holds the finished body");
+        let late = respond_until - base;
+        let collect = A::Acquisition(Owned::Collect { demand_id: demand });
+        assert!(
+            control_step(&frame, &answered, &params, &extras, late, outsider(), acquisition, collect, 0, turn).is_err(),
+            "nobody is missing: there is nothing to collect"
+        );
+        let da = crate::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &claim_id);
+        assert_eq!(answered.bonds.get(&producer).unwrap().collateral, before);
+        assert!(!answered.consumed_offences.contains_key(&da));
+        assert!(matches!(answered.claims.get(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        // Contrast: a demand the producer leaves unanswered is collected past its clock.
+        let next_demand =
+            A::Acquisition(Owned::Demand { request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1::StepLeaf { index: 1 } });
+        let second = control_step(&frame, &answered, &params, &extras, late, outsider(), acquisition, next_demand, 0, turn + 1)
+            .expect("an answered turn lets the owner demand again");
+        let (demand2, until2, turn2, _) = owner_pending(&frame, &second, acquisition);
+        let collect2 = A::Acquisition(Owned::Collect { demand_id: demand2 });
+        let charged = control_step(&frame, &second, &params, &extras, until2 - base, outsider(), acquisition, collect2, 0, turn2)
+            .expect("a silent custodian is collected past its own clock");
+        assert!(charged.bonds.get(&producer).unwrap().collateral < before);
+        assert!(charged.consumed_offences.contains_key(&da));
+    }
+
+    /// **G14 R4 end to end: an outsider detects a fault through its OWN acquisition, and its finding is filed, convicted and
+    /// slashed.** The outside owner demands the leaf its independent replay disagrees with; the producer's accepted answer is read
+    /// back from the rooted chunks only and re-authenticated against the original roots
+    /// (`palw_tir_public_finished_material_v1`); the cone primitive over that same committed leaf passes the filer's dry run of
+    /// the fold (`palw_tir_public_conviction_preflight_v1`) and the filing convicts: `CourtFraud`, the producer debited, the
+    /// `CourtConviction` recorded once.
+    #[test]
+    fn g14_an_outsider_detects_a_fault_and_its_filed_finding_convicts_and_slashes() {
+        use crate::palw_tir_public_owned_v1::PalwTirPublicFinishedV1;
+        let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
+        let frame = fx.frame.clone();
+        let base = frame.plan_v1().terms.accepted_daa;
+        let claim_id = frame.plan_v1().original_claim;
+        let producer = frame.custody_v1().pledge_v1().producer;
+        let (demanded, params, extras, acquisition, offset) = demanded_world(&fx, &frame, FORGED_LEAF as u64);
+        let before = demanded.bonds.get(&producer).unwrap().collateral;
+        let (answered, next) = producer_answers(&fx, &frame, &demanded, &params, &extras, acquisition, FORGED_LEAF, offset);
+        // Detection: the accepted answer, re-read from rooted chunks and re-authenticated, against the outsider's own replay.
+        let reference = owner_pending(&frame, &answered, acquisition).3.expect("the producer's finished body");
+        let Some(PalwTirPublicFinishedV1::Unit(unit)) = crate::palw_tir_public_state_v1::palw_tir_public_finished_material_v1(
+            &answered,
+            &reference,
+            frame.descriptor_v1().maximum_leaves,
+        )
+        .unwrap() else {
+            panic!("an authenticated step unit")
+        };
+        let crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::StepLeaf { opening, .. } = unit.response_v1() else {
+            panic!("a step leaf")
+        };
+        let context = fx.execution.binding.job_context.clone();
+        let replay = crate::palw_tir_court_v1::test_support::tiny_execution_in(|_, _, _| context.clone(), None);
+        assert_eq!(opening.leaf_hash, fx.execution.hashes[FORGED_LEAF], "the accepted answer is the committed leaf");
+        assert_ne!(replay.hashes[FORGED_LEAF], opening.leaf_hash, "the outsider's own replay disagrees exactly there");
+        // The finding: the cone primitive over that same committed leaf.
+        let evidence = cone(&fx);
+        let Evidence::Arithmetic { proof } = &evidence else { unreachable!() };
+        let crate::palw_court_v2::PalwCourtVerdictProofV2::TirCone { refutation } = proof.as_ref() else { unreachable!() };
+        assert_eq!(refutation.output_opening.leaf_hash, opening.leaf_hash);
+        // Filed: the fold's own dry run accepts it, and the filing convicts and slashes.
+        palw_tir_public_conviction_preflight_v1(&answered, &params, &extras, base + next, outsider(), claim_id, &evidence)
+            .expect("the filer's preflight accepts the finding");
+        let convicted = control_step(
+            &frame,
+            &answered,
+            &params,
+            &extras,
+            next,
+            outsider(),
+            T::Conviction,
+            A::Convict(evidence),
+            frame.conviction_rent_v1(),
+            0,
+        )
+        .expect("the filing convicts");
+        assert!(matches!(
+            convicted.claims.get(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+        ));
+        assert!(convicted.bonds.get(&producer).unwrap().collateral < before);
+        assert!(convicted.consumed_offences.contains_key(&palw_court_conviction_offence_id_v1(&producer.0, &claim_id)));
     }
 }

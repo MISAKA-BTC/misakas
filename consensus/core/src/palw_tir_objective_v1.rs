@@ -174,6 +174,27 @@ pub fn adjudicate_flat_output_v1(
     grade_output_ids_v1(target, &view.job_context, view.vocab_size, pin.generated_ids_v1())
 }
 
+/// **G14 R4 (an outside owner's output check): what a complete authenticated ID sequence contradicts in the ORIGINAL claim** —
+/// the committed output root it does not reproduce, a token outside the vocabulary, or the job's own stop rule. `Some` is exactly
+/// the Output evidence the fold's door convicts on (it re-judges all of it); `None` for the honest answer. The node's owner worker
+/// hands `Some` to the public filer; this function decides nothing on chain.
+pub fn palw_tir_public_output_contradiction_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    job_context: &crate::palw_v2::PalwJobContextV2,
+    original_output_root: Hash64,
+    vocab: u32,
+    ids: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
+) -> Option<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1> {
+    let list = ids.ids_v1();
+    let wrong_output = crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(job_context, list) != original_output_root;
+    let outside = list.iter().any(|id| *id >= vocab);
+    let stop = original_stop_rule_fault_v1(job, vocab, list).is_some();
+    (wrong_output || outside || stop).then(|| crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::Output {
+        rows_root: ids.rows_root_v1(),
+        ids: list.to_vec(),
+    })
+}
+
 fn grade_output_ids_v1(
     target: PalwOffenceTargetV1,
     context: &crate::palw_v2::PalwJobContextV2,
@@ -300,7 +321,9 @@ pub fn original_stop_rule_fault_v1(
 ) -> Option<&'static str> {
     use crate::palw_tir_court_v1::PalwTirSelectionRuleV1 as Rule;
     match Rule::of_job_v1(job)? {
-        Rule::V4 { config, .. } => crate::palw_decode_pipeline_v4::decode_answer_stop_v4(&config, job.decode_token_limit, vocab, ids).err(),
+        Rule::V4 { config, .. } => {
+            crate::palw_decode_pipeline_v4::decode_answer_stop_v4(&config, job.decode_token_limit, vocab, ids).err()
+        }
         Rule::Keyed { .. } => (ids.is_empty() || ids.len() as u64 != u64::from(job.decode_token_limit))
             .then_some("the V3 rule never stops before its budget; the answer's length is not the budget"),
     }
@@ -564,11 +587,8 @@ mod tests {
         assert!(original_stop_rule_fault_v1(&v3, 64, &[1, 2, 3]).is_some(), "a V3 answer never stops before its budget");
         let mut v4 = v3.clone();
         v4.version = crate::palw_freeprompt_v3::PALW_FP_V4_VERSION;
-        v4.decode = Some(DecodeConfigV4 {
-            logit_bias: vec![(7, -100 * (1 << 24))],
-            stop_sequences: vec![vec![9]],
-            ..DecodeConfigV4::NOOP
-        });
+        v4.decode =
+            Some(DecodeConfigV4 { logit_bias: vec![(7, -100 * (1 << 24))], stop_sequences: vec![vec![9]], ..DecodeConfigV4::NOOP });
         assert_eq!(original_stop_rule_fault_v1(&v4, 64, &[1, 9]), None, "ends at its first completed stop sequence");
         assert_eq!(original_stop_rule_fault_v1(&v4, 64, &[1, 2, 3, 4]), None, "runs its whole budget with no stop");
         assert!(original_stop_rule_fault_v1(&v4, 64, &[9, 1]).is_some(), "continues past a completed stop sequence");
@@ -577,5 +597,38 @@ mod tests {
         let mut constrained = v3.clone();
         constrained.version = crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
         assert_eq!(original_stop_rule_fault_v1(&constrained, 64, &[1]), None, "a constraint mask is the semantic court's");
+    }
+
+    /// **G14 R4: the owner's output check reports exactly what the Output door convicts on** — nothing for the honest committed
+    /// answer; the authenticated IDs as Output evidence when the committed output root does not match them.
+    #[test]
+    fn g14_owner_output_contradiction_is_the_output_door() {
+        use crate::palw_tir_public_source_v1::{
+            PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1,
+        };
+        let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
+        let frame = fx.frame.clone();
+        let source = frame.source_v1(&fx.record, &fx.layout, frame.descriptor_v1().maximum_leaves).unwrap();
+        let rows_root =
+            crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+        let mut assembler = PalwTirPublicIdsAssemblerV1::default();
+        let mut sealed = None;
+        let mut offset = 0u32;
+        for chunk in fx.execution.generated.chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
+            let request = PalwTirPublicRequestV1::Ids { offset };
+            let response = PalwTirPublicResponseV1::Ids { rows_root, ids: chunk.to_vec() };
+            sealed = assembler.push_v1(&source, &request, &response).unwrap();
+            offset += chunk.len() as u32;
+        }
+        let ids = sealed.expect("the complete IDs reach the original outer EOF");
+        let original = frame.original_v1();
+        let ctx = &frame.header_v1().job_context;
+        assert!(palw_tir_public_output_contradiction_v1(&original.job, ctx, original.output_root, source.vocab_v1(), &ids).is_none());
+        let found = palw_tir_public_output_contradiction_v1(&original.job, ctx, Hash64::from_u64_word(0xBAD), source.vocab_v1(), &ids)
+            .unwrap();
+        assert!(
+            matches!(found, crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::Output { ids: ref carried, .. }
+            if carried.as_slice() == fx.execution.generated.as_slice())
+        );
     }
 }

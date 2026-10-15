@@ -88,7 +88,7 @@ impl PalwTirPublicFilerBookV1 {
             .strip_prefix(PALW_TIR_PUBLIC_FILER_MAGIC_V1)
             .and_then(|body| borsh::from_slice::<Vec<PalwTirPublicPendingFilingV1>>(body).ok())
             .filter(|entries| {
-                entries.len() <= PALW_TIR_PUBLIC_FILER_PENDING_V1 && entries.iter().all(|e| e.evidence.check_v1().is_ok())
+                entries.len() <= PALW_TIR_PUBLIC_FILER_PENDING_V1 && entries.iter().all(|e| e.evidence.check_staged_v1().is_ok())
             });
         match parsed {
             Some(entries) => {
@@ -142,7 +142,9 @@ impl PalwTirPublicFilerBookV1 {
     /// preflight asks it). One finding per claim — a claim is convicted once, so a second finding adds nothing — and at most
     /// [`PALW_TIR_PUBLIC_FILER_PENDING_V1`] at once. Persisted before it returns `true`.
     pub(crate) fn queue_finding_v1(&mut self, claim: Hash64, evidence: PalwTirPublicConvictionEvidenceV1, now_daa: u64) -> bool {
-        if evidence.check_v1().is_err() || self.filings.contains_key(&claim) || self.filings.len() >= PALW_TIR_PUBLIC_FILER_PENDING_V1
+        if evidence.check_staged_v1().is_err()
+            || self.filings.contains_key(&claim)
+            || self.filings.len() >= PALW_TIR_PUBLIC_FILER_PENDING_V1
         {
             return false;
         }
@@ -246,8 +248,10 @@ impl PalwPanelService {
                     continue;
                 }
             };
-            let staged =
-                encoded.len() as u64 + 4096 > kaspa_consensus_core::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1;
+            // Staged too: an Output past the single-control ID preflight, however few bytes it is.
+            let staged = entry.evidence.check_v1().is_err()
+                || encoded.len() as u64 + 4096
+                    > kaspa_consensus_core::palw_tir_public_carriage_v1::PALW_TIR_PUBLIC_CONTROL_MAX_BYTES_V1;
             let built = if staged {
                 let digest = kaspa_consensus_core::palw_tir_public_carriage_v1::palw_tir_public_witness_digest_v1(&encoded);
                 let mut accepted: Option<(u64, Hash64)> = None;
