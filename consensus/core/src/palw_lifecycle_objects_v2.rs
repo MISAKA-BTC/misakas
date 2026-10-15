@@ -2137,6 +2137,12 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
     // 130 `ExecWorkRootOpenedV2` (X8R, `rfc8/x8r-review`).
     a2_row(PalwA2SlotV1::ObjectTags { lo: 130, hi: 139 }, "palw_exec_payload_v2", "X8R RFC-0008 v2", true),
     a2_row(PalwA2SlotV1::ObjectTags { lo: 240, hi: 242 }, "palw_monetary_material_v1", "RFC08 explicit monetary material covenants", true),
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 230, hi: 230 },
+        "palw_court_model_scope_v1",
+        "D2 seat readiness digest (reserved; not landed)",
+        false,
+    ),
     // 140–149: BUDGET (ADR-0176/0177, allocated 2026-10-10). 140 `BondCapitalAssignedV1` (landed, owned by the allocation fence, which
     // needs `palw_bond_budget_v1` at or below it); 141–149 unallocated within the lane: no row until a kind lands there.
     a2_row(PalwA2SlotV1::ObjectTags { lo: 140, hi: 140 }, "palw_model_bond_allocation_v1", "BUDGET capital assignment", true),
@@ -2613,6 +2619,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     (162, 163, "LG14 terminal objective evidence", &["palw_legacy_public_filer_v1"]),
     (164, 164, "G14 prospective registered semantics", &["palw_class_semantics_v1"]),
     (165, 167, "G14 owned public court stream", &["palw_staged_public_court_v1"]),
+    // 230: reserved 2026-10-15 for the D2 replacement route's seat readiness digest (R-D2-READY). Checked free on this branch, the
+    // G14 public-conviction branch and the RFC02 branch (all end at 167 / start again at 240); the kind itself is not landed yet.
+    (230, 230, "D2 seat readiness digest (reserved)", &["palw_court_model_scope_v1"]),
     (240, 242, "RFC08 monetary material consent", &["palw_monetary_material_v1"]),
 ];
 

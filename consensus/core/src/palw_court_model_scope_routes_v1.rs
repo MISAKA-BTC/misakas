@@ -35,7 +35,7 @@
 //! challenger published but does not derive the finalize's exact read set, so a challenger that publishes too few leaves leaves the
 //! accused to add them (bounded per accusation by one finalize's reads, and the challenger's exposure on a dismissed claim); a
 //! composite artifact's and an evaluation close's sections are authenticated by the finalize, not at opening. R-D2-READY: the readiness
-//! digest is a built predicate with no object kind yet (the Lead allocates a tag); until then a class registered past the fence takes
+//! digest is a built predicate whose object tag 230 is reserved but not landed; until then a class registered past the fence takes
 //! no readiness proof and seats it by the possession floor's other conditions.
 
 use borsh::BorshSerialize;
@@ -164,7 +164,7 @@ pub static PALW_D2_REPLACEMENT_ROUTES_V1: [PalwD2ReplacementRouteV1; 4] = {
             restricted: CourtUnitKindV1::SeatReadinessLeaves,
             units: &[U::ReadinessDigest, U::ReadinessRefutationLeaf],
             verdict: PalwD2VerdictRouteV1::ReadinessDigest,
-            carriers: "palw_d2_readiness_digest_v1 / palw_d2_readiness_refute_v1 (no object kind yet: R-D2-READY)",
+            carriers: "palw_d2_readiness_digest_v1 / palw_d2_readiness_refute_v1 (object tag 230 reserved, kind not landed: R-D2-READY)",
         },
     ]
 };
@@ -316,6 +316,11 @@ pub fn palw_d2_tir_root_claim_relayed_v1(
 // =================================================================================================================================
 // Route 4 — SeatReadinessLeaves: a keyed digest per drawn leaf, refuted by a verifier's own opening
 // =================================================================================================================================
+
+/// **The top-level object tag reserved for the seat readiness digest** (2026-10-15; allocation row in
+/// `crate::palw_lifecycle_objects_v2::PALW_A2_TAG_ALLOCATIONS_V1`, A-2 row not landed). Collision-checked against the G14
+/// public-conviction and RFC02 branches before reservation.
+pub const PALW_D2_SEAT_READINESS_DIGEST_TAG_V1: u8 = 230;
 
 /// The keyed domain of a readiness digest.
 pub const PALW_D2_READINESS_DIGEST_DOMAIN_V1: &[u8] = b"MISAKA/PALW/D2/READINESS-DIGEST/V1";
