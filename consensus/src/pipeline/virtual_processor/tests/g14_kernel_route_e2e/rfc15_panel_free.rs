@@ -79,7 +79,7 @@ fn opv_fence() -> PalwPanelFreeFenceV1 {
 /// The budget's kernel-route row of card `card`'s claims (one claim in these worlds).
 fn kernel_budget_rows(w: &World, card: usize) -> Vec<PalwBudgetClaimRowV1> {
     let state = w.net.chain.tip_state().1;
-    let budget = state.bond_budget.as_ref().expect("the budget engine exists past its fence");
+    let budget = state.bond_budget().expect("the budget engine exists past its fence");
     budget.claims.values().filter(|r| r.origin == PalwBudgetOriginV1::KernelRoute && r.bond == w.net.bond(card)).cloned().collect()
 }
 
@@ -300,7 +300,7 @@ async fn rfc15_e2e_collateral_exit_and_re_registration_wait_for_d_plus_w_and_the
     let liability = w.net.ledger().claims[&honest.id].liability_until.expect("a Final claim has a liability horizon");
     let hold = {
         let state = w.net.chain.tip_state().1;
-        state.bond_budget.as_ref().and_then(|b| b.bond_row(&w.net.bond(0)).map(|r| r.liability_hold_until)).unwrap_or(0)
+        state.bond_budget().and_then(|b| b.bond_row(&w.net.bond(0)).map(|r| r.liability_hold_until)).unwrap_or(0)
     };
     let free_at = row.reuse_not_before.max(liability.saturating_add(1)).max(hold.saturating_add(1));
     w.net.beat_to(free_at - 1).await;
@@ -334,7 +334,7 @@ async fn rfc15_e2e_after_a_slash_the_next_claim_fits_the_remaining_capital_besid
     let next = w.claim(0, &job_b, false).await;
     assert!(w.net.ledger().claims.contains_key(&next.id), "the next claim is admitted");
     let state = w.net.chain.tip_state().1;
-    let budget = state.bond_budget.as_ref().expect("the engine");
+    let budget = state.bond_budget().expect("the engine");
     let window = budget.bond_row(&w.net.bond(0)).expect("the bond's row").window;
     assert_eq!(window.claims, 2, "the convicted claim's consumption and the new one share the window");
     let unit = w.net.bundle.genesis_objects.iter().find_map(|o| match o {
