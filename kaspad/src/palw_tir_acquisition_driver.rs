@@ -18,6 +18,76 @@ use kaspa_consensus_core::{
 };
 use std::sync::Arc;
 
+/// Local operational accounting only. Dropping/recreating this ledger is NOT a
+/// native refund, restart checkpoint or proof of paid authority. Runtime use
+/// still requires an accepted native pre-debit for the same literal work scope.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct OperationalWorkV1 {
+    pub attempts: u64,
+    pub io_bytes: u64,
+    pub hash_bytes: u64,
+    pub parser_steps: u64,
+    pub id_copy_words: u64,
+    pub replay_leaves: u64,
+    pub replay_positions: u64,
+    pub replay_id_words: u64,
+}
+
+pub(super) struct OperationalLedgerV1 {
+    source_id: Hash64,
+    maximum: OperationalWorkV1,
+    spent: OperationalWorkV1,
+}
+
+impl OperationalLedgerV1 {
+    pub(super) fn new_v1(source_id: Hash64, maximum: OperationalWorkV1) -> Self {
+        Self { source_id, maximum, spent: OperationalWorkV1::default() }
+    }
+
+    pub(super) fn spent_v1(&self) -> OperationalWorkV1 {
+        self.spent
+    }
+
+    fn debit_v1(&mut self, source_id: Hash64, work: OperationalWorkV1) -> Result<(), String> {
+        if source_id != self.source_id {
+            return Err("TIR operational work changes source".into());
+        }
+        let mut next = self.spent;
+        macro_rules! debit {
+            ($($field:ident),+ $(,)?) => { $(
+                next.$field = next.$field.checked_add(work.$field).filter(|n| *n <= self.maximum.$field)
+                    .ok_or("TIR cumulative local operational work is exhausted")?;
+            )+ };
+        }
+        debit!(attempts, io_bytes, hash_bytes, parser_steps, id_copy_words, replay_leaves, replay_positions, replay_id_words);
+        self.spent = next;
+        Ok(())
+    }
+}
+
+fn metadata_work_v1(source: &PalwTirPublicSourceV1) -> Result<OperationalWorkV1, String> {
+    // Includes the existing all-ID body-bound loop and up to 64 history hashes.
+    Ok(OperationalWorkV1 {
+        attempts: 1,
+        hash_bytes: 65_536,
+        parser_steps: u64::from(source.decode_count_v1())
+            .div_ceil(u64::from(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1))
+            .checked_mul(16)
+            .and_then(|n| n.checked_add(1024))
+            .ok_or("TIR metadata work overflow")?,
+        ..Default::default()
+    })
+}
+
+fn run_fail_closed_v1<T>(failed: &mut bool, operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    if *failed {
+        return Err("TIR local preparation/recovery is poisoned after a failed attempt".into());
+    }
+    let result = operation();
+    *failed = result.is_err();
+    result
+}
+
 /// Borrowed adapter only. It is not deserializable and not a native credential.
 /// The future rooted reader must supply all three fields from ONE accepted native
 /// snapshot. No submitting/signing/ACK actor is connected to this adapter.
@@ -28,6 +98,14 @@ pub(super) struct BorrowedPaidSnapshotV1<'a> {
 }
 
 impl<'a> BorrowedPaidSnapshotV1<'a> {
+    pub(super) fn from_native_v1(
+        snapshot: &'a kaspa_consensus_core::palw_tir_public_state_v1::PalwTirPublicSnapshotV1,
+    ) -> Result<Self, String> {
+        let view = Self::borrowed_v1(snapshot.snapshot_block, snapshot.now_daa, &snapshot.row.owned);
+        view.source_v1(&snapshot.source)?;
+        Ok(view)
+    }
+
     pub(super) fn borrowed_v1(snapshot_block: BlockHash, now_daa: u64, owned: &'a PalwTirPublicOwnedV1) -> Self {
         Self { snapshot_block, now_daa, owned }
     }
@@ -119,7 +197,9 @@ fn check_body_reference_v1(
     source: &PalwTirPublicSourceV1,
     reference: &PalwTirPublicAcceptedBodyRefV1,
     history: Option<&PalwStepOpeningV1>,
+    ledger: &mut OperationalLedgerV1,
 ) -> Result<(), String> {
+    ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
     snapshot.source_v1(source)?;
     let c = snapshot.owned.contract_v1();
     let (maximum_bytes, _) = request_body_bound_v1(source, reference.request)?;
@@ -176,7 +256,9 @@ pub(super) fn owner_next_v1(
     snapshot: &BorrowedPaidSnapshotV1<'_>,
     source: &PalwTirPublicSourceV1,
     intent: Option<OwnerIntentV1<'_>>,
+    ledger: &mut OperationalLedgerV1,
 ) -> Result<OwnerPlanV1, String> {
+    ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
     snapshot.source_v1(source)?;
     let owned = snapshot.owned;
     let c = owned.contract_v1();
@@ -212,6 +294,7 @@ pub(super) fn owner_next_v1(
                         .and_then(|slot| slot.finished.as_ref())
                         .ok_or("TIR mandatory slot lost its accepted body reference")?,
                     None,
+                    ledger,
                 )?;
             }
             return Ok(OwnerPlanV1::AcquisitionEof { demand_id: p.demand_id });
@@ -231,7 +314,7 @@ pub(super) fn owner_next_v1(
     let (request, reacquire) = match &intent {
         OwnerIntentV1::Fresh(request) => (*request, false),
         OwnerIntentV1::Reacquire { previous, proof } => {
-            check_body_reference_v1(snapshot, source, previous, Some(proof))?;
+            check_body_reference_v1(snapshot, source, previous, Some(proof), ledger)?;
             // Reacquire ALWAYS needs the accepted history path, even if current.
             let (count, root) = owned.history_v1();
             if proof.leaf_hash != previous.hash_v1()?
@@ -322,10 +405,14 @@ impl PreparedResponseUnitV1 {
         &self.authentication
     }
 
-    pub(super) fn into_body_v1(self) -> Result<PreparedLogicalBodyV1, String> {
+    pub(super) fn into_body_v1(self, ledger: &mut OperationalLedgerV1) -> Result<PreparedLogicalBodyV1, String> {
         let UnitAuthenticationV1::OriginalRoot(authenticated) = self.authentication else {
             return Err("a provisional ID chunk is not a completed owned logical body".into());
         };
+        ledger.debit_v1(
+            self.source_id,
+            OperationalWorkV1 { attempts: 1, hash_bytes: self.encoded_unit.len() as u64, ..Default::default() },
+        )?;
         Ok(PreparedLogicalBodyV1 {
             source_id: self.source_id,
             request: self.request,
@@ -361,11 +448,18 @@ pub(super) struct IdsBodyPreparationV1 {
     bytes: Vec<u8>,
     assembler: kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicIdsAssemblerV1,
     sealed: Option<PalwTirPublicAuthenticatedIdsV1>,
+    failed: bool,
     _reservation: Arc<PalwMemoryReservationV1>,
 }
 
 impl IdsBodyPreparationV1 {
-    pub(super) fn start_v1(source: &PalwTirPublicSourceV1, claim: Hash64, maximum_body_ram_bytes: u64) -> Result<Self, String> {
+    pub(super) fn start_v1(
+        source: &PalwTirPublicSourceV1,
+        claim: Hash64,
+        maximum_body_ram_bytes: u64,
+        ledger: &mut OperationalLedgerV1,
+    ) -> Result<Self, String> {
+        ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
         source.check_request_v1(&PalwTirPublicRequestV1::Ids { offset: 0 })?;
         let (maximum_bytes, ram) = request_body_bound_v1(source, PalwTirPublicRequestV1::Ids { offset: 0 })?;
         if ram > maximum_body_ram_bytes {
@@ -391,19 +485,61 @@ impl IdsBodyPreparationV1 {
             bytes,
             assembler: Default::default(),
             sealed: None,
+            failed: false,
             _reservation: Arc::new(reservation),
         })
     }
 
     pub(super) fn next_chunk_v1(&self, source: &PalwTirPublicSourceV1) -> Result<Option<PalwTirPublicRequestV1>, String> {
+        if self.failed {
+            return Err("TIR ID preparation is poisoned after a failed attempt".into());
+        }
         if source.source_id_v1() != self.source_id {
             return Err("TIR ID preparation changes its original source".into());
         }
         Ok((self.offset < source.decode_count_v1()).then_some(PalwTirPublicRequestV1::Ids { offset: self.offset }))
     }
 
-    pub(super) fn push_v1(&mut self, source: &PalwTirPublicSourceV1, chunk: PreparedResponseUnitV1) -> Result<(), String> {
+    pub(super) fn push_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        chunk: PreparedResponseUnitV1,
+        ledger: &mut OperationalLedgerV1,
+    ) -> Result<(), String> {
+        let mut failed = self.failed;
+        let result = run_fail_closed_v1(&mut failed, || self.push_inner_v1(source, chunk, ledger));
+        self.failed = failed;
+        result
+    }
+
+    fn push_inner_v1(
+        &mut self,
+        source: &PalwTirPublicSourceV1,
+        chunk: PreparedResponseUnitV1,
+        ledger: &mut OperationalLedgerV1,
+    ) -> Result<(), String> {
         let request = self.next_chunk_v1(source)?.ok_or("TIR ID body already reached local EOF")?;
+        let bound = source.unit_bound_v1(&request)?;
+        let words = u64::from((source.decode_count_v1() - self.offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1));
+        let complete = u64::from(self.offset).checked_add(words) == Some(u64::from(source.decode_count_v1()));
+        // The in-place core assembler appends once and clones only at EOF.
+        ledger.debit_v1(
+            source.source_id_v1(),
+            OperationalWorkV1 {
+                attempts: 1,
+                io_bytes: chunk.encoded_unit.len() as u64,
+                parser_steps: bound.maximum_parser_steps,
+                hash_bytes: bound
+                    .maximum_hash_input_bytes
+                    .checked_add(if complete { u64::from(source.decode_count_v1()) * 4 } else { 0 })
+                    .ok_or("TIR ID hash work overflow")?,
+                id_copy_words: words
+                    .checked_mul(4)
+                    .and_then(|n| n.checked_add(if complete { u64::from(source.decode_count_v1()) } else { 0 }))
+                    .ok_or("TIR ID copy work overflow")?,
+                ..Default::default()
+            },
+        )?;
         if chunk.source_id != self.source_id
             || chunk.request != request
             || !matches!(chunk.authentication, UnitAuthenticationV1::ProvisionalIds { offset } if offset == self.offset)
@@ -423,7 +559,18 @@ impl IdsBodyPreparationV1 {
         Ok(())
     }
 
-    pub(super) fn finish_v1(self, source: &PalwTirPublicSourceV1) -> Result<PreparedLogicalBodyV1, String> {
+    pub(super) fn finish_v1(
+        self,
+        source: &PalwTirPublicSourceV1,
+        ledger: &mut OperationalLedgerV1,
+    ) -> Result<PreparedLogicalBodyV1, String> {
+        if self.failed {
+            return Err("TIR ID preparation is poisoned after a failed attempt".into());
+        }
+        ledger.debit_v1(
+            source.source_id_v1(),
+            OperationalWorkV1 { attempts: 1, hash_bytes: self.bytes.len() as u64, ..Default::default() },
+        )?;
         if source.source_id_v1() != self.source_id || self.offset != source.decode_count_v1() || self.bytes.len() != self.maximum_bytes
         {
             return Err("TIR ID logical body has not reached exact original EOF".into());
@@ -460,7 +607,9 @@ pub(super) fn responder_next_v1(
     source: &PalwTirPublicSourceV1,
     signer: PalwBondKeyV2,
     body: &PreparedLogicalBodyV1,
+    ledger: &mut OperationalLedgerV1,
 ) -> Result<ResponderPlanV1, String> {
+    ledger.debit_v1(source.source_id_v1(), metadata_work_v1(source)?)?;
     snapshot.source_v1(source)?;
     let c = snapshot.owned.contract_v1();
     let p = snapshot.owned.active_v1().ok_or("TIR response has no native pending request")?;
@@ -482,7 +631,7 @@ pub(super) fn responder_next_v1(
             return Ok(ResponderPlanV1::ImmutableBodyConflict);
         }
         if let Some(reference) = slot.finished.as_ref() {
-            check_body_reference_v1(snapshot, source, reference, None)?;
+            check_body_reference_v1(snapshot, source, reference, None, ledger)?;
             return Ok(ResponderPlanV1::Finished);
         }
     }
@@ -498,12 +647,18 @@ pub(super) fn responder_next_v1(
         },
         Some(slot) => match body_part_range_v1(body.bytes.len(), slot.accepted_offset)? {
             None => PalwTirPublicOwnedActionV1::Finish { demand_id: p.demand_id, answerer: signer },
-            Some(range) => PalwTirPublicOwnedActionV1::Part {
-                demand_id: p.demand_id,
-                answerer: signer,
-                offset: slot.accepted_offset,
-                bytes: body.bytes[range].to_vec(),
-            },
+            Some(range) => {
+                ledger.debit_v1(
+                    source.source_id_v1(),
+                    OperationalWorkV1 { attempts: 1, io_bytes: range.len() as u64, ..Default::default() },
+                )?;
+                PalwTirPublicOwnedActionV1::Part {
+                    demand_id: p.demand_id,
+                    answerer: signer,
+                    offset: slot.accepted_offset,
+                    bytes: body.bytes[range].to_vec(),
+                }
+            }
         },
     };
     let mut action = snapshot.action_v1(signer, p.respond_until_daa, action)?;
@@ -540,8 +695,9 @@ impl RecoveredBodyV1 {
         snapshot: &BorrowedPaidSnapshotV1<'_>,
         source: &PalwTirPublicSourceV1,
         history: Option<&PalwStepOpeningV1>,
+        ledger: &mut OperationalLedgerV1,
     ) -> Result<&PreparedLogicalBodyV1, String> {
-        check_body_reference_v1(snapshot, source, &self.reference, history)?;
+        check_body_reference_v1(snapshot, source, &self.reference, history, ledger)?;
         Ok(&self.body)
     }
 }
@@ -559,6 +715,7 @@ pub(super) struct AcceptedBodyRecoveryV1 {
     remaining: u64,
     records: u64,
     reservation: Option<Arc<PalwMemoryReservationV1>>,
+    failed: bool,
 }
 
 fn checked_chunk_range_v1(
@@ -592,8 +749,9 @@ impl AcceptedBodyRecoveryV1 {
         reference: &PalwTirPublicAcceptedBodyRefV1,
         history: Option<&PalwStepOpeningV1>,
         maximum_body_ram_bytes: u64,
+        ledger: &mut OperationalLedgerV1,
     ) -> Result<Self, String> {
-        check_body_reference_v1(snapshot, source, reference, history)?;
+        check_body_reference_v1(snapshot, source, reference, history, ledger)?;
         let (_, ram) = request_body_bound_v1(source, reference.request)?;
         if ram > maximum_body_ram_bytes {
             return Err("TIR accepted-body recovery exceeds its held operational allocation".into());
@@ -609,6 +767,10 @@ impl AcceptedBodyRecoveryV1 {
             )
             .map_err(|e| e.to_string())?;
         let size = usize::try_from(reference.total_bytes).map_err(|_| "TIR accepted body exceeds native usize")?;
+        ledger.debit_v1(
+            source.source_id_v1(),
+            OperationalWorkV1 { attempts: 1, io_bytes: reference.total_bytes, ..Default::default() },
+        )?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(size).map_err(|e| e.to_string())?;
         bytes.resize(size, 0);
@@ -619,6 +781,7 @@ impl AcceptedBodyRecoveryV1 {
             remaining: reference.total_bytes,
             records: 0,
             reservation: Some(Arc::new(reservation)),
+            failed: false,
         })
     }
 
@@ -631,13 +794,42 @@ impl AcceptedBodyRecoveryV1 {
         history: Option<&PalwStepOpeningV1>,
         ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
         reader: &mut dyn AcceptedChunkReaderV1,
+        ledger: &mut OperationalLedgerV1,
     ) -> Result<BodyRecoveryPollV1, String> {
-        check_body_reference_v1(snapshot, source, &self.reference, history)?;
+        let mut failed = self.failed;
+        let result = run_fail_closed_v1(&mut failed, || self.poll_inner_v1(snapshot, source, history, ids, reader, ledger));
+        self.failed = failed;
+        result
+    }
+
+    fn poll_inner_v1(
+        &mut self,
+        snapshot: &BorrowedPaidSnapshotV1<'_>,
+        source: &PalwTirPublicSourceV1,
+        history: Option<&PalwStepOpeningV1>,
+        ids: Option<&PalwTirPublicAuthenticatedIdsV1>,
+        reader: &mut dyn AcceptedChunkReaderV1,
+        ledger: &mut OperationalLedgerV1,
+    ) -> Result<BodyRecoveryPollV1, String> {
+        check_body_reference_v1(snapshot, source, &self.reference, history, ledger)?;
         if self.reservation.is_none() {
             return Err("TIR accepted-body recovery has already emitted its bytes".into());
         }
         let expected_records = self.reference.total_bytes.div_ceil(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64);
         if self.remaining != 0 {
+            // Charge a bounded read/hash attempt BEFORE untrusted history I/O.
+            // None and rejected copies consume this allocation too.
+            let record_bytes = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64 + 1024;
+            ledger.debit_v1(
+                source.source_id_v1(),
+                OperationalWorkV1 {
+                    attempts: 1,
+                    io_bytes: record_bytes * 2,
+                    hash_bytes: record_bytes,
+                    parser_steps: record_bytes * 16,
+                    ..Default::default()
+                },
+            )?;
             let Some(record) = reader.poll_chunk_v1(AcceptedChunkReadV1 {
                 snapshot_block: snapshot.snapshot_block,
                 contract: snapshot.owned.contract_v1(),
@@ -657,6 +849,10 @@ impl AcceptedBodyRecoveryV1 {
                 return Ok(BodyRecoveryPollV1::Pending);
             }
         }
+        ledger.debit_v1(
+            source.source_id_v1(),
+            OperationalWorkV1 { attempts: 1, hash_bytes: self.bytes.len() as u64, ..Default::default() },
+        )?;
         if self.head != Hash64::default()
             || self.records != expected_records
             || palw_tir_public_body_hash_v1(&self.bytes) != self.reference.body_hash
@@ -669,8 +865,26 @@ impl AcceptedBodyRecoveryV1 {
             let mut sealed = None;
             for offset in (0..source.decode_count_v1()).step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
                 let request = PalwTirPublicRequestV1::Ids { offset };
-                let length = usize::try_from(source.unit_bound_v1(&request)?.maximum_response_bytes)
-                    .map_err(|_| "TIR ID chunk exceeds usize")?;
+                let bound = source.unit_bound_v1(&request)?;
+                let length = usize::try_from(bound.maximum_response_bytes).map_err(|_| "TIR ID chunk exceeds usize")?;
+                let words = u64::from((source.decode_count_v1() - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1));
+                let complete = u64::from(offset) + words == u64::from(source.decode_count_v1());
+                ledger.debit_v1(
+                    source.source_id_v1(),
+                    OperationalWorkV1 {
+                        attempts: 1,
+                        parser_steps: bound.maximum_parser_steps,
+                        hash_bytes: bound
+                            .maximum_hash_input_bytes
+                            .checked_add(if complete { u64::from(source.decode_count_v1()) * 4 } else { 0 })
+                            .ok_or("TIR ID recovery hash work overflow")?,
+                        id_copy_words: words
+                            .checked_mul(4)
+                            .and_then(|n| n.checked_add(if complete { u64::from(source.decode_count_v1()) } else { 0 }))
+                            .ok_or("TIR ID recovery copy work overflow")?,
+                        ..Default::default()
+                    },
+                )?;
                 let end = at.checked_add(length).ok_or("TIR ID body offset overflow")?;
                 let raw = self.bytes.get(at..end).ok_or("TIR accepted ID body is truncated")?;
                 let response = source.decode_response_v1(&request, raw)?;
@@ -682,12 +896,22 @@ impl AcceptedBodyRecoveryV1 {
             }
             PalwTirPublicFinishedV1::Ids(sealed.ok_or("TIR accepted IDs never sealed the original trace hash")?)
         } else {
+            let bound = source.unit_bound_v1(&self.reference.request)?;
+            ledger.debit_v1(
+                source.source_id_v1(),
+                OperationalWorkV1 {
+                    attempts: 1,
+                    parser_steps: bound.maximum_parser_steps,
+                    hash_bytes: bound.maximum_hash_input_bytes,
+                    ..Default::default()
+                },
+            )?;
             let response = source.decode_response_v1(&self.reference.request, &self.bytes)?;
             PalwTirPublicFinishedV1::Unit(source.authenticate_v1(&self.reference.request, &response, ids)?)
         };
         // Reconfirm before returning the marker; completed bytes are never an
         // authority to increment native turn/offset/nonce on a different fork.
-        check_body_reference_v1(snapshot, source, &self.reference, history)?;
+        check_body_reference_v1(snapshot, source, &self.reference, history, ledger)?;
         let body = PreparedLogicalBodyV1 {
             source_id: source.source_id_v1(),
             request: self.reference.request,
@@ -762,9 +986,39 @@ pub(super) fn prepare_response_v1(
     capture_need: &PalwTirPublicCaptureNeedV1,
     limits: &ResponsePreparationLimitsV1,
     claim: Hash64,
+    ledger: &mut OperationalLedgerV1,
 ) -> Result<ResponsePreparationV1, String> {
     let bound = source.unit_bound_v1(&request)?;
     let work = response_work_v1(capture_need, limits, bound.resident_ram_bytes)?;
+    // Conservatively debit a whole quoted preparation attempt on EVERY poll,
+    // including None/Err. A future native slice API can avoid this overcharge;
+    // resetting this to a fresh max quote per poll is never allowed.
+    ledger.debit_v1(
+        source.source_id_v1(),
+        OperationalWorkV1 {
+            attempts: 1,
+            io_bytes: capture_need
+                .maximum_prepare_io_bytes
+                .checked_add(capture_need.maximum_response_io_bytes)
+                .and_then(|n| n.checked_add(bound.maximum_response_bytes.checked_mul(2)?))
+                .ok_or("TIR response I/O work overflow")?,
+            hash_bytes: capture_need
+                .maximum_response_tree_hashes
+                .checked_mul(128)
+                .and_then(|n| n.checked_add(bound.maximum_hash_input_bytes))
+                .and_then(|n| n.checked_add(capture_need.maximum_prepare_io_bytes.checked_mul(16)?))
+                .ok_or("TIR response hash work overflow")?,
+            parser_steps: capture_need
+                .maximum_prepare_io_bytes
+                .checked_mul(16)
+                .and_then(|n| n.checked_add(bound.maximum_parser_steps))
+                .ok_or("TIR response parser work overflow")?,
+            replay_leaves: capture_need.maximum_replay_leaves,
+            replay_positions: capture_need.maximum_replay_positions,
+            replay_id_words: capture_need.maximum_replay_id_words,
+            id_copy_words: u64::from(source.decode_count_v1()),
+        },
+    )?;
     let reservation = host_ledger_v1()
         .reserve(
             PalwMemoryReservationKeyV1 {
@@ -802,6 +1056,73 @@ pub(super) fn prepare_response_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cumulative_operational_debit_counts_pending_and_error_without_refund() {
+        let unit = OperationalWorkV1 { attempts: 1, io_bytes: 7, hash_bytes: 11, parser_steps: 13, ..Default::default() };
+        let mut ledger = OperationalLedgerV1::new_v1(
+            hash(1),
+            OperationalWorkV1 { attempts: 2, io_bytes: 14, hash_bytes: 22, parser_steps: 26, ..Default::default() },
+        );
+        ledger.debit_v1(hash(1), unit).unwrap();
+        let pending: Result<Option<()>, String> = Ok(None);
+        assert!(pending.unwrap().is_none());
+        ledger.debit_v1(hash(1), unit).unwrap();
+        let failed: Result<(), String> = Err("untrusted copy rejected".into());
+        assert!(failed.is_err());
+        let spent = ledger.spent_v1();
+        assert_eq!(spent.attempts, 2);
+        assert!(ledger.debit_v1(hash(1), unit).is_err());
+        assert_eq!(ledger.spent_v1(), spent, "failed admission is atomic, completed attempts are never refunded");
+        assert!(ledger.debit_v1(hash(2), OperationalWorkV1::default()).is_err());
+    }
+
+    #[test]
+    fn operational_work_dimensions_and_overflow_never_partially_advance() {
+        for work in [
+            OperationalWorkV1 { io_bytes: 1, ..Default::default() },
+            OperationalWorkV1 { hash_bytes: 1, ..Default::default() },
+            OperationalWorkV1 { parser_steps: 1, ..Default::default() },
+            OperationalWorkV1 { id_copy_words: 1, ..Default::default() },
+            OperationalWorkV1 { replay_leaves: 1, ..Default::default() },
+            OperationalWorkV1 { replay_positions: 1, ..Default::default() },
+            OperationalWorkV1 { replay_id_words: 1, ..Default::default() },
+        ] {
+            let mut ledger = OperationalLedgerV1::new_v1(hash(1), OperationalWorkV1 { attempts: 2, ..Default::default() });
+            assert!(ledger.debit_v1(hash(1), OperationalWorkV1 { attempts: 1, ..work }).is_err());
+            assert_eq!(ledger.spent_v1(), OperationalWorkV1::default());
+        }
+        let mut ledger = OperationalLedgerV1::new_v1(hash(1), OperationalWorkV1 { attempts: u64::MAX, ..Default::default() });
+        ledger.debit_v1(hash(1), OperationalWorkV1 { attempts: u64::MAX, ..Default::default() }).unwrap();
+        assert!(ledger.debit_v1(hash(1), OperationalWorkV1 { attempts: 1, ..Default::default() }).is_err());
+        assert_eq!(ledger.spent_v1().attempts, u64::MAX);
+    }
+
+    #[test]
+    fn failed_recovery_or_id_assembly_cannot_repeat_retained_buffer_work() {
+        let mut poisoned = false;
+        let mut calls = 0;
+        let mut ledger =
+            OperationalLedgerV1::new_v1(hash(1), OperationalWorkV1 { attempts: 2, hash_bytes: 4096, ..Default::default() });
+        let first: Result<(), String> = run_fail_closed_v1(&mut poisoned, || {
+            ledger.debit_v1(hash(1), OperationalWorkV1 { attempts: 1, hash_bytes: 2048, ..Default::default() })?;
+            calls += 1;
+            Err("full-body hash / source decode / original EOF authentication failed".into())
+        });
+        assert!(first.is_err());
+        let spent = ledger.spent_v1();
+        for _ in 0..3 {
+            assert!(
+                run_fail_closed_v1(&mut poisoned, || {
+                    calls += 1;
+                    ledger.debit_v1(hash(1), OperationalWorkV1 { attempts: 1, hash_bytes: 2048, ..Default::default() })
+                })
+                .is_err()
+            );
+        }
+        assert_eq!(calls, 1);
+        assert_eq!(ledger.spent_v1(), spent);
+    }
 
     fn hash(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)

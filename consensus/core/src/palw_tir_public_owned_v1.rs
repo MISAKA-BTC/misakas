@@ -120,15 +120,18 @@ impl PalwTirPublicOwnedPlanV1 {
         let row = sum(&[product(slots, 1536)?, 16_384])?;
         let carrier = product(moves, PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64 + 16_384)?;
         // Small mutable metadata only; body chunks are separate immutable rows.
-        // Includes raw records/keys, history membership index and reversible rows.
+        // Eight raw copies cover the immutable rooted row, delta210 old/new
+        // framing, retained journal and bounded encode/reorg scratch. This is
+        // not a bound on unrelated global BTreeMap clone/root amplification.
+        let raw_storage = product(raw, 8)?;
         let disk = sum(&[
-            raw,
+            raw_storage,
             product(moves, 1024)?,
             product(attempts, 1024 + 64 * 64)?,
             product(product(moves, row)?, 2)?,
             crate::palw_prefix_history_v1::PALW_STAGED_CACHE_LEASE_STORAGE_BYTES_V1,
         ])?;
-        let work = sum(&[product(sum(&[raw, carrier, product(moves, row)?])?, 32)?, product(moves, 65_536)?])?;
+        let work = sum(&[product(sum(&[raw_storage, carrier, product(moves, row)?])?, 32)?, product(moves, 65_536)?])?;
         let maximum_unit_bytes = atom.checked_mul(n.min(256)).ok_or("TIR run body upper bound overflow")?;
         let envelope = PalwRenderingResourcePlanV1 {
             prefix_tokens: 0,
@@ -798,7 +801,7 @@ impl PalwTirPublicOwnedV1 {
         self.spent.reacquire_nonce = next;
         Ok(id)
     }
-    fn response_clock(&self, signer: PalwBondKeyV2, demand: Hash64, now: u64) -> Result<(), String> {
+    pub(crate) fn response_clock(&self, signer: PalwBondKeyV2, demand: Hash64, now: u64) -> Result<(), String> {
         self.original_clock(now)?;
         let p = self.active_v1().ok_or("TIR source has no active request")?;
         if p.demand_id != demand

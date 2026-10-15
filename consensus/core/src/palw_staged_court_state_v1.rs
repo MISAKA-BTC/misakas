@@ -47,6 +47,10 @@ pub enum PalwStagedCourtKeyV1 {
     Inventory(Hash64),
     /// A registered TIR class's published layout (behind `palw_staged_tir_route_v1`).
     TirLayout(Hash64),
+    /// Dormant versioned TIR acquisition sidecars; not legacy Owner courts.
+    TirAcquisition(Hash64, PalwBondKeyV2, Hash64),
+    TirRawChunk(Hash64),
+    TirAcceptedBody(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -73,19 +77,24 @@ pub enum PalwStagedCourtRowV1 {
     /// `layout_digest` (behind `palw_staged_tir_route_v1`): what a TIR prefix quote and court
     /// rebuild the class's step space from.
     TirLayout(Box<crate::palw_tir_class_v1::PalwTirLayoutV1>),
+    TirAcquisition(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1>),
+    TirRawChunk(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1>),
+    TirAcceptedBody(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
+            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) => None,
             _ => Some(self),
         }
     }
     pub fn active_row_mut_v1(&mut self) -> Option<&mut Self> {
         match self {
             Self::OwnerBundle(bundle) => bundle.active_mut_v1(),
-            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_) => None,
+            Self::Claim(_) | Self::ClaimBundle(_) | Self::ArtifactInventoryOpen(_) | Self::ArtifactInventory(_) | Self::TirLayout(_)
+            | Self::TirAcquisition(_) | Self::TirRawChunk(_) | Self::TirAcceptedBody(_) => None,
             _ => Some(self),
         }
     }
@@ -195,6 +204,9 @@ impl PalwStagedCourtRowV1 {
                 c.check_v1()
             }
             (PalwStagedCourtKeyV1::Inventory(hash), Self::ArtifactInventory(c)) if *hash == c.artifact_hash => c.check_v1(),
+            (PalwStagedCourtKeyV1::TirAcquisition(..), Self::TirAcquisition(row)) => row.check_structure_v1(key),
+            (PalwStagedCourtKeyV1::TirRawChunk(head), Self::TirRawChunk(row)) => row.check_structure_v1(*head),
+            (PalwStagedCourtKeyV1::TirAcceptedBody(hash), Self::TirAcceptedBody(row)) => row.check_structure_v1(*hash),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

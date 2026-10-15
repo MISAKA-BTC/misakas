@@ -578,27 +578,30 @@ impl PalwTirPublicIdsAssemblerV1 {
         {
             return Err("ID chunk changes original source, root, exact offset or canonical length".into());
         }
-        let mut candidate = self.ids.clone();
-        candidate.extend_from_slice(ids);
-        let complete = candidate.len() == source.decode_count_v1() as usize;
+        let old_len = self.ids.len();
+        self.ids.try_reserve(ids.len()).map_err(|_| "cannot reserve provisional original IDs")?;
+        self.ids.extend_from_slice(ids);
+        let complete = self.ids.len() == source.decode_count_v1() as usize;
         if complete
             && crate::palw_step_refute::tiled_logits_outer_root_v1(
                 &source.header.job_context,
                 u64::from(source.decode_count_v1()),
                 rows_root,
-                &candidate,
+                &self.ids,
             ) != source.header.full_logits_trace_root
         {
+            // Only EOF authentication can fail after mutation. Roll back the
+            // provisional suffix without copying every prior chunk on each poll.
+            self.ids.truncate(old_len);
             return Err("complete ID stream does not authenticate the original trace root".into());
         }
         let result = complete.then(|| PalwTirPublicAuthenticatedIdsV1 {
             source_id: source.source_id,
             rows_root: *rows_root,
-            ids: candidate.clone(),
+            ids: self.ids.clone(),
         });
         self.source_id = Some(source.source_id);
         self.rows_root = Some(*rows_root);
-        self.ids = candidate;
         Ok(result)
     }
 }
@@ -972,6 +975,8 @@ mod tests {
         let generated = vec![0; 2050];
         let (source, _) = geometry_with_trace(8, 2050, Some((rows_root, &generated)));
         let mut intake = PalwTirPublicIdsAssemblerV1::default();
+        intake.ids.try_reserve_exact(generated.len()).unwrap();
+        let allocation = intake.ids.as_ptr();
         for offset in [0, 1024] {
             assert!(
                 intake
@@ -983,6 +988,7 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
+            assert_eq!(intake.ids.as_ptr(), allocation, "no prior-prefix clone per chunk");
         }
         let before = intake.clone();
         let (foreign, _) = geometry_with_trace(8, 2050, Some((Hash64::from_u64_word(28), &generated)));
@@ -996,6 +1002,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(intake, before);
+        assert_eq!(intake.ids.as_ptr(), allocation, "foreign chunks do not replace the provisional buffer");
         assert!(
             intake
                 .push_v1(
@@ -1006,6 +1013,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(intake, before);
+        assert_eq!(intake.ids.as_ptr(), allocation, "bad EOF rolls back without replacing the provisional buffer");
         assert!(
             intake
                 .push_v1(
@@ -1025,6 +1033,7 @@ mod tests {
             .unwrap();
         assert_eq!(sealed.ids_v1(), generated);
         assert_eq!(sealed.source_id_v1(), source.source_id_v1());
+        assert_eq!(intake.ids.as_ptr(), allocation);
     }
     #[test]
     fn original_tile_tree_frontier_and_full_u32_ragged_tile_authenticate_without_row_node_zero() {

@@ -234,3 +234,53 @@ or dissection, whole-map population amplification, non-preemptible inclusion and
 all-family maximum-size/network terminals are not bought or proven by the new
 acquisition envelope. PredicateHolds, OutputHolds and acquisition EOF are never
 global honesty, objective conviction or full G14 completion.
+
+### Rooted Storage Continuation (Unverified)
+
+The first original-capture/owned-acquisition batch was saved as WIP `196927d38`
+on `codex/integration-followup`. The following continuation remains source only.
+
+- Append-only staged key/row variants separate acquisition metadata, immutable
+  16KiB raw chunks and accepted body references. They do not change existing
+  OwnerBundle fields, delta 211 or old Borsh ordinals. The dormant adapter returns
+  at most two generic delta-210 changes per move, with exact old-row checks before
+  atomic map mutation and reverse replay. Finish reconstructs original records
+  from rooted heads, not private producer storage or unrooted CAS.
+- A typed snapshot getter reconstructs the source against the retained original
+  ClaimBundle, registered class and published layout and uses the same accepted
+  block/clock as its metadata. Source ID and expected turn must be signed and
+  checked on each future carrier, so a previously signed Demand cannot create a
+  later turn. Existing-row transitions never implicitly admit a new allocation.
+- These sidecars have no native Open/carrier/fee door. Existing ClaimBundle
+  payment is not payment for the additional acquisition plan. They are excluded
+  from legacy Owner quota/exposure and retirement handling until dedicated
+  accounting, original source holds, literal Valid grants and indexed TTL/duties
+  are integrated. This is dormant storage plumbing, not an active paid service.
+- The provisional ID assembler now appends in place instead of cloning the whole
+  prefix per chunk. Exact EOF still authenticates the original trace root; bad
+  EOF rolls back the provisional suffix. A source regression checks multi-chunk
+  failure atomicity and retention of a pre-reserved buffer. No timing or
+  maximum-size benchmark has been run.
+- The acquisition driver consumes a cumulative process-local operational ledger
+  before polls, chunk reads, hash/decode, ID copies and response preparation.
+  Pending/error work is not refunded, and failed ID/body recovery cannot retry
+  the same retained buffer. Its snapshot adapter accepts the typed rooted view.
+  This ledger is NOT native spent: restarts can still lose local accounting, and
+  charging the whole preparation Need per poll is conservative rather than a
+  maximum-profile slice guarantee. Native accepted work allocations, predebits,
+  slice permits and restart counters remain necessary before activation.
+- Terminal progress now obtains clock, reservation, immutable declaration and
+  accepted-part bitmap from one accepted state snapshot, rather than combining
+  it with a separately read virtual clock. Regression source covers partial
+  progress, revert, foreign owner and malformed bitmap/deadline refusal.
+
+The terminal audit also corrected an overly broad suspected gap: existing small
+StagedCourt references already use ordinary objective evidence up to 100,000
+bytes and do not depend on the legacy-only multipart reader. A typed transport
+regression verifies that distinction with an injected native-gate result; it
+does not prove a fabricated reference or a real-network conviction. Large
+multipart evidence still requires a live legacy reservation. No retained row is
+given a blanket 2.88MB entitlement: future large TIR proofs need a specifically
+funded original allocation, or an incremental native court producing an ordinary
+small rooted certificate. The whole-family, maximum-profile, collusion and
+real-network acceptance requirements remain outstanding.

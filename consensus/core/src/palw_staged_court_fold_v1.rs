@@ -2830,6 +2830,11 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
         PalwStagedCourtRowV1::ArtifactInventory(_) | PalwStagedCourtRowV1::TirLayout(_) => (u64::MAX, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
+        // Dormant storage only: dedicated paid retention/holds/exposure must be
+        // integrated before these sidecars can be admitted or lifecycle-swept.
+        PalwStagedCourtRowV1::TirAcquisition(_)
+        | PalwStagedCourtRowV1::TirRawChunk(_)
+        | PalwStagedCourtRowV1::TirAcceptedBody(_) => (u64::MAX, Vec::new()),
     }
 }
 pub(super) fn update_indices(
