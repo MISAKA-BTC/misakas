@@ -5096,12 +5096,18 @@ pub(crate) mod tests {
             (162, 0x90e3e29a9106ee3c),
             (163, 0xa30b09c06a2c68f7),
             (164, 0x4235e47da87f3154),
-            (165, 0x868504c5edc94377),
+            // G14 rounds 4-5: the FloatSource*, NativeSelected* and TIR-prefix forms inside 165/167 are owned by their route
+            // fences (`palw_staged_route_forms_v1`) and ride unjudged below them.
+            (165, 0x5de7603f27fce089),
             (166, 0x1d9abdb5bb45bba5),
-            (167, 0x38f4084b1c64b5bb),
-            (240, 0x8ea49ad6543fd3f7),
-            (241, 0xa639b5230cf04abf),
+            (167, 0x20ad01dbaf70d51a),
+            // RFC08 PAV3 wiring (4d049b7cd) changed the monetary material types; dormant `palw_monetary_material_v1`.
+            (240, 0xbc39aa6d38e7db6e),
+            (241, 0xcd75cd8b043876d6),
             (242, 0xd29d0349b76c136f),
+            // G14 TIR native seed and class layout, owned by `palw_staged_tir_route_v1`.
+            (168, 0x08ee1a77654c016e),
+            (169, 0xa24f46d0931b98b5),
             (131, 0xf970df6a8bdc323c),
         ];
 

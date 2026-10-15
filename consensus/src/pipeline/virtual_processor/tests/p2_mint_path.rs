@@ -346,10 +346,13 @@ async fn p2_dns_settlement_uses_the_held_virtual_snapshot_with_a_writer_queued()
         std::thread::yield_now();
     }
     let queued = vp.virtual_stores.try_read().is_none();
+    // The negative control is the nested shared read itself (what the pre-VSTALL settlement path took). Since VSTALL (2026-10-10)
+    // `dns_coinbase_settlement` reads the lock-free LKG virtual state, so it can no longer serve as the control.
     let (old_tx, old_rx) = mpsc::channel();
     let old_vp = vp.clone();
     let control = std::thread::spawn(move || {
-        old_tx.send(old_vp.dns_coinbase_settlement()).unwrap();
+        let nested = old_vp.virtual_stores.read();
+        old_tx.send(nested.state.get().map(|s| s.daa_score).ok()).unwrap();
     });
     let control_waited = old_rx.recv_timeout(Duration::from_millis(50)).is_err();
     let (tx, rx) = mpsc::channel();
