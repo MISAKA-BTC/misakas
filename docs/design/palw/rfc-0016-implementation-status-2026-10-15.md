@@ -121,3 +121,14 @@ All are **test source only** (not run).
 * New `Params` fields are listed at every site `palw_cell_coverage_closure_v1` is. A test that enumerates fence names (e.g. an A-2 or
   fingerprint ledger) may need both names added.
 * Merge with `origin/integ/adr-0162-0178` (`31d4288ad`): `preview_claim_for_origin_moded_v1` composes RFC-0016 P4 with ADR-0176's mode-aware hold.
+* Merge `883e9c93e` (ADR lane `88b54e3a1`): the ADR-0177 V3 allocation stores synthetic history / block rows in the budget's
+  `models` table; `PalwRightsWeightsSourceV1` skips them through `PalwBondBudgetStateV1::is_allocation_aux_row_v1`.
+
+## 8. Overlap with the ADR-0177 V3 block opportunity
+
+The ADR lane's V3 allocation also applies `P_m` to blocks: its `block_opportunity` term reserves each model's reward-bearing block
+units against `⌊accrued_blocks · A_m / ΣA⌋` at the budget plan (`palw_bond_budget_fold_v1.rs`, `PalwBudgetRefusalV1::ModelBlockOpportunity`).
+`P_m` must be applied to blocks ONCE (RFC-0015 §8.5.5), and the adopted physical-layer design is V+ (RFC-0016 D-V1). So
+`validate_palw_model_block_rights_v1` refuses an allocation policy whose `block_opportunity` is on while V+ is armed (one gate, never
+two). Which of the two the activation release arms — V+ (physical, pre-Attempt) or the V3 reservation (reward-bearing units at the
+budget plan) — is a coordination item for the user and the ADR lane; this branch does not edit the ADR lane's code.
