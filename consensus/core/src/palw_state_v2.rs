@@ -14930,8 +14930,23 @@ fn apply_palw_transition_v7_inner(
         // the carrying block is what the job anchor is derived from, so it is load-bearing here.
         builder.state.safe_frontier = claim.accepted_block;
     }
+    // **RFC-0018 §7.5a (Gate C in force at this block): the frontier is RECOMPUTED** — the deepest frontier-eligible Final in the
+    // resolved prefix, never below the floor (seeded with the frontier above at the first such block, raised by retirements). So a
+    // certified claim later convicted stops standing as the frontier and the frontier falls back to the deepest remaining eligible
+    // claim; the delta's `Frontier` entry carries any move, so a reorg reverts it exactly. Below the fence the incremental rule above.
+    if builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)) {
+        let seeded = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
+        palw_security_certification_fold_v1::ensure_frontier_floor_v1(&mut builder, ctx, seeded)?;
+        let (blue_score, block) =
+            crate::palw_security_certification_v1::palw_gate_c_frontier_v1(&builder.state, builder.params, resolved_through);
+        builder.state.safe_frontier_blue_score = blue_score;
+        builder.state.safe_frontier = block;
+    }
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
-    debug_assert!(new_frontier.0 >= old_frontier.0, "the frontier never retreats");
+    debug_assert!(
+        new_frontier.0 >= old_frontier.0 || builder.params.rfc0018_v1().is_some_and(|mirror| mirror.gate_c_at(ctx.daa_score)),
+        "the frontier never retreats (except past Gate C, where a conviction moves it back)"
+    );
 
     // 7. ADR-0125: the round permits this block accepted. After everything else, because nothing
     //    else in the fold reads them, and at a fixed place because fixed IS the requirement.
@@ -17602,8 +17617,26 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
     ncp_at_draw: &BTreeSet<Hash64>,
     thin_at_draw: &BTreeSet<Hash64>,
 ) -> Result<(), PalwStateV2Error> {
+    // **RFC-0018 §5.2 (`palw_panel_anchor_permissionless_v1`, at this block's DAA)**: a block anchors only the claims a contribution of
+    // ANOTHER bond reaches (committed fold output: attempts accepted below this block — this block's own and merged claims excluded
+    // by the blue-score bound); a claim it does not anchor is neither bound nor voided here — it waits for its anchor. Below the
+    // fence `None`, and every claim at or below the reach is this block's, as before.
+    let permissionless = builder
+        .params
+        .rfc0018_v1()
+        .is_some_and(|mirror| mirror.panel_anchor_permissionless_at(ctx.daa_score))
+        .then(|| crate::palw_rfc0018_v1::palw_permissionless_contributions_from_state_v1(&builder.state, ctx.blue_score));
     for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, reach, anchor_delay) {
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+        if let Some(contributions) = permissionless.as_ref()
+            && !crate::palw_rfc0018_v1::palw_permissionless_anchors_claim_v1(
+                contributions,
+                claim.bind_base_daa().saturating_add(anchor_delay),
+                &claim.bond,
+            )
+        {
+            continue;
+        }
         // **Lane F1 (the 2026-09-25 sweep's V03(1)): a claim no capable panel could take retries at its
         // next anchor slot** (past the registry-resilience fence): re-based on this block, its deadline
         // left at `accepted_daa + window_bind` — [`palw_ncp_retry_is_due_v1`] says when, why it cannot

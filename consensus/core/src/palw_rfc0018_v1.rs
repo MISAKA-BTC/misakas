@@ -324,11 +324,41 @@ pub struct PalwAnchorContributionV1 {
     pub bond: PalwBondKeyV2,
     /// The attempt's execution commitment (lane F1's seed unit).
     pub execution: Hash64,
-    /// The fold admitted the attempt (a claim exists for it at the anchor's state). Header-only operator anchoring had no such check
-    /// (RFC-0018 §2 finding F-6); here an unadmitted header contributes nothing.
+    /// The fold admitted the attempt. Contributions are read from COMMITTED fold output
+    /// ([`palw_permissionless_contributions_from_state_v1`]: the claims of the anchor block's selected-parent state), so this is
+    /// `true` for every contribution the node builds; header-only operator anchoring had no such check (RFC-0018 F-6).
     pub admitted: bool,
-    /// The bond was registered and matured in the anchor's committed past (a bond registered after the claim's slot never counts).
+    /// Kept for the pure tests' fixtures; the committed-output reading needs no maturity input (admission already ran on the bond).
     pub bond_matured: bool,
+}
+
+/// **The permissionless anchor's contributions, from committed fold output (RFC-0018 §5.2, exact)**: every ATTEMPT claim of `state`
+/// (the anchor block's selected-parent state — fold output committed before the anchor block) accepted by a chain block below
+/// `before_blue_score`, BLUE or RED alike (`accepted_block` is the carrying block). Phase-independent — a claim the fold admitted was
+/// admitted, whatever happened to it later — so the processor (reading the selected parent's state) and the fold's step 4c (reading
+/// its own state, which adds only claims accepted in the anchor block itself, excluded by the blue-score bound) read one set.
+/// Recognition is therefore one chain block later than the attempt's acceptance.
+pub fn palw_permissionless_contributions_from_state_v1(state: &PalwChainStateV2, before_blue_score: u64) -> Vec<PalwAnchorContributionV1> {
+    state
+        .claims_iter()
+        .filter(|(_, claim)| matches!(claim.source, PalwClaimSourceV2::Attempt) && claim.accepted_blue_score < before_blue_score)
+        .map(|(id, claim)| PalwAnchorContributionV1 {
+            daa_score: claim.accepted_daa,
+            block: claim.accepted_block,
+            bond: claim.bond,
+            execution: claim.work_id.unwrap_or(*id),
+            admitted: true,
+            bond_matured: true,
+        })
+        .collect()
+}
+
+/// **Whether these contributions anchor a claim of `producer` whose slot is `slot`**: at least the policy's minimum of OTHER bonds
+/// contribute at or past the slot (the claim's own producer never seeds its own Panel). The one predicate the processor's walk, its
+/// binding derivation and the fold's step 4c ask.
+pub fn palw_permissionless_anchors_claim_v1(contributions: &[PalwAnchorContributionV1], slot: u64, producer: &PalwBondKeyV2) -> bool {
+    palw_permissionless_anchor_seed_v1(contributions, slot, Some(producer), &PalwPermissionlessAnchorPolicyV1::design_unapproved_v1())
+        .is_some()
 }
 
 /// The permissionless anchor's design values (UNAPPROVED; RFC-0018 §11).
@@ -338,8 +368,8 @@ pub struct PalwPermissionlessAnchorPolicyV1 {
     pub min_distinct_bonds: u32,
 }
 
-/// Unapproved design value (RFC-0018 §11): at least two distinct bonds — the claim's producer alone can never seed its own Panel.
-pub const PALW_RFC0018_ANCHOR_MIN_DISTINCT_BONDS_DESIGN_V1: u32 = 2;
+/// Unapproved design value (RFC-0018 §11): at least one bond OTHER than the claim's producer (the producer is excluded per claim).
+pub const PALW_RFC0018_ANCHOR_MIN_DISTINCT_BONDS_DESIGN_V1: u32 = 1;
 
 impl PalwPermissionlessAnchorPolicyV1 {
     pub const fn design_unapproved_v1() -> Self {
@@ -373,7 +403,7 @@ pub fn palw_permissionless_anchor_seed_v1(
             *entry = (c.daa_score, c.block, c.execution);
         }
     }
-    if (first.len() as u64) < policy.min_distinct_bonds.max(2) as u64 {
+    if (first.len() as u64) < policy.min_distinct_bonds.max(1) as u64 {
         return None;
     }
     let draw_daa = first.values().map(|(daa, _, _)| *daa).min()?;
@@ -389,8 +419,10 @@ pub fn palw_permissionless_anchor_seed_v1(
 
 /// The highest slot a permissionless anchor reaches: the latest eligible contribution's DAA, capped at the anchor's own DAA (as lane A).
 pub fn palw_permissionless_anchor_reach_v1(contributions: &[PalwAnchorContributionV1], anchor_daa: u64) -> Option<u64> {
+    // Claim-independent: whether THIS claim is anchored (a non-producer contribution at or past its slot) is
+    // `palw_permissionless_anchors_claim_v1`, asked per claim by the walk, the derivation and step 4c.
     let distinct: BTreeSet<PalwBondKeyV2> = contributions.iter().filter(|c| c.admitted && c.bond_matured).map(|c| c.bond).collect();
-    if distinct.len() < 2 {
+    if distinct.is_empty() {
         return None;
     }
     contributions.iter().filter(|c| c.admitted && c.bond_matured).map(|c| c.daa_score).max().map(|latest| latest.min(anchor_daa))

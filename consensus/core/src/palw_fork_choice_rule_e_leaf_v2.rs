@@ -519,10 +519,62 @@ pub fn palw_rule_e_pair_from_openings_v1(
     })
 }
 
+/// **RFC-0018 Gate C, as a header-verified client reads it from an opened leaf-v2 window**: how many records are governed, certified,
+/// `Final` but uncertified (no consensus or settlement credit), and the premise the certified ones rest on — the same facts the node's
+/// settlement RPC reports (`uncertifiedFinalAnchors`, `securityCertificationPremise`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwRuleECertificationSummaryV1 {
+    pub governed: u32,
+    pub certified: u32,
+    pub uncertified_final: u32,
+    /// `Some` where any record is governed by Gate C: certification there is premise-based, not an unconditional proof.
+    pub premise: Option<&'static str>,
+}
+
+/// [`PalwRuleECertificationSummaryV1`] of a window's records.
+pub fn palw_rule_e_certification_summary_v1<'a>(records: impl IntoIterator<Item = &'a PalwRuleEClaimRecordV1>) -> PalwRuleECertificationSummaryV1 {
+    use crate::palw_fork_choice_rule_e_v1::{PalwRuleECertificationV1 as C, PalwRuleEClaimStatusV1 as S};
+    let mut out = PalwRuleECertificationSummaryV1::default();
+    for record in records {
+        match record.certification {
+            C::NotGoverned => continue,
+            C::Certified => out.certified += 1,
+            C::Uncertified if record.status == S::Final && record.attempt => out.uncertified_final += 1,
+            C::Uncertified => {}
+        }
+        out.governed += 1;
+    }
+    if out.governed > 0 {
+        out.premise = Some(crate::palw_security_certification_v1::PALW_SECURITY_CERTIFICATION_PREMISE_V1);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::palw_fork_choice_rule_e_v1::PalwRuleEClaimStatusV1;
+
+    /// RFC-0018: the client reads Gate C from the window — the uncertified `Final` count and the premise, and the same side the node
+    /// computes (an uncertified attempt is no participation and no frontier).
+    #[test]
+    fn rfc18_a_client_reads_gate_c_from_the_window() {
+        use crate::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1 as C;
+        let mut certified = record(1, 10, 1, PalwRuleEClaimStatusV1::Final);
+        certified.certification = C::Certified;
+        let mut uncertified = record(2, 20, 2, PalwRuleEClaimStatusV1::Final);
+        uncertified.certification = C::Uncertified;
+        uncertified.safe_weight = 0;
+        let legacy = record(3, 5, 3, PalwRuleEClaimStatusV1::Final);
+        let window = [legacy, certified, uncertified];
+        let summary = palw_rule_e_certification_summary_v1(&window);
+        assert_eq!((summary.governed, summary.certified, summary.uncertified_final), (2, 1, 1));
+        assert!(summary.premise.is_some_and(|p| p.contains("premise-based")));
+        let side = crate::palw_fork_choice_rule_e_v1::palw_rule_e_side_from_records_v1(&window, |_| true).unwrap();
+        assert_eq!(side.participation, 2, "the legacy and the certified attempt; never the uncertified one");
+        assert_eq!(side.safe_frontier_blue_score, 10, "the uncertified Final at 20 stands as no frontier");
+        assert_eq!(palw_rule_e_certification_summary_v1(&[legacy]).premise, None, "no governed record, no premise");
+    }
     use crate::tx::TransactionOutpoint;
 
     fn bond(i: u32) -> PalwBondKeyV2 {
@@ -541,6 +593,7 @@ mod tests {
             capped: false,
             bond_collateral: None,
             budget: None,
+            certification: crate::palw_fork_choice_rule_e_v1::PalwRuleECertificationV1::NotGoverned,
         }
     }
 

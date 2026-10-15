@@ -7366,6 +7366,17 @@ impl<'a> TransitionBuilder<'a> {
         execution_key: Hash64,
     ) {
         let span = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
+        // **RFC-0018 §4.2 (`palw_dag_sibling_attribution_v1`, at the folding block's DAA): no last-write-wins.** Within a span the
+        // anchor is the admitted attempt of least `H(domain ‖ execution key)` — own or merged, blue or red, whichever block folded it
+        // first — so neither the merge order nor which sibling GHOSTDAG selected decides it. Below the fence: the last write, as before.
+        if self.params.rfc0018_v1().is_some_and(|mirror| mirror.sibling_attribution_at(ctx.daa_score))
+            && let Some(held) = self.state.round_seed_anchor
+            && held.span == span
+            && crate::palw_rfc0018_v1::palw_sibling_priority_v1(&held.execution_key)
+                <= crate::palw_rfc0018_v1::palw_sibling_priority_v1(&execution_key)
+        {
+            return;
+        }
         self.write_round_seed_anchor(Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 { span, block, execution_key }));
     }
 
@@ -9624,6 +9635,8 @@ impl<'a> TransitionBuilder<'a> {
             _ => None,
         };
         // Lane BUDGET: a budgeted claim retires the weight its Final (or its spends) was granted — the number `safe_weight` received.
+        // RFC-0018 §7.5a: a retiring frontier-eligible Final raises the Gate C frontier floor (no-op below the fence).
+        super::palw_security_certification_fold_v1::note_retirement_frontier_floor_v1(self, &id, claim)?;
         let retiring = retiring.map(|amount| self.state.bond_budget_weight_or(&id, amount));
         // RFC-0018 Gate C: retire exactly what `safe_weight` received — nothing where Gate C withheld it (identity below its fence).
         let retiring = retiring.map(|amount| crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, claim, amount));

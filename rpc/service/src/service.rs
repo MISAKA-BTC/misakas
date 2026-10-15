@@ -1730,6 +1730,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
                     // ADR-0176 amendment (ユーザー判断 2026-10-15 item 3): the decomposition, not only the total.
                     reservation_split: row.reservation_split.map(|split| split.audit_json()).unwrap_or_default(),
+                    // RFC-0018 Gate C: empty below the fence (the row's version stays 5).
+                    security_certification: match row.security_certification {
+                        "not-governed" => String::new(),
+                        other => other.to_string(),
+                    },
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
