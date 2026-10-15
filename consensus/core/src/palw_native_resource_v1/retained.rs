@@ -19,6 +19,24 @@ impl<E: fmt::Display> fmt::Display for NativeDecodeErrorV1<E> {
     }
 }
 impl<E: std::error::Error + 'static> std::error::Error for NativeDecodeErrorV1<E> {}
+
+/// RFC-0008: why a retained owner's mutation was refused — the typed-RAM reservation, the owner's own verdict on the change
+/// (which may itself be a raw-material or metadata cap, or semantic), or the owner bound. Never flattened into one cause.
+#[derive(Debug)]
+pub enum NativeOwnerMutationErrorV1<E> {
+    TypedRam(NativeCoverageV1),
+    Rejected(E),
+    Bound(String),
+}
+impl<E: fmt::Display> fmt::Display for NativeOwnerMutationErrorV1<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TypedRam(e) => write!(f, "{e}"),
+            Self::Rejected(e) => write!(f, "{e}"),
+            Self::Bound(e) => write!(f, "{e}"),
+        }
+    }
+}
 pub type NativeStateMutationErrorV1 = NativeDecodeErrorV1<crate::palw_state_v2::PalwStateV2Error>;
 pub struct NativeRetainedV1<T> {
     value: T,
@@ -119,20 +137,32 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
         growth: NativeCoverageV1,
         change: impl FnOnce(&mut T) -> Result<(), E>,
     ) -> Result<Self, String> {
+        self.try_mutate_owner_classified_v1(growth, change).map_err(|e| e.to_string())
+    }
+
+    /// RFC-0008: [`Self::try_mutate_owner_v1`] with the refusing cause kept apart — the typed-RAM reservation
+    /// (`NativeOwnerMutationErrorV1::TypedRam`), the owner's own refusal of the change (`Rejected`: a material store's raw or
+    /// metadata cap, or a semantic verdict), and an owner-bound violation. The string form is byte-identical to the historical one.
+    pub(crate) fn try_mutate_owner_classified_v1<E>(
+        &self,
+        growth: NativeCoverageV1,
+        change: impl FnOnce(&mut T) -> Result<(), E>,
+    ) -> Result<Self, NativeOwnerMutationErrorV1<E>> {
+        use NativeOwnerMutationErrorV1 as M;
         let requests = if enabled() {
-            let base = value_requests_v1(&self.value).map_err(|e| e.to_string())?;
-            let extra = growth.bytes().ok_or_else(|| growth.to_string())?;
-            base.checked_add(extra).ok_or("native owner mutation request overflow")?
+            let base = value_requests_v1(&self.value).map_err(M::TypedRam)?;
+            let extra = growth.bytes().ok_or_else(|| M::TypedRam(growth.clone()))?;
+            base.checked_add(extra).ok_or_else(|| M::Bound("native owner mutation request overflow".into()))?
         } else {
             0
         };
-        let lease = reserve_native_requests_v1(requests).map_err(|e| e.to_string())?;
+        let lease = reserve_native_requests_v1(requests).map_err(M::TypedRam)?;
         let mut value = self.value.clone();
-        change(&mut value).map_err(|e| e.to_string())?;
+        change(&mut value).map_err(M::Rejected)?;
         // Diagnostic postcondition catches an incorrect owner-bound derivation;
         // it never retroactively authorizes construction beyond that bound.
-        if enabled() && value_requests_v1(&value).map_err(|e| e.to_string())? > requests {
-            return Err("owner mutation exceeded its audited pre-construction request bound".into());
+        if enabled() && value_requests_v1(&value).map_err(M::TypedRam)? > requests {
+            return Err(M::Bound("owner mutation exceeded its audited pre-construction request bound".into()));
         }
         Ok(Self { value, _lease: lease })
     }

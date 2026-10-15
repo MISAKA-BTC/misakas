@@ -13,7 +13,7 @@ pub use restore::restore_native_carriage_v1;
 pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
 mod transition;
 pub use retained::{
-    NativeDecodeErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
+    NativeDecodeErrorV1, NativeOwnerMutationErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
     retain_native_carriage_decode_classified_v1, retain_native_carriage_decode_v1, retain_native_value_decode_classified_v1,
     retain_native_value_decode_v1,
 };

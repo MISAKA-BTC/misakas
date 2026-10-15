@@ -989,6 +989,8 @@ pub mod palw_claim_compact_v1;
 pub mod palw_claim_interactive_v3;
 
 pub mod palw_material_capacity_v1;
+/// RFC-0008: the five capacity classes (raw material, metadata, typed RAM, DB/history, worker) kept apart on every acceptance path.
+pub mod palw_capacity_classes_v1;
 
 pub mod palw_monetary_material_evidence_v1;
 
