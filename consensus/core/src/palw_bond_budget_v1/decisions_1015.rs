@@ -20,6 +20,9 @@
 //!     scope are defined: a Panel seat's exposure locked behind a LIVE claim (liability: the false-Valid conviction; hold: the seat
 //!     lock until the claim resolves; scope: that exposure). Capital merely bonded for Panel=0 / OPV counts 0 until OPV's
 //!     verifier-liability accounting exists
+//! V10 (RFC-0016, user decision 2026-10-15) a subsidy the verification-attestation gate withholds is never redistributed — not to
+//!     another model, not to an uncertified claim — it is unminted for its epoch and never re-issued later: the epoch's accrual
+//!     restarts at 0 at every roll and a withheld claim's model reservation is never released to the others
 //! ```
 //!
 //! Nothing in this module is built or run by the lane that wrote it (a separate validation agent compiles). No line is a PASS.
@@ -372,6 +375,42 @@ mod tests {
         assert_eq!(palw_verifier_capital_counted_v1(PanelSeatExposure { exposure: 0, claim_live: true }), 0);
         assert!(!PALW_OPV_VERIFIER_LIABILITY_ACCOUNTING_DEFINED_V1);
         assert_eq!(palw_verifier_capital_counted_v1(OpvBondedOnly { capital: 1_000_000 }), 0, "bonded-only Panel=0 capital counts 0");
+    }
+
+    /// RFC-0016 V10 (user decision 2026-10-15): the gate withholds an `Unattested` model-epoch's subsidy whole; the other model's
+    /// budget does not grow from it in that epoch, and the next epoch's accrual starts from zero — never re-issued.
+    #[test]
+    fn v10_withheld_subsidy_is_never_redistributed_nor_reissued() {
+        use crate::palw_econ_contracts_v1::{PalwModelVerificationOutcomeV1, palw_model_verification_subsidy_v1};
+        let gated = palw_model_verification_subsidy_v1(PalwModelVerificationOutcomeV1::Unattested, 5 * KAS);
+        assert_eq!((gated.payable, gated.deferred, gated.withheld), (0, 0, 5 * KAS), "withheld whole, nothing deferred");
+        let p = v3();
+        let ap = PalwModelAllocationPolicyV1 {
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
+            epoch_daa: 10,
+            seasoning_epochs: 1,
+            curve: PalwAllocationCurveV1 { alpha_halves: 3 },
+            max_models_per_bond: 4,
+            average: None,
+        };
+        let mut s = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        s.assign(&ap, bond(1), &[(h(1), 300 * KAS)], 1, CAPITAL, 0, |_| true, &mut j).unwrap();
+        s.assign(&ap, bond(2), &[(h(2), 300 * KAS)], 1, CAPITAL, 0, |_| true, &mut j).unwrap();
+        s.roll_epoch(&ap, 2, 20, |_| (CAPITAL, true), &mut j);
+        s.accrue(10 * KAS, &mut j);
+        assert_eq!((s.model_available(&h(1)), s.model_available(&h(2))), (5 * KAS, 5 * KAS));
+        let ask =
+            PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 5 * KAS, final_weight: 0, liability_sompi: 0 };
+        s.release_due(21, &mut j);
+        s.reserve_claim_v1(&p, CAPITAL, h(50), bond(1), Some(h(1)), 21, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
+        // Model 1's claim is withheld at its Final (Unattested): its reservation stays charged — nothing flows to model 2.
+        assert_eq!(s.model_available(&h(1)), 0);
+        assert_eq!(s.model_available(&h(2)), 5 * KAS, "model 2 never receives model 1's withheld subsidy");
+        // The next epoch: the accrual restarts at zero; the withheld 5 is never re-issued.
+        s.roll_epoch(&ap, 3, 30, |_| (CAPITAL, true), &mut j);
+        assert_eq!(s.header.allocation.map(|e| e.accrued_sompi), Some(0));
+        assert_eq!((s.model_available(&h(1)), s.model_available(&h(2))), (0, 0));
     }
 
     #[test]
