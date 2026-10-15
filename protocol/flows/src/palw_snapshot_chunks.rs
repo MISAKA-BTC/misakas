@@ -14,6 +14,16 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+/// Native quota exhaustion happens after structural authentication, before
+/// reconstruction; it cannot be encoded as malformed peer Borsh.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativeSnapshotDecodeErrorV1 {
+    #[error("{0}")]
+    Encoding(#[from] io::Error),
+    #[error("{0}")]
+    Capacity(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+}
+
 pub(crate) const CHUNK_BYTES: usize = 4 << 20;
 const COMPRESSION_INPUT_BYTES: usize = 64 << 10;
 pub(crate) const SESSION_TTL: Duration = Duration::from_secs(600);
@@ -600,12 +610,31 @@ impl SnapshotReceiver {
         self.decode_with(|reader, _| T::deserialize_reader(reader))
     }
     pub(crate) fn decode_snapshot_with_native_lease(
-        mut self,
-    ) -> io::Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>)> {
+        self,
+    ) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1>
+    {
         use kaspa_consensus_core::palw_native_resource_v1::*;
-        let lease = if native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() {
+        self.decode_snapshot_with_admission_v1(
+            native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1(),
+            reserve_native_wire_v1,
+        )
+    }
+    fn decode_snapshot_with_admission_v1(
+        mut self,
+        enabled: bool,
+        reserve: impl FnOnce(
+            Hash64,
+            &kaspa_consensus_core::palw_native_resource_v1::NativeWirePreflightV1,
+        ) -> Result<
+            Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+        >,
+    ) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1>
+    {
+        use kaspa_consensus_core::palw_native_resource_v1::*;
+        let lease = if enabled {
             if !self.complete() || self.hash.clone().finalize() != self.root {
-                return Err(invalid("native preflight stream hash/EOF mismatch"));
+                return Err(invalid("native preflight stream hash/EOF mismatch").into());
             }
             let profile = self
                 .profile
@@ -618,9 +647,9 @@ impl SnapshotReceiver {
             let preflight = preflight_native_snapshot_v1(&mut reader, profile.decoded)?;
             let mut extra = [0];
             if reader.read(&mut extra)? != 0 || reader.read != profile.decoded || reader.inner.total_in() != self.total {
-                return Err(invalid("native preflight CRC/single-stream/exact decoded length mismatch"));
+                return Err(invalid("native preflight CRC/single-stream/exact decoded length mismatch").into());
             }
-            reserve_native_wire_v1(self.point, &preflight).map_err(|why| io::Error::new(io::ErrorKind::InvalidData, format!("native structural admission: {why:?}")))?
+            reserve(self.point, &preflight).map_err(NativeSnapshotDecodeErrorV1::Capacity)?
         } else {
             None
         };
@@ -815,6 +844,36 @@ mod tests {
         drop(sender);
         assert_eq!(budget.available_permits(), 2);
     }
+    #[test]
+    fn native_capacity_refusal_preserves_cause_and_never_reconstructs_or_installs_snapshot() {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let budget = Arc::new(Semaphore::new(1));
+        let carriage = native_carriage();
+        let declarations = vec![(h(7), vec![0x31; 16])];
+        let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
+        let profile = SnapshotCompressionV1 { nonce: [7; 32], decoded: raw.len() as u64 };
+        let failure = NativeCoverageV1::unsupported::<SnapshotReceiver>("actual local request", "quota exhausted");
+        let result = receive_compressed_raw(&budget, &zlib(&raw), profile).decode_snapshot_with_admission_v1(true, |point, _| {
+            assert_eq!(point, h(1));
+            Err(failure.clone())
+        });
+        assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Capacity(ref actual)) if actual == &failure));
+        assert_eq!(budget.available_permits(), 1, "refusal returns this receiver's global spill permit");
+
+        // Authenticated frames can still encode invalid Borsh. It fails before
+        // quota admission, keeping a malformed stream distinct from local load.
+        let malformed = [0xff; 3];
+        let profile = SnapshotCompressionV1 { decoded: malformed.len() as u64, ..profile };
+        let admitted = std::cell::Cell::new(false);
+        let result = receive_compressed_raw(&budget, &zlib(&malformed), profile).decode_snapshot_with_admission_v1(true, |_, _| {
+            admitted.set(true);
+            Ok(None)
+        });
+        assert!(matches!(result, Err(NativeSnapshotDecodeErrorV1::Encoding(_))));
+        assert!(!admitted.get(), "malformed wire has no native reconstruction permission");
+        assert_eq!(budget.available_permits(), 1);
+    }
+
     #[test]
     fn compressed_complete_material_refuses_duplicate_and_unknown_before_allocation() {
         let budget = Arc::new(Semaphore::new(1));

@@ -1631,6 +1631,21 @@ impl ConsensusApi for Consensus {
         // The header is the native finality witness, never a wall-clock estimate.
         self.headers_store.get_daa_score(pin).map(Some).map_err(|e| e.to_string())
     }
+    fn palw_kernel_material_ingress_v4(&self,checkpoint:BlockHash,request:&kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4)
+        ->Result<kaspa_consensus_core::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialOwnedV4,String>{
+        let before=self.lkg_virtual_state.load();
+        let now=self.get_virtual_daa_score();
+        let (generation,stable)=self.virtual_processor.pruning_import_status().map_err(|e|e.to_string())?;
+        if !stable||generation.active.is_some(){return Err("kernel ingress import incomplete".into())}
+        if !self.services.reachability_service.has_reachability_data(checkpoint)||!self.services.reachability_service.is_chain_ancestor_of(checkpoint,before.ghostdag_data.selected_parent){return Err("kernel ingress checkpoint is not on own accepted chain".into())}
+        let daa=self.headers_store.get_daa_score(checkpoint).map_err(|e|e.to_string())?;
+        if daa>now||now-daa>kaspa_consensus_core::palw_prospective_kernel_material_v4::PALW_KERNEL_INGRESS_CHECKPOINT_WINDOW_V4 {return Err("kernel ingress checkpoint outside bounded native window".into())}
+        let state=self.virtual_processor.palw_candidate_state_v2_checked(checkpoint).map_err(|e|format!("kernel ingress native state unavailable: {e:?}"))?;
+        let prepared=self.virtual_processor.palw_kernel_material_ingress_v4_impl(&state,checkpoint,now,request)?;
+        let after=self.lkg_virtual_state.load();let (generation_after,stable_after)=self.virtual_processor.pruning_import_status().map_err(|e|e.to_string())?;
+        if !stable_after||generation_after.active.is_some()||generation.epoch!=generation_after.epoch||before.ghostdag_data.selected_parent!=after.ghostdag_data.selected_parent||now!=self.get_virtual_daa_score(){return Err("kernel ingress changed native tip/clock/import generation".into())}
+        Ok(prepared)
+    }
     fn palw_native_recovery_session_quote_v4(
         &self,
         checkpoint: Option<BlockHash>,

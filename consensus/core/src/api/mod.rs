@@ -567,6 +567,8 @@ pub trait ConsensusApi: Send + Sync {
     fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
         Err("native finalized recovery clock unavailable".into())
     }
+    fn palw_kernel_material_ingress_v4(&self,_checkpoint:BlockHash,_request:&crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4)
+        ->Result<crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialOwnedV4,String>{Err("own-node prospective kernel material authority unavailable".into())}
     fn palw_native_recovery_session_quote_v4(
         &self,
         _checkpoint: Option<BlockHash>,

@@ -2857,8 +2857,13 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             && (kaspa_consensus_core::palw_native_resource_v1::native_resource_admission_enabled_v1()
                 || kaspa_consensus_core::palw_native_resource_v1::native_logical_admission_enabled_v1())
         {
-            return Err(ProtocolError::Other(
-                "explicit native receive admission requires negotiated protocol 107 structural preflight",
+            return Err(ProtocolError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                    kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+                >(
+                    "native snapshot receive capability",
+                    "explicit local admission requires negotiated protocol 107 structural preflight",
+                ),
             ));
         }
         if self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
