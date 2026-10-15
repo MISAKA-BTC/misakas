@@ -209,7 +209,8 @@ fn q36_gdn_replay_state_v2(
     if !matches!(resolve_kernel(&node.kernel_semantics_id), Some(KernelProgram::Qwen36(Qwen36Op::GdnStep))) {
         return Err(PalwStepRefuteError::Unadjudicable);
     }
-    let first = node_slot.checked_sub(intra_table_index(profile, node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
+    let first = node_slot
+        .checked_sub(intra_table_index(profile, node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
         .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let mut widths = Vec::with_capacity(5);
     let mut tiles = Vec::with_capacity(5);
@@ -316,7 +317,8 @@ fn bind_to_claim_v2(
         return Err(evidence("recurrence checkpoint evidence names another claim execution"));
     }
     leg::verify_binding_v1(binding)?;
-    if binding.shape_profile.shape_profile_id() != registered_class || binding.state_chunk_map_id != binding.shape_profile.state_chunk_map_id
+    if binding.shape_profile.shape_profile_id() != registered_class
+        || binding.state_chunk_map_id != binding.shape_profile.state_chunk_map_id
     {
         return Err(evidence("recurrence checkpoint evidence is not the claim's registered class and map"));
     }
@@ -389,9 +391,7 @@ pub fn check_gdn_transition_refutation_v2(
     let _workspace = reserve_checkpoint_workspace_v2(binding, window, row_lanes, heads)?;
 
     let selected_accused = gdn_selected_delta_chunks_v2(profile, to_first, layer, head)?;
-    if let Err(shape) =
-        authenticate_selected_v2(binding, &r.accused, index, covered, to_first, &selected_accused, max_leaves)?
-    {
+    if let Err(shape) = authenticate_selected_v2(binding, &r.accused, index, covered, to_first, &selected_accused, max_leaves)? {
         let derived = match shape {
             PalwGdnMismatchV2::CheckpointShape { derived, .. } => derived,
             _ => 0,
@@ -489,7 +489,8 @@ fn conv_sources_v2(
     if table.iter().filter(|n| n.kernel_semantics_id == node.kernel_semantics_id).count() != 1 || node.input_refs.len() != 3 {
         return Err(evidence("the layer's convolution is not unique with three projection sources"));
     }
-    let first = conv_slot.checked_sub(intra_table_index(profile, conv_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
+    let first = conv_slot
+        .checked_sub(intra_table_index(profile, conv_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
         .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let want = [
         u64::from(geometry.key_heads) * u64::from(geometry.k_dim),
@@ -555,7 +556,8 @@ pub fn gdn_conv_window_required_v2(
             let mut row = Vec::new();
             for t in (lo / tile) as u32..=((hi - 1) / tile) as u32 {
                 let coord = PalwStepCoordinateV1 { tile_index: t, ..coord0 };
-                let index = canonical_step_leaf_index(profile, &binding.job_context, &coord).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                let index =
+                    canonical_step_leaf_index(profile, &binding.job_context, &coord).ok_or(PalwStepRefuteError::Unadjudicable)?;
                 row.push((index, coord));
             }
             out.push(row);
@@ -576,7 +578,8 @@ pub fn check_gdn_conv_window_refutation_v2(
     bind_to_claim_v2(r.version, binding, claim_execution_root, registered_class)?;
     let profile = &binding.shape_profile;
     let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
-    let conv_heads = if geometry.layout == crate::palw_gdn_state_map_v2::PalwGdnStateLayoutV2::FullConvV1 { 1 } else { geometry.heads };
+    let conv_heads =
+        if geometry.layout == crate::palw_gdn_state_map_v2::PalwGdnStateLayoutV2::FullConvV1 { 1 } else { geometry.heads };
     if r.head >= conv_heads {
         return Err(evidence("accused window head is outside the layout"));
     }
@@ -591,7 +594,8 @@ pub fn check_gdn_conv_window_refutation_v2(
         selected.push(offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?);
     }
     let lanes = 2 * u64::from(geometry.k_dim) + u64::from(geometry.v_dim);
-    let _workspace = reserve_checkpoint_workspace_v2(binding, u64::from(geometry.conv_kernel), lanes.max(u64::from(geometry.conv_width)), 1)?;
+    let _workspace =
+        reserve_checkpoint_workspace_v2(binding, u64::from(geometry.conv_kernel), lanes.max(u64::from(geometry.conv_width)), 1)?;
     if let Err(shape) = authenticate_selected_v2(binding, &r.accused, index, covered, to_first, &selected, max_leaves)? {
         let derived = match shape {
             PalwGdnMismatchV2::CheckpointShape { derived, .. } => derived,
@@ -649,6 +653,20 @@ pub fn check_gdn_conv_window_refutation_v2(
     Err(PalwStepRefuteError::NoFaultFound.into())
 }
 
+/// The layer, the head selection (one Q36 head, or every head of the fused float core) and the kernel of the recurrence at
+/// `node_slot` — the facts every transition assembler and demand derives from the binding alone.
+fn transition_site_v2(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    node_slot: u32,
+    head: u32,
+) -> Result<(u16, Option<u32>, KernelProgram), PalwGdnCourtErrorV2> {
+    let (node, layer) = profile.resolve_node_slot(node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let layer = layer.ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let program = resolve_kernel(&node.kernel_semantics_id).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let sliced = matches!(program, KernelProgram::Qwen36(Qwen36Op::GdnStep));
+    Ok((layer, if sliced { Some(head) } else { None }, program))
+}
+
 /// **Assemble a transition accusation from captured material** — the accused checkpoint `index`, its exact predecessor and the
 /// replay window rows, every index re-derived as the checker derives it. The holder supplies its own honest replay's judgement: this
 /// assembles the evidence and does not decide whether to file it.
@@ -660,13 +678,39 @@ pub fn gdn_transition_refutation_from_capture_v2(
     tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
     checkpoint: &dyn Fn(u32) -> Option<(leg::PalwCheckpointLeafV2, Vec<Vec<u8>>)>,
 ) -> Result<PalwGdnTransitionRefutationV2, PalwGdnCourtErrorV2> {
+    transition_refutation_v2(capture, node_slot, head, index, None, tile, checkpoint)
+}
+
+/// **[`gdn_transition_refutation_from_capture_v2`] with the ACCUSED checkpoint's witness supplied** — the per-position (held)
+/// route, where the producer's retention serves no state and the accused bytes reach the accuser only as the producer's answers to
+/// held data-availability demands ([`gdn_transition_demands_v2`] → [`gdn_checkpoint_witness_from_disclosures_v2`]). `checkpoint`
+/// then serves only the PREDECESSOR, which the accuser recomputed itself. The court authenticates the supplied witness exactly as
+/// it authenticates an assembled one.
+pub fn gdn_transition_refutation_with_accused_v2(
+    capture: &super::capture::PalwGdnCaptureV2<'_>,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    accused: PalwGdnCheckpointWitnessV2,
+    tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
+    checkpoint: &dyn Fn(u32) -> Option<(leg::PalwCheckpointLeafV2, Vec<Vec<u8>>)>,
+) -> Result<PalwGdnTransitionRefutationV2, PalwGdnCourtErrorV2> {
+    transition_refutation_v2(capture, node_slot, head, index, Some(accused), tile, checkpoint)
+}
+
+fn transition_refutation_v2(
+    capture: &super::capture::PalwGdnCaptureV2<'_>,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+    supplied: Option<PalwGdnCheckpointWitnessV2>,
+    tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
+    checkpoint: &dyn Fn(u32) -> Option<(leg::PalwCheckpointLeafV2, Vec<Vec<u8>>)>,
+) -> Result<PalwGdnTransitionRefutationV2, PalwGdnCourtErrorV2> {
     let binding = capture.binding;
     let profile = &binding.shape_profile;
-    let (node, layer) = profile.resolve_node_slot(node_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let layer = layer.ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let program = resolve_kernel(&node.kernel_semantics_id).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let sliced = matches!(program, KernelProgram::Qwen36(Qwen36Op::GdnStep));
-    let selection = if sliced { Some(head) } else { None };
+    let (layer, selection, program) = transition_site_v2(profile, node_slot, head)?;
+    let sliced = selection.is_some();
     let (_, to_first) = checkpoint_site_v2(binding, index)?;
     let last = coordinate_at_v2(binding, to_first - 1, node_slot, if sliced { head } else { 0 });
     let start = gdn_replay_start_v2(binding, &last)?;
@@ -679,7 +723,10 @@ pub fn gdn_transition_refutation_from_capture_v2(
         }
         Ok(PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: out })
     };
-    let accused = witness(index, to_first)?;
+    let accused = match supplied {
+        Some(accused) => accused,
+        None => witness(index, to_first)?,
+    };
     let predecessor = match start.checkpoint_index {
         None => None,
         Some(prev) => Some(witness(prev, start.first_position)?),
@@ -707,6 +754,26 @@ pub fn gdn_transition_refutation_from_capture_v2(
     })
 }
 
+/// The flat indices of `head`'s convolution-window chunks in the checkpoint at `positions` — the order the conv-window terminal
+/// authenticates them in.
+fn conv_window_chunks_v2(
+    binding: &leg::PalwStepBindingV2,
+    conv_slot: u32,
+    head: u32,
+    positions: u32,
+) -> Result<Vec<u32>, PalwGdnCourtErrorV2> {
+    let profile = &binding.shape_profile;
+    let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
+    let (layer, _) = conv_sources_v2(profile, conv_slot, &geometry)?;
+    let (offset, _, _) = gdn_recurrence_section_v2(profile, positions)?;
+    let mut out = Vec::new();
+    for block in 0..geometry.conv_kernel.div_ceil(geometry.conv_rows_per_chunk) {
+        let local = geometry.conv_chunk_index(layer, head, block).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        out.push(offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?);
+    }
+    Ok(out)
+}
+
 /// **Assemble a convolution-window accusation from captured material.**
 pub fn gdn_conv_window_refutation_from_capture_v2(
     capture: &super::capture::PalwGdnCaptureV2<'_>,
@@ -718,18 +785,34 @@ pub fn gdn_conv_window_refutation_from_capture_v2(
 ) -> Result<PalwGdnConvWindowRefutationV2, PalwGdnCourtErrorV2> {
     let binding = capture.binding;
     let profile = &binding.shape_profile;
-    let geometry = PalwGdnStateGeometryV2::of(profile).map_err(evidence)?;
-    let (layer, _) = conv_sources_v2(profile, conv_slot, &geometry)?;
     let (_, to_first) = checkpoint_site_v2(binding, index)?;
-    let (offset, _, _) = gdn_recurrence_section_v2(profile, to_first)?;
     let (leaf, chunks) = checkpoint(index).ok_or_else(|| evidence("the capture lacks the accused checkpoint"))?;
     let opening = leg::step_opening_capped_v1(capture.checkpoint_leaf_hashes, u64::from(index), capture.max_leaves)?;
     let mut witnesses = Vec::new();
-    for block in 0..geometry.conv_kernel.div_ceil(geometry.conv_rows_per_chunk) {
-        let local = geometry.conv_chunk_index(layer, head, block).ok_or(PalwStepRefuteError::Unadjudicable)?;
-        let flat = offset.checked_add(local).and_then(|i| u32::try_from(i).ok()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    for flat in conv_window_chunks_v2(binding, conv_slot, head, to_first)? {
         witnesses.push(gdn_chunk_witness_v2(profile, to_first, &chunks, flat)?);
     }
+    gdn_conv_window_refutation_with_accused_v2(
+        capture,
+        conv_slot,
+        head,
+        index,
+        PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: witnesses },
+        tile,
+    )
+}
+
+/// **[`gdn_conv_window_refutation_from_capture_v2`] with the accused checkpoint's witness supplied** — the per-position (held) route,
+/// the witness built from the producer's held data-availability answers ([`gdn_conv_window_demands_v2`]).
+pub fn gdn_conv_window_refutation_with_accused_v2(
+    capture: &super::capture::PalwGdnCaptureV2<'_>,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
+    accused: PalwGdnCheckpointWitnessV2,
+    tile: &dyn Fn(PalwStepCoordinateV1) -> Option<leg::PalwStepTileLeafV1>,
+) -> Result<PalwGdnConvWindowRefutationV2, PalwGdnCourtErrorV2> {
+    let binding = capture.binding;
     let required = gdn_conv_window_required_v2(binding, conv_slot, head, index)?;
     let inputs = gdn_input_rows_from_capture_v2(&required, capture.step_leaf_hashes, tile, capture.max_leaves)?;
     Ok(PalwGdnConvWindowRefutationV2 {
@@ -737,9 +820,85 @@ pub fn gdn_conv_window_refutation_from_capture_v2(
         binding: binding.clone(),
         conv_slot,
         head,
-        accused: PalwGdnCheckpointWitnessV2 { leaf, opening, chunks: witnesses },
+        accused,
         inputs,
     })
+}
+
+// -------------------------------------------------------------------------------------------------------------------------------
+// The per-position (held) route: the accused checkpoint's bytes through the EXISTING held data-availability court
+// -------------------------------------------------------------------------------------------------------------------------------
+
+/// **The held DA units a transition accusation against checkpoint `index` reads** — one `StateChunk` per selected delta chunk, in
+/// the order the terminal authenticates them. A per-position class retains no checkpoint state (its leaves only), so an accuser
+/// whose own recompute disagrees with checkpoint `index` demands exactly these of the producer through the existing held DA court
+/// (`PalwDaUnitV1::Held` sessions, answered with `MaterialDisclosedV2`; no new object, tag, inner kind or table): an answer is the
+/// producer's own bytes and paths, hash-checked against the claim's committed roots by that court
+/// (`palw_held_da_check_disclosure_v1`), and silence is that court's DA-7 default against the producer. Derived from the binding
+/// alone, exactly as the terminal derives them.
+pub fn gdn_transition_demands_v2(
+    binding: &leg::PalwStepBindingV2,
+    node_slot: u32,
+    head: u32,
+    index: u32,
+) -> Result<Vec<crate::palw_held_da_v1::PalwHeldMissingV1>, PalwGdnCourtErrorV2> {
+    let (layer, selection, _) = transition_site_v2(&binding.shape_profile, node_slot, head)?;
+    let (_, to_first) = checkpoint_site_v2(binding, index)?;
+    Ok(gdn_selected_delta_chunks_v2(&binding.shape_profile, to_first, layer, selection)?
+        .into_iter()
+        .map(|chunk| crate::palw_held_da_v1::PalwHeldMissingV1::StateChunk { checkpoint: index, chunk })
+        .collect())
+}
+
+/// **The held DA units a convolution-window accusation against checkpoint `index` reads** (`head`'s window chunks, in order).
+pub fn gdn_conv_window_demands_v2(
+    binding: &leg::PalwStepBindingV2,
+    conv_slot: u32,
+    head: u32,
+    index: u32,
+) -> Result<Vec<crate::palw_held_da_v1::PalwHeldMissingV1>, PalwGdnCourtErrorV2> {
+    let (_, to_first) = checkpoint_site_v2(binding, index)?;
+    Ok(conv_window_chunks_v2(binding, conv_slot, head, to_first)?
+        .into_iter()
+        .map(|chunk| crate::palw_held_da_v1::PalwHeldMissingV1::StateChunk { checkpoint: index, chunk })
+        .collect())
+}
+
+/// **The accused checkpoint's witness from the producer's held DA answers** — `answers[i]` answers `demands[i]`, every answer names
+/// the same checkpoint leaf and opening, and each chunk keeps the producer's own bytes and path. Pure re-packaging: nothing is
+/// trusted here, because the terminal authenticates every chunk against the claim's committed checkpoint root
+/// ([`check_gdn_transition_refutation_v2`] / [`check_gdn_conv_window_refutation_v2`]), and the DA court already checked each
+/// answer by hash arithmetic when it accepted it.
+pub fn gdn_checkpoint_witness_from_disclosures_v2(
+    demands: &[crate::palw_held_da_v1::PalwHeldMissingV1],
+    answers: &[crate::palw_held_da_v1::PalwHeldDisclosureV1],
+) -> Result<PalwGdnCheckpointWitnessV2, PalwGdnCourtErrorV2> {
+    use crate::palw_held_da_v1::{PalwHeldDisclosureV1 as D, PalwHeldMissingV1 as M};
+    if demands.is_empty() || demands.len() != answers.len() {
+        return Err(evidence("one held DA answer per demanded checkpoint chunk"));
+    }
+    let mut anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1> = None;
+    let mut chunks = Vec::with_capacity(answers.len());
+    for (demand, answer) in demands.iter().zip(answers) {
+        let (M::StateChunk { checkpoint, chunk }, D::StateChunk { anchor: a, chunk: opening }) = (demand, answer) else {
+            return Err(evidence("a checkpoint witness is built only from state-chunk answers"));
+        };
+        if a.leaf.checkpoint_index != *checkpoint || opening.chunk_index != *chunk {
+            return Err(evidence("a held DA answer is of another unit than its demand"));
+        }
+        match anchor {
+            None => anchor = Some(a),
+            Some(first) if first == a => {}
+            Some(_) => return Err(evidence("the answers name different checkpoint leaves")),
+        }
+        chunks.push(PalwGdnStateChunkWitnessV2 {
+            chunk_index: opening.chunk_index,
+            bytes: opening.chunk_bytes.clone(),
+            siblings: opening.siblings.clone(),
+        });
+    }
+    let anchor = anchor.ok_or_else(|| evidence("no held DA answer"))?;
+    Ok(PalwGdnCheckpointWitnessV2 { leaf: anchor.leaf.clone(), opening: anchor.opening.clone(), chunks })
 }
 
 #[cfg(test)]

@@ -189,12 +189,14 @@ fn fund(
             PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
         };
         let sponsor = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&e.terms.sponsor);
-        let once = builder.settle_once_v1(
+        let once = builder.settle_once_liable_v1(
             ctx.daa_score,
             PalwSettlementObligationV1::of(PalwSettlementLegV1::MaterialFunding, e.id().as_bytes()),
             PalwSettlementConsumerV1::MonetaryMaterial,
             fees,
             PalwSettlementDebitV1::Prepaid { sponsor, amount: fees },
+            // RFC08-2: a debit INTO the books from the sponsor; it pays no liable party.
+            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim("a sponsor's prepaid funding debit"),
         )?;
         if !once.pays() {
             return Err(refused("material consent funding was already settled"));
@@ -209,7 +211,7 @@ fn fund(
         builder.reserve_source_income_v1(ctx, e.id(), e.terms.root, offer.provider, ctx.daa_score, offer.prepaid_fee_sompi)?;
         let id = super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), e.terms.root, &offer.provider);
         builder
-            .bond_budget_op(|b, _, j| b.bind_material_income_v1(e.terms.root, id, j))
+            .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.bind_material_income_v1(e.terms.root, id, j))?
             .ok_or_else(|| refused("material fee provenance engine is missing"))?
             .map_err(|e| refused(e.to_string()))?;
     }
@@ -783,7 +785,7 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                     use crate::palw_settlement_once_v1::{
                         PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
                     };
-                    builder.settle_once_v1(
+                    builder.settle_once_liable_v1(
                         ctx.daa_score,
                         PalwSettlementObligationV1::with_party(
                             PalwSettlementLegV1::MaterialProviderFee,
@@ -794,6 +796,12 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                         PalwSettlementConsumerV1::MonetaryMaterial,
                         provider.prepaid_fee_sompi,
                         PalwSettlementDebitV1::Held { amount: provider.prepaid_fee_sompi },
+                        // RFC08-2: the provider stands behind an event-relative covenant (service until every right terminated and
+                        // the last payment + W), which has no finite liability horizon or signed hard deadline an at-once fee could
+                        // be checked against — refused past the fence, never defaulted.
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                            "a material provider's fee: its covenant's liability horizon is event-relative (no finite horizon or hard deadline)",
+                        ),
                     )?
                 };
                 if !once.pays() {
@@ -831,12 +839,14 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                     use crate::palw_settlement_once_v1::{
                         PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
                     };
-                    builder.settle_once_v1(
+                    builder.settle_once_liable_v1(
                         ctx.daa_score,
                         PalwSettlementObligationV1::with_party(PalwSettlementLegV1::MaterialProviderDefault, row.terms.root.as_bytes(), kid, 0),
                         PalwSettlementConsumerV1::MonetaryMaterial,
                         p.collateral_sompi,
                         PalwSettlementDebitV1::Collateral { bond: kid, amount: p.collateral_sompi },
+                        // RFC08-2: a charge on the defaulting provider's collateral; it pays no liable party.
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim("a provider's default charge"),
                     )?
                 };
                 if once.pays() {
@@ -1200,7 +1210,7 @@ mod tests {
             builder.write_payout(queue, None).unwrap();
             observe_payment(&mut builder, &ctx(1_000), income, queue).unwrap();
             builder
-                .bond_budget_op(|b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j))
+                .bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.confirm_native_income_payment_v1(&params.bond_budget().unwrap().policy, &income, 1_000, j)).unwrap()
                 .unwrap()
                 .unwrap();
         }
@@ -1209,7 +1219,7 @@ mod tests {
         assert_eq!(observed.entitlement, Some(super::super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), h(9), &bond(3))));
         tick(&mut builder, &ctx(1_435)).unwrap();
         assert_eq!(builder.state.monetary_material_release_anchor_v1(h(9)), None);
-        builder.bond_budget_op(|b, _, j| b.release_material_income_v1(1_436, j));
+        builder.bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| b.release_material_income_v1(1_436, j)).unwrap();
         tick(&mut builder, &ctx(1_436)).unwrap();
         let row = builder.state.monetary_material_row_v1(h(9)).unwrap();
         assert_eq!(row.tail_block, Some(ctx(1_436).block));

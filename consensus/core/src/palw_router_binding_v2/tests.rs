@@ -155,3 +155,52 @@ fn the_row_round_trips_and_its_key_is_the_class_id() {
     assert_eq!(palw_router_binding_key_v2(&class).len(), 64);
     assert_eq!(PALW_ROUTER_BINDING_TABLE_V2, 139);
 }
+
+/// The row binding every routed reader of `p` to its table's first q36 router — the router the legacy price assumed.
+fn legacy_equivalent_row(p: &PalwShapeProfileV3) -> PalwRouterBindingRowV2 {
+    let q36 = kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_ROUTER_TOPK);
+    let readers = palw_routed_readers_v2(p)
+        .into_iter()
+        .map(|(table, reader)| {
+            let nodes = if table == PALW_ROUTER_BINDING_TABLE_GDN_V2 { &p.gdn_nodes } else { &p.attn_nodes };
+            let router = nodes.iter().position(|n| n.kernel_semantics_id == q36).expect("a q36 router") as u16;
+            PalwRoutedReaderBindingV2 { table, reader, router }
+        })
+        .collect();
+    PalwRouterBindingRowV2 { version: PALW_ROUTER_BINDING_VERSION_V2, bound_from_daa: 0, readers }
+}
+
+/// **RFC06-4 — the admission price under a binding.** (a) A binding naming exactly the router the legacy rule assumed prices the
+/// class exactly as admitted; (b) a row naming no reader is the legacy walk byte for byte (the court's own fallback); (c) a Kimi
+/// table, which has no q36 router and so was priced with NO routing appendix, is priced at its bound Kimi router's row — never
+/// below the legacy figure.
+#[test]
+fn the_bound_admission_price_reads_the_bound_routers_row() {
+    use crate::palw_class_admission_v2::{PalwCourtCostShapeV1, derive_court_cost_bound_v2, derive_court_cost_shaped_v1};
+    let hybrid = crate::palw_qwen36_profile::qwen36_profile_v1(crate::palw_qwen36_profile::QWEN35_2B).expect("the 3.5-2B row");
+    assert!(!palw_routed_readers_v2(&hybrid).is_empty(), "the hybrid's routed FFN readers");
+    let shape = PalwCourtCostShapeV1::genesis_anchored_v1(&hybrid, crate::palw_step::PALW_STEP_MAX_LEAVES);
+    let legacy = derive_court_cost_shaped_v1(&hybrid, shape);
+    assert_eq!(derive_court_cost_bound_v2(&hybrid, shape, &legacy_equivalent_row(&hybrid)), legacy, "(a)");
+    let empty = PalwRouterBindingRowV2 { version: PALW_ROUTER_BINDING_VERSION_V2, bound_from_daa: 0, readers: Vec::new() };
+    assert_eq!(derive_court_cost_bound_v2(&hybrid, shape, &empty), legacy, "(b)");
+
+    let kimi = kimi_bindable();
+    let shape = PalwCourtCostShapeV1::genesis_anchored_v1(&kimi, crate::palw_step::PALW_STEP_MAX_LEAVES);
+    let d = declaration(&kimi);
+    let row = PalwRouterBindingRowV2 { version: PALW_ROUTER_BINDING_VERSION_V2, bound_from_daa: 0, readers: d.readers };
+    if let (Ok(old), Ok(bound)) = (derive_court_cost_shaped_v1(&kimi, shape), derive_court_cost_bound_v2(&kimi, shape, &row)) {
+        assert!(bound.max_close_bytes >= old.max_close_bytes, "(c) the bound appendix is priced, never dropped");
+    }
+    // A binding naming a router index outside its table is a refusal, not a silent legacy price.
+    let mut outside = legacy_equivalent_row(&hybrid);
+    outside.readers[0].router = u16::MAX;
+    assert!(
+        derive_court_cost_bound_v2(
+            &hybrid,
+            PalwCourtCostShapeV1::genesis_anchored_v1(&hybrid, crate::palw_step::PALW_STEP_MAX_LEAVES),
+            &outside
+        )
+        .is_err()
+    );
+}

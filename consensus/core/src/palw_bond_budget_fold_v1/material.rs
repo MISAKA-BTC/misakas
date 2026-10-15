@@ -62,7 +62,7 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         self.state.require_monetary_material_enrollment_v1(self.params, root, now, None)?;
-        self.bond_budget_op(|budget, _, j| budget.bind_material_income_v1(root, income, j))
+        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.bind_material_income_v1(root, income, j))?
             .ok_or_else(|| PalwStateV2Error::BondBudgetRefused("material root has no monetary engine".into()))?
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))
     }
@@ -108,7 +108,9 @@ impl TransitionBuilder<'_> {
                 _ => None,
             })
             .collect();
-        self.bond_budget_op(|budget, _, j| {
+        // RFC-0006 (RFC06-1): the boundary and every frozen old monetary row is a listed row of the op.
+        let old_rows = old.len().saturating_add(1);
+        self.bond_budget_op(super::PalwBudgetGrowthV1::rows(old_rows), |budget, _, j| {
             budget.activate_material_income_v3(j);
             let boundary = keyed64(b"misaka-palw/material-income/legacy-boundary/v1", &[&now.to_le_bytes()]);
             budget.put_material_income_v1(
@@ -164,7 +166,7 @@ impl TransitionBuilder<'_> {
                 )?;
             }
             Ok::<(), PalwBudgetRefusalV1>(())
-        })
+        })?
         .expect("created budget")
         .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
         // Authenticate the known native held subjects. Unidentified old rights retain
@@ -254,7 +256,7 @@ impl TransitionBuilder<'_> {
                             accepted_daa: promise.accepted_daa,
                             payment,
                         };
-                        self.bond_budget_op(|budget, _, j| budget.put_material_income_v1(id, Some(row), j))
+                        self.bond_budget_op(super::PalwBudgetGrowthV1::point(), |budget, _, j| budget.put_material_income_v1(id, Some(row), j))?
                             .expect("created material source engine")
                             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
                     }

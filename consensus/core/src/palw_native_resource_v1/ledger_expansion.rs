@@ -107,6 +107,15 @@ impl ReservedKernelLedgerV1 {
         self.prepare_panel_tally_v1(claim).map_err(NativeDecodeErrorV1::Resource)?;
         self.ledger.apply_paid_claim_tally_v2(claim).map_err(NativeDecodeErrorV1::Decode)
     }
+    /// **RFC-0006 (RFC06-1): the typed memory this ledger's tickets hold** — its admitted expansion plus every admitted growth since.
+    /// Every row the ledger holds was admitted as at least one map-node envelope, so this bounds the rows a flush can materialize
+    /// from it (`palw_kernel_route_fold_v1::flush`). `0` with tracking off.
+    pub fn admitted_memory_v1(&self) -> u64 {
+        self.lease
+            .as_ref()
+            .map_or(0, |lease| lease.memory_v1())
+            .saturating_add(self.projection_lease.as_ref().map_or(0, |lease| lease.memory_v1()))
+    }
     pub fn as_rebuilt_from_v1(self, rows: &LedgerRowsV1) -> Self {
         // The ticket remains alive while the derived indexes are reconstructed.
         let Self { ledger, lease, projection_lease } = self;

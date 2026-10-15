@@ -4233,6 +4233,26 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementConsumer
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }
+            10 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            11 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            12 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            13 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            14 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4310,6 +4330,42 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementLegV1 {
                 Ok(sum)
             }
             9 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            10 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            11 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            12 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            13 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            14 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            15 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            16 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            17 => {
+                let mut sum = NativeWireShapeV1::default();
+                Ok(sum)
+            }
+            18 => {
                 let mut sum = NativeWireShapeV1::default();
                 Ok(sum)
             }

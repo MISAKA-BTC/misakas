@@ -147,6 +147,8 @@ pub(crate) struct PalwTirPublicCustodianBookV1 {
     cases: HashMap<(Hash64, Hash64), CaseV1>,
     /// G14 R8: sealed captures re-authenticated by a full reopen in THIS process (`true`) or found unusable (`false`).
     verified: HashMap<(Hash64, Hash64), bool>,
+    /// G14 R5: the demands this node owes an answer to, by demand id (see the responder below).
+    responses: HashMap<Hash64, ResponseCaseV1>,
 }
 
 impl PalwTirPublicCustodianBookV1 {
@@ -849,6 +851,335 @@ impl PalwPanelService {
                      answered from the retained original capture now",
                     entry.claim
                 );
+            }
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================================================================
+// G14 R5: the custodians' DEMAND RESPONDER — the producer and every seat that granted raw custody answer an outside owner's
+// demand from their sealed prepared capture, before the demand's own response clock, so an honest custodian is never defaulted.
+// ============================================================================================================================
+
+/// The court queue's lane of a custodian's answer move (Begin / Part / Finish), keyed by the demand id (free: `u32::MAX − 27`).
+pub(crate) const PALW_TIR_PUBLIC_RESPOND_ROUND_V1: u32 = u32::MAX - 27;
+/// Demands this node answers at once (each holds one prepared reader's answer body in memory).
+const PALW_TIR_PUBLIC_RESPONSES_V1: usize = 4;
+/// Bounded preparation polls of a warm prepared reader for one unit (a warm reader answers from its sealed index).
+const PALW_TIR_PUBLIC_RESPONSE_POLLS_V1: usize = 1 << 16;
+
+/// One demand this node owes an answer to (process memory). Progress is the ACCEPTED slot itself (`accepted_offset`, `finished`):
+/// after a restart the body is rebuilt deterministically from the same sealed capture (the same bytes, the same checksum the
+/// accepted Begin bound), and the next move resumes at the accepted offset — no answer is ever re-sent from scratch.
+struct ResponseCaseV1 {
+    claim: Hash64,
+    allocation_id: Hash64,
+    source_id: Hash64,
+    owner: PalwBondKeyV2,
+    /// The acquisition row's own allocation component (`Key::TirAcquisition(claim, owner, acquisition)`).
+    acquisition: Hash64,
+    reserved_daa: u64,
+    demand_id: Hash64,
+    turn: u64,
+    request: PalwTirPublicRequestV1,
+    respond_until_daa: u64,
+    body: Option<Vec<u8>>,
+    failed: bool,
+    _memory: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+}
+
+/// What one accepted read decided for one owed demand.
+enum ResponseStepV1 {
+    /// Build the answer body from the sealed prepared capture.
+    Body {
+        demand: Hash64,
+        source: Box<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1>,
+        descriptor: PalwTirPublicPreparedDescriptorV1,
+        material_until_daa: u64,
+        now: u64,
+    },
+    /// Queue (or re-queue) this exact answer move.
+    Move { demand: Hash64, action: PalwTirPublicOwnedActionV1 },
+}
+
+/// A warm prepared reader's answer to one unit, within a bounded number of preparation polls.
+fn poll_unit_v1(
+    reader: &mut dyn PalwTirPublicCaptureReaderV1,
+    request: &PalwTirPublicRequestV1,
+) -> Result<kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicResponseV1, String> {
+    for _ in 0..PALW_TIR_PUBLIC_RESPONSE_POLLS_V1 {
+        if let Some(response) = reader.poll_v1(request)? {
+            return Ok(response);
+        }
+    }
+    Err("the prepared reader did not answer within its bounded polls".into())
+}
+
+/// **The answer body of one demand from a warm prepared reader** — the exact canonical bytes the fold reassembles: one response
+/// for a unit request, or the canonical 1024-ID chunks to the outer EOF for `Ids { offset: 0 }`. Checked against the original
+/// source before it is offered, so a body the fold would refuse is never sent.
+fn response_body_v1(
+    reader: &mut dyn PalwTirPublicCaptureReaderV1,
+    source: &kaspa_consensus_core::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    request: PalwTirPublicRequestV1,
+) -> Result<Vec<u8>, String> {
+    use kaspa_consensus_core::palw_tir_public_source_v1::{PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicIdsAssemblerV1};
+    let bound = kaspa_consensus_core::palw_tir_public_owned_v1::request_body_bound_v1(source, request)?.0;
+    let body = if let PalwTirPublicRequestV1::Ids { offset: 0 } = request {
+        let mut body = Vec::new();
+        let mut assembler = PalwTirPublicIdsAssemblerV1::default();
+        let mut sealed = None;
+        for offset in (0..source.decode_count_v1()).step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
+            let chunk = PalwTirPublicRequestV1::Ids { offset };
+            let response = poll_unit_v1(&mut *reader, &chunk)?;
+            let bytes = borsh::to_vec(&response).map_err(|e| e.to_string())?;
+            if bytes.len() as u64 != source.unit_bound_v1(&chunk)?.maximum_response_bytes {
+                return Err("the prepared ID chunk is not its canonical length".into());
+            }
+            sealed = assembler.push_v1(source, &chunk, &source.decode_response_v1(&chunk, &bytes)?)?;
+            body.extend_from_slice(&bytes);
+        }
+        sealed.ok_or("the prepared IDs never reached the original outer EOF")?;
+        body
+    } else {
+        let response = poll_unit_v1(&mut *reader, &request)?;
+        let bytes = borsh::to_vec(&response).map_err(|e| e.to_string())?;
+        source.authenticate_v1(&request, &source.decode_response_v1(&request, &bytes)?, None)?;
+        bytes
+    };
+    if body.is_empty() || body.len() as u64 > bound {
+        return Err("the prepared answer exceeds the request's native body bound".into());
+    }
+    Ok(body)
+}
+
+impl PalwTirPublicCustodianBookV1 {
+    fn responses_clear_v1(&mut self) {
+        self.responses.clear();
+    }
+}
+
+impl PalwPanelService {
+    /// **One tick of the custodians' demand responder** (G14 R5). The accepted duty index
+    /// (`staged_tir_duties_after_v1`) names every demand this bond must answer (the producer, and every seat that granted raw
+    /// custody and became Ready); each is answered from this node's sealed prepared capture (the journal's exact Ready
+    /// descriptor) with Begin, the canonical 16 KiB Parts and Finish, one accepted move at a time on the court queue's EDF lane,
+    /// due before the demand's own response clock. Budgets: the native response span, move count and body bound (the fold
+    /// enforces them), at most four demands and one answer body each in memory, each body under a host-ledger reservation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn tir_public_responder_tick_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        signer: PalwBondKeyV2,
+        network_domain: Hash64,
+        book: &mut PalwTirPublicCustodianBookV1,
+        pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        due: &mut HashMap<(Hash64, u32, bool), u64>,
+        moved: &mut HashMap<(Hash64, u32, bool), u64>,
+    ) -> Result<(), String> {
+        let ours = |round: u32, responder: bool| responder && round == PALW_TIR_PUBLIC_RESPOND_ROUND_V1;
+        if self.consensus_config.params.palw_tir_public_conviction_v1_fence().is_none() {
+            book.responses_clear_v1();
+            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            return Ok(());
+        }
+        let mut steps: Vec<ResponseStepV1> = Vec::new();
+        let mut now = 0u64;
+        let armed = {
+            let mut read = |state: &PalwChainStateV2| -> Result<(), String> {
+                steps.clear();
+                now = state.last_point().ok_or("TIR responder snapshot has no accepted clock")?.daa_score;
+                // Discover the owed demands (EDF page of this bond's unfinished literal slots).
+                if let Ok((page, _)) = state.staged_tir_duties_after_v1(signer, now, None, PALW_TIR_PUBLIC_RESPONSES_V1) {
+                    for (claim, owner, allocation, turn, demand) in page {
+                        if book.responses.len() >= PALW_TIR_PUBLIC_RESPONSES_V1 || book.responses.contains_key(&demand) {
+                            continue;
+                        }
+                        let Some(row) = state.staged_tir_acquisition_v1(claim, owner, allocation) else { continue };
+                        let Some(p) = row.owned.active_v1() else { continue };
+                        let c = row.owned.contract_v1();
+                        book.responses.insert(
+                            demand,
+                            ResponseCaseV1 {
+                                claim,
+                                allocation_id: c.bundle_id,
+                                source_id: c.source_id,
+                                owner,
+                                acquisition: allocation,
+                                reserved_daa: c.reserved_daa,
+                                demand_id: demand,
+                                turn,
+                                request: p.request,
+                                respond_until_daa: p.respond_until_daa,
+                                body: None,
+                                failed: false,
+                                _memory: None,
+                            },
+                        );
+                    }
+                }
+                // Advance every owed demand by at most one move, from the ACCEPTED slot.
+                let mut ended = Vec::new();
+                for (demand, case) in book.responses.iter_mut() {
+                    let frame = palw_tir_public_claim_v1(state, case.claim);
+                    let row = state.staged_tir_acquisition_v1(case.claim, case.owner, case.acquisition);
+                    let (Some(frame), Some(row)) = (frame, row) else {
+                        ended.push(*demand);
+                        continue;
+                    };
+                    let Some(p) = row.owned.active_v1().filter(|p| p.demand_id == *demand && !p.collected) else {
+                        ended.push(*demand);
+                        continue;
+                    };
+                    if case.failed || now >= p.respond_until_daa {
+                        ended.push(*demand);
+                        continue;
+                    }
+                    let Some(body) = case.body.as_ref() else {
+                        let Some(sealed) = book.sealed.get(&(case.claim, case.allocation_id)) else {
+                            // No sealed capture: this node cannot answer (it should never have granted). Logged once, kept off.
+                            error!(
+                                "[{PALW_PANEL}] TIR frame {}: owed demand {demand} has no sealed prepared capture here",
+                                case.claim
+                            );
+                            case.failed = true;
+                            continue;
+                        };
+                        let source = kaspa_consensus_core::palw_tir_public_state_v1::palw_tir_public_source_for_row_v1(
+                            state,
+                            row,
+                            frame.descriptor_v1().maximum_leaves,
+                        )?;
+                        steps.push(ResponseStepV1::Body {
+                            demand: *demand,
+                            source: Box::new(source),
+                            descriptor: sealed.descriptor,
+                            material_until_daa: sealed.material_until_daa,
+                            now,
+                        });
+                        continue;
+                    };
+                    let body_hash = kaspa_consensus_core::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(body);
+                    let action = match p.slots.get(&signer) {
+                        None => PalwTirPublicOwnedActionV1::Begin {
+                            demand_id: *demand,
+                            answerer: signer,
+                            total_bytes: body.len() as u64,
+                            body_hash,
+                        },
+                        Some(slot) if slot.finished.is_some() => {
+                            ended.push(*demand);
+                            continue;
+                        }
+                        Some(slot) if slot.body_hash != body_hash || slot.total_bytes != body.len() as u64 => {
+                            error!("[{PALW_PANEL}] TIR frame {}: demand {demand}'s accepted Begin binds another body", case.claim);
+                            case.failed = true;
+                            continue;
+                        }
+                        Some(slot) if slot.accepted_offset < slot.total_bytes => {
+                            let start = slot.accepted_offset as usize;
+                            let end = start
+                                .saturating_add(kaspa_consensus_core::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1)
+                                .min(body.len());
+                            PalwTirPublicOwnedActionV1::Part {
+                                demand_id: *demand,
+                                answerer: signer,
+                                offset: slot.accepted_offset,
+                                bytes: body[start..end].to_vec(),
+                            }
+                        }
+                        Some(_) => PalwTirPublicOwnedActionV1::Finish { demand_id: *demand, answerer: signer },
+                    };
+                    steps.push(ResponseStepV1::Move { demand: *demand, action });
+                }
+                for demand in ended {
+                    book.responses.remove(&demand);
+                }
+                Ok(())
+            };
+            session.palw_tir_public_read_v1(&mut read)?
+        };
+        if !armed {
+            book.responses_clear_v1();
+            pending.retain(|(_, round, responder, _)| !ours(*round, *responder));
+            return Ok(());
+        }
+        pending.retain(|(demand, round, responder, _)| !ours(*round, *responder) || book.responses.contains_key(demand));
+        for step in steps {
+            let result: Result<(), String> = async {
+                match step {
+                    ResponseStepV1::Body { demand, source, descriptor, material_until_daa, now } => {
+                        let Some(case) = book.responses.get(&demand) else { return Ok(()) };
+                        let request = case.request;
+                        let ram = kaspa_consensus_core::palw_tir_public_owned_v1::request_body_bound_v1(&source, request)?.1;
+                        let memory = crate::palw_memory_ledger::host_ledger_v1()
+                            .reserve(
+                                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                                    role: "public-tir-custodian-answer",
+                                    class_id: descriptor.class_id,
+                                    job: case.claim,
+                                },
+                                ram,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
+                            Arc::from(self.resolve_backend(session, descriptor.class_id, descriptor.artifact_root)?);
+                        let header = source.header_v1().clone();
+                        let directory = self.config.retention_dir.join("tir-public-prepared");
+                        let body = tokio::task::spawn_blocking(move || {
+                            let mut reader =
+                                backend.reopen_tir_prepared_capture_v1(&header, &descriptor, &directory, material_until_daa, now)?;
+                            if reader.prepared_descriptor_v1() != Some(&descriptor) {
+                                return Err("the reopened capture is not the exact Ready descriptor".into());
+                            }
+                            response_body_v1(reader.as_mut(), &source, request)
+                        })
+                        .await
+                        .map_err(|e| format!("TIR responder body worker failed: {e}"))?;
+                        let Some(case) = book.responses.get_mut(&demand) else { return Ok(()) };
+                        match body {
+                            Ok(body) => {
+                                case.body = Some(body);
+                                case._memory = Some(memory);
+                            }
+                            Err(why) => {
+                                case.failed = true;
+                                error!("[{PALW_PANEL}] TIR frame {}: cannot build the answer to demand {demand}: {why}", case.claim);
+                            }
+                        }
+                    }
+                    ResponseStepV1::Move { demand, action } => {
+                        let Some(case) = book.responses.get(&demand) else { return Ok(()) };
+                        let queue = (demand, PALW_TIR_PUBLIC_RESPOND_ROUND_V1, true);
+                        if pending.iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
+                            || moved.get(&queue).is_some_and(|at| now < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        {
+                            return Ok(());
+                        }
+                        let control = PalwTirPublicControlV1 {
+                            version: 1,
+                            claim: case.claim,
+                            allocation_id: case.allocation_id,
+                            source_id: case.source_id,
+                            target: PalwTirPublicControlTargetV1::Acquisition { owner: case.owner, reserved_daa: case.reserved_daa },
+                            expected_turn: case.turn,
+                            declared_rent_sompi: 0,
+                            signer,
+                            action: PalwTirPublicControlActionV1::Acquisition(action),
+                            signature: Vec::new(),
+                        };
+                        let object = signed_control_v1(self, network_domain, control)?;
+                        pending.push((queue.0, queue.1, queue.2, object));
+                        due.insert(queue, case.respond_until_daa.saturating_sub(1));
+                        moved.insert(queue, now);
+                    }
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(why) = result {
+                debug!("[{PALW_PANEL}] TIR custodian answer remains pending: {why}");
             }
         }
         Ok(())

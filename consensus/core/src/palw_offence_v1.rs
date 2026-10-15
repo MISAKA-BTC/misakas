@@ -669,9 +669,10 @@ where
 
 /// [`palw_verify_objective_offence_v1`] under RFC-0006 R6-CELL round 4's coverage closure: `cell_closure` is the caller's (the
 /// closure governs the accused claim). It reaches only `PanelFalseValid`'s structural step check, where an uncoverable profile is a
-/// shape fault instead of "no fault". `false`: byte for byte the V1 gate.
+/// shape fault instead of "no fault". `false`: byte for byte the V1 gate. RFC06-4: the caller may pass the claim's blame-path mode
+/// (`PalwCellClosureModeV1::for_blame_path`), so past consumer v2 this gate judges a profile as the claim gate and the court do.
 #[allow(clippy::too_many_arguments)]
-pub fn palw_verify_objective_offence_closure_v1<F>(
+pub fn palw_verify_objective_offence_closure_v1<'m, F>(
     kind: PalwOffenceKindV1,
     accused: &TransactionOutpoint,
     evidence_id: &Hash64,
@@ -687,11 +688,12 @@ pub fn palw_verify_objective_offence_closure_v1<F>(
     // so a seat that voted Valid on a lie it could see cannot be convicted through this route at all.
     max_step_leaf_count: u64,
     verify_signature: F,
-    cell_closure: bool,
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
 ) -> Result<(), PalwOffenceVerifyError>
 where
     F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    let cell_closure = cell_closure.into();
     if evidence.is_empty() {
         return Err(PalwOffenceVerifyError::EvidenceEmpty);
     }
@@ -735,7 +737,7 @@ fn verify_palw_panel_false_valid_v1<F>(
     network_id: &[u8],
     max_step_leaf_count: u64,
     verify_signature: F,
-    cell_closure: bool,
+    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'_>,
 ) -> Result<(), PalwOffenceVerifyError>
 where
     F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -886,13 +888,14 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
 
 /// [`palw_panel_contradiction_convicts_execution_v1`] under the R6-CELL coverage closure: with `cell_closure` the structural step
 /// check is the closure-aware one (an uncoverable profile convicts as a shape fault). `false`: byte for byte the V1 function.
-pub fn palw_panel_contradiction_convicts_execution_closure_v1(
+pub fn palw_panel_contradiction_convicts_execution_closure_v1<'m>(
     contradiction: &PalwPanelContradictionV1,
     claim_execution_root: Hash64,
     class_artifact_root: Hash64,
     step_ladder: u64,
-    // `bool` is the round-4 closure; RFC-0006 consumer v2's mode reaches the structural check through the same parameter.
-    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1>,
+    // `bool` is the round-4 closure; RFC-0006 consumer v2's mode reaches the structural check through the same parameter, and
+    // (RFC06-4) with the claim's router binding it names the router a routed step's arithmetic reads — tag 244's row.
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
 ) -> Result<(), PalwOffenceVerifyError> {
     let cell_closure = cell_closure.into();
     match contradiction {
@@ -907,7 +910,16 @@ pub fn palw_panel_contradiction_convicts_execution_closure_v1(
             }
             let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class_artifact_root)
                 .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-            match crate::palw_step_refute::check_execution_step_refutation_capped_v1(refutation, &operands, step_ladder) {
+            // `None` below consumer v2 or without a binding: `check_execution_step_refutation_capped_v1` byte for byte.
+            let bound_router =
+                cell_closure.bound_router_slot(&refutation.binding.shape_profile, refutation.output_preimage.coord.node_slot);
+            match crate::palw_step_refute::check_execution_step_refutation_routed_v2(
+                refutation,
+                &operands,
+                None,
+                step_ladder,
+                bound_router,
+            ) {
                 Ok(_) => Ok(()),
                 Err(_) => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
             }

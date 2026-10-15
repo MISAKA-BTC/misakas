@@ -927,3 +927,16 @@ Nothing below was built, tested or run; nothing is labelled PASS.
 - **Merge fix.** Frame fold calls to writers that integ made fallible now propagate their errors.
 - **Recommendation unchanged:** keep `palw_tir_public_conviction_v1` dormant at DAA 14,000 — the custodians' demand responder and
   the filer's finding producers are not connected, and nothing is measured.
+
+### Last two gaps, 2026-10-16 (branch `integ/g14-remaining`, source only)
+
+- **Demand responder** (`tir_public_responder_tick_v1` in `kaspad/src/palw_tir_public_custodian.rs`): the producer and every seat
+  that granted custody answer outside owners' demands from the sealed prepared capture (Begin, 16 KiB Parts, Finish), inside each
+  demand's own clock, resuming from the accepted slot after a restart.
+- **Findings feed** (`kaspad/src/palw_tir_public_owner.rs`): an outside bond replays a frame's job, opens its own acquisition on a
+  disagreement, localizes over authenticated public material, collects unanswered demands, and hands cone/logits or output findings to
+  the filer scheduler. New consensus readers: `staged_tir_frames_after_v1`, `staged_tir_acquisitions_of_v1`, `fp_claim_prompt_ids_v1`,
+  `palw_tir_public_finished_material_v1`, `palw_tir_public_output_contradiction_v1`.
+- **Tests (source, not run):** honest custodian answers in time and is not slashed (with a silent-custodian contrast that is
+  collected); an outsider detects a fault through its own acquisition and its finding is filed, convicted and slashed.
+- Fence still dormant; nothing measured.

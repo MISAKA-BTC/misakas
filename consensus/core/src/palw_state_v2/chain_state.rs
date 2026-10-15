@@ -1284,6 +1284,13 @@ impl PalwChainStateV2 {
             .collect()
     }
 
+    /// **G14 R4 (node replay input): the prompt ids `claim` was accepted with**, when its acceptance kept them (the ADR-0145 row,
+    /// written for compute-priced claims and swept at its retention). `None` otherwise: the caller then has no public input to
+    /// replay, never a guessed one.
+    pub fn fp_claim_prompt_ids_v1(&self, class_id: &Hash64, bond: &PalwBondKeyV2, claim: &Hash64) -> Option<Vec<u32>> {
+        self.fp_claim_prompts.get(&(*class_id, *bond, *claim)).map(|row| row.prompt_token_ids.clone())
+    }
+
     pub fn work_target(&self) -> Option<&crate::palw_work_target_v1::PalwWorkTargetV2> {
         self.work_target.as_ref()
     }

@@ -14,6 +14,8 @@ mod gdn_court_v2;
 mod native_writers_v1;
 // RFC-0008: once-only settlement across consumers (dormant fence; kernel route aux 140).
 mod settlement_once_v1;
+// RFC-0008 RFC08-2: the combined liability predicate at every leg and admission (dormant).
+mod settlement_liability_v1;
 use super::*;
 use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, challenge_v2};
 use crate::palw_fork_choice::compare_palw_candidates_v1;

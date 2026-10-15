@@ -344,7 +344,7 @@ fn seat_or_retire(
             if !prepay(builder, ctx, signer, p, 0, body.len())? {
                 return Ok(());
             }
-            builder.bond_budget_close_v1(&Hash64::from_bytes(s.budget_id()), ctx.daa_score);
+            builder.bond_budget_close_v1(&Hash64::from_bytes(s.budget_id()), ctx.daa_score)?;
             let mut seats = seats;
             seats.retain(|b| b != signer);
             m.seats = m.seats.saturating_sub(1);
@@ -553,7 +553,7 @@ fn issue(
     } else {
         // Not certified (or not certifiable): no receipt, no weight, no coinbase; the reservation closes (nothing returns).
         c.closed = Some((ctx.daa_score, false));
-        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score);
+        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score)?;
     }
     write_claim(builder, &c)?;
     write_model(builder, &m)?;
@@ -597,7 +597,7 @@ fn collect(
     let mut m = model(r, &c.model)?;
     if let Some(rc) = &receipt {
         m.live_receipts = m.live_receipts.saturating_sub(1);
-        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score);
+        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score)?;
         builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &rc.id), None)?;
     }
     // A permanent tombstone keeps the claim id (and its used Master stages) from ever being re-credited.
@@ -628,6 +628,41 @@ pub(super) fn apply_native_receipt_block_v39(
     }
     if !crate::palw_rfc0018_v1::palw_native_independently_work_certified_v39(builder.params, &builder.state, &c.claim_hash(), c.admitted_daa) {
         return Err(bad("mining39 receipt block's mining claim is not SecurityCertified (Gate C)"));
+    }
+    // RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`): the quantum's worker share settles once across
+    // every consumer, whatever the receipt's own bitmap says — checked and written before the budget draw; a repeat is refused.
+    {
+        use crate::palw_settlement_once_v1::{
+            PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+        };
+        let carve = builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve);
+        let obligation = PalwSettlementObligationV1::with_party(
+            PalwSettlementLegV1::NativeReceiptSpend,
+            receipt_id.as_bytes(),
+            [0; 64],
+            u64::from(spend.quantum_index),
+        );
+        // RFC08-2: a native mining claim is not a V2 claim — X3 defines no hard deadline for it and it carries no signed lifetime
+        // — so its receipt quantum has no liability terms to source: refused past the fence, never defaulted.
+        let once = builder.settle_once_liable_v1(
+            ctx.daa_score,
+            obligation,
+            PalwSettlementConsumerV1::ReceiptBlock,
+            carve,
+            PalwSettlementDebitV1::Issuance { carve },
+            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
+                "a native mining receipt: its mining claim carries no signed hard deadline (X3 governs V2 claims only)",
+            ),
+        )?;
+        match once {
+            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::AlreadySettled(_) => {
+                return Err(bad("mining39 receipt quantum already settled by another consumer"));
+            }
+            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => {
+                return Err(super::palw_settlement_liability_fold_v1::liability_refused_v1(why));
+            }
+            _ => {}
+        }
     }
     let last = rc.spent_quanta + 1 >= rc.price.quanta;
     let granted =

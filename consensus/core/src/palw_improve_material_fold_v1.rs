@@ -651,7 +651,7 @@ pub(super) fn apply_artifact_revealed_v1(
     let governed = builder.state.improvement_governed_at(&artifact.line_id, daa);
     let policy = builder.state.improvement_policies.get(&artifact.line_id).map(|r| r.policy.clone());
     let (true, Some(policy)) = (governed, policy) else {
-        builder.release_improvement_hold_v1(&artifact.line_id, &row.teacher, row.bond)?;
+        builder.release_improvement_hold_v1(&artifact.line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, key.1.as_bytes()), daa)?;
         builder.write_improvement_artifact(key, None)?;
         return Ok(());
     };
@@ -874,7 +874,7 @@ pub(super) fn apply_case_key_revealed_v1(
     if holdout {
         for item in drawn {
             palw_improve_exact_match_on_reveal_hook_v1(builder, &reveal.line_id, epoch, item, &reveal.key)?;
-            pay_s1_setter_v1(builder, &reveal.line_id, epoch, item, &row.case)?;
+            pay_s1_setter_v1(builder, &reveal.line_id, epoch, item, &row.case, daa)?;
         }
     }
     pay_s1_bounty_v1(builder, &reveal.line_id, &reveal.case_id, &reveal.key, daa)?;
@@ -903,7 +903,12 @@ fn pay_s1_bounty_v1(
         (row.revealed.as_ref()?.answer_span.as_slice() == key).then_some(row.teacher)
     });
     if let Some(teacher) = winner {
-        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Bounty)?;
+        let credit = super::palw_improve_fold_v1::PalwImproveCreditV1::S1Bounty {
+            line: *line_id,
+            task: *task,
+            key: super::palw_improve_fold_v1::palw_improve_s1_key_digest_v1(key),
+        };
+        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Bounty, credit, daa)?;
     }
     Ok(())
 }
@@ -918,6 +923,7 @@ fn pay_s1_setter_v1(
     epoch: u64,
     item: u32,
     case: &PalwHardCaseV1,
+    daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     let PalwCaseSourceV1::Artifact { artifact_id } = case.source else { return Ok(()) };
     let failed = builder
@@ -930,7 +936,8 @@ fn pay_s1_setter_v1(
             .then_some(r.teacher)
     });
     if let (true, Some(teacher)) = (failed, teacher) {
-        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Setter)?;
+        let credit = super::palw_improve_fold_v1::PalwImproveCreditV1::S1Setter { line: *line_id, artifact: artifact_id };
+        builder.grant_improvement_s1_v1(line_id, &teacher, PalwRewardStageV1::S1Setter, credit, daa)?;
     }
     Ok(())
 }
@@ -1057,7 +1064,7 @@ pub(super) fn settle_improvement_material_v1(
         if builder.state.improvement_governed_at(&line_id, daa) {
             builder.forfeit_improvement_hold_v1(&line_id, row.bond)?;
         } else {
-            builder.release_improvement_hold_v1(&line_id, &row.teacher, row.bond)?;
+            builder.release_improvement_hold_v1(&line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, commit.as_bytes()), daa)?;
         }
         builder.write_improvement_artifact((line_id, commit), None)?;
         budget -= 1;
@@ -1095,7 +1102,7 @@ pub(super) fn settle_improvement_material_v1(
             .copied()
             .collect();
         for (line_id, _, table, id) in retiring {
-            retire_material_row_v1(builder, &line_id, table, &id)?;
+            retire_material_row_v1(builder, &line_id, table, &id, daa)?;
             budget -= 1;
         }
         if closing && budget > 0 {
@@ -1108,7 +1115,7 @@ pub(super) fn settle_improvement_material_v1(
                 .map(|((_, c), row)| (*c, row.clone()))
                 .collect();
             for (commit, row) in unrevealed {
-                builder.release_improvement_hold_v1(&line.line_id, &row.teacher, row.bond)?;
+                builder.release_improvement_hold_v1(&line.line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, commit.as_bytes()), daa)?;
                 builder.write_improvement_artifact((line.line_id, commit), None)?;
                 budget -= 1;
             }
@@ -1120,7 +1127,13 @@ pub(super) fn settle_improvement_material_v1(
                 .map(|((_, id), row)| (*id, row.clone()))
                 .collect();
             for (dataset_id, row) in datasets {
-                builder.release_improvement_hold_v1(&line.line_id, &row.registrant, row.bond)?;
+                builder.release_improvement_hold_v1(
+                    &line.line_id,
+                    &row.registrant,
+                    row.bond,
+                    (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_DATASET_V1, dataset_id.as_bytes()),
+                    daa,
+                )?;
                 builder.write_improvement_dataset((line.line_id, dataset_id), None)?;
                 budget -= 1;
             }
@@ -1136,18 +1149,25 @@ fn retire_material_row_v1(
     line_id: &Hash64,
     table: u8,
     id: &Hash64,
+    daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     match table {
         MATERIAL_CASE => builder.write_improvement_case((*line_id, *id), None)?,
         MATERIAL_SETTER_SET => {
             if let Some(set) = builder.state.improvement_setter_set(line_id, id).cloned() {
-                builder.release_improvement_hold_v1(line_id, &set.setter, set.bond)?;
+                builder.release_improvement_hold_v1(
+                    line_id,
+                    &set.setter,
+                    set.bond,
+                    (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_SETTER_SET_V1, id.as_bytes()),
+                    daa,
+                )?;
             }
             builder.write_improvement_setter_set((*line_id, *id), None)?;
         }
         MATERIAL_ARTIFACT => {
             if let Some(row) = builder.state.improvement_artifact(line_id, id).cloned() {
-                builder.release_improvement_hold_v1(line_id, &row.teacher, row.bond)?;
+                builder.release_improvement_hold_v1(line_id, &row.teacher, row.bond, (super::palw_improve_fold_v1::PALW_IMPROVE_HOLD_ARTIFACT_V1, id.as_bytes()), daa)?;
             }
             builder.write_improvement_artifact((*line_id, *id), None)?;
         }

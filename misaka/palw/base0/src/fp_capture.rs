@@ -1886,7 +1886,10 @@ pub fn base0_gdn_state_geometry_for_class_v1(
     head_dim: u32,
     conv_kernel: u32,
 ) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
-    if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_spells_key_heads_v1(profile) {
+    // The held v5 composition, or (RFC-0006 consumer v2) the solo key-head map v3 — both gather over the class's key heads.
+    let key_head_map = kaspa_consensus_core::palw_state_chunk_map::palw_profile_spells_key_heads_v1(profile)
+        || profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v3();
+    if !key_head_map {
         return base0_gdn_state_geometry_v2(layers, heads, head_dim, head_dim, conv_kernel);
     }
     let class = kaspa_consensus_core::palw_step::palw_gdn_key_heads_v1(profile)
